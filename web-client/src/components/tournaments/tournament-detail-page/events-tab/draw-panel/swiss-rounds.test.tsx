@@ -1,5 +1,14 @@
+import {
+  buildEntrants,
+  buildSwissDrawnEvent,
+  buildSwissOddDrawnEvent,
+  buildSwissOddMidEvent,
+} from '../../../data/seed.factory'
 import { buildFixtureLineView } from './round-list/fixture-line.factory'
-import { buildMidSwissRounds } from './swiss-rounds.factory'
+import {
+  buildMidSwissRounds,
+  buildSwissRoundsPropsFor,
+} from './swiss-rounds.factory'
 import { swissRoundsPage as page } from './swiss-rounds.page'
 
 describe('SwissRounds', () => {
@@ -135,5 +144,91 @@ describe('SwissRounds', () => {
 
     expect(page.getRoundLines(1)).toEqual(['Withdrawn vs TBD'])
     expect(page.queryForthcoming(1)).toBeNull()
+  })
+
+  /**
+   * The bye. A seven-entrant event plays `⌊7/2⌋ = 3` pairings a round and the seventh
+   * entrant appears in **no fixture**, because a bye is the absence of a row (ADR-0786).
+   * Before this line they were nowhere in the draw at all: on screen in Standings, absent
+   * from the pairings, and a director could only work out who was sitting out by diffing
+   * the two lists by hand.
+   */
+  describe('the entrant sitting out an odd round', () => {
+    it('names them, as a line of the round they sit out', async () => {
+      page.render(buildSwissRoundsPropsFor(buildSwissOddDrawnEvent()))
+      await page.findRound(1)
+
+      // Six of the seven are paired…
+      expect(page.getRoundLines(1)).toEqual([
+        'player.1 vs player.4',
+        'player.2 vs player.5',
+        'player.3 vs player.6',
+      ])
+      // …and the seventh is named, in the round, rather than left for the director to
+      // work out. No record and no win: a bye scores nothing here.
+      expect(page.getByeText(1)).toBe('Bye: player.7')
+    })
+
+    /**
+     * ⚠️ **The discriminating case.** On the freshly-cut draw above only round 1 is paired,
+     * so "who sits out THIS round" and "who sits out round 1" give the same answer — an
+     * implementation that subtracted against the first round's fixtures for every round
+     * passes it. Here they disagree: `advance()` has paired round 2, byeing `entry-1` (who
+     * won round 1) while `entry-7` — round 1's bye — plays.
+     */
+    it('follows the round, not the first one: a later round byes somebody else', async () => {
+      page.render(buildSwissRoundsPropsFor(buildSwissOddMidEvent()))
+      await page.findRound(1)
+
+      expect(page.getByeText(1)).toBe('Bye: player.7')
+      expect(page.getRoundLines(2)).toEqual([
+        'player.2 vs player.3',
+        'player.4 vs player.5',
+        'player.6 vs player.7',
+      ])
+      expect(page.getByeText(2)).toBe('Bye: player.1')
+    })
+
+    /**
+     * A round nobody has been paired in yet byes **nobody** — and this is the case that
+     * separates a real derivation from a set subtraction fired at every round. Round 3 of
+     * this draw is cut with both sides null, so *every* one of the seven entrants is "in no
+     * fixture of round 3": an ungated implementation announces the whole field as sitting
+     * out a round the event has not reached.
+     */
+    it('names nobody under a round that is not paired yet', async () => {
+      page.render(buildSwissRoundsPropsFor(buildSwissOddDrawnEvent()))
+      await page.findRound(1)
+
+      expect(page.queryForthcoming(3)).not.toBeNull()
+      expect(page.queryBye(2)).toBeNull()
+      expect(page.queryBye(3)).toBeNull()
+    })
+
+    /**
+     * An **even** field byes nobody, so there is no line — a "nobody sits out" note on
+     * every round of every even event is noise.
+     *
+     * The fixture is deliberately not the tidy six-over-six cut: eight entrants over a
+     * six-seat round, which is what a draw looks like after two more players enter (a
+     * *stale* draw, which the panel still renders). So two entrants really are seated in no
+     * fixture, and the claim under test is the **parity** gate rather than an empty
+     * subtraction that could not have failed.
+     */
+    it('names nobody when the field is even, even with entrants left unseated', async () => {
+      page.render(
+        buildSwissRoundsPropsFor(
+          buildSwissDrawnEvent({ entrants: buildEntrants(8) }),
+        ),
+      )
+      await page.findRound(1)
+
+      expect(page.getRoundLines(1)).toEqual([
+        'player.1 vs player.4',
+        'player.2 vs player.5',
+        'player.3 vs player.6',
+      ])
+      expect(page.queryBye(1)).toBeNull()
+    })
   })
 })

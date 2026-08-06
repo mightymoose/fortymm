@@ -652,6 +652,21 @@ export function planSingleElimFixtures(
 }
 
 /**
+ * The most rounds a field of `size` can play **without a rematch** — the API's
+ * `_max_rematch_free_rounds` (`api/app/draws.py`), mirrored here because this stub raises
+ * the same refusal the server does.
+ *
+ * It is **not** `n - 1`, the number of distinct opponents an entrant has. An odd field byes
+ * one entrant a round, so over `n` rounds everybody plays `n - 1` matches and sits out
+ * once: five entrants really can play five rounds, and refusing that refused a legal swiss.
+ * `n - 1 + n % 2` is the same statement in one expression — unchanged for an even field,
+ * one round longer for an odd one.
+ */
+function maxRematchFreeRounds(size: number): number {
+  return size - 1 + (size % 2)
+}
+
+/**
  * Plan a **swiss** draw the way the API plans one (`SwissStrategy.plan_initial`,
  * `api/app/draws.py`): all `R` rounds up front, `⌊n/2⌋` fixtures each, round 1 seeded
  * top-half-against-bottom-half from the draw order and every later round written with both
@@ -890,23 +905,24 @@ export function planDraw(
         return {
           ok: false,
           detail:
-            'A swiss draw needs at least 2 entrants — a field of one has nobody to play.',
+            'A Swiss draw needs at least 2 entrants — a smaller field has nobody to play.',
         }
       }
-      if (rounds > entryIds.length - 1) {
-        // `n - 1` is the number of distinct opponents an entrant can have, so past it a
-        // rematch-free swiss cannot exist. Refused at the CUT and not at configure time,
-        // because `n` is not known when the setting is written (ADR "swiss pre-cuts every
-        // round and pairs each one on advance") — which is exactly why the form's own bound
-        // (`swissRoundsSchema`) stops at 32 and says nothing about the field.
+      const maximumRounds = maxRematchFreeRounds(entryIds.length)
+      if (rounds > maximumRounds) {
+        // Past the ceiling a rematch-free swiss cannot exist. Refused at the CUT and not at
+        // configure time, because `n` is not known when the setting is written (ADR "swiss
+        // pre-cuts every round and pairs each one on advance") — which is exactly why the
+        // form's own bound (`swissRoundsSchema`) stops at 32 and says nothing about the
+        // field.
         const roundNoun = rounds === 1 ? 'round' : 'rounds'
-        const opponentNoun = entryIds.length - 1 === 1 ? 'opponent' : 'opponents'
+        const maximumNoun = maximumRounds === 1 ? 'round' : 'rounds'
         return {
           ok: false,
           detail:
-            `${rounds} ${roundNoun} is more than the ${entryIds.length - 1} ` +
-            `${opponentNoun} each of ${entryIds.length} entrants can have — play fewer ` +
-            'rounds, or add entrants.',
+            `${rounds} ${roundNoun} is more than the ${maximumRounds} ` +
+            `${maximumNoun} a field of ${entryIds.length} entrants can play without a ` +
+            'rematch — play fewer rounds, or add entrants.',
         }
       }
       return { ok: true, fixtures: planSwissFixtures(entryIds, rounds) }

@@ -20,6 +20,8 @@ import {
   buildFixture,
   buildPool,
   buildSwissDrawnEvent,
+  buildSwissOddDrawnEvent,
+  buildSwissOddMidEvent,
   buildTwoStageDrawnEvent,
 } from './seed.factory'
 
@@ -134,6 +136,71 @@ describe('drawState', () => {
     expect(state.pools).toEqual([])
     expect(state.unpooled.map((r) => r.round)).toEqual([1, 2, 3])
     expect(state.unpooled.map((r) => r.fixtures.length)).toEqual([3, 3, 3])
+  })
+
+  /**
+   * The **bye**, derived: a bye is the absence of a fixture, so the entrant sitting a round
+   * out is the one that round's fixtures never name. Nothing on the wire says who it is,
+   * and nothing here invents a fixture for them.
+   */
+  describe('swissByes', () => {
+    /** Round 1 of a seven-entrant cut seats six; `entry-7` is in no fixture, so they are
+     * the bye — named, in draw order, as an entrant rather than as a bare id. */
+    it('names the entrant an odd field leaves out of a paired round', () => {
+      const state = drawn(drawState(buildSwissOddDrawnEvent()))
+
+      expect(state.swissByes.get(1)?.map((e) => e.username)).toEqual(['player.7'])
+    })
+
+    /** Asked of each round's OWN fixtures. `advance()` byes whoever the standings leave
+     * over, which is a different entrant every round. */
+    it('follows the round — a later paired round byes somebody else', () => {
+      const state = drawn(drawState(buildSwissOddMidEvent()))
+
+      expect(state.swissByes.get(1)?.map((e) => e.username)).toEqual(['player.7'])
+      expect(state.swissByes.get(2)?.map((e) => e.username)).toEqual(['player.1'])
+    })
+
+    /** A round cut with both sides null names nobody, so *every* entrant is "in no fixture"
+     * of it. It has no bye — it has no pairings yet. */
+    it('byes nobody in a round that is not paired yet', () => {
+      const state = drawn(drawState(buildSwissOddDrawnEvent()))
+
+      expect(state.swissByes.has(2)).toBe(false)
+      expect(state.swissByes.has(3)).toBe(false)
+    })
+
+    /** An even field seats everybody. Eight entrants over a six-seat round — a *stale*
+     * draw, two entries taken since the cut — so there really are entrants in no fixture,
+     * and it is the parity that decides there is no bye rather than an empty subtraction. */
+    it('byes nobody when the field is even, unseated entrants and all', () => {
+      const state = drawn(
+        drawState(buildSwissDrawnEvent({ entrants: buildEntrants(8) })),
+      )
+
+      expect(state.swissByes.size).toBe(0)
+    })
+
+    /**
+     * Never for a bracket, whatever the parity. Its rounds are the same un-pooled shape,
+     * but an entrant in none of them has been **eliminated** — calling that a bye would be
+     * the routing lie again, one layer down.
+     *
+     * The five-entrant bracket is the case that can fail: `buildBracketDrawnEvent` seats
+     * four entrants in its two semifinals, so with an ODD field of five `entry-5` is in no
+     * fixture of a **paired** round — the exact input the swiss subtraction answers, on a
+     * draw type that must not answer it. The four-entrant default cannot tell the gate from
+     * its absence (everybody it lists is seated), so it is here as the ordinary case only.
+     */
+    it('is empty for every draw type but swiss', () => {
+      expect(drawn(drawState(buildBracketDrawnEvent())).swissByes.size).toBe(0)
+      expect(
+        drawn(
+          drawState(buildBracketDrawnEvent({ entrants: buildEntrants(5) })),
+        ).swissByes.size,
+      ).toBe(0)
+      expect(drawn(drawState(buildTwoStageDrawnEvent())).swissByes.size).toBe(0)
+    })
   })
 
   it('lists each pool’s entrants — the members its own fixtures name, by NAME', () => {

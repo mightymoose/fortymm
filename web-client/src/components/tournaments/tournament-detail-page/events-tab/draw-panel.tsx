@@ -10,6 +10,7 @@ import {
   drawState,
   type DrawNotice,
   type DrawRound,
+  type SwissByes,
   type UnpooledShape,
 } from '../../data/draw'
 import type { TournamentEvent } from '../../data/types'
@@ -231,7 +232,11 @@ const DrawBody = ({
               through single-elimination's successor arithmetic. Shown both pre-live (the
               director reviews the seeded round-1 pairings and byes) and live. */}
           {state.unpooled.length > 0 && (
-            <UnpooledDraw shape={state.unpooledShape} rounds={state.unpooled} />
+            <UnpooledDraw
+              shape={state.unpooledShape}
+              rounds={state.unpooled}
+              byes={state.swissByes}
+            />
           )}
         </div>
       )
@@ -267,9 +272,14 @@ const DrawBody = ({
 const UnpooledDraw = ({
   shape,
   rounds,
+  byes,
 }: {
   shape: UnpooledShape
   rounds: DrawRound[]
+  /** Read by the swiss arm alone. `drawState` computes it for that draw type only, so the
+   * other two arms are handed an empty map rather than a claim about their format: an
+   * entrant in none of a bracket round's fixtures has been **eliminated**, not byed. */
+  byes: SwissByes
 }) => {
   switch (shape) {
     case 'bracket':
@@ -299,7 +309,7 @@ const UnpooledDraw = ({
           <h4 className="text-[13px] font-semibold text-[color:var(--fg-1)]">
             Rounds
           </h4>
-          <SwissRounds rounds={rounds} />
+          <SwissRounds rounds={rounds} byes={byes} />
         </section>
       )
 

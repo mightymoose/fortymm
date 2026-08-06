@@ -1785,46 +1785,66 @@ describe('planDraw, swiss', () => {
     expect(plan.ok).toBe(false)
     if (plan.ok) return
     expect(plan.detail).toBe(
-      'A swiss draw needs at least 2 entrants — a field of one has nobody to play.',
+      'A Swiss draw needs at least 2 entrants — a smaller field has nobody to play.',
     )
   })
 
   /**
-   * `R > n - 1` is refused at the **cut**, not at configure time: `n` is not known when the
-   * setting is written, so a round count that was legal when the director typed it must not
-   * become unwritable when somebody withdraws. This is the sentence the API raises
+   * `R > n - 1 + n % 2` is refused at the **cut**, not at configure time: `n` is not known
+   * when the setting is written, so a round count that was legal when the director typed it
+   * must not become unwritable when somebody withdraws. This is the sentence the API raises
    * (`SwissStrategy.plan_initial`), copied verbatim — a paraphrase here would go green
    * against words the server never says.
    */
-  it('refuses more rounds than there are distinct opponents, naming both numbers', () => {
+  it('refuses more rounds than the field can play rematch-free, naming both numbers', () => {
     const plan = planDraw('swiss', entrants(5), [], null, 9)
 
     expect(plan.ok).toBe(false)
     if (plan.ok) return
     expect(plan.detail).toBe(
-      '9 rounds is more than the 4 opponents each of 5 entrants can have — play ' +
-        'fewer rounds, or add entrants.',
+      '9 rounds is more than the 5 rounds a field of 5 entrants can play without a ' +
+        'rematch — play fewer rounds, or add entrants.',
     )
   })
 
-  // The boundary itself is legal: with `n` entrants everybody CAN meet all `n - 1` others.
-  it('accepts exactly n − 1 rounds', () => {
-    const plan = planDraw('swiss', entrants(5), [], null, 4)
+  /**
+   * ⚠️ **The discriminating case for the ceiling.** An ODD field byes one entrant a round,
+   * so over `n` rounds everybody plays `n - 1` matches and sits out once: five entrants can
+   * play five rounds with no rematch. The old bound was `n - 1` for every field and refused
+   * this — a legal swiss, turned away.
+   */
+  it('accepts an odd field’s n-th round', () => {
+    const plan = planDraw('swiss', entrants(5), [], null, 5)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures).toHaveLength(8)
+    // `R × ⌊n/2⌋` — five rounds of two pairings, the fifth entrant sitting each one out.
+    expect(plan.fixtures).toHaveLength(10)
   })
 
-  // Singular/plural, because the message is read by a person. One round against a field of
+  /** The other half of the same claim, and the reason the bound is `n - 1 + n % 2` rather
+   * than `n`: an EVEN field byes nobody, so it still stops at `n - 1`. Without this, a
+   * ceiling read as "a field can play `n` rounds" passes every case above. */
+  it('still refuses an even field’s n-th round', () => {
+    const plan = planDraw('swiss', entrants(6), [], null, 6)
+
+    expect(plan.ok).toBe(false)
+    if (plan.ok) return
+    expect(plan.detail).toBe(
+      '6 rounds is more than the 5 rounds a field of 6 entrants can play without a ' +
+        'rematch — play fewer rounds, or add entrants.',
+    )
+  })
+
+  // Singular/plural, because the message is read by a person. Two rounds against a field of
   // two is the only shape that reaches both nouns at once.
-  it('inflects the sentence for a single round and a single opponent', () => {
+  it('inflects the sentence for a single round of ceiling', () => {
     const plan = planDraw('swiss', entrants(2), [], null, 2)
 
     expect(plan.ok).toBe(false)
     if (plan.ok) return
     expect(plan.detail).toBe(
-      '2 rounds is more than the 1 opponent each of 2 entrants can have — play ' +
-        'fewer rounds, or add entrants.',
+      '2 rounds is more than the 1 round a field of 2 entrants can play without a ' +
+        'rematch — play fewer rounds, or add entrants.',
     )
   })
 

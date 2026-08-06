@@ -314,7 +314,7 @@ export function buildRrThenKoEvent(
  * `buildRrThenKoEvent` gives about its qualifier count: `1` is where any dropped-setting
  * bug lands, so a fixture built on it could not tell "the director's R was threaded
  * through" from "something substituted the minimum". It is also a legal R for this field —
- * the cut refuses `R > n - 1`, and 3 is comfortably under 7.
+ * the cut refuses `R > n - 1 + n % 2`, and 3 is comfortably under 7.
  *
  * `pools: []` is the format, not an omission: swiss ranks the whole field in one table, so
  * an event carrying pools would be describing a shape the draw does not have.
@@ -631,8 +631,8 @@ export function buildDrawnEvent(
  * byte-identical in shape to a single-elimination bracket, so a panel routing on the null
  * renders this as one. Only the DRAW TYPE tells them apart.
  *
- * `rounds: 3` over six entrants is legal at the cut (`R <= n - 1`), so nothing here is a
- * shape the server would have refused.
+ * `rounds: 3` over six entrants is legal at the cut (`R <= n - 1 + n % 2`), so nothing here
+ * is a shape the server would have refused.
  */
 export function buildSwissDrawnEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
@@ -711,6 +711,73 @@ export function buildSwissMidEvent(
       ...cut.fixtures.slice(6),
     ],
     ...overrides,
+  })
+}
+
+/**
+ * A swiss event with an **ODD** field whose draw is cut: **seven** entrants over three
+ * rounds, so `3 × ⌊7/2⌋ = 9` fixtures and one entrant sitting out every round.
+ *
+ * The fixture the bye is about. Round 1 seats `entry-1`…`entry-6` (top half against bottom
+ * half, exactly as `plan_initial` deals it) and `entry-7` is in **no fixture at all** —
+ * because a bye is the ABSENCE of a row (ADR-0786), never a row with a null side. That
+ * absence is precisely why the seventh entrant appeared nowhere in the draw: they are
+ * derivable from the event and from nothing on the fixture.
+ *
+ * `rounds: 3` is legal for this field, and comfortably so — an odd field of 7 can play 7
+ * rounds without a rematch (`R <= n - 1 + n % 2`).
+ *
+ * The fixtures are the six-entrant cut's, unchanged, because they are the same nine rows:
+ * `⌊7/2⌋` is also 3, and top-half-against-bottom-half over seven names deals `entry-1 v
+ * entry-4`, `entry-2 v entry-5`, `entry-3 v entry-6` exactly as over six. The one
+ * difference is the seventh entrant, and the whole point is that no fixture mentions them.
+ */
+export function buildSwissOddDrawnEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildSwissDrawnEvent({
+    id: 'ev-swiss-odd',
+    entrants: buildEntrants(7),
+    ...overrides,
+  })
+}
+
+/**
+ * The odd-field swiss event **one round in**: round 2 paired by `advance()`, byeing a
+ * DIFFERENT entrant (`entry-1`, who won round 1 and now draws the bye) while `entry-7` —
+ * round 1's bye — plays.
+ *
+ * The discriminating fixture for the bye, and it is the same trick `buildSwissMidEvent`
+ * plays on `isPaired`: with only the cut-fresh event above, "who sits out this round?" has
+ * one answer for the whole draw, so an implementation that subtracted against **round 1's**
+ * fixtures for every round would pass. Here the two disagree.
+ */
+export function buildSwissOddMidEvent(
+  // `fixtures` is deliberately NOT overridable: this event *is* its round-2 pairing, and a
+  // caller who replaced the list — to add a round-3 pairing, say — would silently get the
+  // cut-fresh draw back, since a spread override lands after the fixtures below. Want a
+  // different draw? Build it from `buildSwissOddDrawnEvent`.
+  overrides: Partial<Omit<TournamentEvent, 'entered' | 'fixtures'>> = {},
+): TournamentEvent {
+  const cut = buildSwissOddDrawnEvent()
+  const pairing = (position: number, a: string, b: string) =>
+    buildFixture({
+      id: `fx-sw-r2-p${position}`,
+      poolId: null,
+      round: 2,
+      position,
+      entryAId: a,
+      entryBId: b,
+    })
+  return buildSwissOddDrawnEvent({
+    ...overrides,
+    fixtures: [
+      ...cut.fixtures.filter((f) => f.round === 1),
+      pairing(1, 'entry-2', 'entry-3'),
+      pairing(2, 'entry-4', 'entry-5'),
+      pairing(3, 'entry-6', 'entry-7'),
+      ...cut.fixtures.filter((f) => f.round === 3),
+    ],
   })
 }
 

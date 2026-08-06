@@ -158,10 +158,12 @@ MAX_SWISS_ROUNDS = 32
 """The ceiling on **R** — how many rounds a swiss event plays.
 
 The same kind of bound as ``MAX_QUALIFIERS_PER_POOL``, and not the domain rule either.
-The rule that matters moves with the field: ``R <= N - 1``, because with ``N`` entrants
-nobody has more than ``N - 1`` distinct opponents, and the cut refuses more with a
-message naming both numbers (``DegenerateDraw``). This is the *boundary* refusing round
-counts that are nonsense on their face and would otherwise reach the column. A swiss
+The rule that matters moves with the field: ``R <= N - 1 + N % 2``, the number of rounds
+``N`` entrants can play with nobody meeting twice — ``N - 1`` for an even field, and
+``N`` for an odd one, whose per-round bye lets everybody play ``N - 1`` matches and sit
+out once. The cut refuses more with a message naming both numbers (``DegenerateDraw``).
+This is the *boundary* refusing round counts that are nonsense on their face and would
+otherwise reach the column. A swiss
 field of 512 — the largest event this API will hold — is conventionally paired out in
 nine rounds (``ceil(log2 N)``), so 32 is far above any event a table-tennis director
 will run and far below the ``Integer`` column's 2,147,483,647."""
@@ -175,9 +177,10 @@ nothing, a negative count is not a count, and a count in the thousands is not a 
 count whatever the field looks like. Stated once and shared by the create schema, the
 patch schema and the union arm below, so the three cannot drift.
 
-The bound that **moves with the entrant count** — ``R <= N - 1`` — is deliberately not
-here, for the reason ``QualifiersPerPool`` gives: ``N`` is not known when the setting is
-written, and a configuration that was legal when it was written must not become
+The bound that **moves with the entrant count** — ``R <= N - 1 + N % 2`` — is
+deliberately not here, for the reason ``QualifiersPerPool`` gives: ``N`` is not known
+when the setting is written, and a configuration that was legal when it was written must
+not become
 unwritable when a player withdraws."""
 
 

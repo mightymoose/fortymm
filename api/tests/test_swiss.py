@@ -452,7 +452,7 @@ async def test_the_standings_carry_the_whole_field_including_the_byed_entrant(
     assert results["champion"] is None
 
 
-async def test_cutting_more_rounds_than_the_field_has_opponents_is_refused(
+async def test_cutting_more_rounds_than_the_field_can_play_rematch_free_is_refused(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     """A moving bound, refused at the cut in the director's own language, naming both
@@ -469,12 +469,31 @@ async def test_cutting_more_rounds_than_the_field_has_opponents_is_refused(
 
     assert response.status_code == 422, response.text
     assert response.json()["detail"] == (
-        "9 rounds is more than the 4 opponents each of 5 entrants can have — play "
-        "fewer rounds, or add entrants."
+        "9 rounds is more than the 5 rounds a field of 5 entrants can play without a "
+        "rematch — play fewer rounds, or add entrants."
     )
     assert await _fixtures(db_session, event_id) == [], (
         "a refused cut writes nothing at all"
     )
+
+
+async def test_an_odd_field_cuts_a_full_n_rounds(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The QA-found refusal, from the director's end: five entrants, five rounds, cut.
+
+    An odd field byes one entrant a round, so five rounds give everybody four matches
+    and one round off — every opponent met, nothing repeated. The bound was ``n - 1``
+    for every field, which refused this 201 as if it were a rematch.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _field(client, db_session, 5, rounds=5)
+
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+
+    fixtures = await _fixtures(db_session, event_id)
+    assert len(fixtures) == 10  # 5 rounds × ⌊5/2⌋
+    assert sorted({f.round for f in fixtures}) == [1, 2, 3, 4, 5]
 
 
 async def test_the_round_count_is_frozen_once_the_draw_is_cut(

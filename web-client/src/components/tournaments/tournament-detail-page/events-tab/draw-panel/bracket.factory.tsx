@@ -231,6 +231,9 @@ export function buildSingleElimDrawState(
     // implies it.
     unpooledShape: 'bracket',
     unpooled: buildEightEntrantRounds(),
+    // A bracket byes nobody: an entrant in none of its fixtures is **eliminated**, which is
+    // why `drawState` computes the map for swiss alone (`SwissByes`, `../../../data/draw`).
+    swissByes: new Map(),
     ...overrides,
   }
 }

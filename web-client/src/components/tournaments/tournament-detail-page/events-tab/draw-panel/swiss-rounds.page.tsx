@@ -36,6 +36,19 @@ const scoped = (container: Container) => ({
       .trim()
   },
 
+  /** One round's **bye** line — who sits it out. `query…` because its absence is the
+   * assertion for an even field and for a round nobody is paired in yet. */
+  queryBye(round: number) {
+    return container.queryByTestId(`swiss-round-bye-${round}`)
+  },
+  /** That line as one normalised string (`Bye: player.7`) — read as text, because naming
+   * the player IS the whole content of it. */
+  getByeText(round: number) {
+    return (container.getByTestId(`swiss-round-bye-${round}`).textContent ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  },
+
   /** Every round heading in DOM order (`['Round 1', 'Round 2', …]`) — the assertion that
    * **every** cut round is on screen, forthcoming ones included, in order. Read off the
    * headings rather than the lists, because a forthcoming round has no list. */

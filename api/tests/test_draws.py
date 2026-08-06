@@ -2194,39 +2194,64 @@ class TestSwissCut:
         assert all(f.pool_id is None for f in fixtures)
         assert len(fixtures) == 6
 
-    def test_more_rounds_than_distinct_opponents_is_refused(self) -> None:
-        """``R > n − 1`` is a :class:`DegenerateDraw` at the CUT: with five entrants
-        nobody has more than four distinct opponents, so a rematch-free swiss of nine
-        rounds does not exist. Refused here rather than at configure time because ``n``
-        is not known when the setting is written — and the message names both numbers,
-        because it is director-facing copy the endpoint passes straight through."""
+    def test_more_rounds_than_the_field_can_play_rematch_free_is_refused(self) -> None:
+        """``R > n − 1 + n % 2`` is a :class:`DegenerateDraw` at the CUT: five entrants
+        can play at most five rounds without a rematch, so a swiss of nine rounds does
+        not exist. Refused here rather than at configure time because ``n`` is not known
+        when the setting is written — and the message names both numbers, because it is
+        director-facing copy the endpoint passes straight through."""
         with pytest.raises(DegenerateDraw) as refusal:
             SwissStrategy(rounds=9).plan_initial(DrawConfig(), _ordered(5))
 
         message = str(refusal.value)
         assert "9 rounds" in message
-        assert "4 opponents" in message
+        assert "5 rounds" in message
         assert "5 entrants" in message
 
     def test_the_refusal_inflects_its_nouns_for_the_smallest_field(self) -> None:
-        """Two entrants have exactly **one** opponent each, so the sentence is the one
-        shape where both nouns are singular. Director-facing copy is passed through to
-        the director verbatim, and "the 1 opponents" reads as a bug in the product."""
+        """Two entrants play exactly **one** rematch-free round, so the sentence is the
+        one shape where both nouns are singular. Director-facing copy is passed through
+        to the director verbatim, and "the 1 rounds" reads as a bug in the product."""
         with pytest.raises(DegenerateDraw) as refusal:
             SwissStrategy(rounds=2).plan_initial(DrawConfig(), _ordered(2))
 
         assert str(refusal.value) == (
-            "2 rounds is more than the 1 opponent each of 2 entrants can have — play "
-            "fewer rounds, or add entrants."
+            "2 rounds is more than the 1 round a field of 2 entrants can play without "
+            "a rematch — play fewer rounds, or add entrants."
         )
 
-    def test_exactly_n_minus_one_rounds_is_allowed(self) -> None:
-        """The boundary is inclusive on the legal side: five entrants can play four
-        rounds, which is every distinct opponent one of them has. A cut refused here
-        would refuse the fullest swiss a field can play."""
-        fixtures = SwissStrategy(rounds=4).plan_initial(DrawConfig(), _ordered(5))
+    def test_an_even_field_plays_at_most_n_minus_one_rounds(self) -> None:
+        """Everybody plays every round, so an even field's ceiling really is the count
+        of distinct opponents: six entrants play five rounds and no more. The boundary
+        is inclusive on the legal side, and refusing a sixth round is what stops a
+        rematch."""
+        fixtures = SwissStrategy(rounds=5).plan_initial(DrawConfig(), _ordered(6))
+        assert len(fixtures) == 15  # 5 rounds × ⌊6/2⌋
 
-        assert len(fixtures) == 8  # 4 rounds × ⌊5/2⌋
+        with pytest.raises(DegenerateDraw) as refusal:
+            SwissStrategy(rounds=6).plan_initial(DrawConfig(), _ordered(6))
+
+        assert str(refusal.value) == (
+            "6 rounds is more than the 5 rounds a field of 6 entrants can play without "
+            "a rematch — play fewer rounds, or add entrants."
+        )
+
+    def test_an_odd_field_plays_a_full_n_rounds(self) -> None:
+        """The parity the ``n - 1`` rule got wrong. An odd field byes exactly one
+        entrant per round, so over ``n`` rounds everybody plays ``n - 1`` matches and
+        sits out once — meeting every opponent, with no rematch. Five entrants play five
+        rounds, which a bound of ``n - 1`` refused as illegal (QA found it from the UI),
+        and the sixth round is the first that must repeat a pairing."""
+        fixtures = SwissStrategy(rounds=5).plan_initial(DrawConfig(), _ordered(5))
+        assert len(fixtures) == 10  # 5 rounds × ⌊5/2⌋
+
+        with pytest.raises(DegenerateDraw) as refusal:
+            SwissStrategy(rounds=6).plan_initial(DrawConfig(), _ordered(5))
+
+        assert str(refusal.value) == (
+            "6 rounds is more than the 5 rounds a field of 5 entrants can play without "
+            "a rematch — play fewer rounds, or add entrants."
+        )
 
     def test_a_field_of_one_is_refused(self) -> None:
         """Mirrors single-elim's floor: a swiss of one has nobody to play, and the
@@ -2234,6 +2259,19 @@ class TestSwissCut:
         names the real problem."""
         with pytest.raises(DegenerateDraw, match="at least 2 entrants"):
             SwissStrategy(rounds=1).plan_initial(DrawConfig(), _ordered(1))
+
+    def test_an_empty_field_is_refused_by_the_same_sentence(self) -> None:
+        """Zero entrants take the entrant-count refusal, not the round-count one, and
+        the sentence has to be true of them: a field of none has nobody to play just as
+        a field of one does, and copy that says "a field of one" describes the wrong
+        event to the director who cut an empty one."""
+        with pytest.raises(DegenerateDraw) as refusal:
+            SwissStrategy(rounds=1).plan_initial(DrawConfig(), _ordered(0))
+
+        assert str(refusal.value) == (
+            "A Swiss draw needs at least 2 entrants — a smaller field has nobody to "
+            "play."
+        )
 
     def test_a_round_count_below_one_is_a_programmer_error(self) -> None:
         """``R >= 1`` is static — a Pydantic constraint at the request boundary — so a

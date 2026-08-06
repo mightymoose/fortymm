@@ -326,9 +326,10 @@ export const SWISS_ROUNDS_MIN = 1
  * nine rounds (`ceil(log2 n)`), so 32 is far above any event a table-tennis director will
  * run and far below the column's 2,147,483,647.
  *
- * It is **not** the same kind of bound as the server's entrant-dependent one (`R <= N - 1`,
- * because nobody has more than `N - 1` distinct opponents). That one moves with the field
- * and is refused at the **cut** as a degenerate draw — a configuration that was legal when
+ * It is **not** the same kind of bound as the server's entrant-dependent one
+ * (`R <= n - 1 + n % 2`, the rounds a field can play without a rematch — `n - 1` for an even
+ * field, and one more for an odd one, whose bye lets everybody play `n - 1` matches over `n`
+ * rounds). That one moves with the field and is refused at the **cut** as a degenerate draw — a configuration that was legal when
  * it was written must not become unwritable when a player withdraws — so it is deliberately
  * NOT mirrored here. The cut's own refusal says which number to change, in the server's
  * words (`drawRefusalNotice`, `data/draw`). */
@@ -355,12 +356,15 @@ export const swissRoundsSchema = z
   .number({ error: 'Say how many rounds this event plays.' })
   .int({ error: 'The number of rounds must be a whole number.' })
   .min(SWISS_ROUNDS_MIN, {
-    error: `A swiss event plays at least ${SWISS_ROUNDS_MIN} round.`,
+    // "Swiss", capitalised — the word the picker shows (the API's own seeded label,
+    // `DRAW_TYPE_CATALOGUE`), never the `swiss` slug. A raw key in a sentence a director
+    // reads is the leak `labelFor` exists to prevent, one surface over.
+    error: `A Swiss event plays at least ${SWISS_ROUNDS_MIN} round.`,
   })
   // The floor's sentence, turned over — one bound, two directions, one voice. Stated as a
   // number the director can act on, not as "invalid".
   .max(SWISS_ROUNDS_MAX, {
-    error: `A swiss event plays at most ${SWISS_ROUNDS_MAX} rounds.`,
+    error: `A Swiss event plays at most ${SWISS_ROUNDS_MAX} rounds.`,
   })
 
 /** The editor's four tabs, of which three can hold something invalid (Match settings

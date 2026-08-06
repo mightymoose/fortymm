@@ -872,6 +872,23 @@ class RrThenKoStrategy:
         return fills
 
 
+def _max_rematch_free_rounds(size: int) -> int:
+    """How many rounds a field of ``size`` can play with nobody meeting twice.
+
+    **The answer depends on the parity, and an earlier version of this rule did not.**
+    An even field of ``n`` plays ``n - 1`` rounds: everybody plays every round, so the
+    ceiling really is the number of distinct opponents one entrant has. An odd field
+    plays ``n``, because each round byes exactly one entrant — over ``n`` rounds every
+    entrant plays ``n - 1`` matches and sits out once, meeting all ``n - 1`` opponents
+    with no rematch. Refusing an odd field's ``n``-th round refused a legal swiss.
+
+    ``n - 1 + (n % 2)`` is the same statement in one expression, and is the round-robin
+    circle method's round count: pair the odd field with a ghost bye and it is an even
+    field of ``n + 1``, whose ``n`` rounds each sit one real entrant out.
+    """
+    return size - 1 + size % 2
+
+
 @dataclass(frozen=True, slots=True)
 class SwissStrategy:
     """Swiss: a fixed number of rounds, nobody eliminated, each round paired by the
@@ -913,8 +930,8 @@ class SwissStrategy:
     #: How many rounds the event plays. ``R >= 1`` is static — a Pydantic constraint at
     #: the request boundary — so a smaller value is a *programmer* error and is refused
     #: in the constructor; the refusal that depends on the entrant count
-    #: (``R <= n - 1``, which moves as the field does) is a :class:`DegenerateDraw` at
-    #: the cut.
+    #: (``R <= n - 1 + n % 2``, see :func:`_max_rematch_free_rounds`, which moves as the
+    #: field does) is a :class:`DegenerateDraw` at the cut.
     rounds: int
 
     def __post_init__(self) -> None:
@@ -928,20 +945,23 @@ class SwissStrategy:
         size = len(entrants)
         if size < 2:
             raise DegenerateDraw(
-                "A swiss draw needs at least 2 entrants — a field of one has nobody to "
-                "play."
+                "A Swiss draw needs at least 2 entrants — a smaller field has nobody "
+                "to play."
             )
-        if self.rounds > size - 1:
-            # ``n - 1`` is the number of distinct opponents an entrant can have, so past
-            # it a rematch-free swiss cannot exist. Refused at the CUT and not at
+        if self.rounds > _max_rematch_free_rounds(size):
+            # The ceiling is the number of rounds the field can play without a rematch,
+            # and it is NOT simply the ``n - 1`` distinct opponents an entrant has: an
+            # odd field byes one entrant per round, so over ``n`` rounds everybody plays
+            # ``n - 1`` matches and sits out once. Refused at the CUT and not at
             # configure time, because ``n`` is not known when the setting is written —
             # the same split every entrant-count-dependent refusal in this module uses.
+            maximum = _max_rematch_free_rounds(size)
             round_noun = "round" if self.rounds == 1 else "rounds"
-            opponent_noun = "opponent" if size - 1 == 1 else "opponents"
+            maximum_noun = "round" if maximum == 1 else "rounds"
             raise DegenerateDraw(
-                f"{self.rounds} {round_noun} is more than the {size - 1} "
-                f"{opponent_noun} each of {size} entrants can have — play fewer "
-                "rounds, or add entrants."
+                f"{self.rounds} {round_noun} is more than the {maximum} "
+                f"{maximum_noun} a field of {size} entrants can play without a "
+                "rematch — play fewer rounds, or add entrants."
             )
         # The odd entrant out sits the round; ``m`` is the field that actually plays, so
         # every round holds ⌊n/2⌋ fixtures whatever the parity.

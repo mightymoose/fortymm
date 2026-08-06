@@ -160,7 +160,7 @@ describe('eventSchema', () => {
       const result = eventSchema.safeParse(swiss(33))
       expect(result.success).toBe(false)
       expect(result.error?.issues[0].message).toBe(
-        'A swiss event plays at most 32 rounds.',
+        'A Swiss event plays at most 32 rounds.',
       )
     })
 

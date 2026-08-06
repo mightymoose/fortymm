@@ -99,10 +99,18 @@ length of a day that is already booked. The schedule preview also has to answer
 "how long is this day" before anyone has registered, and an explicit `R` is what
 lets it answer honestly.
 
-`R > n - 1` is refused at the cut as `DegenerateDraw`. With `n` entrants a player
-has at most `n - 1` distinct opponents, so beyond that a rematch-free swiss cannot
-exist. This is refused at the cut rather than at configure time, because `n` is
-not known when the setting is written.
+`R > n - 1 + n % 2` is refused at the cut as `DegenerateDraw`. The ceiling is the
+number of rounds the field can play with nobody meeting twice, and that number
+depends on the parity of `n`. An even field plays `n - 1` rounds: everybody plays
+every round, so the ceiling is the count of distinct opponents. An odd field plays
+`n`, because each round byes exactly one entrant, so over `n` rounds every entrant
+plays `n - 1` matches and sits out once. This is refused at the cut rather than at
+configure time, because `n` is not known when the setting is written.
+
+This rule first shipped as `R > n - 1` for every field, justified by the
+distinct-opponent count alone. That justification was off by one for an odd field,
+and the rule **refused a legal draw**: a 5-entrant event could not play 5 rounds,
+which is a rematch-free swiss and the fullest one that field can play.
 
 ## Consequences
 
