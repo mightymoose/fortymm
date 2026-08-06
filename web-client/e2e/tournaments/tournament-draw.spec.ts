@@ -181,7 +181,10 @@ test.describe('Tournaments · cutting the draw', () => {
     await expect(pom.drawPanel(event)).not.toContainText(ME.username)
 
     // --- re-cut: the whole plan is re-made from the field as it now stands ----
+    // Two clicks, not one: re-cutting throws away the pairings standing now, so the verb
+    // opens the consequence confirm and the confirm's own button is what fires it.
     await pom.recutDrawButton(event).click()
+    await pom.irreversibleActConfirmButton.click()
 
     // The re-cut is a real re-deal, not a no-op that left the old fixtures standing: the
     // sixth entrant lands in Pool B (the snake's next seat), and Pool B — a pool of two,
@@ -195,7 +198,9 @@ test.describe('Tournaments · cutting the draw', () => {
     expect(store.fixturesOf(event)).toHaveLength(6) // C(3,2) + C(3,2)
 
     // --- throw it away -------------------------------------------------------
+    // Priced the same way, and for the same reason: nothing here comes back.
     await pom.deleteDrawButton(event).click()
+    await pom.irreversibleActConfirmButton.click()
 
     // Back to the designed empty state — and the event, its entrants and its pools are
     // all still there. Un-cutting removes the draw, not the event.
@@ -414,6 +419,7 @@ test.describe('Tournaments · going live needs a current draw', () => {
     // The notice says: cut the draw again, then start. So do exactly that. Without this,
     // the spec would prove only that the tournament is stuck.
     await pom.recutDrawButton(EVENT.JOURNEY).click()
+    await pom.irreversibleActConfirmButton.click()
     await expect(pom.drawPanel(EVENT.JOURNEY)).toContainText(ME.username)
 
     await pom.lifecycleButton('Start tournament').click()
