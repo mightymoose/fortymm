@@ -96,6 +96,7 @@ async def _add_event(
     *,
     draw_type: DrawType = DrawType.round_robin,
     qualifiers_per_pool: int | None = None,
+    rounds: int | None = None,
     max_players: int | None = 6,
     pools: list[dict[str, object]] | None = None,
     length_games: int = 5,
@@ -107,7 +108,7 @@ async def _add_event(
         name=name,
         format=EventFormat.singles,
         draw_settings=event_draw_settings(
-            draw_type, qualifiers_per_pool=qualifiers_per_pool
+            draw_type, qualifiers_per_pool=qualifiers_per_pool, rounds=rounds
         ),
         max_players=max_players,
         entry_fee=Decimal("0"),
@@ -408,21 +409,30 @@ async def test_preview_snapshot_count_override_resizes_field(
 
 @pytest.mark.parametrize(
     "draw_type",
-    # Single-elim is the whole live subject now the enum holds only draw types that
-    # run (ADR "a draw type is a seeded row, …"): it *can* be cut (#785), but the
-    # CP-SAT table scheduler is pool-based and a pool-less bracket has no windows to
-    # solve over, so the preview must refuse it rather than invent a grid. The old
-    # double-elim / swiss subjects are no longer enum members, and ``rr-then-ko`` is
+    # The two POOL-LESS draw types, which is the whole criterion: both *can* be cut,
+    # but the CP-SAT table scheduler is pool-based and a draw with no pools has no
+    # windows to solve over, so the preview refuses them rather than invent a grid.
+    # Single-elim is the bracket (#785); swiss ranks one field in one table (ADR "swiss
+    # pre-cuts every round and pairs each one on advance"). ``rr-then-ko`` is
     # deliberately NOT here: it has a pool stage that schedules perfectly well, so it
     # is previewed in part rather than refused (see the two tests below).
-    [DrawType.single_elim],
+    [DrawType.single_elim, DrawType.swiss],
 )
 async def test_preview_snapshot_unsupported_draw_raises(
     db_session: AsyncSession, default_league: League, draw_type: DrawType
 ) -> None:
     owner = await make_user(db_session, f"prev-unsup-{draw_type.value}")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    await _add_event(db_session, tournament, draw_type=draw_type, max_players=8)
+    await _add_event(
+        db_session,
+        tournament,
+        draw_type=draw_type,
+        # Swiss requires a round count on its settings arm; single-elim carries no
+        # setting at all. The refusal is about neither — it is about the pools these
+        # draw types do not have.
+        rounds=3 if draw_type is DrawType.swiss else None,
+        max_players=8,
+    )
     loaded = await _load(db_session, tournament.id)
 
     with pytest.raises(UnsupportedDrawType):

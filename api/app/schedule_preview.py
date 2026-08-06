@@ -48,7 +48,11 @@ production's own ``cut_draw`` uses:
   event, so a partial snapshot would be a fiction rather than a subset. This is the
   only surviving raiser of ``UnsupportedDrawType``:
   :func:`app.draws.strategy_for` is total, because the enum holds only draw types
-  that run (ADR).
+  that run (ADR);
+* **swiss** — refused loud too, and it shares single-elim's ``case`` arm because it
+  is refused for single-elim's reason: its draw is pool-less **end to end** (ADR
+  "swiss pre-cuts every round and pairs each one on advance"), so there is no pool
+  stage for the pool-based scheduler to solve over and no partial preview to give.
 
 The refusal is per **event** but aborts the whole **tournament**'s preview — this
 builder sits inside a per-event loop of a whole-tournament build. That is why
@@ -329,7 +333,12 @@ def build_preview_snapshot(
                 fixtures = strategy_for_event(event).plan_initial(
                     draw_config(event), ordered_entrants
                 )
-            case DrawType.single_elim:
+            case DrawType.single_elim | DrawType.swiss:
+                # Swiss takes single-elim's path for single-elim's reason: it is
+                # POOL-LESS (ADR "swiss pre-cuts every round and pairs each one on
+                # advance"), and the preview covers the pool stage. A director asking
+                # for one is told the format has no preview, rather than shown an empty
+                # day that silently covers nothing.
                 raise UnsupportedDrawType(draw_type)
             case _:
                 assert_never(draw_type)

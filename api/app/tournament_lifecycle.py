@@ -356,9 +356,10 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
         raise TournamentNotReadyToGoLiveError(
             _NOTHING_TO_START, uncut=[], stale=[], no_events=True
         )
-    # ONE batched read for the whole tournament (two statements, whatever the number
-    # of events): this runs with the row lock held, and a per-event query would hold
-    # it for a time that grows with the tournament.
+    # ONE batched read for the whole tournament (three statements, whatever the number
+    # of events — entries, fixtures, and the draw types the bye allowance turns on):
+    # this runs with the row lock held, and a per-event query would hold it for a time
+    # that grows with the tournament.
     currency = await draw_currency_by_event(db, [event_id for event_id, _ in events])
     uncut: list[str] = []
     stale: list[str] = []

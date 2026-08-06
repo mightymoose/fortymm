@@ -4352,6 +4352,7 @@ internal enum Components {
             case singleElim = "single-elim"
             case roundRobin = "round-robin"
             case rrThenKo = "rr-then-ko"
+            case swiss = "swiss"
         }
         /// One selectable draw format, as the ``draw_types`` table holds it.
         ///
@@ -9953,6 +9954,62 @@ internal enum Components {
             case live = "live"
             case final = "final"
         }
+        /// The **pool-less standings** shape of an event's results — the swiss arm of the
+        /// ``results`` discriminated union, tagged ``kind: "swiss_standings"`` (ADR "swiss
+        /// pre-cuts every round and pairs each one on advance").
+        ///
+        /// One table over the whole field, because swiss has no pools: everybody is ranked
+        /// against everybody, which is what pairing by score is for. The rows are the *same*
+        /// :class:`StandingRowRead` a round-robin pool carries, so a client renders this with
+        /// the table it already has — the difference is that they arrive as one list rather
+        /// than grouped under a pool, which is a fact about the format and not a second row
+        /// shape.
+        ///
+        /// ``complete`` is every round decided, including the later rounds that are cut up
+        /// front with their sides still unknown. ``champion`` is the leader of a complete
+        /// event — a swiss ranks its whole field, so unlike the round-robin arm there is no
+        /// multi-pool carve-out — and ``null`` until then. Derived live from the fixtures'
+        /// completed matches like every other results shape.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead`.
+        internal struct SwissStandingsResultsRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case swissStandings = "swiss_standings"
+            }
+            /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/kind`.
+            internal var kind: Components.Schemas.SwissStandingsResultsRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/rows`.
+            internal var rows: [Components.Schemas.StandingRowRead]
+            /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/complete`.
+            internal var complete: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/champion`.
+            internal var champion: Swift.String?
+            /// Creates a new `SwissStandingsResultsRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - rows:
+            ///   - complete:
+            ///   - champion:
+            internal init(
+                kind: Components.Schemas.SwissStandingsResultsRead.KindPayload? = nil,
+                rows: [Components.Schemas.StandingRowRead],
+                complete: Swift.Bool,
+                champion: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.rows = rows
+                self.complete = complete
+                self.champion = champion
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case rows
+                case complete
+                case champion
+            }
+        }
         /// Two or more in-progress matches recorded on the *same table* at
         /// overlapping times — physically impossible (a table holds one match), so
         /// contradictory data from a soft manual placement PATCH. Resolved: the table's
@@ -10420,6 +10477,8 @@ internal enum Components {
             internal var drawType: Components.Schemas.DrawType
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/qualifiers_per_pool`.
             internal var qualifiersPerPool: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/rounds`.
+            internal var rounds: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/max_players`.
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/entry_fee`.
@@ -10441,6 +10500,7 @@ internal enum Components {
             ///   - format:
             ///   - drawType:
             ///   - qualifiersPerPool:
+            ///   - rounds:
             ///   - maxPlayers:
             ///   - entryFee:
             ///   - timezone:
@@ -10453,6 +10513,7 @@ internal enum Components {
                 format: Components.Schemas.EventFormat,
                 drawType: Components.Schemas.DrawType,
                 qualifiersPerPool: Swift.Int? = nil,
+                rounds: Swift.Int? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
                 timezone: Swift.String,
@@ -10465,6 +10526,7 @@ internal enum Components {
                 self.format = format
                 self.drawType = drawType
                 self.qualifiersPerPool = qualifiersPerPool
+                self.rounds = rounds
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
                 self.timezone = timezone
@@ -10478,6 +10540,7 @@ internal enum Components {
                 case format
                 case drawType = "draw_type"
                 case qualifiersPerPool = "qualifiers_per_pool"
+                case rounds
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
                 case timezone
@@ -10503,6 +10566,10 @@ internal enum Components {
                 self.qualifiersPerPool = try container.decodeIfPresent(
                     Swift.Int.self,
                     forKey: .qualifiersPerPool
+                )
+                self.rounds = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .rounds
                 )
                 self.maxPlayers = try container.decodeIfPresent(
                     Swift.Int.self,
@@ -10537,6 +10604,7 @@ internal enum Components {
                     "format",
                     "draw_type",
                     "qualifiers_per_pool",
+                    "rounds",
                     "max_players",
                     "entry_fee",
                     "timezone",
@@ -10561,6 +10629,8 @@ internal enum Components {
             internal var drawType: Components.Schemas.DrawType
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/qualifiers_per_pool`.
             internal var qualifiersPerPool: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/rounds`.
+            internal var rounds: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/max_players`.
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_fee`.
@@ -10636,6 +10706,8 @@ internal enum Components {
                 case standings(Components.Schemas.StandingsResultsRead)
                 /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results/StandingsThenFinishesResultsRead`.
                 case standingsThenFinishes(Components.Schemas.StandingsThenFinishesResultsRead)
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results/SwissStandingsResultsRead`.
+                case swissStandings(Components.Schemas.SwissStandingsResultsRead)
                 internal enum CodingKeys: String, CodingKey {
                     case kind
                 }
@@ -10652,6 +10724,8 @@ internal enum Components {
                         self = .standings(try .init(from: decoder))
                     case "standings_then_finishes":
                         self = .standingsThenFinishes(try .init(from: decoder))
+                    case "swiss_standings":
+                        self = .swissStandings(try .init(from: decoder))
                     default:
                         throw Swift.DecodingError.unknownOneOfDiscriminator(
                             discriminatorKey: CodingKeys.kind,
@@ -10667,6 +10741,8 @@ internal enum Components {
                     case let .standings(value):
                         try value.encode(to: encoder)
                     case let .standingsThenFinishes(value):
+                        try value.encode(to: encoder)
+                    case let .swissStandings(value):
                         try value.encode(to: encoder)
                     }
                 }
@@ -10690,6 +10766,7 @@ internal enum Components {
             ///   - format:
             ///   - drawType:
             ///   - qualifiersPerPool:
+            ///   - rounds:
             ///   - maxPlayers:
             ///   - entryFee:
             ///   - timezone:
@@ -10711,6 +10788,7 @@ internal enum Components {
                 format: Components.Schemas.EventFormat,
                 drawType: Components.Schemas.DrawType,
                 qualifiersPerPool: Swift.Int? = nil,
+                rounds: Swift.Int? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
                 timezone: Swift.String,
@@ -10732,6 +10810,7 @@ internal enum Components {
                 self.format = format
                 self.drawType = drawType
                 self.qualifiersPerPool = qualifiersPerPool
+                self.rounds = rounds
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
                 self.timezone = timezone
@@ -10754,6 +10833,7 @@ internal enum Components {
                 case format
                 case drawType = "draw_type"
                 case qualifiersPerPool = "qualifiers_per_pool"
+                case rounds
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
                 case timezone
@@ -10836,6 +10916,8 @@ internal enum Components {
             internal var drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/qualifiers_per_pool`.
             internal var qualifiersPerPool: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/rounds`.
+            internal var rounds: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/max_players`.
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/entry_fee`.
@@ -10893,6 +10975,7 @@ internal enum Components {
             ///   - format:
             ///   - drawType:
             ///   - qualifiersPerPool:
+            ///   - rounds:
             ///   - maxPlayers:
             ///   - entryFee:
             ///   - timezone:
@@ -10905,6 +10988,7 @@ internal enum Components {
                 format: Components.Schemas.TournamentEventUpdate.FormatPayload? = nil,
                 drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload? = nil,
                 qualifiersPerPool: Swift.Int? = nil,
+                rounds: Swift.Int? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double? = nil,
                 timezone: Swift.String? = nil,
@@ -10917,6 +11001,7 @@ internal enum Components {
                 self.format = format
                 self.drawType = drawType
                 self.qualifiersPerPool = qualifiersPerPool
+                self.rounds = rounds
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
                 self.timezone = timezone
@@ -10930,6 +11015,7 @@ internal enum Components {
                 case format
                 case drawType = "draw_type"
                 case qualifiersPerPool = "qualifiers_per_pool"
+                case rounds
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
                 case timezone
@@ -10955,6 +11041,10 @@ internal enum Components {
                 self.qualifiersPerPool = try container.decodeIfPresent(
                     Swift.Int.self,
                     forKey: .qualifiersPerPool
+                )
+                self.rounds = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .rounds
                 )
                 self.maxPlayers = try container.decodeIfPresent(
                     Swift.Int.self,
@@ -10989,6 +11079,7 @@ internal enum Components {
                     "format",
                     "draw_type",
                     "qualifiers_per_pool",
+                    "rounds",
                     "max_players",
                     "entry_fee",
                     "timezone",

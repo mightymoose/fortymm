@@ -25,7 +25,8 @@ const row = (over: Partial<Record<string, unknown>> = {}) => ({
  * discover at the moment they cut the draw that it was never possible. The API's enum
  * now holds exactly what runs, and what does not is a **422 at the request boundary** —
  * a set that moves in both directions: `rr-then-ko` was removed with the other three and
- * came back in #1227 the moment its strategy landed.
+ * came back in #1227 the moment its strategy landed, and `swiss` came back the same way
+ * when `SwissStrategy` learned to cut a draw.
  *
  * What survives on the client is a *vocabulary*, not an offer, and it is declared
  * **once**: `DRAW_TYPES` in `./draw-types`, with `drawTypeSchema` (the event form's
@@ -48,9 +49,9 @@ describe('the draw-type vocabulary (a contract with the API, not a menu)', () =>
   })
 
   it('makes a draw type the server would 422 a compile error', () => {
-    // @ts-expect-error 'swiss' left the API's enum — it is not a draw type any more.
-    const drawType: DrawType = 'swiss'
-    expect(drawType).toBe('swiss')
+    // @ts-expect-error 'double-elim' is not in the API's enum — nothing can plan it.
+    const drawType: DrawType = 'double-elim'
+    expect(drawType).toBe('double-elim')
   })
 })
 
@@ -88,7 +89,7 @@ describe('parseDrawTypeCatalogue', () => {
   it('drops a draw type this build does not know, and keeps the rest', () => {
     const options = parseDrawTypeCatalogue([
       row({ key: 'round-robin', name: 'Round robin', display_order: 1 }),
-      row({ key: 'swiss', name: 'Swiss', display_order: 2 }),
+      row({ key: 'double-elim', name: 'Double elimination', display_order: 2 }),
     ])
 
     expect(options).toEqual([{ value: 'round-robin', label: 'Round robin' }])
@@ -115,6 +116,22 @@ describe('parseDrawTypeCatalogue', () => {
     expect(options).toEqual([
       { value: 'round-robin', label: 'Round robin' },
       { value: 'rr-then-ko', label: 'Round-robin then knockout' },
+    ])
+  })
+
+  /** The same pin for `swiss`, the second slug to make the trip from "a 422 at the
+   * request boundary" back to "a seeded row the picker must offer" (ADR "swiss pre-cuts
+   * every round and pairs each one on advance"). Written out rather than mapped from
+   * `DRAW_TYPES`, for the reason the rr-then-ko case gives above. */
+  it('keeps the swiss row the server seeds, rather than dropping it', () => {
+    const options = parseDrawTypeCatalogue([
+      row({ key: 'round-robin', name: 'Round robin', display_order: 1 }),
+      row({ key: 'swiss', name: 'Swiss', display_order: 4 }),
+    ])
+
+    expect(options).toEqual([
+      { value: 'round-robin', label: 'Round robin' },
+      { value: 'swiss', label: 'Swiss' },
     ])
   })
 

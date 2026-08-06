@@ -13,9 +13,13 @@
 // - **Pool membership is not stored.** ADR-0786: it is derived from the fixtures
 //   themselves, exactly as `entered` is derived from the entries (ADR-0016).
 // - **A bye is the ABSENCE of a fixture**, never a row. An odd pool simply has fewer
-//   fixtures in some rounds. Nothing here invents a "bye" line, because nothing on the
-//   wire says one is missing — and a derived one would be a second, drift-prone copy of
-//   the planner's rotation.
+//   fixtures in some rounds. Nothing here invents a fixture to stand for one, and nothing
+//   asks the server for a "byed entrant" field — a stored one would be a second,
+//   drift-prone copy of the planner's rotation. For a **swiss** round, whose whole field
+//   is one table, the absence is read back off the data already here (`SwissByes`): the
+//   event's entrants minus the entry ids the round's fixtures name. A pool's bye is not
+//   derived, because "in no fixture of this pool" also describes every entrant in the
+//   other pools.
 //
 // All of it is a pure function of one event, so it is unit-tested (`./draw.test.ts`)
 // rather than asserted through a DOM.
@@ -27,16 +31,20 @@ import { poolsInOrder } from './helpers'
 import { fallbackNotice, type Notice } from './notice'
 import { labelFor } from './options'
 import type {
+  DrawType,
   DrawTypeOption,
   Entrant,
   Fixture,
   TournamentEvent,
 } from './types'
 
-/** A fixture side whose feeding fixture is not decided yet (`entryAId`/`entryBId` is
- * `null` — ADR-0786: "**TBD**, never a bye"). Round-robin never produces one; a
- * knockout round does, and it is the state the panel must render as a word rather than
- * as a blank half-line. */
+/** A fixture side whose occupant is not decided yet (`entryAId`/`entryBId` is
+ * `null` — ADR-0786: "**TBD**, never a bye"). Round-robin never produces one. A knockout
+ * round does, because the fixture that feeds it is undecided — and **swiss produces the
+ * most of them**, for a different reason: every round past the first is cut up front with
+ * *both* sides `null` and stays that way until `advance()` pairs it from the standings.
+ * Either way it is the state the panel must render as a word rather than as a blank
+ * half-line. */
 export const TBD_LABEL = 'TBD'
 
 /** A fixture side naming an entry the event **no longer lists**.
@@ -98,6 +106,29 @@ export interface DrawRound {
   fixtures: FixtureLine[]
 }
 
+/**
+ * Who **sits out** each round of a swiss draw, keyed by round number — derived, never
+ * sent.
+ *
+ * A bye is still the ABSENCE of a fixture (the file header above, ADR-0786): nothing here
+ * invents a fixture row, and nothing asks the server for a new field. It is set
+ * subtraction over data already on the page — the event's entrants, minus the entry ids
+ * that round's fixtures name.
+ *
+ * A round that is **not in the map** byes nobody, and there are three ways to be absent:
+ * the draw type is not swiss, the field is even (an even field seats everybody), or the
+ * round is **not paired yet**. That last one is the load-bearing case: a swiss draw cuts
+ * every round up front with both sides null, so in a forthcoming round *every* entrant is
+ * "in no fixture" — and a renderer that subtracted anyway would list the whole field under
+ * every round the event has not reached.
+ *
+ * The value is a **list**, not one entrant, because a stale draw (entries taken since the
+ * cut — CONTEXT.md's "current" draw) genuinely leaves more than one player unseated. It
+ * names whoever is not in the round, honestly, rather than guessing which of them the
+ * planner would have byed.
+ */
+export type SwissByes = ReadonlyMap<number, Entrant[]>
+
 /** One pool of a cut draw: the pool as the event names it, the entrants the draw dealt
  * into it (derived from its fixtures), and those fixtures grouped by round. */
 export interface PoolDraw {
@@ -107,6 +138,75 @@ export interface PoolDraw {
    * fixtures, never stored (ADR-0786). */
   entrants: Entrant[]
   rounds: DrawRound[]
+}
+
+/**
+ * How an event's **un-pooled fixtures read** — the one decision that says which view the
+ * draw panel gives them.
+ *
+ * ⚠️ **It is a fact about the DRAW TYPE, never about `poolId` being null**, and that
+ * distinction is the whole reason this type exists. `pool_id IS NULL` is the *stage*
+ * discriminator: for an `rr-then-ko` draw it means "the knockout stage" and will keep
+ * meaning exactly that. Swiss is a different **draw type** that happens to share the null,
+ * because it is pool-less end to end. Reading the null as "this is a bracket" conflated the
+ * two and rendered a swiss draw through single-elimination's successor arithmetic — the one
+ * thing the ADR says swiss does not have (ADR "swiss pre-cuts every round and pairs each
+ * one on advance": "swiss has no successor arithmetic").
+ *
+ * A third answer exists because the first two are both *claims about a format*, and one case
+ * can make neither: a round-robin fixture naming a pool the event does not list. It is shown
+ * — nothing is ever dropped — as `'orphaned'`, which says only that.
+ */
+export type UnpooledShape =
+  /** Rounds-as-columns, named back from the final (`Bracket`). */
+  | 'bracket'
+  /** A flat list of rounds, the unpaired ones announced as forthcoming (`SwissRounds`). */
+  | 'swiss-rounds'
+  /** Nothing this event's format can place: a plain list of the fixtures, under a neutral
+   * heading (`RoundList`). The honest shape for a fixture the format view has no home for —
+   * shown, because a fixture is never dropped, and named nothing it is not. */
+  | 'orphaned'
+
+/**
+ * Which view an event's un-pooled fixtures get — **exhaustive over `DrawType`, with no
+ * catch-all**, so a fifth draw type is a compile error here until somebody says how its
+ * draw reads.
+ *
+ * That exhaustiveness is the point. The routing this replaces was a value check
+ * (`unpooled.length > 0` → render a bracket), which no type checker can see through: swiss
+ * landed, shared the null, and silently rendered as a knockout bracket with nothing red.
+ */
+export function unpooledShape(drawType: DrawType): UnpooledShape {
+  switch (drawType) {
+    case 'single-elim':
+      return 'bracket'
+    case 'rr-then-ko':
+      // The knockout stage, which IS a bracket — `pool_id IS NULL` is the stage
+      // discriminator for this draw type, and the pool stage renders above it as pools.
+      return 'bracket'
+    case 'round-robin':
+      // A round-robin draw has no un-pooled fixtures the server can send: every fixture is
+      // dealt into a pool. One reaching here names a pool the event does not list, which is
+      // a payload that cannot legitimately arise — and `drawState` deliberately does not
+      // DROP it (see below). It is shown, as itself: `'orphaned'`, a plain list under a
+      // neutral heading.
+      //
+      // It used to answer `'bracket'`, which was the same class of lie the swiss routing
+      // fix exists to stop, aimed at round-robin instead. `Bracket` names its rounds
+      // backwards from the last round present, so a single stray fixture rendered inside a
+      // section headed "Bracket" with its round labelled "Final" — a knockout this event
+      // does not have, a final nobody played.
+      return 'orphaned'
+    case 'swiss':
+      // Pool-less by design, and NOT a bracket: nobody is eliminated, `position` is a
+      // pairing rank rather than a topology, and rounds past the first are cut with both
+      // sides unknown until `advance()` pairs them.
+      return 'swiss-rounds'
+    default: {
+      const exhaustive: never = drawType
+      return exhaustive
+    }
+  }
 }
 
 /**
@@ -122,12 +222,20 @@ export type DrawState =
       kind: 'drawn'
       /** The pools the draw actually used, in the event's own pool order. */
       pools: PoolDraw[]
-      /** Fixtures belonging to **no pool** — an un-pooled draw (single-elim), or the
-       * knockout stage of a combined draw type (#787; ADR-0786: `pool_id` is `null` for
-       * both). A fixture that has no pool must not be *dropped*: it is rendered as a
-       * bracket (#785), and anything a bracket cannot place is still shown, honestly,
-       * outside the pools. */
+      /** Fixtures belonging to **no pool** — a pool-less draw (single-elim, swiss), or the
+       * knockout stage of a combined draw type (#787; ADR-0786: `pool_id` is `null` for all
+       * of them). A fixture that has no pool must not be *dropped*: it is rendered,
+       * honestly, outside the pools.
+       *
+       * **Which view it gets is `unpooledShape` below, not this list.** */
       unpooled: DrawRound[]
+      /** How `unpooled` reads — decided from the event's **draw type**, once, here, so no
+       * renderer has to infer a format from a null pool id. */
+      unpooledShape: UnpooledShape
+      /** Who sits out each **paired swiss round**, by round number (`SwissByes`). Empty
+       * for every other draw type — an entrant missing from a bracket round is
+       * eliminated, not byed. */
+      swissByes: SwissByes
     }
 
 /**
@@ -196,6 +304,52 @@ function roundsOf(fixtures: Fixture[], byId: Map<string, Entrant>): DrawRound[] 
     }))
 }
 
+/**
+ * The entrants a **swiss** round leaves out — the byes (`SwissByes`), computed once from
+ * the event's entrants and its un-pooled fixtures.
+ *
+ * Three gates, and each one is a different fact:
+ *
+ * 1. **The draw type is swiss.** A bracket's un-pooled rounds are the same shape, and an
+ *    entrant missing from one of those is *eliminated*, not byed — naming them "Bye" would
+ *    be the same class of lie as rendering a swiss draw as a knockout (`unpooledShape`).
+ * 2. **The field is odd.** An even field seats everybody, so "nobody sits out" is not news
+ *    — it is a line on every round of every event, saying nothing.
+ * 3. **The round is paired.** Asked of the fixtures' entry ids, exactly as the renderer
+ *    asks it of the sides: a cut-but-unpaired round names nobody at all, so subtracting
+ *    would report the entire field as sitting out a round that has not been drawn yet.
+ *
+ * A withdrawn entry counts as seated — its id is on the fixture, and it is that presence
+ * that makes the draw *stale* (`WITHDRAWN_LABEL`). It is not in `entrants`, so it never
+ * appears as a bye either way.
+ */
+function swissByesOf(event: TournamentEvent, unpooled: Fixture[]): SwissByes {
+  const byes = new Map<number, Entrant[]>()
+  if (unpooledShape(event.drawType) !== 'swiss-rounds') return byes
+  if (event.entrants.length % 2 === 0) return byes
+
+  const seatedByRound = new Map<number, Set<string>>()
+  for (const fixture of unpooled) {
+    const seated = seatedByRound.get(fixture.round) ?? new Set<string>()
+    if (fixture.entryAId !== null) seated.add(fixture.entryAId)
+    if (fixture.entryBId !== null) seated.add(fixture.entryBId)
+    seatedByRound.set(fixture.round, seated)
+  }
+
+  const inDrawOrder = drawOrder(event.entrants)
+  for (const [round, seated] of seatedByRound) {
+    // Nobody seated at all — the round is cut but not yet paired. Gate 3.
+    if (seated.size === 0) continue
+    // In draw order, the order every other list of entrants on this page is in.
+    const sittingOut = inDrawOrder.filter((entrant) => !seated.has(entrant.id))
+    // A round that byes nobody is simply absent — never a key holding an empty list,
+    // which a renderer would have to ask about twice. (Reachable on a stale draw whose
+    // field has SHRUNK: the round seats withdrawn ids, and every current entrant plays.)
+    if (sittingOut.length > 0) byes.set(round, sittingOut)
+  }
+  return byes
+}
+
 /** An event has a draw exactly when it has fixtures — the ONE definition of it, guarded
  * on by `drawState` below and asked by the editor's two freezes.
  *
@@ -260,7 +414,18 @@ export function drawState(event: TournamentEvent): DrawState {
     ]
   })
 
-  return { kind: 'drawn', pools, unpooled: roundsOf(unpooled, byId) }
+  return {
+    kind: 'drawn',
+    pools,
+    unpooled: roundsOf(unpooled, byId),
+    // Read off the DRAW TYPE, never off the null pool id the fixtures above were bucketed
+    // by — see `unpooledShape`.
+    unpooledShape: unpooledShape(event.drawType),
+    // Computed from the entry IDS, here, where they are — the same join `roundsOf` makes
+    // for the names, and the reason this is not the renderer's job: a `FixtureLine` has
+    // usernames on it and no ids at all.
+    swissByes: swissByesOf(event, unpooled),
+  }
 }
 
 /**

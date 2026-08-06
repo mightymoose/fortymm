@@ -277,10 +277,15 @@ class DashboardTournamentEvent(BaseModel):
     is_live: bool
     wins: int
     losses: int
-    # The caller's 1-based rank in their pool, and how many players are in it.
-    # ``position`` is ``None`` when the event has no POOL standings to rank the caller
-    # in: no draw cut yet, or a draw type whose results are not standings at all —
-    # single-elim reads out **finishes**, a placement list, not a per-pool table
+    # The caller's 1-based rank in whichever standings table ranks them, and how many
+    # players that table holds: their **pool** under round-robin and under an
+    # rr-then-ko event's pool stage, and the **whole field** under swiss, which is
+    # pool-less and ranks everybody in one table (ADR "swiss pre-cuts every round and
+    # pairs each one on advance").
+    #
+    # ``position`` is ``None`` when the event has no such table to rank the caller in:
+    # no draw cut yet, or a draw type whose results are not standings at all —
+    # single-elim reads out **finishes**, a placement list, not a standings table
     # (ADR-0785). Either way a fact, not a zero.
     position: int | None
     field_size: int

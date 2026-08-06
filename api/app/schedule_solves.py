@@ -131,12 +131,26 @@ start; the pure module holds its table to ``max(estimated end, now + bucket)``
 so an overrun keeps blocking. A real "match started" fact is a later drop-in
 that replaces one condition here.
 
-Un-pooled fixtures (``pool_id IS NULL`` — single-elim today, and a pools-then-knockout
-draw type's KO stage once #787 adds one) are not scheduled: the solver's windows come
+Un-pooled fixtures (``pool_id IS NULL`` — single-elim, swiss, and an rr-then-ko
+draw type's KO stage) are not scheduled: the solver's windows come
 from pools (KO-stage
 scheduling is a designed later layer, per the ADR). Fixtures with a TBD side
 cannot be placed and are left out of the snapshot; both still count toward the
 fingerprint, so their arrival or resolution is drift like any other.
+
+**For swiss that rule costs the WHOLE event, and nothing else states it.**
+Single-elim and rr-then-ko each lose a *stage* to it, but a swiss draw is
+un-pooled end to end (ADR "swiss pre-cuts every round and pairs each one on
+advance"), so **every** fixture of one is skipped here. No swiss fixture is ever
+given a *solved* table or a *solved* start: a swiss event is absent from every
+schedule this module produces, and nothing in one is ever placed automatically.
+
+The only table and time a swiss fixture ever gets is one a director typed in.
+A manual placement (:func:`app.tournaments.place_fixture`) pins whatever it is
+given and never asks the fixture for a pool, and from there the fixture flows
+through the ordinary pin/call machinery like any other hand placement — so a
+hand-placed swiss fixture *is* called, this module simply never plans one.
+Solving swiss for real is unbuilt, not designed away.
 """
 
 import hashlib
@@ -865,8 +879,15 @@ async def _load_solver_inputs(
     for event, settings, _pools in parsed_events:
         for fixture in fixtures_by_event[event.id]:
             if fixture.pool_id is None:
-                # Un-pooled (single-elim / a KO stage): no pool, no window —
-                # KO scheduling is a later layer (module docstring).
+                # Un-pooled (single-elim / swiss / a KO stage): no pool, no
+                # window — KO scheduling is a later layer (module docstring).
+                #
+                # For swiss this `continue` skips the ENTIRE event rather than a
+                # stage of it: a swiss draw is un-pooled end to end, so no
+                # fixture of one is ever given a SOLVED table or start and
+                # nothing in one is ever placed automatically. The only table
+                # and time a swiss fixture gets is one a director typed in
+                # (module docstring).
                 continue
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it

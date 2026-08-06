@@ -23,6 +23,12 @@ const scoped = (container: Container) => ({
     return container.queryByTestId(`two-stage-panel-${eventId}`)
   },
 
+  /** The **swiss** block, by event id — present only when the results are the
+   * `swiss_standings` arm. `query…` for the same reason as the rest. */
+  querySwissPanel(eventId: string) {
+    return container.queryByTestId(`swiss-standings-panel-${eventId}`)
+  },
+
   /** Each block's own champion callout, by event id. The two-stage arm asserts the STAGE
    * callouts are absent (it crowns once, itself), so all three need a `query…`. */
   queryStandingsChampion(eventId: string) {
@@ -33,6 +39,9 @@ const scoped = (container: Container) => ({
   },
   queryTwoStageChampion(eventId: string) {
     return container.queryByTestId(`two-stage-champion-${eventId}`)
+  },
+  querySwissChampion(eventId: string) {
+    return container.queryByTestId(`swiss-champion-${eventId}`)
   },
 
   /** A block's champion callout, by its full test id. The panels are handed their view now,

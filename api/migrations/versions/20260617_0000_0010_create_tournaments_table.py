@@ -91,6 +91,19 @@ DRAW_TYPE_SEED = [
         "knockout bracket.",
         3,
     ),
+    (
+        "swiss",
+        # The director-facing copy is pinned by the ADR "swiss pre-cuts every
+        # round and pairs each one on advance" — it is seed data, so changing
+        # either string is a migration.
+        "Swiss",
+        "A fixed number of rounds, each pairing entrants who are on similar "
+        "scores. Nobody is eliminated and everybody plays every round, so a "
+        "large field is ranked in far fewer matches than a round robin — but a "
+        "round's pairings are only known once the round before it has finished, "
+        "and a long event may repeat a pairing.",
+        4,
+    ),
 ]
 
 
@@ -163,9 +176,10 @@ def upgrade() -> None:
         # The draw type's settings, as ONE NOT NULL JSON object (ADR "a draw
         # type's settings are one NOT NULL JSON object"). ``{}`` for a draw type
         # that takes no configuration — ``round-robin`` and ``single-elim`` —
-        # and ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``. A draw type with
-        # no configuration stores the empty object and never NULL, so no reader
-        # has to test for absence before it reads.
+        # ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``, and
+        # ``{"rounds": R}`` for ``swiss``. A draw type with no configuration
+        # stores the empty object and never NULL, so no reader has to test for
+        # absence before it reads.
         #
         # It replaces a nullable ``qualifiers_per_pool`` integer column and the
         # CASE constraint that paired it with its draw type. Which settings a

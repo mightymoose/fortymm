@@ -109,6 +109,104 @@ describe('eventSchema', () => {
     })
   })
 
+  /**
+   * **R is judged with its draw type, never alone** (ADR "swiss pre-cuts every round and
+   * pairs each one on advance") — the resolver's half of the server's tagged union, one
+   * draw type over from the qualifier count above and for the identical reason.
+   *
+   * A field-level rule would have to answer "is a null round count wrong?" without knowing
+   * the draw type, and both answers are wrong three-quarters of the time: for `swiss`,
+   * `null` is a missing answer; for the other three it is the only legal value — and a red
+   * raised there would refuse the save with a message under a control that is not rendered.
+   */
+  describe('the round count', () => {
+    const swiss = (rounds: number | null) => formFor({ drawType: 'swiss', rounds })
+
+    it('requires a round count for swiss, and blames the field by name', () => {
+      expect(rejectedFields(swiss(null))).toEqual(['rounds'])
+    })
+
+    it('speaks the schema’s own sentence about the missing answer', () => {
+      const result = eventSchema.safeParse(swiss(null))
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].message).toBe(
+        'Say how many rounds this event plays.',
+      )
+    })
+
+    // `ge=1` on the server (`SwissRounds`). A swiss of zero rounds plays nothing, a
+    // negative count is not a count, and half a round is not a round.
+    it.each([0, -1, 2.5])('refuses %s', (bad) => {
+      expect(rejectedFields(swiss(bad))).toEqual(['rounds'])
+    })
+
+    it('accepts the smallest legal count, and a larger one', () => {
+      expect(rejectedFields(swiss(1))).toEqual([])
+      expect(rejectedFields(swiss(5))).toEqual([])
+    })
+
+    /**
+     * ⚠️ **`le=32` on the server, and the resolver has to know it too** — the qualifier
+     * count's #1231 bug, one field over: an unbounded box sends a number that overflows the
+     * `Integer` column, and the director is told "something went wrong on our end", which is
+     * false. Refused HERE, so it is never sent, with the ceiling named because the number is
+     * the only thing they can change.
+     */
+    it.each([33, 999_999_999, 2_147_483_648])('refuses %s', (tooMany) => {
+      expect(rejectedFields(swiss(tooMany))).toEqual(['rounds'])
+    })
+
+    it('speaks the schema’s own sentence about the ceiling', () => {
+      const result = eventSchema.safeParse(swiss(33))
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].message).toBe(
+        'A Swiss event plays at most 32 rounds.',
+      )
+    })
+
+    // The server's bound is INCLUSIVE, so the boundary itself must save — a form that
+    // refused 32 would refuse a save the API accepts.
+    it('accepts the ceiling itself', () => {
+      expect(rejectedFields(swiss(32))).toEqual([])
+    })
+
+    // ⚠️ The inverse, and the one a field-level rule would get wrong: the other three draw
+    // types carry `null` and must SAVE. A schema that demanded a round count regardless
+    // would dead-end every non-swiss event, with a red nobody could see or fix.
+    it.each(['round-robin', 'single-elim'] as const)(
+      'asks nothing of %s, whose round count is null',
+      (drawType) => {
+        expect(rejectedFields(formFor({ drawType, rounds: null }))).toEqual([])
+      },
+    )
+
+    // …and does not complain about a STALE count left behind by a draw-type switch: the
+    // control unmounted, but React-Hook-Form keeps the value, and the write body omits it
+    // anyway (`drawSettingsToApi`). A rule that fired here would block the save over a
+    // number that is never sent.
+    it('ignores a leftover round count once the draw type no longer plays rounds', () => {
+      expect(rejectedFields(formFor({ drawType: 'round-robin', rounds: 5 }))).toEqual(
+        [],
+      )
+    })
+
+    // The two halves of the draw configuration are judged INDEPENDENTLY: a swiss event is
+    // never asked for a qualifier count, and a two-stage event is never asked for a round
+    // count. A refinement that shared one branch would blame both fields at once.
+    it('asks a swiss event for no qualifier count, and a two-stage one for no rounds', () => {
+      expect(
+        rejectedFields(
+          formFor({ drawType: 'swiss', rounds: 3, qualifiersPerPool: null }),
+        ),
+      ).toEqual([])
+      expect(
+        rejectedFields(
+          formFor({ drawType: 'rr-then-ko', qualifiersPerPool: 2, rounds: null }),
+        ),
+      ).toEqual([])
+    })
+  })
+
   it('requires an entry fee, and takes zero for a free event', () => {
     expect(rejectedFields(formFor({ entryFee: Number.NaN }))).toEqual(['entryFee'])
     expect(rejectedFields(formFor({ entryFee: 0 }))).toEqual([])
@@ -222,6 +320,13 @@ describe('firstInvalidSection', () => {
     expect(
       firstInvalidSection({ qualifiersPerPool: { type: 'custom', message: 'x' } }),
     ).toBe('basics')
+  })
+
+  // …and the round count, which lives on the same tab beside the same picker.
+  it('sends a broken round count to Basics', () => {
+    expect(firstInvalidSection({ rounds: { type: 'custom', message: 'x' } })).toBe(
+      'basics',
+    )
   })
 
   it('sends a broken timezone to Basics', () => {

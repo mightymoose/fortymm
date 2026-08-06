@@ -425,11 +425,40 @@ export interface StandingsThenFinishesResults {
 }
 
 /**
+ * A **swiss** event's results (ADR "swiss pre-cuts every round and pairs each one on
+ * advance"): **one standings table over the whole field**, whether every round is decided,
+ * and the leader once it is. The `swiss_standings` arm of the `EventResults` union.
+ *
+ * The rows are the very `StandingRow`s a round-robin pool carries — not a swiss-flavoured
+ * near-copy — so the same table renders them and the two shapes cannot drift apart. The
+ * one difference is that they arrive as **one list rather than grouped under a pool**, and
+ * that is a fact about the format: swiss is pool-less, everybody is ranked against
+ * everybody, which is what pairing by score is for.
+ *
+ * Live and partial like every other results shape: the table fills in as matches land, and
+ * the later rounds — cut up front with their sides still unknown — contribute nothing until
+ * they are paired and played.
+ */
+export interface SwissStandingsResults {
+  kind: 'swiss_standings'
+  /** The whole field in the server's finishing order, **never re-sorted here** (the order
+   * *is* the result — ADR-0788). One list, because there is no pool to group by. */
+  rows: StandingRow[]
+  /** True when **every round** is decided, the later ones included. */
+  complete: boolean
+  /** The leader's **entry id** once the event is complete, else `null`. A swiss ranks its
+   * whole field, so unlike the round-robin arm there is no multi-pool carve-out: a complete
+   * swiss always has one. Joined to a username at render, like a row's `entryId`. */
+  champion: string | null
+}
+
+/**
  * An event's **results**, a discriminated union tagged by shape (ADR-0785, widened by ADR
- * 20260727): `standings` for round-robin, `finishes` for single-elimination,
- * `standings_then_finishes` for round-robin-then-knockout. Each draw type's results
- * strategy returns its own shape; the BFF emits the `kind` tag; the client switches on it.
- * A future draw type is a type error until it declares its shape.
+ * 20260727 and by the swiss ADR): `standings` for round-robin, `finishes` for
+ * single-elimination, `standings_then_finishes` for round-robin-then-knockout, and
+ * `swiss_standings` for swiss. Each draw type's results strategy returns its own shape; the
+ * BFF emits the `kind` tag; the client switches on it. A future draw type is a type error
+ * until it declares its shape.
  *
  * On the event it is `null` for an event with **no draw** — nothing to stand — an honest
  * "no results", never an empty table that would read as a played event with nobody in it.
@@ -440,6 +469,7 @@ export type EventResults =
   | StandingsResults
   | FinishesResults
   | StandingsThenFinishesResults
+  | SwissStandingsResults
 
 /** One *active* entry in an event. Withdrawn entries are not entrants — they
  * appear in neither this list nor the `entered` count (ADR-0016).
@@ -521,13 +551,13 @@ export interface TournamentEvent {
    * `rr-then-ko` draw, or `null` for a draw type that has no knockout stage to qualify
    * for (ADR 20260727).
    *
-   * ⚠️ `null` is not "unset" — it is the **only** legal value for `round-robin` and
-   * `single-elim`, and the server says so at the request boundary: the draw
-   * configuration is a union tagged by the draw type, and the two count-less arms are
-   * `extra="forbid"`, so a qualifier count sent alongside either of them is a 422 rather
+   * ⚠️ `null` is not "unset" — it is the **only** legal value for `round-robin`,
+   * `single-elim` and `swiss`, and the server says so at the request boundary: the draw
+   * configuration is a union tagged by the draw type, and the three count-less arms are
+   * `extra="forbid"`, so a qualifier count sent alongside any of them is a 422 rather
    * than a value quietly dropped. That is why `eventToApiFields` (`./api`) **omits** the
-   * key for those two types instead of sending `null` — and why the editor's control for
-   * it is rendered only for `rr-then-ko`.
+   * key for those three types instead of sending `null` — and why the editor's control
+   * for it is rendered only for `rr-then-ko`.
    *
    * For `rr-then-ko` it is **required**, at least 1, and it is not a number this client
    * may assume: "2" is a convention, not a fact about the event, and a bracket cut for a
@@ -536,6 +566,25 @@ export interface TournamentEvent {
    * the mock planner and every reader take the director's real value rather than a
    * default. */
   qualifiersPerPool: number | null
+  /** **R** — how many rounds a `swiss` event plays, or `null` for a draw type whose round
+   * count is not a thing anybody chooses (ADR "swiss pre-cuts every round and pairs each
+   * one on advance").
+   *
+   * ⚠️ `null` is not "unset" — it is the **only** legal value for the other three draw
+   * types, and the server says so at the request boundary the same way it does for the
+   * qualifier count: the draw configuration is a union tagged by the draw type, and the
+   * three round-count-less arms are `extra="forbid"`, so a `rounds` sent alongside any of
+   * them is a 422 rather than a value quietly dropped. That is why `eventToApiFields`
+   * (`./api`) **omits** the key for those three instead of sending `null` — and why the
+   * editor's control for it is rendered only for `swiss`.
+   *
+   * For `swiss` it is **required**, and it is not a number this client may assume:
+   * `ceil(log2 n)` is the convention, and deliberately not a derived default — a director
+   * books tables and a venue window before registration opens, so a round count that moved
+   * as entrants arrived would change the length of a day that is already booked. It is also
+   * what sizes the draw (`R × ⌊n/2⌋` fixtures, all cut up front), which is why it is
+   * carried on the read model at all. */
+  rounds: number | null
   /** The entrant cap, or `null` for an uncapped event. `null` means "no cap",
    * never zero (ADR-0935): a blank player-limit field submits `null`, and every
    * reader must handle the no-cap branch rather than dividing by it. */

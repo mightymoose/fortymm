@@ -226,7 +226,14 @@ export function buildSingleElimDrawState(
   return {
     kind: 'drawn',
     pools: [],
+    // A single-elim draw's un-pooled fixtures ARE its bracket (`unpooledShape`,
+    // `../../../data/draw`) — stated, because since swiss landed "un-pooled" no longer
+    // implies it.
+    unpooledShape: 'bracket',
     unpooled: buildEightEntrantRounds(),
+    // A bracket byes nobody: an entrant in none of its fixtures is **eliminated**, which is
+    // why `drawState` computes the map for swiss alone (`SwissByes`, `../../../data/draw`).
+    swissByes: new Map(),
     ...overrides,
   }
 }

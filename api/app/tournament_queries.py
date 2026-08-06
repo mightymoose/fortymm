@@ -246,11 +246,11 @@ def _pool_position() -> ScalarSelect[int | None]:
     is unique, rather than by a ``LIMIT`` papering over duplicates.
 
     It is ``NULL`` in exactly one case now, and that case wants to sort at the end of
-    the pooled group: an **un-pooled** fixture (``pool_id IS NULL`` — single-elim, or
-    the KO stage of an rr-then-ko draw) matches no row. It used to have a second — a
-    pool stored before ``position`` existed — which the ``NOT NULL`` column has closed;
-    the id stays on as a secondary sort key below because the *order* still has to be
-    total when this is NULL for every row of an un-pooled draw.
+    the pooled group: an **un-pooled** fixture (``pool_id IS NULL`` — single-elim,
+    swiss, or the KO stage of an rr-then-ko draw) matches no row. It used to have a
+    second — a pool stored before ``position`` existed — which the ``NOT NULL`` column
+    has closed; the id stays on as a secondary sort key below because the *order* still
+    has to be total when this is NULL for every row of an un-pooled draw.
 
     Correlated on ``TournamentFixture`` alone. The ``event_id`` comes off the fixture
     rather than off the joined ``TournamentEvent`` — the same column either way, and

@@ -3448,12 +3448,12 @@ async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
     """``draw_currency_by_event`` of an empty list answers ``{}`` — and asks the
     database nothing at all to do it.
 
-    The batch loader's contract is "two statements for the whole batch, whatever the
-    number of events", and *none* is a number of events: a draft tournament with no
-    events reaches the go-live precondition, and this is the loader it reaches. The
-    short-circuit is the difference between an empty answer and an ``IN ()`` — a
-    predicate that is not merely wasteful but false for every row, and which no version
-    of this function should ever be asked to mean.
+    The batch loader's contract is "at most three statements for the whole batch,
+    whatever the number of events", and *none* is a number of events: a draft
+    tournament with no events reaches the go-live precondition, and this is the loader
+    it reaches. The short-circuit is the difference between an empty answer and an
+    ``IN ()`` — a predicate that is not merely wasteful but false for every row, and
+    which no version of this function should ever be asked to mean.
 
     The statement count is the assertion, not decoration: an implementation that dropped
     the guard would still return ``{}`` (there are no events to key the result by), and
@@ -3464,6 +3464,67 @@ async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
 
     assert currency == {}
     assert statements == [], statements
+
+
+def _draw_type_reads(statements: list[str]) -> list[str]:
+    """The statements that read the events' draw types — the third one, by the only
+    column that is unique to it."""
+    return [statement for statement in statements if "draw_type_key" in statement]
+
+
+async def test_currency_asks_for_draw_types_only_where_a_draw_was_cut(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """The draw-type statement is issued for the events that are **cut**, and not at all
+    when none of them is.
+
+    The draw type is read for one purpose —
+    :func:`~app.draws.unseated_entrant_allowance` — which only the ``current``/``stale``
+    arm of the answer reaches. An uncut event never takes that arm (Python evaluates the
+    lookup lazily inside the conditional), so its draw type is a row fetched and
+    discarded. Uncut is not an exotic state either: it is every event of every
+    tournament whose director has not cut a draw yet, and they all reach this loader on
+    the go-live path, under the tournament's row lock.
+
+    Two pins, and the second is why the narrowing cannot be done by asking per event:
+    nothing cut costs **no** statement, and a partially cut batch still costs exactly
+    **one** — the batching this whole function exists for.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = created["id"]
+    first, _ = await _event_with_entrants(
+        client, db_session, tournament_id, name="Open Singles"
+    )
+    second, _ = await _event_with_entrants(
+        client, db_session, tournament_id, name="Under 1200"
+    )
+    event_ids = [uuid.UUID(first), uuid.UUID(second)]
+
+    async with counted_statements(engine) as (session, statements):
+        before_any_cut = await draw_currency_by_event(session, event_ids)
+
+    assert before_any_cut == dict.fromkeys(event_ids, DrawCurrency.uncut)
+    assert _draw_type_reads(statements) == [], statements
+    assert len(statements) == 2, statements
+
+    await _cut_the_draw(client, tournament_id, first)
+
+    async with counted_statements(engine) as (session, statements):
+        after_one_cut = await draw_currency_by_event(session, event_ids)
+
+    assert after_one_cut == {
+        event_ids[0]: DrawCurrency.current,
+        event_ids[1]: DrawCurrency.uncut,
+    }
+    assert len(statements) == 3, statements
+    # The expanded ``IN`` renders one bind placeholder per id, so the placeholders are
+    # what the loader asked about: one, the event that is cut, and not the uncut one
+    # sitting beside it in the same batch.
+    (draw_type_read,) = _draw_type_reads(statements)
+    assert draw_type_read.count("::UUID") == 1, draw_type_read
 
 
 # ----- the league a tournament is judged on (ADR-0783) ----------------------
@@ -4306,8 +4367,8 @@ async def test_the_detail_payload_carries_the_seeded_draw_types_in_display_order
     seeded one, in ``display_order``, each with the copy to render it.
 
     Order is asserted as a list, not a set: a picker whose options move between two
-    loads is a real defect, and the round-robin/single-elim/rr-then-ko sequence is the
-    one the seed states."""
+    loads is a real defect, and the round-robin/single-elim/rr-then-ko/swiss sequence is
+    the one the seed states."""
     client, _ = authed_client
     tournament_id, _ = await _tournament_with_events(client)
 
@@ -4317,6 +4378,7 @@ async def test_the_detail_payload_carries_the_seeded_draw_types_in_display_order
         "round-robin",
         "single-elim",
         "rr-then-ko",
+        "swiss",
     ]
     assert [row["display_order"] for row in catalogue] == sorted(
         row["display_order"] for row in catalogue
@@ -4353,10 +4415,15 @@ async def test_the_draw_type_catalogue_is_the_table_not_the_draw_type_enum(
 
     catalogue = await _catalogue_of(client, tournament_id)
 
-    assert [row["key"] for row in catalogue] == ["round-robin", "rr-then-ko"]
+    assert [row["key"] for row in catalogue] == ["round-robin", "rr-then-ko", "swiss"]
     # And the enum still holds the deleted one, so "it followed the table" is the only
     # reading of the assertion above.
-    assert {t.value for t in DrawType} == {"round-robin", "single-elim", "rr-then-ko"}
+    assert {t.value for t in DrawType} == {
+        "round-robin",
+        "single-elim",
+        "rr-then-ko",
+        "swiss",
+    }
 
 
 async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
@@ -4368,8 +4435,9 @@ async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
 
     Rewriting two of the rows swaps their order and their words; a catalogue assembled
     from a Python dict of labels keyed by enum member would answer the old copy in the
-    old order, whatever the table says. The third row is left alone and asserted last,
-    so the rewrite is shown to have moved the two it names and nothing else."""
+    old order, whatever the table says. The rows it does not name are left alone and
+    asserted last, so the rewrite is shown to have moved the two it names and nothing
+    else."""
     client, _ = authed_client
     tournament_id, _ = await _tournament_with_events(client)
     await db_session.execute(
@@ -4406,6 +4474,15 @@ async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
             "Round-robin then knockout",
             "Pools play all-play-all, then the top finishers from each pool meet in "
             "a knockout bracket.",
+        ),
+        (
+            "swiss",
+            "Swiss",
+            "A fixed number of rounds, each pairing entrants who are on similar "
+            "scores. Nobody is eliminated and everybody plays every round, so a "
+            "large field is ranked in far fewer matches than a round robin — but a "
+            "round's pairings are only known once the round before it has finished, "
+            "and a long event may repeat a pairing.",
         ),
     ]
 
@@ -5552,7 +5629,7 @@ async def test_a_draw_on_a_tournament_or_event_that_does_not_exist_is_404(
 # ----- the draws this event cannot produce (422) ----------------------------
 
 
-@pytest.mark.parametrize("draw_type", ["double-elim", "swiss"])
+@pytest.mark.parametrize("draw_type", ["double-elim"])
 async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_boundary(
     authed_client: tuple[AsyncClient, User],
     draw_type: str,
@@ -5568,12 +5645,13 @@ async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_b
     Pydantic rejects the slug at the edge with a 422 that NAMES the valid values, no
     custom validator required — and no event row is written at all.
 
-    The parametrized subjects are the ex-members that are STILL unimplemented: they are
-    the values a stale client (or a stale hardcoded picker) would still send.
-    ``rr-then-ko`` used to be among them and is deliberately gone — #1227 gave it a
-    strategy, a results strategy and a seeded row, so it is now a slug this boundary
-    ACCEPTS, which the create tests beside this one assert. That is the mechanism
-    working: the list of refused slugs shrinks by exactly the format that shipped.
+    The parametrized subject is the ex-member that is STILL unimplemented: it is the
+    value a stale client (or a stale hardcoded picker) would still send. ``rr-then-ko``
+    used to be among them and is deliberately gone — #1227 gave it a strategy, a results
+    strategy and a seeded row — and so is ``swiss``, which #1276 gave the same. Both are
+    now slugs this boundary ACCEPTS, which the create tests beside this one assert. That
+    is the mechanism working: the list of refused slugs shrinks by exactly the format
+    that shipped.
 
     **The accepted slugs are pinned as literals, never re-derived from ``DrawType``.**
     Pydantic composes that ``expected`` message *out of* the enum, so comparing it back
@@ -5596,11 +5674,11 @@ async def test_creating_an_event_with_an_unimplemented_draw_type_is_422_at_the_b
     body = response.json()
     (error,) = [e for e in body["detail"] if e["loc"][-1] == "draw_type"]
     # The 422 names the slugs that run, and nothing else — a client reading it learns
-    # exactly what it may send. Pydantic renders a three-member list as
-    # ``'a', 'b' or 'c'``, so the final " or " becomes a comma before the split.
+    # exactly what it may send. Pydantic renders the list as ``'a', 'b', 'c' or 'd'``,
+    # so the final " or " becomes a comma before the split.
     assert set(
         error["ctx"]["expected"].replace("'", "").replace(" or ", ", ").split(", ")
-    ) == {"round-robin", "single-elim", "rr-then-ko"}, error
+    ) == {"round-robin", "single-elim", "rr-then-ko", "swiss"}, error
     # Refused at the boundary means refused before persistence: no event exists.
     detail = (await client.get(f"/v1/tournaments/{created['id']}")).json()
     assert detail["events"] == []

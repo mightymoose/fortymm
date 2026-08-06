@@ -5,12 +5,21 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 import { useCutDraw, useUncutDraw } from '../../data/api'
-import { drawRefusalNotice, drawState, type DrawNotice } from '../../data/draw'
+import {
+  drawRefusalNotice,
+  drawState,
+  type DrawNotice,
+  type DrawRound,
+  type SwissByes,
+  type UnpooledShape,
+} from '../../data/draw'
 import type { TournamentEvent } from '../../data/types'
 import { LeadReason } from './lead-reason'
 import { Bracket } from './draw-panel/bracket'
 import { PoolDraw } from './draw-panel/pool-draw'
 import { ResultsPanel } from './draw-panel/results-panel'
+import { RoundList } from './draw-panel/round-list'
+import { SwissRounds } from './draw-panel/swiss-rounds'
 
 export interface DrawPanelProps {
   tournamentId: string
@@ -215,22 +224,19 @@ const DrawBody = ({
           {state.pools.map((pool) => (
             <PoolDraw key={pool.id} pool={pool} />
           ))}
-          {/* Fixtures belonging to no pool — a single-elim bracket (or the knockout stage
-              of a combined draw type, #787). Rendered as rounds-as-columns by `Bracket` (ADR-0785), which
-              replaces the flat `RoundList` here; pools above keep `RoundList`. Shown both
-              pre-live (the director reviews the seeded round-1 pairings and byes) and
-              live. */}
+          {/* Fixtures belonging to no pool. **Which view they get is the DRAW TYPE's
+              answer, not this list's** (`unpooledShape`, `../../data/draw`): `pool_id IS
+              NULL` is the *stage* discriminator for an `rr-then-ko` knockout stage and
+              will keep meaning that, while swiss is a pool-less draw *type* that happens
+              to share the null. Routing on the null alone is what rendered a swiss draw
+              through single-elimination's successor arithmetic. Shown both pre-live (the
+              director reviews the seeded round-1 pairings and byes) and live. */}
           {state.unpooled.length > 0 && (
-            <section
-              data-testid="draw-unpooled"
-              aria-label="Bracket"
-              className="rounded-[10px] border border-[color:var(--border-subtle)] p-3"
-            >
-              <h4 className="text-[13px] font-semibold text-[color:var(--fg-1)]">
-                Bracket
-              </h4>
-              <Bracket rounds={state.unpooled} />
-            </section>
+            <UnpooledDraw
+              shape={state.unpooledShape}
+              rounds={state.unpooled}
+              byes={state.swissByes}
+            />
           )}
         </div>
       )
@@ -238,6 +244,97 @@ const DrawBody = ({
     default: {
       // A third draw state without copy is a TYPE error here, not a blank card section.
       const exhaustive: never = state
+      return exhaustive
+    }
+  }
+}
+
+/**
+ * The un-pooled block, in the view its **draw type** calls for — the second half of the
+ * routing decision `unpooledShape` (`../../data/draw`) makes.
+ *
+ * A `switch` with a `never` default, so the two halves are checked at both ends: adding a
+ * draw type is a compile error in `unpooledShape` until it names a shape, and adding a
+ * shape is a compile error *here* until it has a view. Neither is something a value check
+ * on `pool_id` could ever have given us — which is precisely how a swiss draw came to
+ * render as a knockout bracket with nothing red.
+ *
+ * The block keeps its `draw-unpooled` test hook in the bracket arm: it is the same block
+ * the existing bracket tests address, and renaming it would churn them for nothing. The
+ * other two arms get hooks of their own, so "this event got the rounds view and NOT the
+ * bracket" is one assertion rather than an inference.
+ *
+ * The third arm is the one for fixtures **no format view can place** (`'orphaned'`). It
+ * exists because "show it anyway" and "show it as a bracket" are different promises: the
+ * first is what `drawState` guarantees (a fixture is never dropped), the second is a claim
+ * about the event's shape that a round-robin cannot make.
+ */
+const UnpooledDraw = ({
+  shape,
+  rounds,
+  byes,
+}: {
+  shape: UnpooledShape
+  rounds: DrawRound[]
+  /** Read by the swiss arm alone. `drawState` computes it for that draw type only, so the
+   * other two arms are handed an empty map rather than a claim about their format: an
+   * entrant in none of a bracket round's fixtures has been **eliminated**, not byed. */
+  byes: SwissByes
+}) => {
+  switch (shape) {
+    case 'bracket':
+      return (
+        <section
+          data-testid="draw-unpooled"
+          aria-label="Bracket"
+          className="rounded-[10px] border border-[color:var(--border-subtle)] p-3"
+        >
+          <h4 className="text-[13px] font-semibold text-[color:var(--fg-1)]">
+            Bracket
+          </h4>
+          <Bracket rounds={rounds} />
+        </section>
+      )
+
+    case 'swiss-rounds':
+      // Titled "Rounds", not "Bracket": swiss eliminates nobody and has no final, so the
+      // bracket's own vocabulary would be a lie in the heading before it was one in the
+      // layout.
+      return (
+        <section
+          data-testid="draw-swiss-rounds"
+          aria-label="Rounds"
+          className="rounded-[10px] border border-[color:var(--border-subtle)] p-3"
+        >
+          <h4 className="text-[13px] font-semibold text-[color:var(--fg-1)]">
+            Rounds
+          </h4>
+          <SwissRounds rounds={rounds} byes={byes} />
+        </section>
+      )
+
+    case 'orphaned':
+      // Fixtures this event's format cannot place — a round-robin fixture naming a pool the
+      // event does not list. **Never dropped** (`drawState`), and never dressed up: a plain
+      // numbered list under a neutral heading, because every other view here would say
+      // something untrue about it. The bracket said the most: it names its rounds backwards
+      // from the last one present, so one stray fixture read as a "Final".
+      return (
+        <section
+          data-testid="draw-orphaned"
+          aria-label="Other fixtures"
+          className="rounded-[10px] border border-[color:var(--border-subtle)] p-3"
+        >
+          <h4 className="text-[13px] font-semibold text-[color:var(--fg-1)]">
+            Other fixtures
+          </h4>
+          <RoundList rounds={rounds} groupName="other fixtures" />
+        </section>
+      )
+
+    default: {
+      // A shape without a view is a TYPE error here, not a dropped draw.
+      const exhaustive: never = shape
       return exhaustive
     }
   }

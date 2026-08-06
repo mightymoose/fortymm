@@ -1,9 +1,11 @@
 import { eventFinishes } from '../../../data/finishes'
 import { eventStandings } from '../../../data/standings'
+import { eventSwissStandings } from '../../../data/swiss-standings'
 import { eventStandingsThenFinishes } from '../../../data/two-stage'
 import type { TournamentEvent } from '../../../data/types'
 import { FinishesPanel } from './finishes/finishes-panel'
 import { StandingsPanel } from './standings/standings-panel'
+import { SwissStandingsPanel } from './standings/swiss-standings-panel'
 import { TwoStagePanel } from './two-stage/two-stage-panel'
 
 export interface ResultsPanelProps {
@@ -12,9 +14,10 @@ export interface ResultsPanelProps {
 
 /**
  * An event's **results** on its card in the Events tab — the one render path that switches on
- * the results shape (ADR-0785, widened by ADR 20260727): a **standings** table for
- * round-robin, a **finishes** placement list for single-elimination, and **both** — pools
- * above bracket, one champion — for round-robin-then-knockout. The results are a
+ * the results shape (ADR-0785, widened by ADR 20260727 and by the swiss ADR): a **standings**
+ * table for round-robin, a **finishes** placement list for single-elimination, **both** —
+ * pools above bracket, one champion — for round-robin-then-knockout, and **one pool-less
+ * table over the whole field** for swiss. The results are a
  * discriminated union tagged by `kind`, parsed at the boundary (`../../../data/results`), so
  * this switch is exhaustive: a future draw type's shape is a **type error here** until it is
  * given a render arm.
@@ -61,6 +64,17 @@ export const ResultsPanel = ({ event }: ResultsPanelProps) => {
           eventId={event.id}
           eventName={event.name}
           twoStage={eventStandingsThenFinishes(event, results)}
+        />
+      )
+    case 'swiss_standings':
+      // One table over the whole field (the swiss ADR): swiss has no pools, so there is
+      // nothing to group by and nothing to title each block with. The table itself is the
+      // one a pool renders.
+      return (
+        <SwissStandingsPanel
+          eventId={event.id}
+          eventName={event.name}
+          standings={eventSwissStandings(event, results)}
         />
       )
     default: {

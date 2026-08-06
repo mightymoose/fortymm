@@ -27,13 +27,14 @@ already imports ``app.draws``, so a shared third module is the only place both c
 reach (ADR 20260727). ``MatchOutcome`` is re-exported from here for the callers that
 already know it by this name.
 
-Three arms are implemented: :class:`RoundRobinResults`, whose shape is a **standings**
+Four arms are implemented: :class:`RoundRobinResults`, whose shape is a **standings**
 table per pool; :class:`SingleElimResults` (ADR-0785), whose shape is the bracket's
-**finishes** — each entrant's finishing position by the round it was eliminated in; and
+**finishes** — each entrant's finishing position by the round it was eliminated in;
 :class:`RrThenKoResults` (ADR 20260727), a two-**stage** event whose shape is **both**,
-one block per stage. The shapes cross the wire as a discriminated union tagged by
-``kind`` (ADR-0785); here they are simply different value objects returned by different
-``tabulate`` methods.
+one block per stage; and :class:`SwissResults` (ADR "swiss pre-cuts every round and
+pairs each one on advance"), whose shape is a single **pool-less** table over the whole
+field. The shapes cross the wire as a discriminated union tagged by ``kind`` (ADR-0785);
+here they are simply different value objects returned by different ``tabulate`` methods.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ __all__ = [
     "BracketFinishes",
     "BracketFixture",
     "EventResults",
+    "FieldInput",
     "FinishRow",
     # Re-exported: the value object the tabulation consumes lives in
     # ``app.pool_finishing_order`` so the draw layer can reach it too, but every
@@ -61,6 +63,8 @@ __all__ = [
     "SingleElimResults",
     "StandingRow",
     "StandingsThenFinishes",
+    "SwissResults",
+    "SwissStandings",
     "results_for",
 ]
 
@@ -80,6 +84,29 @@ class PoolInput:
     """
 
     pool_id: PoolId
+    entrants: tuple[EntryId, ...]
+    fixture_count: int
+    outcomes: tuple[MatchOutcome, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FieldInput:
+    """A **pool-less** field's whole input to its standings: every entry in the event,
+    how many fixtures it has, and the outcomes of the ones already decided.
+
+    :class:`PoolInput` without the ``pool_id``, because swiss has no pool to name (ADR
+    "swiss pre-cuts every round and pairs each one on advance") — the whole field stands
+    in one table. The three fields mean exactly what they mean there, and are read the
+    same way: ``entrants`` is the full seated field so an entrant yet to play still has
+    a row of zeros, and ``fixture_count`` counts the pairings that can still yield a
+    result, which for swiss includes the later rounds that are cut but not yet paired.
+
+    It is deliberately not a shared base class with :class:`PoolInput`. One is keyed by
+    a pool and one is not, which is the only difference there will ever be, and a base
+    would buy a name for three fields at the cost of a hierarchy in a module that is
+    otherwise flat value objects.
+    """
+
     entrants: tuple[EntryId, ...]
     fixture_count: int
     outcomes: tuple[MatchOutcome, ...]
@@ -218,9 +245,30 @@ class StandingsThenFinishes:
     champion: EntryId | None
 
 
+@dataclass(frozen=True, slots=True)
+class SwissStandings:
+    """A swiss event's results: **one** standings table over the whole field, whether
+    every round has been decided, and its champion when it has.
+
+    One table and not a tuple of them, because swiss is pool-less: everybody is ranked
+    against everybody, which is the whole point of pairing by score. That is the only
+    structural difference from :class:`EventResults`, and it is why this is its own
+    shape rather than a pool-less flavour of that one — a ``pools`` list of length one
+    with a made-up id would be a lie about a pool that does not exist.
+
+    ``champion`` is the leader of a **complete** event, with no single-pool carve-out to
+    make: a swiss event ranks the whole field, so its table's top row is its winner
+    (CONTEXT.md, "Swiss"). ``None`` while any round is still to be decided.
+    """
+
+    rows: tuple[StandingRow, ...]
+    complete: bool
+    champion: EntryId | None
+
+
 def results_for(
     draw_type: DrawType,
-) -> RoundRobinResults | SingleElimResults | RrThenKoResults:
+) -> RoundRobinResults | SingleElimResults | RrThenKoResults | SwissResults:
     """The results strategy for this draw type.
 
     **Total**, exactly as ``app.draws.strategy_for``: an exhaustive ``match`` with
@@ -231,9 +279,11 @@ def results_for(
 
     The return type is a **union tagged by shape** (ADR-0785): round-robin's
     :class:`RoundRobinResults` reads out a **standings** table, single-elim's
-    :class:`SingleElimResults` reads out the bracket's **finishes**, and rr-then-ko's
-    :class:`RrThenKoResults` reads out **both**. A caller narrows the union (an
-    exhaustive ``match`` over the concrete strategies) to call the right ``tabulate`` —
+    :class:`SingleElimResults` reads out the bracket's **finishes**, rr-then-ko's
+    :class:`RrThenKoResults` reads out **both**, and swiss's :class:`SwissResults` reads
+    out a single **pool-less** table over the whole field. A caller narrows the union
+    (an exhaustive ``match`` over the concrete strategies) to call the right
+    ``tabulate`` —
     so a further strategy is a type error at every call site until handled.
 
     The narrowing is not uniform, and cannot be: :meth:`RrThenKoResults.tabulate` takes
@@ -249,6 +299,8 @@ def results_for(
             return SingleElimResults()
         case DrawType.rr_then_ko:
             return RrThenKoResults()
+        case DrawType.swiss:
+            return SwissResults()
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,9 +432,55 @@ class RrThenKoResults:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SwissResults:
+    """A swiss event's results: one standings table over the whole field (ADR "swiss
+    pre-cuts every round and pairs each one on advance").
+
+    Ordered by :func:`~app.pool_finishing_order.finishing_order` — the *same* chain a
+    round-robin pool is ordered by — through the same :func:`_standing_rows` a pool's
+    table is built with. That is deliberate and temporary: swiss gets its own ordering
+    function, with Buchholz above game difference and the head-to-head step guarded on
+    the pair having met, in its own slice (ADR "swiss standings add Buchholz, and
+    head-to-head is guarded on having met"). Until then this reads out the chain that
+    exists rather than a swiss-shaped approximation of the one that does not.
+
+    Live and partial like every other shape: an entrant appears from the moment they are
+    seated, and a correction re-orders the table the instant it lands.
+    """
+
+    def tabulate(self, field: FieldInput) -> SwissStandings:
+        rows = _standing_rows(field.entrants, field.outcomes)
+        # Every round decided — which, since the later rounds are cut up front with
+        # their sides unknown, includes the ones nobody has been paired into yet. An
+        # event with no fixtures that can still yield a result is deliberately NOT
+        # complete: ``0 == 0`` would call an uncut (or wholly voided) swiss finished.
+        complete = (
+            field.fixture_count > 0 and len(field.outcomes) == field.fixture_count
+        )
+        champion = rows[0].entry_id if complete and rows else None
+        return SwissStandings(rows=rows, complete=complete, champion=champion)
+
+
 def _pool_standings(pool: PoolInput) -> PoolStandings:
-    ordered = finishing_order(pool.entrants, pool.outcomes)
-    rows = tuple(
+    return PoolStandings(
+        pool_id=pool.pool_id,
+        rows=_standing_rows(pool.entrants, pool.outcomes),
+        complete=len(pool.outcomes) == pool.fixture_count,
+    )
+
+
+def _standing_rows(
+    entrants: Sequence[EntryId], outcomes: Sequence[MatchOutcome]
+) -> tuple[StandingRow, ...]:
+    """These entrants' rows, at their settled ranks — the one place a table is built,
+    for the two shapes that carry one (a pool's, and a swiss field's).
+
+    Shared so that "a standings row means the same thing whichever event it is read
+    off" is true structurally: the ordering is
+    :func:`~app.pool_finishing_order.finishing_order` and the counts come off the
+    tallies it returns, in one function rather than two that agree today."""
+    return tuple(
         StandingRow(
             entry_id=tally.entry_id,
             rank=rank,
@@ -392,10 +490,5 @@ def _pool_standings(pool: PoolInput) -> PoolStandings:
             games_won=tally.games_won,
             games_lost=tally.games_lost,
         )
-        for rank, tally in enumerate(ordered, start=1)
-    )
-    return PoolStandings(
-        pool_id=pool.pool_id,
-        rows=rows,
-        complete=len(pool.outcomes) == pool.fixture_count,
+        for rank, tally in enumerate(finishing_order(entrants, outcomes), start=1)
     )
