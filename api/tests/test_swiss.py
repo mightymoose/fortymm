@@ -17,14 +17,14 @@ either wrong stalls a live event silently rather than failing.
 """
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.draws import _swiss_seated_pairings
@@ -40,11 +40,16 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.schemas.tournament import MAX_SWISS_ROUNDS, TournamentFixtureRead
+from app.results import SwissResults
+from app.schemas.tournament import (
+    MAX_SWISS_ROUNDS,
+    TournamentEntrantRead,
+    TournamentFixtureRead,
+)
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_draws import DrawCurrency, draw_currency_by_event, fixture_state
 from app.tournament_materialization import materialize_event
-from app.tournament_serialization import _seated_pairings
+from app.tournament_serialization import _field_input, _seated_pairings
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     counted_statements,
@@ -884,6 +889,130 @@ async def test_a_byed_entrant_is_credited_with_a_win_worth_zero_games(
         }, "round 2 seats the byed entrant, and the bye passes to the seed without one"
 
 
+async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**The whole of both bugs, through the real endpoints.** Four entrants, three
+    rounds — two rows a round. The cut seats round 1 (1v3, 2v4) and go-live materializes
+    it. Seed 4 then **withdraws while the event is live**, and the three survivors make
+    one pairing a round, so rounds 2 and 3 each keep a row nothing will ever seat.
+
+    Read as pending, that row made its round neither wholly unpaired nor decided: round
+    2 was paired and then round 3 never was, on that advance and every one after, with
+    no move a director could make — a played draw cannot be un-cut. And the row was
+    counted as a pairing still to come, so the event could not read ``complete`` even
+    once every match that existed had been played.
+
+    Seed 4 is in no round after the first, which is also what made them look byed. The
+    table below is where that shows: **one match, one loss**, not the two bye wins a
+    departed player was collecting.
+
+    **The withdrawal is written as the statement that causes it in production.** The
+    ordinary withdrawal endpoint is window-gated and answers 409 on a live event, so
+    nothing here could reach the pairing code through it. ``app.account_merge`` can and
+    does: when a guest who is already playing claims a verified account that is also
+    entered, the merge flips the colliding entry to ``withdrawn`` — deliberately, rather
+    than deleting it, *because* the row seats fixtures that have been played. This is
+    that ``UPDATE``. Driving ``merge_user`` itself would add a re-pointed user, a voided
+    self-play match and a re-solve without adding anything this asserts.
+    """
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "swiss-shrink-two") as (client_2, user_2),
+        opponent_session(db_session, "swiss-shrink-three") as (client_3, user_3),
+        opponent_session(db_session, "swiss-shrink-four") as (client_4, user_4),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (await _create_event(client, tournament_id)).json()["id"]
+        entries = [
+            await _enter(db_session, event_id, user, seed=seed, minutes=seed)
+            for seed, user in enumerate((owner, user_2, user_3, user_4), start=1)
+        ]
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        entry_ids = [entry.id for entry in entries]
+        clients = dict(
+            zip(entry_ids, [client, client_2, client_3, client_4], strict=True)
+        )
+
+        await db_session.execute(
+            update(TournamentEntry)
+            .where(TournamentEntry.id == entry_ids[3])
+            .values(status=TournamentEntryStatus.withdrawn)
+        )
+        await db_session.commit()
+
+        async def play(round_number: int, winner_index: int) -> None:
+            """Call and win the one fixture of ``round_number`` that carries a pairing.
+
+            Round 1 has two, and both are played by the same walk — the round is only
+            decided once every pairing in it is, whoever has since left the event."""
+            db_session.expire_all()
+            rows = [
+                f
+                for f in await _fixtures(db_session, event_id)
+                if f.round == round_number and f.entry_a_id is not None
+            ]
+            await _call_fixtures(db_session, tournament_id, rows)
+            for row in rows:
+                winner = (
+                    entry_ids[winner_index]
+                    if entry_ids[winner_index] in (row.entry_a_id, row.entry_b_id)
+                    else row.entry_a_id
+                )
+                assert winner is not None
+                await _win_fixture_match(
+                    row,
+                    clients_by_entry=clients,
+                    winner_entry_id=winner,
+                    rated=False,
+                )
+
+        # Round 1 as the cut dealt it, seed 4 included: seed 1 beats 3, and 2 beats 4.
+        await play(1, winner_index=0)
+
+        db_session.expire_all()
+        round_two = [f for f in await _fixtures(db_session, event_id) if f.round == 2]
+        paired = [f for f in round_two if f.entry_a_id is not None]
+        assert len(round_two) == 2, "the cut's second row is still there"
+        assert [{f.entry_a_id, f.entry_b_id} for f in paired] == [
+            {entry_ids[0], entry_ids[1]}
+        ], "three survivors make one pairing, and seed 3 sits round 2 out"
+
+        await play(2, winner_index=0)
+
+        db_session.expire_all()
+        round_three = [f for f in await _fixtures(db_session, event_id) if f.round == 3]
+        paired = [f for f in round_three if f.entry_a_id is not None]
+        assert [{f.entry_a_id, f.entry_b_id} for f in paired] == [
+            {entry_ids[0], entry_ids[2]}
+        ], (
+            "round 3 is paired off round 2's table — the round whose unpairable row "
+            "stalled the walk for good, leaving the event unplayable from here"
+        )
+
+        await play(3, winner_index=0)
+
+        db_session.expire_all()
+        results = (await _event_read(client, tournament_id))["results"]
+
+        assert results["complete"] is True, (
+            "every fixture that could ever be paired has been played, so the event is "
+            "over — the rows the cut wrote for a field that left are not results owed"
+        )
+        assert results["champion"] == str(entry_ids[0])
+        departed = {row["entry_id"]: row for row in results["rows"]}[str(entry_ids[3])]
+        assert (departed["played"], departed["wins"], departed["losses"]) == (
+            1,
+            0,
+            1,
+        ), (
+            "the entrant who left is still listed — they played a real match — with "
+            "the record they actually have, not a bye win for every round since"
+        )
+
+
 async def test_advancing_a_swiss_event_costs_three_statements(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -1061,6 +1190,171 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
             f"the read layer and the draw layer must both call a {match_status} "
             f"pairing {'decided' if decided else 'undecided'}"
         )
+
+
+# ----- a field that shrinks after the cut, as the read layer sees it -----------------
+
+
+def _entry(number: int) -> uuid.UUID:
+    """The entry id of the ``number``-th seed, as a readable literal."""
+    return uuid.UUID(int=number)
+
+
+def _entrant(number: int) -> TournamentEntrantRead:
+    """One **active** entrant, in the shape ``active_entrants_by_event`` returns."""
+    return TournamentEntrantRead(
+        id=_entry(number),
+        user_id=uuid.UUID(int=100 + number),
+        username=f"seed{number}",
+        seed=number,
+        rating=None,
+    )
+
+
+def _row(
+    *,
+    round_number: int,
+    position: int,
+    pairing: tuple[int, int] | None = None,
+    winner: int | None = None,
+    voided: bool = False,
+) -> TournamentFixtureRead:
+    """One fixture row: unpaired (both sides ``None``) when ``pairing`` is omitted,
+    carrying a **completed** match when ``winner`` is given, and a **voided** one — a
+    pairing that happened and will never produce a result — when ``voided`` is set."""
+    status = MatchStatus.completed if winner is not None else None
+    if voided:
+        status = MatchStatus.voided
+    match_id = (
+        uuid.UUID(int=1000 + round_number * 10 + position)
+        if status is not None
+        else None
+    )
+    return TournamentFixtureRead(
+        id=uuid.UUID(int=2000 + round_number * 10 + position),
+        pool_id=None,
+        round=round_number,
+        position=position,
+        entry_a_id=_entry(pairing[0]) if pairing else None,
+        entry_b_id=_entry(pairing[1]) if pairing else None,
+        winner_entry_id=_entry(winner) if winner is not None else None,
+        match_id=match_id,
+        match_status=status,
+        table_id=None,
+        scheduled_start=None,
+        pinned_at=None,
+        call_notified_count=0,
+        completed_at=None,
+    )
+
+
+def _counts(
+    fixtures: Sequence[TournamentFixtureRead],
+) -> dict[uuid.UUID, tuple[int, int]]:
+    """The game counts of every **completed** match among ``fixtures``, 3–0 to
+    ``entry_a`` — keyed as ``game_counts_by_match`` keys them, which is completed
+    matches and nothing else, so a voided pairing has no entry here either."""
+    return {
+        f.match_id: (3, 0)
+        for f in fixtures
+        if f.match_id is not None and f.match_status is MatchStatus.completed
+    }
+
+
+#: A 4-entrant, 3-round swiss (two rows a round) whose field lost seed 4 **after** the
+#: cut, played out to the last round. Seed 4's round-1 match still stands — that is why
+#: the merge withdraws rather than deletes — and every round after it holds one pairing
+#: for the three survivors plus one row nothing will ever seat.
+_SHRUNK_FIXTURES = [
+    _row(round_number=1, position=1, pairing=(1, 3), winner=1),
+    _row(round_number=1, position=2, pairing=(2, 4), winner=2),
+    _row(round_number=2, position=1, pairing=(1, 2), winner=1),
+    _row(round_number=2, position=2),
+    _row(round_number=3, position=1, pairing=(1, 3), winner=1),
+    _row(round_number=3, position=2),
+]
+
+_SHRUNK_GAME_COUNTS = _counts(_SHRUNK_FIXTURES)
+
+#: The three entrants still in the event. Seed 4 is absent —
+#: ``active_entrants_by_event`` filters withdrawn entries out at the only place that
+#: reads them.
+_SURVIVORS = [_entrant(1), _entrant(2), _entrant(3)]
+
+
+def test_a_shrunk_field_can_still_finish_its_event() -> None:
+    """**The event has to be able to end.** Every round is cut with ⌊n/2⌋ rows from the
+    field at the cut, so a field that shrinks leaves rows nothing will ever seat — and
+    counting those as pairings still to come held the event one outcome short of
+    ``complete`` forever: no champion, on a table where every match had been played.
+
+    Four rows of the six here can ever carry a pairing (both of round 1's, and one each
+    of rounds 2 and 3), and all four have a result. Count the six and the event reads
+    live with two phantom matches outstanding."""
+    field = _field_input(_SURVIVORS, _SHRUNK_FIXTURES, _SHRUNK_GAME_COUNTS)
+
+    assert field.fixture_count == 4, (
+        "the two rows the cut wrote for a field that no longer exists are not "
+        "fixtures that can still yield a result"
+    )
+
+    standings = SwissResults().tabulate(field)
+
+    assert standings.complete is True
+    assert standings.champion == _entry(1)
+
+
+def test_a_void_and_a_shrink_in_one_round_both_come_off_the_count() -> None:
+    """The two ways a row stops being a result the event is waiting for, in the shape
+    that produces both at once.
+
+    An account merge that collides on a played event voids the guest-vs-survivor match
+    *and* withdraws the guest — so in a four-entrant cut the same round 1 holds a voided
+    pairing, while every round after it holds a row the shrunk field can never seat. The
+    count subtracts a voided pairing from a round that is **full** (nothing left to pair
+    there) and drops an unpairable row from rounds that are not, and the event still has
+    to be able to end."""
+    fixtures = [
+        _row(round_number=1, position=1, pairing=(1, 3), winner=1),
+        _row(round_number=1, position=2, pairing=(2, 4), voided=True),
+        _row(round_number=2, position=1, pairing=(1, 2), winner=1),
+        _row(round_number=2, position=2),
+        _row(round_number=3, position=1, pairing=(1, 3), winner=1),
+        _row(round_number=3, position=2),
+    ]
+
+    field = _field_input(_SURVIVORS, fixtures, _counts(fixtures))
+
+    assert field.fixture_count == 3, (
+        "round 1 owes one result rather than two — the voided pairing will never "
+        "produce one — and rounds 2 and 3 owe one each rather than two"
+    )
+    assert SwissResults().tabulate(field).complete is True
+
+
+def test_a_withdrawn_but_seated_entrant_is_not_given_a_bye_they_never_took() -> None:
+    """**A bye is derived from the active field, not from who the rows happen to name.**
+
+    Seed 4 left after round 1 and is in no round after it. Deriving the byes over the
+    union of the active entrants and the seated ones asked "who is missing from this
+    round?" and got seed 4 back every time — a win per remaining round, up to ``R − 1``
+    of them, credited to somebody who had gone home. Nothing about the table looked
+    wrong: the event still completed, with the wrong order in it.
+
+    Seed 4 still has a **row**, and must: they played a real match, and dropping them
+    would be a ``KeyError`` on the first outcome that names them. The row reads what
+    they actually did — one match, one loss."""
+    field = _field_input(_SURVIVORS, _SHRUNK_FIXTURES, _SHRUNK_GAME_COUNTS)
+
+    assert field.byes == (_entry(3), _entry(2)), (
+        "seed 3 sat round 2 out and seed 2 sat round 3 out — and nobody else did"
+    )
+    assert _entry(4) in field.entrants, "somebody who played is still in the table"
+
+    rows = {row.entry_id: row for row in SwissResults().tabulate(field).rows}
+
+    departed = rows[_entry(4)]
+    assert (departed.played, departed.wins, departed.losses) == (1, 0, 1)
 
 
 async def test_a_swiss_event_has_no_schedule_preview(

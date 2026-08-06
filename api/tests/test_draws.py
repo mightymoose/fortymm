@@ -2381,6 +2381,24 @@ def _seed_pairs(
     ]
 
 
+def _paired_rows(
+    fixtures: Sequence[FixtureState], round_number: int
+) -> list[tuple[int, int, int]]:
+    """:func:`_seed_pairs` for a round some of whose rows can never be paired.
+
+    A field that shrinks after the cut leaves a round with more rows than pairings, and
+    ``_seed_pairs`` reads every row (its ``_seed_of`` asserts a seat). This one reports
+    the rows that carry a pairing and says nothing about the rest, so a test can assert
+    both the pairings and how many rows were left."""
+    return [
+        (f.position, f.entry_a_id.int, f.entry_b_id.int)
+        for f in sorted(fixtures, key=lambda f: f.position)
+        if f.round == round_number
+        and f.entry_a_id is not None
+        and f.entry_b_id is not None
+    ]
+
+
 def _seated(fixtures: Sequence[FixtureState], round_number: int) -> set[int]:
     """The seeds seated in one round — everybody but that round's bye."""
     return {
@@ -2700,12 +2718,13 @@ class TestSwissAdvance:
         """The other half of the rule: with the byeless set empty, selection takes the
         lowest-ranked entrant overall rather than refusing or looking forever.
 
-        The state is **one the cut refuses** — three entrants cannot be given four
-        rounds (``R > n − 1``), and byes are handed out at most one per round, so a
-        field in which everybody has had one is unreachable through
-        ``plan_initial``. It is built by hand precisely because of that: the branch
-        exists to keep the function total, and an unreachable branch that raises or
-        loops is still a live event stopped dead if anything ever reaches it.
+        The state is one **the cut refuses to write** — three entrants cannot be given
+        four rounds — so it is built by hand here rather than driven through
+        ``plan_initial``. It is not unreachable: the cut compares ``R`` against the
+        field it sees, and a field that **shrinks** afterwards (an account merge
+        withdraws a guest whose entry seats played fixtures) carries the old ``R`` into
+        a smaller field, which is exactly this. A branch that raised or looped would be
+        a live event stopped dead.
 
             round 1   1 beat 2    3 byed
             round 2   1 beat 3    2 byed
@@ -2772,6 +2791,114 @@ class TestSwissAdvance:
 
         assert _seed_pairs(_apply(round_two, plan), 3) == [(1, 1, 5), (2, 2, 4)]
         assert (2, 2, 4) in _seed_pairs(round_two, 1)  # the repeat, round 1's own
+
+    def test_a_field_that_shrinks_after_the_cut_keeps_pairing_its_later_rounds(
+        self,
+    ) -> None:
+        """**The deadlock, and the one withdrawal that caused it.**
+
+        Eight entrants are cut for four rounds — four rows a round — and round 1 is
+        played by all eight. Seed 8 then leaves, which the ordinary withdrawal endpoint
+        cannot do to a live event but the account merge can: it flips a colliding
+        guest's entry to ``withdrawn`` rather than deleting it, *because* the row seats
+        played fixtures. Seven entrants make three pairings, so round 2 is paired into
+        three of its four rows and the fourth stays ``NULL`` for good.
+
+        That fourth row is what has to be understood as **permanently unpairable**
+        rather than pending. Read as pending it made round 2 neither wholly unpaired nor
+        decided, and the walk answered "no round is pairable" on that call and on every
+        call after: rounds 3 and 4 were never paired, the event never read complete, and
+        a played draw cannot be un-cut — no move a director could make.
+
+        The pairings are asserted exactly, in both rounds, so this cannot pass by
+        pairing *something*. Round 2's table is the seven survivors' (5, 2, 7, 4, 3, 6,
+        1 — seed 8's win over seed 4 is not theirs to count), seed 1 takes the bye, and
+        round 3 is paired off round 2's table in turn.
+        """
+        played = _played(self._cut(rounds=4, entrants=8), _ROUND_ONE_UPSETS)
+
+        round_two = _apply(played, SwissStrategy(rounds=4).advance(played, _ordered(7)))
+
+        assert _paired_rows(round_two, 2) == [(1, 5, 2), (2, 7, 4), (3, 3, 6)]
+        assert _seated(round_two, 2) == {2, 3, 4, 5, 6, 7}, "seed 1 sits round 2 out"
+        assert len([f for f in round_two if f.round == 2]) == 4, (
+            "the cut's fourth row is still there — it is unpairable, not deleted"
+        )
+
+        decided = _played(
+            round_two,
+            {
+                frozenset({5, 2}): (5, 3, 0),
+                frozenset({7, 4}): (7, 3, 0),
+                frozenset({3, 6}): (3, 3, 0),
+            },
+        )
+        round_three = _apply(
+            decided, SwissStrategy(rounds=4).advance(decided, _ordered(7))
+        )
+
+        assert _paired_rows(round_three, 3) == [(1, 5, 7), (2, 3, 2), (3, 1, 4)], (
+            "round 3 is paired off round 2's table — the round that was neither "
+            "wholly unpaired nor decided, and stalled the walk forever"
+        )
+        assert _seated(round_three, 3) == {1, 2, 3, 4, 5, 7}, "seed 6 sits round 3 out"
+
+    def test_a_shrunk_round_is_not_paired_a_second_time(self) -> None:
+        """The idempotence the fix must not cost. A round paired down to a shrunk field
+        has a ``NULL`` row left in it, and "has a ``NULL`` row" is exactly what the
+        pairable check no longer means — so the guard has to be that the round is
+        **full**, not that it is untouched. Re-run over the applied state and it plans
+        no fill, and the rows it filled keep the entrants they were given."""
+        played = _played(self._cut(rounds=4, entrants=8), _ROUND_ONE_UPSETS)
+        applied = _apply(played, SwissStrategy(rounds=4).advance(played, _ordered(7)))
+
+        second = SwissStrategy(rounds=4).advance(applied, _ordered(7))
+
+        assert second.side_fills == ()
+        assert _paired_rows(applied, 2) == [(1, 5, 2), (2, 7, 4), (3, 3, 6)]
+
+    def test_a_shrunk_field_runs_out_of_byeless_entrants(self) -> None:
+        """**The byeless fallback is reachable through the real cut**, and the docstring
+        beside it used to argue it was not.
+
+        That argument read the ceiling as ``R ≤ n − 1``, so the byes handed out (one a
+        round) could never cover the field. It reasoned about ``n`` at the cut. Six
+        entrants are cut for five rounds here — legal — and three of them are left after
+        round 1, so rounds 2, 3 and 4 bye one survivor each and round 5 has nobody
+        byeless to pick. It hands the bye to the lowest-ranked entrant overall, a second
+        one for seed 3, rather than raising or looping in the middle of a live event.
+
+        Every round after the first is paired by ``advance`` itself, which is what makes
+        this a statement about a draw the system can actually be in."""
+        played = _played(
+            self._cut(rounds=5, entrants=6),
+            {
+                frozenset({1, 4}): (1, 3, 0),
+                frozenset({2, 5}): (2, 3, 0),
+                frozenset({3, 6}): (3, 3, 0),
+                # Every pairing the three survivors can be given, so each round is
+                # played out whichever two of them meet.
+                frozenset({1, 2}): (1, 3, 0),
+                frozenset({1, 3}): (1, 3, 0),
+                frozenset({2, 3}): (2, 3, 0),
+            },
+        )
+        for _ in range(4):
+            played = _played(
+                _apply(played, SwissStrategy(rounds=5).advance(played, _ordered(3))),
+                {
+                    frozenset({1, 2}): (1, 3, 0),
+                    frozenset({1, 3}): (1, 3, 0),
+                    frozenset({2, 3}): (2, 3, 0),
+                },
+            )
+
+        assert [
+            {1, 2, 3} - _seated(played, round_number) for round_number in (2, 3, 4, 5)
+        ] == [{3}, {2}, {1}, {3}], (
+            "three byeless entrants last three rounds; the fourth falls back to the "
+            "lowest-ranked, who has already had one"
+        )
 
     def test_re_running_the_advance_pairs_the_round_again_no_differently(self) -> None:
         """**Idempotence, in the two steps the seam takes.** Apply the fills and the

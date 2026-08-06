@@ -1250,6 +1250,45 @@ def swiss_byes(
     )
 
 
+def swiss_pairable_rows(row_count: int, seated_count: int, field_size: int) -> int:
+    """How many of one swiss round's pre-cut rows can ever carry a pairing.
+
+    The cut writes ``⌊n/2⌋`` rows a round from the field it saw, and **the field moves
+    under that number in both directions**. The rule that survives both is: a round's
+    *capacity* is ``⌊(current field)/2⌋``, capped by the rows that exist and floored by
+    the rows already seated.
+
+    - ``min(row_count, …)`` is the **grown** field. A draw cut for eight that a ninth
+      joined has one pairing more than there are rows for, and the lowest-ranked
+      pairing is simply not written — the same outcome that entrant would have had as
+      the round's bye. Without the cap a fully-written round would read as still having
+      room, and would be re-paired over rows that are already being played.
+    - ``max(seated_count, …)`` is the **shrunk** field, one round late. A round paired
+      when the field was eight holds four real pairings; if somebody then leaves, those
+      four are still four fixtures that will produce four results, whatever ``⌊7/2⌋``
+      says. Only rows that were never seated are lost to a shrink.
+
+    What is left over — ``row_count`` minus this — is **permanently unpairable**: rows
+    the cut wrote for a field that no longer exists. They are not pending. Three
+    readings depend on saying so once, here, rather than three times:
+
+    - a round with this many rows filled is fully paired, so the walk moves past it
+      instead of stalling on a round that is neither wholly unpaired nor decided
+      (:func:`_swiss_round_to_pair`);
+    - a round is decided when every row that *could* be filled is
+      (:func:`_swiss_round_is_decided`), so a dead row does not hold its round — and the
+      bye scored against it — open forever;
+    - the event's fixture count is this, not the row count
+      (:func:`app.tournament_serialization._field_input`), so a shrunk field can still
+      read ``complete``.
+
+    ``field_size`` is the **active** field in both layers, which is the same field
+    :func:`swiss_byes` is derived over. A shrunk field that shrank the capacity but not
+    the byes would credit a departed entrant with a bye per round.
+    """
+    return max(seated_count, min(row_count, field_size // 2))
+
+
 def _swiss_pairing_fills(
     fixtures: Sequence[FixtureState], ordered_entrants: Sequence[OrderedEntrant]
 ) -> list[SideFill]:
@@ -1259,10 +1298,10 @@ def _swiss_pairing_fills(
     The four steps are the ADR's own sentence: find the round to pair, order the field
     by the current standings, take the bye out of an odd field, and walk the rest.
     """
-    round_fixtures = _swiss_round_to_pair(fixtures)
+    field = [entrant.entry_id for entrant in ordered_entrants]
+    round_fixtures = _swiss_round_to_pair(fixtures, len(field))
     if round_fixtures is None:
         return []
-    field = [entrant.entry_id for entrant in ordered_entrants]
     # Projected once and handed to both readers, so "who has played whom" and "who has
     # sat out" are two questions asked of one set of pairings.
     pairings = _swiss_seated_pairings(fixtures)
@@ -1278,11 +1317,15 @@ def _swiss_pairing_fills(
     fills: list[SideFill] = []
     # ``position`` is the pairing's rank (ADR), so the round's rows are filled in
     # position order with the pairings in standings order. ``strict=False`` because the
-    # two can legitimately differ in length: a field that grew by one after the cut has
-    # a pairing more than there are rows for, and its lowest-ranked pairing simply is
-    # not written — the same outcome the entrant would have had as that round's bye. A
-    # field that grew by *more* than one is a stale draw, which go-live refuses
-    # (:func:`unseated_entrant_allowance`) before this is ever reached.
+    # two can legitimately differ in length, in **either** direction
+    # (:func:`swiss_pairable_rows`). A field that grew by one after the cut has a
+    # pairing more than there are rows for, and its lowest-ranked pairing simply is not
+    # written — the same outcome the entrant would have had as that round's bye. (A
+    # field that grew by *more* than one is a stale draw, which go-live refuses —
+    # :func:`unseated_entrant_allowance` — before this is ever reached.) A field that
+    # SHRANK has fewer pairings than rows, and the surplus rows stay ``NULL`` for good:
+    # the round is fully paired all the same, which is what stops the walk stalling on
+    # it forever.
     for (higher, lower), fixture in zip(
         pairs, sorted(round_fixtures, key=lambda f: f.position), strict=False
     ):
@@ -1296,7 +1339,7 @@ def _swiss_pairing_fills(
 
 
 def _swiss_round_to_pair(
-    fixtures: Sequence[FixtureState],
+    fixtures: Sequence[FixtureState], field_size: int
 ) -> list[FixtureState] | None:
     """The fixtures of the round this advance may pair — the **earliest wholly unpaired
     round, and only if every round before it is decided** — or ``None``.
@@ -1312,28 +1355,52 @@ def _swiss_round_to_pair(
     one risks seating an entrant in two fixtures of the same round. So a half-paired
     round stalls the walk instead, visibly, rather than being papered over.
 
-    It is also what makes the whole advance idempotent: once a round's rows are filled
-    it is no longer wholly unpaired, so no later run re-pairs it — which is the same
-    mechanism that keeps a correction to an earlier result from re-pairing a round that
-    is already being played.
+    **A round is over when it is full, and full is not the row count.** An earlier
+    version asked whether every row was seated, which is the same question only while
+    the field is the one the cut saw. A field that **shrinks** afterwards — the account
+    merge withdraws a guest whose entry seats played fixtures, and that is not
+    window-gated — leaves ``⌊n/2⌋`` pairings for a round of more rows than that, so the
+    surplus rows stay ``NULL`` for good. Read as "not yet fully seated" they made the
+    round neither wholly unpaired nor decided, which returned ``None`` here on that call
+    and on every call after: rounds ``r+1…R`` were never paired, and a played draw
+    cannot be un-cut. One withdrawal deadlocked an eight-entrant, four-round event.
+    :func:`swiss_pairable_rows` is the count that is actually full, and it holds for a
+    field that grew too.
+
+    It is still what makes the whole advance idempotent: once a round's pairable rows
+    are filled it is no longer wholly unpaired, so no later run re-pairs it — which is
+    the same mechanism that keeps a correction to an earlier result from re-pairing a
+    round that is already being played.
     """
     by_round: dict[int, list[FixtureState]] = defaultdict(list)
     for fixture in fixtures:
         by_round[fixture.round].append(fixture)
     for round_number in sorted(by_round):
         round_fixtures = by_round[round_number]
-        if all(
+        seated = [fixture for fixture in round_fixtures if not fixture.is_pending]
+        pairable = swiss_pairable_rows(len(round_fixtures), len(seated), field_size)
+        # Wholly unpaired — every row's BOTH sides empty, which is stricter than "none
+        # is seated" and deliberately so: a row with one side filled is a state nothing
+        # can produce, and pairing around it could seat somebody twice in one round.
+        # ``pairable > 0`` excludes a field of one (or none), which has nobody to play:
+        # not a round to pair, and not a round to stall on either.
+        if pairable > 0 and all(
             fixture.entry_a_id is None and fixture.entry_b_id is None
             for fixture in round_fixtures
         ):
             return round_fixtures
-        if not _swiss_round_is_decided(round_fixtures):
+        if not _swiss_round_is_decided(seated, pairable):
             return None
     return None
 
 
-def _swiss_round_is_decided(round_fixtures: Sequence[FixtureState]) -> bool:
-    """Whether every fixture in one round has produced all the result it ever will.
+def _swiss_round_is_decided(seated: Sequence[FixtureState], pairable: int) -> bool:
+    """Whether every row of one round that could **ever** carry a pairing has produced
+    all the result it ever will.
+
+    Takes the round's *seated* fixtures and how many rows it can fill
+    (:func:`swiss_pairable_rows`), rather than the round's rows, because those are the
+    two facts the answer is made of and the caller has already derived both.
 
     Per fixture that is :attr:`FixtureState.is_decided` — the shared spelling, which is
     also what :attr:`SeatedPairing.decided` carries, so "this round is over" is one
@@ -1341,14 +1408,14 @@ def _swiss_round_is_decided(round_fixtures: Sequence[FixtureState]) -> bool:
     score a bye. Read that property for why it is the **live-outcome** view
     (:attr:`FixtureState.games`) and why a **voided** fixture counts as decided.
 
-    The extra half — both sides known — stays here rather than on the property. It is a
-    question about a *round* being playable at all, not about one fixture's result, and
-    a round with an unpaired fixture in it has not been played whatever its other rows
-    say.
+    The extra half — that the round has no row left to seat — stays here rather than on
+    the property. It is a question about a *round* being playable at all, not about one
+    fixture's result, and a round still owing a pairing has not been played whatever
+    its other rows say. What it is **not** is "no row is still ``NULL``": a round whose
+    field shrank under it keeps rows that can never be seated, and holding the round
+    open for them would hold the bye scored against it open too, and the event with it.
     """
-    return all(
-        not fixture.is_pending and fixture.is_decided for fixture in round_fixtures
-    )
+    return len(seated) >= pairable and all(fixture.is_decided for fixture in seated)
 
 
 def _swiss_standings_order(
@@ -1423,10 +1490,21 @@ def _swiss_bye(order: Sequence[EntryId], byes: Sequence[EntryId]) -> EntryId | N
     that the two spellings of "decided" underneath them still agree is pinned by a
     test, not by a shared call.)
 
-    The fallback for a field in which everybody has had one (the lowest-ranked overall)
-    is written for completeness rather than because it runs. The cut refuses ``R > n −
-    1``, so there are always fewer rounds than entrants and the byeless set cannot
-    empty.
+    The fallback for a field in which everybody has had one takes the lowest-ranked
+    entrant overall — a second bye, which is worse than the rule but is a bye somebody
+    has to take.
+
+    **It runs**, and an earlier version of this docstring argued it could not: it read
+    the ceiling as ``R ≤ n − 1``, so byes taken (``r − 1`` when pairing round ``r``)
+    could never reach ``n``. The ceiling is ``R ≤ n − 1 + n % 2``
+    (:func:`_max_rematch_free_rounds`) — an odd field legally plays ``R = n`` — and,
+    more to the point, ``n`` is the field **at the cut**. A field that shrinks
+    afterwards (the account merge withdraws a guest whose entry seats played fixtures)
+    can hand out a bye to every remaining entrant and still owe rounds: six cut for five
+    rounds, then three left, and by round 5 all three have sat out
+    (``test_a_shrunk_field_runs_out_of_byeless_entrants``). The *conclusion* of the old
+    argument still holds for a field that only grows, which is why the branch was never
+    reached before.
     """
     if len(order) % 2 == 0:
         return None
@@ -1750,8 +1828,8 @@ def unseated_entrant_allowance(draw_type: DrawType, field_size: int) -> int:
     says so. Hence ``field_size % 2``: one for an odd field, none for an even one.
 
     It is an **allowance**, i.e. an upper bound, not a required count. Once a later
-    round is paired (the next slice) the round-1 bye is seated in it, and a draw that
-    seats its whole field must stay current.
+    round is paired the round-1 bye is seated in it, and a draw that seats its whole
+    field must stay current.
 
     What the allowance **cannot** do is tell a byed entrant from a single latecomer who
     leaves the field odd: a swiss draw cut for eight and joined by a ninth holds exactly

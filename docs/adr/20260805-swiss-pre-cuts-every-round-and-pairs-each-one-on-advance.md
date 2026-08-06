@@ -120,6 +120,49 @@ this draw layer is deliberately pure and deterministic, with no solver. We accep
 the occasional avoidable rematch rather than give a pure domain a solver
 dependency, and rather than refuse to pair, which would strand a live event.
 
+### A round's capacity is `floor(active field / 2)`, and rows beyond it are unpairable
+
+Added 2026-08-06, after code review found two bugs that share this root.
+
+Pre-cutting fixes each round's row count at the cut, as `cut_size // 2`. The
+**active field can still shrink afterwards.** Cutting has no status gate, and
+`account_merge` withdraws a colliding entry on a live, played event — it withdraws
+rather than deletes precisely because the row seats played fixtures. So a guest
+playing in a live swiss draw who claims a verified account already entered in that
+event drops the field by one.
+
+When that happens the pre-written rows outnumber the pairings the field can make.
+So a round's **capacity** is `floor(len(active field) / 2)`, and a round is fully
+paired when its filled rows reach that capacity — not when every written row is
+filled. Rows beyond capacity are **permanently unpairable**, not pending.
+
+That distinction has to hold in three places or the problem only moves: the pairing
+gate, decidedness, and the completeness count. Miss the second and an unpairable
+row holds its round open forever. Miss the third and the event can never read
+complete.
+
+**The two bugs this fixes, neither of which anything pinned.** Requiring every row
+filled meant a shrunk field left rows NULL, after which the round was neither
+wholly unpaired nor decided and the draw **stopped pairing forever** — with no
+operator recourse, since a played draw cannot be un-cut. Separately, the results
+layer derived byes from the active entrants *unioned with every seated entry*, so a
+departed entrant read as byed in every later round and collected a win for each
+one.
+
+The union itself is right and stays: a player who actually played keeps a row in
+the table. Only the **bye derivation** narrows to the active field, so both layers
+pair and score from one field.
+
+The reverse case is unchanged and still correct: a field that *grew* by one has one
+more pairing than rows, and that pairing is dropped.
+
+**One claim this overturned.** `_swiss_bye`'s fallback — take the lowest-ranked
+entrant once everybody has had a bye — was documented as unreachable, on the
+grounds that a legal cut has fewer rounds than entrants. Under a shrunk field it is
+reachable: six entrants cut for five rounds, three left after round 1, and by round
+5 nobody is byeless. It is now pinned by a test driven through real cuts and
+advances rather than asserted to be impossible.
+
 ## Consequences
 
 Swiss costs no change to `AdvancePlan` and no migration beyond the settings object

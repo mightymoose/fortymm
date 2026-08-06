@@ -18,7 +18,13 @@ from typing import Any, assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import EntryId, PoolId, SeatedPairing, swiss_byes
+from app.draws import (
+    EntryId,
+    PoolId,
+    SeatedPairing,
+    swiss_byes,
+    swiss_pairable_rows,
+)
 from app.models import (
     MatchStatus,
     ScheduleSolve,
@@ -346,23 +352,38 @@ def _field_input(
     seven-player draw derived from fixtures alone would stand a six-player table.
 
     The entries seated in fixtures are **unioned in** rather than assumed to be a
-    subset. A player who withdraws after the draw is cut leaves the active list while
-    their played fixtures stay, and :func:`~app.pool_finishing_order.finishing_order`
-    indexes its tallies by entrant — so dropping them would be a ``KeyError`` on the
-    first outcome that names them, on the detail page of any event that had a
-    withdrawal.
+    subset, for the **rows** only. A player who withdraws after the draw is cut leaves
+    the active list while their played fixtures stay, and
+    :func:`~app.pool_finishing_order.finishing_order` indexes its tallies by entrant —
+    so dropping them would be a ``KeyError`` on the first outcome that names them, on
+    the detail page of any event that had a withdrawal. Somebody who played real
+    matches belongs in the table.
 
-    A round nobody has been paired into yet is still **counted**: it can very much still
-    yield a result. Only a **voided** pairing is left out of the count, exactly as it is
-    for a pool — it never will produce one, and counting it would hold the event one
-    outcome short of complete forever.
+    The **byes** are derived here rather than stored, because there is nothing to
+    store: a bye is the absence of a fixture row, so it is read off the rounds that
+    *are* paired (:func:`~app.draws.swiss_byes`). They are scored as a win worth zero
+    games one layer down, in the standings themselves.
 
-    The **byes** are derived here rather than stored, because there is nothing to store:
-    a bye is the absence of a fixture row, so it is read off the rounds that *are*
-    paired (:func:`~app.draws.swiss_byes`, the same call the draw layer's pairing makes,
-    so the table and the next round's seedings cannot rank the field differently). They
-    are scored as a win worth zero games one layer down, in the standings themselves."""
-    field = {EntryId(entrant.id) for entrant in entrants} | {
+    **Over the active entrants, not that union** — the one field the draw layer pairs
+    from. Handed the union, this layer asked who was missing from each round and got
+    the departed entrant back every time, because nobody seats them again: a
+    withdrawn-but-seated player collected a phantom bye win per remaining round, up to
+    ``R − 1`` of them, on a table that otherwise looked right. The two layers now derive
+    byes from one field, which is the whole of what they share: the tallies are still
+    the union's, so a departed entrant's results count here and are dropped by
+    :func:`~app.draws._swiss_standings_order` (a stranger in its tallies would turn a
+    two-way tie into a three-way one). For a field that never shrank the two sets are
+    the same set and the two tables are the same table.
+
+    ``fixture_count`` is **what can still be paired**, not the row count. Every round
+    is cut with ``⌊n/2⌋`` rows from the field at the cut, and a round nobody has been
+    paired into yet is very much still countable — but a field that shrank leaves rows
+    nothing will ever seat, and counting those holds the event one outcome short of
+    complete forever. :func:`~app.draws.swiss_pairable_rows` is that count, per round,
+    over the same active field; a **voided** pairing comes off it exactly as it does
+    for a pool, for the same reason."""
+    active = tuple(EntryId(entrant.id) for entrant in entrants)
+    field = set(active) | {
         EntryId(entry_id)
         for f in fixtures
         for entry_id in (f.entry_a_id, f.entry_b_id)
@@ -375,12 +396,35 @@ def _field_input(
     ]
     return FieldInput(
         entrants=tuple(field),
-        fixture_count=sum(
-            1 for f in fixtures if f.match_status is not MatchStatus.voided
-        ),
+        fixture_count=_swiss_fixture_count(fixtures, len(active)),
         outcomes=tuple(outcomes),
-        byes=swiss_byes(field, _seated_pairings(fixtures)),
+        byes=swiss_byes(active, _seated_pairings(fixtures)),
     )
+
+
+def _swiss_fixture_count(fixtures: list[TournamentFixtureRead], field_size: int) -> int:
+    """How many of a swiss draw's rows can still yield a result — the denominator
+    ``complete`` is measured against.
+
+    Per round, because that is the grain the cut wrote and the grain a field change
+    moves: :func:`~app.draws.swiss_pairable_rows` says how many of a round's rows can
+    ever carry a pairing, and the ones already seated into a **voided** match are taken
+    back off, since that match is terminal and will never produce the outcome the count
+    is promising."""
+    by_round: dict[int, list[TournamentFixtureRead]] = defaultdict(list)
+    for f in fixtures:
+        by_round[f.round].append(f)
+    total = 0
+    for round_fixtures in by_round.values():
+        seated = [
+            f
+            for f in round_fixtures
+            if f.entry_a_id is not None and f.entry_b_id is not None
+        ]
+        total += swiss_pairable_rows(
+            len(round_fixtures), len(seated), field_size
+        ) - sum(1 for f in seated if f.match_status is MatchStatus.voided)
+    return total
 
 
 def _seated_pairings(

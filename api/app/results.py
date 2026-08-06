@@ -461,8 +461,11 @@ class SwissResults:
     player did not cause. Zero games, because a nominal 3-0 would hand them a game
     difference nobody earned and lift them over somebody who beat a real opponent. The
     byes themselves are derived from the fixtures by :func:`app.draws.swiss_byes` and
-    arrive on :attr:`FieldInput.byes` — the same derivation the draw layer pairs by, so
-    the rank a director reads and the rank the next round is paired down are one number.
+    arrive on :attr:`FieldInput.byes` — one derivation over one field (the **active**
+    entrants), which is what the draw layer pairs by, so a bye credited here is a bye
+    the next round's pairing passes over. The claim is about the byes and stops there:
+    a departed entrant's real results are still tallied here and are dropped by the
+    pairing, so the two tables can differ by exactly that after a withdrawal.
 
     Live and partial like every other shape: an entrant appears from the moment they are
     seated, and a correction re-orders the table the instant it lands.
