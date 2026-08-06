@@ -469,17 +469,19 @@ describe('DrawPanel', () => {
       expect(enabledVerbsIn('ev-u1200')).toHaveLength(2)
     })
 
-    // The dialog prices the act it was opened for, and names the EVENT with it: the tab
+    // What the PANEL decides is which act opened and which event it carries — the tab
     // renders one card per event, so "the draw" alone is ambiguous the moment a
-    // tournament has more than one.
+    // tournament has more than one. The sentences themselves belong to the dialog's own
+    // test: pinning them here too is the shape that lets a copy edit green one file and
+    // leave the other stale until a full-suite run. So each act is witnessed by ONE
+    // string, the confirm button's — the words on the control the director actually
+    // clicks — and that string still differs per variant, so a swapped act reds.
     it('names the act and the event it would discard', async () => {
       page.render({ event: DRAWN })
 
       await userEvent.click(await page.findDeleteButton('U1200 Singles'))
 
-      const dialog = page.confirm.getDialog()
-      expect(dialog).toHaveTextContent('Delete this draw?')
-      expect(dialog).toHaveTextContent('U1200 Singles')
+      expect(page.confirm.getDialog()).toHaveTextContent('U1200 Singles')
       expect(page.confirm.getConfirmButton()).toHaveTextContent('Delete the draw')
     })
 
@@ -488,7 +490,6 @@ describe('DrawPanel', () => {
 
       await userEvent.click(await page.findRecutButton('U1200 Singles'))
 
-      expect(page.confirm.getDialog()).toHaveTextContent('Re-cut this draw?')
       expect(page.confirm.getConfirmButton()).toHaveTextContent('Re-cut the draw')
     })
 

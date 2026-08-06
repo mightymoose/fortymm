@@ -26,9 +26,17 @@ import {
  * A lifecycle act is about a *tournament*, not an event, so hoisting the name would
  * oblige every future variant to supply a field its copy never says.
  */
-export type IrreversibleActConsequence =
+/** The acts that belong to an event's **draw**. Named apart from the whole union
+ * because the draw panel owns exactly these and must be able to say so: a component
+ * typed on `IrreversibleActConsequence` inherits every variant the union later grows,
+ * so its own exhaustive switch breaks in a slice that never mentions it, and its state
+ * can hold an act it has no case for. The narrow alias is what keeps "make illegal
+ * states unrepresentable" pointing outward instead of at ourselves. */
+export type DrawActConsequence =
   | { variant: 'recut-draw'; eventName: string }
   | { variant: 'delete-draw'; eventName: string }
+
+export type IrreversibleActConsequence = DrawActConsequence
 
 export interface ConfirmIrreversibleActDialogProps {
   open: boolean

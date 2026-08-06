@@ -16,7 +16,7 @@ import {
 import type { TournamentEvent } from '../../data/types'
 import {
   ConfirmIrreversibleActDialog,
-  type IrreversibleActConsequence,
+  type DrawActConsequence,
 } from '../confirm-irreversible-act-dialog'
 import { LeadReason } from './lead-reason'
 import { Bracket } from './draw-panel/bracket'
@@ -103,7 +103,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   // The act awaiting its confirm, held as the CONSEQUENCE the dialog will price rather
   // than as a queued closure: the dialog needs it anyway, and a stored callback would
   // capture whatever `event` was when the button was clicked.
-  const [pending, setPending] = useState<IrreversibleActConsequence | null>(null)
+  const [pending, setPending] = useState<DrawActConsequence | null>(null)
 
   const state = drawState(event)
   // One in-flight draw verb at a time. A second click on Re-cut while the first is still
@@ -120,10 +120,12 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
     }
   }
 
-  /** The confirmed act, fired. The switch is exhaustive on the consequence, so a third
-   * destructive draw verb is a TYPE error here rather than a dialog that prices one act
-   * and performs another. */
-  const runConfirmed = (consequence: IrreversibleActConsequence) => {
+  /** The confirmed act, fired. The switch is exhaustive on `DrawActConsequence` — the
+   * acts this panel OWNS — so a third destructive draw verb is a TYPE error here rather
+   * than a dialog that prices one act and performs another. Deliberately not the whole
+   * `IrreversibleActConsequence`: the lifecycle edges join that union later, and a panel
+   * checked against them would red in a slice it has no part in. */
+  const runConfirmed = (consequence: DrawActConsequence) => {
     setPending(null)
     switch (consequence.variant) {
       case 'recut-draw':
