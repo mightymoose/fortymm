@@ -4,6 +4,7 @@ import {
   drawRefusalNotice,
   drawState,
   drawTypeFreeze,
+  drawVerbFreeze,
   poolSetFreeze,
   unpooledShape,
   type DrawState,
@@ -18,6 +19,7 @@ import {
   buildEntrants,
   buildEvent,
   buildFixture,
+  buildPlayedDrawnEvent,
   buildPool,
   buildSwissDrawnEvent,
   buildSwissOddDrawnEvent,
@@ -598,5 +600,85 @@ describe('drawTypeFreeze', () => {
     expect(freeze.reason).not.toContain('dealt as')
     expect(freeze.reason).toContain('its draw type is frozen')
     expect(freeze.reason).toContain('Delete the draw to change the type')
+  })
+})
+
+/**
+ * The third freeze — the one on the draw **verbs** themselves (#1060). It restates the
+ * server's `draw_has_play` and nothing else, so the cases below are that guard's own two
+ * halves, apart, plus the negative.
+ */
+describe('drawVerbFreeze', () => {
+  it('is open on a draw that has been cut but not played', () => {
+    // The day-of re-cut ADR-0786 preserves: a full draw, no result and no match, and both
+    // verbs live. Freezing on the *draw* rather than on the *evidence* would break this.
+    expect(drawVerbFreeze(buildDrawnEvent()).kind).toBe('open')
+  })
+
+  it('is open on an event with no draw at all', () => {
+    // Not a special case in the predicate — no fixtures, nothing to find evidence on —
+    // and stated anyway, because it is what keeps Generate (the undrawn verb) unfrozen.
+    expect(drawVerbFreeze(buildEvent()).kind).toBe('open')
+  })
+
+  // Half one, alone: a decided fixture. A result exists, and a re-cut would discard it.
+  it('freezes on a fixture with a recorded WINNER, match or no match', () => {
+    const freeze = drawVerbFreeze(
+      buildDrawnEvent({
+        fixtures: [
+          buildFixture({ id: 'fx-a-1', winnerEntryId: 'entry-1', matchId: null }),
+          buildFixture({ id: 'fx-a-2', round: 2 }),
+        ],
+      }),
+    )
+
+    expect(freeze.kind).toBe('frozen')
+  })
+
+  /**
+   * Half two, alone, and the half a laxer client would get wrong: a fixture that has
+   * become a real match with **no winner and no status**.
+   *
+   * The `matchStatus: null` is the load-bearing part. `matchOf` (the renderer's helper in
+   * the same module) requires an id *and* a status before it will call a fixture
+   * materialized, so a freeze derived from `FixtureLine.match` — or from `drawState` —
+   * would read this fixture as un-played and offer a verb the server answers 409 to. The
+   * guard is `match_id IS NOT NULL`, and so is this.
+   */
+  it('freezes on a merely LINKED match, even with no winner and no status', () => {
+    const freeze = drawVerbFreeze(
+      buildDrawnEvent({
+        fixtures: [
+          buildFixture({
+            id: 'fx-a-1',
+            winnerEntryId: null,
+            matchId: 'm-1',
+            matchStatus: null,
+          }),
+        ],
+      }),
+    )
+
+    expect(freeze.kind).toBe('frozen')
+  })
+
+  // ANY fixture, not every one: the seeded event materializes one of its four.
+  it('freezes on one played fixture among four unplayed ones', () => {
+    expect(drawVerbFreeze(buildPlayedDrawnEvent()).kind).toBe('frozen')
+  })
+
+  it('says both verbs are gone, and why — and names no way out, because there is none', () => {
+    const freeze = drawVerbFreeze(buildPlayedDrawnEvent())
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen draw verb')
+
+    // What is true, in the director's terms…
+    expect(freeze.reason).toContain('already under way')
+    expect(freeze.reason).toContain('re-cut or removed')
+    // …and why it costs something to ignore.
+    expect(freeze.reason).toMatch(/throw away a result/i)
+    // The half the sibling freezes' copy register would drag in and that would be a LIE
+    // here: deleting the draw is the act being refused, so there is no exit to offer.
+    expect(freeze.reason).not.toContain('Delete the draw')
+    expect(freeze.reason).not.toContain('cut it again')
   })
 })

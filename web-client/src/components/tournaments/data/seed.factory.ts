@@ -539,6 +539,36 @@ export function buildPlayerConflict(
 }
 
 /**
+ * `buildDrawnEvent`, with its draw **under way** — the state `drawVerbFreeze` (`./draw`)
+ * refuses a re-cut and a delete on (#1060), and the state the server answers 409 from.
+ *
+ * Only ONE of its four fixtures carries the evidence, on purpose: the guard is "**any**
+ * fixture", and one-of-four is what tells a predicate asking `some` from one asking
+ * `every`.
+ *
+ * The evidence is a **recorded winner**, and that choice is load-bearing for the DOM
+ * surfaces that use this. A winner is not rendered anywhere on a fixture line, so the draw
+ * this builds paints **identically** to `buildDrawnEvent`'s — which leaves the freeze as
+ * the only difference between a frozen panel and an open one. The other half of the guard
+ * (a linked `matchId`) would also render a `<Link>` to the match, which costs two things:
+ * a `RouterProvider` in every test of a panel that is not about routing, **and** an
+ * `a[href]` — which `INTERACTIVE_SELECTOR` matches, so the ADR-0015 "a non-owner sees zero
+ * controls" sweep would red as well. Neither red would be about the freeze. Both halves of
+ * the guard are pinned apart, on the predicate itself, in `draw.test.ts`.
+ */
+export function buildPlayedDrawnEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  const drawn = buildDrawnEvent()
+  return buildDrawnEvent({
+    fixtures: drawn.fixtures.map((fixture, i) =>
+      i === 0 ? { ...fixture, winnerEntryId: fixture.entryAId } : fixture,
+    ),
+    ...overrides,
+  })
+}
+
+/**
  * An event whose draw **is cut**: a round-robin U1200 Singles, five entrants
  * (`player.1`…`player.5`) dealt across two pools by the snake the API uses, and the
  * fixtures that field really produces.
