@@ -399,8 +399,9 @@ async def _enforce_draw_settings_frozen(
     db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
     """Raise :class:`DrawTypeFrozenError` once a draw-configuration payload would change
-    the **draw type or its qualifier count** on an event that **has a draw** (ADR-0786,
-    ADR 20260727).
+    the **draw type or the setting that goes with it** — rr-then-ko's qualifier count,
+    swiss's round count — on an event that **has a draw** (ADR-0786, ADR 20260727, and
+    the swiss ADR).
 
     A draw type is not a label on an event — it is the strategy that dealt the event's
     fixtures, and the fixtures are the shape that strategy prescribes. Patch it under a
@@ -412,9 +413,11 @@ async def _enforce_draw_settings_frozen(
     because it is the same fact wearing a second column: an ``rr-then-ko`` draw's
     bracket is cut upfront for ``P × K``, so a K the fixtures were not cut for is
     exactly as contradictory as a type they were not dealt by — and quieter (see
-    :func:`_qualifiers_per_pool_frozen_detail`). One comparison over the whole
-    configuration is also what keeps a payload that moves *both* from being judged
-    twice.
+    :func:`_qualifiers_per_pool_frozen_detail`). Swiss's ``rounds`` is frozen by that
+    same guard for that same reason: all ``R`` rounds are cut at once, so an R the
+    fixtures were not cut for leaves the draw with rounds it has no fixtures for (see
+    :func:`_rounds_frozen_detail`). One comparison over the whole configuration is also
+    what keeps a payload that moves *both* from being judged twice.
 
     **Presence is not enough — the change is what is refused.** A configuration equal to
     the one the event already has changes nothing, so a page PATCHing the whole event

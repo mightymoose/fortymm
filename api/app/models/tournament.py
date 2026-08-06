@@ -397,8 +397,9 @@ class TournamentEvent(Base):
     #
     # NULLs last, explicitly, rather than relying on Postgres' ASC default: a NULL
     # ``pool_id`` is a real value here ("this fixture belongs to no pool" —
-    # single-elim, or this is the KO stage of an rr-then-ko event), and it belongs
-    # after the pools that feed it.
+    # single-elim or swiss, or this is the KO stage of an rr-then-ko event), and it
+    # belongs after the pools that feed it — where a swiss event has none, every
+    # fixture of one being un-pooled.
     #
     # It orders the pools by ``pool_id``, where ``fixtures_by_event`` orders them by the
     # pool's ``position`` in the event's own pool order (ADR 20260801) — a relationship

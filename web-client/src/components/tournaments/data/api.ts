@@ -140,7 +140,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     format: e.format,
     drawType: e.draw_type,
     // Carried across UNCHANGED, `null` included (ADR 20260727): `null` is not missing
-    // data, it is what the two count-less draw types store, and it is what the read
+    // data, it is what the three count-less draw types store, and it is what the read
     // shape's `NOT NULL`-less column really holds. Coalescing it to a number here would
     // invent a qualifier count for a format that has no knockout stage — and, on the way
     // back out, author a body the server 422s.

@@ -751,7 +751,7 @@ function snakeRefusal(
  * **`qualifiersPerPool` has no default**, on purpose. It is a real column
  * (`tournament_event_draw_settings.qualifiers_per_pool`) that rides both write bodies and
  * comes back on `TournamentEventRead`, so every caller genuinely has an answer: a stored
- * event's own value, or `null` for the two draw types that take no count. A default here
+ * event's own value, or `null` for the three draw types that take no count. A default here
  * would let one be omitted by accident, and that is the quietest possible mock/server
  * disagreement — a K=1 bracket cut for an event configured at K=2 raises nothing, is a
  * perfectly well-formed draw, and is simply the wrong size.
@@ -769,7 +769,7 @@ export function planDraw(
   entryIds: readonly string[],
   poolIds: readonly string[],
   /** **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's
-   * knockout stage. `null` for the two draw types that have no knockout stage to qualify
+   * knockout stage. `null` for the three draw types that have no knockout stage to qualify
    * for, which is what their settings row holds and what their callers pass out loud. */
   qualifiersPerPool: number | null,
   /** **R** — how many rounds a `swiss` draw plays. `null` for the three draw types whose

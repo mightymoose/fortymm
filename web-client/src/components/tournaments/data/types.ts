@@ -551,13 +551,13 @@ export interface TournamentEvent {
    * `rr-then-ko` draw, or `null` for a draw type that has no knockout stage to qualify
    * for (ADR 20260727).
    *
-   * ⚠️ `null` is not "unset" — it is the **only** legal value for `round-robin` and
-   * `single-elim`, and the server says so at the request boundary: the draw
-   * configuration is a union tagged by the draw type, and the two count-less arms are
-   * `extra="forbid"`, so a qualifier count sent alongside either of them is a 422 rather
+   * ⚠️ `null` is not "unset" — it is the **only** legal value for `round-robin`,
+   * `single-elim` and `swiss`, and the server says so at the request boundary: the draw
+   * configuration is a union tagged by the draw type, and the three count-less arms are
+   * `extra="forbid"`, so a qualifier count sent alongside any of them is a 422 rather
    * than a value quietly dropped. That is why `eventToApiFields` (`./api`) **omits** the
-   * key for those two types instead of sending `null` — and why the editor's control for
-   * it is rendered only for `rr-then-ko`.
+   * key for those three types instead of sending `null` — and why the editor's control
+   * for it is rendered only for `rr-then-ko`.
    *
    * For `rr-then-ko` it is **required**, at least 1, and it is not a number this client
    * may assume: "2" is a convention, not a fact about the event, and a bracket cut for a

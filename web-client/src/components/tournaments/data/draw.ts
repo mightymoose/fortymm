@@ -34,10 +34,13 @@ import type {
   TournamentEvent,
 } from './types'
 
-/** A fixture side whose feeding fixture is not decided yet (`entryAId`/`entryBId` is
- * `null` — ADR-0786: "**TBD**, never a bye"). Round-robin never produces one; a
- * knockout round does, and it is the state the panel must render as a word rather than
- * as a blank half-line. */
+/** A fixture side whose occupant is not decided yet (`entryAId`/`entryBId` is
+ * `null` — ADR-0786: "**TBD**, never a bye"). Round-robin never produces one. A knockout
+ * round does, because the fixture that feeds it is undecided — and **swiss produces the
+ * most of them**, for a different reason: every round past the first is cut up front with
+ * *both* sides `null` and stays that way until `advance()` pairs it from the standings.
+ * Either way it is the state the panel must render as a word rather than as a blank
+ * half-line. */
 export const TBD_LABEL = 'TBD'
 
 /** A fixture side naming an entry the event **no longer lists**.

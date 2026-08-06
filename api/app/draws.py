@@ -370,9 +370,9 @@ class FixtureState:
     #: **structurally**, down to the game-difference and games-won tiebreakers, rather
     #: than by two implementations happening to concur.
     #:
-    #: Only ``rr-then-ko`` reads it; round-robin and single-elim ignore it, and
-    #: :func:`reads_fixture_games` is where that is said once so a caller knows whether
-    #: it has to load the counts at all.
+    #: Only ``rr-then-ko`` and ``swiss`` declare that they read it; round-robin
+    #: and single-elim do not, and :func:`reads_fixture_games` is where that is
+    #: said once so a caller knows whether it has to load the counts at all.
     games: FixtureGames | None = None
     #: Whether this fixture's match is **voided** — terminal, and contributing nothing
     #: (ADR-0013). A voided pairing genuinely produced no result and never will: the
@@ -882,11 +882,18 @@ class SwissStrategy:
     carries both sides, seeded from the draw order; every later round is written with
     both sides ``None``. That is not a workaround for :class:`AdvancePlan` being unable
     to create a fixture — it is what makes swiss expressible without changing the
-    contract at all. With the field frozen at the cut (withdrawal is refused outside the
-    registration window) and ``R`` an explicit setting, the *number* of fixtures is
-    fully determined; only the *sides* are unknown, and a ``None`` side already means
+    contract at all. The *number* of fixtures follows from the field size at the cut and
+    ``R``, an explicit setting; only the *sides* are unknown, and a ``None`` side means
     exactly "TBD, ``advance()`` will fill it" — the state single-elim's later rounds
     have always been in.
+
+    **The field is not frozen at the cut**, and an earlier version of this docstring
+    said it was. Cutting has no status gate, so a draw is cut while the tournament is
+    still ``published`` and registration is still open; the field can move between the
+    cut and go-live. That is what makes the draw **stale** and what
+    :func:`unseated_entrant_allowance` exists to reason about. It does not weaken the
+    argument above: the fixture count follows from the field the cut actually saw, and a
+    field that moves under it is caught at go-live rather than silently tolerated.
 
     **Round 1 is top half against bottom half**: with ``m = 2⌊n/2⌋`` playing entrants,
     draw-order position ``i`` meets position ``i + m/2``, so the top seed meets the best
@@ -1093,8 +1100,10 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
 
     The sort key asks three questions, in this order:
 
-    1. "Is it pooled?" — ``pool_id is None``, which sorts the un-pooled (single-elim, or
-       an rr-then-ko draw's KO stage) LAST, behind the pools that feed them.
+    1. "Is it pooled?" — ``pool_id is None``, which sorts the un-pooled (single-elim,
+       swiss, or an rr-then-ko draw's KO stage) LAST, behind the pools that feed them —
+       except under swiss, whose draw is un-pooled end to end, so there are no pools for
+       it to sort behind and this key partitions nothing.
     2. "Where in the event's order is its pool?" — ``pool_position``, with a ``None``
        (an unresolved pool order; see the field) sorting after every pool that has one.
     3. "Which pool?" — the id as text, the tie-break that keeps the order **total** when

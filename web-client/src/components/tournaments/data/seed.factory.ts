@@ -176,8 +176,8 @@ export function buildEvent(
     results: null,
     ...overrides,
     // **No knockout stage to qualify for, so no qualifier count** (ADR 20260727) —
-    // `null` is the only value a round-robin or single-elim event's draw settings admit,
-    // and it is not "unset". Stated AFTER the spread because `Partial<…>` admits an
+    // `null` is the only value a round-robin, single-elim or swiss event's draw settings
+    // admit, and it is not "unset". Stated AFTER the spread because `Partial<…>` admits an
     // explicit `undefined` while the field is required-and-nullable (`number | null`) —
     // the same reason `entryState` is computed below rather than spread.
     qualifiersPerPool: overrides.qualifiersPerPool ?? null,

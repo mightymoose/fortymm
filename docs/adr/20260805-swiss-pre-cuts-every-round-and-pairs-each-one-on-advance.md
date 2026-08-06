@@ -28,13 +28,25 @@ supported state.
 
 **The field is frozen once the tournament is live.** Withdrawing an active entry
 is refused outside the registration window
-(`_enforce_withdrawal_registration_open`). So the entrant count `n` cannot move
-after the cut.
+(`_enforce_withdrawal_registration_open`).
 
-Those two together remove the reason to change the strategy contract. With `n`
-frozen and the round count `R` known, every swiss round holds exactly
-`floor(n / 2)` fixtures. The fixture set is fully determined at the cut. Only the
-*sides* are unknown, which is the one thing this model already handles.
+**Correction, 2026-08-06.** This section originally drew a second conclusion from
+that: "so the entrant count `n` cannot move after the cut". **That is wrong.**
+Cutting a draw has no status gate, so a draw is cut while the tournament is still
+`published` and registration is still open. The field can move between the cut and
+go-live — which is exactly why this arc needed a chore to stop an odd swiss field
+reading as stale, and why an existing test is named
+`test_a_swap_between_the_cut_and_go_live_is_stale`.
+
+The decision below is unaffected, and it is worth being precise about why. The
+fixture count follows from the field the cut *actually saw*, not from a promise
+that the field will not move. A field that moves under a cut draw makes the draw
+**stale**, which go-live already refuses. So the count is determined at the cut,
+and the model holds — it just holds for a narrower reason than first written.
+
+With the field the cut saw and the round count `R` known, every swiss round holds
+exactly `floor(n / 2)` fixtures. Only the *sides* are unknown, which is the one
+thing this model already handles.
 
 ## Decision
 

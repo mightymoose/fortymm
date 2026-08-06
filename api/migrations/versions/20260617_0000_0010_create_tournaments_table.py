@@ -176,9 +176,10 @@ def upgrade() -> None:
         # The draw type's settings, as ONE NOT NULL JSON object (ADR "a draw
         # type's settings are one NOT NULL JSON object"). ``{}`` for a draw type
         # that takes no configuration — ``round-robin`` and ``single-elim`` —
-        # and ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``. A draw type with
-        # no configuration stores the empty object and never NULL, so no reader
-        # has to test for absence before it reads.
+        # ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``, and
+        # ``{"rounds": R}`` for ``swiss``. A draw type with no configuration
+        # stores the empty object and never NULL, so no reader has to test for
+        # absence before it reads.
         #
         # It replaces a nullable ``qualifiers_per_pool`` integer column and the
         # CASE constraint that paired it with its draw type. Which settings a

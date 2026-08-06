@@ -244,9 +244,10 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     domain is never ``""``.
 
     Every configured pool is passed, whatever the draw type. An un-pooled strategy
-    (single-elim, #785) ignores them and writes ``NULL`` pool refs; a pooled one deals
-    the field across exactly these ids — which is what makes a fixture's ``pool_id`` a
-    string ref that resolves against the event the client is already holding.
+    (single-elim, #785, and swiss) ignores them and writes ``NULL`` pool refs; a pooled
+    one deals the field across exactly these ids — which is what makes a fixture's
+    ``pool_id`` a string ref that resolves against the event the client is already
+    holding.
 
     The order is read off each pool's ``position`` (ADR 20260801, "Pools carry an
     explicit ``position``") rather than taken from the JSONB array's incidental

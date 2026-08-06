@@ -145,7 +145,7 @@ export const eventSchema = z.object({
   // `data/draw-types.test.ts`.
   drawType: drawTypeSchema,
   // **K**, held as `number | null` and judged BELOW, with the draw type beside it — the
-  // shape rule only (ADR 20260727). `null` is the honest value for the two draw types
+  // shape rule only (ADR 20260727). `null` is the honest value for the three draw types
   // that have no knockout stage, and it is the *blank box* for the one that does; which
   // of those two things it is depends on `drawType`, which a field-level rule cannot
   // see. See `qualifiersPerPoolSchema` (`data/event-validation`) for why the pair, and

@@ -185,7 +185,7 @@ class DrawSettingsWriteBase(BaseModel):
     """What every arm of the draw-settings union shares: ``extra="forbid"``, and the
     serialization onto the settings column.
 
-    A base class rather than three copies, because the storage form is one rule (ADR "a
+    A base class rather than four copies, because the storage form is one rule (ADR "a
     draw type's settings are one NOT NULL JSON object") and a new arm that spelled it
     differently would store a shape the read side could not parse back.
 
@@ -1704,8 +1704,8 @@ class TournamentEventRead(BaseModel):
     # send the pair (ADR 20260727). Both halves come off the same ``draw_settings`` row,
     # so this is the stored configuration and not a second copy of it.
     #
-    # ``null`` for a round-robin or single-elim event, and that is a *fact* rather than
-    # missing data: neither draw type has a qualifier count, which is what the write
+    # ``null`` for a round-robin, single-elim or swiss event — a *fact* rather than
+    # missing data: none of those three has a qualifier count, which is what the write
     # union says at the boundary. (It is no longer also said in DDL — the settings
     # table's ``CASE`` ``CHECK`` was dropped with the column it named.) This read is the
     # second statement of the same pairing and it cannot disagree with the union,
@@ -2123,10 +2123,10 @@ class TournamentEventCreate(BaseModel):
     # **K**, and only for the one draw type that has one. It is flat beside
     # ``draw_type`` on the wire and a *union* in the interior: the pair is parsed into
     # ``DrawSettingsWrite`` by the validator below, so a qualifier count on a
-    # round-robin or single-elim event is a 422 here and never a value quietly dropped
-    # (ADR 20260727). ``QualifiersPerPool`` is the same ``1 <= K <= 1000`` alias the
-    # union arm carries, restated on the field so both bounds reach the generated
-    # clients too.
+    # round-robin, single-elim or swiss event is a 422 here and never a value
+    # quietly dropped (ADR 20260727). ``QualifiersPerPool`` is the same
+    # ``1 <= K <= 1000`` alias the union arm carries, restated on the field so both
+    # bounds reach the generated clients too.
     qualifiers_per_pool: QualifiersPerPool | None = None
     # **R**, and only for the one draw type that has one — the same flat-beside-the-type
     # shape ``qualifiers_per_pool`` takes, parsed into the same union by the validator

@@ -95,7 +95,8 @@ class TournamentEventDrawSettings(Base):
     # The draw type's settings, as one NOT NULL JSON object (ADR "a draw type's
     # settings are one NOT NULL JSON object"). ``{}`` for a draw type that takes no
     # configuration — ``round-robin`` and ``single-elim`` today —
-    # ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``.
+    # ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``, and ``{"rounds": R}`` for
+    # ``swiss``.
     #
     # This is the **serialized form of a union**: which keys are in here depends
     # entirely on the draw type beside it, which is what a wide row of nullable
