@@ -15,6 +15,7 @@ import {
   buildEntrants,
   buildEvent,
   buildFixture,
+  buildPlayedDrawnEvent,
   buildPool,
   buildSwissDrawnEvent,
   buildTenPoolDrawnEvent,
@@ -27,6 +28,11 @@ import { drawPanelPage as page } from './draw-panel.page'
 /** The seeded drawn event: round-robin, `player.1`…`player.5`, Pool A (1/4/5 — odd) and
  * Pool B (2/3). */
 const DRAWN = buildDrawnEvent()
+
+/** The same draw, **under way**: one of its four fixtures has a recorded winner. Nothing
+ * else differs — a winner is not drawn on a fixture line — so the freeze is the only thing
+ * that can make a test here read differently from the same test against `DRAWN`. */
+const PLAYED = buildPlayedDrawnEvent()
 
 /** The panel's own verbs that are still live — swept by DOM rather than by role, because
  * an open dialog puts `aria-hidden` over everything behind it and a role query then finds
@@ -547,6 +553,162 @@ describe('DrawPanel', () => {
     })
   })
 
+  /**
+   * **A draw that is under way freezes both verbs** (#1060, ADR "a confirm prices an
+   * irreversible act, a freeze explains an illegal one"). The server refuses a re-cut and
+   * a delete with a 409 once any fixture has a winner or a match, and the client had gone
+   * on offering both — a live button for an act that can only fail.
+   *
+   * Frozen means **present, dead and explained**, not hidden: hiding is ADR-0015's answer
+   * to a *permission* boundary, and this director is entitled to the act and could have
+   * performed it a minute ago.
+   */
+  describe('a draw that is already under way', () => {
+    it('renders both verbs dead — and reachable, with the reason attached', () => {
+      page.render({ event: PLAYED })
+
+      const recut = page.queryRecutButton('U1200 Singles')
+      const del = page.queryDeleteButton('U1200 Singles')
+
+      // Present. A verb that vanished from under a director who could use it a minute ago
+      // asks a loud question and answers none of it.
+      expect(recut).toBeInTheDocument()
+      expect(del).toBeInTheDocument()
+      // Dead — and dead the way that keeps them **focusable**. `aria-disabled`, not the
+      // `disabled` attribute: a disabled button leaves the tab order and most screen
+      // readers skip it, so its description is a sentence nobody ever hears.
+      expect(recut).toHaveAttribute('aria-disabled', 'true')
+      expect(del).toHaveAttribute('aria-disabled', 'true')
+      expect(recut).toBeEnabled()
+      expect(del).toBeEnabled()
+      // ⚠️ THE assertion of this slice, and the one #1223 is open against on the frozen
+      // draw-type control: the reason reaches a screen reader THROUGH the control.
+      // `toHaveAccessibleDescription` resolves the `aria-describedby` reference — an
+      // assertion that merely compared ids would pass against a control pointing at
+      // nothing, which is precisely the defect.
+      expect(recut).toHaveAccessibleDescription(/already under way/i)
+      expect(recut).toHaveAccessibleDescription(/throw away a result/i)
+      expect(del).toHaveAccessibleDescription(/already under way/i)
+      expect(del).toHaveAccessibleDescription(/throw away a result/i)
+      // …and it is on screen for a sighted director too.
+      expect(page.getFrozenNotice('ev-u1200')).toHaveTextContent(
+        'Re-cut and Delete are unavailable',
+      )
+    })
+
+    /**
+     * The behaviour half, and a **second, independent witness** to the state assertions
+     * above: a frozen verb opens no confirm and sends nothing.
+     *
+     * Two things make this evidence rather than a vacuous pass:
+     *
+     * - The identical click on an *unfrozen* event **does** open the dialog (the two
+     *   "sends NOTHING on a bare click" tests above). So "no dialog" discriminates the
+     *   freeze from the panel's ordinary behaviour, rather than describing a page where
+     *   clicking does nothing anywhere.
+     * - The click really **landed**. The frozen verb is styled dead but keeps its pointer
+     *   events on purpose, so `userEvent.click` delivers it (it throws outright on a
+     *   `pointer-events: none` target) and the button takes focus. Without that probe,
+     *   "no dialog appeared" could not tell a working guard from a click swallowed by CSS.
+     */
+    it('opens no confirm and sends nothing when the frozen Re-cut is clicked', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({ tournamentId: 't-1', event: PLAYED })
+
+      const recut = await page.findRecutButton('U1200 Singles')
+      await userEvent.click(recut)
+
+      // The claim first, so a freeze that stopped working reds *as* "the confirm opened".
+      expect(page.confirm.queryDialog()).toBeNull()
+      // Then the probe that says the click was really delivered — read second so its
+      // message only ever means what it says.
+      expect(recut).toHaveFocus()
+      expect(calls).toBe(0)
+      // A refused click is not a failure to report: the notice slot stays empty and the
+      // standing freeze notice is what does the talking.
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    it('opens no confirm and sends nothing when the frozen Delete is clicked', async () => {
+      let calls = 0
+      mockEventUncutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return new HttpResponse(null, { status: 204 })
+      })
+      page.render({ tournamentId: 't-1', event: PLAYED })
+
+      const del = await page.findDeleteButton('U1200 Singles')
+      await userEvent.click(del)
+
+      expect(page.confirm.queryDialog()).toBeNull()
+      expect(del).toHaveFocus()
+      expect(calls).toBe(0)
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    // The day-of re-cut ADR-0786 deliberately preserves. The freeze is on the EVIDENCE,
+    // never on the draw existing — an over-eager predicate would take this away, and no
+    // amount of correct freezing copy would make that right.
+    it('leaves both verbs live on a cut draw nobody has played yet', () => {
+      page.render({ event: DRAWN })
+
+      expect(page.queryRecutButton('U1200 Singles')).not.toHaveAttribute(
+        'aria-disabled',
+      )
+      expect(page.queryDeleteButton('U1200 Singles')).not.toHaveAttribute(
+        'aria-disabled',
+      )
+      expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
+    })
+
+    // Generate is untouched, and structurally so: an undrawn event has no fixtures, so it
+    // has no evidence to find. Stated anyway, because "the freeze leaked onto the first
+    // cut" is the one way this slice could break the exemption slice 1 exists to protect.
+    it('does not freeze Generate on an undrawn event', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, () => {
+        calls += 1
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({
+        tournamentId: 't-1',
+        event: buildEvent({ id: 'ev-1', name: 'Open Singles' }),
+      })
+
+      const generate = await page.findGenerateButton('Open Singles')
+      expect(generate).not.toHaveAttribute('aria-disabled')
+      expect(page.queryFrozenNotice('ev-1')).toBeNull()
+
+      await userEvent.click(generate)
+
+      await waitFor(() => expect(calls).toBe(1))
+    })
+
+    /**
+     * The non-owner branch is **unchanged by the freeze**: absent, not frozen.
+     *
+     * Two claims, and they are different. A reader gets no verbs at all — the ADR-0015
+     * guard sweep still finds zero controls, which it would not if a frozen verb had been
+     * rendered to them (`INTERACTIVE_SELECTOR` matches a `button` whatever its
+     * `aria-disabled` says). And they get no freeze notice either: it explains two
+     * controls they do not have, in the organizer's voice.
+     */
+    it('shows a NON-owner no verbs and no freeze — absent, not frozen', () => {
+      page.render({ event: PLAYED, canEdit: false })
+
+      expect(page.getPanelControls('ev-u1200')).toHaveLength(0)
+      expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
+      // The draw itself is still theirs to read.
+      expect(page.getPoolLines('p-a')).toHaveLength(3)
+    })
+  })
+
   // The refusals. Each is rendered INLINE, where the click happened — the draw verbs
   // carry no toast (`web-client/CLAUDE.md`, ## Forms) — and for the 409 and the 422 the
   // sentence beneath the title is the SERVER'S: it is written for the director and names
@@ -568,6 +730,11 @@ describe('DrawPanel', () => {
       const notice = await page.findNoticeText()
       expect(notice).toContain('This draw is already under way')
       expect(notice).toContain(PLAY_GUARD)
+      // …and a screen reader hears it without hunting for it. Asserted here because the
+      // page object no longer *finds* the notice by role: the freeze notice is an `Alert`
+      // too and the two co-occur, so the accessor moved to a testid. The role is still
+      // the contract — this is where it is now pinned.
+      expect(await page.findNotice()).toHaveAttribute('role', 'alert')
       // The standing draw is untouched — a refused cut destroys nothing.
       expect(page.getPoolLines('p-a')).toHaveLength(3)
     })

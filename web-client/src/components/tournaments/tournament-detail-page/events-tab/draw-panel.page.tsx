@@ -60,19 +60,35 @@ const scoped = (container: Container) => ({
   },
 
   /** The inline **refusal** — the 409, the 422 and every other failure, in the place the
-   * click happened. Found by role (`alert`), which is the contract: it is the app talking
-   * back, and a screen reader must hear it without hunting for it. */
+   * click happened.
+   *
+   * Addressed by its own testid, not by `role="alert"`. The freeze notice below is an
+   * `Alert` too, and the two genuinely co-occur: a director who clicks Re-cut a moment
+   * before the first score lands meets the 409 *and* then refetches into the evidence that
+   * freezes the verbs. "The alert" would throw on exactly that overlap — the same lesson
+   * `pools-section` wrote down one surface over. */
   queryNotice() {
-    return container.queryByRole('alert')
+    return container.queryByTestId(/^draw-notice-/)
   },
   findNotice() {
-    return container.findByRole('alert')
+    return container.findByTestId(/^draw-notice-/)
   },
   /** The notice as one normalised string — title *and* the sentence beneath it, since
    * the whole point of the 409/422 copy is that both halves are there. */
   async findNoticeText() {
-    const notice = await container.findByRole('alert')
+    const notice = await container.findByTestId(/^draw-notice-/)
     return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
+
+  /** The **freeze** notice — why Re-cut and Delete are dead on a draw that is under way
+   * (`drawVerbFreeze`). Shown to the director alone: a reader has no verbs to explain.
+   * `query…` because "a non-owner is told nothing about a freeze that is not theirs" is
+   * half the claim. */
+  queryFrozenNotice(eventId: string) {
+    return container.queryByTestId(`draw-frozen-notice-${eventId}`)
+  },
+  getFrozenNotice(eventId: string) {
+    return container.getByTestId(`draw-frozen-notice-${eventId}`)
   },
 
   /** EVERY control in the panel. The sweep a "a non-owner is offered nothing" claim
