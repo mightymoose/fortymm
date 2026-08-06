@@ -279,6 +279,23 @@ export class TournamentDetailPage {
     return this.swissRound(eventId, round).getByRole('listitem')
   }
 
+  /** One round's **bye line** — the entrant an odd field leaves out of it, named.
+   *
+   * A **sibling** of `swissRound`'s list, never an item in it, and the separation is the
+   * point: a bye is the absence of a fixture (ADR-0786), so the byed entrant has no row
+   * and cannot be an `<li>` without inventing the one the format does not have. That is
+   * what lets a spec state the two halves of the fact separately — *this* line names them,
+   * and `swissRound` does not, so "named as the bye" and "not seated in a pairing" are two
+   * assertions rather than one ambiguous one.
+   *
+   * Present only for a **paired** round of an odd field: an unpaired round seats nobody,
+   * and listing its whole field as byed would be the bug the derivation's third gate
+   * exists to prevent. Plural ("Byes: a, b") when a draw has gone stale and more than one
+   * entrant is unseated. */
+  swissRoundBye(eventId: string, round: number): Locator {
+    return this.swissRounds(eventId).getByTestId(`swiss-round-bye-${round}`)
+  }
+
   /** One **forthcoming** round's line — the round that is already cut, holds its
    * `⌊n/2⌋` fixtures, and has nobody in it yet.
    *

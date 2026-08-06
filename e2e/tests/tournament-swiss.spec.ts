@@ -345,13 +345,31 @@ test.describe('Tournament — swiss draw', () => {
     await expect(detail.swissRoundFixtures(eventId, 1)).toHaveText(
       roundOneLines(entrants),
     )
-    // …and the seventh is nowhere in the draw at all. That absence IS the bye: the format
-    // byes the lowest-ranked entrant, who under registration draw order is the last one
-    // in, and a bye is the absence of a fixture rather than a row with an empty side.
+    // …and the seventh is the round's **bye**: the format byes the lowest-ranked entrant,
+    // who under registration draw order is the last one in.
+    //
+    // Two different claims, asserted separately on purpose.
+    //
+    // A bye is still the absence of a fixture row (ADR-0786) — that domain rule has not
+    // moved. What the page now does is *name the entrant that absence implies*, derived
+    // client-side from the entrants a round's fixtures do not mention. Before it did, the
+    // seventh player of a seven-player event appeared nowhere at all, and a director could
+    // only work out who was sitting out by diffing the standings against the pairings by
+    // hand. So the first claim is that the round says who it left out.
+    //
+    // The second is the one the whole assertion originally existed for, and it survives
+    // the change: they must not be **in a pairing**. `toContainText` alone would pass just
+    // as happily if they had been wrongly seated in a fixture, so it is scoped to the
+    // fixtures list — which the bye line is a sibling of, never an item in.
     const byed = entrants[entrants.length - 1]
     await expect(
-      detail.swissRounds(eventId),
-      `${byed.username} should be round 1's bye — a bye is the absence of a fixture`,
+      detail.swissRoundBye(eventId, 1),
+      `${byed.username} sits round 1 out, so the round should name them as its bye`,
+    ).toContainText(byed.username)
+    await expect(
+      detail.swissRound(eventId, 1),
+      `${byed.username} is round 1's bye — a bye is the absence of a fixture, so they ` +
+        'must appear in no pairing of it',
     ).not.toContainText(byed.username)
 
     // Rounds 2..R are cut and forthcoming here too, at `⌊7/2⌋` matches apiece — the byed
@@ -361,6 +379,14 @@ test.describe('Tournament — swiss draw', () => {
       await expect(detail.swissRoundForthcoming(eventId, round)).toContainText(
         `${Math.floor(ODD_FIELD / 2)} matches`,
       )
+      // …and NO bye line on a round nobody is paired into. The bye is derived from the
+      // entrants a round's fixtures do not name, so without the "only a paired round"
+      // gate every entrant qualifies on a forthcoming one and the whole field would be
+      // listed as sitting it out.
+      await expect(
+        detail.swissRoundBye(eventId, round),
+        `round ${round} has not been paired, so it byes nobody yet`,
+      ).toHaveCount(0)
     }
 
     // ----- GO LIVE — the assertion this test exists for -----------------------
