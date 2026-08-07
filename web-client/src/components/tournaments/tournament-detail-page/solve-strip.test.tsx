@@ -229,6 +229,44 @@ describe('SolveStrip', () => {
     expect(text).not.toContain('player_over_subscribed')
   })
 
+  it('names the conflict core by matchup — WHICH matches could not all be placed — without ever claiming that set is the minimum', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        infeasibilityReasons: [
+          {
+            kind: 'unplaceable_fixtures',
+            fixtures: [
+              { fixtureId: 'fx-1', playerA: 'crafty-otter', playerB: 'spiked-frigatebird' },
+              { fixtureId: 'fx-2', playerA: 'dazed-marmot', playerB: 'wily-heron' },
+            ],
+          },
+        ],
+      }),
+    })
+    const text = solveStripPage.getStateText('infeasible')
+    expect(text).toContain("The day doesn't fit")
+    // The ticket's headline: WHICH matches, by who is playing whom — every one of
+    // them, named.
+    expect(text).toContain("2 matches couldn't all be placed")
+    expect(text).toContain('crafty-otter-vs-spiked-frigatebird')
+    expect(text).toContain('dazed-marmot-vs-wily-heron')
+    // …and NEVER as a minimum. The set comes off a capped optimization, so the
+    // strip may only ever say "these couldn't all be placed" (ADR decision 4).
+    expect(text).toContain("aren't necessarily the smallest set")
+    expect(text).not.toMatch(/\bminimum\b|\bminimal\b/i)
+    expect(text).not.toMatch(/must (remove|drop|cut)/i)
+    // Enough table-time exists by construction here, so: not the add-tables trap.
+    expect(text).toContain("adding tables won't help here")
+    expect(text).not.toContain('Add tables, widen a pool window')
+    // The raw wire code never reaches the UI, and neither do the fixture ids.
+    expect(text).not.toContain('unplaceable_fixtures')
+    expect(text).not.toContain('fx-1')
+  })
+
   it('falls back to the generic sentence if an infeasible row carries no reasons — the strip never renders bodyless', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({

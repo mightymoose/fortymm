@@ -77,6 +77,7 @@ from app.scheduling import (
     PoolOverCapacity,
     ScheduleSnapshot,
     SolveResult,
+    UnplaceableFixtures,
     Verdict,
     WindowTooShortForMatch,
 )
@@ -91,12 +92,14 @@ from app.schemas.schedule_preview import (
     PreviewVerdict,
 )
 from app.schemas.schedule_solve import (
+    ConflictFixtureRead,
     NoSingleCauseRead,
     PastWindowReasonRead,
     PlayerOverSubscribedRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
     ResolvedReason,
+    UnplaceableFixturesRead,
     WindowTooShortForMatchRead,
 )
 from app.tournament_draws import event_pools
@@ -392,6 +395,11 @@ def run_schedule_preview(inputs: PreviewJobInputs) -> dict[str, object]:
         inputs.snapshot,
         time_cap_s=get_settings().preview_solver_time_cap_s,
         num_search_workers=_solve_num_workers(),
+        # The conflict-core diagnostic's own budget, spent only when the preview
+        # comes back INFEASIBLE — which is exactly when a director most wants to
+        # know *which* matches don't fit. Worst case it doubles the preview's own
+        # cap (5 + 5), still inside ``PREVIEW_JOB_TIMEOUT_MARGIN_S`` on top.
+        diagnostic_time_cap_s=get_settings().diagnostic_solver_time_cap_s,
     )
     return project_preview_result(inputs, result).model_dump(mode="json")
 
@@ -551,11 +559,14 @@ def _resolve_reasons(
     fixture-id → ``length_games`` map derived from the snapshot's events (a preview
     has no DB to read it from); a blamed *player* from their own synthetic id
     (``placeholder-7`` → ``Placeholder 7``), since a preview's entrants are
-    stand-ins with no name to look up. Exhaustive ``match`` with an
-    ``assert_never`` floor, like ``app.schedule_solves._resolve_reason``."""
+    stand-ins with no name to look up, and a conflict-core *fixture* from the two
+    such labels it pairs. Exhaustive ``match`` with an ``assert_never`` floor,
+    like ``app.schedule_solves._resolve_reason``."""
     best_of = _fixture_best_of(inputs.snapshot)
+    matchups = _fixture_matchups(inputs.snapshot)
     return [
-        _resolve_reason(reason, inputs.pool_resolutions, best_of) for reason in reasons
+        _resolve_reason(reason, inputs.pool_resolutions, best_of, matchups)
+        for reason in reasons
     ]
 
 
@@ -571,10 +582,27 @@ def _fixture_best_of(snapshot: ScheduleSnapshot) -> dict[str, MatchLength]:
     }
 
 
+def _fixture_matchups(snapshot: ScheduleSnapshot) -> dict[str, tuple[str, str]]:
+    """fixture id → its matchup as two *display* labels — the DB-blind twin of
+    ``app.schedule_solves``'s ``fixture_matchups``. A preview's entrants are
+    synthetic stand-ins, so each side resolves straight off its own id
+    (``placeholder-7`` → ``Placeholder 7``,
+    :func:`app.schedule_preview.placeholder_label`) with no DB read: exactly the
+    labels the preview surface already shows the director."""
+    return {
+        str(fixture.id): (
+            placeholder_label(fixture.player_a_id),
+            placeholder_label(fixture.player_b_id),
+        )
+        for fixture in snapshot.fixtures
+    }
+
+
 def _resolve_reason(
     reason: InfeasibilityReason,
     pool_resolutions: Mapping[str, _PreviewPoolResolution],
     best_of: Mapping[str, MatchLength],
+    matchups: Mapping[str, tuple[str, str]],
 ) -> ResolvedReason:
     """One pure, id-and-minute reason → its resolved read form, the DB-blind twin
     of ``app.schedule_solves._resolve_reason`` (same union, same arms) taking the
@@ -619,6 +647,21 @@ def _resolve_reason(
                 match_count=reason.match_count,
                 required_min=reason.required_min,
                 window_span_min=reason.window_span_min,
+            )
+        case UnplaceableFixtures():
+            # The conflict core, named by matchup in the same
+            # ``ConflictFixtureRead`` shape the real solve uses — with both sides
+            # resolved off their synthetic ids, so a preview explains *which*
+            # matches don't fit without any DB read.
+            return UnplaceableFixturesRead(
+                fixtures=[
+                    ConflictFixtureRead(
+                        fixture_id=fixture_id,
+                        player_a=matchups[fixture_id][0],
+                        player_b=matchups[fixture_id][1],
+                    )
+                    for fixture_id in reason.fixture_ids
+                ]
             )
         case NoSingleCause():
             return NoSingleCauseRead(

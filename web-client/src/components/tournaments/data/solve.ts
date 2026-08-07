@@ -69,6 +69,47 @@ export type ScheduleSolveTrigger = z.infer<typeof scheduleSolveTriggerSchema>
 export type ScheduleSolveStatus = z.infer<typeof scheduleSolveStatusSchema>
 export type SolverVerdict = z.infer<typeof solverVerdictSchema>
 
+// ----- a named fixture: the one shape BOTH unions carry -----------------------
+//
+// `ConflictFixtureRead` is deliberately shared on the wire (see its docstring in
+// `schema.d.ts`): a placement conflict names the fixtures it caught, and the
+// conflict core names the fixtures it could not place, with the *same* shape — so
+// the client renders a named fixture identically wherever it appears. It lives
+// above both unions because both parse through it at module-init time; hoisting a
+// `const` schema is not a thing, so ordering here is load-bearing.
+
+type ConflictFixtureWire = components['schemas']['ConflictFixtureRead']
+
+/** One fixture named the way the director reads a match — by its **matchup**, the
+ * two players facing off. The raw `fixtureId` rides along so a surface can
+ * key/deep-link without re-deriving it. Carried by the placement-conflict arms
+ * *and* by the infeasibility union's `unplaceable_fixtures` (the conflict core). */
+export interface ConflictFixture {
+  fixtureId: string
+  playerA: string
+  playerB: string
+}
+
+/** The wire fixture, as it really arrives: snake_case. `satisfies` it against the
+ * generated schema so a field renamed in the API is a compile error here. */
+const conflictFixtureWireSchema = z.object({
+  fixture_id: z.string(),
+  player_a: z.string(),
+  player_b: z.string(),
+}) satisfies z.ZodType<ConflictFixtureWire>
+
+function conflictFixtureFromWire(f: ConflictFixtureWire): ConflictFixture {
+  return { fixtureId: f.fixture_id, playerA: f.player_a, playerB: f.player_b }
+}
+
+/** A fixture's matchup label — the two players facing off, `crafty-vs-spiked`.
+ * How the director already reads a match, so every sentence built out of these
+ * names matches rather than ids. Shared by the placement-conflict caution and by
+ * the conflict core's sentence, so the two cannot drift on how a match reads. */
+export function conflictFixtureLabel(fixture: ConflictFixture): string {
+  return `${fixture.playerA}-vs-${fixture.playerB}`
+}
+
 // ----- why the day doesn't fit: the resolved infeasibility reasons ------------
 //
 // An `infeasible` solve no longer speaks in one opaque "Doesn't fit" — the API
@@ -91,6 +132,8 @@ type PoolOverCapacityWire =
   components['schemas']['PoolOverCapacityRead']
 type PlayerOverSubscribedWire =
   components['schemas']['PlayerOverSubscribedRead']
+type UnplaceableFixturesWire =
+  components['schemas']['UnplaceableFixturesRead']
 type NoSingleCauseWire =
   components['schemas']['NoSingleCauseRead']
 type PastWindowReasonWire =
@@ -115,8 +158,16 @@ type PastWindowReasonWire =
  *   one structural cause that names a *person* rather than a pool or fixture —
  *   and the one where adding tables is provably useless (extra tables let *other*
  *   people play in parallel, never this one).
- * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–4 all passed: a
- *   *timing* conflict, never a raw-capacity shortfall (so: don't add tables).
+ * - **`unplaceable_fixtures`** — the **conflict core** (CONTEXT.md): the matches a
+ *   proven-infeasible day could not place, each named by its matchup. It is the
+ *   *which* behind a timing conflict, and the one arm that is explicitly **not** a
+ *   proof of anything minimal: the API extracts it from a capped optimization, so
+ *   it is a set whose removal lets the day fit (an upper bound), never "the
+ *   smallest set" (ADR "the conflict core is a second, max-placed solve",
+ *   decision 4). Nothing in this client may word it as a minimum.
+ * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–4 all passed and
+ *   no core could be extracted either: a *timing* conflict, never a raw-capacity
+ *   shortfall (so: don't add tables). The floor, not the residual.
  * - **`past_window`** — a pool's ENTIRE planned window is already a day behind
  *   now (ADR "a past day is named, not disguised"), fixed by moving the date, not
  *   by adding tables/time. Carries the offending venue-local `date` (`YYYY-MM-DD`,
@@ -153,6 +204,7 @@ export type InfeasibilityReason =
       requiredMin: number
       windowSpanMin: number
     }
+  | { kind: 'unplaceable_fixtures'; fixtures: ConflictFixture[] }
   | { kind: 'no_single_cause'; requiredMin: number; availableMin: number }
   | { kind: 'past_window'; date: string }
 
@@ -196,6 +248,14 @@ const playerOverSubscribedWireSchema = z.object({
   window_span_min: z.number().int(),
 }) satisfies z.ZodType<PlayerOverSubscribedWire>
 
+/** The conflict core. `fixtures` reuses the shared `conflictFixtureWireSchema`
+ * above — one shape on the wire, one parser here, so a fixture named by a
+ * placement conflict and a fixture named by the core can never drift apart. */
+const unplaceableFixturesWireSchema = z.object({
+  kind: z.literal('unplaceable_fixtures'),
+  fixtures: z.array(conflictFixtureWireSchema),
+}) satisfies z.ZodType<UnplaceableFixturesWire>
+
 const noSingleCauseWireSchema = z.object({
   kind: z.literal('no_single_cause'),
   required_min: z.number().int(),
@@ -207,7 +267,7 @@ const pastWindowReasonWireSchema = z.object({
   date: z.string(),
 }) satisfies z.ZodType<PastWindowReasonWire>
 
-/** The six arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
+/** The seven arms as one `z.discriminatedUnion('kind', …)` — an unknown `kind`
  * has no arm and throws, which is exactly the boundary rule: a reason this
  * client cannot render must fail the parse, not blank the row. */
 export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
@@ -215,6 +275,7 @@ export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
   windowTooShortForMatchWireSchema,
   poolOverCapacityWireSchema,
   playerOverSubscribedWireSchema,
+  unplaceableFixturesWireSchema,
   noSingleCauseWireSchema,
   pastWindowReasonWireSchema,
 ])
@@ -260,6 +321,13 @@ export function infeasibilityReasonFromWire(
         requiredMin: r.required_min,
         windowSpanMin: r.window_span_min,
       }
+    case 'unplaceable_fixtures':
+      return {
+        kind: r.kind,
+        // The same `conflictFixtureFromWire` the placement conflicts use — one
+        // mapping for one wire shape.
+        fixtures: r.fixtures.map(conflictFixtureFromWire),
+      }
     case 'no_single_cause':
       return {
         kind: r.kind,
@@ -299,18 +367,8 @@ export const infeasibilityReasonSchema =
 // are data (a `player_name` is like a username); the *sentence* is the client's,
 // minted in `placementConflictSentence` below.
 
-type ConflictFixtureWire = components['schemas']['ConflictFixtureRead']
 type TableConflictWire = components['schemas']['TableConflictRead']
 type PlayerConflictWire = components['schemas']['PlayerConflictRead']
-
-/** One in-progress match caught in a conflict, named the way the director reads
- * a fixture — by its **matchup**, the two players facing off. The raw `fixtureId`
- * rides along so a surface can key/deep-link without re-deriving it. */
-export interface ConflictFixture {
-  fixtureId: string
-  playerA: string
-  playerB: string
-}
 
 /**
  * One resolved placement conflict a solve carries, in the domain's camelCase — a
@@ -326,14 +384,6 @@ export interface ConflictFixture {
 export type PlacementConflict =
   | { kind: 'table_conflict'; tableLabel: string; fixtures: ConflictFixture[] }
   | { kind: 'player_conflict'; playerName: string; fixtures: ConflictFixture[] }
-
-/** The wire fixture, as it really arrives: snake_case. `satisfies` it against the
- * generated schema so a field renamed in the API is a compile error here. */
-const conflictFixtureWireSchema = z.object({
-  fixture_id: z.string(),
-  player_a: z.string(),
-  player_b: z.string(),
-}) satisfies z.ZodType<ConflictFixtureWire>
 
 const tableConflictWireSchema = z.object({
   kind: z.literal('table_conflict'),
@@ -354,10 +404,6 @@ export const placementConflictWireSchema = z.discriminatedUnion('kind', [
   tableConflictWireSchema,
   playerConflictWireSchema,
 ])
-
-function conflictFixtureFromWire(f: ConflictFixtureWire): ConflictFixture {
-  return { fixtureId: f.fixture_id, playerA: f.player_a, playerB: f.player_b }
-}
 
 /** One wire arm → one domain `PlacementConflict`. Annotated so the union above
  * and the wire arms are one thing. Exhaustive over `kind` (a `never` default), so
@@ -673,16 +719,27 @@ export interface InfeasibilityReasonCopy {
  * default makes a further arm added to the API a compile error here until it is
  * given words, so a reason can never reach the UI as a blank line.
  *
- * Two arms are deliberately worded to steer the director *away* from adding
- * tables, for two different reasons:
+ * Three arms are deliberately worded to steer the director *away* from adding
+ * tables, for three different reasons:
  *
- * - the residual (`no_single_cause`), because by construction there is a
+ * - the floor (`no_single_cause`), because by construction there is a
  *   table-time surplus — the problem is timing, not capacity;
  * - `player_over_subscribed`, because a table is parallelism and this is a
  *   pigeonhole over ONE human — a second table lets somebody *else* play, never
  *   this person twice at once. Its remedies are fewer matches for them in that
  *   pool, or a longer window (ADR "the conflict core is a second, max-placed
- *   solve", decision 1).
+ *   solve", decision 1);
+ * - `unplaceable_fixtures`, which is that same timing conflict *named* — it is
+ *   reached only once every capacity pre-check has passed, so there is table-time
+ *   to spare here too.
+ *
+ * And `unplaceable_fixtures` carries a second, harder rule: **it must never claim
+ * minimality.** The API extracts that set from an optimization under a time cap,
+ * so it may be a good-enough answer rather than a proven-smallest one, and it
+ * carries no proven/partial flag to tell the two apart — deliberately (ADR
+ * decision 4). The sentence therefore has to be true under *both* outcomes: "these
+ * couldn't all be placed" and "not necessarily the smallest set", never "you must
+ * remove exactly these" or "the minimum set is". A test pins that.
  */
 export function infeasibilityReasonCopy(
   reason: InfeasibilityReason,
@@ -717,6 +774,34 @@ export function infeasibilityReasonCopy(
         // trap `no_single_cause`'s remedy avoids, for a different reason).
         remedy: `Give ${reason.playerName} fewer matches in ${reason.poolName} — a smaller pool, or a shorter match format — or widen its window; adding tables won't help one player.`,
       }
+    case 'unplaceable_fixtures': {
+      // The conflict core, said in matchups — WHICH matches form the timing
+      // conflict, which is the whole point of the arm. Every fixture is named,
+      // conjoined the way `placementConflictSentence` names its colliding matches
+      // (the existing pattern for a fixture list); nothing is elided behind an
+      // "and N more", because a director cannot act on a set they can only see
+      // part of — and a truncated list would read as *the* set, which is exactly
+      // the claim this arm may not make.
+      const matches = conjoinWithAnd(reason.fixtures.map(conflictFixtureLabel))
+      const one = reason.fixtures.length === 1
+      return {
+        // NEVER "you must remove exactly these" / "the minimum set is": the core
+        // is the drop set of a capped optimization, so "the rest fits without
+        // them" is an upper bound that holds whether the solver proved optimality
+        // or ran out of time, and the "not necessarily the smallest" clause keeps
+        // the honest half of that on screen.
+        sentence: one
+          ? `1 match couldn't be placed: ${matches} — the rest of the day fits without it, though freeing it up isn't necessarily the only way to make the day work.`
+          : `${reason.fixtures.length} matches couldn't all be placed: ${matches} — the rest of the day fits once they're out of it, though they aren't necessarily the smallest set to change.`,
+        // NOT "add tables": every capacity pre-check passed before this arm was
+        // reached, so there is table-time to spare and the obstacle is
+        // arrangement — the same trap `no_single_cause`'s remedy avoids, worded
+        // consistently with it.
+        remedy: one
+          ? `Trim this match from the field, widen its pool's window, or split the event across days — adding tables won't help here.`
+          : `Trim one of these matches from the field, widen its pool's window, or split the event across days — adding tables won't help here.`,
+      }
+    }
     case 'no_single_cause':
       return {
         sentence: `There's enough total table-time (about ${fmtTableTime(reason.availableMin)} available for about ${fmtTableTime(reason.requiredMin)} of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.`,
@@ -753,13 +838,6 @@ export function infeasibilityReasonKey(reason: InfeasibilityReason, i: number): 
 // Schedule-tab solve strip and the admin solve ledger import
 // `placementConflictSentence` and render the SAME warning, so the two surfaces
 // cannot drift on how a conflict reads. Pure functions, unit-tested here.
-
-/** A fixture's matchup label — the two players facing off, `crafty-vs-spiked`.
- * How the director already reads a fixture, so the warning names matches, not
- * ids. */
-export function conflictFixtureLabel(fixture: ConflictFixture): string {
-  return `${fixture.playerA}-vs-${fixture.playerB}`
-}
 
 /** One conflict as the director's caution sentence, naming the colliding matches
  * and the shared resource: `crafty-vs-spiked and dazed-vs-confused overlap on

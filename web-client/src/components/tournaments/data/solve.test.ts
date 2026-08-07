@@ -24,8 +24,17 @@ import {
   scheduleRefetchInterval,
   solveInFlight,
   solveStripState,
+  type ConflictFixture,
   type InfeasibilityReason,
 } from './solve'
+
+/** A conflict core's fixtures, in the domain spelling — the same `ConflictFixture`
+ * shape a placement conflict carries, which is the point of the shared type. */
+const CORE_FIXTURES: ConflictFixture[] = [
+  { fixtureId: 'fx-1', playerA: 'crafty-otter', playerB: 'spiked-frigatebird' },
+  { fixtureId: 'fx-2', playerA: 'dazed-marmot', playerB: 'wily-heron' },
+  { fixtureId: 'fx-3', playerA: 'mellow-quokka', playerB: 'brisk-tapir' },
+]
 
 // ----- the parse boundary ----------------------------------------------------
 
@@ -155,6 +164,33 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       requiredMin: 150,
       windowSpanMin: 90,
     })
+  })
+
+  it('parses unplaceable_fixtures — the conflict core, through the SAME fixture shape a placement conflict uses', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'unplaceable_fixtures',
+        fixtures: [
+          { fixture_id: 'fx-1', player_a: 'crafty-otter', player_b: 'spiked-frigatebird' },
+          { fixture_id: 'fx-2', player_a: 'dazed-marmot', player_b: 'wily-heron' },
+        ],
+      }),
+    ).toEqual({
+      kind: 'unplaceable_fixtures',
+      fixtures: [
+        { fixtureId: 'fx-1', playerA: 'crafty-otter', playerB: 'spiked-frigatebird' },
+        { fixtureId: 'fx-2', playerA: 'dazed-marmot', playerB: 'wily-heron' },
+      ],
+    })
+  })
+
+  it('refuses an unplaceable_fixtures arm whose fixtures are malformed — a half-named match must fail the parse, not render half a matchup', () => {
+    expect(() =>
+      infeasibilityReasonSchema.parse({
+        kind: 'unplaceable_fixtures',
+        fixtures: [{ fixture_id: 'fx-1', player_a: 'crafty-otter' }],
+      }),
+    ).toThrow()
   })
 
   it('parses no_single_cause (the residual, no pool)', () => {
@@ -436,6 +472,90 @@ describe('infeasibilityReasonCopy', () => {
     expect(copy.remedy).toContain('widen its window')
   })
 
+  it('words unplaceable_fixtures by naming every match, by who is playing whom', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'unplaceable_fixtures',
+        fixtures: CORE_FIXTURES,
+      }),
+    ).toEqual({
+      sentence:
+        "3 matches couldn't all be placed: crafty-otter-vs-spiked-frigatebird, dazed-marmot-vs-wily-heron and mellow-quokka-vs-brisk-tapir — the rest of the day fits once they're out of it, though they aren't necessarily the smallest set to change.",
+      remedy:
+        "Trim one of these matches from the field, widen its pool's window, or split the event across days — adding tables won't help here.",
+    })
+  })
+
+  it('never claims the conflict core is minimal — the diagnostic is a capped optimization, so "these could not all be placed" is the strongest true sentence', () => {
+    // THE regression this arm exists to avoid (ADR "the conflict core is a second,
+    // max-placed solve", decision 4; CONTEXT.md "Conflict core"). The API extracts
+    // this set from an optimization under a time cap and carries NO proven/partial
+    // flag, so the copy has to be true whether the solver proved optimality or ran
+    // out of time. Anything that promises a minimum is a lie in the second case.
+    for (const fixtures of [CORE_FIXTURES, [CORE_FIXTURES[0]!]]) {
+      const copy = infeasibilityReasonCopy({ kind: 'unplaceable_fixtures', fixtures })
+      const said = `${copy.sentence} ${copy.remedy}`
+      // No minimality vocabulary, in any casing…
+      expect(said).not.toMatch(/\bminimum\b|\bminimal\b|\bfewest\b/i)
+      expect(said).not.toMatch(/\b(is|are) the smallest\b/i)
+      // …no imperative that turns the set into an instruction…
+      expect(said).not.toMatch(/must (remove|drop|delete|cut|take out)/i)
+      expect(said).not.toMatch(/exactly these|these exact|remove all of these/i)
+      // …and the hedge is on screen, not merely absent-by-luck: a future edit that
+      // drops it reds here.
+      expect(copy.sentence).toMatch(/aren't necessarily|isn't necessarily/)
+    }
+    // The sanctioned phrasing, verbatim from CONTEXT.md's "Conflict core".
+    expect(
+      infeasibilityReasonCopy({ kind: 'unplaceable_fixtures', fixtures: CORE_FIXTURES })
+        .sentence,
+    ).toContain("couldn't all be placed")
+  })
+
+  it('never steers the director toward adding tables for a conflict core — capacity already passed, so this is arrangement, not tables', () => {
+    // Same trap as `no_single_cause`, for the same reason: this arm is only
+    // reached once every capacity pre-check passed, so there IS table-time to
+    // spare. The remedy stays consistent with the residual's wording.
+    const copy = infeasibilityReasonCopy({
+      kind: 'unplaceable_fixtures',
+      fixtures: CORE_FIXTURES,
+    })
+    expect(copy.remedy).not.toMatch(/add (a |another |more )?tables?/i)
+    expect(copy.remedy).toContain("adding tables won't help here")
+  })
+
+  it('names EVERY match in a long core — nothing is elided behind an "and N more"', () => {
+    // A drop set a director can only half-see is not actionable, and a truncated
+    // list would read as *the* set — the one claim this arm may not make.
+    const many = Array.from({ length: 7 }, (_, i) => ({
+      fixtureId: `fx-${i}`,
+      playerA: `player-a${i}`,
+      playerB: `player-b${i}`,
+    }))
+    const { sentence } = infeasibilityReasonCopy({
+      kind: 'unplaceable_fixtures',
+      fixtures: many,
+    })
+    for (const f of many) {
+      expect(sentence).toContain(`${f.playerA}-vs-${f.playerB}`)
+    }
+    expect(sentence).not.toMatch(/\bmore\b|…|\.\.\./)
+    expect(sentence).toContain("7 matches couldn't all be placed")
+  })
+
+  it('words a one-match core in the singular — the sentence stays grammatical at the smallest core', () => {
+    const copy = infeasibilityReasonCopy({
+      kind: 'unplaceable_fixtures',
+      fixtures: [CORE_FIXTURES[0]!],
+    })
+    expect(copy.sentence).toBe(
+      "1 match couldn't be placed: crafty-otter-vs-spiked-frigatebird — the rest of the day fits without it, though freeing it up isn't necessarily the only way to make the day work.",
+    )
+    expect(copy.remedy).toBe(
+      "Trim this match from the field, widen its pool's window, or split the event across days — adding tables won't help here.",
+    )
+  })
+
   it('words no_single_cause as a timing conflict that steers away from adding tables', () => {
     const copy = infeasibilityReasonCopy({
       kind: 'no_single_cause',
@@ -496,6 +616,7 @@ describe('infeasibilityReasonCopy', () => {
         requiredMin: 150,
         windowSpanMin: 90,
       },
+      { kind: 'unplaceable_fixtures', fixtures: CORE_FIXTURES },
       { kind: 'no_single_cause', requiredMin: 360, availableMin: 480 },
       { kind: 'past_window', date: '2026-07-18' },
     ]

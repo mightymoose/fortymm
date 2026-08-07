@@ -61,6 +61,7 @@ from app.schemas.schedule_preview import (
 from app.schemas.schedule_solve import (
     PastWindowReasonRead,
     PlayerOverSubscribedRead,
+    UnplaceableFixturesRead,
     WindowTooShortForMatchRead,
 )
 from app.tournament_errors import (
@@ -619,6 +620,53 @@ async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
     assert first.match_count == 3
     assert first.required_min == 125  # 3 * 35 + 2 * REST_MIN
     assert first.window_span_min == 120
+
+
+async def test_preview_conflict_core_names_its_fixtures_by_placeholder_matchup(
+    db_session: AsyncSession,
+    default_league: League,
+    preview_queue: Queue,
+) -> None:
+    """The conflict core on the DB-blind preview path: the fixtures the
+    diagnostic could not place, each named by its matchup — both sides resolved
+    off their synthetic ids (``Placeholder N``), with no DB read, in the same
+    ``ConflictFixtureRead`` shape a real solve records.
+
+    Three entrants in a round-robin means three matches that *all* pairwise share
+    a player, so they can only run one after another: 3 × 25 plus two 10-minute
+    rests needs 95 minutes against a 65-minute window. No certain arm can prove
+    that — one match fits (25 ≤ 65), the pool is far under capacity (75 ≤ 65 × 2),
+    and each player has only two matches (25 + 10 + 25 = 60 ≤ 65) — so CP-SAT has
+    to prove it, and the diagnostic answers with the one fixture whose removal
+    lets the other two fit."""
+    owner = await make_user(db_session, "prev-conflict-core")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=3,
+        length_games=3,
+        pools=[_pool(["t1", "t2"], start="09:00", end="10:05")],
+    )
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+
+    assert result.verdict is PreviewVerdict.infeasible
+    (reason,) = result.infeasibility_reasons
+    assert isinstance(reason, UnplaceableFixturesRead)
+    (unplaceable,) = reason.fixtures
+    # A fixture the preview itself drew and handed back to the caller.
+    assert unplaceable.fixture_id in {f.fixture_id for f in enqueued.fixtures}
+    # Both sides shown the way the preview surface shows a synthetic entrant —
+    # never the raw ``placeholder-2`` spelling.
+    assert {unplaceable.player_a, unplaceable.player_b} < {
+        f"Placeholder {k}" for k in (1, 2, 3)
+    }
 
 
 async def test_preview_solve_past_dated_window_resolves_past_window(
