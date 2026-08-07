@@ -60,19 +60,36 @@ const scoped = (container: Container) => ({
   },
 
   /** The inline **refusal** — the 409, the 422 and every other failure, in the place the
-   * click happened. Found by role (`alert`), which is the contract: it is the app talking
-   * back, and a screen reader must hear it without hunting for it. */
+   * click happened.
+   *
+   * Addressed by its own testid, not by `role="alert"`. The freeze notice below is an
+   * `Alert` too, so "the alert" never named one of them — the same lesson `pools-section`
+   * wrote down one surface over. (The freeze is a `status` now and this one is still an
+   * `alert`, and the panel shows only one of them at a time: the freeze supersedes a
+   * standing refusal. A testid still says *which* notice a test means, which is what an
+   * accessor owes its reader.) */
   queryNotice() {
-    return container.queryByRole('alert')
+    return container.queryByTestId(/^draw-notice-/)
   },
   findNotice() {
-    return container.findByRole('alert')
+    return container.findByTestId(/^draw-notice-/)
   },
   /** The notice as one normalised string — title *and* the sentence beneath it, since
    * the whole point of the 409/422 copy is that both halves are there. */
   async findNoticeText() {
-    const notice = await container.findByRole('alert')
+    const notice = await container.findByTestId(/^draw-notice-/)
     return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
+
+  /** The **freeze** notice — why Re-cut and Delete are dead on a draw that is under way
+   * (`drawVerbFreeze`). Shown to the director alone: a reader has no verbs to explain.
+   * `query…` because "a non-owner is told nothing about a freeze that is not theirs" is
+   * half the claim. */
+  queryFrozenNotice(eventId: string) {
+    return container.queryByTestId(`draw-frozen-notice-${eventId}`)
+  },
+  getFrozenNotice(eventId: string) {
+    return container.getByTestId(`draw-frozen-notice-${eventId}`)
   },
 
   /** EVERY control in the panel. The sweep a "a non-owner is offered nothing" claim
@@ -130,8 +147,23 @@ const scoped = (container: Container) => ({
  * is the exception: the first cut fires on its single click.
  */
 export const drawPanelPage = {
+  /** Mount the panel. Returns the render result, plus `rerenderWith` — the only honest way
+   * to say "the event changed **underneath** this panel", which is what the refetch after a
+   * settled draw verb does. A draw that freezes while a refusal is on screen is exactly
+   * that shape.
+   *
+   * ⚠️ `rerenderWith` rebuilds the props from the factory, so anything a test does not
+   * repeat reverts to the default — pass the whole set both times. And calling `render` a
+   * second time does NOT replace the first tree: Testing Library appends a second one and
+   * `screen` spans the body, so the queries would find two panels. */
   render(overrides: Partial<DrawPanelProps> = {}) {
-    render(<DrawPanel {...buildDrawPanelProps(overrides)} />)
+    const utils = render(<DrawPanel {...buildDrawPanelProps(overrides)} />)
+    return {
+      ...utils,
+      rerenderWith(next: Partial<DrawPanelProps> = {}) {
+        utils.rerender(<DrawPanel {...buildDrawPanelProps(next)} />)
+      },
+    }
   },
 
   within(container: Container = screen) {
