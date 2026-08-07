@@ -25,19 +25,12 @@ import { ResultsPanel } from './draw-panel/results-panel'
 import { RoundList } from './draw-panel/round-list'
 import { SwissRounds } from './draw-panel/swiss-rounds'
 
-/**
- * The two acts THIS panel can price — the draw half of `IrreversibleActConsequence`.
- *
- * Narrowed rather than carrying the whole union, because the panel's `switch` below has
- * to be exhaustive over exactly what it can hold: the three lifecycle edges live in the
- * header (`../lifecycle-actions`) and there is no draw verb that could fire one. Widening
- * this would turn the `never` default into a dead arm that has to invent an answer for an
- * act the panel cannot perform.
- */
-type DrawActConsequence = Extract<
-  IrreversibleActConsequence,
-  { variant: 'recut-draw' | 'delete-draw' }
->
+// `DrawActConsequence` — the two acts THIS panel can price — is imported above rather
+// than re-derived here. It is narrower than `IrreversibleActConsequence` because the
+// panel's `switch` below has to be exhaustive over exactly what it can hold: the three
+// lifecycle edges live in the header (`../lifecycle-actions`) and there is no draw verb
+// that could fire one. Widening it would turn the `never` default into a dead arm that
+// has to invent an answer for an act the panel cannot perform.
 
 export interface DrawPanelProps {
   tournamentId: string

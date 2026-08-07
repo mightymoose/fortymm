@@ -83,8 +83,26 @@ const scoped = (container: Container) => ({
  * button alone opens the dialog and sends nothing, which is the whole point of it.
  */
 export const lifecycleActionsPage = {
+  /** Mount the header action. Returns the render result, plus `rerenderWith` — the only
+   * honest way to say "the tournament changed **underneath** this component", which is
+   * what a refetch landing under an open confirm does.
+   *
+   * ⚠️ Calling `render` a second time does NOT replace the first tree: Testing Library
+   * appends a second one and `screen` spans the whole body, so the queries would find two
+   * `lifecycle-actions` roots and the assertion would be about the wrong one (or throw on
+   * the ambiguity). Prop-change claims use this. */
   render(overrides: Partial<LifecycleActionsProps> = {}) {
-    render(<LifecycleActions {...buildLifecycleActionsProps(overrides)} />)
+    const utils = render(
+      <LifecycleActions {...buildLifecycleActionsProps(overrides)} />,
+    )
+    return {
+      ...utils,
+      rerenderWith(next: Partial<LifecycleActionsProps> = {}) {
+        utils.rerender(
+          <LifecycleActions {...buildLifecycleActionsProps(next)} />,
+        )
+      },
+    }
   },
 
   within(container: Container = screen) {

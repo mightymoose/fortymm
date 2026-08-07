@@ -46,6 +46,12 @@ function refuseTransition(status: number, detail: string) {
   )
 }
 
+/** One shape of the go-live 409, short enough to read in an assertion: the server naming
+ * the event whose draw is missing. Hard-coded, not read from the mock store — a test that
+ * took the copy from the code it is testing would pass whatever the copy became. */
+const NO_DRAW_FOR_OPEN_SINGLES =
+  'This tournament cannot start yet: “Open Singles” has no draw yet.'
+
 /** Click **Start tournament** on a published tournament the viewer owns, and pay for it —
  * the one edge that carries a precondition (ADR-0786). Two clicks, because the button
  * opens the confirm and the confirm's own button is what posts. */
@@ -492,5 +498,154 @@ describe('LifecycleActions · the confirm on every edge', () => {
 
     expect(lifecycleActionsPage.queryAllButtons()).toHaveLength(0)
     expect(lifecycleActionsPage.confirm.queryDialog()).toBeNull()
+  })
+
+  // The dialog names the TOURNAMENT — by its name, which is the only handle a director
+  // has on it. Pinned because a component that passed `tournament.id` instead renders a
+  // sentence that is still grammatical, still one line, and still passed every other test
+  // in this file: "Starting bay-area-open-2026 closes registration for good".
+  it('names the tournament the director is about to move — its name, not its id', async () => {
+    lifecycleActionsPage.render({
+      tournament: buildTournament({
+        id: 't-1',
+        name: 'Bay Area Open 2026',
+        status: 'published',
+      }),
+    })
+
+    await userEvent.click(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    )
+
+    const dialog = lifecycleActionsPage.confirm.getDialog()
+    expect(dialog).toHaveTextContent('Bay Area Open 2026')
+    // The discriminating half: the id must not be what reached the copy.
+    expect(dialog).not.toHaveTextContent('t-1')
+  })
+})
+
+/**
+ * **The confirm posts the edge it PRICED** — the regression this file exists to hold shut.
+ *
+ * `edge` is recomputed from the `tournament` prop on every render, and this page polls
+ * (`useSchedulePolling`, ~3s on the Schedule tab). So the tournament can move underneath an
+ * open dialog: a co-director starts it from their phone while this director is reading
+ * "Start this tournament?", the refetch lands, and `edge` becomes `live → archived`.
+ *
+ * With the edge read live at confirm time, clicking **Start the tournament** posted
+ * `{ to: 'archived' }` — the app ENDING a tournament under a dialog that had just described
+ * starting it. Capturing the edge at the click is the fix, and a stale capture is the
+ * designed outcome: `(current, to)` is the server's judgement (ADR-0017), so it answers 409
+ * and this component renders that sentence inline. Being told beats silently performing an
+ * act nobody chose.
+ */
+describe('LifecycleActions · a refetch under the open confirm', () => {
+  it('posts the edge the dialog PRICED, not the one the refetch moved on to', async () => {
+    const seen = captureTransition()
+    const { rerenderWith } = lifecycleActionsPage.render({
+      tournament: buildTournament({ id: 't-1', status: 'published' }),
+    })
+
+    // The director opens the confirm on `published → live`.
+    await userEvent.click(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    )
+    expect(lifecycleActionsPage.confirm.getDialog()).toHaveTextContent(
+      'Start this tournament?',
+    )
+
+    // …and the tournament moves underneath them: somebody else started it, the poll
+    // landed, and the edge this component would compute is now `live → archived`.
+    rerenderWith({ tournament: buildTournament({ id: 't-1', status: 'live' }) })
+
+    // The refetch LANDED — the positive witness, and the half this test cannot do
+    // without: the dialog's own copy comes from the captured edge, so it reads "Start
+    // this tournament?" whether the new prop applied or not, and a `rerenderWith` that
+    // silently did nothing would leave every other assertion here green. The HEADER's
+    // button is the thing that moves, and it has moved on to `live → archived`.
+    //
+    // Read by DOM sweep, not by role: Radix marks everything behind the open modal
+    // `aria-hidden`, so `getByRole('button')` finds none of these and would report the
+    // header as empty either way.
+    expect(
+      lifecycleActionsPage.getActionControls().map((el) => el.textContent),
+    ).toEqual(['End tournament'])
+
+    // And the question they are answering is still the question they were asked.
+    expect(lifecycleActionsPage.confirm.getDialog()).toHaveTextContent(
+      'Start this tournament?',
+    )
+
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+
+    await waitFor(() => expect(seen).toHaveLength(1))
+    // The whole regression, in one line: `{ to: 'live' }` is the act that was priced.
+    // `{ to: 'archived' }` is the act the live `edge` would have performed — ending the
+    // tournament — and it is a request too, so "something was sent" would pass either way.
+    expect(seen[0].body).toEqual({ to: 'live' })
+  })
+
+  /** The same capture, seen from the other end: a captured edge the server has since
+   * refused is a **409**, and the notice frames it with the edge the director actually
+   * clicked. A refusal titled after the edge now on offer would tell them the wrong move
+   * failed. */
+  it('reports a refused stale edge as the move the director made', async () => {
+    refuseTransition(409, 'This tournament is already live.')
+    const { rerenderWith } = lifecycleActionsPage.render({
+      tournament: buildTournament({ id: 't-1', status: 'published' }),
+    })
+
+    await userEvent.click(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    )
+    // No landing witness of its own: the test above pins that this same `rerenderWith`
+    // reaches the component, so a helper that stopped working reds there first.
+    rerenderWith({ tournament: buildTournament({ id: 't-1', status: 'live' }) })
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+
+    const text = await lifecycleActionsPage.findNoticeText()
+    expect(text).toContain("Couldn't start the tournament")
+    expect(text).toContain('This tournament is already live.')
+    // Not the edge the refetch moved on to.
+    expect(text).not.toContain("Couldn't end the tournament")
+    expectNoToast()
+  })
+})
+
+/**
+ * The standing refusal is about the last **attempt**, and opening or cancelling a dialog is
+ * not one. A 409 on Start names the events whose draws are missing or stale — a work list
+ * the director reads *while* going to fix it — so a second look at the confirm, thought
+ * better of, must not take it away.
+ */
+describe('LifecycleActions · the refusal notice and the dialog', () => {
+  it('keeps a standing refusal when the director opens the confirm and goes back', async () => {
+    refuseTransition(409, NO_DRAW_FOR_OPEN_SINGLES)
+    lifecycleActionsPage.render({
+      tournament: buildTournament({ id: 't-1', status: 'published' }),
+    })
+
+    await userEvent.click(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    )
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+    await lifecycleActionsPage.findNotice()
+
+    // Second thoughts: open the question again, then go back.
+    await userEvent.click(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    )
+    await userEvent.click(lifecycleActionsPage.confirm.getCancelButton())
+    await waitFor(() =>
+      expect(lifecycleActionsPage.confirm.queryDialog()).toBeNull(),
+    )
+
+    // Still there — a cancel sent nothing, so it changed nothing, so it explains nothing
+    // away. (Read by testid: while the dialog was up, Radix had this `aria-hidden`, and a
+    // role query would have reported a standing notice as gone.)
+    expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      '“Open Singles” has no draw yet',
+    )
   })
 })
