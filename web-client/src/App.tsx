@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Wordmark } from '@/components/wordmark'
+import { TESTFLIGHT_URL } from '@/lib/external-links'
 import './landing.css'
 
 /** Public source repository — FortyMM is GPLv3 and open to contributors. */
@@ -1068,13 +1069,21 @@ function CtaBand() {
             <span className="btn-dot" />
             Start playing now
           </Link>
-          <span
-            className="btn btn-secondary btn-xl btn-disabled"
-            aria-disabled="true"
-            title="Coming soon — iOS is in beta"
+          {/*
+            The TestFlight beta is public — anyone with the link can join — so
+            a logged-out visitor gets the same working link the signed-in
+            sidebar shows (`app-shell.tsx`). Android has no build at all, which
+            is why the button beside this one stays inert.
+          */}
+          <a
+            className="btn btn-secondary btn-xl"
+            href={TESTFLIGHT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Join the public TestFlight beta"
           >
             Get the iOS app
-          </span>
+          </a>
           <span
             className="btn btn-secondary btn-xl btn-disabled"
             aria-disabled="true"
