@@ -181,11 +181,13 @@ Put a button in. Also print the full URL as visible text below it. Two reasons:
 2. Corporate link scanners prefetch button targets. A prefetch can burn a one-time token before
    the person clicks. A visible URL gives them a second way through.
 
-### No SVG, and we have no logo file
+### No SVG, and no exported logo file
 
-Gmail strips SVG. Our only mark today is `web-client/public/favicon.svg`. Please deliver a wordmark
-as PNG at 1x, 2x, and 3x, or design a text-only wordmark set in the brand typeface. A text wordmark
-is acceptable and avoids an image-blocking failure.
+Gmail strips SVG. The wordmark above lives in code as styled text, not as an image asset. The only
+image file we hold is `web-client/public/favicon.svg`, which email clients will not render.
+
+Please deliver the wordmark as PNG at 1x, 2x, and 3x, or specify it as text-only in the fallback
+font stack. Text-only is acceptable. It also survives the case where a client blocks images.
 
 ### Web fonts will not load
 
@@ -224,7 +226,7 @@ one preheader line per email. It sits in a hidden block at the top of the wrappe
 3. Five composed emails, one per section above, using those components.
 4. The notification email in two states: with a deep link and without.
 5. The no-account email in two states: with a link and without.
-6. One preheader line per email, six lines in total counting both notification states.
+6. One preheader line for each email and each state above.
 7. A wordmark as PNG at 1x, 2x, and 3x, or a specified text-only wordmark.
 8. A spec sheet: hex values, pixel spacing, font sizes, and the fallback font stack.
 
