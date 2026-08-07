@@ -19,6 +19,7 @@ import {
 import { useSession } from '@/api/session'
 import { Wordmark } from '@/components/wordmark'
 import { cn } from '@/lib/utils'
+import { TESTFLIGHT_URL } from '@/lib/external-links'
 import { PERM } from '@/lib/permissions'
 import { NotificationBell } from './notifications/notification-bell'
 import { UserMenu } from './user-menu'
@@ -48,9 +49,6 @@ type NavSection = {
   label?: string
   items: NavItem[]
 }
-
-/** The app's public TestFlight beta — anyone with the link can join, no invite needed. */
-const TESTFLIGHT_URL = 'https://testflight.apple.com/join/5pGVbku3'
 
 const NAV_SECTIONS: NavSection[] = [
   {
