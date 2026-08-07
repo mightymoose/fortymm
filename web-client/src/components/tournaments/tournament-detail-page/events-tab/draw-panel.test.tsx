@@ -15,6 +15,7 @@ import {
   buildEntrants,
   buildEvent,
   buildFixture,
+  buildMaterializedDrawnEvent,
   buildPlayedDrawnEvent,
   buildPool,
   buildSwissDrawnEvent,
@@ -585,15 +586,46 @@ describe('DrawPanel', () => {
       // draw-type control: the reason reaches a screen reader THROUGH the control.
       // `toHaveAccessibleDescription` resolves the `aria-describedby` reference — an
       // assertion that merely compared ids would pass against a control pointing at
-      // nothing, which is precisely the defect.
-      expect(recut).toHaveAccessibleDescription(/already under way/i)
-      expect(recut).toHaveAccessibleDescription(/throw away a result/i)
-      expect(del).toHaveAccessibleDescription(/already under way/i)
-      expect(del).toHaveAccessibleDescription(/throw away a result/i)
-      // …and it is on screen for a sighted director too.
-      expect(page.getFrozenNotice('ev-u1200')).toHaveTextContent(
-        'Re-cut and Delete are unavailable',
+      // nothing, which is precisely the defect. ONE short token each: the sentence itself
+      // belongs to `drawVerbFreeze`'s own test, and pinning it in two files is the shape
+      // that greens one of them on a copy edit and leaves the other stale.
+      expect(recut).toHaveAccessibleDescription(/under way/i)
+      expect(del).toHaveAccessibleDescription(/under way/i)
+      // …and it is on screen for a sighted director too — as a **status**, not an alert.
+      // The `Alert` hardcodes `role="alert"` (assertive), which interrupts a screen reader
+      // to announce a condition that was simply true when the page loaded. The refusal
+      // below keeps `alert`; that one answers a click.
+      const frozenNotice = page.getFrozenNotice('ev-u1200')
+      expect(frozenNotice).toHaveTextContent('Re-cut and Delete are unavailable')
+      expect(frozenNotice).toHaveAttribute('role', 'status')
+    })
+
+    /**
+     * The **other half of the guard**, through the panel: a fixture that has merely
+     * materialized — a linked `matchId`, no winner, nothing played. This is what go-live
+     * produces on every ready fixture, so it is the commonest frozen draw there is, and
+     * until now only the data module covered it.
+     *
+     * The control count is the load-bearing second assertion. This fixture's `matchStatus`
+     * is `null`, so `matchOf` renders no "View match" `<Link>` — which is what keeps this
+     * event usable in a panel test with no router, and what keeps the ADR-0015 sweep
+     * (`INTERACTIVE_SELECTOR` matches an `a[href]`) counting verbs and nothing else.
+     */
+    it('freezes on a fixture that is a match but has no result yet', () => {
+      page.render({ event: buildMaterializedDrawnEvent() })
+
+      expect(page.queryRecutButton('U1200 Singles')).toHaveAttribute(
+        'aria-disabled',
+        'true',
       )
+      expect(page.queryDeleteButton('U1200 Singles')).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
+      expect(page.getFrozenNotice('ev-u1200')).toBeInTheDocument()
+      // The two verbs, and no link: a materialized fixture with no status paints exactly
+      // as an un-materialized one does.
+      expect(page.getPanelControls('ev-u1200')).toHaveLength(2)
     })
 
     /**
@@ -649,6 +681,46 @@ describe('DrawPanel', () => {
       expect(page.confirm.queryDialog()).toBeNull()
       expect(del).toHaveFocus()
       expect(calls).toBe(0)
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    /**
+     * ⚠️ **The freeze supersedes a standing refusal.** The race it settles is real and it
+     * has one exit: the director clicks Re-cut on a draw nobody had played, the first score
+     * lands first, the server answers 409, and the refetch the mutation settles into brings
+     * back the evidence that freezes the verbs.
+     *
+     * Left alone, the two notices sit on the card **permanently**, saying nearly the same
+     * thing in different words. `setNotice(null)` runs in exactly one place — the top of
+     * `attempt` — and once frozen, `attempt` is unreachable: both destructive verbs
+     * short-circuit before it, and Generate is not rendered on a drawn event. So the red
+     * one has no way to clear, ever.
+     *
+     * A `rerenderWith` rather than a second `render`, because the claim is that the event
+     * changed **underneath** a panel that is holding a refusal in its state — a fresh mount
+     * would have no refusal to supersede and the test would pass against no fix at all.
+     */
+    it('drops a standing refusal once the freeze engages — one notice, not two', async () => {
+      const playGuard =
+        "This event's draw is already under way — at least one fixture has a match " +
+        'or a recorded winner — so it can no longer be cut or removed.'
+      mockEventCutDrawEndpoint(server, () =>
+        HttpResponse.json({ detail: playGuard }, { status: 409 }),
+      )
+      const { rerenderWith } = page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
+      // The refusal is up, on a draw that is still open — the two-notice state, mid-race.
+      expect(await page.findNoticeText()).toContain(playGuard)
+      expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
+
+      // …and now the refetch lands, carrying the score that beat the click.
+      rerenderWith({ tournamentId: 't-1', event: PLAYED })
+
+      expect(page.getFrozenNotice('ev-u1200')).toBeInTheDocument()
+      // The whole assertion: the red one is gone, because no further request is possible
+      // and a refusal nobody can retire is worse than none.
       expect(page.queryNotice()).toBeNull()
     })
 
@@ -730,10 +802,12 @@ describe('DrawPanel', () => {
       const notice = await page.findNoticeText()
       expect(notice).toContain('This draw is already under way')
       expect(notice).toContain(PLAY_GUARD)
-      // …and a screen reader hears it without hunting for it. Asserted here because the
-      // page object no longer *finds* the notice by role: the freeze notice is an `Alert`
-      // too and the two co-occur, so the accessor moved to a testid. The role is still
-      // the contract — this is where it is now pinned.
+      // …and a screen reader is interrupted to hear it, because a refusal is an EVENT: it
+      // lands in answer to this click. That is the half the freeze notice does not share —
+      // it is a standing condition and carries `role="status"`. Asserted here because the
+      // page object finds the notice by testid rather than by role (the freeze notice is
+      // an `Alert` too, so "the alert" named neither of them). The role is still the
+      // contract — this is where it is pinned.
       expect(await page.findNotice()).toHaveAttribute('role', 'alert')
       // The standing draw is untouched — a refused cut destroys nothing.
       expect(page.getPoolLines('p-a')).toHaveLength(3)

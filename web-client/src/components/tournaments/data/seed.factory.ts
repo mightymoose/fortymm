@@ -542,30 +542,59 @@ export function buildPlayerConflict(
  * `buildDrawnEvent`, with its draw **under way** — the state `drawVerbFreeze` (`./draw`)
  * refuses a re-cut and a delete on (#1060), and the state the server answers 409 from.
  *
- * Only ONE of its four fixtures carries the evidence, on purpose: the guard is "**any**
+ * Only ONE of its fixtures carries the evidence, on purpose: the guard is "**any**
  * fixture", and one-of-four is what tells a predicate asking `some` from one asking
  * `every`.
+ *
+ * The evidence is stamped on **whatever fixtures the overrides produced**, not on the
+ * default four, so a caller passing `fixtures` gets those fixtures *with* the evidence.
+ * Spreading `overrides` over a pre-stamped `fixtures` key instead would hand back an event
+ * with no evidence at all — an unplayed draw, from a factory whose name promises the
+ * opposite, and a silent green for every test built on it.
  *
  * The evidence is a **recorded winner**, and that choice is load-bearing for the DOM
  * surfaces that use this. A winner is not rendered anywhere on a fixture line, so the draw
  * this builds paints **identically** to `buildDrawnEvent`'s — which leaves the freeze as
  * the only difference between a frozen panel and an open one. The other half of the guard
- * (a linked `matchId`) would also render a `<Link>` to the match, which costs two things:
- * a `RouterProvider` in every test of a panel that is not about routing, **and** an
- * `a[href]` — which `INTERACTIVE_SELECTOR` matches, so the ADR-0015 "a non-owner sees zero
- * controls" sweep would red as well. Neither red would be about the freeze. Both halves of
- * the guard are pinned apart, on the predicate itself, in `draw.test.ts`.
+ * is `buildMaterializedDrawnEvent` below. Both halves are also pinned apart, on the
+ * predicate itself, in `draw.test.ts`.
  */
 export function buildPlayedDrawnEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
 ): TournamentEvent {
-  const drawn = buildDrawnEvent()
-  return buildDrawnEvent({
+  const drawn = buildDrawnEvent(overrides)
+  return {
+    ...drawn,
     fixtures: drawn.fixtures.map((fixture, i) =>
       i === 0 ? { ...fixture, winnerEntryId: fixture.entryAId } : fixture,
     ),
-    ...overrides,
-  })
+  }
+}
+
+/**
+ * The **other** half of the play guard: a draw whose first fixture has *materialized* —
+ * a linked `matchId`, no winner, nothing played. This is the state go-live actually
+ * produces (`materialize_live_draw` stamps a `match_id` on every ready fixture in one
+ * transaction), so it is the commonest frozen draw a director meets.
+ *
+ * `matchStatus` stays `null`, and that is what makes this usable in a DOM test. `matchOf`
+ * (`./draw`) calls a fixture materialized only when it has an id **and** a status, so this
+ * fixture renders no `<Link>`: no `RouterProvider` is needed in a panel test that is not
+ * about routing, and no `a[href]` lands in the ADR-0015 "a non-owner sees zero controls"
+ * sweep (`INTERACTIVE_SELECTOR` matches one). `drawVerbFreeze` reads the parsed fixture
+ * rather than `matchOf`, which is exactly why it still freezes here — the server refuses
+ * on `match_id` alone.
+ */
+export function buildMaterializedDrawnEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  const drawn = buildDrawnEvent(overrides)
+  return {
+    ...drawn,
+    fixtures: drawn.fixtures.map((fixture, i) =>
+      i === 0 ? { ...fixture, matchId: 'm-1', matchStatus: null } : fixture,
+    ),
+  }
 }
 
 /**

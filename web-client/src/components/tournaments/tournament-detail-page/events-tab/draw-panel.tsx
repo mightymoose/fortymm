@@ -11,6 +11,7 @@ import {
   drawVerbFreeze,
   type DrawNotice,
   type DrawRound,
+  type EditFreeze,
   type SwissByes,
   type UnpooledShape,
 } from '../../data/draw'
@@ -34,6 +35,35 @@ import { SwissRounds } from './draw-panel/swiss-rounds'
 // has to invent an answer for an act the panel cannot perform.
 
 /**
+ * The classes a frozen verb wears — what `disabled:` would have given for free, re-hung on
+ * `aria-disabled`. `cursor-not-allowed` and `opacity-50` are that pair; the four after
+ * them are what make a dead verb *look* dead:
+ *
+ * - **`text-…`** mutes the label at rest. `outline`'s Re-cut is `text-foreground` and
+ *   `ghost`'s Delete is already `--fg-2`, so without it the two frozen verbs would sit
+ *   side by side in different weights of dead.
+ * - **`hover:bg-transparent`** and **`hover:text-…`** take back the variant's hover tint
+ *   (`outline` lifts its background, `ghost` lifts its background *and* its text). Both
+ *   land on the resting colour above, so the verb does not change at all under the cursor:
+ *   a control that lights up while the cursor beside it reads `not-allowed` is telling the
+ *   director two different things.
+ * - **`active:…translate-y-0`** takes back the depress. A button that sinks under the
+ *   click is saying the click was taken. The `not-aria-[haspopup]` qualifier is carried
+ *   over from the base rule this overrides, so that this one is strictly *more* specific —
+ *   the two would otherwise tie at three selectors and be settled by stylesheet order.
+ *
+ * `pointer-events-none` is pointedly NOT among them: the click must still land and be
+ * refused *by the handler*, or "a frozen verb opens no confirm" becomes untestable — a
+ * dialog that never appeared cannot tell a working guard from a click that was swallowed
+ * by CSS.
+ */
+const FROZEN_VERB_CLASSES =
+  'aria-disabled:cursor-not-allowed aria-disabled:opacity-50 ' +
+  'aria-disabled:text-[color:var(--fg-2)] aria-disabled:hover:bg-transparent ' +
+  'aria-disabled:hover:text-[color:var(--fg-2)] ' +
+  'aria-disabled:active:not-aria-[haspopup]:translate-y-0'
+
+/**
  * How a **frozen** draw verb is dressed: unavailable, focusable, and pointing at the
  * sentence that says why.
  *
@@ -44,20 +74,22 @@ import { SwissRounds } from './draw-panel/swiss-rounds'
  * - **`aria-disabled`** announces the state without removing the verb from the tab order.
  * - **`aria-describedby`** is the only channel the reason has. It is what makes this a
  *   frozen control rather than #1223's grey box with a sentence painted beside it.
- * - **the classes** are what `disabled:` would have given for free. `pointer-events-none`
- *   is pointedly NOT among them: the click must still land and be refused *by the
- *   handler*, or "a frozen verb opens no confirm" becomes untestable — a dialog that never
- *   appeared cannot tell a working guard from a click that was swallowed by CSS.
+ * - **the classes** (`FROZEN_VERB_CLASSES`) make the dead state look dead.
+ *
+ * It takes the **`EditFreeze` itself**, never a boolean and an id. The boolean and the
+ * reason are one decision, and the sum type exists precisely so the pair cannot be
+ * reconstructed by hand: `frozenVerb(true, someUnrelatedId)` type-checked, and dressing a
+ * verb as frozen while the freeze was open was a two-argument slip away.
  *
  * Open, it contributes nothing at all — not `aria-disabled="false"`, which is a claim of
  * its own that a screen reader will read out.
  */
-const frozenVerb = (frozen: boolean, reasonId: string) =>
-  frozen
+const frozenVerb = (freeze: EditFreeze, reasonId: string) =>
+  freeze.kind === 'frozen'
     ? {
         'aria-disabled': true,
         'aria-describedby': reasonId,
-        className: 'aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
+        className: FROZEN_VERB_CLASSES,
       }
     : {}
 
@@ -179,6 +211,23 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   const freeze = drawVerbFreeze(event)
   const frozen = freeze.kind === 'frozen'
 
+  /** Everything the two destructive verbs share: the in-flight lock, the frozen dress, and
+   * the click that names an act **without performing it** — the confirm's button is what
+   * fires it. One helper rather than two copies, because the guard and the dress are the
+   * same decision on both buttons and a verb that kept one without the other would be
+   * either a dead-looking button that still fires or a live-looking one that cannot. All
+   * that differs between them is the act. */
+  const destructiveVerb = (variant: DrawActConsequence['variant']) => ({
+    disabled: isPending,
+    ...frozenVerb(freeze, freezeNoticeId),
+    onClick: () => {
+      // The refusal is HERE, not in CSS: the click lands on a frozen verb (see
+      // `FROZEN_VERB_CLASSES`) and is turned away, so no confirm opens and nothing is sent.
+      if (frozen) return
+      setPending({ variant, eventName: event.name })
+    },
+  })
+
   const attempt = async (verb: string, fire: () => Promise<unknown>) => {
     setNotice(null)
     try {
@@ -251,12 +300,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
                   size="sm"
                   variant="outline"
                   aria-label={`Re-cut draw for ${event.name}`}
-                  disabled={isPending}
-                  {...frozenVerb(frozen, freezeNoticeId)}
-                  onClick={() => {
-                    if (frozen) return
-                    setPending({ variant: 'recut-draw', eventName: event.name })
-                  }}
+                  {...destructiveVerb('recut-draw')}
                 >
                   <Shuffle size={14} />
                   Re-cut draw
@@ -265,12 +309,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
                   size="sm"
                   variant="ghost"
                   aria-label={`Delete draw for ${event.name}`}
-                  disabled={isPending}
-                  {...frozenVerb(frozen, freezeNoticeId)}
-                  onClick={() => {
-                    if (frozen) return
-                    setPending({ variant: 'delete-draw', eventName: event.name })
-                  }}
+                  {...destructiveVerb('delete-draw')}
                 >
                   <Trash2 size={14} />
                   Delete draw
@@ -290,13 +329,23 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
           gating it with the buttons keeps the description from ever pointing at an element
           that is not on the page.
 
-          Addressed by testid rather than by `role="alert"`, exactly as the pools section
-          learned to be: this and the refusal below are both `Alert`s, and they genuinely
-          co-occur — a director who clicks Re-cut just before the first score lands gets the
-          409 *and* then refetches into evidence. A page object asking for "the alert" would
-          throw on that overlap. */}
+          Addressed by testid rather than by role, exactly as the pools section learned to
+          be: this and the refusal below are both `Alert`s, so "the alert" was never a name
+          for one of them. It is not one now either — this notice is a `status` and that one
+          is an `alert` — but a testid says which notice a test means, where a role only
+          says which kind of announcement it is. */}
       {canEdit && freeze.kind === 'frozen' && (
-        <Alert data-testid={`draw-frozen-notice-${event.id}`} className="mt-2.5">
+        <Alert
+          // `role="status"` — polite — over the `Alert`'s own hardcoded `role="alert"`,
+          // which is assertive and interrupts whatever a screen reader is saying. This is
+          // a **standing condition**, true on load and true for as long as the page is
+          // open: nothing just happened. (The `Alert` spreads `{...props}` after its own
+          // role, so this wins.) The refusal below keeps `alert` — that one *is* an event,
+          // and it lands in answer to a click.
+          role="status"
+          data-testid={`draw-frozen-notice-${event.id}`}
+          className="mt-2.5"
+        >
           <Lock size={16} />
           {/* The title names what it means for the two controls; the description names the
               cause. Between them they say it once each — the title is not a shorter copy
@@ -311,8 +360,18 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
 
       {/* The refusal, where the click was — an `Alert` (the app talking back), not a
           toast that leaves after four seconds carrying the one sentence that says what
-          to change. */}
-      {notice && (
+          to change.
+
+          **The freeze supersedes it.** A refusal is a standing notice about the last
+          *attempt*, and it is cleared when the next one starts (`attempt`) — but once the
+          verbs are frozen there is no next attempt: both short-circuit before `attempt`
+          runs, and Generate is not rendered on a drawn event. So a refusal caught on the
+          way into the freeze — the director clicks Re-cut on an unplayed draw, a score
+          lands first, the 409 comes back, the refetch brings the evidence — would sit
+          there for good, a red alert saying almost what the freeze above it says, with
+          nothing in the panel able to clear it. The freeze is the same fact, current and
+          complete, so it does the talking alone. */}
+      {!frozen && notice && (
         <Alert
           variant="destructive"
           data-testid={`draw-notice-${event.id}`}

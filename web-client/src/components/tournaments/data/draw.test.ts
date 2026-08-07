@@ -19,6 +19,7 @@ import {
   buildEntrants,
   buildEvent,
   buildFixture,
+  buildMaterializedDrawnEvent,
   buildPlayedDrawnEvent,
   buildPool,
   buildSwissDrawnEvent,
@@ -26,6 +27,7 @@ import {
   buildSwissOddMidEvent,
   buildTwoStageDrawnEvent,
 } from './seed.factory'
+import type { TournamentEvent } from './types'
 
 /** The drawn arm, or a failed assertion — so the tests below can read `.pools`
  * without a cast, and an accidental `undrawn` fails loudly instead of quietly
@@ -609,6 +611,14 @@ describe('drawTypeFreeze', () => {
  * halves, apart, plus the negative.
  */
 describe('drawVerbFreeze', () => {
+  /** The frozen reason, or a failed assertion — so a test that is about the *words* reads
+   * them without a narrowing dance, and an accidentally open freeze fails loudly. */
+  const frozenReason = (event: TournamentEvent) => {
+    const freeze = drawVerbFreeze(event)
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen draw verb')
+    return freeze.reason
+  }
+
   it('is open on a draw that has been cut but not played', () => {
     // The day-of re-cut ADR-0786 preserves: a full draw, no result and no match, and both
     // verbs live. Freezing on the *draw* rather than on the *evidence* would break this.
@@ -668,17 +678,43 @@ describe('drawVerbFreeze', () => {
   })
 
   it('says both verbs are gone, and why — and names no way out, because there is none', () => {
-    const freeze = drawVerbFreeze(buildPlayedDrawnEvent())
-    if (freeze.kind !== 'frozen') throw new Error('expected a frozen draw verb')
+    const reason = frozenReason(buildPlayedDrawnEvent())
 
     // What is true, in the director's terms…
-    expect(freeze.reason).toContain('already under way')
-    expect(freeze.reason).toContain('re-cut or removed')
-    // …and why it costs something to ignore.
-    expect(freeze.reason).toMatch(/throw away a result/i)
+    expect(reason).toContain('under way')
+    // …and what it would cost to ignore: the two verbs, named as the acts they are.
+    expect(reason).toMatch(/re-cutting or removing the draw/i)
     // The half the sibling freezes' copy register would drag in and that would be a LIE
     // here: deleting the draw is the act being refused, so there is no exit to offer.
-    expect(freeze.reason).not.toContain('Delete the draw')
-    expect(freeze.reason).not.toContain('cut it again')
+    expect(reason).not.toContain('Delete the draw')
+    expect(reason).not.toContain('cut it again')
+  })
+
+  /**
+   * ⚠️ **The reason must be true of a draw nobody has played** — the commonest frozen draw
+   * there is, and the one the copy used to contradict.
+   *
+   * `materialize_live_draw` stamps a `match_id` on every ready fixture inside the go-live
+   * transaction, so the ordinary way a draw freezes is: the tournament goes live, every
+   * fixture becomes a real match, **zero results**. The sentence said a re-deal "would
+   * throw away a result somebody has already played for" — false here, and flatly against
+   * its own first clause, which offered the match as an *alternative* to a winner.
+   *
+   * The assertion is therefore on the **hedge**, not on a replacement fragment: a result
+   * may be named only as one of two alternatives, the way the server's own guard hedges it
+   * ("a linked match, which **may** already carry games"). Pinning another literal string
+   * is what let the false claim through the first time.
+   */
+  it('claims no result on a draw that has merely materialized', () => {
+    const reason = frozenReason(buildMaterializedDrawnEvent())
+
+    // Nothing has been played on this event, so nothing can be thrown away.
+    expect(reason).not.toMatch(/throw away/i)
+    expect(reason).not.toMatch(/has already been played/i)
+    // The match is the fact; the result is the alternative ("… or …").
+    expect(reason).toMatch(/real match now, or/i)
+    // One sentence covers both halves of the guard — a director cannot be shown a reason
+    // that names the half their own draw does not have.
+    expect(reason).toBe(frozenReason(buildPlayedDrawnEvent()))
   })
 })

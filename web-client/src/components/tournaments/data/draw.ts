@@ -567,6 +567,14 @@ export function drawTypeFreeze(
  * gives every ready fixture a `match_id` — but it is the `match_id` that seals the draw,
  * not the status.)
  *
+ * **The reason must be true of a match nobody has played**, and that is the whole reason
+ * it is worded the way it is. Go-live stamps a `match_id` on *every* ready fixture in one
+ * transaction, so the ordinary frozen draw has real matches and **zero results** — a
+ * sentence claiming a re-cut would discard a result somebody played for would be false in
+ * the commonest case this freeze meets. The server's own guard is careful about exactly
+ * this: a linked match "**may** already carry games" (`_enforce_unplayed`). So the result
+ * is named as one of two alternatives, never as a fact.
+ *
  * The server remains the enforcement: `_enforce_unplayed` answers **409**, and
  * `drawRefusalNotice`'s 409 arm is still there for the director who loses the race
  * between a page load and the first score. What this buys is a better refusal — a verb
@@ -577,9 +585,9 @@ export function drawVerbFreeze(event: TournamentEvent): EditFreeze {
   return {
     kind: 'frozen',
     reason:
-      'This event’s draw is already under way — at least one fixture has a recorded ' +
-      'winner, or has become a real match — so it can no longer be re-cut or removed. ' +
-      'Re-dealing it now would throw away a result somebody has already played for.',
+      'This event’s draw is under way: one of its fixtures is a real match now, or ' +
+      'carries a result somebody played for. Re-cutting or removing the draw would ' +
+      'take that back from the players.',
   }
 }
 
