@@ -353,7 +353,10 @@ async function goLive(page: Page, detail: TournamentDetailPage): Promise<void> {
   const transitionPost = page.waitForResponse(
     (r) => r.url().endsWith('/transitions') && r.request().method() === 'POST',
   )
-  await detail.startButton.click()
+  // `startTournament`, not `startButton.click()`: the header's button only opens the
+  // confirm now, and the transition is fired by the dialog's. Armed before the act so the
+  // response lands inside the wait either way.
+  await detail.startTournament()
   const response = await transitionPost
   expect(
     response.status(),
@@ -526,7 +529,7 @@ test.describe('Tournament — swiss draw', () => {
     const eventId = await authorSwissEvent(page, detail, director, tournamentId)
 
     // ----- publish, then fill the field --------------------------------------
-    await detail.publishButton.click()
+    await detail.publishTournament()
     await expect(detail.startButton).toBeVisible()
 
     const entrants = await seedEntrants(
@@ -616,7 +619,7 @@ test.describe('Tournament — swiss draw', () => {
 
     const eventId = await authorSwissEvent(page, detail, director, tournamentId)
 
-    await detail.publishButton.click()
+    await detail.publishTournament()
     await expect(detail.startButton).toBeVisible()
 
     const entrants = await seedEntrants(
@@ -758,7 +761,7 @@ test.describe('Tournament — swiss draw', () => {
 
     const eventId = await authorSwissEvent(page, detail, director, tournamentId)
 
-    await detail.publishButton.click()
+    await detail.publishTournament()
     await expect(detail.startButton).toBeVisible()
 
     const entrants = await seedEntrants(
@@ -934,7 +937,7 @@ test.describe('Tournament — swiss draw', () => {
 
     const eventId = await authorSwissEvent(page, detail, director, tournamentId)
 
-    await detail.publishButton.click()
+    await detail.publishTournament()
     await expect(detail.startButton).toBeVisible()
 
     const entrants = await seedEntrants(
@@ -1171,7 +1174,7 @@ test.describe('Tournament — swiss draw', () => {
       BUCHHOLZ_ROUNDS,
     )
 
-    await detail.publishButton.click()
+    await detail.publishTournament()
     await expect(detail.startButton).toBeVisible()
 
     const entrants = await seedEntrants(
