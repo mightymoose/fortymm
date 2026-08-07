@@ -3,6 +3,7 @@ import { StrictMode } from 'react'
 import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
+import { confirmIrreversibleActDialogPage } from '../confirm-irreversible-act-dialog.page'
 import { DrawPanel, type DrawPanelProps } from './draw-panel'
 import { buildDrawPanelProps } from './draw-panel.factory'
 import { poolDrawPage } from './draw-panel/pool-draw.page'
@@ -45,6 +46,12 @@ const scoped = (container: Container) => ({
     return container.findByRole('button', { name: `Delete draw for ${eventName}` })
   },
 
+  /** The **confirm** the two destructive verbs are gated by — Re-cut and Delete open it
+   * and send nothing; the act is fired by its own button. Always addressed at `screen`,
+   * whatever the panel's scope: the dialog portals to the document body, so it is never
+   * inside the card a container narrows to. (Generate has none, by design.) */
+  confirm: confirmIrreversibleActDialogPage.within(screen),
+
   /** The **designed empty state** of an event with no draw — inert copy, never a
    * spinner and never an error. */
   queryEmptyState() {
@@ -55,18 +62,24 @@ const scoped = (container: Container) => ({
   },
 
   /** The inline **refusal** — the 409, the 422 and every other failure, in the place the
-   * click happened. Found by role (`alert`), which is the contract: it is the app talking
-   * back, and a screen reader must hear it without hunting for it. */
+   * click happened.
+   *
+   * Addressed by its own testid, not by `role="alert"`. The freeze notice below is an
+   * `Alert` too, so "the alert" never named one of them — the same lesson `pools-section`
+   * wrote down one surface over. (The freeze is a `status` now and this one is still an
+   * `alert`, and the panel shows only one of them at a time: the freeze supersedes a
+   * standing refusal. A testid still says *which* notice a test means, which is what an
+   * accessor owes its reader.) */
   queryNotice() {
-    return container.queryByRole('alert')
+    return container.queryByTestId(/^draw-notice-/)
   },
   findNotice() {
-    return container.findByRole('alert')
+    return container.findByTestId(/^draw-notice-/)
   },
   /** The notice as one normalised string — title *and* the sentence beneath it, since
    * the whole point of the 409/422 copy is that both halves are there. */
   async findNoticeText() {
-    const notice = await container.findByRole('alert')
+    const notice = await container.findByTestId(/^draw-notice-/)
     return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
   },
   /** The notice as one normalised string, **synchronously** — `''` when there is none.
@@ -77,6 +90,17 @@ const scoped = (container: Container) => ({
   queryNoticeText() {
     const notice = container.queryByRole('alert')
     return (notice?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
+
+  /** The **freeze** notice — why Re-cut and Delete are dead on a draw that is under way
+   * (`drawVerbFreeze`). Shown to the director alone: a reader has no verbs to explain.
+   * `query…` because "a non-owner is told nothing about a freeze that is not theirs" is
+   * half the claim. */
+  queryFrozenNotice(eventId: string) {
+    return container.queryByTestId(`draw-frozen-notice-${eventId}`)
+  },
+  getFrozenNotice(eventId: string) {
+    return container.getByTestId(`draw-frozen-notice-${eventId}`)
   },
 
   /** EVERY control in the panel. The sweep a "a non-owner is offered nothing" claim
@@ -138,16 +162,30 @@ const mount = (props: DrawPanelProps) => (
  * clicks one of its verbs must stub the draw endpoint itself — `mockEventCutDrawEndpoint`
  * / `mockEventUncutDrawEndpoint` (`@/mocks/endpoints/tournaments/tournaments.endpoint`).
  * Rendering alone fetches nothing: the fixtures ride the event it is handed.
+ *
+ * A test driving **Re-cut** or **Delete** must go through `confirm` — clicking the verb
+ * alone opens the dialog and sends nothing, which is the whole point of it. **Generate**
+ * is the exception: the first cut fires on its single click.
  */
 export const drawPanelPage = {
-  /** Render, and hand back the one thing a caller may do afterwards: give the panel
-   * **fresh server data** — a new `event` — the way the detail page does when the
-   * tournament refetches. That is how a refusal's expiry is exercised; nobody clicks
-   * anything for it. */
+  /** Mount the panel, and hand back the one thing a caller may do afterwards:
+   * `rerenderWith`, the only honest way to say "the event changed **underneath** this
+   * panel". That is what the refetch after a settled draw verb does — a draw that freezes
+   * while a refusal is on screen is exactly that shape — and it is also how a refusal's
+   * expiry is exercised; nobody clicks anything for it.
+   *
+   * ⚠️ `rerenderWith` rebuilds the props from the factory, so anything a test does not
+   * repeat reverts to the default — pass the whole set both times. And calling `render` a
+   * second time does NOT replace the first tree: Testing Library appends a second one and
+   * `screen` spans the body, so the queries would find two panels.
+   *
+   * The raw `rerender` is deliberately NOT handed back: it would re-render the panel bare,
+   * dropping the `StrictMode` wrapper the first mount was given and quietly ending the
+   * double-invoke the expiry hook is under test in. */
   render(overrides: Partial<DrawPanelProps> = {}) {
     const { rerender } = render(mount(buildDrawPanelProps(overrides)))
     return {
-      rerender(next: Partial<DrawPanelProps> = {}) {
+      rerenderWith(next: Partial<DrawPanelProps> = {}) {
         rerender(mount(buildDrawPanelProps(next)))
       },
     }

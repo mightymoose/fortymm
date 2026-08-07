@@ -34,7 +34,8 @@ export const SWISS_STANDINGS_COLUMNS = {
 /**
  * The tournament detail page (`/tournaments/$tournamentId`) — scoped to the
  * lifecycle round-robin spec's load-bearing surfaces: the header's lifecycle
- * button (Publish → Start tournament → End tournament, `LifecycleActions`), an
+ * button (Publish → Start tournament → End tournament, `LifecycleActions`) and the
+ * confirm each of those edges now opens before it fires (`publishTournament`), an
  * event card's Enter control and draw panel (both on the default **Events** tab),
  * the fixture's link into its materialized match, and the standings the completed
  * event derives.
@@ -117,9 +118,21 @@ export class TournamentDetailPage {
 
   // ----- lifecycle (header) -------------------------------------------------
 
-  /** `draft → published`. Present only for the owner, only while `draft`. */
+  /** `draft → published`. Present only for the owner, only while `draft`.
+   *
+   * **`exact` is load-bearing here and only here.** `getByRole`'s name option is a
+   * *substring* match by default, and the confirm this button opens carries the act's own
+   * verb — `Publish the tournament` — which contains `Publish`. Measured against both
+   * buttons on one page: the loose locator resolves **2**, the exact one **1**. So while
+   * the dialog is open the loose locator is a strict-mode violation at best, and at worst
+   * an assertion that means the header and silently checks the dialog.
+   *
+   * The other two edges do **not** need it and do not have it: `Start the tournament`
+   * does not contain `Start tournament`, nor `End the tournament` contain `End
+   * tournament` (the definite article breaks the substring). Don't "tidy" all three into
+   * agreement — the asymmetry is the fact, not an oversight. */
   get publishButton(): Locator {
-    return this.page.getByRole('button', { name: 'Publish' })
+    return this.page.getByRole('button', { name: 'Publish', exact: true })
   }
 
   /** `published → live` — the edge that materializes the draw into real matches. */
@@ -136,6 +149,57 @@ export class TournamentDetailPage {
   /** The inline `Alert` a refused transition raises (e.g. Start on a stale draw). */
   get lifecycleNotice(): Locator {
     return this.page.getByTestId('lifecycle-notice')
+  }
+
+  /** The **confirm** button of `ConfirmIrreversibleActDialog` — the dialog every
+   * one-way act opens before it is performed (ADR "a confirm prices an irreversible
+   * act, a freeze explains an illegal one").
+   *
+   * Not scoped to anything: Radix portals an `AlertDialog` to the body, so a
+   * header-scoped query finds nothing whether it opened or not. Addressed by testid
+   * rather than by name because the name is the act's own verb and differs per edge
+   * (`Publish the tournament`, `Start the tournament`, `End the tournament`) — one stable
+   * hook, three sentences. */
+  get confirmActButton(): Locator {
+    return this.page.getByTestId('confirm-irreversible-act-confirm')
+  }
+
+  /** Publish the tournament: click the header's edge, then answer the confirm it opens.
+   *
+   * A method rather than two lines at each call site, for the same reason `openSchedule`
+   * is one: the click and the confirm are **one act** a director performs, and the button
+   * alone now moves nothing. A spec that clicked the edge and stopped would leave the
+   * tournament in `draft` behind an unanswered dialog — which is exactly how this suite
+   * went red when the confirms landed. */
+  async publishTournament(): Promise<void> {
+    await this.publishButton.click()
+    await this.answerConfirm()
+  }
+
+  /** Go live: click **Start tournament**, then answer its confirm. The transition
+   * (`POST …/transitions`) is fired by the confirm, so a spec awaiting that response
+   * must arm its `waitForResponse` before calling this. */
+  async startTournament(): Promise<void> {
+    await this.startButton.click()
+    await this.answerConfirm()
+  }
+
+  /** Archive: click **End tournament**, then answer its confirm. */
+  async endTournament(): Promise<void> {
+    await this.endButton.click()
+    await this.answerConfirm()
+  }
+
+  /** Click the standing confirm and wait for the dialog to actually leave.
+   *
+   * The `detached` wait is the method's postcondition — "the act was answered *and* the
+   * dialog is gone" — and it is not decoration: Radix animates the overlay out, and the
+   * next thing a spec does after publishing is click a button on the page underneath it.
+   * A `waitFor`, not an `expect`, so page objects stay assertion-free like the rest of
+   * this suite. */
+  private async answerConfirm(): Promise<void> {
+    await this.confirmActButton.click()
+    await this.confirmActButton.waitFor({ state: 'detached' })
   }
 
   // ----- events (Events tab) ------------------------------------------------

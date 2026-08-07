@@ -27,6 +27,7 @@ error, just stale output.
 | **Docker BuildKit** | `up --build` serves a cached image without your change | Check the *served* asset (bundle, `openapi.json`) actually contains the feature; `--no-cache` if not |
 | **PWA service worker** | Browser keeps the old `index.html` after a rebuild | Unregister the service worker + clear caches, or you QA the previous commit |
 | **Vite dev server** | A reused server serves the old transform, so a fail-then-pass demo passes in *both* states | Restart vite between the red and green states of a regression proof |
+| **`node_modules/.vite` (vitest)** | A stale cache makes `vitest run` **silently skip the newest test files** — the run is green, the count is lower, and nothing names what was dropped | `rm -rf web-client/node_modules/.vite`, then check "Test Files N passed" against `vitest list --filesOnly` |
 | **Xcode incremental build** | Reports `BUILD SUCCEEDED` while serving a stale dylib | `rm -rf ios/build/sim` before the build that counts, or check the dylib mtime |
 | **MSW** | Left on, it intercepts the `page.route` stubs an e2e run depends on, false-redding unrelated specs | A hand-started vite reused by Playwright must set `VITE_ENABLE_MSW=false` |
 | **Playwright reporter** | "N passed" can under-report — a whole project (e.g. mobile) never ran | Check "N passed" against `--list`'s collected total |

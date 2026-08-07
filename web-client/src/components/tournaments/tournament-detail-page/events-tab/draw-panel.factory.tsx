@@ -86,23 +86,24 @@ export function buildCrowdedPoolsEvent(
   })
 }
 
-/** The **drawn** U1200 Singles as it stands once play has started: its first fixture has
- * a **recorded winner**. That is precisely what the panel's 409 play guard is about ("at
- * least one fixture has a match or a recorded winner") — and it arrives on the click's
- * own settle refetch, which is why it must not be the thing that withdraws the refusal
- * (`drawConfigFingerprint`). Its configuration — format, draw type, two pools, five
- * entrants — is untouched.
+/** The same U1200 Singles after somebody **re-cut its draw** — every fixture is a
+ * different row than the one it replaced (new ids, the two sides swapped), and not one of
+ * them has been played.
  *
- * The winner arm rather than the match arm on purpose: a *materialized* fixture renders a
- * typed `<Link>` to its match, which needs a `RouterProvider` (`@/test/router`) whose
- * router owns the tree — and the whole point of this fixture is to be handed to a
- * `rerender`. Both arms are the same evidence to the same server guard. */
-export function buildUnderWayEvent(): TournamentEvent {
+ * The fixture change that carries **no evidence of play**, which is what makes it useful:
+ * `buildUnderWayEvent` moves the fixtures and freezes the verbs at the same time, so it
+ * cannot tell a refusal withdrawn by the fingerprint from one superseded by the freeze.
+ * This one moves the fixtures and leaves the verbs live, so only the fingerprint can
+ * decide. Its configuration — format, draw type, two pools, five entrants — is untouched. */
+export function buildRecutFixturesEvent(): TournamentEvent {
   const drawn = buildDrawnEvent()
   return {
     ...drawn,
-    fixtures: drawn.fixtures.map((fixture, i) =>
-      i === 0 ? { ...fixture, winnerEntryId: fixture.entryAId } : fixture,
-    ),
+    fixtures: drawn.fixtures.map((fixture) => ({
+      ...fixture,
+      id: `${fixture.id}-recut`,
+      entryAId: fixture.entryBId,
+      entryBId: fixture.entryAId,
+    })),
   }
 }

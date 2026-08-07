@@ -261,7 +261,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     for (const pool of pools) expect(pool.id).toMatch(UUID)
 
     // ----- publish, then fill the field --------------------------------------
-    await detail.publishButton.click()
+    await detail.publishTournament()
     await expect(detail.startButton).toBeVisible()
 
     const entrants = await seedEntrants(
@@ -349,7 +349,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     }
 
     // ----- go live: the pool fixtures become real matches --------------------
-    await detail.startButton.click()
+    await detail.startTournament()
     await expect(detail.endButton).toBeVisible()
 
     // ----- play the POOL STAGE, and only it, over the API --------------------

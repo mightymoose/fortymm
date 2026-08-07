@@ -44,6 +44,20 @@ export interface LifecycleEdge {
   verb: string
   icon: LucideIcon
   tone: LifecycleTone
+  /** Which consequence the confirm prices before this edge is posted — every edge has
+   * one, because the lifecycle is forward-only and none of the three can be walked back
+   * (ADR "a confirm prices an irreversible act, a freeze explains an illegal one").
+   *
+   * It sits on the edge for the same reason `verb` does: everything the UI knows about an
+   * edge is on the edge, so a new one cannot acquire a button without also acquiring the
+   * question asked before it. A separate table keyed on the target status would need an
+   * unreachable `draft` row to stay total, and could disagree with this one.
+   *
+   * Spelled as bare literals rather than imported from
+   * `IrreversibleActConsequence['variant']`: this is the data layer, and it must not
+   * depend on the component that renders it. `LifecycleActions` makes the join, and the
+   * compiler checks it there. */
+  confirm: 'publish-tournament' | 'start-tournament' | 'end-tournament'
 }
 
 /**
@@ -70,6 +84,7 @@ export const LIFECYCLE_EDGE: Record<TournamentStatus, LifecycleEdge | null> = {
     verb: 'publish the tournament',
     icon: Rocket,
     tone: 'default',
+    confirm: 'publish-tournament',
   },
   published: {
     to: 'live',
@@ -77,6 +92,7 @@ export const LIFECYCLE_EDGE: Record<TournamentStatus, LifecycleEdge | null> = {
     verb: 'start the tournament',
     icon: Radio,
     tone: 'go-live',
+    confirm: 'start-tournament',
   },
   live: {
     to: 'archived',
@@ -84,6 +100,7 @@ export const LIFECYCLE_EDGE: Record<TournamentStatus, LifecycleEdge | null> = {
     verb: 'end the tournament',
     icon: Square,
     tone: 'ghost',
+    confirm: 'end-tournament',
   },
   archived: null,
 }

@@ -360,6 +360,33 @@ function swissByesOf(event: TournamentEvent, unpooled: Fixture[]): SwissByes {
 const hasDraw = (event: TournamentEvent): boolean => event.fixtures.length > 0
 
 /**
+ * Whether this event's draw shows **evidence of play** — the client's mirror of the
+ * server's `draw_has_play` (`api/app/tournament_draws.py`), which is the one thing a
+ * cut, a re-cut and an un-cut are refused for (ADR-0786).
+ *
+ * The two halves are deliberately **not one condition**, because they are two different
+ * facts:
+ *
+ * - a **winner** — the fixture is decided, and a result exists to be thrown away;
+ * - a **linked match** — the fixture has materialized into a real match (#788), which may
+ *   already carry games on its scratchpad or a proposed result. A merely-linked match is
+ *   enough on its own: replacing the draw wholesale would orphan that match along with
+ *   whatever has been entered on it, and a draw must never silently eat a score.
+ *
+ * ⚠️ Read straight off the **parsed fixture**, never through `matchOf` / `FixtureLine`.
+ * That helper wants an id *and* a status before it will render a link, and being stricter
+ * about what is renderable is right for a renderer — but the server refuses on the id
+ * alone. Routing this question through it would make the client **laxer** than the guard
+ * it is restating, and a fixture with an id and no status would show a live verb that can
+ * only 409.
+ *
+ * Not gated on `hasDraw`: an undrawn event has no fixtures, so this is already false, and
+ * a gate would say the condition is *drawn-ness* when it is *evidence*.
+ */
+const drawIsUnderWay = (event: TournamentEvent): boolean =>
+  event.fixtures.some((f) => f.winnerEntryId !== null || f.matchId !== null)
+
+/**
  * An event's draw, shaped for the reader: pools with their members and rounds, or the
  * designed `undrawn` state.
  *
@@ -446,9 +473,14 @@ export type EditFreeze =
   | { kind: 'open' }
   | {
       kind: 'frozen'
-      /** Why this control is unavailable, and — the load-bearing half — the way out of
-       * it: delete the draw, edit, cut it again. Reads standalone in whichever surface
-       * shows it (a `Field` hint, an `Alert` beneath the section header). */
+      /** Why this control is unavailable — and, **when there is one**, the way out of it:
+       * delete the draw, edit, cut it again. Reads standalone in whichever surface shows
+       * it (a `Field` hint, an `Alert` beneath the section header).
+       *
+       * The way out is the load-bearing half of the two config freezes, and it is the
+       * thing `drawVerbFreeze` must NOT invent: a draw that is under way stays that way,
+       * so a sentence ending "delete the draw, then cut it again" would name an escape
+       * that is itself refused. A refusal with no exit says so, plainly, and stops. */
       reason: string
     }
 
@@ -515,6 +547,47 @@ export function drawTypeFreeze(
     reason:
       `This event’s draw is cut, so its draw type is frozen${dealtAs}. ` +
       `Delete the draw to change the type, then cut it again.`,
+  }
+}
+
+/**
+ * May the director **re-cut or remove** this event's draw?
+ *
+ * The third freeze, and the one whose refusal has **no way out**. Its two siblings are
+ * about an event's *configuration* — change the draw type, change the pool set — and both
+ * end by telling the director how to get unstuck, because deleting the draw really does
+ * unstick them. This one is about the draw *itself*, and once it shows evidence of play
+ * (`drawIsUnderWay`) neither verb is available again: deleting the draw is the very act
+ * being refused, so there is no exit to name and this reason does not invent one.
+ *
+ * Frozen on the **evidence**, never on the tournament's status. That is ADR-0786's choice
+ * and the panel must not tighten it: a director may cut and re-cut right up to the moment
+ * the first fixture becomes real, which is the day-of re-cut the ADR deliberately
+ * preserves. (Going live is what usually produces the evidence — `materialize_live_draw`
+ * gives every ready fixture a `match_id` — but it is the `match_id` that seals the draw,
+ * not the status.)
+ *
+ * **The reason must be true of a match nobody has played**, and that is the whole reason
+ * it is worded the way it is. Go-live stamps a `match_id` on *every* ready fixture in one
+ * transaction, so the ordinary frozen draw has real matches and **zero results** — a
+ * sentence claiming a re-cut would discard a result somebody played for would be false in
+ * the commonest case this freeze meets. The server's own guard is careful about exactly
+ * this: a linked match "**may** already carry games" (`_enforce_unplayed`). So the result
+ * is named as one of two alternatives, never as a fact.
+ *
+ * The server remains the enforcement: `_enforce_unplayed` answers **409**, and
+ * `drawRefusalNotice`'s 409 arm is still there for the director who loses the race
+ * between a page load and the first score. What this buys is a better refusal — a verb
+ * that says why it cannot be used, instead of a click that can only fail (#1060).
+ */
+export function drawVerbFreeze(event: TournamentEvent): EditFreeze {
+  if (!drawIsUnderWay(event)) return { kind: 'open' }
+  return {
+    kind: 'frozen',
+    reason:
+      'This event’s draw is under way: one of its fixtures is a real match now, or ' +
+      'carries a result somebody played for. Re-cutting or removing the draw would ' +
+      'take that back from the players.',
   }
 }
 

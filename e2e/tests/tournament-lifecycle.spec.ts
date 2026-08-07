@@ -94,7 +94,9 @@ test.describe('Tournament — round-robin lifecycle', () => {
     const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
 
     // ----- publish: draft → published (opens registration) ------------------
-    await detail.publishButton.click()
+    // Click plus confirm: the header's edge only asks the question, and the transition
+    // is what the dialog's own button fires.
+    await detail.publishTournament()
     await expect(detail.startButton).toBeVisible()
 
     // ----- enter the director themselves, through the UI --------------------
@@ -117,7 +119,7 @@ test.describe('Tournament — round-robin lifecycle', () => {
     await expect(detail.viewMatchLink(eventId)).toBeHidden()
 
     // ----- go live: published → live (materializes the fixture) -------------
-    await detail.startButton.click()
+    await detail.startTournament()
     // Now live: the only edge left is End. But the fixture is materialized as a
     // *scheduled* match, not a live one (#1073): it is born `pending`, so it reads
     // "Not started" and is NOT yet scorable. The materialized fixture already

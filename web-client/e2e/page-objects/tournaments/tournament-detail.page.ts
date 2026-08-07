@@ -118,7 +118,14 @@ export class TournamentDetailPage {
   /** ANY lifecycle button — the locator for the two states in which the header
    * must offer *none*: an archived tournament (no edge out of it), and a viewer
    * (every transition is owner-only). `toHaveCount(0)` against a per-edge locator
-   * would only prove the absence of the one edge it named. */
+   * would only prove the absence of the one edge it named.
+   *
+   * The regex is **anchored**, and that is load-bearing: the confirm dialog's own buttons
+   * are verb-plus-object (`Publish the tournament`, `Start the tournament`), so anchoring
+   * keeps this counting the HEADER's buttons alone. It stopped being a live hazard when
+   * the publish confirm was renamed off the bare `Publish` this pattern also matches —
+   * until then, a count taken with that dialog open could resolve to the dialog's button
+   * and pass while measuring the wrong control. */
   get anyLifecycleButton(): Locator {
     return this.page.getByRole('button', {
       name: /^(Publish|Start tournament|End tournament)$/,
@@ -187,6 +194,19 @@ export class TournamentDetailPage {
 
   deleteDrawButton(eventName: string): Locator {
     return this.page.getByRole('button', { name: `Delete draw for ${eventName}` })
+  }
+
+  /** The consequence-stating confirm that every irreversible act opens, and the button
+   * that actually fires it (ADR "a confirm prices an irreversible act, a freeze explains
+   * an illegal one"). Five acts share it: the two draw verbs (Re-cut, Delete) and the
+   * three lifecycle edges (Publish, Start tournament, End tournament) — the lifecycle is
+   * forward-only, so none of its edges can be walked back either.
+   *
+   * Addressed by testid, because the label is the act's own verb — `Re-cut the draw`,
+   * `Start the tournament` — not a fixed string. **Generate draw opens no dialog**: the
+   * first cut is one click, by design. */
+  get irreversibleActConfirmButton(): Locator {
+    return this.page.getByTestId('confirm-irreversible-act-confirm')
   }
 
   /** The panel's inline **refusal** — the `Alert` where the click was, carrying the

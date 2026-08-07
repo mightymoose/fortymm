@@ -15,6 +15,8 @@ import {
   buildEntrants,
   buildEvent,
   buildFixture,
+  buildMaterializedDrawnEvent,
+  buildPlayedDrawnEvent,
   buildPool,
   buildSwissDrawnEvent,
   buildSwissEvent,
@@ -27,13 +29,25 @@ import {
   buildCrowdedPoolsEvent,
   buildEmptyFieldEvent,
   buildLoneBracketEvent,
-  buildUnderWayEvent,
+  buildRecutFixturesEvent,
 } from './draw-panel.factory'
 import { drawPanelPage as page } from './draw-panel.page'
 
 /** The seeded drawn event: round-robin, `player.1`…`player.5`, Pool A (1/4/5 — odd) and
  * Pool B (2/3). */
 const DRAWN = buildDrawnEvent()
+
+/** The same draw, **under way**: one of its four fixtures has a recorded winner. Nothing
+ * else differs — a winner is not drawn on a fixture line — so the freeze is the only thing
+ * that can make a test here read differently from the same test against `DRAWN`. */
+const PLAYED = buildPlayedDrawnEvent()
+
+/** The panel's own verbs that are still live — swept by DOM rather than by role, because
+ * an open dialog puts `aria-hidden` over everything behind it and a role query then finds
+ * none of them. A drawn event offers exactly two, and both go dead while a draw verb is
+ * in flight, so the count is a synchronous read of "nothing was sent". */
+const enabledVerbsIn = (eventId: string) =>
+  page.getPanelControls(eventId).filter((el) => !el.hasAttribute('disabled'))
 
 /** What a successful cut answers with. The panel does not read it — the refetched
  * tournament carries the new draw — but it must be a payload the parser accepts, or the
@@ -372,7 +386,7 @@ describe('DrawPanel', () => {
       expect(page.queryNotice()).toBeNull()
     })
 
-    it('re-cuts a standing draw through the same POST', async () => {
+    it('re-cuts a standing draw through the same POST — once the confirm is answered', async () => {
       let seen = ''
       mockEventCutDrawEndpoint(server, ({ request }) => {
         seen = request.url
@@ -381,13 +395,14 @@ describe('DrawPanel', () => {
       page.render({ tournamentId: 't-1', event: DRAWN })
 
       await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       await waitFor(() =>
         expect(seen).toContain('/v1/tournaments/t-1/events/ev-u1200/draw'),
       )
     })
 
-    it('deletes a draw with a DELETE on that same resource', async () => {
+    it('deletes a draw with a DELETE on that same resource — once the confirm is answered', async () => {
       let seen: { url: string; method: string } | null = null
       mockEventUncutDrawEndpoint(server, ({ request }) => {
         seen = { url: request.url, method: request.method }
@@ -396,13 +411,16 @@ describe('DrawPanel', () => {
       page.render({ tournamentId: 't-1', event: DRAWN })
 
       await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       await waitFor(() => expect(seen).not.toBeNull())
       expect(seen!.method).toBe('DELETE')
       expect(seen!.url).toContain('/v1/tournaments/t-1/events/ev-u1200/draw')
     })
 
-    // One whole-draw replacement at a time: a double-click must not race two cuts.
+    // One whole-draw replacement at a time: a double-click must not race two cuts. The
+    // confirm does NOT make this redundant — it asks a question once, per click, and two
+    // clicks would ask it twice. The lock is what stops the second one being asked at all.
     it('locks the verbs while one is in flight', async () => {
       let calls = 0
       mockEventCutDrawEndpoint(server, async () => {
@@ -414,11 +432,383 @@ describe('DrawPanel', () => {
 
       const recut = await page.findRecutButton('U1200 Singles')
       await userEvent.click(recut)
+      await userEvent.click(page.confirm.getConfirmButton())
 
       await waitFor(() => expect(recut).toBeDisabled())
       expect(page.queryDeleteButton('U1200 Singles')).toBeDisabled()
       await userEvent.click(recut)
       expect(calls).toBe(1)
+      // …and the second click did not even get as far as the question: a locked verb
+      // opens no dialog. Without this the assertion above would only be saying that a
+      // disabled button is disabled, since the cut now needs a confirm it never got.
+      expect(page.confirm.queryDialog()).toBeNull()
+    })
+  })
+
+  /**
+   * **The confirm is what fires the two destructive verbs** (ADR "a confirm prices an
+   * irreversible act, a freeze explains an illegal one"). Re-cut and Delete each discard
+   * a standing draw and the schedule solved on it, and neither is undoable — so the click
+   * that names the act and the click that pays for it are different clicks.
+   *
+   * The first cut is exempt and stays a single click. That exemption is the reason the
+   * other two are worth anything: a director trained to click through confirms reads none
+   * of them.
+   */
+  describe('the confirm on a destructive verb', () => {
+    /**
+     * The endpoints **hang** (`delay('infinite')`) in these two, and that is what makes
+     * them evidence rather than a race. A verb wired to the dialog *and* the mutation
+     * would send a request that completes in milliseconds, and by the time an assertion
+     * ran, `isPending` would be back to false and the panel would look untouched. A
+     * request that never answers cannot settle away: it holds the verbs disabled for as
+     * long as the test cares to look, so "both verbs are still live" is a synchronous
+     * read of "nothing was sent" — one that does not depend on when MSW got there.
+     */
+    it('sends NOTHING on a bare click of Delete draw — the dialog is what gates it', async () => {
+      let calls = 0
+      mockEventUncutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return new HttpResponse(null, { status: 204 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+
+      // Settle on the dialog first — the count is only evidence once the click has been
+      // given somewhere to have gone. Bounded under `testTimeout`, so a failure reads
+      // "unable to find role=alertdialog" rather than an undiscriminated 5s timeout
+      // (`web-client/CLAUDE.md`).
+      await waitFor(() => expect(page.confirm.getDialog()).toBeInTheDocument(), {
+        timeout: 2000,
+      })
+      expect(calls).toBe(0)
+      // Swept by DOM: Radix marks everything behind an open modal `aria-hidden`, so a
+      // role query finds none of the panel's buttons while the dialog is up.
+      expect(enabledVerbsIn('ev-u1200')).toHaveLength(2)
+    })
+
+    it('sends NOTHING on a bare click of Re-cut draw either', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+
+      await waitFor(() => expect(page.confirm.getDialog()).toBeInTheDocument(), {
+        timeout: 2000,
+      })
+      expect(calls).toBe(0)
+      expect(enabledVerbsIn('ev-u1200')).toHaveLength(2)
+    })
+
+    // What the PANEL decides is which act opened and which event it carries — the tab
+    // renders one card per event, so "the draw" alone is ambiguous the moment a
+    // tournament has more than one. The sentences themselves belong to the dialog's own
+    // test: pinning them here too is the shape that lets a copy edit green one file and
+    // leave the other stale until a full-suite run. So each act is witnessed by ONE
+    // string, the confirm button's — the words on the control the director actually
+    // clicks — and that string still differs per variant, so a swapped act reds.
+    it('names the act and the event it would discard', async () => {
+      page.render({ event: DRAWN })
+
+      await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+
+      expect(page.confirm.getDialog()).toHaveTextContent('U1200 Singles')
+      expect(page.confirm.getConfirmButton()).toHaveTextContent('Delete the draw')
+    })
+
+    it('prices a re-cut as a re-deal, not as a deletion', async () => {
+      page.render({ event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+
+      expect(page.confirm.getConfirmButton()).toHaveTextContent('Re-cut the draw')
+    })
+
+    it('sends nothing when the director goes back, and leaves the draw standing', async () => {
+      let calls = 0
+      mockEventUncutDrawEndpoint(server, () => {
+        calls += 1
+        return new HttpResponse(null, { status: 204 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getCancelButton())
+
+      await waitFor(() => expect(page.confirm.queryDialog()).toBeNull())
+      expect(calls).toBe(0)
+      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      // A cancel is not a failure: there is nothing to explain, so there is no notice.
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    it('sends nothing when the dialog is dismissed with Escape', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, () => {
+        calls += 1
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.keyboard('{Escape}')
+
+      await waitFor(() => expect(page.confirm.queryDialog()).toBeNull())
+      expect(calls).toBe(0)
+      expect(page.getPoolLines('p-a')).toHaveLength(3)
+    })
+
+    // The exemption, pinned. The first cut is constructive and re-cuttable: one click
+    // cuts it, and no dialog stands in the way.
+    it('asks nothing on the FIRST cut — Generate stays one click', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, () => {
+        calls += 1
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({
+        tournamentId: 't-1',
+        event: buildEvent({ id: 'ev-1', name: 'Open Singles' }),
+      })
+
+      await userEvent.click(await page.findGenerateButton('Open Singles'))
+
+      await waitFor(() => expect(calls).toBe(1))
+      expect(page.confirm.queryDialog()).toBeNull()
+    })
+  })
+
+  /**
+   * **A draw that is under way freezes both verbs** (#1060, ADR "a confirm prices an
+   * irreversible act, a freeze explains an illegal one"). The server refuses a re-cut and
+   * a delete with a 409 once any fixture has a winner or a match, and the client had gone
+   * on offering both — a live button for an act that can only fail.
+   *
+   * Frozen means **present, dead and explained**, not hidden: hiding is ADR-0015's answer
+   * to a *permission* boundary, and this director is entitled to the act and could have
+   * performed it a minute ago.
+   */
+  describe('a draw that is already under way', () => {
+    it('renders both verbs dead — and reachable, with the reason attached', () => {
+      page.render({ event: PLAYED })
+
+      const recut = page.queryRecutButton('U1200 Singles')
+      const del = page.queryDeleteButton('U1200 Singles')
+
+      // Present. A verb that vanished from under a director who could use it a minute ago
+      // asks a loud question and answers none of it.
+      expect(recut).toBeInTheDocument()
+      expect(del).toBeInTheDocument()
+      // Dead — and dead the way that keeps them **focusable**. `aria-disabled`, not the
+      // `disabled` attribute: a disabled button leaves the tab order and most screen
+      // readers skip it, so its description is a sentence nobody ever hears.
+      expect(recut).toHaveAttribute('aria-disabled', 'true')
+      expect(del).toHaveAttribute('aria-disabled', 'true')
+      expect(recut).toBeEnabled()
+      expect(del).toBeEnabled()
+      // ⚠️ THE assertion of this slice, and the one #1223 is open against on the frozen
+      // draw-type control: the reason reaches a screen reader THROUGH the control.
+      // `toHaveAccessibleDescription` resolves the `aria-describedby` reference — an
+      // assertion that merely compared ids would pass against a control pointing at
+      // nothing, which is precisely the defect. ONE short token each: the sentence itself
+      // belongs to `drawVerbFreeze`'s own test, and pinning it in two files is the shape
+      // that greens one of them on a copy edit and leaves the other stale.
+      expect(recut).toHaveAccessibleDescription(/under way/i)
+      expect(del).toHaveAccessibleDescription(/under way/i)
+      // …and it is on screen for a sighted director too — as a **status**, not an alert.
+      // The `Alert` hardcodes `role="alert"` (assertive), which interrupts a screen reader
+      // to announce a condition that was simply true when the page loaded. The refusal
+      // below keeps `alert`; that one answers a click.
+      const frozenNotice = page.getFrozenNotice('ev-u1200')
+      expect(frozenNotice).toHaveTextContent('Re-cut and Delete are unavailable')
+      expect(frozenNotice).toHaveAttribute('role', 'status')
+    })
+
+    /**
+     * The **other half of the guard**, through the panel: a fixture that has merely
+     * materialized — a linked `matchId`, no winner, nothing played. This is what go-live
+     * produces on every ready fixture, so it is the commonest frozen draw there is, and
+     * until now only the data module covered it.
+     *
+     * The control count is the load-bearing second assertion. This fixture's `matchStatus`
+     * is `null`, so `matchOf` renders no "View match" `<Link>` — which is what keeps this
+     * event usable in a panel test with no router, and what keeps the ADR-0015 sweep
+     * (`INTERACTIVE_SELECTOR` matches an `a[href]`) counting verbs and nothing else.
+     */
+    it('freezes on a fixture that is a match but has no result yet', () => {
+      page.render({ event: buildMaterializedDrawnEvent() })
+
+      expect(page.queryRecutButton('U1200 Singles')).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
+      expect(page.queryDeleteButton('U1200 Singles')).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
+      expect(page.getFrozenNotice('ev-u1200')).toBeInTheDocument()
+      // The two verbs, and no link: a materialized fixture with no status paints exactly
+      // as an un-materialized one does.
+      expect(page.getPanelControls('ev-u1200')).toHaveLength(2)
+    })
+
+    /**
+     * The behaviour half, and a **second, independent witness** to the state assertions
+     * above: a frozen verb opens no confirm and sends nothing.
+     *
+     * Two things make this evidence rather than a vacuous pass:
+     *
+     * - The identical click on an *unfrozen* event **does** open the dialog (the two
+     *   "sends NOTHING on a bare click" tests above). So "no dialog" discriminates the
+     *   freeze from the panel's ordinary behaviour, rather than describing a page where
+     *   clicking does nothing anywhere.
+     * - The click really **landed**. The frozen verb is styled dead but keeps its pointer
+     *   events on purpose, so `userEvent.click` delivers it (it throws outright on a
+     *   `pointer-events: none` target) and the button takes focus. Without that probe,
+     *   "no dialog appeared" could not tell a working guard from a click swallowed by CSS.
+     */
+    it('opens no confirm and sends nothing when the frozen Re-cut is clicked', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({ tournamentId: 't-1', event: PLAYED })
+
+      const recut = await page.findRecutButton('U1200 Singles')
+      await userEvent.click(recut)
+
+      // The claim first, so a freeze that stopped working reds *as* "the confirm opened".
+      expect(page.confirm.queryDialog()).toBeNull()
+      // Then the probe that says the click was really delivered — read second so its
+      // message only ever means what it says.
+      expect(recut).toHaveFocus()
+      expect(calls).toBe(0)
+      // A refused click is not a failure to report: the notice slot stays empty and the
+      // standing freeze notice is what does the talking.
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    it('opens no confirm and sends nothing when the frozen Delete is clicked', async () => {
+      let calls = 0
+      mockEventUncutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return new HttpResponse(null, { status: 204 })
+      })
+      page.render({ tournamentId: 't-1', event: PLAYED })
+
+      const del = await page.findDeleteButton('U1200 Singles')
+      await userEvent.click(del)
+
+      expect(page.confirm.queryDialog()).toBeNull()
+      expect(del).toHaveFocus()
+      expect(calls).toBe(0)
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    /**
+     * ⚠️ **The freeze supersedes a standing refusal.** The race it settles is real and it
+     * has one exit: the director clicks Re-cut on a draw nobody had played, the first score
+     * lands first, the server answers 409, and the refetch the mutation settles into brings
+     * back the evidence that freezes the verbs.
+     *
+     * Left alone, the two notices sit on the card **permanently**, saying nearly the same
+     * thing in different words. `setNotice(null)` runs in exactly one place — the top of
+     * `attempt` — and once frozen, `attempt` is unreachable: both destructive verbs
+     * short-circuit before it, and Generate is not rendered on a drawn event. So the red
+     * one has no way to clear, ever.
+     *
+     * A `rerenderWith` rather than a second `render`, because the claim is that the event
+     * changed **underneath** a panel that is holding a refusal in its state — a fresh mount
+     * would have no refusal to supersede and the test would pass against no fix at all.
+     */
+    it('drops a standing refusal once the freeze engages — one notice, not two', async () => {
+      const playGuard =
+        "This event's draw is already under way — at least one fixture has a match " +
+        'or a recorded winner — so it can no longer be cut or removed.'
+      mockEventCutDrawEndpoint(server, () =>
+        HttpResponse.json({ detail: playGuard }, { status: 409 }),
+      )
+      const { rerenderWith } = page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
+      // The refusal is up, on a draw that is still open — the two-notice state, mid-race.
+      expect(await page.findNoticeText()).toContain(playGuard)
+      expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
+
+      // …and now the refetch lands, carrying the score that beat the click.
+      rerenderWith({ tournamentId: 't-1', event: PLAYED })
+
+      expect(page.getFrozenNotice('ev-u1200')).toBeInTheDocument()
+      // The whole assertion: the red one is gone, because no further request is possible
+      // and a refusal nobody can retire is worse than none.
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    // The day-of re-cut ADR-0786 deliberately preserves. The freeze is on the EVIDENCE,
+    // never on the draw existing — an over-eager predicate would take this away, and no
+    // amount of correct freezing copy would make that right.
+    it('leaves both verbs live on a cut draw nobody has played yet', () => {
+      page.render({ event: DRAWN })
+
+      expect(page.queryRecutButton('U1200 Singles')).not.toHaveAttribute(
+        'aria-disabled',
+      )
+      expect(page.queryDeleteButton('U1200 Singles')).not.toHaveAttribute(
+        'aria-disabled',
+      )
+      expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
+    })
+
+    // Generate is untouched, and structurally so: an undrawn event has no fixtures, so it
+    // has no evidence to find. Stated anyway, because "the freeze leaked onto the first
+    // cut" is the one way this slice could break the exemption slice 1 exists to protect.
+    it('does not freeze Generate on an undrawn event', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, () => {
+        calls += 1
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({
+        tournamentId: 't-1',
+        event: buildEvent({ id: 'ev-1', name: 'Open Singles' }),
+      })
+
+      const generate = await page.findGenerateButton('Open Singles')
+      expect(generate).not.toHaveAttribute('aria-disabled')
+      expect(page.queryFrozenNotice('ev-1')).toBeNull()
+
+      await userEvent.click(generate)
+
+      await waitFor(() => expect(calls).toBe(1))
+    })
+
+    /**
+     * The non-owner branch is **unchanged by the freeze**: absent, not frozen.
+     *
+     * Two claims, and they are different. A reader gets no verbs at all — the ADR-0015
+     * guard sweep still finds zero controls, which it would not if a frozen verb had been
+     * rendered to them (`INTERACTIVE_SELECTOR` matches a `button` whatever its
+     * `aria-disabled` says). And they get no freeze notice either: it explains two
+     * controls they do not have, in the organizer's voice.
+     */
+    it('shows a NON-owner no verbs and no freeze — absent, not frozen', () => {
+      page.render({ event: PLAYED, canEdit: false })
+
+      expect(page.getPanelControls('ev-u1200')).toHaveLength(0)
+      expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
+      // The draw itself is still theirs to read.
+      expect(page.getPoolLines('p-a')).toHaveLength(3)
     })
   })
 
@@ -434,10 +824,18 @@ describe('DrawPanel', () => {
       page.render({ event: DRAWN })
 
       await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       const notice = await page.findNoticeText()
       expect(notice).toContain('This draw is already under way')
       expect(notice).toContain(PLAY_GUARD)
+      // …and a screen reader is interrupted to hear it, because a refusal is an EVENT: it
+      // lands in answer to this click. That is the half the freeze notice does not share —
+      // it is a standing condition and carries `role="status"`. Asserted here because the
+      // page object finds the notice by testid rather than by role (the freeze notice is
+      // an `Alert` too, so "the alert" named neither of them). The role is still the
+      // contract — this is where it is pinned.
+      expect(await page.findNotice()).toHaveAttribute('role', 'alert')
       // The standing draw is untouched — a refused cut destroys nothing.
       expect(page.getPoolLines('p-a')).toHaveLength(3)
     })
@@ -449,6 +847,7 @@ describe('DrawPanel', () => {
       page.render({ event: DRAWN })
 
       await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       expect(await page.findNoticeText()).toContain(PLAY_GUARD)
     })
@@ -558,12 +957,12 @@ describe('DrawPanel · a refusal outlives its state only until the state moves',
   // coat-tails.
   it('withdraws the bracket refusal when the draw type changes — with no second click', async () => {
     refuseCut(422, LONE_BRACKET)
-    const { rerender } = page.render({ event: buildLoneBracketEvent() })
+    const { rerenderWith } = page.render({ event: buildLoneBracketEvent() })
     await userEvent.click(await page.findGenerateButton('Championship Singles'))
     expect(await page.findNoticeText()).toContain('single-elimination draw needs')
 
     // The director changes the type to round robin; the page refetches and re-renders.
-    rerender({ event: buildLoneBracketEvent({ drawType: 'round-robin' }) })
+    rerenderWith({ event: buildLoneBracketEvent({ drawType: 'round-robin' }) })
 
     expect(page.queryNotice()).toBeNull()
     // The affordance is untouched — the refusal went, the button it was about did not.
@@ -578,14 +977,14 @@ describe('DrawPanel · a refusal outlives its state only until the state moves',
   it('withdraws a swiss refusal when the round count changes — with no second click', async () => {
     const ROUNDS_FLOOR = 'rounds must be at least 1, got 0.'
     refuseCut(422, ROUNDS_FLOOR)
-    const { rerender } = page.render({
+    const { rerenderWith } = page.render({
       event: buildSwissEvent({ name: 'Swiss Open', rounds: 0 }),
     })
     await userEvent.click(await page.findGenerateButton('Swiss Open'))
     expect(await page.findNoticeText()).toContain('rounds must be at least 1')
 
     // The director sets a legal round count; the page refetches and re-renders.
-    rerender({ event: buildSwissEvent({ name: 'Swiss Open', rounds: 5 }) })
+    rerenderWith({ event: buildSwissEvent({ name: 'Swiss Open', rounds: 5 }) })
 
     expect(page.queryNotice()).toBeNull()
     expect(page.queryGenerateButton('Swiss Open')).toBeInTheDocument()
@@ -596,11 +995,11 @@ describe('DrawPanel · a refusal outlives its state only until the state moves',
   // thing that can be carrying this one.
   it('withdraws the empty-field refusal when a player enters — with no second click', async () => {
     refuseCut(422, EMPTY_FIELD)
-    const { rerender } = page.render({ event: buildEmptyFieldEvent() })
+    const { rerenderWith } = page.render({ event: buildEmptyFieldEvent() })
     await userEvent.click(await page.findGenerateButton('U1500 Singles'))
     expect(await page.findNoticeText()).toContain('0 entrants across 2 pool(s)')
 
-    rerender({ event: buildEmptyFieldEvent({ entrants: buildEntrants(1) }) })
+    rerenderWith({ event: buildEmptyFieldEvent({ entrants: buildEntrants(1) }) })
 
     expect(page.queryNotice()).toBeNull()
   })
@@ -611,13 +1010,13 @@ describe('DrawPanel · a refusal outlives its state only until the state moves',
   // cleared on any fresh event would take the sentence away mid-fix (ADR-0786).
   it('keeps a still-true refusal when something it does not turn on changes', async () => {
     refuseCut(422, CROWDED_POOLS)
-    const { rerender } = page.render({ event: buildCrowdedPoolsEvent() })
+    const { rerenderWith } = page.render({ event: buildCrowdedPoolsEvent() })
     await userEvent.click(await page.findGenerateButton('U1500 Singles'))
     await page.findNotice()
 
     // The director renames the event, renames a pool and gives it tables, and raises the
     // cap — none of which the planner reads. Still five entrants, still three pools.
-    rerender({
+    rerenderWith({
       event: buildCrowdedPoolsEvent({
         name: 'U1500 Singles (Sunday)',
         maxPlayers: 32,
@@ -634,24 +1033,38 @@ describe('DrawPanel · a refusal outlives its state only until the state moves',
     expect(page.queryNoticeText()).toContain('5 entrants across 3 pool(s)')
   })
 
-  // The 409 is *about* a state change, so the state it is about must NOT expire it: the
-  // click that earns it reconciles the tournament (the draw mutations refetch on settle,
-  // failure path included), which is exactly when the fixtures carrying a match and a
-  // winner land. A fingerprint built on the fixtures would delete this sentence in the
-  // same beat it appeared, and the director would watch the panel refuse their Delete
-  // draw for no stated reason.
-  it('keeps the play-guard refusal when the evidence of play it names arrives', async () => {
+  // **The fixtures are not in the fingerprint**, and this is the case that decides it. A
+  // 409 is *about* a state change, and the click that earns one reconciles the tournament
+  // (the draw mutations refetch on settle, failure path included) — so the fixtures move
+  // underneath a standing refusal as a matter of course. A fingerprint built on them would
+  // delete the sentence in the same beat it appeared.
+  //
+  // The fixtures move here WITHOUT freezing: a co-director re-cuts the draw from another
+  // device and the poll brings it back — new pairings, new fixture ids, nobody has played
+  // any of them. The play-guard sentence is still the answer the server gave, the verbs are
+  // still live, and nothing about that re-cut makes it untrue.
+  //
+  // (The other direction — fixtures that arrive carrying *evidence of play* — is not this
+  // rule's to decide. There the freeze supersedes the refusal outright and says the same
+  // fact in current words; see "drops a standing refusal once the freeze engages" above.)
+  it('keeps the play-guard refusal when the draw is re-cut underneath it', async () => {
     mockEventUncutDrawEndpoint(server, () =>
       HttpResponse.json({ detail: PLAY_GUARD }, { status: 409 }),
     )
-    const { rerender } = page.render({ event: DRAWN })
+    const { rerenderWith } = page.render({ event: DRAWN })
     await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+    // The verb only ASKS; the confirm's own button is what sends the delete (#1287).
+    await userEvent.click(page.confirm.getConfirmButton())
     await page.findNotice()
 
-    // The refetch lands: the first fixture is now a completed match with a winner — the
-    // very thing the refusal says it cannot delete around.
-    rerender({ event: buildUnderWayEvent() })
+    // The re-cut lands: every fixture is a different row than the one it replaced, and
+    // none of them has been played.
+    rerenderWith({ event: buildRecutFixturesEvent() })
 
+    // Synchronously: the refusal was already on screen, so there is nothing to wait for.
     expect(page.queryNoticeText()).toContain(PLAY_GUARD)
+    // Still unfrozen — so it really is the fingerprint keeping the sentence up, not the
+    // freeze having taken over the talking.
+    expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
   })
 })

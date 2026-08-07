@@ -5981,6 +5981,61 @@ async def test_the_play_guard_is_scoped_to_the_event_being_cut(
     assert open_recut.status_code == 201, open_recut.text
 
 
+async def test_going_live_seals_every_events_draw(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A LIVE tournament always has its draws — going live materializes them,
+    and materialization is itself the evidence the play guard refuses on (#1043).
+
+    The guard is written on **evidence of play**, not on status (ADR-0786), and
+    deliberately so: a director must be able to re-cut around a no-show right up
+    until the first ball. When #1043 was filed that reasoning had a hole, because
+    nothing could produce evidence yet — fixtures did not become matches until
+    #788 — so the play guard was vacuous, and a director could delete a running
+    tournament's draw and leave it live with no fixtures at all.
+
+    #788 closed the hole without touching the guard: ``materialize_live_draw``
+    gives every ready fixture a ``match_id`` inside the go-live transaction, and a
+    ``match_id`` is half of what :func:`draw_has_play` refuses on. So the status
+    gate #1043 asked for is not needed — going live *produces* the evidence rather
+    than being checked against it.
+
+    Asserted on **two** events, because the guard is scoped per event
+    (``test_the_play_guard_is_scoped_to_the_event_being_cut``): a one-event
+    tournament cannot tell "every event is sealed" from "the first one is". An
+    event that went live holding no materialized fixture would still be deletable,
+    and that is the shape the single-event version would sail past.
+    """
+    client, _ = authed_client
+    tournament_id, (one, two) = await _tournament_with_events(
+        client,
+        _rr_payload(POOL_A, POOL_B, name="Under 13s"),
+        _rr_payload(POOL_A, POOL_B, name="Open Singles"),
+    )
+    await _seed_field(db_session, one["id"], 4, prefix="one")
+    await _seed_field(db_session, two["id"], 4, prefix="two")
+    await _cut_the_draw(client, tournament_id, one["id"])
+    await _cut_the_draw(client, tournament_id, two["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    live = await _go_live(client, tournament_id)
+    assert live.status_code == 201, live.text
+
+    for event in (one, two):
+        before = _snapshot(await _fixture_rows(db_session, event["id"]))
+        assert before, f"{event['name']} went live with no fixtures at all"
+
+        removed = await client.delete(_draw_url(tournament_id, event["id"]))
+        recut = await client.post(_draw_url(tournament_id, event["id"]))
+
+        assert removed.status_code == 409, f"{event['name']}: {removed.text}"
+        assert "already under way" in removed.json()["detail"]
+        assert recut.status_code == 409, f"{event['name']}: {recut.text}"
+        # The refusal leaves the draw byte-for-byte — a live tournament keeps its
+        # fixtures, which is the invariant #1043 said was breakable.
+        assert _snapshot(await _fixture_rows(db_session, event["id"])) == before
+
+
 # ----- the row lock behind the cut ------------------------------------------
 
 

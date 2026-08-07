@@ -7,6 +7,7 @@ import {
   type TournamentDetailPageProps,
 } from './tournament-detail-page'
 import { buildTournamentDetailPageProps } from './tournament-detail-page.factory'
+import { confirmIrreversibleActDialogPage } from './tournament-detail-page/confirm-irreversible-act-dialog.page'
 import { eventsTabPage } from './tournament-detail-page/events-tab.page'
 
 const scoped = (container: Container) => ({
@@ -38,6 +39,17 @@ const scoped = (container: Container) => ({
   getLifecycleButton(name: RegExp) {
     return container.getByRole('button', { name })
   },
+  /** The **confirm** every lifecycle edge is gated by (ADR "a confirm prices an
+   * irreversible act…"): the header's button opens it and posts nothing, and the
+   * transition is fired by the dialog's own button. Addressed at `screen` whatever the
+   * scope, because the dialog portals to the document body.
+   *
+   * Named `lifecycleConfirm`, not `confirm`: the Events tab spreads a `confirm` of its
+   * own for the two draw acts, and one name for both would be the last spread silently
+   * winning. The rename buys a readable call site, **not** isolation — there is one
+   * dialog component behind one testid, so both accessors resolve to whichever act is
+   * open. Nothing here opens two at once, and nothing should. */
+  lifecycleConfirm: confirmIrreversibleActDialogPage.within(screen),
   /** The hero's status pill (`StatusBadge`) — the page's one claim about where the
    * tournament stands. Read it after a refused transition: nothing here is optimistic,
    * so a refused **Start tournament** must leave it saying **Published**. */
