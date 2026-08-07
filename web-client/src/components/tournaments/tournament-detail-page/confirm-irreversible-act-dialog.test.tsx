@@ -1,6 +1,9 @@
 import {
   buildDeleteDrawConsequence,
+  buildEndTournamentConsequence,
+  buildPublishTournamentConsequence,
   buildRecutDrawConsequence,
+  buildStartTournamentConsequence,
 } from './confirm-irreversible-act-dialog.factory'
 import { confirmIrreversibleActDialogPage as page } from './confirm-irreversible-act-dialog.page'
 
@@ -41,10 +44,143 @@ describe('ConfirmIrreversibleActDialog', () => {
     expect(page.getConfirmButton()).toHaveTextContent('Delete the draw')
   })
 
-  it('neither variant borrows the other act’s sentence', () => {
+  it('neither draw variant borrows the other act’s sentence', () => {
     page.render({ consequence: buildRecutDrawConsequence() })
     expect(page.getDialog()).not.toHaveTextContent('Nothing is kept.')
     expect(page.getConfirmButton()).not.toHaveTextContent('Delete the draw')
+  })
+
+  /**
+   * The three **lifecycle** edges (ADR-0017): `draft → published → live → archived`, with
+   * no edge back and `archived` terminal. They are one-way exactly as the draw acts are,
+   * and each is priced in its own terms — what it opens, what it mints, where it ends.
+   *
+   * The copy is asserted phrase by phrase rather than by "some dialog appeared", because
+   * the ADR's whole demand is that a variant cannot borrow another act's sentence: a
+   * generic "This cannot be undone. Continue?" would satisfy every looser assertion.
+   */
+  it('prices a PUBLISH: the tournament leaves the drafts and becomes enterable by anyone', () => {
+    page.render({
+      consequence: buildPublishTournamentConsequence({
+        tournamentName: 'Spring Open',
+      }),
+    })
+
+    const dialog = page.getDialog()
+    expect(dialog).toHaveTextContent('Publish this tournament?')
+    // The TOURNAMENT is named — not an event. A lifecycle act moves the whole thing.
+    expect(dialog).toHaveTextContent('Publishing Spring Open')
+    // The visibility boundary, which is what this edge and only this edge crosses.
+    expect(dialog).toHaveTextContent('puts it in front of everybody')
+    expect(dialog).toHaveTextContent('players can find it and enter it')
+    expect(dialog).toHaveTextContent('There is no un-publishing it.')
+    // Verb plus object, like every other act's button — and asserted as an EXACT name,
+    // because a bare `Publish` is what the header's own button says: two controls sharing
+    // one accessible name put them in the same role query, where an assertion meant for
+    // one can resolve to the other and pass while checking nothing.
+    expect(page.getConfirmButton()).toHaveAccessibleName('Publish the tournament')
+  })
+
+  it('prices a START: registration shuts and every ready fixture becomes a real match', () => {
+    page.render({
+      consequence: buildStartTournamentConsequence({
+        tournamentName: 'Spring Open',
+      }),
+    })
+
+    const dialog = page.getDialog()
+    expect(dialog).toHaveTextContent('Start this tournament?')
+    expect(dialog).toHaveTextContent('Starting Spring Open')
+    // BOTH halves. Since #788 this edge spends the players' attention, not merely the
+    // tournament's visibility, and copy that named only the closing window would be
+    // pricing the smaller half of what the click buys.
+    expect(dialog).toHaveTextContent('closes registration for good')
+    expect(dialog).toHaveTextContent(
+      'turns every ready fixture into a match its players can go and play',
+    )
+    expect(dialog).toHaveTextContent('It cannot be un-started.')
+    expect(page.getConfirmButton()).toHaveTextContent('Start the tournament')
+  })
+
+  it('prices an END: archived is terminal, with no edge out of it', () => {
+    page.render({
+      consequence: buildEndTournamentConsequence({ tournamentName: 'Spring Open' }),
+    })
+
+    const dialog = page.getDialog()
+    expect(dialog).toHaveTextContent('End this tournament?')
+    expect(dialog).toHaveTextContent('Ending Spring Open')
+    expect(dialog).toHaveTextContent('archived is the last thing a tournament is')
+    expect(dialog).toHaveTextContent('no way back to live and no way to re-open it')
+    expect(page.getConfirmButton()).toHaveTextContent('End the tournament')
+  })
+
+  // Said the other way round, across all five: the sum type exists so that a variant
+  // cannot render another act's sentence, and "X is present" alone would never catch a
+  // dialog that also said everything else — or a generic "This cannot be undone" that
+  // said nothing in particular.
+  const SAID = {
+    'recut-draw': 'deals a completely new set of pairings',
+    'delete-draw': 'Nothing is kept.',
+    'publish-tournament': 'puts it in front of everybody',
+    'start-tournament': 'closes registration for good',
+    'end-tournament': 'archived is the last thing a tournament is',
+  } as const
+
+  it.each([
+    { variant: 'recut-draw', consequence: buildRecutDrawConsequence() },
+    { variant: 'delete-draw', consequence: buildDeleteDrawConsequence() },
+    {
+      variant: 'publish-tournament',
+      consequence: buildPublishTournamentConsequence(),
+    },
+    { variant: 'start-tournament', consequence: buildStartTournamentConsequence() },
+    { variant: 'end-tournament', consequence: buildEndTournamentConsequence() },
+  ] as const)(
+    'gives $variant a sentence no other act says',
+    ({ variant, consequence }) => {
+      page.render({ consequence })
+
+      for (const [other, sentence] of Object.entries(SAID)) {
+        if (other === variant) expect(page.getDialog()).toHaveTextContent(sentence)
+        else expect(page.getDialog()).not.toHaveTextContent(sentence)
+      }
+    },
+  )
+
+  /**
+   * The button treatment, per act — decided in the same switch that writes the copy.
+   *
+   * `destructive` is for the two verbs that throw work away (pairings, and the schedule
+   * solved on them). The three lifecycle edges destroy nothing: publishing opens a door,
+   * starting mints matches, ending archives. They are one-way, which is what earns them
+   * the dialog — not destructive, which is what would earn them the red. It also keeps
+   * them off `variant="destructive"`, which fails AA colour contrast (#1039, open) and
+   * carries an axe exclusion wherever it is on screen in `e2e/tournaments/`.
+   */
+  it.each([
+    { name: 'a re-cut', consequence: buildRecutDrawConsequence(), destructive: true },
+    { name: 'a delete', consequence: buildDeleteDrawConsequence(), destructive: true },
+    {
+      name: 'a publish',
+      consequence: buildPublishTournamentConsequence(),
+      destructive: false,
+    },
+    {
+      name: 'a start',
+      consequence: buildStartTournamentConsequence(),
+      destructive: false,
+    },
+    { name: 'an end', consequence: buildEndTournamentConsequence(), destructive: false },
+  ])('paints the confirm for $name', ({ consequence, destructive }) => {
+    page.render({ consequence })
+
+    // `bg-destructive` is the class the axe exclusion is keyed on
+    // (`KNOWN_DESTRUCTIVE_BUTTON_CONTRAST`), so it is the thing worth pinning rather
+    // than a prop name that never reaches the DOM.
+    expect(page.getConfirmButton().className.includes('bg-destructive')).toBe(
+      destructive,
+    )
   })
 
   it('reports the confirm ONCE and as no kind of cancel — Radix closes on the action click through the same channel Escape uses', () => {
