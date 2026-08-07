@@ -15,7 +15,8 @@ export type SwissStandingsPanelScenario = Partial<SwissStandingsPanelProps> & {
 
 /**
  * Props for `SwissStandingsPanel`: by default a **swiss** event with results — one complete
- * four-deep table over the whole field, and a champion (`buildSwissStandingsEvent`).
+ * five-deep table over the whole field, and a champion (`buildSwissStandingsEvent`, whose
+ * field is five entrants over three rounds).
  *
  * The panel takes a view, not an event, but a test still reasons in events — so this derives
  * the props from one **the same way `ResultsPanel` does at runtime**: `eventSwissStandings`

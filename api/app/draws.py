@@ -50,7 +50,12 @@ from datetime import datetime
 from typing import NewType, Protocol
 
 from app.models.tournament import DrawType, EventFormat
-from app.pool_finishing_order import EntryTally, MatchOutcome, finishing_order
+from app.pool_finishing_order import (
+    EntryTally,
+    MatchOutcome,
+    finishing_order,
+    swiss_finishing_order,
+)
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
     RoundRobinDrawSettingsWrite,
@@ -540,9 +545,9 @@ class DrawStrategy(Protocol):
         parameters. A default here would let one implementation quietly leave the
         parameter off its signature and still satisfy the checker, and the one that did
         would be the one that needed it. The mirror case is
-        :func:`~app.pool_finishing_order.finishing_order`, a single free function whose
-        ``byes`` **is** defaulted: nothing implements it, so an omission there is a
-        caller's choice at one call site rather than a hole in a seam.
+        :func:`~app.pool_finishing_order.swiss_finishing_order`, a single free function
+        whose ``byes`` **is** defaulted: nothing implements it, so an omission there is
+        a caller's choice at one call site rather than a hole in a seam.
         """
         ...
 
@@ -1427,20 +1432,22 @@ def _swiss_standings_order(
     down.
 
     **Byes are scored here too**, as a win worth zero games, by the same
-    :func:`finishing_order` the table on screen is built by (ADR "swiss standings add
-    Buchholz"). Leaving them out would rank a byed entrant below everybody who played
-    while the director's table ranked them above — the two layers disagreeing about the
-    standings, which is precisely what one shared chain exists to prevent.
+    :func:`swiss_finishing_order` the table on screen is built by (ADR "swiss standings
+    add Buchholz"). Leaving them out would rank a byed entrant below everybody who
+    played while the director's table ranked them above — the two layers disagreeing
+    about the standings, which is precisely what one shared chain exists to prevent.
 
     ``byes`` arrives already derived (:func:`swiss_byes`, called once by
     :func:`_swiss_pairing_fills`) rather than being derived here, so that this and
     :func:`_swiss_bye` read one value instead of two derivations of it.
 
-    :func:`~app.pool_finishing_order.finishing_order` is the *shared* definition of that
-    table, the same call the standings on screen are projected through, so the order a
-    director reads and the order the pairing walks cannot disagree. (Swiss gets its own
-    chain — Buchholz above game difference — in its own slice; until then this is the
-    one that exists, and it is one call to change.)
+    :func:`~app.pool_finishing_order.swiss_finishing_order` is the *shared* definition
+    of that table — wins, guarded head-to-head, **Buchholz**, game difference, games
+    won, entry id — and the same call the standings on screen are projected through, so
+    the order a director reads and the order the pairing walks cannot disagree. It is
+    the swiss chain and not the pool one: pairing down a table ordered by margin rather
+    than by strength of schedule would seat the next round off an order nobody is
+    looking at.
 
     An outcome naming an entry that is not in the field is left out: a withdrawal
     between the cut and this advance would otherwise be a ``KeyError`` deep inside the
@@ -1470,7 +1477,10 @@ def _swiss_standings_order(
                 entry_b_games=games.entry_b_games,
             )
         )
-    return [tally.entry_id for tally in finishing_order(field, outcomes, byes)]
+    return [
+        standing.tally.entry_id
+        for standing in swiss_finishing_order(field, outcomes, byes)
+    ]
 
 
 def _swiss_bye(order: Sequence[EntryId], byes: Sequence[EntryId]) -> EntryId | None:

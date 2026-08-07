@@ -7,6 +7,7 @@ type FinishesResultsRead = components['schemas']['FinishesResultsRead']
 type StandingsThenFinishesResultsRead =
   components['schemas']['StandingsThenFinishesResultsRead']
 type SwissStandingsResultsRead = components['schemas']['SwissStandingsResultsRead']
+type SwissStandingRowRead = components['schemas']['SwissStandingRowRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
 type FinishRowRead = components['schemas']['FinishRowRead']
 
@@ -93,14 +94,30 @@ function wireTwoStage(
   }
 }
 
+/** A wire **swiss** row (`SwissStandingRowRead`): a pool's row plus `buchholz`. Built off
+ * `wireRow` rather than restated, exactly as the schema `.extend()`s rather than
+ * re-declaring — so the eight shared columns are written once here too.
+ *
+ * `buchholz: 5` collides with none of its neighbours (wins 2, game difference 3, games won
+ * 4), so a parser or a cell reading the wrong field cannot come out right by accident. */
+function wireSwissRow(
+  overrides: Partial<SwissStandingRowRead> = {},
+): SwissStandingRowRead {
+  return { ...wireRow(), buchholz: 5, ...overrides }
+}
+
 /** A complete `swiss_standings` results block off the wire (the swiss ADR) — **one list of
- * rows, no pools**, because swiss ranks the whole field in one table. */
+ * rows, no pools**, because swiss ranks the whole field in one table, and each row carrying
+ * the Buchholz figure that ordered it. */
 function wireSwiss(
   overrides: Partial<SwissStandingsResultsRead> = {},
 ): SwissStandingsResultsRead {
   return {
     kind: 'swiss_standings',
-    rows: [wireRow(), wireRow({ entry_id: 'entry-2', rank: 2 })],
+    rows: [
+      wireSwissRow(),
+      wireSwissRow({ entry_id: 'entry-2', rank: 2, buchholz: 4 }),
+    ],
     complete: true,
     champion: 'entry-1',
     ...overrides,
@@ -235,6 +252,10 @@ describe('parseResults', () => {
           gamesWon: 4,
           gamesLost: 1,
           gameDifference: 3,
+          // The one column a pool's row does not carry, and the reason the swiss arm has a
+          // row parser of its own. `toEqual` is exact, so a parse that dropped it — or that
+          // let a pool row through unchanged — reds here.
+          buchholz: 5,
         },
         {
           entryId: 'entry-2',
@@ -245,11 +266,44 @@ describe('parseResults', () => {
           gamesWon: 4,
           gamesLost: 1,
           gameDifference: 3,
+          // Deliberately DIFFERENT from row 1's, so a parser that read the first row's
+          // figure for every row (or a constant) cannot pass.
+          buchholz: 4,
         },
       ],
       complete: true,
       champion: 'entry-1',
     })
+  })
+
+  /** A pool's row has no `buchholz`, so a swiss payload carrying pool rows is real server
+   * drift — and it must fail at the boundary rather than reach a table with one column
+   * permanently blank. `.extend()` on a Zod object keeps the field **required**, which is
+   * what this pins; `.partial()` or an `.optional()` would quietly let it through. */
+  it('rejects a swiss row with no buchholz at the boundary', () => {
+    const { buchholz, ...withoutBuchholz } = wireSwissRow()
+    // The dropped field really was there to drop. Without this the test would still pass
+    // against a fixture that never carried a `buchholz` — asserting on the absence of
+    // something nobody removed.
+    expect(buchholz).toBe(5)
+
+    // Assembled as a plain object rather than through `wireSwiss`, because the point is a
+    // payload the generated type forbids — `parseResults` takes `unknown`, which is exactly
+    // the claim it exists to check at RUNTIME.
+    expect(() =>
+      parseResults({ ...wireSwiss(), rows: [withoutBuchholz] }),
+    ).toThrow()
+  })
+
+  /** `0` is a legitimate Buchholz — every one of this entrant's opponents has yet to win a
+   * match, which is the ordinary state of round 1 — so it must survive the parse as `0`.
+   * Anything that treated it as missing and coalesced it would be inventing a figure. */
+  it('keeps a buchholz of zero as zero', () => {
+    const parsed = parseResults(wireSwiss({ rows: [wireSwissRow({ buchholz: 0 })] }))
+
+    expect(
+      parsed?.kind === 'swiss_standings' ? parsed.rows[0].buchholz : null,
+    ).toBe(0)
   })
 
   it('keeps a LIVE swiss block incomplete, with no champion', () => {
@@ -268,8 +322,8 @@ describe('parseResults', () => {
     const parsed = parseResults(
       wireSwiss({
         rows: [
-          wireRow({ entry_id: 'entry-5', rank: 3 }),
-          wireRow({ entry_id: 'entry-1', rank: 1 }),
+          wireSwissRow({ entry_id: 'entry-5', rank: 3 }),
+          wireSwissRow({ entry_id: 'entry-1', rank: 1 }),
         ],
       }),
     )

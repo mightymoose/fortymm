@@ -1,7 +1,10 @@
 import { test, expect, type Page } from '@playwright/test'
 import { faker } from '@faker-js/faker'
 
-import { TournamentDetailPage } from '../page-objects/tournament-detail.page'
+import {
+  SWISS_STANDINGS_COLUMNS,
+  TournamentDetailPage,
+} from '../page-objects/tournament-detail.page'
 import { guestFromContext, type Guest } from '../support/match-api'
 import { grantBetaTester } from '../support/rbac-grant'
 import {
@@ -18,7 +21,9 @@ import {
 } from '../support/tournament-api'
 import {
   earlierRegisteredWins,
+  inStraightGames,
   playSwissRound,
+  type PickResult,
   type PickWinner,
 } from '../support/tournament-play'
 
@@ -68,6 +73,182 @@ const ODD_FIELD = 7
  */
 const ROUND_ONE_WINNERS = [4, 1, 6, 3]
 
+/** `n` and `R` for the **Buchholz** test: six entrants over two rounds.
+ *
+ * Six because the tied group has to face *different* opposition. A field small enough for
+ * everybody to have played everybody cannot discriminate at all: Buchholz would then be
+ * `total wins − your own wins`, identical for any two entrants level on wins, by
+ * arithmetic. Six players in two rounds leaves each of them having met a third of the
+ * field, which is what makes strength of schedule a real difference.
+ *
+ * Two rounds because the whole fixture has to be **predicted**, not observed: round 2 is
+ * paired from the round-1 standings, so the spec can only write down expected results if
+ * it knows the pairing, and round 2 is the last round for which that is derivable without
+ * re-implementing the greedy walk (see `consecutivePairs`). One round could not work — after
+ * round 1 every opponent's win count is 0 or 1 and the tied entrants' Buchholz figures are
+ * equal by symmetry.
+ */
+const BUCHHOLZ_FIELD = 6
+const BUCHHOLZ_ROUNDS = 2
+
+/** One fixture's planned outcome, by **registration index**: who wins, who loses, and how
+ * many games the loser takes. The margin is the point — see `BUCHHOLZ_ROUND_ONE`. */
+interface PlannedResult {
+  readonly winner: number
+  readonly loser: number
+  readonly loserGames: number
+}
+
+/**
+ * **Round 1 of the Buchholz fixture**, on the pairing the cut deals: draw-order position
+ * `i` against `i + 3`, so `p0-p3`, `p1-p4`, `p2-p5`.
+ *
+ * The three winners are chosen with **three different margins** on purpose. After one round
+ * every winner's Buchholz is 0 (their opponent has no wins yet) and every loser's is 1, so
+ * Buchholz separates nobody and the standings fall through to game difference — which means
+ * three distinct margins make the round-1 order, and therefore round 2's pairing, **fully
+ * determined**. Give two winners the same margin and the order between them falls to the
+ * entry-id tiebreak, the pairing becomes a coin flip, and every number below it is a
+ * guess. (The editor's default best-of-5 is what affords three margins: 3-0, 3-1, 3-2.)
+ */
+const BUCHHOLZ_ROUND_ONE: ReadonlyArray<PlannedResult> = [
+  { winner: 0, loser: 3, loserGames: 0 },
+  { winner: 1, loser: 4, loserGames: 1 },
+  { winner: 2, loser: 5, loserGames: 2 },
+]
+
+/**
+ * **Round 2**, on the pairing those results force. The standings after round 1 read
+ * `p0, p1, p2` (winners, by margin) then `p5, p4, p3` (losers, by margin), and the walk
+ * gives each entrant the nearest following one they have not met:
+ *
+ * - `p0` takes `p1` — the two at the top of the table;
+ * - `p2` skips `p5`, whom it has just beaten, and takes `p4`;
+ * - `p5` and `p3` are left, and are strangers.
+ *
+ * The results below are then chosen to make **margin and strength of schedule point
+ * opposite ways** among the four entrants who finish level on one win:
+ *
+ * | | wins | opponents | Buchholz | game difference |
+ * | --- | --- | --- | --- | --- |
+ * | `p4` | 1 | `p1` (2 wins), `p2` (1) | **3** | **-1** |
+ * | `p0` | 1 | `p3` (0), `p1` (2) | 2 | +2 |
+ * | `p2` | 1 | `p5` (1), `p4` (1) | 2 | 0 |
+ * | `p5` | 1 | `p2` (1), `p3` (0) | **1** | **+2** |
+ *
+ * `p4` has the **worst** margin of the four and the **strongest** schedule; `p5` has the
+ * joint-best margin and the weakest schedule. Buchholz above game difference ranks the
+ * four `p4, p0, p2, p5` — the order this test asserts. Demote the step below game
+ * difference and the two ends of that group swap: `p4` falls to the bottom of the field's
+ * middle and `p0` takes the top of it, which is what the falsification of this test
+ * measured.
+ */
+const BUCHHOLZ_ROUND_TWO: ReadonlyArray<PlannedResult> = [
+  { winner: 1, loser: 0, loserGames: 2 },
+  { winner: 4, loser: 2, loserGames: 2 },
+  { winner: 5, loser: 3, loserGames: 0 },
+]
+
+/** One row of the standings the fixture above produces, in **finishing order** — so the
+ * index is the rank and the whole table is one written-down expectation. Every column the
+ * table shows is here, because a wrong number in the right order is still wrong. */
+interface ExpectedStanding {
+  /** The entrant, by registration index. */
+  readonly player: number
+  readonly wins: number
+  readonly losses: number
+  readonly buchholz: number
+  readonly gameDifference: number
+  readonly gamesWon: number
+}
+
+/**
+ * **The standings the Buchholz fixture must produce**, top to bottom.
+ *
+ * `p1` leads on wins, `p3` is last on wins, and the four in between are level on one win
+ * and ordered by Buchholz — the claim this test exists to make. Read the middle four
+ * downwards: Buchholz falls 3, 2, 2, 1 while game difference goes -1, +2, 0, +2. The one
+ * column descends; the other does not. That is what "ranked by strength of schedule rather
+ * than by margin" looks like on a table.
+ */
+const BUCHHOLZ_STANDINGS: ReadonlyArray<ExpectedStanding> = [
+  { player: 1, wins: 2, losses: 0, buchholz: 2, gameDifference: 3, gamesWon: 6 },
+  { player: 4, wins: 1, losses: 1, buchholz: 3, gameDifference: -1, gamesWon: 4 },
+  { player: 0, wins: 1, losses: 1, buchholz: 2, gameDifference: 2, gamesWon: 5 },
+  { player: 2, wins: 1, losses: 1, buchholz: 2, gameDifference: 0, gamesWon: 5 },
+  { player: 5, wins: 1, losses: 1, buchholz: 1, gameDifference: 2, gamesWon: 5 },
+  { player: 3, wins: 0, losses: 2, buchholz: 2, gameDifference: -6, gamesWon: 0 },
+]
+
+/** The two entrants the claim rests on, **by registration index**: `p4` faced the stronger
+ * schedule on a worse margin, `p0` the weaker schedule on a better one. The test asserts
+ * their relationship off the *served* standings rather than off the table above, so a
+ * fixture that stopped discriminating fails instead of passing quietly. */
+const STRONGER_SCHEDULE = 4
+const BETTER_MARGIN = 0
+
+/** A game difference as the table renders it: signed when positive, because `+2` and `-2`
+ * are different standings and a bare `2` would read as both. */
+function signed(difference: number): string {
+  return difference > 0 ? `+${difference}` : String(difference)
+}
+
+/** One expected row as the seven cells the table renders, in column order
+ * (`SWISS_STANDINGS_COLUMNS`). */
+function standingRowText(
+  expected: ExpectedStanding,
+  rank: number,
+  username: string,
+): string[] {
+  return [
+    String(rank),
+    username,
+    String(expected.wins),
+    String(expected.losses),
+    String(expected.buchholz),
+    signed(expected.gameDifference),
+    String(expected.gamesWon),
+  ]
+}
+
+/**
+ * Play a round to a **written-down plan**: each fixture decided by the row naming both its
+ * entrants, at the margin that row gives.
+ *
+ * Refuses a pairing the plan does not name, and says which two it met. That refusal is
+ * load-bearing rather than defensive: the plan is written against a pairing this spec
+ * *derived* (see `BUCHHOLZ_ROUND_TWO`), so a server that paired the round differently would
+ * otherwise produce plausible results for the wrong matches, and the failure would surface
+ * as an inexplicable standings table two steps later.
+ */
+function asPlanned(
+  plan: ReadonlyArray<PlannedResult>,
+  entrants: ReadonlyArray<Guest>,
+): PickResult {
+  const indexOf = new Map(entrants.map((guest, index) => [guest.username, index]))
+  const nameOf = (index: number): string => entrants[index].username
+  return (a, b) => {
+    const pair = [indexOf.get(a.username), indexOf.get(b.username)]
+    const row = plan.find(
+      (candidate) =>
+        pair.includes(candidate.winner) && pair.includes(candidate.loser),
+    )
+    if (!row) {
+      const planned = plan
+        .map((r) => `${nameOf(r.winner)} vs ${nameOf(r.loser)}`)
+        .join('; ')
+      throw new Error(
+        `the round paired ${a.username} vs ${b.username}, which this fixture's plan ` +
+          `does not name — it expects: ${planned}`,
+      )
+    }
+    return {
+      winner: indexOf.get(a.username) === row.winner ? a : b,
+      loserGames: row.loserGames,
+    }
+  }
+}
+
 /**
  * Round one, as the ADR seeds it: **top half against bottom half in draw order**.
  *
@@ -108,6 +289,7 @@ async function authorSwissEvent(
   detail: TournamentDetailPage,
   director: Guest,
   tournamentId: string,
+  rounds: number = ROUNDS,
 ): Promise<string> {
   const editor = await detail.openNewEvent()
   await editor.nameInput.fill(EVENT_NAME)
@@ -116,7 +298,7 @@ async function authorSwissEvent(
   // a format that does not ask the question. So its appearance is the proof the picker's
   // choice reached the form, before anything is submitted.
   await expect(editor.roundsInput).toBeVisible()
-  await editor.setRounds(ROUNDS)
+  await editor.setRounds(rounds)
 
   const createPost = page.waitForResponse(
     (r) => r.url().endsWith('/events') && r.request().method() === 'POST',
@@ -136,7 +318,7 @@ async function authorSwissEvent(
   // round, or none.
   const event = await findEventByName(director, tournamentId, EVENT_NAME)
   expect(event.draw_type).toBe(DRAW_TYPE_KEY)
-  expect(event.rounds).toBe(ROUNDS)
+  expect(event.rounds).toBe(rounds)
   return event.id
 }
 
@@ -627,7 +809,9 @@ test.describe('Tournament — swiss draw', () => {
         eventId,
         entrants,
         1,
-        pickInterleavedWinner,
+        // Straight games: this test's subject is WHO won, not by how much — the margins
+        // are the Buchholz test's business.
+        inStraightGames(pickInterleavedWinner),
       ),
       'round 1 of an eight-player swiss is four matches',
     ).toBe(EVEN_FIELD / 2)
@@ -807,7 +991,7 @@ test.describe('Tournament — swiss draw', () => {
         eventId,
         entrants,
         1,
-        earlierRegisteredWins(entrants),
+        inStraightGames(earlierRegisteredWins(entrants)),
       ),
       'round 1 of a seven-player swiss is three matches',
     ).toBe(perRound)
@@ -876,7 +1060,7 @@ test.describe('Tournament — swiss draw', () => {
         eventId,
         entrants,
         2,
-        earlierRegisteredWins(entrants),
+        inStraightGames(earlierRegisteredWins(entrants)),
       ),
       'round 2 is three matches — the byed entrant costs the round a fixture',
     ).toBe(perRound)
@@ -918,6 +1102,197 @@ test.describe('Tournament — swiss draw', () => {
       detail.swissRoundBye(eventId, ROUNDS),
       `${byedInRoundThree} sits round 3 out, so the round should name them as its bye`,
     ).toContainText(byedInRoundThree)
+
+    await Promise.all(entrants.map((entrant) => entrant.ctx.dispose()))
+  })
+
+  /**
+   * **Swiss standings rank by strength of schedule, not by margin** (ADR "swiss standings
+   * add Buchholz, and head-to-head is guarded on having met").
+   *
+   * Buchholz — the sum of an entrant's opponents' win counts — sits **above** game
+   * difference in the chain: wins, head-to-head when the tied pair met, Buchholz, game
+   * difference, games won, entry id. Swiss deliberately pairs you against players on your
+   * own score, so two entrants level on wins may have faced completely different halves of
+   * the field, and margin against unequal opposition says less than who you had to beat.
+   *
+   * ## The whole test is the fixture
+   *
+   * An assertion that the table comes out in *some* order proves nothing about Buchholz:
+   * for most results Buchholz and game difference agree, and then the standings are the
+   * same whether the step exists or not. So `BUCHHOLZ_ROUND_ONE` and `BUCHHOLZ_ROUND_TWO`
+   * engineer four entrants level on one win whose two columns point **opposite** ways —
+   * `p4` strongest schedule and worst margin, `p5` weakest schedule and joint-best margin —
+   * and the claim is that the table reads `p4` first and `p5` last of the four.
+   *
+   * That the fixture still discriminates is itself asserted, off the **served** standings
+   * rather than the written-down table: level on wins, higher Buchholz, *worse* game
+   * difference, ranked above. An edit that let the two columns agree again would red here
+   * instead of quietly turning this into a test of nothing.
+   *
+   * ## Six entrants, two rounds, three margins
+   *
+   * Each constant says why in its own docstring. In short: a field small enough for
+   * everybody to play everybody makes Buchholz constant across a tie by arithmetic; two
+   * rounds is as far as the pairing can be *predicted* rather than observed; and three
+   * distinct round-1 margins are what make the round-1 order — and so round 2's pairing —
+   * fall out of game difference rather than out of the entry-id tiebreak.
+   *
+   * ## And the figure itself, not merely the order
+   *
+   * A wrong number in the right order is still wrong, so every rendered cell of every row
+   * is pinned: rank, player, W, L, **Buc**, Diff, GW. The `Buc` column's *position* is
+   * pinned too (`SWISS_STANDINGS_COLUMNS`) — it was inserted between `L` and `Diff`, which
+   * moved `GW` and silently turned a "games won" assertion into a game-difference one.
+   */
+  test('swiss standings rank two entrants level on wins by Buchholz, above game difference', async ({
+    page,
+    baseURL,
+  }) => {
+    // Six minted guests, six director-entries, a real cut, a real go-live and two rounds —
+    // six matches — played out over the API, on top of the ordinary page work.
+    test.setTimeout(420_000)
+    expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
+
+    const director = await guestFromContext(page.request)
+    grantBetaTester(director.username)
+
+    const name = `Swiss Buchholz ${faker.string.alphanumeric(8)}`
+    const { tournamentId } = await createTournament(director, name)
+
+    const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
+    await expect(detail.title).toContainText(name, { timeout: 60_000 })
+
+    const eventId = await authorSwissEvent(
+      page,
+      detail,
+      director,
+      tournamentId,
+      BUCHHOLZ_ROUNDS,
+    )
+
+    await detail.publishButton.click()
+    await expect(detail.startButton).toBeVisible()
+
+    const entrants = await seedEntrants(
+      director,
+      baseURL!,
+      tournamentId,
+      eventId,
+      BUCHHOLZ_FIELD,
+    )
+    const filled = await findEventByName(director, tournamentId, EVENT_NAME)
+    expect(filled.entered).toBe(BUCHHOLZ_FIELD)
+
+    await detail.reload(tournamentId)
+    await cutTheDraw(page, detail)
+
+    // The cut deals round 1 top half against bottom half, which is the pairing
+    // `BUCHHOLZ_ROUND_ONE` is written against. Asserted before a ball is hit, so a
+    // different seeding fails here rather than as a standings table nobody can explain.
+    await expect(detail.swissRoundFixtures(eventId, 1)).toHaveText(
+      roundOneLines(entrants),
+    )
+
+    await goLive(page, detail)
+
+    // ----- two rounds, to plan -----------------------------------------------
+    const perRound = BUCHHOLZ_FIELD / 2
+    expect(
+      await playSwissRound(
+        director,
+        tournamentId,
+        eventId,
+        entrants,
+        1,
+        asPlanned(BUCHHOLZ_ROUND_ONE, entrants),
+      ),
+    ).toBe(perRound)
+
+    await detail.reload(tournamentId)
+    await expect(detail.swissRoundFixtures(eventId, 2)).toHaveCount(perRound)
+
+    expect(
+      await playSwissRound(
+        director,
+        tournamentId,
+        eventId,
+        entrants,
+        2,
+        // `asPlanned` refuses a pairing this plan does not name, so this call is also the
+        // assertion that round 2 was paired the way the fixture derived it would be.
+        asPlanned(BUCHHOLZ_ROUND_TWO, entrants),
+      ),
+    ).toBe(perRound)
+
+    await detail.reload(tournamentId)
+
+    // ----- the fixture DISCRIMINATES, off the served standings ---------------
+    // Before reading the order, establish that reading it is worth anything: the two
+    // entrants the claim rests on are level on wins and their two tiebreak columns
+    // disagree. Taken from the server, so this cannot agree with the written-down table
+    // by construction.
+    const served = await readSwissStandings(director, tournamentId, eventId)
+    const stronger = standingOf(served, entrants[STRONGER_SCHEDULE].username)
+    const weaker = standingOf(served, entrants[BETTER_MARGIN].username)
+    expect(
+      stronger.wins,
+      `${stronger.username} and ${weaker.username} must be LEVEL ON WINS for Buchholz ` +
+        'to be what separates them',
+    ).toBe(weaker.wins)
+    expect(
+      stronger.buchholz,
+      `${stronger.username} must have faced the stronger schedule`,
+    ).toBeGreaterThan(weaker.buchholz)
+    expect(
+      stronger.gameDifference,
+      `${stronger.username} must have the WORSE game difference — with the two columns ` +
+        'agreeing, this table would come out the same with no Buchholz step at all',
+    ).toBeLessThan(weaker.gameDifference)
+
+    // …and the entrant with the stronger schedule ranks above the one with the better
+    // margin. This is the sentence the chore is about.
+    expect(
+      stronger.rank,
+      `${stronger.username} (Buchholz ${stronger.buchholz}, difference ` +
+        `${stronger.gameDifference}) must rank above ${weaker.username} (Buchholz ` +
+        `${weaker.buchholz}, difference ${weaker.gameDifference})`,
+    ).toBeLessThan(weaker.rank)
+
+    // ----- the whole table, in order, off the page ---------------------------
+    // The column positions the cell accessors read, verified against the headers on
+    // screen: an inserted column would otherwise move every number one place and be read
+    // as a wrong value rather than as a wrong index.
+    for (const column of Object.values(SWISS_STANDINGS_COLUMNS)) {
+      await expect(detail.swissStandingsHeader(eventId, column)).toHaveAccessibleName(
+        column.name,
+      )
+    }
+
+    const expectedOrder = BUCHHOLZ_STANDINGS.map(
+      (row) => entrants[row.player].username,
+    )
+    expect(
+      served.map((row) => row.username),
+      'the served finishing order',
+    ).toEqual(expectedOrder)
+
+    await expect(detail.swissStandingsRows(eventId)).toHaveCount(BUCHHOLZ_FIELD)
+    for (const [index, expected] of BUCHHOLZ_STANDINGS.entries()) {
+      const username = entrants[expected.player].username
+      const entryId = standingOf(served, username).entryId
+      // The row in the position the fixture says it holds, keyed by the server-minted
+      // entry id — so this pins the order on screen, not just that the row exists.
+      await expect(detail.swissStandingsRows(eventId).nth(index)).toHaveAttribute(
+        'data-testid',
+        `standing-row-${entryId}`,
+      )
+      // …and every cell of it, Buchholz included.
+      await expect(
+        detail.swissStandingCells(eventId, entryId),
+        `${username}'s standings line`,
+      ).toHaveText(standingRowText(expected, index + 1, username))
+    }
 
     await Promise.all(entrants.map((entrant) => entrant.ctx.dispose()))
   })

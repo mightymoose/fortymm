@@ -32,6 +32,7 @@ import type {
   FinishRow,
   PoolStandings,
   StandingRow,
+  SwissStandingRow,
 } from './types'
 
 /** The wire shape (`StandingRowRead`), snake_case, every field required — a standings row
@@ -53,18 +54,44 @@ const standingRowWireSchema = z.object({
 /** One wire row → one domain `StandingRow`. Annotated `: StandingRow` on purpose — that
  * is what keeps the domain interface in `./types` and this schema one thing: drop a field
  * from either and this line is a compile error, so the runtime parser and the type the app
- * holds cannot drift apart. */
-const standingRowSchema = standingRowWireSchema.transform(
-  (r): StandingRow => ({
-    entryId: r.entry_id,
-    rank: r.rank,
-    played: r.played,
-    wins: r.wins,
-    losses: r.losses,
-    gamesWon: r.games_won,
-    gamesLost: r.games_lost,
-    gameDifference: r.game_difference,
-  }),
+ * holds cannot drift apart.
+ *
+ * Extracted as a function rather than inlined in the transform below, because the **swiss**
+ * row is this row plus one column and reuses it: one mapping, so a column added to the
+ * shared shape reaches both tables at once and the two cannot fork. */
+const toStandingRow = (r: z.output<typeof standingRowWireSchema>): StandingRow => ({
+  entryId: r.entry_id,
+  rank: r.rank,
+  played: r.played,
+  wins: r.wins,
+  losses: r.losses,
+  gamesWon: r.games_won,
+  gamesLost: r.games_lost,
+  gameDifference: r.game_difference,
+})
+
+const standingRowSchema = standingRowWireSchema.transform(toStandingRow)
+
+/** The wire shape (`SwissStandingRowRead`): a pool's row **plus `buchholz`** — the sum of
+ * this entrant's opponents' win counts, and the tiebreak that sits above game difference in
+ * swiss (ADR "swiss standings add Buchholz, and head-to-head is guarded on having met").
+ *
+ * `.extend()`ed from the shared row rather than re-declared, so the eight fields both
+ * tables' rows carry are stated once. Eight is what the **wire** sends, not what either
+ * table shows: `played` and `gamesLost` are parsed and carried inward, and neither is a
+ * column. Required and an integer, exactly as the wire has it: a
+ * missing `buchholz` is real server drift, and it fails HERE rather than rendering as an
+ * empty cell in the one column that explains the order. `0` is a legitimate value — an
+ * entrant every one of whose opponents has yet to win — so it is not a "missing" stand-in
+ * and must never be coalesced from one. */
+const swissStandingRowWireSchema = standingRowWireSchema.extend({
+  buchholz: z.number().int(),
+})
+
+/** One wire swiss row → one domain `SwissStandingRow`. Annotated for the same reason, and
+ * built on `toStandingRow` so the shared columns are mapped by the shared mapper. */
+const swissStandingRowSchema = swissStandingRowWireSchema.transform(
+  (r): SwissStandingRow => ({ ...toStandingRow(r), buchholz: r.buchholz }),
 )
 
 /** The wire shape (`PoolStandingsRead`): a pool's rows **in the server's finishing order**
@@ -152,14 +179,15 @@ const standingsThenFinishesResultsWireSchema = z.object({
  * `kind: "swiss_standings"` — **one list of rows over the whole field**, whether every round
  * is decided, and the leader once it is.
  *
- * The rows are parsed by `standingRowSchema`, the very parser a pool's standings use, so the
- * swiss table cannot drift from the round-robin one and a malformed row fails at the same
- * boundary whichever arm carried it. The only structural difference is the absence of a pool
- * to group under — swiss ranks the whole field in one table (ADR "swiss pre-cuts every round
- * and pairs each one on advance"). */
+ * The rows are `swissStandingRowSchema` — the very parser a pool's standings use, extended
+ * by the one field swiss adds — so the two tables cannot drift on the eight they share and
+ * a malformed row fails at the same boundary whichever arm carried it. The two structural
+ * differences are both facts about the format: no pool to group under (swiss ranks the whole
+ * field in one table, ADR "swiss pre-cuts every round and pairs each one on advance") and
+ * the `buchholz` figure that ordered each row. */
 const swissStandingsResultsWireSchema = z.object({
   kind: z.literal('swiss_standings'),
-  rows: z.array(standingRowSchema),
+  rows: z.array(swissStandingRowSchema),
   complete: z.boolean(),
   champion: z.string().nullable(),
 })

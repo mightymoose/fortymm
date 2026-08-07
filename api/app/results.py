@@ -21,11 +21,12 @@ snapshot, and a corrected or voided match re-derives the results the instant it 
 ``completed``, with no bookkeeping to keep in step (ADR-0788, "everything derives from
 the matches").
 
-The round-robin **tiebreak chain itself** lives in ``app.pool_finishing_order``, not
-here: the draw layer needs the same order to pick a pool's qualifiers, and this module
-already imports ``app.draws``, so a shared third module is the only place both can
-reach (ADR 20260727). ``MatchOutcome`` is re-exported from here for the callers that
-already know it by this name.
+The **tiebreak chains themselves** — the round-robin one and the swiss one — live in
+``app.pool_finishing_order``, not here: the draw layer needs the same orders to pick a
+pool's qualifiers and to pair a swiss round, and this module already imports
+``app.draws``, so a shared third module is the only place both can reach (ADR 20260727).
+``MatchOutcome`` is re-exported from here for the callers that already know it by this
+name.
 
 Four arms are implemented: :class:`RoundRobinResults`, whose shape is a **standings**
 table per pool; :class:`SingleElimResults` (ADR-0785), whose shape is the bracket's
@@ -41,10 +42,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TypedDict
 
 from app.draws import EntryId, PoolId
 from app.models.tournament import DrawType
-from app.pool_finishing_order import MatchOutcome, entry_id_order, finishing_order
+from app.pool_finishing_order import (
+    EntryTally,
+    MatchOutcome,
+    entry_id_order,
+    finishing_order,
+    swiss_finishing_order,
+)
 
 __all__ = [
     "BracketFinishes",
@@ -62,8 +70,10 @@ __all__ = [
     "RrThenKoResults",
     "SingleElimResults",
     "StandingRow",
+    "StandingRowColumns",
     "StandingsThenFinishes",
     "SwissResults",
+    "SwissStandingRow",
     "SwissStandings",
     "results_for",
 ]
@@ -256,6 +266,35 @@ class StandingsThenFinishes:
 
 
 @dataclass(frozen=True, slots=True)
+class SwissStandingRow(StandingRow):
+    """One entry's line in a swiss table: the row every standings table carries, plus
+    the **Buchholz** figure that ordered it.
+
+    A **subclass**, not a wider :class:`StandingRow` and not a wrapper around one. The
+    two are different claims and only the first was ever in doubt: widening the shared
+    row would put a Buchholz of ``0`` on every round-robin line, where it would mean
+    "not applicable" while reading as a real figure. Extending it does not — a pool row
+    is a :class:`StandingRow` and is never one of these — and it says the thing that is
+    true, that a swiss line *is* a standings line with one more column. The wire models
+    (:class:`~app.schemas.tournament.SwissStandingRowRead`) and the web client's types
+    are both shaped that way, so this is also the shape the whole stack already agrees
+    on.
+
+    ``buchholz`` is on the row because it is the one link in the swiss chain a director
+    cannot recompute from the counts beside it — the sum of *this entrant's opponents'*
+    win counts, which lives in other rows. Every other tiebreak on the table shows its
+    own working.
+
+    (:class:`~app.pool_finishing_order.SwissTally` next door stays *composed*, and the
+    difference is real: a tally is what the chain mutates while it counts, so one shared
+    definition of "wins" there is the thing that keeps the two chains from drifting. A
+    row is the finished, frozen output.)
+    """
+
+    buchholz: int
+
+
+@dataclass(frozen=True, slots=True)
 class SwissStandings:
     """A swiss event's results: **one** standings table over the whole field, whether
     every round has been decided, and its champion when it has.
@@ -271,7 +310,7 @@ class SwissStandings:
     (CONTEXT.md, "Swiss"). ``None`` while any round is still to be decided.
     """
 
-    rows: tuple[StandingRow, ...]
+    rows: tuple[SwissStandingRow, ...]
     complete: bool
     champion: EntryId | None
 
@@ -447,13 +486,19 @@ class SwissResults:
     """A swiss event's results: one standings table over the whole field (ADR "swiss
     pre-cuts every round and pairs each one on advance").
 
-    Ordered by :func:`~app.pool_finishing_order.finishing_order` — the *same* chain a
-    round-robin pool is ordered by — through the same :func:`_standing_rows` a pool's
-    table is built with. That is deliberate and temporary: swiss gets its own ordering
-    function, with Buchholz above game difference and the head-to-head step guarded on
-    the pair having met, in its own slice (ADR "swiss standings add Buchholz, and
-    head-to-head is guarded on having met"). Until then this reads out the chain that
-    exists rather than a swiss-shaped approximation of the one that does not.
+    Ordered by :func:`~app.pool_finishing_order.swiss_finishing_order` — **swiss's own**
+    chain: wins, head-to-head when exactly two are tied *and they met*, then
+    **Buchholz**, then game difference, games won and the entry id (ADR "swiss standings
+    add Buchholz, and head-to-head is guarded on having met"). Buchholz sits above game
+    difference because swiss pairs by score: two entrants level on wins may have played
+    different halves of the field, so who they had to beat says more than the margin
+    they beat them by. It rides out on every row (:class:`SwissStandingRow`) because it
+    is the one tiebreak a director cannot recompute from the row it ordered.
+
+    The chain still lives in ``app.pool_finishing_order`` beside the pool one, for the
+    reason it went there in the first place (ADR 20260727): the draw layer walks this
+    same order to pair the next round, so "the standings a director reads" and "the
+    order the next round is paired down" are one definition and cannot drift.
 
     **A bye scores as a win worth zero games** (ADR "swiss standings add Buchholz, and
     head-to-head is guarded on having met"), which is the one thing this table counts
@@ -472,7 +517,7 @@ class SwissResults:
     """
 
     def tabulate(self, field: FieldInput) -> SwissStandings:
-        rows = _standing_rows(field.entrants, field.outcomes, field.byes)
+        rows = _swiss_standing_rows(field.entrants, field.outcomes, field.byes)
         # Every round decided — which, since the later rounds are cut up front with
         # their sides unknown, includes the ones nobody has been paired into yet. An
         # event with no fixtures that can still yield a result is deliberately NOT
@@ -495,28 +540,83 @@ def _pool_standings(pool: PoolInput) -> PoolStandings:
 def _standing_rows(
     entrants: Sequence[EntryId],
     outcomes: Sequence[MatchOutcome],
-    byes: Sequence[EntryId] = (),
 ) -> tuple[StandingRow, ...]:
-    """These entrants' rows, at their settled ranks — the one place a table is built,
-    for the two shapes that carry one (a pool's, and a swiss field's).
+    """A pool's rows, at their settled ranks, ordered by
+    :func:`~app.pool_finishing_order.finishing_order`.
 
-    Shared so that "a standings row means the same thing whichever event it is read
-    off" is true structurally: the ordering is
-    :func:`~app.pool_finishing_order.finishing_order` and the counts come off the
-    tallies it returns, in one function rather than two that agree today.
-
-    ``byes`` defaults to none, which is a **fact about a pool** rather than a
-    convenience: a round-robin bye is a round sat out inside a schedule that seats its
-    holder in every other one, so there is nothing to score. Only swiss passes any."""
+    It takes no byes: a round-robin bye is a round sat out inside a schedule that seats
+    its holder in every other one, so there is nothing to score. Swiss, which does score
+    one, orders through its own chain — :func:`_swiss_standing_rows`."""
     return tuple(
-        StandingRow(
-            entry_id=tally.entry_id,
-            rank=rank,
-            played=tally.played,
-            wins=tally.wins,
-            losses=tally.losses,
-            games_won=tally.games_won,
-            games_lost=tally.games_lost,
-        )
-        for rank, tally in enumerate(finishing_order(entrants, outcomes, byes), start=1)
+        _standing_row(tally, rank)
+        for rank, tally in enumerate(finishing_order(entrants, outcomes), start=1)
     )
+
+
+def _swiss_standing_rows(
+    entrants: Sequence[EntryId],
+    outcomes: Sequence[MatchOutcome],
+    byes: Sequence[EntryId],
+) -> tuple[SwissStandingRow, ...]:
+    """A swiss field's rows, at their settled ranks, ordered by
+    :func:`~app.pool_finishing_order.swiss_finishing_order` — the chain with
+    **Buchholz** above game difference, and the figure itself carried out beside each
+    row.
+
+    Its shared columns are filled from the same :func:`_standing_columns` a pool row's
+    are, so "a standings row means the same thing whichever event it is read off" stays
+    true structurally; the two tables differ in how they are *ordered* and in the one
+    extra column, not in what a row is."""
+    return tuple(
+        SwissStandingRow(
+            **_standing_columns(standing.tally, rank), buchholz=standing.buchholz
+        )
+        for rank, standing in enumerate(
+            swiss_finishing_order(entrants, outcomes, byes), start=1
+        )
+    )
+
+
+class StandingRowColumns(TypedDict):
+    """The columns **every** standings row carries, named once.
+
+    It exists because :class:`SwissStandingRow` extends :class:`StandingRow` rather than
+    wrapping one: a frozen dataclass cannot be widened into its own subclass, so without
+    this the seven shared columns would be spelled out at two constructors that must
+    agree — the duplication the subclass was supposed to remove. Unpacked into both
+    (:func:`_standing_row`, :func:`_swiss_standing_rows`), so a column added to the row
+    is a type error at either site until it is added here too.
+
+    Public because the **wire** has the same pair of shapes and the same duplication to
+    avoid: ``app.tournament_serialization`` reads a row's columns back into it to build
+    :class:`~app.schemas.tournament.StandingRowRead` and its swiss subclass. One name
+    for the set of columns, checked statically at all four constructors.
+    """
+
+    entry_id: EntryId
+    rank: int
+    played: int
+    wins: int
+    losses: int
+    games_won: int
+    games_lost: int
+
+
+def _standing_columns(tally: EntryTally, rank: int) -> StandingRowColumns:
+    """One tally's shared columns at ``rank`` — the one place a standings row's counts
+    are read off a tally, for both shapes that carry a table."""
+    return StandingRowColumns(
+        entry_id=tally.entry_id,
+        rank=rank,
+        played=tally.played,
+        wins=tally.wins,
+        losses=tally.losses,
+        games_won=tally.games_won,
+        games_lost=tally.games_lost,
+    )
+
+
+def _standing_row(tally: EntryTally, rank: int) -> StandingRow:
+    """One tally as a **pool's** table row at ``rank``. A swiss row is built next door
+    from the same columns, with its Buchholz figure beside them."""
+    return StandingRow(**_standing_columns(tally, rank))

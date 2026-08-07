@@ -476,6 +476,10 @@ async def test_the_standings_carry_the_whole_field_including_the_byed_entrant(
     }
     assert [row["rank"] for row in results["rows"]] == [1, 2, 3, 4, 5, 6, 7]
     assert all(row["played"] == 0 for row in results["rows"]), "nobody has played yet"
+    assert all(row["buchholz"] == 0 for row in results["rows"]), (
+        "the column swiss adds reaches the wire — every figure is zero here because "
+        "nobody has an opponent yet; a real one is pinned in tests/test_results.py"
+    )
     assert results["complete"] is False
     assert results["champion"] is None
 
@@ -907,6 +911,12 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
     table below is where that shows: **one match, one loss**, not the two bye wins a
     departed player was collecting.
 
+    Round 2 repeats round 1's 1v3, and that is the standings speaking rather than a
+    slip. Seed 4's departure takes seed 2's only result with it, so seed 2 has no wins
+    and **no opposition** — Buchholz 0, below seed 3, who at least lost to the leader.
+    The table reads 1, 3, 2, seed 2 takes the bye, and the two left have already met:
+    the documented last resort, which pairs them again rather than stranding the round.
+
     **The withdrawal is written as the statement that causes it in production.** The
     ordinary withdrawal endpoint is window-gated and answers 409 on a live event, so
     nothing here could reach the pairing code through it. ``app.account_merge`` can and
@@ -977,8 +987,8 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
         paired = [f for f in round_two if f.entry_a_id is not None]
         assert len(round_two) == 2, "the cut's second row is still there"
         assert [{f.entry_a_id, f.entry_b_id} for f in paired] == [
-            {entry_ids[0], entry_ids[1]}
-        ], "three survivors make one pairing, and seed 3 sits round 2 out"
+            {entry_ids[0], entry_ids[2]}
+        ], "three survivors make one pairing, and seed 2 sits round 2 out"
 
         await play(2, winner_index=0)
 
@@ -986,7 +996,7 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
         round_three = [f for f in await _fixtures(db_session, event_id) if f.round == 3]
         paired = [f for f in round_three if f.entry_a_id is not None]
         assert [{f.entry_a_id, f.entry_b_id} for f in paired] == [
-            {entry_ids[0], entry_ids[2]}
+            {entry_ids[0], entry_ids[1]}
         ], (
             "round 3 is paired off round 2's table — the round whose unpairable row "
             "stalled the walk for good, leaving the event unplayable from here"

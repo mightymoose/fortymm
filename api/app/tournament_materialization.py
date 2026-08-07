@@ -264,6 +264,27 @@ async def _fixtures_with_match_statuses(
             select(TournamentFixture, Match.status)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(TournamentFixture.event_id == event_id)
+            # Ordered for **stability**, not for presentation: an unordered ``SELECT``
+            # has no guarantee even between two runs against unchanged data, and the
+            # rows go on to be projected into the outcomes a draw type ranks its field
+            # by. Nothing downstream may depend on that order — the tiebreak chain is
+            # sums and counts (``app.pool_finishing_order``), and a plan's ready list is
+            # sorted by ``app.draws.ready_fixtures`` — but "no caller depends on it" is
+            # cheaper to keep true when the order is fixed.
+            #
+            # ``(pool_id, round, position)`` is total within one event: it is the
+            # fixture's identity there, declared NULLS NOT DISTINCT so the un-pooled
+            # draws are covered too
+            # (``uq_tournament_fixtures_event_id_pool_id_round_position``). It is the
+            # read path's key (``app.tournament_queries.fixtures_by_event``) minus the
+            # pool's *position*, which that path sorts on to render the draw in the
+            # director's pool order — presentation this seam has no use for, and would
+            # pay a correlated subquery for.
+            .order_by(
+                TournamentFixture.pool_id.asc().nulls_last(),
+                TournamentFixture.round,
+                TournamentFixture.position,
+            )
         )
     ).all()
     fixtures: list[TournamentFixture] = []

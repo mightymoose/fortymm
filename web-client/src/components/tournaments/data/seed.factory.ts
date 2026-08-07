@@ -25,6 +25,7 @@ import type {
   StandingRow,
   StandingsResults,
   StandingsThenFinishesResults,
+  SwissStandingRow,
   SwissStandingsResults,
   Tournament,
   TournamentEvent,
@@ -1006,6 +1007,20 @@ export function buildStandingRow(overrides: Partial<StandingRow> = {}): Standing
   }
 }
 
+/**
+ * One line of a **swiss** table: a pool's row plus the `buchholz` figure that ordered it.
+ *
+ * `buchholz: 5` rather than a number that could be confused with one of its neighbours —
+ * not `2` (the wins), not `3` (the game difference), not `4` (the games won). A column
+ * reading the wrong field is the failure this fixture exists to catch, and a figure that
+ * collided with a sibling column would let it pass.
+ */
+export function buildSwissStandingRow(
+  overrides: Partial<SwissStandingRow> = {},
+): SwissStandingRow {
+  return { ...buildStandingRow(), buchholz: 5, ...overrides }
+}
+
 /** One pool's standings — a **complete** three-player pool in finishing order:
  * `entry-1` (2–0) over `entry-4` (1–1) over `entry-5` (0–2). In the server's order, which
  * the view renders untouched (ADR-0788 — the order *is* the result), so a factory that
@@ -1277,13 +1292,33 @@ export function swissStandingsResultsOf(
 }
 
 /**
- * A **swiss** event's results (the swiss ADR): **one complete table over the whole field**,
- * four entrants deep, with `entry-1` on top and crowned.
+ * A **swiss** event's results (the swiss ADR): **one complete table over the whole field** —
+ * five entrants over three rounds, `entry-1` on top and crowned.
  *
- * No pools, which is the whole shape: a swiss ranks everybody against everybody. The ranks
- * are distinct and the numbers descend with them, so a panel that re-sorted — or a selector
- * that lost the order — would show a visibly different table. The live state (rounds still
- * to play) is `buildSwissStandingsResults({ complete: false, champion: null })`.
+ * No pools, which is the whole shape: a swiss ranks everybody against everybody. The live
+ * state (rounds still to play) is
+ * `buildSwissStandingsResults({ complete: false, champion: null })`.
+ *
+ * ## The numbers are a real event, not decoration
+ *
+ * Five entrants is **odd on purpose**: every round byes exactly one of them, which is what
+ * makes the two Buchholz rules in the ADR ("swiss standings add Buchholz, and head-to-head
+ * is guarded on having met") visible in the figures rather than merely asserted about them.
+ * The draw behind the table:
+ *
+ *     R1  e1 v e3   e2 v e4   bye e5
+ *     R2  e1 v e2   e3 v e5   bye e4
+ *     R3  e1 v e4   e2 v e5   bye e3
+ *
+ * e1 wins everything; e2 beats e4 and e5; e3 beats e5 and takes a bye; e4 and e5 win
+ * nothing but their byes. That is 6 match wins + 3 bye wins = **9 wins**, which is what the
+ * rows total — and games won totals 24 against games lost 24, so nothing here is invented.
+ *
+ * ⚠️ **It is built to discriminate, twice over.** `e2` and `e3` are level on wins, never
+ * met, and Buchholz puts e2 first **against** game difference (0 beats +1). A table that
+ * showed the wrong number, dropped the column, or re-sorted the rows gets that pair visibly
+ * wrong; a fixture whose ranks simply descended with every column could not tell any of
+ * those apart. `e4`/`e5` repeat the shape a tier down.
  */
 export function buildSwissStandingsResults(
   overrides: Partial<SwissStandingsResults> = {},
@@ -1291,45 +1326,75 @@ export function buildSwissStandingsResults(
   return {
     kind: 'swiss_standings',
     rows: [
-      buildStandingRow({
+      // e1 won all three. Opponents 3, 2 and 4 → Buchholz 2 + 2 + 1 = 5.
+      buildSwissStandingRow({
         entryId: 'entry-1',
         rank: 1,
         played: 3,
         wins: 3,
         losses: 0,
         gamesWon: 9,
-        gamesLost: 2,
-        gameDifference: 7,
+        gamesLost: 3,
+        gameDifference: 6,
+        buchholz: 5,
       }),
-      buildStandingRow({
+      // ⚠️ **The pair the whole column is for.** e2 and e3 are level on wins and never met,
+      // so head-to-head falls through and BUCHHOLZ decides — and it puts e2 first *despite
+      // e3's better game difference* (+1 against 0). Ordered on margin alone these two are
+      // the other way round, so this is the row a table that showed the wrong number, or
+      // re-sorted, gets visibly wrong.
+      //
+      // e2's opponents are 4, 1 and 5 → 1 + 3 + 1 = 5. Two of those five points are **bye
+      // wins** (e4's and e5's only wins are byes), which is the ADR's decision made visible:
+      // Buchholz reads the same wins column this table shows.
+      buildSwissStandingRow({
         entryId: 'entry-2',
         rank: 2,
         played: 3,
         wins: 2,
         losses: 1,
-        gamesWon: 7,
-        gamesLost: 5,
-        gameDifference: 2,
+        gamesWon: 6,
+        gamesLost: 6,
+        gameDifference: 0,
+        buchholz: 5,
       }),
-      buildStandingRow({
+      // e3 played only two opponents — 1 and 5 — because its third round was a **bye**,
+      // which adds no term to its own sum: 3 + 1 = 4. Its bye is also why it has the softer
+      // schedule that puts it below e2.
+      buildSwissStandingRow({
         entryId: 'entry-3',
         rank: 3,
         played: 3,
-        wins: 1,
-        losses: 2,
-        gamesWon: 5,
-        gamesLost: 7,
-        gameDifference: -2,
+        wins: 2,
+        losses: 1,
+        gamesWon: 4,
+        gamesLost: 3,
+        gameDifference: 1,
+        buchholz: 4,
       }),
-      buildStandingRow({
+      // e4 and e5 repeat the same shape one tier down: level on a single win (each of them a
+      // bye win), never met, separated by Buchholz — 2 + 3 = 5 against 2 + 2 = 4.
+      buildSwissStandingRow({
         entryId: 'entry-4',
         rank: 4,
         played: 3,
-        wins: 0,
-        losses: 3,
+        wins: 1,
+        losses: 2,
+        gamesWon: 3,
+        gamesLost: 6,
+        gameDifference: -3,
+        buchholz: 5,
+      }),
+      buildSwissStandingRow({
+        entryId: 'entry-5',
+        rank: 5,
+        played: 3,
+        wins: 1,
+        losses: 2,
         gamesWon: 2,
-        gamesLost: 9,
-        gameDifference: -7,
+        gamesLost: 6,
+        gameDifference: -4,
+        buchholz: 4,
       }),
     ],
     complete: true,
@@ -1339,12 +1404,18 @@ export function buildSwissStandingsResults(
 }
 
 /** A **swiss** event **with results**: the pool-less swiss event `buildSwissEvent` seeds,
- * played out to a champion. Its entrants (`entry-1`…`entry-8`) include every id the table
- * names, so every row joins to a username. */
+ * played out to a champion.
+ *
+ * **Five entrants, not the eight `buildSwissEvent` defaults to**, because a swiss table
+ * ranks the *whole* field: the five rows the results carry are exactly the five entrants the
+ * event lists, so every row joins to a username and no entrant is missing from the table it
+ * is supposed to be ranked in. It is also the odd field the results' bye arithmetic
+ * describes. */
 export function buildSwissStandingsEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
 ): TournamentEvent {
   return buildSwissEvent({
+    entrants: buildEntrants(5),
     results: buildSwissStandingsResults(),
     ...overrides,
   })

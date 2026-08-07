@@ -18,10 +18,21 @@ difference, then games won, then the entry id.
 Swiss orders its field with the same kind of table, but two steps in that chain
 rest on a round-robin assumption that swiss breaks.
 
-**Head-to-head assumes the tied pair met.** In a round-robin everyone plays
-everyone, so a two-way tie always has a head-to-head result to read. In swiss a
-pair tied on wins may never have been paired. The existing step has no way to say
-"they did not meet", because in its own format that cannot happen.
+**Head-to-head, when the tied pair never met.** In a round-robin everyone
+eventually plays everyone, so a completed two-way tie has a head-to-head result to
+read. In swiss a pair tied on wins may never have been paired at all.
+
+**Correction, 2026-08-05.** This section originally claimed the existing step had
+no way to say "they did not meet", and that adding the guard was a correctness fix
+swiss forced. **That was wrong.** `_head_to_head` already returned `None` for a
+pair with no fixture between them, and `_break_tie` already fell through to the
+scalar chain. The guard predates swiss, because a *part-played* round-robin pool
+reaches the same state.
+
+The claim was made during design and not checked against the code. Swiss needed
+nothing here. What this ADR actually contributes on this point is a **test** for
+the guard, which nothing had — confirmed by deliberately breaking it, which reds
+both a swiss test and a pre-existing round-robin one.
 
 **Strength of schedule is invisible.** A round-robin gives every entrant the same
 opponents, so who you played carries no information and the chain rightly ignores
@@ -93,12 +104,24 @@ because a player must not be punished for a scheduling artifact. The games are
 zero so the bye stays neutral on steps 4 and 5, rather than awarding difference
 nobody earned.
 
-### The head-to-head guard is a correctness fix for both formats
+### The head-to-head guard is shared machinery, and it is now tested
 
-The guard is written into the shared understanding of the step, not bolted onto
-the swiss copy. A round-robin pool cannot reach it, because its entrants always
-met. Adding it costs a round-robin nothing and stops the swiss chain reading a
-result that does not exist.
+The guard is a property of the step, not a swiss branch. It already existed (see
+the correction above); what changes is that it is pinned. Breaking it deliberately
+reds a swiss test **and** a pre-existing round-robin one, which is the empirical
+demonstration that one piece of machinery serves both formats.
+
+### A rematch counts twice in Buchholz
+
+Buchholz iterates the outcomes, so an opponent met twice contributes their win
+count twice. This is standard Buchholz, which is a sum over games played rather
+than over distinct opponents, and it is what we take.
+
+The alternative — summing over distinct opponents — would make a player's Buchholz
+depend on how many of their games the pairing happened to repeat, which is not
+something they controlled. Since a rematch only occurs when the greedy walk could
+find no fresh opponent, double-counting keeps the measure a straight function of
+the games actually played.
 
 ## Consequences
 

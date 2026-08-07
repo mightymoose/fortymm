@@ -44,8 +44,10 @@ from app.results import (
     RrThenKoResults,
     SingleElimResults,
     StandingRow,
+    StandingRowColumns,
     StandingsThenFinishes,
     SwissResults,
+    SwissStandingRow,
     SwissStandings,
     results_for,
 )
@@ -63,6 +65,7 @@ from app.schemas.tournament import (
     StandingRowRead,
     StandingsResultsRead,
     StandingsThenFinishesResultsRead,
+    SwissStandingRowRead,
     SwissStandingsResultsRead,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -354,10 +357,10 @@ def _field_input(
     The entries seated in fixtures are **unioned in** rather than assumed to be a
     subset, for the **rows** only. A player who withdraws after the draw is cut leaves
     the active list while their played fixtures stay, and
-    :func:`~app.pool_finishing_order.finishing_order` indexes its tallies by entrant —
-    so dropping them would be a ``KeyError`` on the first outcome that names them, on
-    the detail page of any event that had a withdrawal. Somebody who played real
-    matches belongs in the table.
+    :func:`~app.pool_finishing_order.swiss_finishing_order` indexes its tallies by
+    entrant — so dropping them would be a ``KeyError`` on the first outcome that names
+    them, on the detail page of any event that had a withdrawal. Somebody who played
+    real matches belongs in the table.
 
     The **byes** are derived here rather than stored, because there is nothing to
     store: a bye is the absence of a fixture row, so it is read off the rounds that
@@ -527,18 +530,47 @@ def _pool_standings_read(pools: Sequence[PoolStandings]) -> list[PoolStandingsRe
 
 
 def _standing_rows_read(rows: Sequence[StandingRow]) -> list[StandingRowRead]:
-    """One standings table's rows, shared by every shape that carries a table — a pool's
-    and a swiss field's — so a row means the same thing on either."""
+    """A pool's standings rows, shared by the two shapes that carry one — the
+    round-robin arm and the pool stage of the rr-then-ko arm."""
+    return [StandingRowRead(**_standing_read_columns(row)) for row in rows]
+
+
+def _standing_read_columns(row: StandingRow) -> StandingRowColumns:
+    """One domain row's columns, ready to unpack into its wire model — the one place a
+    standings row crosses onto the wire, for both tables that carry one.
+
+    The set of columns is named once, in :class:`~app.results.StandingRowColumns`, and
+    both wire models take it: :class:`StandingRowRead` alone, and
+    :class:`SwissStandingRowRead` with ``buchholz`` beside it, exactly as their domain
+    rows relate. So adding a column to a standings row is a type error at each
+    constructor until it is added here, rather than a column that quietly reaches one
+    table and not the other."""
+    return StandingRowColumns(
+        entry_id=row.entry_id,
+        rank=row.rank,
+        played=row.played,
+        wins=row.wins,
+        losses=row.losses,
+        games_won=row.games_won,
+        games_lost=row.games_lost,
+    )
+
+
+def _swiss_standing_rows_read(
+    rows: Sequence[SwissStandingRow],
+) -> list[SwissStandingRowRead]:
+    """A swiss table's rows: the same columns a pool's row carries plus ``buchholz``,
+    the figure that ordered them (ADR "swiss standings add Buchholz, and head-to-head is
+    guarded on having met").
+
+    The shared columns come from :func:`_standing_read_columns`, the same call a pool
+    row's do, rather than being spelled out a second time here: the shapes match on both
+    sides of the wire — :class:`SwissStandingRowRead` extends
+    :class:`~app.schemas.tournament.StandingRowRead` exactly as
+    :class:`~app.results.SwissStandingRow` extends :class:`~app.results.StandingRow` —
+    so the only thing this adds is the one column swiss has."""
     return [
-        StandingRowRead(
-            entry_id=row.entry_id,
-            rank=row.rank,
-            played=row.played,
-            wins=row.wins,
-            losses=row.losses,
-            games_won=row.games_won,
-            games_lost=row.games_lost,
-        )
+        SwissStandingRowRead(**_standing_read_columns(row), buchholz=row.buchholz)
         for row in rows
     ]
 
@@ -573,11 +605,10 @@ def _serialize_finishes(results: BracketFinishes) -> FinishesResultsRead:
 
 
 def _serialize_swiss_standings(results: SwissStandings) -> SwissStandingsResultsRead:
-    """The swiss table, whose rows are serialized by the same helper a pool's are — so
-    "a swiss event's standings rows cross the wire exactly as a round-robin pool's do"
-    is true structurally rather than by two serializers agreeing."""
+    """The swiss table — a pool's columns plus the Buchholz figure each row was ordered
+    by."""
     return SwissStandingsResultsRead(
-        rows=_standing_rows_read(results.rows),
+        rows=_swiss_standing_rows_read(results.rows),
         complete=results.complete,
         champion=results.champion,
     )

@@ -60,6 +60,14 @@ export interface SwissStanding {
   readonly username: string
   readonly rank: number
   readonly wins: number
+  /** **Buchholz** — the sum of this entrant's opponents' win counts, and the swiss
+   * chain's tiebreak *above* game difference. On the wire (`SwissStandingRowRead`)
+   * because it is the one link a client cannot re-derive from the row it ordered. */
+  readonly buchholz: number
+  /** `games_won - games_lost`, the server's own figure — the link Buchholz outranks. A
+   * spec that wants to prove strength of schedule beat margin has to be able to read
+   * both and show they disagree. */
+  readonly gameDifference: number
   readonly gamesWon: number
 }
 
@@ -85,6 +93,8 @@ interface SwissResultsPayload {
     readonly entry_id: string
     readonly rank: number
     readonly wins: number
+    readonly buchholz: number
+    readonly game_difference: number
     readonly games_won: number
   }>
 }
@@ -209,6 +219,8 @@ export async function readSwissStandings(
       username,
       rank: row.rank,
       wins: row.wins,
+      buchholz: row.buchholz,
+      gameDifference: row.game_difference,
       gamesWon: row.games_won,
     }
   })

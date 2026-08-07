@@ -31,7 +31,11 @@ export const PoolStandingsTable = ({ pool }: PoolStandingsTableProps) => {
         {pool.name}
       </h4>
 
+      {/* `format="pool"` is the whole of what this table is not: a pool gives every
+          entrant the same opposition, so strength of schedule carries no information and
+          there is no Buchholz column to show (ADR "swiss standings add Buchholz…"). */}
       <StandingsTable
+        format="pool"
         ariaLabel={`Standings for ${pool.name}`}
         rows={pool.rows}
         className="mt-2"
