@@ -95,30 +95,43 @@ CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 QA_SLUG="${QA_PROJECT:-fortymm-qa-$(git rev-parse --abbrev-ref HEAD)}"
 RUN_DIR=".qa-review/$QA_SLUG"; mkdir -p "$RUN_DIR"
 
-launch_cdp() {  # $1=label
-  local dir="/tmp/qa-chrome-$QA_SLUG-$1" port
+# NEVER use shell positional parameters — a dollar sign followed by a digit — or
+# a shell function that takes them, anywhere in this file. Slash-command
+# injection replaces positionals with the words YOU typed after /qa-review,
+# before this text ever reaches the model, so such a parameter silently becomes
+# a word from the user's prompt. That is not theoretical: it turned this very
+# loop into one that launched a single browser under two labels, giving a
+# "two-user" pass in which both identities were the same person. Loop variables
+# like $label are untouched by the substitution — use those.
+for label in poster opponent; do
+  dir="/tmp/qa-chrome-$QA_SLUG-$label"
   # Reuse this run's own browser if it's still alive (a resumed session), but
   # never adopt a stranger's: the port came from OUR profile dir.
   if [ -s "$dir/DevToolsActivePort" ]; then
     port="$(head -1 "$dir/DevToolsActivePort")"
     if curl -sf -o /dev/null "http://localhost:$port/json/version"; then
-      echo "$1: reusing CDP on $port"; echo "$port" > "$RUN_DIR/$1.port"; return
+      echo "$label: reusing CDP on $port"; echo "$port" > "$RUN_DIR/$label.port"; continue
     fi
   fi
   rm -f "$dir/DevToolsActivePort"
   nohup "$CHROME" --remote-debugging-port=0 --user-data-dir="$dir" \
     --no-first-run --no-default-browser-check about:blank >/dev/null 2>&1 &
-  echo $! > "$RUN_DIR/$1.pid"
+  echo $! > "$RUN_DIR/$label.pid"
   disown
   for _ in $(seq 1 60); do [ -s "$dir/DevToolsActivePort" ] && break; sleep 1; done
   port="$(head -1 "$dir/DevToolsActivePort")"
-  echo "$port" > "$RUN_DIR/$1.port"
-  echo "$1: CDP up on $port (pid $(cat "$RUN_DIR/$1.pid"))"
-}
+  echo "$port" > "$RUN_DIR/$label.port"
+  echo "$label: CDP up on $port (pid $(cat "$RUN_DIR/$label.pid"))"
+done
 
-launch_cdp poster
-launch_cdp opponent
 echo "poster=$(cat "$RUN_DIR/poster.port")  opponent=$(cat "$RUN_DIR/opponent.port")"
+
+# Prove you got TWO browsers, not one reused under two labels. Different ports
+# AND different debugger UUIDs, or you do not have two identities.
+for label in poster opponent; do
+  p="$(cat "$RUN_DIR/$label.port")"
+  echo "$label port=$p $(curl -s "localhost:$p/json/version" | tr ',' '\n' | grep webSocketDebuggerUrl)"
+done
 ```
 
 Steps 3 and 4 read `.qa-review/$QA_SLUG/{poster,opponent}.port` and `.pid` — read
