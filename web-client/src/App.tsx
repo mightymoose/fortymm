@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Wordmark } from '@/components/wordmark'
+import { TESTFLIGHT_URL } from '@/lib/external-links'
 import './landing.css'
 
 /** Public source repository — FortyMM is GPLv3 and open to contributors. */
@@ -145,7 +146,7 @@ function Hero() {
                   <path d="M2 7h12" />
                 </svg>
               </span>
-              Web. iOS &amp; Android soon.
+              Web. iOS in beta. Android soon.
             </span>
             <span className="meta-divider" />
             <span className="meta-item">
@@ -980,7 +981,7 @@ function FAQ() {
     },
     {
       q: "What's on the web vs. in the apps?",
-      a: 'Right now: the web is the whole product. Match tracking, ratings, club feeds, the full tournament admin, the spectator view — it all works in your browser on any phone or laptop. Native iOS and Android apps are next; they\'ll be the same product with nicer score entry and push notifications.',
+      a: "Right now: the web is the whole product. Match tracking, ratings, club feeds, the full tournament admin, the spectator view — it all works in your browser on any phone or laptop. The iOS app is in open beta on TestFlight — anyone with the link can join, no invite needed — and it's the same product with nicer score entry and push notifications. Android is next.",
     },
     {
       q: 'How does the rating work?',
@@ -1068,13 +1069,21 @@ function CtaBand() {
             <span className="btn-dot" />
             Start playing now
           </Link>
-          <span
-            className="btn btn-secondary btn-xl btn-disabled"
-            aria-disabled="true"
-            title="Coming soon — iOS is in beta"
+          {/*
+            The TestFlight beta is public — anyone with the link can join — so
+            a logged-out visitor gets the same working link the signed-in
+            sidebar shows (`app-shell.tsx`). Android has no build at all, which
+            is why the button beside this one stays inert.
+          */}
+          <a
+            className="btn btn-secondary btn-xl"
+            href={TESTFLIGHT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Join the public TestFlight beta"
           >
             Get the iOS app
-          </span>
+          </a>
           <span
             className="btn btn-secondary btn-xl btn-disabled"
             aria-disabled="true"
@@ -1084,7 +1093,7 @@ function CtaBand() {
           </span>
         </div>
         <div className="cta-foot mono">
-          ● Web is live · iOS in beta · Android in beta
+          ● Web is live · iOS in beta · Android soon
         </div>
       </div>
     </section>
@@ -1109,8 +1118,8 @@ function Footer() {
           h="Product"
           items={[
             { label: 'Web app', to: '/matches/new' },
-            { label: 'iOS (beta)', disabled: true },
-            { label: 'Android (beta)', disabled: true },
+            { label: 'iOS (beta)', href: TESTFLIGHT_URL, external: true },
+            { label: 'Android', disabled: true },
             { label: 'Spectator view', disabled: true },
             { label: 'Changelog', disabled: true },
           ]}

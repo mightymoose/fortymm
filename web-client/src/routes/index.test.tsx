@@ -107,9 +107,11 @@ describe('/ route', () => {
     renderAt('/')
     await expectLandingVisible()
 
-    // "Get the iOS app" has no destination yet — it must not be a clickable link.
+    // "Get the Android app" has no destination yet — there is no Android build
+    // at all — so it must not be a clickable link. (Its iOS neighbour *is* a
+    // link now: the TestFlight beta is public. See `App.test.tsx`.)
     expect(
-      screen.queryByRole('link', { name: /get the ios app/i }),
+      screen.queryByRole('link', { name: /get the android app/i }),
     ).not.toBeInTheDocument()
     // Footer "Discord" has no invite URL yet — also not a link.
     expect(
