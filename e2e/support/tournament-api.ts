@@ -191,18 +191,42 @@ export interface StoredAddress extends Coords {
   readonly venue: string
 }
 
+/** The draw types this seed can author. Two, because these are the two shapes the seed
+ * itself can express: `round-robin`, whose draw settings are the empty object, and
+ * `single-elim`, whose settings are empty too (`SingleElimDrawSettingsWrite` — a bracket
+ * has no pools to qualify out of and its depth is derived from the field).
+ *
+ * The two formats that DO carry a setting are deliberately absent. `rr-then-ko` needs
+ * `qualifiers_per_pool` and `swiss` needs `rounds`, both **required with no default** on
+ * their arm of the server's draw-settings union — and both are authored through the event
+ * editor **in the browser** by the specs that use them, because the payload that editor
+ * builds is the seam their 422 lived in. Adding them here would give those specs a way to
+ * skip the surface they exist to test. */
+export type SeededDrawType = 'round-robin' | 'single-elim'
+
 /** Optional knobs on `seedTournament`. Defaults reproduce the original minimal
- * shape (one table, one pool, a far-future window), so existing specs are
- * untouched; the solver-schedule spec overrides both — its pool window must
+ * shape (one round-robin, one table, one pool, a far-future window), so existing specs
+ * are untouched; the solver-schedule spec overrides two of them — its pool window must
  * bracket the stack's real NOW for the call-ahead pinning to fire naturally,
  * and a 4-entrant round-robin wants two tables to run its rounds in parallel. */
 export interface SeedTournamentOptions {
+  /** The event's draw type. Omitted = `round-robin`, the original minimal shape.
+   *
+   * `single-elim` is what `tournament-single-elim-schedule.spec.ts` seeds, and it is
+   * seeded **with `pools: []`**: a bracket is un-pooled end to end (ADR-0786), so a pool
+   * on such an event would reserve a slice of the venue no fixture is ever drawn into —
+   * and the spec's whole subject is what the scheduler does with a fixture that names no
+   * pool (ADR 20260807, "a pool restricts scheduling, it does not enable it"). */
+  readonly drawType?: SeededDrawType
   /** The window both the event and its single pool carry. */
   readonly slot?: SlotSpec
   /** The table catalogue; the pool references every listed table. */
   readonly tables?: ReadonlyArray<TableSpec>
   /** The event's pools, **in the director's order** — omitted = the original single
-   * `Pool A` over the whole catalogue, so existing specs are untouched.
+   * `Pool A` over the whole catalogue, so existing specs are untouched. **`[]` seeds an
+   * event with NO pools**, which is what an un-pooled draw type wants: the create verb
+   * takes any number of pools, zero included, and `??` leaves an explicit empty list
+   * alone (only an *omitted* option falls back to the default).
    *
    * The list's order is the whole point of the option: it is what the server turns into
    * the stored `position`s, and therefore what the draw, the deal and the rendered pool
@@ -247,8 +271,13 @@ export interface SeededTournament extends CreatedTournament {
    * The only handle a spec has on a pool id, and the order the draw must read in. */
   readonly pools: ReadonlyArray<StoredPool>
   /** The event's **first** pool id — its only one under the default seed — so a spec
-   * can scope its standings assertions without indexing `pools` itself. */
-  readonly poolId: string
+   * can scope its standings assertions without indexing `pools` itself.
+   *
+   * **`null` for a seed with no pools** (`pools: []`, an un-pooled draw type). Nullable
+   * rather than "the first element of a possibly-empty list", which reads as a `string`
+   * and is `undefined`: a pool-less event has no first pool, and saying so here is what
+   * stops that `undefined` travelling into a locator and resolving nothing. */
+  readonly poolId: string | null
 }
 
 /**
@@ -370,7 +399,11 @@ export async function seedTournament(
         // timezone-aware instants"), so the window still brackets NOW.
         timezone: 'UTC',
         format: 'singles',
-        draw_type: 'round-robin',
+        // The caller's draw type, defaulting to the original round-robin. Both types
+        // this seed can author take **no** further draw settings, so there is nothing
+        // to send beside it (see `SeededDrawType` for the two that do, and why they
+        // are authored in the browser instead).
+        draw_type: options.drawType ?? 'round-robin',
         entry_fee: 0,
         // Only sent when the caller caps the field; omitting the key leaves the
         // event uncapped (the API treats a missing `max_players` as no cap).
@@ -422,7 +455,7 @@ export async function seedTournament(
     tables: storedTables,
     eventId: created.id,
     pools: created.pools,
-    poolId: created.pools[0].id,
+    poolId: created.pools[0]?.id ?? null,
   }
 }
 
@@ -709,6 +742,10 @@ export interface FixtureDetail {
    * position** (ADR 20260801) — so the order these ids first appear in *is* the
    * server's statement of the event's pool order, before any client touches it. */
   readonly pool_id: string | null
+  /** Which round of its draw the fixture belongs to, 1-based. The handle on a bracket's
+   * **first round** — the only round of a freshly cut single-elim draw whose fixtures
+   * have both sides, and therefore the only one the solver can place at all. */
+  readonly round: number
   readonly entry_a_id: string | null
   readonly entry_b_id: string | null
   readonly match_id: string | null
