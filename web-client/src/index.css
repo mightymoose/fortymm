@@ -1017,8 +1017,11 @@ body.dark.fortymm-theme {
 .app-shell__backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(2px);
+  /* Match the Dialog/Sheet overlays, which use `bg-black/10 backdrop-blur-xs`.
+     Tailwind compiles those to oklab(0 0 0 / 0.1) and blur(4px); over the
+     --ink-950 canvas both scrims composite to the same rgb(9, 11, 16). */
+  background: rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(4px);
   z-index: 35;
   opacity: 0;
   pointer-events: none;
