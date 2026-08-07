@@ -28,6 +28,13 @@ import { drawPanelPage as page } from './draw-panel.page'
  * Pool B (2/3). */
 const DRAWN = buildDrawnEvent()
 
+/** The panel's own verbs that are still live — swept by DOM rather than by role, because
+ * an open dialog puts `aria-hidden` over everything behind it and a role query then finds
+ * none of them. A drawn event offers exactly two, and both go dead while a draw verb is
+ * in flight, so the count is a synchronous read of "nothing was sent". */
+const enabledVerbsIn = (eventId: string) =>
+  page.getPanelControls(eventId).filter((el) => !el.hasAttribute('disabled'))
+
 /** What a successful cut answers with. The panel does not read it — the refetched
  * tournament carries the new draw — but it must be a payload the parser accepts, or the
  * mutation rejects and the test would be asserting against a *failed* cut. */
@@ -341,7 +348,7 @@ describe('DrawPanel', () => {
       expect(page.queryNotice()).toBeNull()
     })
 
-    it('re-cuts a standing draw through the same POST', async () => {
+    it('re-cuts a standing draw through the same POST — once the confirm is answered', async () => {
       let seen = ''
       mockEventCutDrawEndpoint(server, ({ request }) => {
         seen = request.url
@@ -350,13 +357,14 @@ describe('DrawPanel', () => {
       page.render({ tournamentId: 't-1', event: DRAWN })
 
       await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       await waitFor(() =>
         expect(seen).toContain('/v1/tournaments/t-1/events/ev-u1200/draw'),
       )
     })
 
-    it('deletes a draw with a DELETE on that same resource', async () => {
+    it('deletes a draw with a DELETE on that same resource — once the confirm is answered', async () => {
       let seen: { url: string; method: string } | null = null
       mockEventUncutDrawEndpoint(server, ({ request }) => {
         seen = { url: request.url, method: request.method }
@@ -365,13 +373,16 @@ describe('DrawPanel', () => {
       page.render({ tournamentId: 't-1', event: DRAWN })
 
       await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       await waitFor(() => expect(seen).not.toBeNull())
       expect(seen!.method).toBe('DELETE')
       expect(seen!.url).toContain('/v1/tournaments/t-1/events/ev-u1200/draw')
     })
 
-    // One whole-draw replacement at a time: a double-click must not race two cuts.
+    // One whole-draw replacement at a time: a double-click must not race two cuts. The
+    // confirm does NOT make this redundant — it asks a question once, per click, and two
+    // clicks would ask it twice. The lock is what stops the second one being asked at all.
     it('locks the verbs while one is in flight', async () => {
       let calls = 0
       mockEventCutDrawEndpoint(server, async () => {
@@ -383,11 +394,156 @@ describe('DrawPanel', () => {
 
       const recut = await page.findRecutButton('U1200 Singles')
       await userEvent.click(recut)
+      await userEvent.click(page.confirm.getConfirmButton())
 
       await waitFor(() => expect(recut).toBeDisabled())
       expect(page.queryDeleteButton('U1200 Singles')).toBeDisabled()
       await userEvent.click(recut)
       expect(calls).toBe(1)
+      // …and the second click did not even get as far as the question: a locked verb
+      // opens no dialog. Without this the assertion above would only be saying that a
+      // disabled button is disabled, since the cut now needs a confirm it never got.
+      expect(page.confirm.queryDialog()).toBeNull()
+    })
+  })
+
+  /**
+   * **The confirm is what fires the two destructive verbs** (ADR "a confirm prices an
+   * irreversible act, a freeze explains an illegal one"). Re-cut and Delete each discard
+   * a standing draw and the schedule solved on it, and neither is undoable — so the click
+   * that names the act and the click that pays for it are different clicks.
+   *
+   * The first cut is exempt and stays a single click. That exemption is the reason the
+   * other two are worth anything: a director trained to click through confirms reads none
+   * of them.
+   */
+  describe('the confirm on a destructive verb', () => {
+    /**
+     * The endpoints **hang** (`delay('infinite')`) in these two, and that is what makes
+     * them evidence rather than a race. A verb wired to the dialog *and* the mutation
+     * would send a request that completes in milliseconds, and by the time an assertion
+     * ran, `isPending` would be back to false and the panel would look untouched. A
+     * request that never answers cannot settle away: it holds the verbs disabled for as
+     * long as the test cares to look, so "both verbs are still live" is a synchronous
+     * read of "nothing was sent" — one that does not depend on when MSW got there.
+     */
+    it('sends NOTHING on a bare click of Delete draw — the dialog is what gates it', async () => {
+      let calls = 0
+      mockEventUncutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return new HttpResponse(null, { status: 204 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+
+      // Settle on the dialog first — the count is only evidence once the click has been
+      // given somewhere to have gone. Bounded under `testTimeout`, so a failure reads
+      // "unable to find role=alertdialog" rather than an undiscriminated 5s timeout
+      // (`web-client/CLAUDE.md`).
+      await waitFor(() => expect(page.confirm.getDialog()).toBeInTheDocument(), {
+        timeout: 2000,
+      })
+      expect(calls).toBe(0)
+      // Swept by DOM: Radix marks everything behind an open modal `aria-hidden`, so a
+      // role query finds none of the panel's buttons while the dialog is up.
+      expect(enabledVerbsIn('ev-u1200')).toHaveLength(2)
+    })
+
+    it('sends NOTHING on a bare click of Re-cut draw either', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, async () => {
+        calls += 1
+        await delay('infinite')
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+
+      await waitFor(() => expect(page.confirm.getDialog()).toBeInTheDocument(), {
+        timeout: 2000,
+      })
+      expect(calls).toBe(0)
+      expect(enabledVerbsIn('ev-u1200')).toHaveLength(2)
+    })
+
+    // What the PANEL decides is which act opened and which event it carries — the tab
+    // renders one card per event, so "the draw" alone is ambiguous the moment a
+    // tournament has more than one. The sentences themselves belong to the dialog's own
+    // test: pinning them here too is the shape that lets a copy edit green one file and
+    // leave the other stale until a full-suite run. So each act is witnessed by ONE
+    // string, the confirm button's — the words on the control the director actually
+    // clicks — and that string still differs per variant, so a swapped act reds.
+    it('names the act and the event it would discard', async () => {
+      page.render({ event: DRAWN })
+
+      await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+
+      expect(page.confirm.getDialog()).toHaveTextContent('U1200 Singles')
+      expect(page.confirm.getConfirmButton()).toHaveTextContent('Delete the draw')
+    })
+
+    it('prices a re-cut as a re-deal, not as a deletion', async () => {
+      page.render({ event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+
+      expect(page.confirm.getConfirmButton()).toHaveTextContent('Re-cut the draw')
+    })
+
+    it('sends nothing when the director goes back, and leaves the draw standing', async () => {
+      let calls = 0
+      mockEventUncutDrawEndpoint(server, () => {
+        calls += 1
+        return new HttpResponse(null, { status: 204 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getCancelButton())
+
+      await waitFor(() => expect(page.confirm.queryDialog()).toBeNull())
+      expect(calls).toBe(0)
+      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      // A cancel is not a failure: there is nothing to explain, so there is no notice.
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    it('sends nothing when the dialog is dismissed with Escape', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, () => {
+        calls += 1
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({ tournamentId: 't-1', event: DRAWN })
+
+      await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.keyboard('{Escape}')
+
+      await waitFor(() => expect(page.confirm.queryDialog()).toBeNull())
+      expect(calls).toBe(0)
+      expect(page.getPoolLines('p-a')).toHaveLength(3)
+    })
+
+    // The exemption, pinned. The first cut is constructive and re-cuttable: one click
+    // cuts it, and no dialog stands in the way.
+    it('asks nothing on the FIRST cut — Generate stays one click', async () => {
+      let calls = 0
+      mockEventCutDrawEndpoint(server, () => {
+        calls += 1
+        return HttpResponse.json(cutResponse(), { status: 201 })
+      })
+      page.render({
+        tournamentId: 't-1',
+        event: buildEvent({ id: 'ev-1', name: 'Open Singles' }),
+      })
+
+      await userEvent.click(await page.findGenerateButton('Open Singles'))
+
+      await waitFor(() => expect(calls).toBe(1))
+      expect(page.confirm.queryDialog()).toBeNull()
     })
   })
 
@@ -407,6 +563,7 @@ describe('DrawPanel', () => {
       page.render({ event: DRAWN })
 
       await userEvent.click(await page.findRecutButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       const notice = await page.findNoticeText()
       expect(notice).toContain('This draw is already under way')
@@ -422,6 +579,7 @@ describe('DrawPanel', () => {
       page.render({ event: DRAWN })
 
       await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+      await userEvent.click(page.confirm.getConfirmButton())
 
       expect(await page.findNoticeText()).toContain(PLAY_GUARD)
     })

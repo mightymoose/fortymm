@@ -139,7 +139,10 @@ test.describe('Tournaments · the lifecycle', () => {
     // closing it would mean starting a tournament that has me on its roster and nowhere
     // in its fixtures. Re-cut, then start. (The refusal itself, and its copy, are
     // `tournament-draw.spec.ts`'s subject.)
+    // Re-cutting discards the standing pairings, so it is priced: the verb opens the
+    // confirm and the act is the confirm's own button.
     await pom.recutDrawButton(EVENT.JOURNEY).click()
+    await pom.irreversibleActConfirmButton.click()
     await expect(pom.drawPanel(EVENT.JOURNEY)).toContainText(ME.username)
 
     await pom.lifecycleButton('Start tournament').click()

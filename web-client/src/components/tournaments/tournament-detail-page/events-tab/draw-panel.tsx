@@ -14,6 +14,10 @@ import {
   type UnpooledShape,
 } from '../../data/draw'
 import type { TournamentEvent } from '../../data/types'
+import {
+  ConfirmIrreversibleActDialog,
+  type DrawActConsequence,
+} from '../confirm-irreversible-act-dialog'
 import { LeadReason } from './lead-reason'
 import { Bracket } from './draw-panel/bracket'
 import { PoolDraw } from './draw-panel/pool-draw'
@@ -52,6 +56,21 @@ export interface DrawPanelProps {
  * - **drawn** — the pools, their members and their fixtures, round by round
  *   (`PoolDraw`).
  *
+ * ## The two destructive verbs are priced, the first cut is not
+ *
+ * Re-cut and Delete each open `ConfirmIrreversibleActDialog` first, and the mutation fires
+ * on the confirm alone — Go back and Escape leave the draw exactly as it stands and send
+ * nothing, and an overlay click does not even close the dialog (`AlertDialog`
+ * `preventDefault`s outside interaction, so a mis-click beside a destructive confirm is
+ * inert) (ADR "a confirm prices an irreversible act, a freeze explains an
+ * illegal one"). **Generate is deliberately exempt**: the first cut is constructive and
+ * re-cuttable, and a confirm there would only train the director to click through the two
+ * that matter.
+ *
+ * The `isPending` lock stays alongside the confirm rather than being replaced by it. A
+ * confirm is not a debounce: it asks a question once, while the lock is what keeps two
+ * whole-draw replacements from racing.
+ *
  * ## Refusals are inline, and the server's sentence is the copy
  *
  * The panel surfaces its own failures — `useCutDraw` / `useUncutDraw` carry **no global
@@ -80,8 +99,13 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   const cut = useCutDraw(tournamentId)
   const uncut = useUncutDraw(tournamentId)
   // The last refusal, in words. Cleared when a new attempt starts — a notice about the
-  // click before last is worse than none.
+  // click before last is worse than none. An opened (or cancelled) dialog is NOT an
+  // attempt, so it leaves the standing notice alone.
   const [notice, setNotice] = useState<DrawNotice | null>(null)
+  // The act awaiting its confirm, held as the CONSEQUENCE the dialog will price rather
+  // than as a queued closure: the dialog needs it anyway, and a stored callback would
+  // capture whatever `event` was when the button was clicked.
+  const [pending, setPending] = useState<DrawActConsequence | null>(null)
 
   const state = drawState(event)
   // One in-flight draw verb at a time. A second click on Re-cut while the first is still
@@ -95,6 +119,25 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
     } catch (error) {
       // `mutateAsync` rejects; the notice IS the error surface (there is no toast).
       setNotice(drawRefusalNotice(error, verb))
+    }
+  }
+
+  /** The confirmed act, fired. The switch is exhaustive on `DrawActConsequence` — the
+   * acts this panel OWNS — so a third destructive draw verb is a TYPE error here rather
+   * than a dialog that prices one act and performs another. Deliberately not the whole
+   * `IrreversibleActConsequence`: the lifecycle edges join that union later, and a panel
+   * checked against them would red in a slice it has no part in. */
+  const runConfirmed = (consequence: DrawActConsequence) => {
+    setPending(null)
+    switch (consequence.variant) {
+      case 'recut-draw':
+        return attempt('cut the draw', () => cut.mutateAsync(event.id))
+      case 'delete-draw':
+        return attempt('remove the draw', () => uncut.mutateAsync(event.id))
+      default: {
+        const exhaustive: never = consequence
+        return exhaustive
+      }
     }
   }
 
@@ -132,13 +175,16 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
               </Button>
             ) : (
               <>
+                {/* The two destructive verbs. Neither one mutates on this click: it
+                    opens the confirm, and the act is what the confirm's own button
+                    fires. */}
                 <Button
                   size="sm"
                   variant="outline"
                   aria-label={`Re-cut draw for ${event.name}`}
                   disabled={isPending}
                   onClick={() =>
-                    attempt('cut the draw', () => cut.mutateAsync(event.id))
+                    setPending({ variant: 'recut-draw', eventName: event.name })
                   }
                 >
                   <Shuffle size={14} />
@@ -150,7 +196,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
                   aria-label={`Delete draw for ${event.name}`}
                   disabled={isPending}
                   onClick={() =>
-                    attempt('remove the draw', () => uncut.mutateAsync(event.id))
+                    setPending({ variant: 'delete-draw', eventName: event.name })
                   }
                 >
                   <Trash2 size={14} />
@@ -187,6 +233,19 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
           first and the table/placements they fill in second; it is live BFF data, so it
           updates on the same refetch the rest of the card does, with no wiring of its own. */}
       <ResultsPanel event={event} />
+
+      {/* The price of a destructive verb, asked before it is paid. Mounted only while an
+          act is awaiting its answer, so the dialog cannot be on screen with nothing
+          behind it. Confirm runs the act it named; cancel — and Escape — drops it, and the
+          draw below is untouched because nothing was ever sent. */}
+      {pending && (
+        <ConfirmIrreversibleActDialog
+          open
+          consequence={pending}
+          onConfirm={() => void runConfirmed(pending)}
+          onCancel={() => setPending(null)}
+        />
+      )}
     </section>
   )
 }

@@ -1,6 +1,7 @@
 import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
+import { confirmIrreversibleActDialogPage } from '../confirm-irreversible-act-dialog.page'
 import { DrawPanel, type DrawPanelProps } from './draw-panel'
 import { buildDrawPanelProps } from './draw-panel.factory'
 import { poolDrawPage } from './draw-panel/pool-draw.page'
@@ -42,6 +43,12 @@ const scoped = (container: Container) => ({
   findDeleteButton(eventName: string) {
     return container.findByRole('button', { name: `Delete draw for ${eventName}` })
   },
+
+  /** The **confirm** the two destructive verbs are gated by — Re-cut and Delete open it
+   * and send nothing; the act is fired by its own button. Always addressed at `screen`,
+   * whatever the panel's scope: the dialog portals to the document body, so it is never
+   * inside the card a container narrows to. (Generate has none, by design.) */
+  confirm: confirmIrreversibleActDialogPage.within(screen),
 
   /** The **designed empty state** of an event with no draw — inert copy, never a
    * spinner and never an error. */
@@ -117,6 +124,10 @@ const scoped = (container: Container) => ({
  * clicks one of its verbs must stub the draw endpoint itself — `mockEventCutDrawEndpoint`
  * / `mockEventUncutDrawEndpoint` (`@/mocks/endpoints/tournaments/tournaments.endpoint`).
  * Rendering alone fetches nothing: the fixtures ride the event it is handed.
+ *
+ * A test driving **Re-cut** or **Delete** must go through `confirm` — clicking the verb
+ * alone opens the dialog and sends nothing, which is the whole point of it. **Generate**
+ * is the exception: the first cut fires on its single click.
  */
 export const drawPanelPage = {
   render(overrides: Partial<DrawPanelProps> = {}) {

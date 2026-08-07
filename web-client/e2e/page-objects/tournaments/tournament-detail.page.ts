@@ -189,6 +189,15 @@ export class TournamentDetailPage {
     return this.page.getByRole('button', { name: `Delete draw for ${eventName}` })
   }
 
+  /** The consequence-stating confirm that Re-cut and Delete open, and the button that
+   * actually fires the act (ADR "a confirm prices an irreversible act, a freeze explains
+   * an illegal one"). Addressed by testid, because the label is the act's own verb —
+   * `Re-cut the draw` / `Delete the draw` — not a fixed string. **Generate opens no
+   * dialog**: the first cut is one click, by design. */
+  get irreversibleActConfirmButton(): Locator {
+    return this.page.getByTestId('confirm-irreversible-act-confirm')
+  }
+
   /** The panel's inline **refusal** — the `Alert` where the click was, carrying the
    * server's own sentence (a 422 names what the director must change). Addressed by the
    * testid prefix because the id carries the event's id, which a spec has no business
