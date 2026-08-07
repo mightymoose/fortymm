@@ -76,8 +76,10 @@ const standingRowSchema = standingRowWireSchema.transform(toStandingRow)
  * this entrant's opponents' win counts, and the tiebreak that sits above game difference in
  * swiss (ADR "swiss standings add Buchholz, and head-to-head is guarded on having met").
  *
- * `.extend()`ed from the shared row rather than re-declared, so the eight columns both
- * tables show are stated once. Required and an integer, exactly as the wire has it: a
+ * `.extend()`ed from the shared row rather than re-declared, so the eight fields both
+ * tables' rows carry are stated once. Eight is what the **wire** sends, not what either
+ * table shows: `played` and `gamesLost` are parsed and carried inward, and neither is a
+ * column. Required and an integer, exactly as the wire has it: a
  * missing `buchholz` is real server drift, and it fails HERE rather than rendering as an
  * empty cell in the one column that explains the order. `0` is a legitimate value — an
  * entrant every one of whose opponents has yet to win — so it is not a "missing" stand-in
@@ -178,7 +180,7 @@ const standingsThenFinishesResultsWireSchema = z.object({
  * is decided, and the leader once it is.
  *
  * The rows are `swissStandingRowSchema` — the very parser a pool's standings use, extended
- * by the one column swiss adds — so the two tables cannot drift on the eight they share and
+ * by the one field swiss adds — so the two tables cannot drift on the eight they share and
  * a malformed row fails at the same boundary whichever arm carried it. The two structural
  * differences are both facts about the format: no pool to group under (swiss ranks the whole
  * field in one table, ADR "swiss pre-cuts every round and pairs each one on advance") and

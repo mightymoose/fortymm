@@ -412,25 +412,6 @@ export class TournamentDetailPage {
     return this.swissStandingCell(eventId, entryId, SWISS_STANDINGS_COLUMNS.wins)
   }
 
-  /** One entry's **Buchholz** cell — the sum of their opponents' win counts, and the
-   * tiebreak that sits *above* game difference in the swiss chain. It is on the table
-   * because it is the one link a director cannot re-derive from the columns beside it:
-   * a row ranked above another on equal wins and a worse `Diff` is unreadable without
-   * it. */
-  swissStandingBuchholz(eventId: string, entryId: string): Locator {
-    return this.swissStandingCell(eventId, entryId, SWISS_STANDINGS_COLUMNS.buchholz)
-  }
-
-  /** One entry's **game difference** cell. Rendered with an explicit sign (`+2`, `-1`),
-   * because `+2` and `-2` are different standings and a bare `2` would read as both. */
-  swissStandingGameDifference(eventId: string, entryId: string): Locator {
-    return this.swissStandingCell(
-      eventId,
-      entryId,
-      SWISS_STANDINGS_COLUMNS.gameDifference,
-    )
-  }
-
   /** One entry's **games won** cell. Zero for a bye, which is what stops a scheduling
    * artifact nobody played from lifting its holder over somebody who beat a real
    * opponent. */

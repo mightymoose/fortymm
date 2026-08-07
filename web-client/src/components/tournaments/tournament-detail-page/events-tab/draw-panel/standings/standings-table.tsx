@@ -66,60 +66,64 @@ const NumCell = ({
 )
 
 /**
- * One entrant's line: the columns **every** standings table shows, plus the Buchholz cell
- * when this table has that column.
+ * **One entrant's line, tagged the same way the table is** — `StandingsTableRows` in the
+ * singular, so the row and the columns it has are still one decision at this level.
  *
- * `buchholz` is `number | undefined` here rather than on the row, and the two arms of
- * `bodyRows` below are what supply it — so the cell exists exactly when the header does,
- * both decided by the one tag. A row type that carried an optional `buchholz` would let a
- * pool row wander in with one, or a swiss row arrive without.
+ * The alternative, a `buchholz?: number` prop beside a plain `StandingLine`, re-admits at
+ * the row exactly what the tag removed at the table: a swiss line arriving without its
+ * figure, or a pool line arriving with one, neither of which the type could refuse. Carrying
+ * the tag down means `swiss` **requires** a `SwissStandingLine` and the cell is read off the
+ * row it belongs to, one narrowing, no optional.
  */
-const StandingsLineRow = ({
-  row,
-  buchholz,
-}: {
-  row: StandingLine
-  buchholz?: number
-}) => (
-  <TableRow data-testid={`standing-row-${row.entryId}`}>
-    <NumCell className="text-[color:var(--fg-3)]">{row.rank}</NumCell>
-    <TableCell className="text-[color:var(--fg-1)]">{row.name}</TableCell>
-    <NumCell>{row.wins}</NumCell>
-    <NumCell>{row.losses}</NumCell>
-    {/* Above game difference, because that is where it sits in swiss's tiebreak chain
-        (wins → head-to-head → **Buchholz** → game difference → games won). The columns run
-        left-to-right in chain order, which is what lets a director read *why* two entrants
-        level on wins are in the order they are in. */}
-    {buchholz !== undefined && (
-      <NumCell className="text-[color:var(--fg-2)]">{buchholz}</NumCell>
-    )}
-    {/* The sign is load-bearing — `+2` and `-2` are different standings, and a bare `2`
-        would read as both. A screen reader hears "plus 2" / "minus 2" from the same glyph.
-        Buchholz above takes no sign: it is a sum of win counts, so it is never negative and
-        a `+` would suggest a margin it is not. */}
-    <NumCell className="text-[color:var(--fg-2)]">
-      {row.gameDifference > 0 ? `+${row.gameDifference}` : row.gameDifference}
-    </NumCell>
-    <NumCell>{row.gamesWon}</NumCell>
-  </TableRow>
-)
+type StandingsTableLine =
+  | { format: 'pool'; row: StandingLine }
+  | { format: 'swiss'; row: SwissStandingLine }
+
+const StandingsLineRow = (line: StandingsTableLine) => {
+  const { row } = line
+
+  return (
+    <TableRow data-testid={`standing-row-${row.entryId}`}>
+      <NumCell className="text-[color:var(--fg-3)]">{row.rank}</NumCell>
+      <TableCell className="text-[color:var(--fg-1)]">{row.name}</TableCell>
+      <NumCell>{row.wins}</NumCell>
+      <NumCell>{row.losses}</NumCell>
+      {/* Above game difference, because that is where it sits in swiss's tiebreak chain
+          (wins → head-to-head → **Buchholz** → game difference → games won). The columns run
+          left-to-right in chain order, which is what lets a director read *why* two entrants
+          level on wins are in the order they are in. */}
+      {line.format === 'swiss' && (
+        <NumCell className="text-[color:var(--fg-2)]">{line.row.buchholz}</NumCell>
+      )}
+      {/* The sign is load-bearing — `+2` and `-2` are different standings, and a bare `2`
+          would read as both. A screen reader hears "plus 2" / "minus 2" from the same glyph.
+          Buchholz above takes no sign: it is a sum of win counts, so it is never negative and
+          a `+` would suggest a margin it is not. */}
+      <NumCell className="text-[color:var(--fg-2)]">
+        {row.gameDifference > 0 ? `+${row.gameDifference}` : row.gameDifference}
+      </NumCell>
+      <NumCell>{row.gamesWon}</NumCell>
+    </TableRow>
+  )
+}
 
 /**
  * The body, one arm per table format — a `switch` with a `never` default, so a third kind
  * of standings table is a **compile error here** until it says which columns it has.
  *
  * The `map` lives *inside* the switch on purpose: that is what narrows `rows` to the arm's
- * own row type, so the swiss arm reads `row.buchholz` with no cast and the pool arm cannot.
+ * own row type, so the swiss arm hands `StandingsLineRow` a row carrying `buchholz` with no
+ * cast, and the pool arm cannot hand it one that claims to.
  */
 const bodyRows = (table: StandingsTableRows) => {
   switch (table.format) {
     case 'pool':
       return table.rows.map((row) => (
-        <StandingsLineRow key={row.entryId} row={row} />
+        <StandingsLineRow key={row.entryId} format="pool" row={row} />
       ))
     case 'swiss':
       return table.rows.map((row) => (
-        <StandingsLineRow key={row.entryId} row={row} buchholz={row.buchholz} />
+        <StandingsLineRow key={row.entryId} format="swiss" row={row} />
       ))
     default: {
       const exhaustive: never = table
@@ -134,7 +138,7 @@ const bodyRows = (table: StandingsTableRows) => {
  * **Buchholz** figure that ordered them.
  *
  * **One table for every results shape that ranks players.** A round-robin pool
- * (`PoolStandingsTable`) and a pool-less swiss event (`SwissStandingsPanel`) share eight
+ * (`PoolStandingsTable`) and a pool-less swiss event (`SwissStandingsPanel`) share six
  * columns computed the same way, so they render through this one component rather than two
  * that agree today. What differs is the *title*, the test hooks — both the caller's — and
  * the one extra column, which is `format`'s.

@@ -1,7 +1,7 @@
 import { renderedHtml } from '@/test/rendered-html'
 import { render, screen, type Container } from '@/test/utilities'
 
-import { PLAYER_COLUMN, standingsTablePage } from './standings-table.page'
+import { standingsTablePage } from './standings-table.page'
 import { StandingsPanel } from './standings-panel'
 import {
   buildStandingsPanelProps,
@@ -46,11 +46,12 @@ const scoped = (container: Container) => ({
 
   /** One pool table's player names, top to bottom (the rendered order) — for the "the
    * panel shows each pool, joined to names" assertion. Read through `standingsTablePage`,
-   * which owns the table these rows are in. */
+   * which owns the table these rows are in, and asked for by the Player header rather than
+   * by an index a new column would shift. */
   getRowNames(poolName: string) {
     return standingsTablePage
       .within(container)
-      .getColumn(`Standings for ${poolName}`, PLAYER_COLUMN)
+      .getColumnUnder(`Standings for ${poolName}`, 'Player')
   },
 })
 

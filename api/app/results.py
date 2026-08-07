@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TypedDict
 
 from app.draws import EntryId, PoolId
 from app.models.tournament import DrawType
@@ -69,6 +70,7 @@ __all__ = [
     "RrThenKoResults",
     "SingleElimResults",
     "StandingRow",
+    "StandingRowColumns",
     "StandingsThenFinishes",
     "SwissResults",
     "SwissStandingRow",
@@ -264,22 +266,31 @@ class StandingsThenFinishes:
 
 
 @dataclass(frozen=True, slots=True)
-class SwissStandingRow:
+class SwissStandingRow(StandingRow):
     """One entry's line in a swiss table: the row every standings table carries, plus
     the **Buchholz** figure that ordered it.
 
-    Composed rather than a wider :class:`StandingRow`, for the reason
-    :class:`~app.pool_finishing_order.SwissTally` is: a pool has no Buchholz, so a
-    shared row would carry a ``0`` on every round-robin line that means "not applicable"
-    while reading as a real figure.
+    A **subclass**, not a wider :class:`StandingRow` and not a wrapper around one. The
+    two are different claims and only the first was ever in doubt: widening the shared
+    row would put a Buchholz of ``0`` on every round-robin line, where it would mean
+    "not applicable" while reading as a real figure. Extending it does not — a pool row
+    is a :class:`StandingRow` and is never one of these — and it says the thing that is
+    true, that a swiss line *is* a standings line with one more column. The wire models
+    (:class:`~app.schemas.tournament.SwissStandingRowRead`) and the web client's types
+    are both shaped that way, so this is also the shape the whole stack already agrees
+    on.
 
-    It is on the row because it is the one link in the swiss chain a director cannot
-    recompute from the counts beside it — the sum of *this entrant's opponents'* win
-    counts, which lives in other rows. Every other tiebreak on the table shows its own
-    working.
+    ``buchholz`` is on the row because it is the one link in the swiss chain a director
+    cannot recompute from the counts beside it — the sum of *this entrant's opponents'*
+    win counts, which lives in other rows. Every other tiebreak on the table shows its
+    own working.
+
+    (:class:`~app.pool_finishing_order.SwissTally` next door stays *composed*, and the
+    difference is real: a tally is what the chain mutates while it counts, so one shared
+    definition of "wins" there is the thing that keeps the two chains from drifting. A
+    row is the finished, frozen output.)
     """
 
-    row: StandingRow
     buchholz: int
 
 
@@ -514,7 +525,7 @@ class SwissResults:
         complete = (
             field.fixture_count > 0 and len(field.outcomes) == field.fixture_count
         )
-        champion = rows[0].row.entry_id if complete and rows else None
+        champion = rows[0].entry_id if complete and rows else None
         return SwissStandings(rows=rows, complete=complete, champion=champion)
 
 
@@ -552,13 +563,13 @@ def _swiss_standing_rows(
     **Buchholz** above game difference, and the figure itself carried out beside each
     row.
 
-    The row half is built by the same :func:`_standing_row` a pool's is, so "a standings
-    row means the same thing whichever event it is read off" stays true structurally;
-    the two tables differ in how they are *ordered* and in the one extra column, not in
-    what a row is."""
+    Its shared columns are filled from the same :func:`_standing_columns` a pool row's
+    are, so "a standings row means the same thing whichever event it is read off" stays
+    true structurally; the two tables differ in how they are *ordered* and in the one
+    extra column, not in what a row is."""
     return tuple(
         SwissStandingRow(
-            row=_standing_row(standing.tally, rank), buchholz=standing.buchholz
+            **_standing_columns(standing.tally, rank), buchholz=standing.buchholz
         )
         for rank, standing in enumerate(
             swiss_finishing_order(entrants, outcomes, byes), start=1
@@ -566,10 +577,35 @@ def _swiss_standing_rows(
     )
 
 
-def _standing_row(tally: EntryTally, rank: int) -> StandingRow:
-    """One tally as the table's row at ``rank`` — the one place a standings row is
-    built, for both shapes that carry a table."""
-    return StandingRow(
+class StandingRowColumns(TypedDict):
+    """The columns **every** standings row carries, named once.
+
+    It exists because :class:`SwissStandingRow` extends :class:`StandingRow` rather than
+    wrapping one: a frozen dataclass cannot be widened into its own subclass, so without
+    this the seven shared columns would be spelled out at two constructors that must
+    agree — the duplication the subclass was supposed to remove. Unpacked into both
+    (:func:`_standing_row`, :func:`_swiss_standing_rows`), so a column added to the row
+    is a type error at either site until it is added here too.
+
+    Public because the **wire** has the same pair of shapes and the same duplication to
+    avoid: ``app.tournament_serialization`` reads a row's columns back into it to build
+    :class:`~app.schemas.tournament.StandingRowRead` and its swiss subclass. One name
+    for the set of columns, checked statically at all four constructors.
+    """
+
+    entry_id: EntryId
+    rank: int
+    played: int
+    wins: int
+    losses: int
+    games_won: int
+    games_lost: int
+
+
+def _standing_columns(tally: EntryTally, rank: int) -> StandingRowColumns:
+    """One tally's shared columns at ``rank`` — the one place a standings row's counts
+    are read off a tally, for both shapes that carry a table."""
+    return StandingRowColumns(
         entry_id=tally.entry_id,
         rank=rank,
         played=tally.played,
@@ -578,3 +614,9 @@ def _standing_row(tally: EntryTally, rank: int) -> StandingRow:
         games_won=tally.games_won,
         games_lost=tally.games_lost,
     )
+
+
+def _standing_row(tally: EntryTally, rank: int) -> StandingRow:
+    """One tally as a **pool's** table row at ``rank``. A swiss row is built next door
+    from the same columns, with its Buchholz figure beside them."""
+    return StandingRow(**_standing_columns(tally, rank))

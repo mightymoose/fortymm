@@ -117,15 +117,13 @@ def test_a_swiss_field_stands_in_one_table_ordered_by_the_swiss_chain() -> None:
 
     standings = SwissResults().tabulate(field)
 
-    assert [
-        (row.row.entry_id, row.row.wins, row.row.losses) for row in standings.rows
-    ] == [
+    assert [(row.entry_id, row.wins, row.losses) for row in standings.rows] == [
         (A, 2, 0),
         (B, 1, 1),
         (C, 1, 1),
         (D, 0, 2),
     ]
-    assert [row.row.rank for row in standings.rows] == [1, 2, 3, 4]
+    assert [row.rank for row in standings.rows] == [1, 2, 3, 4]
 
 
 def test_the_swiss_table_ranks_on_buchholz_and_shows_the_figure() -> None:
@@ -154,7 +152,7 @@ def test_the_swiss_table_ranks_on_buchholz_and_shows_the_figure() -> None:
 
     standings = SwissResults().tabulate(field)
 
-    assert [(row.row.entry_id, row.buchholz) for row in standings.rows] == [
+    assert [(row.entry_id, row.buchholz) for row in standings.rows] == [
         (A, 1),
         (B, 2),
         (C, 0),
@@ -180,14 +178,14 @@ def test_a_byed_entrant_is_credited_with_a_win_and_no_games() -> None:
 
     standings = SwissResults().tabulate(field)
 
-    by_entry = {row.row.entry_id: row.row for row in standings.rows}
+    by_entry = {row.entry_id: row for row in standings.rows}
     assert (by_entry[C].played, by_entry[C].wins, by_entry[C].losses) == (1, 1, 0)
     assert (by_entry[C].games_won, by_entry[C].games_lost) == (0, 0)
     assert by_entry[C].game_difference == 0
     # A won a real match 3-1, so A's +2 outranks the bye's 0 — the two are level on
     # wins, on Buchholz (A's only opponent has no wins; C has no opponent) and have
     # never met. A nominal 3-0 for the bye would put C first.
-    assert [row.row.entry_id for row in standings.rows] == [A, C, B]
+    assert [row.entry_id for row in standings.rows] == [A, C, B]
 
 
 def test_a_pool_scores_no_byes() -> None:
@@ -231,7 +229,7 @@ def test_a_swiss_event_with_rounds_left_is_live_and_uncrowned() -> None:
 
     assert not standings.complete
     assert standings.champion is None
-    assert {row.row.entry_id for row in standings.rows} == {A, B, C, D}
+    assert {row.entry_id for row in standings.rows} == {A, B, C, D}
 
 
 def test_an_uncut_swiss_event_is_not_complete() -> None:

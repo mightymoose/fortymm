@@ -31,10 +31,13 @@ in step (ADR "swiss standings add Buchholz, and head-to-head is guarded on havin
 :func:`finishing_order` — a **round-robin pool**:
 
 1. **wins** — most match wins first;
-2. **head-to-head**, *only when exactly two entries are tied* on wins **and they have
-   actually met** — the one that beat the other ranks above it. A three-or-more-way tie
-   can cycle (A beat B beat C beat A), so it is **not** broken head-to-head; it falls
-   straight through to the game tiebreakers rather than a recursive mini-league;
+2. **head-to-head**, *only when exactly two entries are tied* on wins **and one of them
+   won more of their meetings than the other** — that one ranks above. It counts every
+   meeting rather than one, because swiss pairs a rematch as a last resort and a pair
+   who met twice and took one each did not beat each other: a split falls through, like
+   a pair who never met at all. A three-or-more-way tie can cycle (A beat B beat C beat
+   A), so it is **not** broken head-to-head; it falls straight through to the game
+   tiebreakers rather than a recursive mini-league;
 3. **game difference** — games won minus games lost;
 4. **games won**;
 5. the **entry id** — a total, deterministic fallback, so a pool in which two entries
@@ -47,12 +50,14 @@ The two share their machinery rather than agreeing by coincidence: one grouping 
 wins, one guarded head-to-head step, one tail of scalar comparators ending in the entry
 id. The swiss chain is that tail with one value in front of it.
 
-**The head-to-head step is guarded on the pair having met**, in *both* chains, and that
-is a property of the step rather than a swiss carve-out. A round-robin pool cannot reach
-the guard once it is played out — everyone meets everyone — so it costs that format
-nothing, while a swiss pair tied on wins may never have been drawn against each other
-and there is simply no result to read. (A part-played pool reaches it too, which is why
-the guard predates swiss.)
+**The head-to-head step is guarded on the pair having a result between them**, in *both*
+chains, and that is a property of the step rather than a swiss carve-out. A round-robin
+pool cannot reach the guard once it is played out — everyone meets everyone, once — so
+it costs that format nothing, while a swiss pair tied on wins may never have been drawn
+against each other and there is simply no result to read. (A part-played pool reaches it
+too, which is why the guard predates swiss.) Swiss adds the second way through it: a
+pair who met **twice** and took one each are level between themselves, so the step has
+no answer there either.
 """
 
 from __future__ import annotations
@@ -371,16 +376,18 @@ def _break_tie(
 ) -> list[EntryTally]:
     """Order a group of entries level on wins.
 
-    A **two-way** tie is broken head-to-head when the pair has actually met — the
-    winner of that match ranks above the loser. A larger tie (which can cycle) and a
-    two-way tie whose pair has not met fall through to ``scalar_key``.
+    A **two-way** tie is broken head-to-head when one of the pair won more of their
+    meetings than the other — that one ranks above. A larger tie (which can cycle), a
+    two-way tie whose pair has not met, and a two-way tie whose pair split their
+    meetings evenly all fall through to ``scalar_key``.
 
-    "When the pair has actually met" is the guard, and it belongs to the step rather
-    than to either format. A part-played round-robin pool reaches it, and a swiss field
-    reaches it at the end of a completed event too: swiss pairs by score and never
+    "When the pair have a result between them" is the guard, and it belongs to the step
+    rather than to either format. A part-played round-robin pool reaches it, and a swiss
+    field reaches it at the end of a completed event too: swiss pairs by score and never
     claims to have drawn every pair together, so two entrants can finish level on wins
-    having never played each other. Without the guard the step would have to read a
-    result that does not exist.
+    having never played each other — or, after a last-resort rematch, having beaten each
+    other once apiece. Without the guard the step would have to read a result that does
+    not exist, or pick one of two that disagree.
     """
     if len(group) == 2:
         decided = _head_to_head(group[0], group[1], outcomes)
@@ -392,13 +399,33 @@ def _break_tie(
 def _head_to_head(
     first: EntryTally, second: EntryTally, outcomes: Sequence[MatchOutcome]
 ) -> list[EntryTally] | None:
-    """``[winner, loser]`` if these two have met, else ``None`` (not yet played)."""
+    """``[winner, loser]`` if one of these two won **more of their meetings** than the
+    other, else ``None``.
+
+    ``None`` covers two cases and they are one answer: the pair have never met (nothing
+    to read — the guard :func:`_break_tie` describes), and the pair met an even number
+    of times and took half each. A 1-1 split is not one side beating the other, so
+    there is no head-to-head result to rank on and the chain carries on to the next
+    link, exactly as it does for a pair who never played.
+
+    **Every** meeting is counted, not the first one found, and that is what keeps the
+    step order-independent. Swiss pairs a rematch as a last resort once the walk runs
+    out of fresh opponents (CONTEXT.md, "Rematch"), so a pair genuinely can meet twice
+    — and reading only the first matching outcome made the answer depend on the order
+    the caller listed them in. The two callers do not list them alike (each loads its
+    own rows, sorted on its own key), so that was the one step in either chain that
+    could have parted them: every other link is a sum or a count, and neither cares
+    about order. This one now counts too.
+    """
     pair = {first.entry_id, second.entry_id}
+    wins = 0
     for outcome in outcomes:
         if {outcome.entry_a_id, outcome.entry_b_id} == pair:
-            if outcome.winner_entry_id == first.entry_id:
-                return [first, second]
-            return [second, first]
+            wins += 1 if outcome.winner_entry_id == first.entry_id else -1
+    if wins > 0:
+        return [first, second]
+    if wins < 0:
+        return [second, first]
     return None
 
 

@@ -44,6 +44,7 @@ from app.results import (
     RrThenKoResults,
     SingleElimResults,
     StandingRow,
+    StandingRowColumns,
     StandingsThenFinishes,
     SwissResults,
     SwissStandingRow,
@@ -531,18 +532,28 @@ def _pool_standings_read(pools: Sequence[PoolStandings]) -> list[PoolStandingsRe
 def _standing_rows_read(rows: Sequence[StandingRow]) -> list[StandingRowRead]:
     """A pool's standings rows, shared by the two shapes that carry one — the
     round-robin arm and the pool stage of the rr-then-ko arm."""
-    return [
-        StandingRowRead(
-            entry_id=row.entry_id,
-            rank=row.rank,
-            played=row.played,
-            wins=row.wins,
-            losses=row.losses,
-            games_won=row.games_won,
-            games_lost=row.games_lost,
-        )
-        for row in rows
-    ]
+    return [StandingRowRead(**_standing_read_columns(row)) for row in rows]
+
+
+def _standing_read_columns(row: StandingRow) -> StandingRowColumns:
+    """One domain row's columns, ready to unpack into its wire model — the one place a
+    standings row crosses onto the wire, for both tables that carry one.
+
+    The set of columns is named once, in :class:`~app.results.StandingRowColumns`, and
+    both wire models take it: :class:`StandingRowRead` alone, and
+    :class:`SwissStandingRowRead` with ``buchholz`` beside it, exactly as their domain
+    rows relate. So adding a column to a standings row is a type error at each
+    constructor until it is added here, rather than a column that quietly reaches one
+    table and not the other."""
+    return StandingRowColumns(
+        entry_id=row.entry_id,
+        rank=row.rank,
+        played=row.played,
+        wins=row.wins,
+        losses=row.losses,
+        games_won=row.games_won,
+        games_lost=row.games_lost,
+    )
 
 
 def _swiss_standing_rows_read(
@@ -552,21 +563,14 @@ def _swiss_standing_rows_read(
     the figure that ordered them (ADR "swiss standings add Buchholz, and head-to-head is
     guarded on having met").
 
-    The columns are restated rather than copied off a :class:`StandingRowRead` built
-    next door, because the read model is a *subclass* — there is no partially-built row
-    to widen, and ``model_dump`` would carry the computed ``game_difference`` back in as
-    a field it cannot be set from."""
+    The shared columns come from :func:`_standing_read_columns`, the same call a pool
+    row's do, rather than being spelled out a second time here: the shapes match on both
+    sides of the wire — :class:`SwissStandingRowRead` extends
+    :class:`~app.schemas.tournament.StandingRowRead` exactly as
+    :class:`~app.results.SwissStandingRow` extends :class:`~app.results.StandingRow` —
+    so the only thing this adds is the one column swiss has."""
     return [
-        SwissStandingRowRead(
-            entry_id=row.row.entry_id,
-            rank=row.row.rank,
-            played=row.row.played,
-            wins=row.row.wins,
-            losses=row.row.losses,
-            games_won=row.row.games_won,
-            games_lost=row.row.games_lost,
-            buchholz=row.buchholz,
-        )
+        SwissStandingRowRead(**_standing_read_columns(row), buchholz=row.buchholz)
         for row in rows
     ]
 

@@ -1,6 +1,6 @@
 import { render, screen, type Container } from '@/test/utilities'
 
-import { PLAYER_COLUMN, standingsTablePage } from './standings-table.page'
+import { standingsTablePage } from './standings-table.page'
 import { SwissStandingsPanel } from './swiss-standings-panel'
 import {
   buildSwissStandingsPanelProps,
@@ -47,9 +47,10 @@ const scoped = (container: Container) => {
         .map((t: HTMLElement) => t.getAttribute('aria-label') ?? '')
     },
 
-    /** The table's player names, top to bottom (the rendered order). */
+    /** The table's player names, top to bottom (the rendered order) — the Player column,
+     * asked for by its header rather than by an index a new column would shift. */
     getRowNames(eventName: string) {
-      return table.getColumn(tableName(eventName), PLAYER_COLUMN)
+      return table.getColumnUnder(tableName(eventName), 'Player')
     },
 
     /**

@@ -476,6 +476,10 @@ async def test_the_standings_carry_the_whole_field_including_the_byed_entrant(
     }
     assert [row["rank"] for row in results["rows"]] == [1, 2, 3, 4, 5, 6, 7]
     assert all(row["played"] == 0 for row in results["rows"]), "nobody has played yet"
+    assert all(row["buchholz"] == 0 for row in results["rows"]), (
+        "the column swiss adds reaches the wire — every figure is zero here because "
+        "nobody has an opponent yet; a real one is pinned in tests/test_results.py"
+    )
     assert results["complete"] is False
     assert results["champion"] is None
 
@@ -1357,7 +1361,7 @@ def test_a_withdrawn_but_seated_entrant_is_not_given_a_bye_they_never_took() -> 
     )
     assert _entry(4) in field.entrants, "somebody who played is still in the table"
 
-    rows = {row.row.entry_id: row.row for row in SwissResults().tabulate(field).rows}
+    rows = {row.entry_id: row for row in SwissResults().tabulate(field).rows}
 
     departed = rows[_entry(4)]
     assert (departed.played, departed.wins, departed.losses) == (1, 0, 1)

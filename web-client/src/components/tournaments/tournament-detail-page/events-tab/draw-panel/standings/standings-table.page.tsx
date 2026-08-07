@@ -1,27 +1,12 @@
 import { render, screen, within, type Container } from '@/test/utilities'
 
-import type { StandingLine } from '../../../../data/standings'
-import type { SwissStandingLine } from '../../../../data/swiss-standings'
-import { StandingsTable, type StandingsTableProps } from './standings-table'
+import { StandingsTable } from './standings-table'
 import {
   buildPoolStandingsTableProps,
   buildSwissStandingsTableProps,
+  type PoolOverrides,
+  type SwissOverrides,
 } from './standings-table.factory'
-
-/** What a test may vary on either arm — everything but the `format` tag, which IS the arm
- * and so is chosen by picking `renderPool` or `renderSwiss` rather than passed. */
-type PoolOverrides = Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
-  rows?: StandingLine[]
-}
-type SwissOverrides = Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
-  rows?: SwissStandingLine[]
-}
-
-/** The **Player** column's index in the header order (`#`, Player, W, L, Diff, GW) — the
- * one column every caller reads by name rather than by number, since "who is in this table,
- * in what order" is the assertion each of them makes. Stated once so a column inserted to
- * its left is one edit, not four. */
-export const PLAYER_COLUMN = 1
 
 const scoped = (container: Container) => ({
   /** The table itself, by its accessible name — the one thing the caller supplies, so a
@@ -48,24 +33,17 @@ const scoped = (container: Container) => ({
       .map((h) => (h.textContent ?? '').trim())
   },
 
-  /** One column of body cells, top to bottom, by its **index** in the header order — which
-   * differs by arm: a pool table runs `#`, Player, W, L, Diff, GW, and a swiss table
-   * inserts **Buc** between L and Diff. Prefer `getColumnUnder`, which asks by header. */
-  getColumn(ariaLabel: string, index: number) {
-    return within(this.getTable(ariaLabel))
-      .getAllByRole('row')
-      .slice(1)
-      .map((row) => (within(row).getAllByRole('cell')[index].textContent ?? '').trim())
-  },
-
   /**
-   * One column of body cells, addressed by its **header's full word** ("Buchholz", "Wins")
-   * rather than by index.
+   * One column of body cells, top to bottom, addressed by its **header's full word**
+   * ("Player", "Buchholz", "Wins") rather than by index.
    *
-   * The index is exactly what a Buchholz column changes, so an index-addressed assertion
-   * would move under this feature and — worse — could silently start reading the neighbour
-   * it displaced. Asking by header ties the cells to the heading above them, which is also
-   * the claim a screen-reader user relies on.
+   * The index is exactly what a Buchholz column changes — a pool table runs `#`, Player, W,
+   * L, Diff, GW and a swiss table inserts **Buc** between L and Diff — so an index-addressed
+   * assertion would move under this feature and, worse, could silently start reading the
+   * neighbour it displaced. Asking by header ties the cells to the heading above them, which
+   * is also the claim a screen-reader user relies on. It is the **only** column reader here
+   * for that reason: an index-taking one left beside it is an index-taking one someone
+   * reaches for.
    */
   getColumnUnder(ariaLabel: string, header: string) {
     const table = within(this.getTable(ariaLabel))

@@ -82,17 +82,30 @@ export function buildStandingLines(): StandingLine[] {
  */
 const BUCHHOLZ = [8, 6, 7]
 
-/** **Two builders, one per arm of `StandingsTableRows`** — the union cannot be built by one
- * `Partial<>`, and it should not be: which table this is decides which columns it has, so a
- * test picks the arm it means rather than half-specifying one. */
+/** **Two builders, one per arm of `StandingsTableRows`**, each with an overrides type of its
+ * own — the union cannot be built by one `Partial<>`, and it should not be: which table this
+ * is decides which columns it has, so a test picks the arm it means rather than
+ * half-specifying one. The two types are stated HERE, beside the builders that take them, so
+ * the page object's `renderPool` / `renderSwiss` import the contract rather than restate it.
+ */
+
+/** What a caller may vary on the **pool** arm — everything but the `format` tag, which IS
+ * the arm and so is chosen by picking the pool builder rather than passed. */
+export type PoolOverrides = Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
+  rows?: StandingLine[]
+}
+
+/** The same, on the **swiss** arm — identical but for the row type, which is the one thing
+ * the tag decides. */
+export type SwissOverrides = Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
+  rows?: SwissStandingLine[]
+}
 
 /** Props for a **pool** `StandingsTable` — the three-deep body above, named as a pool's
  * table, and no Buchholz column, because every entrant in a pool faces the same
  * opposition. */
 export function buildPoolStandingsTableProps(
-  overrides: Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
-    rows?: StandingLine[]
-  } = {},
+  overrides: PoolOverrides = {},
 ): StandingsTableProps {
   return {
     format: 'pool',
@@ -107,9 +120,7 @@ export function buildPoolStandingsTableProps(
  * so the only difference a test can see between the two arms is the column `format` decides
  * on. */
 export function buildSwissStandingsTableProps(
-  overrides: Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
-    rows?: SwissStandingLine[]
-  } = {},
+  overrides: SwissOverrides = {},
 ): StandingsTableProps {
   return {
     format: 'swiss',

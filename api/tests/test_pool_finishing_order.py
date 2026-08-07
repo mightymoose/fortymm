@@ -16,8 +16,12 @@ changes who advances.
 
 **The swiss chain's is that chain with Buchholz between head-to-head and game
 difference** (ADR "swiss standings add Buchholz, and head-to-head is guarded on having
-met"), and the head-to-head link is **guarded on the pair having met** — swiss pairs by
-score, so two entrants can finish level on wins having never played each other.
+met"), and the head-to-head link is **guarded on the pair having a result between
+them** — swiss pairs by score, so two entrants can finish level on wins having never
+played each other, and its last-resort rematch lets a pair meet twice and take one each.
+Counting **every** meeting rather than the first one found is also what keeps that link
+order-independent, and so what keeps the draw layer's answer and the results layer's the
+same one.
 
 Each test below isolates **one** link: the case is built so that link alone separates
 the pair, and so the *later* links — including the entry-id fallback — would give the
@@ -30,14 +34,22 @@ import uuid
 from pathlib import Path
 
 import app.pool_finishing_order
-from app.draws import EntryId, PoolId
+from app.draws import (
+    EntryId,
+    FixtureGames,
+    FixtureId,
+    FixtureState,
+    MatchId,
+    PoolId,
+    _swiss_standings_order,
+)
 from app.pool_finishing_order import (
     EntryTally,
     MatchOutcome,
     finishing_order,
     swiss_finishing_order,
 )
-from app.results import PoolInput, RoundRobinResults
+from app.results import FieldInput, PoolInput, RoundRobinResults, SwissResults
 
 _API_ROOT = Path(__file__).resolve().parent.parent
 
@@ -117,6 +129,57 @@ def _buchholz(
         standing.buchholz
         for standing in swiss_finishing_order(entrants, outcomes, byes)
         if standing.tally.entry_id == of
+    )
+
+
+#: The four entrants of the rematch cases below. ``_A`` carries the smallest id, so the
+#: entry-id fallback always says ``_A`` first — which is what makes an answer of ``_B``
+#: first evidence of the link under test rather than of the fallback.
+_A, _B, _C, _D = _eid(1), _eid(2), _eid(3), _eid(4)
+
+
+def _split_rematch() -> tuple[list[EntryId], list[MatchOutcome]]:
+    """A four-entrant swiss in which A and B met **twice and took one each**, with the
+    outcomes in the order the results layer reads them (round, then position).
+
+    Read the arithmetic in
+    :func:`test_a_split_rematch_leaves_the_head_to_head_undecided`, which is the test
+    the field is shaped for; the other two read the same field from the draw layer and
+    from the results layer.
+    """
+    return (
+        [_A, _B, _C, _D],
+        [
+            _outcome(_A, _B, 3, 1),
+            _outcome(_C, _D, 3, 0),
+            _outcome(_A, _D, 3, 0),
+            _outcome(_B, _C, 3, 0),
+            _outcome(_B, _A, 3, 1),
+        ],
+    )
+
+
+def _fixture(
+    round_number: int,
+    position: int,
+    first: EntryId,
+    second: EntryId,
+    first_games: int,
+    second_games: int,
+) -> FixtureState:
+    """One decided, un-pooled fixture as the **draw** layer holds it — the row shape
+    :func:`app.draws._swiss_standings_order` projects its outcomes from."""
+    slot = round_number * 16 + position
+    return FixtureState(
+        fixture_id=FixtureId(uuid.UUID(int=0xF000 + slot)),
+        pool_id=None,
+        round=round_number,
+        position=position,
+        entry_a_id=first,
+        entry_b_id=second,
+        winner_entry_id=first if first_games > second_games else second,
+        match_id=MatchId(uuid.UUID(int=0xE000 + slot)),
+        games=FixtureGames(entry_a_games=first_games, entry_b_games=second_games),
     )
 
 
@@ -394,6 +457,96 @@ def test_a_tied_pair_who_never_met_fall_through_the_head_to_head_link() -> None:
     ]
 
     assert _swiss_order(entrants, outcomes)[:3] == [s, y, x]
+
+
+def test_a_split_rematch_leaves_the_head_to_head_undecided() -> None:
+    """**A pair who met twice and took one each did not beat each other**, so the link
+    has nothing to say and the chain carries on to Buchholz.
+
+    Swiss pairs a rematch as a last resort when the walk runs out of fresh opponents,
+    so a pair *can* meet twice — and reading only one of the two meetings makes the
+    answer depend on which meeting the caller happened to list first. Here A won the
+    first meeting and B the second, and they are the only two on two wins.
+
+        A beat B 3-1, B beat A 3-1   → A: 2-1, GW 7, GL 4, GD +3
+                                       B: 2-1, GW 7, GL 4, GD +3
+        A beat D 3-0                 → Buchholz A = B(2) + B(2) + D(0) = 4
+        B beat C 3-0                 → Buchholz B = A(2) + A(2) + C(1) = 5
+        C beat D 3-0                 → C: 1-1,  D: 0-2
+
+    Buchholz says B, and it is the only link that separates them: they are level on
+    game difference (+3) and games won (7), and the entry-id fallback says A. So an
+    implementation that answered the head-to-head from *either* meeting gets a
+    different order — and one that answered it from the **first** meeting in the list
+    gets a different order depending on the order it was handed.
+    """
+    entrants, outcomes = _split_rematch()
+
+    assert _swiss_order(entrants, outcomes) == [_B, _A, _C, _D]
+    assert _swiss_order(entrants, list(reversed(outcomes))) == [_B, _A, _C, _D], (
+        "the order must not depend on which meeting the caller listed first"
+    )
+
+
+def test_a_decisive_rematch_ranks_the_side_that_won_both_above() -> None:
+    """The other half: a pair who met twice and one of them won **both** *did* beat the
+    other, so head-to-head still settles them.
+
+    A won both meetings 3-2. Every link below head-to-head says B — game difference
+    (+4 against +2), with Buchholz level at four apiece — so the pair only comes out
+    A-first because the two meetings are counted and A took both.
+
+        A beat B 3-2 twice  → A: 2-0, GW 6, GL 4, GD +2;  Buchholz B(2) + B(2) = 4
+        B beat C 3-0        → B: 2-2, GW 10, GL 6, GD +4; Buchholz A(2) + A(2)
+        B beat D 3-0                                              + C(0) + D(0) = 4
+                            → C: 0-1,  D: 0-1
+    """
+    entrants = [_A, _B, _C, _D]
+    outcomes = [
+        _outcome(_A, _B, 3, 2),
+        _outcome(_B, _C, 3, 0),
+        _outcome(_A, _B, 3, 2),
+        _outcome(_B, _D, 3, 0),
+    ]
+
+    assert _swiss_order(entrants, outcomes) == [_A, _B, _C, _D]
+    assert _swiss_order(entrants, list(reversed(outcomes))) == [_A, _B, _C, _D]
+
+
+def test_a_split_rematch_orders_the_draw_layer_and_the_results_layer_alike() -> None:
+    """**The two layers rank one table**, over the case that used to be able to part
+    them.
+
+    The results layer reads its fixtures ordered (round, then position); the draw layer
+    reads the same rows to decide which order the next round is paired down. A
+    head-to-head answered from the first meeting in the list made that a question about
+    which row came back first, so the director's table and the pairing could disagree —
+    and the draw layer's answer could differ between two advances of the same event.
+
+    Both layers are asked here, and the draw layer is asked a second time with its rows
+    **reversed** — the shape an unordered ``SELECT`` is free to hand it.
+    """
+    entrants, outcomes = _split_rematch()
+    fixtures = [
+        _fixture(1, 1, _A, _B, 3, 1),
+        _fixture(1, 2, _C, _D, 3, 0),
+        _fixture(2, 1, _A, _D, 3, 0),
+        _fixture(2, 2, _B, _C, 3, 0),
+        _fixture(3, 1, _B, _A, 3, 1),
+    ]
+
+    table = SwissResults().tabulate(
+        FieldInput(entrants=tuple(entrants), fixture_count=5, outcomes=tuple(outcomes))
+    )
+
+    assert [row.entry_id for row in table.rows] == [_B, _A, _C, _D]
+    assert _swiss_standings_order(entrants, fixtures, ()) == [_B, _A, _C, _D]
+    assert _swiss_standings_order(entrants, list(reversed(fixtures)), ()) == [
+        _B,
+        _A,
+        _C,
+        _D,
+    ], "an unordered fixture load must not move the pairing order"
 
 
 def test_buchholz_counts_an_opponents_bye_win() -> None:
