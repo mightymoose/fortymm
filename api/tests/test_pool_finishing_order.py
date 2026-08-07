@@ -22,7 +22,7 @@ from pathlib import Path
 
 import app.pool_finishing_order
 from app.draws import EntryId, PoolId
-from app.pool_finishing_order import MatchOutcome, finishing_order
+from app.pool_finishing_order import EntryTally, MatchOutcome, finishing_order
 from app.results import PoolInput, RoundRobinResults
 
 _API_ROOT = Path(__file__).resolve().parent.parent
@@ -61,8 +61,25 @@ def _outcome(
     )
 
 
-def _order(entrants: list[EntryId], outcomes: list[MatchOutcome]) -> list[EntryId]:
-    return [tally.entry_id for tally in finishing_order(entrants, outcomes)]
+def _order(
+    entrants: list[EntryId],
+    outcomes: list[MatchOutcome],
+    byes: list[EntryId] | None = None,
+) -> list[EntryId]:
+    return [tally.entry_id for tally in finishing_order(entrants, outcomes, byes or ())]
+
+
+def _tally(
+    entrants: list[EntryId],
+    outcomes: list[MatchOutcome],
+    byes: list[EntryId],
+    of: EntryId,
+) -> EntryTally:
+    return next(
+        tally
+        for tally in finishing_order(entrants, outcomes, byes)
+        if tally.entry_id == of
+    )
 
 
 def test_the_shared_module_imports_no_layer_that_imports_it() -> None:
@@ -160,6 +177,89 @@ def test_the_entry_id_is_the_final_deterministic_tiebreak() -> None:
 
     fed_in = [c, b, a]
     assert _order(fed_in, outcomes) == list(reversed(fed_in))
+
+
+def test_a_bye_counts_as_a_win() -> None:
+    """A bye is a **win** in the first link of the chain (ADR "swiss standings add
+    Buchholz"), because a player must not be punished for a scheduling artifact they
+    did not cause.
+
+    Built so the win alone moves B, and moves them *past somebody*. C has a real win
+    and a game difference of −2; B has a bye and a game difference of 0. Counting the
+    bye puts B and C in the same wins group, where B's better difference ranks them
+    above. Not counting it drops B into the group below C entirely — second place to
+    third, overtaken by the player they are level with.
+
+        A beat C 3-0, A beat D 3-0  → A: 2-0
+        C beat D 3-2                → C: 1-1, GW 3, GL 5, GD -2
+                                      D: 0-2, GW 2, GL 6, GD -4
+        B sat out                   → B: 1-0 by bye, GW 0, GL 0, GD 0
+    """
+    a, b, c, d = _eid(1), _eid(2), _eid(3), _eid(4)
+    outcomes = [_outcome(a, c, 3, 0), _outcome(a, d, 3, 0), _outcome(c, d, 3, 2)]
+
+    assert _order([a, b, c, d], outcomes, byes=[b]) == [a, b, c, d]
+    # And the same field with the bye unscored, which is what the assertion above is
+    # worth: B falls behind the entrant they outrank on every count but the win.
+    assert _order([a, b, c, d], outcomes) == [a, c, b, d]
+
+
+def test_a_bye_is_worth_zero_games_not_a_nominal_win() -> None:
+    """**The half of the rule that a passing test can easily miss.** A bye adds a win
+    and *no games*, so it stays neutral on game difference and games won — the links
+    below it.
+
+    Awarding a nominal 3-0 instead would be invisible in the wins column and decisive
+    here: A and B are level on wins, have never met (B was byed, so head-to-head has
+    nothing to read), and A's real 3-1 win gives them a difference of +2. A phantom
+    3-0 would give B +3 and put the player who sat out above the player who went and
+    won a match.
+
+        A beat C 3-1  → A: 1-0, GW 3, GL 1, GD +2
+                        C: 0-1, GW 1, GL 3, GD -2
+        B sat out     → B: 1-0 by bye, GW 0, GL 0, GD 0  (a nominal 3-0 would be +3)
+    """
+    a, b, c = _eid(1), _eid(2), _eid(3)
+    outcomes = [_outcome(a, c, 3, 1)]
+
+    assert _order([a, b, c], outcomes, byes=[b]) == [a, b, c]
+
+    tally = _tally([a, b, c], outcomes, [b], of=b)
+    assert (tally.wins, tally.games_won, tally.games_lost) == (1, 0, 0)
+    assert tally.game_difference == 0, "the bye moves neither game counter"
+
+
+def test_a_bye_leaves_the_row_reading_played_once_and_won_once() -> None:
+    """``played`` moves with the win, so the row still satisfies the arithmetic every
+    other row on the table does: played equals wins plus losses. A row reading "played
+    0, won 1" is what a director would report as a bug in the standings."""
+    a, b = _eid(1), _eid(2)
+
+    tally = _tally([a, b], [], [b], of=b)
+
+    assert (tally.played, tally.wins, tally.losses) == (1, 1, 0)
+
+
+def test_two_byes_count_twice() -> None:
+    """Byes arrive one id per bye taken, so an entrant who has sat out twice is
+    credited twice — the multiset is the whole meaning of that argument."""
+    a, b = _eid(1), _eid(2)
+
+    tally = _tally([a, b], [], [b, b], of=b)
+
+    assert (tally.played, tally.wins) == (2, 2)
+
+
+def test_a_bye_does_not_reach_the_head_to_head_link() -> None:
+    """A bye has no opponent, so it cannot be read as a result *against* anybody. B
+    and C are tied on wins — C's from a real match, B's from a bye — and the pair have
+    never met, so the head-to-head link falls through to the game tiebreakers, where
+    C's +1 outranks B's 0. A bye that leaked into head-to-head could only invent a
+    result nobody played."""
+    b, c, d = _eid(1), _eid(2), _eid(3)
+    outcomes = [_outcome(c, d, 3, 2)]
+
+    assert _order([b, c, d], outcomes, byes=[b]) == [c, b, d]
 
 
 def test_the_standings_table_is_this_order() -> None:

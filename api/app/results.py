@@ -101,15 +101,25 @@ class FieldInput:
     a row of zeros, and ``fixture_count`` counts the pairings that can still yield a
     result, which for swiss includes the later rounds that are cut but not yet paired.
 
+    ``byes`` is the fourth field and the one :class:`PoolInput` will never have: one
+    entry id **per bye taken**, derived by :func:`app.draws.swiss_byes` from the rows
+    the caller is already holding. It is a *result* the table has to score — a win worth
+    zero games (ADR "swiss standings add Buchholz") — and it cannot come from
+    ``outcomes``, because a bye has no opponent to name. Empty for an even field, and
+    empty for a round-robin pool, whose byed entrant is seated in every other round and
+    is not credited with anything for the one they sat out.
+
     It is deliberately not a shared base class with :class:`PoolInput`. One is keyed by
-    a pool and one is not, which is the only difference there will ever be, and a base
-    would buy a name for three fields at the cost of a hierarchy in a module that is
-    otherwise flat value objects.
+    a pool and one is not, and one scores byes, and a base would buy a name for three
+    fields at the cost of a hierarchy in a module that is otherwise flat value objects.
     """
 
     entrants: tuple[EntryId, ...]
     fixture_count: int
     outcomes: tuple[MatchOutcome, ...]
+    #: Only ids that are in ``entrants`` — the tallies are keyed by entrant, so a
+    #: stranger here is a ``KeyError``. Empty when nobody has sat out.
+    byes: tuple[EntryId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,12 +455,24 @@ class SwissResults:
     head-to-head is guarded on having met"). Until then this reads out the chain that
     exists rather than a swiss-shaped approximation of the one that does not.
 
+    **A bye scores as a win worth zero games** (ADR "swiss standings add Buchholz, and
+    head-to-head is guarded on having met"), which is the one thing this table counts
+    that a pool's does not. The win, because sitting out is a scheduling artifact the
+    player did not cause. Zero games, because a nominal 3-0 would hand them a game
+    difference nobody earned and lift them over somebody who beat a real opponent. The
+    byes themselves are derived from the fixtures by :func:`app.draws.swiss_byes` and
+    arrive on :attr:`FieldInput.byes` — one derivation over one field (the **active**
+    entrants), which is what the draw layer pairs by, so a bye credited here is a bye
+    the next round's pairing passes over. The claim is about the byes and stops there:
+    a departed entrant's real results are still tallied here and are dropped by the
+    pairing, so the two tables can differ by exactly that after a withdrawal.
+
     Live and partial like every other shape: an entrant appears from the moment they are
     seated, and a correction re-orders the table the instant it lands.
     """
 
     def tabulate(self, field: FieldInput) -> SwissStandings:
-        rows = _standing_rows(field.entrants, field.outcomes)
+        rows = _standing_rows(field.entrants, field.outcomes, field.byes)
         # Every round decided — which, since the later rounds are cut up front with
         # their sides unknown, includes the ones nobody has been paired into yet. An
         # event with no fixtures that can still yield a result is deliberately NOT
@@ -471,7 +493,9 @@ def _pool_standings(pool: PoolInput) -> PoolStandings:
 
 
 def _standing_rows(
-    entrants: Sequence[EntryId], outcomes: Sequence[MatchOutcome]
+    entrants: Sequence[EntryId],
+    outcomes: Sequence[MatchOutcome],
+    byes: Sequence[EntryId] = (),
 ) -> tuple[StandingRow, ...]:
     """These entrants' rows, at their settled ranks — the one place a table is built,
     for the two shapes that carry one (a pool's, and a swiss field's).
@@ -479,7 +503,11 @@ def _standing_rows(
     Shared so that "a standings row means the same thing whichever event it is read
     off" is true structurally: the ordering is
     :func:`~app.pool_finishing_order.finishing_order` and the counts come off the
-    tallies it returns, in one function rather than two that agree today."""
+    tallies it returns, in one function rather than two that agree today.
+
+    ``byes`` defaults to none, which is a **fact about a pool** rather than a
+    convenience: a round-robin bye is a round sat out inside a schedule that seats its
+    holder in every other one, so there is nothing to score. Only swiss passes any."""
     return tuple(
         StandingRow(
             entry_id=tally.entry_id,
@@ -490,5 +518,5 @@ def _standing_rows(
             games_won=tally.games_won,
             games_lost=tally.games_lost,
         )
-        for rank, tally in enumerate(finishing_order(entrants, outcomes), start=1)
+        for rank, tally in enumerate(finishing_order(entrants, outcomes, byes), start=1)
     )

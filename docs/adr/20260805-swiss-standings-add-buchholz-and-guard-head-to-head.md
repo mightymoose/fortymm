@@ -62,6 +62,32 @@ A bye is the absence of a fixture row, so a byed round produced no opponent and
 adds no term to the sum. This falls out of the definition rather than needing a
 special case.
 
+### But a bye win *does* count toward the Buchholz of whoever played that entrant
+
+Added 2026-08-05, after the bye's scoring landed and made the question real.
+
+A bye scores as a win. Buchholz sums an entrant's opponents' win counts. So the
+question is whether those counts are the wins the standings display, bye wins
+included, or some adjusted number that strips them out.
+
+**They are the wins the standings display.** Buchholz reads the same wins column
+a director is looking at.
+
+The case against is real: a bye win is not evidence of strength, so counting it
+slightly inflates the Buchholz of whoever happened to play the byed entrant. The
+case for wins anyway:
+
+- Stripping bye wins would mean **two definitions of "wins"** in one module — the
+  one the table shows and a private one Buchholz uses. Avoiding exactly that
+  divergence is why this chain lives in a shared module at all (ADR 20260727).
+- A director can verify Buchholz by adding up their opponents' win columns. Under
+  an adjusted number that arithmetic silently fails to reconcile, and the figure
+  reads as a bug.
+
+The inflation is bounded at one win per opponent per event, and it lands on
+whoever played the entrant the format handed a bye to, which is arbitrary rather
+than systematic.
+
 A bye still scores as a **win worth zero games** in step 1. The win is granted
 because a player must not be punished for a scheduling artifact. The games are
 zero so the bye stays neutral on steps 4 and 5, rather than awarding difference

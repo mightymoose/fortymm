@@ -18,7 +18,13 @@ from typing import Any, assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import EntryId, PoolId
+from app.draws import (
+    EntryId,
+    PoolId,
+    SeatedPairing,
+    swiss_byes,
+    swiss_pairable_rows,
+)
 from app.models import (
     MatchStatus,
     ScheduleSolve,
@@ -346,17 +352,38 @@ def _field_input(
     seven-player draw derived from fixtures alone would stand a six-player table.
 
     The entries seated in fixtures are **unioned in** rather than assumed to be a
-    subset. A player who withdraws after the draw is cut leaves the active list while
-    their played fixtures stay, and :func:`~app.pool_finishing_order.finishing_order`
-    indexes its tallies by entrant — so dropping them would be a ``KeyError`` on the
-    first outcome that names them, on the detail page of any event that had a
-    withdrawal.
+    subset, for the **rows** only. A player who withdraws after the draw is cut leaves
+    the active list while their played fixtures stay, and
+    :func:`~app.pool_finishing_order.finishing_order` indexes its tallies by entrant —
+    so dropping them would be a ``KeyError`` on the first outcome that names them, on
+    the detail page of any event that had a withdrawal. Somebody who played real
+    matches belongs in the table.
 
-    A round nobody has been paired into yet is still **counted**: it can very much still
-    yield a result. Only a **voided** pairing is left out of the count, exactly as it is
-    for a pool — it never will produce one, and counting it would hold the event one
-    outcome short of complete forever."""
-    field = {EntryId(entrant.id) for entrant in entrants} | {
+    The **byes** are derived here rather than stored, because there is nothing to
+    store: a bye is the absence of a fixture row, so it is read off the rounds that
+    *are* paired (:func:`~app.draws.swiss_byes`). They are scored as a win worth zero
+    games one layer down, in the standings themselves.
+
+    **Over the active entrants, not that union** — the one field the draw layer pairs
+    from. Handed the union, this layer asked who was missing from each round and got
+    the departed entrant back every time, because nobody seats them again: a
+    withdrawn-but-seated player collected a phantom bye win per remaining round, up to
+    ``R − 1`` of them, on a table that otherwise looked right. The two layers now derive
+    byes from one field, which is the whole of what they share: the tallies are still
+    the union's, so a departed entrant's results count here and are dropped by
+    :func:`~app.draws._swiss_standings_order` (a stranger in its tallies would turn a
+    two-way tie into a three-way one). For a field that never shrank the two sets are
+    the same set and the two tables are the same table.
+
+    ``fixture_count`` is **what can still be paired**, not the row count. Every round
+    is cut with ``⌊n/2⌋`` rows from the field at the cut, and a round nobody has been
+    paired into yet is very much still countable — but a field that shrank leaves rows
+    nothing will ever seat, and counting those holds the event one outcome short of
+    complete forever. :func:`~app.draws.swiss_pairable_rows` is that count, per round,
+    over the same active field; a **voided** pairing comes off it exactly as it does
+    for a pool, for the same reason."""
+    active = tuple(EntryId(entrant.id) for entrant in entrants)
+    field = set(active) | {
         EntryId(entry_id)
         for f in fixtures
         for entry_id in (f.entry_a_id, f.entry_b_id)
@@ -369,11 +396,80 @@ def _field_input(
     ]
     return FieldInput(
         entrants=tuple(field),
-        fixture_count=sum(
-            1 for f in fixtures if f.match_status is not MatchStatus.voided
-        ),
+        fixture_count=_swiss_fixture_count(fixtures, len(active)),
         outcomes=tuple(outcomes),
+        byes=swiss_byes(active, _seated_pairings(fixtures)),
     )
+
+
+def _swiss_fixture_count(fixtures: list[TournamentFixtureRead], field_size: int) -> int:
+    """How many of a swiss draw's rows can still yield a result — the denominator
+    ``complete`` is measured against.
+
+    Per round, because that is the grain the cut wrote and the grain a field change
+    moves: :func:`~app.draws.swiss_pairable_rows` says how many of a round's rows can
+    ever carry a pairing, and the ones already seated into a **voided** match are taken
+    back off, since that match is terminal and will never produce the outcome the count
+    is promising."""
+    by_round: dict[int, list[TournamentFixtureRead]] = defaultdict(list)
+    for f in fixtures:
+        by_round[f.round].append(f)
+    total = 0
+    for round_fixtures in by_round.values():
+        seated = [
+            f
+            for f in round_fixtures
+            if f.entry_a_id is not None and f.entry_b_id is not None
+        ]
+        total += swiss_pairable_rows(
+            len(round_fixtures), len(seated), field_size
+        ) - sum(1 for f in seated if f.match_status is MatchStatus.voided)
+    return total
+
+
+def _seated_pairings(
+    fixtures: list[TournamentFixtureRead],
+) -> list[SeatedPairing]:
+    """The read rows that seat **both** sides, in the shape
+    :func:`~app.draws.swiss_byes` reads them.
+
+    A **voided** pairing is deliberately still a pairing here. It happened — those two
+    were drawn against each other and neither sat out — so counting its round as one
+    nobody was paired into would invent a bye for every other entrant in it. Voiding
+    takes away the *result*, which ``outcomes`` above already reflects, not the fact of
+    the pairing. It counts as ``decided`` for the same reason it is left out of
+    ``fixture_count``: it will never produce a result, so it must not hold its round —
+    and the bye scored against that round — open forever.
+
+    ``decided`` is the match's **terminal status** — completed, or voided — read live
+    off the row, which is the same live fact :func:`_fixture_outcome` gates the
+    standings on. So a result under correction un-decides its round here exactly as it
+    un-scores its match there.
+
+    It asks the status directly rather than building the outcome and testing it for
+    ``None``, which is what this did and what cost a discarded ``MatchOutcome`` per
+    completed fixture on every detail render. The other two things that projection
+    checks are already true of every row that reaches here: the comprehension filters
+    both entries, and ``match_status`` is read off an outer join onto the fixture's own
+    ``match_id`` (:func:`~app.tournament_queries.fixtures_by_event`), so a status of
+    any kind means there is a match behind it.
+
+    The draw layer spells the same question over its own row shape
+    (:attr:`app.draws.FixtureState.is_decided`, a live score or a void). The row shapes
+    genuinely differ, so the two are not one predicate — that the two agree, including
+    on a status neither of them names, is pinned by a test in ``tests/test_swiss.py``.
+    """
+    return [
+        SeatedPairing(
+            round=f.round,
+            entry_a_id=EntryId(f.entry_a_id),
+            entry_b_id=EntryId(f.entry_b_id),
+            decided=f.match_status is MatchStatus.voided
+            or f.match_status is MatchStatus.completed,
+        )
+        for f in fixtures
+        if f.entry_a_id is not None and f.entry_b_id is not None
+    ]
 
 
 def _bracket_fixtures(

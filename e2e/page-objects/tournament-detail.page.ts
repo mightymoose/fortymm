@@ -331,6 +331,53 @@ export class TournamentDetailPage {
     return this.page.getByTestId(`pool-standings-${poolId}`)
   }
 
+  // ----- swiss standings (event card) ---------------------------------------
+
+  /** A **swiss** event's standings — *one* table over the whole field, because swiss has
+   * no pools (ADR "swiss pre-cuts every round and pairs each one on advance").
+   *
+   * A different section from `standingsPanel`, which groups its tables under pools: a
+   * swiss event ranks everybody against everybody, and reading the pooled one would be a
+   * spec that could not tell "the field is ranked" from "there are no pools to show". */
+  swissStandings(eventId: string): Locator {
+    return this.page.getByTestId(`swiss-standings-panel-${eventId}`)
+  }
+
+  /** **Every row of the swiss standings, in the order the page lays them out** — the
+   * finishing order a director reads, top to bottom.
+   *
+   * Addressed by the testid *pattern* so the set is "the rows", whatever entries they
+   * are; each row's own testid names the **server-minted entry id** it is for, which is
+   * what `swissStandingRow` asks for and what makes "the table is in the server's order"
+   * assertable rather than inferred from names. */
+  swissStandingsRows(eventId: string): Locator {
+    return this.swissStandings(eventId).getByTestId(/^standing-row-/)
+  }
+
+  /** One entry's row of the swiss standings, by the **entry id** the server minted. */
+  swissStandingRow(eventId: string, entryId: string): Locator {
+    return this.swissStandings(eventId).getByTestId(`standing-row-${entryId}`)
+  }
+
+  /** One entry's **wins** cell — the third column of the standings table (`#`, `Player`,
+   * `W`, `L`, `Diff`, `GW`).
+   *
+   * The columns carry no test hooks of their own, so they are addressed by index here,
+   * once, rather than in every spec that reads one. This is the cell a **bye** is visible
+   * in at all: a bye is scored as a win worth zero games (ADR "swiss standings add
+   * Buchholz"), so the byed entrant's win shows up here and nowhere else — `GW` stays 0,
+   * which is the other half of the same fact (`swissStandingGamesWon`). */
+  swissStandingWins(eventId: string, entryId: string): Locator {
+    return this.swissStandingRow(eventId, entryId).getByRole('cell').nth(2)
+  }
+
+  /** One entry's **games won** cell — the sixth column. Zero for a bye, which is what
+   * stops a scheduling artifact nobody played from lifting its holder over somebody who
+   * beat a real opponent. */
+  swissStandingGamesWon(eventId: string, entryId: string): Locator {
+    return this.swissStandingRow(eventId, entryId).getByRole('cell').nth(5)
+  }
+
   /** The **two-stage** champion callout — the one a round-robin-then-knockout event
    * crowns (ADR 20260727).
    *
