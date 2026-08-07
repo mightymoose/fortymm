@@ -72,7 +72,8 @@ Settings to keep your matches and rating.
 If you didn't request this, you can safely ignore this email.
 ```
 
-- Note: this email carries no token. The link goes to the app home page.
+- Note: this email carries no token. The link goes to the app home page. The link is also
+  optional, so design a state without it.
 
 ### 4. Link your guest session to an existing account
 
@@ -142,6 +143,23 @@ The app runs a dark theme. These are the live tokens.
 - The UI kit mockup is `docs/designs/design-system.html`. Open it in a browser. Its arrows are
   decorative, not flow.
 
+### The existing wordmark
+
+We already have a wordmark in code. Match it.
+
+- The word is `FORTYMM`, set as one word with no space.
+- `FORTY` takes the foreground colour. `MM` takes the ball orange, `#ff7a1a`.
+- The face is the display face, Bebas Neue.
+- Letter spacing is `0.06em`.
+- The app renders it at 24px in the header and 22px elsewhere.
+- Source: `web-client/src/components/wordmark.tsx`.
+
+### Sender identity
+
+The From address is a deploy setting, not a fixed value in the code. Ask us for the production
+value before you design the header. Design the header so it reads correctly next to a `noreply@`
+sender, because that is what we send from today.
+
 ## Constraints
 
 Read these before you start. Each one changes the design.
@@ -186,6 +204,12 @@ engineers hand-code the template. There is no email framework in the stack.
 We send `multipart/alternative`. The plain-text part must carry the same message. Keep the design
 simple enough that the text version is not a downgrade in meaning.
 
+### Every email needs preheader text
+
+Most clients print a preview line next to the subject in the inbox list. If we leave it undefined,
+the client grabs whatever text comes first, which is usually the wordmark or a footer link. Write
+one preheader line per email. It sits in a hidden block at the top of the wrapper.
+
 ### Width and dark-mode behaviour
 
 - Target 600px maximum content width.
@@ -194,13 +218,15 @@ simple enough that the text version is not a downgrade in meaning.
 
 ## Deliverables
 
-1. A wrapper: header, footer, and the shell every email shares.
+1. A wrapper: hidden preheader, header, footer, and the shell every email shares.
 2. Components: a heading, a paragraph, a primary button, a visible-URL block, and a muted footnote
    block.
 3. Five composed emails, one per section above, using those components.
 4. The notification email in two states: with a deep link and without.
-5. A wordmark as PNG at 1x, 2x, and 3x, or a specified text-only wordmark.
-6. A spec sheet: hex values, pixel spacing, font sizes, and the fallback font stack.
+5. The no-account email in two states: with a link and without.
+6. One preheader line per email, six lines in total counting both notification states.
+7. A wordmark as PNG at 1x, 2x, and 3x, or a specified text-only wordmark.
+8. A spec sheet: hex values, pixel spacing, font sizes, and the fallback font stack.
 
 ## Out of scope
 
