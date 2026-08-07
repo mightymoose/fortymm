@@ -74,7 +74,11 @@ describe('ConfirmIrreversibleActDialog', () => {
     expect(dialog).toHaveTextContent('puts it in front of everybody')
     expect(dialog).toHaveTextContent('players can find it and enter it')
     expect(dialog).toHaveTextContent('There is no un-publishing it.')
-    expect(page.getConfirmButton()).toHaveTextContent('Publish')
+    // Verb plus object, like every other act's button — and asserted as an EXACT name,
+    // because a bare `Publish` is what the header's own button says: two controls sharing
+    // one accessible name put them in the same role query, where an assertion meant for
+    // one can resolve to the other and pass while checking nothing.
+    expect(page.getConfirmButton()).toHaveAccessibleName('Publish the tournament')
   })
 
   it('prices a START: registration shuts and every ready fixture becomes a real match', () => {

@@ -118,7 +118,14 @@ export class TournamentDetailPage {
   /** ANY lifecycle button — the locator for the two states in which the header
    * must offer *none*: an archived tournament (no edge out of it), and a viewer
    * (every transition is owner-only). `toHaveCount(0)` against a per-edge locator
-   * would only prove the absence of the one edge it named. */
+   * would only prove the absence of the one edge it named.
+   *
+   * The regex is **anchored**, and that is load-bearing: the confirm dialog's own buttons
+   * are verb-plus-object (`Publish the tournament`, `Start the tournament`), so anchoring
+   * keeps this counting the HEADER's buttons alone. It stopped being a live hazard when
+   * the publish confirm was renamed off the bare `Publish` this pattern also matches —
+   * until then, a count taken with that dialog open could resolve to the dialog's button
+   * and pass while measuring the wrong control. */
   get anyLifecycleButton(): Locator {
     return this.page.getByRole('button', {
       name: /^(Publish|Start tournament|End tournament)$/,

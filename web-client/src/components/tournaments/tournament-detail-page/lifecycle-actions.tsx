@@ -14,7 +14,7 @@ import {
 import type { Tournament } from '../data/types'
 import {
   ConfirmIrreversibleActDialog,
-  type IrreversibleActConsequence,
+  type LifecycleActConsequence,
 } from './confirm-irreversible-act-dialog'
 
 export interface LifecycleActionsProps {
@@ -55,7 +55,7 @@ const TONE: Record<
 const consequenceFor = (
   edge: LifecycleEdge,
   tournamentName: string,
-): IrreversibleActConsequence => {
+): LifecycleActConsequence => {
   switch (edge.confirm) {
     case 'publish-tournament':
       return { variant: 'publish-tournament', tournamentName }
@@ -102,6 +102,11 @@ const consequenceFor = (
  * mints a match for every ready fixture, which spends the *players'* attention rather than
  * the tournament's visibility.
  *
+ * The edge is **captured at the click** and it is the captured one the confirm posts —
+ * never the one recomputed from a `tournament` prop that may have been refetched out from
+ * under the open dialog. See the `pending` state below: that is what stops the dialog
+ * pricing one act and performing another.
+ *
  * The `isPending` lock stays alongside the confirm rather than being replaced by it. A
  * confirm is not a debounce: it asks a question once, per click, while the lock is what
  * keeps a double-click from sending a second transition whose only possible answer is a
@@ -144,24 +149,53 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   // attempt, so it leaves the standing 409 work list alone: the director reads it *while*
   // going to fix it.
   const [refusal, setRefusal] = useState<LifecycleRefusal | null>(null)
-  // The edge awaiting its confirm, held as the CONSEQUENCE the dialog will price rather
-  // than as a queued closure: the dialog needs it anyway, and a stored callback would
-  // capture whatever `tournament` was when the button was clicked.
-  const [pending, setPending] = useState<IrreversibleActConsequence | null>(null)
+  /**
+   * The **edge** awaiting its confirm — captured at the click, and the thing the confirm
+   * posts. Typed as the edge rather than as the consequence, and narrowed to
+   * `LifecycleEdge` rather than the whole five-variant act union, for two reasons:
+   *
+   * 1. **The dialog must price the act it performs.** `edge` below is recomputed from the
+   *    `tournament` prop on *every* render, and this page polls (`useSchedulePolling`, ~3s
+   *    on the Schedule tab). A co-director starting the tournament from their phone while
+   *    this director reads "Start this tournament?" would move `edge` on to `live →
+   *    archived` underneath them — and a confirm that posted the live `edge` would END the
+   *    tournament under a dialog that had just described starting it. The captured edge is
+   *    both what the dialog prices (via `consequenceFor`) and what `move` posts, so the two
+   *    cannot disagree. It is the hazard `useUpdateTableCatalogue` names next door (`../data/api`):
+   *    a refetch under an open dialog swapping the thing the pending act was computed from.
+   *
+   *    A *stale* captured edge is safe, and designed for: `(current, to)` is the server's
+   *    judgement (ADR-0017), so re-asserting an edge that no longer exists is a 409 — which
+   *    this component already renders inline, in the server's own words ("This tournament is
+   *    already live."). Being told is the correct outcome. Silently performing an act nobody
+   *    chose is not. The alternative — keep a boolean and re-derive the consequence from the
+   *    live `edge` — stays self-consistent by rewriting the dialog's copy under the
+   *    director's eyes mid-decision, which is the same theft with better manners.
+   *
+   * 2. **This component can only hold acts it can perform.** A state typed on the whole
+   *    `IrreversibleActConsequence` could hold `recut-draw` / `delete-draw`, which no
+   *    lifecycle button can fire — the mirror of the narrowing the draw panel already has
+   *    (`DrawActConsequence`).
+   */
+  const [pending, setPending] = useState<LifecycleEdge | null>(null)
 
   const edge = lifecycleEdgeFor(tournament)
   if (!edge) return null
   const Icon = edge.icon
   const tone = TONE[edge.tone]
 
-  const move = async () => {
+  /** Post the edge the director was ASKED about — the captured one, passed in — never the
+   * one `lifecycleEdgeFor` happens to offer by the time they answer. The refusal is framed
+   * with that same edge, so a 409 on a stale one reads as the move they actually made
+   * ("Couldn't start the tournament"), not as the move now on offer. */
+  const move = async (confirmed: LifecycleEdge) => {
     setPending(null)
     setRefusal(null)
     try {
-      await transition.mutateAsync(edge)
+      await transition.mutateAsync(confirmed)
     } catch (error) {
       // `mutateAsync` rejects; this notice IS the error surface (there is no toast).
-      setRefusal(lifecycleRefusalNotice(error, edge))
+      setRefusal(lifecycleRefusalNotice(error, confirmed))
     }
   }
 
@@ -177,9 +211,9 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
         // second transition, whose only possible answer is the 409 "already
         // published" — an error shown to a user who did nothing wrong.
         disabled={transition.isPending}
-        // This click moves nothing. It opens the confirm on the consequence this edge
-        // spends; the transition is fired by the confirm's own button.
-        onClick={() => setPending(consequenceFor(edge, tournament.name))}
+        // This click moves nothing. It captures the edge and opens the confirm on it; the
+        // transition is fired by the confirm's own button, on that same captured edge.
+        onClick={() => setPending(edge)}
       >
         <Icon size={16} />
         {edge.label}
@@ -200,13 +234,15 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
 
       {/* The price of a one-way edge, asked before it is paid. Mounted only while an edge
           is awaiting its answer, so the dialog cannot be on screen with nothing behind it.
-          Confirm posts the transition it named; cancel — and Escape, and the overlay —
-          drops it, and the tournament is untouched because nothing was ever sent. */}
+          Confirm posts the transition it named — the CAPTURED edge, both here and in
+          `move`, so the sentence read and the request sent are the same act. Cancel — and
+          Escape, and the overlay — drops it, and the tournament is untouched because
+          nothing was ever sent. */}
       {pending && (
         <ConfirmIrreversibleActDialog
           open
-          consequence={pending}
-          onConfirm={() => void move()}
+          consequence={consequenceFor(pending, tournament.name)}
+          onConfirm={() => void move(pending)}
           onCancel={() => setPending(null)}
         />
       )}

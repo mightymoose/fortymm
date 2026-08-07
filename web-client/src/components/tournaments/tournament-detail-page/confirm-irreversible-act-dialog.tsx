@@ -40,11 +40,20 @@ import {
 export type DrawActConsequence =
   | { variant: 'recut-draw'; eventName: string }
   | { variant: 'delete-draw'; eventName: string }
+
+/** The acts that belong to a **tournament's lifecycle** — the mirror of
+ * `DrawActConsequence`, and narrow for the same reason: `LifecycleActions` owns exactly
+ * these three, so its state must be unable to hold a draw act it has no way to perform.
+ * The two aliases are what keep the wide union out of both components; nothing but the
+ * dialog itself is typed on `IrreversibleActConsequence`. */
+export type LifecycleActConsequence =
   | { variant: 'publish-tournament'; tournamentName: string }
   | { variant: 'start-tournament'; tournamentName: string }
   | { variant: 'end-tournament'; tournamentName: string }
 
-export type IrreversibleActConsequence = DrawActConsequence
+export type IrreversibleActConsequence =
+  | DrawActConsequence
+  | LifecycleActConsequence
 
 export interface ConfirmIrreversibleActDialogProps {
   open: boolean
@@ -150,7 +159,11 @@ export const ConfirmIrreversibleActDialog = ({
               enter it from this moment on. There is no un-publishing it.
             </>
           ),
-          confirmLabel: 'Publish',
+          // Verb plus object, like every other act's button — and never the bare
+          // `Publish` the HEADER button says. Two controls with one accessible name put
+          // the dialog's button and the header's in the same role query, so an assertion
+          // that meant one could resolve to the other and pass while checking nothing.
+          confirmLabel: 'Publish the tournament',
           confirmVariant: 'default' as const,
         }
       // The costliest of the three, and the reason none of them is exempt: since #788
