@@ -3,7 +3,7 @@ import { render, screen, type Container } from '@/test/utilities'
 
 import { PoolStandingsTable, type PoolStandingsTableProps } from './pool-standings-table'
 import { buildPoolStandingsTableProps } from './pool-standings-table.factory'
-import { PLAYER_COLUMN, standingsTablePage } from './standings-table.page'
+import { standingsTablePage } from './standings-table.page'
 
 /** The accessible name a pool's table carries — the wrapper's own wiring, written once. */
 const tableName = (poolName: string) => `Standings for ${poolName}`
@@ -33,10 +33,11 @@ const scoped = (container: Container) => {
       return container.getByRole('region', { name: poolName })
     },
 
-    /** The player names, top to bottom — the shared table's Player column, read through the
-     * pool's accessible name. The ORDER is the claim: the server's, untouched (ADR-0788). */
+    /** The player names, top to bottom — the shared table's Player column, asked for by its
+     * header and read through the pool's accessible name. The ORDER is the claim: the
+     * server's, untouched (ADR-0788). */
     getRowNames(poolName: string) {
-      return table.getColumn(tableName(poolName), PLAYER_COLUMN)
+      return table.getColumnUnder(tableName(poolName), 'Player')
     },
 
     /** Everything interactive in the pool section — must be empty. Standings are a read

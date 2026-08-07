@@ -1,6 +1,6 @@
 import { render, screen, type Container } from '@/test/utilities'
 
-import { PLAYER_COLUMN, standingsTablePage } from './standings-table.page'
+import { standingsTablePage } from './standings-table.page'
 import { SwissStandingsPanel } from './swiss-standings-panel'
 import {
   buildSwissStandingsPanelProps,
@@ -47,15 +47,28 @@ const scoped = (container: Container) => {
         .map((t: HTMLElement) => t.getAttribute('aria-label') ?? '')
     },
 
-    /** The table's player names, top to bottom (the rendered order). */
+    /** The table's player names, top to bottom (the rendered order) — the Player column,
+     * asked for by its header rather than by an index a new column would shift. */
     getRowNames(eventName: string) {
-      return table.getColumn(tableName(eventName), PLAYER_COLUMN)
+      return table.getColumnUnder(tableName(eventName), 'Player')
     },
 
-    /** One numeric column of the table, read top to bottom by its **column index** — the
-     * same order the header row declares (`#`, Player, W, L, Diff, GW). */
-    getColumn(eventName: string, index: number) {
-      return table.getColumn(tableName(eventName), index)
+    /**
+     * One column of the table, read top to bottom and addressed by its **header's full word**
+     * ("Buchholz", "Wins") rather than by index.
+     *
+     * By index would be the obvious thing and is a trap: a swiss table's Buchholz column sits
+     * between Losses and Game difference, so every index after it shifts — and an
+     * index-addressed assertion does not fail when that happens, it silently starts reading
+     * the neighbour it displaced. Asking by header also ties each cell to the heading a
+     * screen-reader user hears above it.
+     *
+     * The lookup itself is the shared table's (`standingsTablePage.getColumnUnder`), because
+     * the table is the shared table — this file only supplies the accessible name a swiss
+     * event's table carries.
+     */
+    getColumnUnder(eventName: string, header: string) {
+      return table.getColumnUnder(tableName(eventName), header)
     },
 
     /** A pool table's test hook, which must NEVER appear here: swiss has no pools, so a

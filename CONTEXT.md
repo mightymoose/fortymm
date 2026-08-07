@@ -458,9 +458,13 @@ _Avoid_: walkover (that is an opponent who failed to appear), forfeit, default.
 The sum of an entrant's opponents' win counts — a **swiss** tiebreak measuring
 how strong a field that entrant had to beat. It ranks above game difference,
 because who you played carries more information than your margin when the format
-deliberately pairs you against your own score. A **bye** contributes nothing,
-having produced no opponent. It moves as the event runs: an opponent winning a
-later match raises your Buchholz without you playing.
+deliberately pairs you against your own score. A **bye** cuts two ways, and the
+distinction matters: it adds nothing to the byed entrant's **own** sum, having
+produced no opponent — but the win it scores **does** count toward the Buchholz of
+whoever played that entrant, because Buchholz reads the same wins column the
+standings display. A rematch counts twice, since the sum is over games played
+rather than distinct opponents. Buchholz moves as the event runs: an opponent
+winning a later match raises yours without you playing.
 _Avoid_: strength of schedule (fine in prose, but the computed term is Buchholz),
 sonneborn-berger (a different measure we do not compute).
 

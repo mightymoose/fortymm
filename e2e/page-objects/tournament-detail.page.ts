@@ -5,6 +5,33 @@ import { ScheduleTabPage } from './tournament-detail-page/schedule-tab.page'
 import { TablesTabPage } from './tournament-detail-page/tables-tab.page'
 
 /**
+ * The **swiss** standings table's columns, by index, each with the name a screen reader
+ * hears for it — `#`, `Player`, `W`, `L`, `Buc`, `Diff`, `GW`.
+ *
+ * The cells carry no test hooks of their own, so a column can only be addressed by
+ * position, and a position is exactly the thing a *new column* silently changes. It did:
+ * `Buc` was inserted between `L` and `Diff` when swiss standings started ranking by
+ * Buchholz, which moved `GW` from index 5 to 6 — and index 5 still resolved, to game
+ * difference, so an assertion reading "games won" quietly read the wrong number.
+ *
+ * Hence one map here rather than an `nth(…)` in each accessor, and hence the **name**
+ * beside each index: a spec asserts that the header at each index is the column this map
+ * claims (`swissStandingsHeader`), which turns the next inserted column into a red naming
+ * the layout instead of a wrong number in a green run. The names are the `sr-only` words
+ * the header spans carry, since the visible glyphs (`W`, `GW`) are not the accessible
+ * name.
+ */
+export const SWISS_STANDINGS_COLUMNS = {
+  rank: { index: 0, name: 'Rank' },
+  player: { index: 1, name: 'Player' },
+  wins: { index: 2, name: 'Wins' },
+  losses: { index: 3, name: 'Losses' },
+  buchholz: { index: 4, name: 'Buchholz' },
+  gameDifference: { index: 5, name: 'Game difference' },
+  gamesWon: { index: 6, name: 'Games won' },
+} as const
+
+/**
  * The tournament detail page (`/tournaments/$tournamentId`) — scoped to the
  * lifecycle round-robin spec's load-bearing surfaces: the header's lifecycle
  * button (Publish → Start tournament → End tournament, `LifecycleActions`), an
@@ -329,6 +356,74 @@ export class TournamentDetailPage {
    * the first data row is rank 1. */
   poolStandings(poolId: string): Locator {
     return this.page.getByTestId(`pool-standings-${poolId}`)
+  }
+
+  // ----- swiss standings (event card) ---------------------------------------
+
+  /** A **swiss** event's standings — *one* table over the whole field, because swiss has
+   * no pools (ADR "swiss pre-cuts every round and pairs each one on advance").
+   *
+   * A different section from `standingsPanel`, which groups its tables under pools: a
+   * swiss event ranks everybody against everybody, and reading the pooled one would be a
+   * spec that could not tell "the field is ranked" from "there are no pools to show". */
+  swissStandings(eventId: string): Locator {
+    return this.page.getByTestId(`swiss-standings-panel-${eventId}`)
+  }
+
+  /** **Every row of the swiss standings, in the order the page lays them out** — the
+   * finishing order a director reads, top to bottom.
+   *
+   * Addressed by the testid *pattern* so the set is "the rows", whatever entries they
+   * are; each row's own testid names the **server-minted entry id** it is for, which is
+   * what `swissStandingRow` asks for and what makes "the table is in the server's order"
+   * assertable rather than inferred from names. */
+  swissStandingsRows(eventId: string): Locator {
+    return this.swissStandings(eventId).getByTestId(/^standing-row-/)
+  }
+
+  /** One entry's row of the swiss standings, by the **entry id** the server minted. */
+  swissStandingRow(eventId: string, entryId: string): Locator {
+    return this.swissStandings(eventId).getByTestId(`standing-row-${entryId}`)
+  }
+
+  /** **Every cell of one entry's row, in column order** — for an assertion that pins the
+   * whole line at once (`toHaveText([...])`), which is the only shape that can catch a
+   * column having moved as well as a number being wrong. Column order and meaning:
+   * `SWISS_STANDINGS_COLUMNS`. */
+  swissStandingCells(eventId: string, entryId: string): Locator {
+    return this.swissStandingRow(eventId, entryId).getByRole('cell')
+  }
+
+  /** One entry's cell in a named column — the accessor the single-column assertions go
+   * through, so no spec writes an `nth(…)` of its own. */
+  private swissStandingCell(
+    eventId: string,
+    entryId: string,
+    column: { readonly index: number },
+  ): Locator {
+    return this.swissStandingCells(eventId, entryId).nth(column.index)
+  }
+
+  /** One entry's **wins** cell. This is the cell a **bye** is visible in at all: a bye is
+   * scored as a win worth zero games (ADR "swiss standings add Buchholz"), so the byed
+   * entrant's win shows up here and nowhere else — `GW` stays 0, which is the other half
+   * of the same fact (`swissStandingGamesWon`). */
+  swissStandingWins(eventId: string, entryId: string): Locator {
+    return this.swissStandingCell(eventId, entryId, SWISS_STANDINGS_COLUMNS.wins)
+  }
+
+  /** One entry's **games won** cell. Zero for a bye, which is what stops a scheduling
+   * artifact nobody played from lifting its holder over somebody who beat a real
+   * opponent. */
+  swissStandingGamesWon(eventId: string, entryId: string): Locator {
+    return this.swissStandingCell(eventId, entryId, SWISS_STANDINGS_COLUMNS.gamesWon)
+  }
+
+  /** The standings table's **column header** at one index — what a spec asserts the name
+   * of, to establish that the index a cell accessor reads is still the column it means.
+   * See `SWISS_STANDINGS_COLUMNS` for why that guard exists. */
+  swissStandingsHeader(eventId: string, column: { readonly index: number }): Locator {
+    return this.swissStandings(eventId).getByRole('columnheader').nth(column.index)
   }
 
   /** The **two-stage** champion callout — the one a round-robin-then-knockout event

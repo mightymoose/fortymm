@@ -18,7 +18,13 @@ from typing import Any, assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import EntryId, PoolId
+from app.draws import (
+    EntryId,
+    PoolId,
+    SeatedPairing,
+    swiss_byes,
+    swiss_pairable_rows,
+)
 from app.models import (
     MatchStatus,
     ScheduleSolve,
@@ -38,8 +44,10 @@ from app.results import (
     RrThenKoResults,
     SingleElimResults,
     StandingRow,
+    StandingRowColumns,
     StandingsThenFinishes,
     SwissResults,
+    SwissStandingRow,
     SwissStandings,
     results_for,
 )
@@ -57,6 +65,7 @@ from app.schemas.tournament import (
     StandingRowRead,
     StandingsResultsRead,
     StandingsThenFinishesResultsRead,
+    SwissStandingRowRead,
     SwissStandingsResultsRead,
     TournamentDetailRead,
     TournamentEntrantRead,
@@ -346,17 +355,38 @@ def _field_input(
     seven-player draw derived from fixtures alone would stand a six-player table.
 
     The entries seated in fixtures are **unioned in** rather than assumed to be a
-    subset. A player who withdraws after the draw is cut leaves the active list while
-    their played fixtures stay, and :func:`~app.pool_finishing_order.finishing_order`
-    indexes its tallies by entrant — so dropping them would be a ``KeyError`` on the
-    first outcome that names them, on the detail page of any event that had a
-    withdrawal.
+    subset, for the **rows** only. A player who withdraws after the draw is cut leaves
+    the active list while their played fixtures stay, and
+    :func:`~app.pool_finishing_order.swiss_finishing_order` indexes its tallies by
+    entrant — so dropping them would be a ``KeyError`` on the first outcome that names
+    them, on the detail page of any event that had a withdrawal. Somebody who played
+    real matches belongs in the table.
 
-    A round nobody has been paired into yet is still **counted**: it can very much still
-    yield a result. Only a **voided** pairing is left out of the count, exactly as it is
-    for a pool — it never will produce one, and counting it would hold the event one
-    outcome short of complete forever."""
-    field = {EntryId(entrant.id) for entrant in entrants} | {
+    The **byes** are derived here rather than stored, because there is nothing to
+    store: a bye is the absence of a fixture row, so it is read off the rounds that
+    *are* paired (:func:`~app.draws.swiss_byes`). They are scored as a win worth zero
+    games one layer down, in the standings themselves.
+
+    **Over the active entrants, not that union** — the one field the draw layer pairs
+    from. Handed the union, this layer asked who was missing from each round and got
+    the departed entrant back every time, because nobody seats them again: a
+    withdrawn-but-seated player collected a phantom bye win per remaining round, up to
+    ``R − 1`` of them, on a table that otherwise looked right. The two layers now derive
+    byes from one field, which is the whole of what they share: the tallies are still
+    the union's, so a departed entrant's results count here and are dropped by
+    :func:`~app.draws._swiss_standings_order` (a stranger in its tallies would turn a
+    two-way tie into a three-way one). For a field that never shrank the two sets are
+    the same set and the two tables are the same table.
+
+    ``fixture_count`` is **what can still be paired**, not the row count. Every round
+    is cut with ``⌊n/2⌋`` rows from the field at the cut, and a round nobody has been
+    paired into yet is very much still countable — but a field that shrank leaves rows
+    nothing will ever seat, and counting those holds the event one outcome short of
+    complete forever. :func:`~app.draws.swiss_pairable_rows` is that count, per round,
+    over the same active field; a **voided** pairing comes off it exactly as it does
+    for a pool, for the same reason."""
+    active = tuple(EntryId(entrant.id) for entrant in entrants)
+    field = set(active) | {
         EntryId(entry_id)
         for f in fixtures
         for entry_id in (f.entry_a_id, f.entry_b_id)
@@ -369,11 +399,80 @@ def _field_input(
     ]
     return FieldInput(
         entrants=tuple(field),
-        fixture_count=sum(
-            1 for f in fixtures if f.match_status is not MatchStatus.voided
-        ),
+        fixture_count=_swiss_fixture_count(fixtures, len(active)),
         outcomes=tuple(outcomes),
+        byes=swiss_byes(active, _seated_pairings(fixtures)),
     )
+
+
+def _swiss_fixture_count(fixtures: list[TournamentFixtureRead], field_size: int) -> int:
+    """How many of a swiss draw's rows can still yield a result — the denominator
+    ``complete`` is measured against.
+
+    Per round, because that is the grain the cut wrote and the grain a field change
+    moves: :func:`~app.draws.swiss_pairable_rows` says how many of a round's rows can
+    ever carry a pairing, and the ones already seated into a **voided** match are taken
+    back off, since that match is terminal and will never produce the outcome the count
+    is promising."""
+    by_round: dict[int, list[TournamentFixtureRead]] = defaultdict(list)
+    for f in fixtures:
+        by_round[f.round].append(f)
+    total = 0
+    for round_fixtures in by_round.values():
+        seated = [
+            f
+            for f in round_fixtures
+            if f.entry_a_id is not None and f.entry_b_id is not None
+        ]
+        total += swiss_pairable_rows(
+            len(round_fixtures), len(seated), field_size
+        ) - sum(1 for f in seated if f.match_status is MatchStatus.voided)
+    return total
+
+
+def _seated_pairings(
+    fixtures: list[TournamentFixtureRead],
+) -> list[SeatedPairing]:
+    """The read rows that seat **both** sides, in the shape
+    :func:`~app.draws.swiss_byes` reads them.
+
+    A **voided** pairing is deliberately still a pairing here. It happened — those two
+    were drawn against each other and neither sat out — so counting its round as one
+    nobody was paired into would invent a bye for every other entrant in it. Voiding
+    takes away the *result*, which ``outcomes`` above already reflects, not the fact of
+    the pairing. It counts as ``decided`` for the same reason it is left out of
+    ``fixture_count``: it will never produce a result, so it must not hold its round —
+    and the bye scored against that round — open forever.
+
+    ``decided`` is the match's **terminal status** — completed, or voided — read live
+    off the row, which is the same live fact :func:`_fixture_outcome` gates the
+    standings on. So a result under correction un-decides its round here exactly as it
+    un-scores its match there.
+
+    It asks the status directly rather than building the outcome and testing it for
+    ``None``, which is what this did and what cost a discarded ``MatchOutcome`` per
+    completed fixture on every detail render. The other two things that projection
+    checks are already true of every row that reaches here: the comprehension filters
+    both entries, and ``match_status`` is read off an outer join onto the fixture's own
+    ``match_id`` (:func:`~app.tournament_queries.fixtures_by_event`), so a status of
+    any kind means there is a match behind it.
+
+    The draw layer spells the same question over its own row shape
+    (:attr:`app.draws.FixtureState.is_decided`, a live score or a void). The row shapes
+    genuinely differ, so the two are not one predicate — that the two agree, including
+    on a status neither of them names, is pinned by a test in ``tests/test_swiss.py``.
+    """
+    return [
+        SeatedPairing(
+            round=f.round,
+            entry_a_id=EntryId(f.entry_a_id),
+            entry_b_id=EntryId(f.entry_b_id),
+            decided=f.match_status is MatchStatus.voided
+            or f.match_status is MatchStatus.completed,
+        )
+        for f in fixtures
+        if f.entry_a_id is not None and f.entry_b_id is not None
+    ]
 
 
 def _bracket_fixtures(
@@ -431,18 +530,47 @@ def _pool_standings_read(pools: Sequence[PoolStandings]) -> list[PoolStandingsRe
 
 
 def _standing_rows_read(rows: Sequence[StandingRow]) -> list[StandingRowRead]:
-    """One standings table's rows, shared by every shape that carries a table — a pool's
-    and a swiss field's — so a row means the same thing on either."""
+    """A pool's standings rows, shared by the two shapes that carry one — the
+    round-robin arm and the pool stage of the rr-then-ko arm."""
+    return [StandingRowRead(**_standing_read_columns(row)) for row in rows]
+
+
+def _standing_read_columns(row: StandingRow) -> StandingRowColumns:
+    """One domain row's columns, ready to unpack into its wire model — the one place a
+    standings row crosses onto the wire, for both tables that carry one.
+
+    The set of columns is named once, in :class:`~app.results.StandingRowColumns`, and
+    both wire models take it: :class:`StandingRowRead` alone, and
+    :class:`SwissStandingRowRead` with ``buchholz`` beside it, exactly as their domain
+    rows relate. So adding a column to a standings row is a type error at each
+    constructor until it is added here, rather than a column that quietly reaches one
+    table and not the other."""
+    return StandingRowColumns(
+        entry_id=row.entry_id,
+        rank=row.rank,
+        played=row.played,
+        wins=row.wins,
+        losses=row.losses,
+        games_won=row.games_won,
+        games_lost=row.games_lost,
+    )
+
+
+def _swiss_standing_rows_read(
+    rows: Sequence[SwissStandingRow],
+) -> list[SwissStandingRowRead]:
+    """A swiss table's rows: the same columns a pool's row carries plus ``buchholz``,
+    the figure that ordered them (ADR "swiss standings add Buchholz, and head-to-head is
+    guarded on having met").
+
+    The shared columns come from :func:`_standing_read_columns`, the same call a pool
+    row's do, rather than being spelled out a second time here: the shapes match on both
+    sides of the wire — :class:`SwissStandingRowRead` extends
+    :class:`~app.schemas.tournament.StandingRowRead` exactly as
+    :class:`~app.results.SwissStandingRow` extends :class:`~app.results.StandingRow` —
+    so the only thing this adds is the one column swiss has."""
     return [
-        StandingRowRead(
-            entry_id=row.entry_id,
-            rank=row.rank,
-            played=row.played,
-            wins=row.wins,
-            losses=row.losses,
-            games_won=row.games_won,
-            games_lost=row.games_lost,
-        )
+        SwissStandingRowRead(**_standing_read_columns(row), buchholz=row.buchholz)
         for row in rows
     ]
 
@@ -477,11 +605,10 @@ def _serialize_finishes(results: BracketFinishes) -> FinishesResultsRead:
 
 
 def _serialize_swiss_standings(results: SwissStandings) -> SwissStandingsResultsRead:
-    """The swiss table, whose rows are serialized by the same helper a pool's are — so
-    "a swiss event's standings rows cross the wire exactly as a round-robin pool's do"
-    is true structurally rather than by two serializers agreeing."""
+    """The swiss table — a pool's columns plus the Buchholz figure each row was ordered
+    by."""
     return SwissStandingsResultsRead(
-        rows=_standing_rows_read(results.rows),
+        rows=_swiss_standing_rows_read(results.rows),
         complete=results.complete,
         champion=results.champion,
     )

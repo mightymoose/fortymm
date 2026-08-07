@@ -10008,16 +10008,107 @@ internal enum Components {
             case live = "live"
             case final = "final"
         }
+        /// One entry's line in a **swiss** table: every column a pool's row carries, plus
+        /// the **Buchholz** figure that ordered it.
+        ///
+        /// ``buchholz`` is the sum of this entrant's opponents' win counts — the wins column
+        /// this same table shows, **bye wins included** (ADR "swiss standings add Buchholz, and
+        /// head-to-head is guarded on having met"), so a director can check the figure by
+        /// adding up the rows of the players this one has played. A **bye adds no term** to its
+        /// own holder's sum: it produced no opponent.
+        ///
+        /// It is on the wire because it is the one tiebreak a client cannot derive from the row
+        /// it ordered: ``rank`` is settled by wins, then head-to-head, then *this*, then
+        /// ``game_difference`` and ``games_won``, and every other link shows its working in the
+        /// columns beside it. A swiss table that ranks A above B on equal wins and worse game
+        /// difference is unreadable without it.
+        ///
+        /// It extends the round-robin row rather than replacing it, so a client renders a swiss
+        /// table with the component it already has and one extra column.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead`.
+        internal struct SwissStandingRowRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/entry_id`.
+            internal var entryId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/rank`.
+            internal var rank: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/played`.
+            internal var played: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/wins`.
+            internal var wins: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/losses`.
+            internal var losses: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/games_won`.
+            internal var gamesWon: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/games_lost`.
+            internal var gamesLost: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/buchholz`.
+            internal var buchholz: Swift.Int
+            /// ``games_won - games_lost`` — the third tiebreaker, on the wire for the table
+            /// to show but derived here so it cannot disagree with the two counts beside it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SwissStandingRowRead/game_difference`.
+            internal var gameDifference: Swift.Int
+            /// Creates a new `SwissStandingRowRead`.
+            ///
+            /// - Parameters:
+            ///   - entryId:
+            ///   - rank:
+            ///   - played:
+            ///   - wins:
+            ///   - losses:
+            ///   - gamesWon:
+            ///   - gamesLost:
+            ///   - buchholz:
+            ///   - gameDifference: ``games_won - games_lost`` — the third tiebreaker, on the wire for the table
+            internal init(
+                entryId: Swift.String,
+                rank: Swift.Int,
+                played: Swift.Int,
+                wins: Swift.Int,
+                losses: Swift.Int,
+                gamesWon: Swift.Int,
+                gamesLost: Swift.Int,
+                buchholz: Swift.Int,
+                gameDifference: Swift.Int
+            ) {
+                self.entryId = entryId
+                self.rank = rank
+                self.played = played
+                self.wins = wins
+                self.losses = losses
+                self.gamesWon = gamesWon
+                self.gamesLost = gamesLost
+                self.buchholz = buchholz
+                self.gameDifference = gameDifference
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case entryId = "entry_id"
+                case rank
+                case played
+                case wins
+                case losses
+                case gamesWon = "games_won"
+                case gamesLost = "games_lost"
+                case buchholz
+                case gameDifference = "game_difference"
+            }
+        }
         /// The **pool-less standings** shape of an event's results — the swiss arm of the
         /// ``results`` discriminated union, tagged ``kind: "swiss_standings"`` (ADR "swiss
         /// pre-cuts every round and pairs each one on advance").
         ///
         /// One table over the whole field, because swiss has no pools: everybody is ranked
-        /// against everybody, which is what pairing by score is for. The rows are the *same*
-        /// :class:`StandingRowRead` a round-robin pool carries, so a client renders this with
-        /// the table it already has — the difference is that they arrive as one list rather
-        /// than grouped under a pool, which is a fact about the format and not a second row
-        /// shape.
+        /// against everybody, which is what pairing by score is for. The rows are a
+        /// :class:`StandingRowRead` plus one column (:class:`SwissStandingRowRead`), and they
+        /// arrive as one list rather than grouped under a pool — both facts about the format
+        /// rather than a second row shape.
+        ///
+        /// The order is swiss's own chain: wins, head-to-head when exactly two are tied **and
+        /// they met**, then **Buchholz**, then game difference, games won and the entry id (ADR
+        /// "swiss standings add Buchholz, and head-to-head is guarded on having met"). Strength
+        /// of schedule outranks margin here because swiss pairs by score, so two entrants level
+        /// on wins may have faced different halves of the field.
         ///
         /// ``complete`` is every round decided, including the later rounds that are cut up
         /// front with their sides still unknown. ``champion`` is the leader of a complete
@@ -10034,7 +10125,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/kind`.
             internal var kind: Components.Schemas.SwissStandingsResultsRead.KindPayload?
             /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/rows`.
-            internal var rows: [Components.Schemas.StandingRowRead]
+            internal var rows: [Components.Schemas.SwissStandingRowRead]
             /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/complete`.
             internal var complete: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead/champion`.
@@ -10048,7 +10139,7 @@ internal enum Components {
             ///   - champion:
             internal init(
                 kind: Components.Schemas.SwissStandingsResultsRead.KindPayload? = nil,
-                rows: [Components.Schemas.StandingRowRead],
+                rows: [Components.Schemas.SwissStandingRowRead],
                 complete: Swift.Bool,
                 champion: Swift.String? = nil
             ) {

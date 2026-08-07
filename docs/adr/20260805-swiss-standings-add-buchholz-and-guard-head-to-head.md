@@ -18,10 +18,21 @@ difference, then games won, then the entry id.
 Swiss orders its field with the same kind of table, but two steps in that chain
 rest on a round-robin assumption that swiss breaks.
 
-**Head-to-head assumes the tied pair met.** In a round-robin everyone plays
-everyone, so a two-way tie always has a head-to-head result to read. In swiss a
-pair tied on wins may never have been paired. The existing step has no way to say
-"they did not meet", because in its own format that cannot happen.
+**Head-to-head, when the tied pair never met.** In a round-robin everyone
+eventually plays everyone, so a completed two-way tie has a head-to-head result to
+read. In swiss a pair tied on wins may never have been paired at all.
+
+**Correction, 2026-08-05.** This section originally claimed the existing step had
+no way to say "they did not meet", and that adding the guard was a correctness fix
+swiss forced. **That was wrong.** `_head_to_head` already returned `None` for a
+pair with no fixture between them, and `_break_tie` already fell through to the
+scalar chain. The guard predates swiss, because a *part-played* round-robin pool
+reaches the same state.
+
+The claim was made during design and not checked against the code. Swiss needed
+nothing here. What this ADR actually contributes on this point is a **test** for
+the guard, which nothing had — confirmed by deliberately breaking it, which reds
+both a swiss test and a pre-existing round-robin one.
 
 **Strength of schedule is invisible.** A round-robin gives every entrant the same
 opponents, so who you played carries no information and the chain rightly ignores
@@ -62,17 +73,55 @@ A bye is the absence of a fixture row, so a byed round produced no opponent and
 adds no term to the sum. This falls out of the definition rather than needing a
 special case.
 
+### But a bye win *does* count toward the Buchholz of whoever played that entrant
+
+Added 2026-08-05, after the bye's scoring landed and made the question real.
+
+A bye scores as a win. Buchholz sums an entrant's opponents' win counts. So the
+question is whether those counts are the wins the standings display, bye wins
+included, or some adjusted number that strips them out.
+
+**They are the wins the standings display.** Buchholz reads the same wins column
+a director is looking at.
+
+The case against is real: a bye win is not evidence of strength, so counting it
+slightly inflates the Buchholz of whoever happened to play the byed entrant. The
+case for wins anyway:
+
+- Stripping bye wins would mean **two definitions of "wins"** in one module — the
+  one the table shows and a private one Buchholz uses. Avoiding exactly that
+  divergence is why this chain lives in a shared module at all (ADR 20260727).
+- A director can verify Buchholz by adding up their opponents' win columns. Under
+  an adjusted number that arithmetic silently fails to reconcile, and the figure
+  reads as a bug.
+
+The inflation is bounded at one win per opponent per event, and it lands on
+whoever played the entrant the format handed a bye to, which is arbitrary rather
+than systematic.
+
 A bye still scores as a **win worth zero games** in step 1. The win is granted
 because a player must not be punished for a scheduling artifact. The games are
 zero so the bye stays neutral on steps 4 and 5, rather than awarding difference
 nobody earned.
 
-### The head-to-head guard is a correctness fix for both formats
+### The head-to-head guard is shared machinery, and it is now tested
 
-The guard is written into the shared understanding of the step, not bolted onto
-the swiss copy. A round-robin pool cannot reach it, because its entrants always
-met. Adding it costs a round-robin nothing and stops the swiss chain reading a
-result that does not exist.
+The guard is a property of the step, not a swiss branch. It already existed (see
+the correction above); what changes is that it is pinned. Breaking it deliberately
+reds a swiss test **and** a pre-existing round-robin one, which is the empirical
+demonstration that one piece of machinery serves both formats.
+
+### A rematch counts twice in Buchholz
+
+Buchholz iterates the outcomes, so an opponent met twice contributes their win
+count twice. This is standard Buchholz, which is a sum over games played rather
+than over distinct opponents, and it is what we take.
+
+The alternative — summing over distinct opponents — would make a player's Buchholz
+depend on how many of their games the pairing happened to repeat, which is not
+something they controlled. Since a rematch only occurs when the greedy walk could
+find no fresh opponent, double-counting keeps the measure a straight function of
+the games actually played.
 
 ## Consequences
 

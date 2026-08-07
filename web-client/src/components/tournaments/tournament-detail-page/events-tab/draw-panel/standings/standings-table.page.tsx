@@ -1,13 +1,12 @@
 import { render, screen, within, type Container } from '@/test/utilities'
 
-import { StandingsTable, type StandingsTableProps } from './standings-table'
-import { buildStandingsTableProps } from './standings-table.factory'
-
-/** The **Player** column's index in the header order (`#`, Player, W, L, Diff, GW) — the
- * one column every caller reads by name rather than by number, since "who is in this table,
- * in what order" is the assertion each of them makes. Stated once so a column inserted to
- * its left is one edit, not four. */
-export const PLAYER_COLUMN = 1
+import { StandingsTable } from './standings-table'
+import {
+  buildPoolStandingsTableProps,
+  buildSwissStandingsTableProps,
+  type PoolOverrides,
+  type SwissOverrides,
+} from './standings-table.factory'
 
 const scoped = (container: Container) => ({
   /** The table itself, by its accessible name — the one thing the caller supplies, so a
@@ -34,13 +33,53 @@ const scoped = (container: Container) => ({
       .map((h) => (h.textContent ?? '').trim())
   },
 
-  /** One column of body cells, top to bottom, by its **index** in the header order
-   * (`#`, Player, W, L, Diff, GW). */
-  getColumn(ariaLabel: string, index: number) {
-    return within(this.getTable(ariaLabel))
+  /**
+   * One column of body cells, top to bottom, addressed by its **header's full word**
+   * ("Player", "Buchholz", "Wins") rather than by index.
+   *
+   * The index is exactly what a Buchholz column changes — a pool table runs `#`, Player, W,
+   * L, Diff, GW and a swiss table inserts **Buc** between L and Diff — so an index-addressed
+   * assertion would move under this feature and, worse, could silently start reading the
+   * neighbour it displaced. Asking by header ties the cells to the heading above them, which
+   * is also the claim a screen-reader user relies on. It is the **only** column reader here
+   * for that reason: an index-taking one left beside it is an index-taking one someone
+   * reaches for.
+   */
+  getColumnUnder(ariaLabel: string, header: string) {
+    const table = within(this.getTable(ariaLabel))
+    const index = table
+      .getAllByRole('columnheader')
+      .findIndex((h) => (h.textContent ?? '').includes(header))
+    if (index === -1) {
+      throw new Error(
+        `No column headed "${header}" in the table "${ariaLabel}". Headers: ${table
+          .getAllByRole('columnheader')
+          .map((h) => (h.textContent ?? '').trim())
+          .join(', ')}`,
+      )
+    }
+    return table
       .getAllByRole('row')
       .slice(1)
       .map((row) => (within(row).getAllByRole('cell')[index].textContent ?? '').trim())
+  },
+
+  /** Whether a column with this header exists at all — for the claim that a **pool** table
+   * has no Buchholz column, which is half of what `format` decides. */
+  hasColumn(ariaLabel: string, header: string) {
+    return within(this.getTable(ariaLabel))
+      .getAllByRole('columnheader')
+      .some((h) => (h.textContent ?? '').includes(header))
+  },
+
+  /** How many body cells a row holds — the guard that the header and the cells agree about
+   * how many columns there are. A table whose header grew a column its rows did not is not
+   * a table any assertion above would catch. */
+  getCellCounts(ariaLabel: string) {
+    return within(this.getTable(ariaLabel))
+      .getAllByRole('row')
+      .slice(1)
+      .map((row) => within(row).getAllByRole('cell').length)
   },
 
   /** One entry's row, by the entry id it is keyed on — for scoping a per-row assertion. */
@@ -52,11 +91,24 @@ const scoped = (container: Container) => ({
   },
 })
 
-/** Test page-object for `StandingsTable` — the table body shared by the pooled and the
- * pool-less standings blocks. */
+/**
+ * Test page-object for `StandingsTable` — the table shared by the pooled and the pool-less
+ * standings blocks.
+ *
+ * **Two renders, one per arm of `StandingsTableRows`**, rather than one `render` taking a
+ * `format`: the tag decides which columns exist *and* which row type is legal, so a single
+ * entry point would have to take a half-typed union and would let a test ask for a swiss
+ * table over pool rows — the exact state the component's props were shaped to forbid.
+ */
 export const standingsTablePage = {
-  render(overrides: Partial<StandingsTableProps> = {}) {
-    render(<StandingsTable {...buildStandingsTableProps(overrides)} />)
+  /** A **pool** table: no Buchholz column. */
+  renderPool(overrides: PoolOverrides = {}) {
+    render(<StandingsTable {...buildPoolStandingsTableProps(overrides)} />)
+  },
+
+  /** A **swiss** table: the same columns plus Buchholz. */
+  renderSwiss(overrides: SwissOverrides = {}) {
+    render(<StandingsTable {...buildSwissStandingsTableProps(overrides)} />)
   },
 
   within(container: Container = screen) {

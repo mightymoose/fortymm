@@ -46,11 +46,17 @@ position (plus a pool, when pooled), sides nullable while unknown. One table,
 Each `DrawType` is a strategy behind a `Protocol` with two pure operations:
 
 - `plan_initial(config, ordered_entrants) → [PlannedFixture]` — cuts the draw.
-- `advance(fixtures) → AdvancePlan` — reads the persisted state and returns
-  side-fills for TBD fixtures plus the fixtures now ready to materialize.
-  **Idempotent**: against an unchanged state it returns an empty plan, so it is
-  re-run after *every* result (and at go-live) rather than triggered by
-  carefully-chosen events.
+- `advance(fixtures, ordered_entrants) → AdvancePlan` — reads the persisted
+  state and returns side-fills for TBD fixtures plus the fixtures now ready to
+  materialize. **Idempotent**: against an unchanged state it returns an empty
+  plan, so it is re-run after *every* result (and at go-live) rather than
+  triggered by carefully-chosen events.
+
+  It takes the **field** as well as the fixtures because a swiss bye is the
+  absence of a fixture row, so a swiss draw cannot recover its own field from
+  the rows it wrote. The three other draw types seat every entrant somewhere and
+  never read the argument, which `app.draws.reads_entrants` says once so the
+  caller knows whether to load it at all.
 
   Idempotence forces the definition of **ready**: both sides known **and** not
   already materialized (`match_id is None`) **and** not already decided

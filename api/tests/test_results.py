@@ -98,14 +98,11 @@ def test_results_for_returns_the_swiss_strategy() -> None:
     assert isinstance(results_for(DrawType.swiss), SwissResults)
 
 
-def test_a_swiss_field_stands_in_one_table_ordered_by_the_shared_chain() -> None:
+def test_a_swiss_field_stands_in_one_table_ordered_by_the_swiss_chain() -> None:
     """Four entrants over two rounds, no pools: A wins both, B wins one, C wins one, D
-    wins none. The table is one list, ordered by the same chain a pool is ordered by —
-    wins first, then (B before C) the head-to-head they played.
-
-    Buchholz is deliberately NOT part of this ordering yet (ADR "swiss standings add
-    Buchholz"): this slice reads out through the chain that exists rather than a
-    swiss-shaped approximation of the one that does not.
+    wins none. The table is one list, ordered by swiss's own chain — wins, then (B and C
+    having never met, and being level on Buchholz at two apiece) B's better game
+    difference.
     """
     field = FieldInput(
         entrants=(A, B, C, D),
@@ -127,6 +124,80 @@ def test_a_swiss_field_stands_in_one_table_ordered_by_the_shared_chain() -> None
         (D, 0, 2),
     ]
     assert [row.rank for row in standings.rows] == [1, 2, 3, 4]
+
+
+def test_the_swiss_table_ranks_on_buchholz_and_shows_the_figure() -> None:
+    """**Strength of schedule, above margin, and visible.**
+
+    B and C are level on one win each and never met. B beat the field's strongest player
+    (A, on two wins), C beat its weakest (E, on none), so Buchholz says B — while game
+    difference (+1 against +3) and the entry id both say C. The table puts B second, and
+    carries the figure that put them there.
+
+        A beat D 3-0, A beat E 3-0  → A: 2-1
+        B beat A 3-2                → B: 1-0, GD +1;  Buchholz A(2) = 2
+        C beat E 3-0                → C: 1-0, GD +3;  Buchholz E(0) = 0
+                                      D: 0-1,  E: 0-2
+    """
+    field = FieldInput(
+        entrants=(A, B, C, D, E),
+        fixture_count=4,
+        outcomes=(
+            _outcome(A, D, 3, 0),
+            _outcome(A, E, 3, 0),
+            _outcome(B, A, 3, 2),
+            _outcome(C, E, 3, 0),
+        ),
+    )
+
+    standings = SwissResults().tabulate(field)
+
+    assert [(row.entry_id, row.buchholz) for row in standings.rows] == [
+        (A, 1),
+        (B, 2),
+        (C, 0),
+        (E, 3),
+        (D, 2),
+    ]
+
+
+def test_a_byed_entrant_is_credited_with_a_win_and_no_games() -> None:
+    """The bye reaches the table as a **win worth zero games** (ADR "swiss standings
+    add Buchholz"): C sat out round 1 and reads 1-0 with a game difference of zero.
+
+    The rule is pinned link by link in ``tests/test_pool_finishing_order.py``; what
+    this asserts is that the swiss table actually *passes its byes through*, which is
+    the half a test of the chain alone cannot see.
+    """
+    field = FieldInput(
+        entrants=(A, B, C),
+        fixture_count=3,
+        outcomes=(_outcome(A, B, 3, 1),),
+        byes=(C,),
+    )
+
+    standings = SwissResults().tabulate(field)
+
+    by_entry = {row.entry_id: row for row in standings.rows}
+    assert (by_entry[C].played, by_entry[C].wins, by_entry[C].losses) == (1, 1, 0)
+    assert (by_entry[C].games_won, by_entry[C].games_lost) == (0, 0)
+    assert by_entry[C].game_difference == 0
+    # A won a real match 3-1, so A's +2 outranks the bye's 0 — the two are level on
+    # wins, on Buchholz (A's only opponent has no wins; C has no opponent) and have
+    # never met. A nominal 3-0 for the bye would put C first.
+    assert [row.entry_id for row in standings.rows] == [A, C, B]
+
+
+def test_a_pool_scores_no_byes() -> None:
+    """A round-robin pool passes none, and that is a fact about the format rather than
+    an omission: its byed entrant sits out one round of a schedule that seats them in
+    every other, so there is no result to credit. B has played nobody and reads a row
+    of zeros."""
+    pool = _single_pool(entrants=(A, B), fixture_count=1, outcomes=[])
+
+    (standings,) = RoundRobinResults().tabulate([pool]).pools
+
+    assert all((row.played, row.wins) == (0, 0) for row in standings.rows)
 
 
 def test_a_swiss_event_is_complete_and_crowned_when_every_round_is_decided() -> None:

@@ -33,15 +33,19 @@ from app.draws import (
     QualifierSeat,
     RoundRobinStrategy,
     RrThenKoStrategy,
+    SeatedPairing,
     Side,
     SideFill,
     SingleElimStrategy,
     SwissStrategy,
     order_entrants,
     qualifier_seed_assignment,
+    reads_entrants,
     reads_fixture_games,
     ready_fixtures,
     strategy_for,
+    swiss_byes,
+    swiss_pairings,
     unseated_entrant_allowance,
 )
 from app.models.tournament import DrawType
@@ -91,6 +95,14 @@ def _ordered(count: int) -> list[OrderedEntrant]:
     return [
         OrderedEntrant(entry_id=_entry_id(i), position=i) for i in range(1, count + 1)
     ]
+
+
+#: The field argument for the three strategies that **do not read it**. ``advance``
+#: takes the event's entrants as well as its fixtures because a swiss bye is the
+#: absence of a fixture row, so swiss cannot recover its field from the rows.
+#: Round-robin seats its whole field in every pool, and a bracket seats even its byed
+#: seeds at cut time. Passing an empty field to those three asserts they never look.
+NO_FIELD: tuple[OrderedEntrant, ...] = ()
 
 
 def _seed_of(entry_id: EntryId | None) -> int:
@@ -343,6 +355,62 @@ class TestStrategyRegistry:
             DrawType.swiss: True,
         }
 
+    def test_the_field_gate_names_every_draw_type_and_only_the_one_that_reads_it(
+        self,
+    ) -> None:
+        """``reads_entrants`` is the games gate's sibling: it lets the same seam skip
+        loading a field nothing will read, on every result submission.
+
+        A whole-enum equality, so a new ``DrawType`` reds here as well as failing to
+        type-check. The three ``False``\\ s are not "these formats have no byes" — they
+        are "their byed entrants are seated in some other row", which is what makes the
+        fixtures a complete description of their field and leaves swiss the only one
+        that has to be told."""
+        assert {draw_type: reads_entrants(draw_type) for draw_type in DrawType} == {
+            DrawType.round_robin: False,
+            DrawType.single_elim: False,
+            DrawType.rr_then_ko: False,
+            # A swiss bye is the absence of a row, so the seated set is not the field.
+            DrawType.swiss: True,
+        }
+
+    def test_a_draw_type_the_field_gate_clears_advances_the_same_without_a_field(
+        self,
+    ) -> None:
+        """And *true of the strategies*, not merely asserted about them: for every draw
+        type the gate clears, a played-out draw advances byte-identically whether it is
+        handed the field or an empty sequence.
+
+        The falsifiable half. A strategy that started reading the field would part
+        company here, rather than silently pairing nobody at the one seam that skips the
+        load."""
+        for draw_type in DrawType:
+            if reads_entrants(draw_type):
+                continue
+            strategy = strategy_for(_settings(draw_type))
+            ordered = _ordered(8)
+            cut = _persisted(strategy.plan_initial(_config(2), ordered))
+            played = _played(
+                cut,
+                {
+                    frozenset({f.entry_a_id.int, f.entry_b_id.int}): (
+                        min(f.entry_a_id.int, f.entry_b_id.int),
+                        3,
+                        1,
+                    )
+                    for f in cut
+                    if f.entry_a_id is not None and f.entry_b_id is not None
+                },
+            )
+            assert not strategy.advance(cut, ordered).is_empty, (
+                f"{draw_type.value}: two empty plans would compare equal for free"
+            )
+
+            for state in (cut, played):
+                assert strategy.advance(state, ordered) == strategy.advance(
+                    state, NO_FIELD
+                )
+
     @pytest.mark.parametrize("field_size", [6, 7])
     def test_the_bye_allowance_names_every_draw_type_and_only_swiss_byes_absently(
         self, field_size: int
@@ -427,7 +495,9 @@ class TestStrategyRegistry:
                 f"{draw_type.value}: the two states must actually differ"
             )
 
-            assert strategy.advance(with_games) == strategy.advance(without_games)
+            assert strategy.advance(with_games, NO_FIELD) == strategy.advance(
+                without_games, NO_FIELD
+            )
 
     def test_the_draw_type_lives_in_exactly_one_place_and_it_is_not_the_config(
         self,
@@ -716,7 +786,7 @@ class TestRoundRobinAdvance:
         planned = RoundRobinStrategy().plan_initial(_config(2), _ordered(7))
         fixtures = _persisted(planned)
 
-        plan = RoundRobinStrategy().advance(fixtures)
+        plan = RoundRobinStrategy().advance(fixtures, NO_FIELD)
 
         assert plan.side_fills == ()
         assert set(plan.ready_fixture_ids) == {f.fixture_id for f in fixtures}
@@ -729,7 +799,7 @@ class TestRoundRobinAdvance:
         by_id = {f.fixture_id: f for f in fixtures}
 
         # Feed them in deliberately scrambled — the plan must not inherit input order.
-        plan = RoundRobinStrategy().advance(list(reversed(fixtures)))
+        plan = RoundRobinStrategy().advance(list(reversed(fixtures)), NO_FIELD)
 
         keys = [
             (by_id[fid].pool_id or "", by_id[fid].round, by_id[fid].position)
@@ -742,7 +812,9 @@ class TestRoundRobinAdvance:
         # it proposes nothing. That is what lets advance() run after every result.
         planned = RoundRobinStrategy().plan_initial(_config(2), _ordered(6))
 
-        plan = RoundRobinStrategy().advance(_persisted(planned, materialized=True))
+        plan = RoundRobinStrategy().advance(
+            _persisted(planned, materialized=True), NO_FIELD
+        )
 
         assert plan == AdvancePlan()
         assert plan.is_empty
@@ -753,7 +825,9 @@ class TestRoundRobinAdvance:
         )
         strategy = RoundRobinStrategy()
 
-        assert strategy.advance(fixtures) == strategy.advance(fixtures)
+        assert strategy.advance(fixtures, NO_FIELD) == strategy.advance(
+            fixtures, NO_FIELD
+        )
 
     def test_a_decided_fixture_is_not_ready_again(self) -> None:
         # match_id is ON DELETE SET NULL, so a decided fixture can lose its match link.
@@ -769,7 +843,7 @@ class TestRoundRobinAdvance:
             match_id=None,
         )
 
-        assert RoundRobinStrategy().advance([decided]).is_empty
+        assert RoundRobinStrategy().advance([decided], NO_FIELD).is_empty
 
     def test_a_fixture_with_an_unknown_side_is_never_ready(self) -> None:
         pending = FixtureState(
@@ -782,10 +856,10 @@ class TestRoundRobinAdvance:
         )
 
         assert pending.is_pending
-        assert RoundRobinStrategy().advance([pending]).is_empty
+        assert RoundRobinStrategy().advance([pending], NO_FIELD).is_empty
 
     def test_an_empty_draw_advances_to_an_empty_plan(self) -> None:
-        assert RoundRobinStrategy().advance([]) == AdvancePlan()
+        assert RoundRobinStrategy().advance([], NO_FIELD) == AdvancePlan()
 
 
 class TestReadyFixtures:
@@ -931,7 +1005,7 @@ class TestReadyFixtures:
         fixtures = [ready, materialized, pending]
 
         assert ready_fixtures(fixtures) == (ready.fixture_id,)
-        assert RoundRobinStrategy().advance(fixtures) == AdvancePlan(
+        assert RoundRobinStrategy().advance(fixtures, NO_FIELD) == AdvancePlan(
             side_fills=(), ready_fixture_ids=(ready.fixture_id,)
         )
 
@@ -1196,7 +1270,7 @@ class TestSingleElimAdvance:
         assert winner is not None
 
         plan = SingleElimStrategy().advance(
-            self._decide(fixtures, round=1, position=1, winner=winner)
+            self._decide(fixtures, round=1, position=1, winner=winner), NO_FIELD
         )
 
         # position 1 is odd → side a of round 2, position ceil(1/2) = 1.
@@ -1211,7 +1285,7 @@ class TestSingleElimAdvance:
         assert winner is not None
 
         plan = SingleElimStrategy().advance(
-            self._decide(fixtures, round=1, position=2, winner=winner)
+            self._decide(fixtures, round=1, position=2, winner=winner), NO_FIELD
         )
 
         # position 2 is even → side b of round 2, position ceil(2/2) = 1.
@@ -1235,7 +1309,7 @@ class TestSingleElimAdvance:
             for f in decided
         ]
 
-        assert SingleElimStrategy().advance(applied).side_fills == ()
+        assert SingleElimStrategy().advance(applied, NO_FIELD).side_fills == ()
 
     def test_a_champion_is_seated_nowhere_the_final_has_no_successor(self) -> None:
         # A decided final must not seat its winner into a non-existent round after
@@ -1253,7 +1327,7 @@ class TestSingleElimAdvance:
         )
         state = [decided_final if f is final else f for f in fixtures]
 
-        assert SingleElimStrategy().advance(state).side_fills == ()
+        assert SingleElimStrategy().advance(state, NO_FIELD).side_fills == ()
 
     def test_a_freshly_cut_bracket_is_ready_exactly_where_both_sides_are_known(
         self,
@@ -1264,7 +1338,7 @@ class TestSingleElimAdvance:
         fixtures = self._persisted_bracket(5)
         by_rp = {(f.round, f.position): f for f in fixtures}
 
-        plan = SingleElimStrategy().advance(fixtures)
+        plan = SingleElimStrategy().advance(fixtures, NO_FIELD)
 
         assert plan.side_fills == ()
         ready = set(plan.ready_fixture_ids)
@@ -1791,7 +1865,7 @@ class TestRrThenKoAdvance:
         fixtures = _played(self._cut(), POOL_A_RESULTS)
         by_slot = {(f.round, f.position): f for f in fixtures if f.pool_id is None}
 
-        plan = _rr_then_ko(2).advance(fixtures)
+        plan = _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
         assert plan.side_fills == (
             SideFill(
@@ -1830,7 +1904,7 @@ class TestRrThenKoAdvance:
         cut = _persisted(_rr_then_ko(2).plan_initial(_config(1), _ordered(4)))
         fixtures = _played(cut, CYCLIC_POOL_RESULTS)
 
-        plan = _rr_then_ko(2).advance(fixtures)
+        plan = _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
         assert _knockout_sides(_apply(fixtures, plan)) == {
             (1, 1, "a"): CYCLIC_POOL_FINISHING_ORDER[0],
@@ -1843,15 +1917,17 @@ class TestRrThenKoAdvance:
         cut = self._cut()
         partial = dict(list(POOL_A_RESULTS.items())[:-1])
 
-        assert _rr_then_ko(2).advance(_played(cut, partial)).side_fills == ()
+        assert _rr_then_ko(2).advance(_played(cut, partial), NO_FIELD).side_fills == ()
 
     def test_rr_then_ko_is_idempotent_once_the_qualifiers_are_seated(self) -> None:
         # THE idempotence claim: apply the plan, feed the result back, and the second
         # advance seats nobody — a SideFill only ever fills an *empty* side.
         fixtures = _played(self._cut(), POOL_A_RESULTS)
-        first = _rr_then_ko(2).advance(fixtures)
+        first = _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
-        assert _rr_then_ko(2).advance(_apply(fixtures, first)).side_fills == ()
+        assert (
+            _rr_then_ko(2).advance(_apply(fixtures, first), NO_FIELD).side_fills == ()
+        )
 
     def test_rr_then_ko_plans_nothing_at_all_over_its_own_fully_applied_plan(
         self,
@@ -1860,7 +1936,7 @@ class TestRrThenKoAdvance:
         # materialized (what ``materialize_event`` does in the same transaction), the
         # whole plan is empty — which is what makes re-running after every result safe.
         fixtures = _played(self._cut(), POOL_A_RESULTS)
-        applied = _apply(fixtures, _rr_then_ko(2).advance(fixtures))
+        applied = _apply(fixtures, _rr_then_ko(2).advance(fixtures, NO_FIELD))
         materialized = [
             dataclasses.replace(f, match_id=MatchId(uuid.UUID(int=4000 + i)))
             if f.match_id is None
@@ -1868,7 +1944,7 @@ class TestRrThenKoAdvance:
             for i, f in enumerate(applied)
         ]
 
-        assert _rr_then_ko(2).advance(materialized) == AdvancePlan()
+        assert _rr_then_ko(2).advance(materialized, NO_FIELD) == AdvancePlan()
 
     def test_rr_then_ko_advances_the_knockout_as_a_single_elim_bracket_does(
         self,
@@ -1889,7 +1965,7 @@ class TestRrThenKoAdvance:
         ]
         by_slot = {(f.round, f.position): f for f in seeded if f.pool_id is None}
 
-        plan = _rr_then_ko(2).advance(seeded)
+        plan = _rr_then_ko(2).advance(seeded, NO_FIELD)
 
         # Round 1 position 3 is odd → side a of round 2, position 2.
         assert (
@@ -1912,7 +1988,7 @@ class TestRrThenKoAdvance:
         cut = self._cut()
         partial = dict(list(POOL_A_RESULTS.items())[:2])
 
-        assert _rr_then_ko(2).advance(_played(cut, partial)).side_fills == ()
+        assert _rr_then_ko(2).advance(_played(cut, partial), NO_FIELD).side_fills == ()
 
     def test_rr_then_ko_round_one_never_pairs_two_qualifiers_out_of_one_pool(
         self,
@@ -1928,7 +2004,7 @@ class TestRrThenKoAdvance:
         cut = _persisted(planned)
         fixtures = _played(cut, _lower_seed_wins(cut))
 
-        seeded = _apply(fixtures, _rr_then_ko(2).advance(fixtures))
+        seeded = _apply(fixtures, _rr_then_ko(2).advance(fixtures, NO_FIELD))
 
         round_one = [
             (f.entry_a_id, f.entry_b_id)
@@ -1945,7 +2021,7 @@ class TestRrThenKoAdvance:
         # pool stage materializes at go-live and the bracket waits.
         cut = self._cut()
 
-        plan = _rr_then_ko(2).advance(cut)
+        plan = _rr_then_ko(2).advance(cut, NO_FIELD)
 
         assert plan.side_fills == ()
         assert set(plan.ready_fixture_ids) == {
@@ -1969,7 +2045,7 @@ class TestRrThenKoAdvance:
         ]
 
         with pytest.raises(MissingFixtureGames) as excinfo:
-            _rr_then_ko(2).advance(gameless)
+            _rr_then_ko(2).advance(gameless, NO_FIELD)
 
         assert "no game counts" in str(excinfo.value)
         assert "18 decided pool fixtures" in str(excinfo.value)
@@ -1988,7 +2064,7 @@ class TestRrThenKoAdvance:
         fixtures = _played(cut, _lower_seed_wins(cut))
 
         with pytest.raises(MissingBracketSlot) as excinfo:
-            _rr_then_ko(2).advance(fixtures)
+            _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
         assert "cut for a different number of qualifiers" in str(excinfo.value)
         # Not a DrawError: a frozen K means nothing a director can type reaches this, so
@@ -2010,7 +2086,7 @@ class TestRrThenKoAdvance:
             for f in fixtures
         ]
 
-        plan = _rr_then_ko(2).advance(in_flux)
+        plan = _rr_then_ko(2).advance(in_flux, NO_FIELD)
 
         assert plan.side_fills == ()
 
@@ -2041,7 +2117,7 @@ class TestRrThenKoAdvance:
         )
         fixtures = _voided(played, {voided_pair})
 
-        plan = _rr_then_ko(2).advance(fixtures)
+        plan = _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
         assert _knockout_sides(_apply(fixtures, plan)) == {
             (1, 1, "a"): 2,
@@ -2060,7 +2136,7 @@ class TestRrThenKoAdvance:
         cut = _persisted(_rr_then_ko(2).plan_initial(_config(1), _ordered(4)))
         fixtures = _voided(cut, set(CYCLIC_POOL_RESULTS))
 
-        plan = _rr_then_ko(2).advance(fixtures)
+        plan = _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
         assert plan.side_fills == ()
 
@@ -2075,7 +2151,7 @@ class TestRrThenKoAdvance:
         cut = self._cut()
         fixtures = _voided(cut, {frozenset({1, 6})})
 
-        plan = _rr_then_ko(2).advance(fixtures)
+        plan = _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
         assert plan.side_fills == (), "pool A has five pairings still to play"
 
@@ -2094,7 +2170,7 @@ class TestRrThenKoAdvance:
         fixtures = _voided(gameless, {frozenset({1, 6})})
 
         with pytest.raises(MissingFixtureGames) as excinfo:
-            _rr_then_ko(2).advance(fixtures)
+            _rr_then_ko(2).advance(fixtures, NO_FIELD)
 
         assert "5 decided pool fixtures" in str(excinfo.value)
 
@@ -2281,22 +2357,108 @@ class TestSwissCut:
             SwissStrategy(rounds=0)
 
 
+#: Round 1 of an 8-entrant cut (1v5, 2v6, 3v7, 4v8), played so that the standings it
+#: produces are a **permutation** of the draw order rather than the draw order itself:
+#: seed 5 beats 1 and seed 7 beats 3, and the margins separate the two winners left
+#: level on wins. A round-2 pairing computed off the seeds instead of the table cannot
+#: agree with the expectation below by luck.
+_ROUND_ONE_UPSETS: dict[frozenset[int], tuple[int, int, int]] = {
+    frozenset({1, 5}): (5, 3, 0),
+    frozenset({2, 6}): (2, 3, 1),
+    frozenset({3, 7}): (7, 3, 2),
+    frozenset({4, 8}): (4, 3, 0),
+}
+
+
+def _seed_pairs(
+    fixtures: Sequence[FixtureState], round_number: int
+) -> list[tuple[int, int, int]]:
+    """``(position, seed a, seed b)`` for one round, in position order."""
+    return [
+        (f.position, _seed_of(f.entry_a_id), _seed_of(f.entry_b_id))
+        for f in sorted(fixtures, key=lambda f: f.position)
+        if f.round == round_number
+    ]
+
+
+def _paired_rows(
+    fixtures: Sequence[FixtureState], round_number: int
+) -> list[tuple[int, int, int]]:
+    """:func:`_seed_pairs` for a round some of whose rows can never be paired.
+
+    A field that shrinks after the cut leaves a round with more rows than pairings, and
+    ``_seed_pairs`` reads every row (its ``_seed_of`` asserts a seat). This one reports
+    the rows that carry a pairing and says nothing about the rest, so a test can assert
+    both the pairings and how many rows were left."""
+    return [
+        (f.position, f.entry_a_id.int, f.entry_b_id.int)
+        for f in sorted(fixtures, key=lambda f: f.position)
+        if f.round == round_number
+        and f.entry_a_id is not None
+        and f.entry_b_id is not None
+    ]
+
+
+def _seated(fixtures: Sequence[FixtureState], round_number: int) -> set[int]:
+    """The seeds seated in one round — everybody but that round's bye."""
+    return {
+        entry_id.int
+        for f in fixtures
+        if f.round == round_number
+        for entry_id in (f.entry_a_id, f.entry_b_id)
+        if entry_id is not None
+    }
+
+
+#: The five-entrant, four-round chain the bye and forced-rematch tests drive. Round 1 is
+#: the cut's own (1v3, 2v4, seed 5 byed); rounds 2 and 3 are whatever ``advance`` pairs,
+#: written out here so a change to the pairing rule shows up as a ``_played`` call that
+#: matches no fixture rather than as a quietly different tournament.
+_FIVE_ENTRANT_RESULTS: list[dict[frozenset[int], tuple[int, int, int]]] = [
+    {frozenset({1, 3}): (1, 3, 0), frozenset({2, 4}): (2, 3, 0)},
+    {frozenset({1, 2}): (1, 3, 0), frozenset({5, 3}): (5, 3, 0)},
+    {frozenset({1, 5}): (1, 3, 0), frozenset({2, 4}): (2, 3, 0)},
+]
+
+
+def _five_entrant_rounds(
+    cut: Sequence[FixtureState], rounds: int
+) -> list[FixtureState]:
+    """A five-entrant swiss driven ``rounds`` rounds forward — every round after the
+    first paired by ``advance`` itself, then played out."""
+    played = _played(cut, _FIVE_ENTRANT_RESULTS[0])
+    for results in _FIVE_ENTRANT_RESULTS[1:rounds]:
+        played = _played(
+            _apply(played, SwissStrategy(rounds=4).advance(played, _ordered(5))),
+            results,
+        )
+    return played
+
+
 class TestSwissAdvance:
-    """Round 1 was paired at the cut, so all ``advance`` has to report today is
-    readiness. Pairing rounds 2..R off the standings is its own slice, and its absence
-    is asserted here rather than stubbed."""
+    """Once every fixture in a round carries a result, ``advance`` pairs the next round
+    into the rows the cut already wrote: the field ordered by the standings, walked, and
+    each entrant given the nearest one below they have not met (ADR "swiss pre-cuts
+    every round and pairs each one on advance")."""
 
     def _cut(self, *, rounds: int = 3, entrants: int = 8) -> list[FixtureState]:
         return _persisted(
             SwissStrategy(rounds=rounds).plan_initial(DrawConfig(), _ordered(entrants))
         )
 
+    def _advance(
+        self, fixtures: Sequence[FixtureState], field: Sequence[OrderedEntrant]
+    ) -> AdvancePlan:
+        return SwissStrategy(rounds=3).advance(fixtures, field)
+
     def test_a_freshly_cut_draw_is_ready_in_round_one_only_and_fills_nothing(
         self,
     ) -> None:
+        """Nothing is decided, so there is nothing to pair: round 1 was seeded at the
+        cut and rounds 2..R wait for it."""
         fixtures = self._cut()
 
-        plan = SwissStrategy(rounds=3).advance(fixtures)
+        plan = self._advance(fixtures, _ordered(8))
 
         assert plan.side_fills == ()
         assert set(plan.ready_fixture_ids) == {
@@ -2305,9 +2467,9 @@ class TestSwissAdvance:
         assert not plan.is_empty
 
     def test_a_materialized_round_one_leaves_an_empty_plan(self) -> None:
-        """Idempotence: apply the plan (the fixtures now carry matches) and re-running
-        it proposes nothing — the later rounds are still pending, so they are not
-        ready, and round 1 is no longer."""
+        """Round 1 is being *played*, not decided: its fixtures carry matches, so they
+        are no longer ready, and round 2 must not be paired off a table that is still
+        moving."""
         fixtures = [
             dataclasses.replace(f, match_id=MatchId(uuid.UUID(int=4000 + i)))
             if f.round == 1
@@ -2315,32 +2477,617 @@ class TestSwissAdvance:
             for i, f in enumerate(self._cut())
         ]
 
-        plan = SwissStrategy(rounds=3).advance(fixtures)
+        plan = self._advance(fixtures, _ordered(8))
 
         assert plan.is_empty
 
-    def test_a_decided_round_one_pairs_nothing_yet(self) -> None:
-        """**The honest limit of this slice.** Round 1 played out in full still fills no
-        side of round 2: pairing by standings is the next chore, and a stub that seated
-        somebody here would be writing pairings nothing computed.
+    def test_a_decided_round_one_pairs_round_two_in_standings_order(self) -> None:
+        """The claim in one assertion: **who** meets whom, and **where**.
 
-        It is asserted rather than left unsaid so that the chore landing the pairing has
-        a test to *change*, and so nothing quietly reports a round ready that has no
-        players in it."""
+        Round 1 upsets the seeding — 5 beats 1, 7 beats 3 — so the table reads
+        4, 5, 2, 7, 3, 6, 1, 8 (seed 4 above seed 5 on the entry-id fallback, the two
+        being level on wins, game difference and games won). Pairing that order down the
+        list gives 4v5, 2v7, 3v6, 1v8, and a fixture's ``position`` is its **pairing
+        rank**, so the pairing holding the top-ranked entrant is position 1.
+
+        Pairing by the draw order instead would give 1v2, 3v4, 5v6, 7v8 — a different
+        answer in every position, which is what makes this test discriminating."""
+        played = _played(self._cut(), _ROUND_ONE_UPSETS)
+
+        plan = self._advance(played, _ordered(8))
+
+        assert _seed_pairs(_apply(played, plan), 2) == [
+            (1, 4, 5),
+            (2, 2, 7),
+            (3, 3, 6),
+            (4, 1, 8),
+        ]
+
+    def test_the_walk_takes_the_nearest_opponent_it_has_not_already_met(self) -> None:
+        """**The rematch-avoidance test, built so that the naive answer is wrong.**
+
+        Four entrants, three rounds, driven all the way through. Round 1 is 1v3, 2v4;
+        the standings stay 1, 2, 3, 4 throughout, so round 2 pairs 1v2 and 3v4 —
+        indistinguishable from pairing adjacent entrants. Round 3 is where they part:
+        every adjacent pair has now met, so pairing down the standings unchecked would
+        emit 1v2 and 3v4 again, both repeats. Skipping to the nearest **unmet** opponent
+        gives 1v4 and 2v3 — the only rematch-free round left."""
+        round_one = _played(
+            self._cut(rounds=3, entrants=4),
+            {frozenset({1, 3}): (1, 3, 0), frozenset({2, 4}): (2, 3, 0)},
+        )
+        round_two = _played(
+            _apply(round_one, self._advance(round_one, _ordered(4))),
+            {frozenset({1, 2}): (1, 3, 0), frozenset({3, 4}): (3, 3, 0)},
+        )
+
+        plan = self._advance(round_two, _ordered(4))
+
+        assert _seed_pairs(round_two, 2) == [(1, 1, 2), (2, 3, 4)]
+        assert _seed_pairs(_apply(round_two, plan), 3) == [(1, 1, 4), (2, 2, 3)]
+
+    def test_only_the_next_round_is_paired(self) -> None:
+        """Round 3 cannot be paired off round 1's table — it is paired off round 2's,
+        which has not been played. So a decided round 1 fills round 2 and nothing
+        else."""
+        played = _played(self._cut(), _ROUND_ONE_UPSETS)
+
+        applied = _apply(played, self._advance(played, _ordered(8)))
+
+        assert all(
+            f.entry_a_id is None and f.entry_b_id is None
+            for f in applied
+            if f.round == 3
+        )
+
+    def test_a_round_with_one_result_outstanding_pairs_nothing(self) -> None:
+        """A swiss round pairs off the whole table, so one unreported result blocks the
+        next round for the entire field (ADR, "a stalled round stalls the whole
+        event"). Three of round 1's four fixtures decided is not a table."""
+        partial = dict(_ROUND_ONE_UPSETS)
+        del partial[frozenset({4, 8})]
+        played = _played(self._cut(), partial)
+
+        plan = self._advance(played, _ordered(8))
+
+        assert plan.side_fills == ()
+
+    def test_a_voided_pairing_does_not_stall_the_round(self) -> None:
+        """A voided match will never produce a result, so requiring one would leave the
+        event one score short forever, with no move a director could make. The round
+        counts as decided without it — the same exception the pool-finished test
+        makes.
+
+        Seed 4 is ahead of seed 3 in the second pairing because the standings put them
+        there: 4 lost to the field's only winner (Buchholz 1) and 3's single fixture was
+        voided, so 3 has faced nobody (Buchholz 0). Both are on no wins and a game
+        difference the chain never reaches."""
+        cut = self._cut(rounds=3, entrants=4)
+        played = _played(cut, {frozenset({2, 4}): (2, 3, 0)})
+        voided = [
+            dataclasses.replace(
+                f, match_id=MatchId(uuid.UUID(int=5000)), match_voided=True
+            )
+            if f.round == 1 and _seed_of(f.entry_a_id) == 1
+            else f
+            for f in played
+        ]
+
+        plan = self._advance(voided, _ordered(4))
+
+        assert _seed_pairs(_apply(voided, plan), 2) == [(1, 2, 1), (2, 4, 3)]
+
+    def test_the_field_is_the_entrants_so_round_ones_bye_is_paired_next(self) -> None:
+        """**The field comes from the entrants, never from the seated set.** Seed 5 has
+        no round-1 fixture at all — a bye is the absence of a row — so a pairing built
+        from the rows would drop them out of the event from here on. They are paired in
+        round 2, and the bye passes to the lowest-ranked entrant who has not had one."""
         played = _played(
-            self._cut(),
+            self._cut(rounds=4, entrants=5),
+            {frozenset({1, 3}): (1, 3, 0), frozenset({2, 4}): (2, 3, 0)},
+        )
+
+        applied = _apply(played, SwissStrategy(rounds=4).advance(played, _ordered(5)))
+
+        assert _seed_pairs(applied, 2) == [(1, 1, 2), (2, 5, 3)]
+        assert _seated(applied, 2) == {1, 2, 3, 5}
+
+    def test_a_latecomer_seated_nowhere_is_paired_into_the_next_round(self) -> None:
+        """A draw cut for eight that a ninth entrant joined holds exactly the rows a
+        draw cut for nine holds (``unseated_entrant_allowance``), so the latecomer is an
+        entrant with no fixture anywhere. Pairing from the entrants is what gets them a
+        match; pairing from the rows would leave them entered and unplayable."""
+        played = _played(self._cut(), _ROUND_ONE_UPSETS)
+
+        applied = _apply(played, self._advance(played, _ordered(9)))
+
+        assert 9 in _seated(applied, 2)
+        assert len(_seated(applied, 2)) == 8
+
+    def test_the_bye_goes_to_the_lowest_ranked_entrant_who_has_not_had_one(
+        self,
+    ) -> None:
+        """Nobody sits out twice before everybody has sat out once (CONTEXT.md, "Bye").
+        Five entrants over three played rounds bye a different entrant each time, and
+        the one taking it is always the lowest-ranked entrant still without one.
+
+        This chain pins the *sequence*, not the byeless preference: its bye holders bank
+        a win and float up the table, so "lowest-ranked byeless" and "lowest-ranked"
+        happen to agree every round and it would pass against an implementation that
+        never checked. ``test_the_bye_skips_an_entrant_who_has_had_one_even_when_they
+        _rank_last`` is the one that tells them apart."""
+        played = _five_entrant_rounds(self._cut(rounds=4, entrants=5), 3)
+
+        byes = [
+            {1, 2, 3, 4, 5} - _seated(played, round_number)
+            for round_number in (1, 2, 3)
+        ]
+
+        assert byes == [{5}, {4}, {3}]
+
+    def test_the_pairing_counts_a_bye_as_a_win_when_it_ranks_the_field(self) -> None:
+        """**The two layers rank one table.** A bye is a win worth zero games in the
+        standings (ADR "swiss standings add Buchholz"), and the next round is paired by
+        walking those standings — so the win has to count *here* too, or the draw would
+        pair the field in an order that contradicts the table on screen.
+
+        Seven entrants, three rounds, driven through two rounds of real results. By
+        round 3 the two byed entrants are seed 7 (round 1) and seed 5 (round 2), and
+        their bye wins move both of them up the table: 7 into the two-win group above
+        every one-win player, and 5 above seed 4. Score the byes as nothing and
+        the walk sees a different order and emits three different pairings —
+        2v4, 7v1, 6v5 — including one the rematch rule then has to work around.
+
+        The one-win group is ordered by **Buchholz**, so it reads 1, 6, 5, 4: seed 1
+        played the eventual leader and seed 4 played the winless seed 3, which outweighs
+        seed 4's better game difference (+2 against −2). The table is therefore
+        2, 7, 1, 6, 5, 4, 3 and the walk pairs 2v7, 1v6, 5v4 with seed 3 byed.
+        """
+        cut = _persisted(
+            SwissStrategy(rounds=3).plan_initial(DrawConfig(), _ordered(7))
+        )
+        round_one = _played(
+            cut,
             {
-                frozenset({1, 5}): (1, 3, 0),
-                frozenset({2, 6}): (2, 3, 1),
-                frozenset({3, 7}): (7, 3, 2),
-                frozenset({4, 8}): (4, 3, 0),
+                frozenset({1, 4}): (1, 3, 2),
+                frozenset({2, 5}): (2, 3, 2),
+                frozenset({3, 6}): (6, 3, 2),
+            },
+        )
+        round_two = _played(
+            _apply(round_one, SwissStrategy(rounds=3).advance(round_one, _ordered(7))),
+            {
+                frozenset({1, 2}): (2, 3, 0),
+                frozenset({6, 7}): (7, 3, 2),
+                frozenset({3, 4}): (4, 3, 0),
             },
         )
 
-        plan = SwissStrategy(rounds=3).advance(played)
+        plan = SwissStrategy(rounds=3).advance(round_two, _ordered(7))
+
+        assert _seed_pairs(round_two, 2) == [(1, 1, 2), (2, 6, 7), (3, 3, 4)]
+        assert _seed_pairs(_apply(round_two, plan), 3) == [
+            (1, 2, 7),
+            (2, 1, 6),
+            (3, 5, 4),
+        ]
+        assert _seated(_apply(round_two, plan), 3) == {1, 2, 4, 5, 6, 7}, (
+            "seed 3 takes round 3's bye, being the lowest-ranked entrant without one"
+        )
+
+    def test_the_bye_skips_an_entrant_who_has_had_one_even_when_they_rank_last(
+        self,
+    ) -> None:
+        """**The byeless preference, in the only case that tests it.**
+
+        "The lowest-ranked entrant who has not yet had a bye" and "the lowest-ranked
+        entrant" are the same answer in most fields, because a bye banks a win and
+        floats its holder *up* the table, leaving somebody byeless at the bottom. A test
+        built on such a field passes against an implementation that never looks at who
+        has already sat out.
+
+        So this one sinks the bye holder instead. Seed 5 sits out round 1, then loses
+        round 2, and comes into round 3 **last**: five entrants, and the table reads
+        1, 2, 3, 4, 5 (seed 4 and seed 5 both on one win and a game difference of −3,
+        separated by the entry-id fallback).
+
+            round 1   1 beat 3, 2 beat 4          5 byed
+            round 2   1 beat 2, 3 beat 5          4 byed
+            round 3   the bye is seed 3's — the lowest-ranked of 1, 2 and 3, the
+                      entrants who have not had one
+
+        Ignore the preference and the bye goes to seed 5 for the **second** time, while
+        three players have never sat out at all. That is what this reds on.
+        """
+        round_one = _played(
+            self._cut(rounds=3, entrants=5),
+            {frozenset({1, 3}): (1, 3, 0), frozenset({2, 4}): (2, 3, 0)},
+        )
+        round_two = _played(
+            _apply(round_one, SwissStrategy(rounds=3).advance(round_one, _ordered(5))),
+            {frozenset({1, 2}): (1, 3, 0), frozenset({3, 5}): (3, 3, 0)},
+        )
+
+        plan = SwissStrategy(rounds=3).advance(round_two, _ordered(5))
+
+        applied = _apply(round_two, plan)
+        assert _seed_pairs(applied, 2) == [(1, 1, 2), (2, 5, 3)]
+        assert _seated(applied, 3) == {1, 2, 4, 5}, (
+            "seed 3 takes round 3's bye. Seed 5 is ranked below them and would take it "
+            "again under a rule that only reads the standings — a second bye for the "
+            "one entrant who has already had one"
+        )
+        assert [
+            {1, 2, 3, 4, 5} - _seated(applied, round_number)
+            for round_number in (1, 2, 3)
+        ] == [{5}, {4}, {3}], "three rounds, three different entrants sitting out"
+
+    def test_once_everybody_has_had_a_bye_it_falls_back_to_the_lowest_ranked(
+        self,
+    ) -> None:
+        """The other half of the rule: with the byeless set empty, selection takes the
+        lowest-ranked entrant overall rather than refusing or looking forever.
+
+        The state is one **the cut refuses to write** — three entrants cannot be given
+        four rounds — so it is built by hand here rather than driven through
+        ``plan_initial``. It is not unreachable: the cut compares ``R`` against the
+        field it sees, and a field that **shrinks** afterwards (an account merge
+        withdraws a guest whose entry seats played fixtures) carries the old ``R`` into
+        a smaller field, which is exactly this. A branch that raised or looped would be
+        a live event stopped dead.
+
+            round 1   1 beat 2    3 byed
+            round 2   1 beat 3    2 byed
+            round 3   2 beat 3    1 byed
+            round 4   everybody has sat out once, so the bye is seed 3's, last on the
+                      table — and the round is paired, as a rematch, because after
+                      three rounds these three have met everybody
+        """
+        played = _played(
+            _persisted(
+                [
+                    PlannedFixture(
+                        pool_id=None,
+                        round=1,
+                        position=1,
+                        entry_a_id=_entry_id(1),
+                        entry_b_id=_entry_id(2),
+                    ),
+                    PlannedFixture(
+                        pool_id=None,
+                        round=2,
+                        position=1,
+                        entry_a_id=_entry_id(1),
+                        entry_b_id=_entry_id(3),
+                    ),
+                    PlannedFixture(
+                        pool_id=None,
+                        round=3,
+                        position=1,
+                        entry_a_id=_entry_id(2),
+                        entry_b_id=_entry_id(3),
+                    ),
+                    PlannedFixture(pool_id=None, round=4, position=1),
+                ]
+            ),
+            {
+                frozenset({1, 2}): (1, 3, 0),
+                frozenset({1, 3}): (1, 3, 0),
+                frozenset({2, 3}): (2, 3, 0),
+            },
+        )
+
+        plan = SwissStrategy(rounds=4).advance(played, _ordered(3))
+
+        assert not plan.is_empty, (
+            "a field that has run out of byeless entrants is still paired — the "
+            "fallback is a choice, not a refusal"
+        )
+        assert _seed_pairs(_apply(played, plan), 4) == [(1, 1, 2)]
+        assert _seated(_apply(played, plan), 4) == {1, 2}, "seed 3 sits out again"
+
+    def test_a_forced_rematch_is_paired_rather_than_refused(self) -> None:
+        """**The last resort, reached by a draw the cut itself writes.** Five entrants,
+        three rounds in: by round 3 the standings put seeds 2 and 4 last among those
+        still to be paired, and they met in round 1. No rematch-free pairing is left for
+        them, and the round is paired anyway — 2v4 again — because refusing would strand
+        a live event with a round nobody can play.
+
+        The pairing above it, 1v5, is fresh: the fallback is taken only by the pair that
+        has no alternative, not by the whole round."""
+        round_two = _five_entrant_rounds(self._cut(rounds=4, entrants=5), 2)
+
+        plan = SwissStrategy(rounds=4).advance(round_two, _ordered(5))
+
+        assert _seed_pairs(_apply(round_two, plan), 3) == [(1, 1, 5), (2, 2, 4)]
+        assert (2, 2, 4) in _seed_pairs(round_two, 1)  # the repeat, round 1's own
+
+    def test_a_field_that_shrinks_after_the_cut_keeps_pairing_its_later_rounds(
+        self,
+    ) -> None:
+        """**The deadlock, and the one withdrawal that caused it.**
+
+        Eight entrants are cut for four rounds — four rows a round — and round 1 is
+        played by all eight. Seed 8 then leaves, which the ordinary withdrawal endpoint
+        cannot do to a live event but the account merge can: it flips a colliding
+        guest's entry to ``withdrawn`` rather than deleting it, *because* the row seats
+        played fixtures. Seven entrants make three pairings, so round 2 is paired into
+        three of its four rows and the fourth stays ``NULL`` for good.
+
+        That fourth row is what has to be understood as **permanently unpairable**
+        rather than pending. Read as pending it made round 2 neither wholly unpaired nor
+        decided, and the walk answered "no round is pairable" on that call and on every
+        call after: rounds 3 and 4 were never paired, the event never read complete, and
+        a played draw cannot be un-cut — no move a director could make.
+
+        The pairings are asserted exactly, in both rounds, so this cannot pass by
+        pairing *something*. Round 2's table is the seven survivors' (5, 2, 7, 3, 6, 1,
+        4), seed 4 takes the bye, and round 3 is paired off round 2's table in turn.
+
+        Seed 4 is last on it, and that is the shrink showing up in the standings rather
+        than a quirk: seed 8's departure takes seed 4's only result with it (an outcome
+        naming an entry outside the field is left out), so seed 4 has no wins and, on
+        the step above game difference, **no opposition at all** — Buchholz 0, below the
+        three entrants who lost to somebody who is still here. The one-win group is
+        ordered by game difference, the chain's next link, since all three beat a
+        winless opponent.
+        """
+        played = _played(self._cut(rounds=4, entrants=8), _ROUND_ONE_UPSETS)
+
+        round_two = _apply(played, SwissStrategy(rounds=4).advance(played, _ordered(7)))
+
+        assert _paired_rows(round_two, 2) == [(1, 5, 2), (2, 7, 6), (3, 3, 1)]
+        assert _seated(round_two, 2) == {1, 2, 3, 5, 6, 7}, "seed 4 sits round 2 out"
+        assert len([f for f in round_two if f.round == 2]) == 4, (
+            "the cut's fourth row is still there — it is unpairable, not deleted"
+        )
+
+        decided = _played(
+            round_two,
+            {
+                frozenset({5, 2}): (5, 3, 0),
+                frozenset({7, 6}): (7, 3, 0),
+                frozenset({3, 1}): (3, 3, 0),
+            },
+        )
+        round_three = _apply(
+            decided, SwissStrategy(rounds=4).advance(decided, _ordered(7))
+        )
+
+        assert _paired_rows(round_three, 3) == [(1, 5, 7), (2, 3, 2), (3, 4, 6)], (
+            "round 3 is paired off round 2's table — the round that was neither "
+            "wholly unpaired nor decided, and stalled the walk forever"
+        )
+        assert _seated(round_three, 3) == {2, 3, 4, 5, 6, 7}, "seed 1 sits round 3 out"
+
+    def test_a_shrunk_round_is_not_paired_a_second_time(self) -> None:
+        """The idempotence the fix must not cost. A round paired down to a shrunk field
+        has a ``NULL`` row left in it, and "has a ``NULL`` row" is exactly what the
+        pairable check no longer means — so the guard has to be that the round is
+        **full**, not that it is untouched. Re-run over the applied state and it plans
+        no fill, and the rows it filled keep the entrants they were given."""
+        played = _played(self._cut(rounds=4, entrants=8), _ROUND_ONE_UPSETS)
+        applied = _apply(played, SwissStrategy(rounds=4).advance(played, _ordered(7)))
+
+        second = SwissStrategy(rounds=4).advance(applied, _ordered(7))
+
+        assert second.side_fills == ()
+        assert _paired_rows(applied, 2) == [(1, 5, 2), (2, 7, 6), (3, 3, 1)]
+
+    def test_a_shrunk_field_runs_out_of_byeless_entrants(self) -> None:
+        """**The byeless fallback is reachable through the real cut**, and the docstring
+        beside it used to argue it was not.
+
+        That argument read the ceiling as ``R ≤ n − 1``, so the byes handed out (one a
+        round) could never cover the field. It reasoned about ``n`` at the cut. Six
+        entrants are cut for five rounds here — legal — and three of them are left after
+        round 1, so rounds 2, 3 and 4 bye one survivor each and round 5 has nobody
+        byeless to pick. It hands the bye to the lowest-ranked entrant overall, a second
+        one for seed 3, rather than raising or looping in the middle of a live event.
+
+        Every round after the first is paired by ``advance`` itself, which is what makes
+        this a statement about a draw the system can actually be in."""
+        played = _played(
+            self._cut(rounds=5, entrants=6),
+            {
+                frozenset({1, 4}): (1, 3, 0),
+                frozenset({2, 5}): (2, 3, 0),
+                frozenset({3, 6}): (3, 3, 0),
+                # Every pairing the three survivors can be given, so each round is
+                # played out whichever two of them meet.
+                frozenset({1, 2}): (1, 3, 0),
+                frozenset({1, 3}): (1, 3, 0),
+                frozenset({2, 3}): (2, 3, 0),
+            },
+        )
+        for _ in range(4):
+            played = _played(
+                _apply(played, SwissStrategy(rounds=5).advance(played, _ordered(3))),
+                {
+                    frozenset({1, 2}): (1, 3, 0),
+                    frozenset({1, 3}): (1, 3, 0),
+                    frozenset({2, 3}): (2, 3, 0),
+                },
+            )
+
+        assert [
+            {1, 2, 3} - _seated(played, round_number) for round_number in (2, 3, 4, 5)
+        ] == [{3}, {2}, {1}, {3}], (
+            "three byeless entrants last three rounds; the fourth falls back to the "
+            "lowest-ranked, who has already had one"
+        )
+
+    def test_re_running_the_advance_pairs_the_round_again_no_differently(self) -> None:
+        """**Idempotence, in the two steps the seam takes.** Apply the fills and the
+        round is no longer *wholly* unpaired, so it is no longer pairable and a second
+        run plans no fill.
+
+        The second plan is not *empty*, and must not be: the round it just paired is
+        genuinely ready to become matches, which is what the caller does with it next
+        (``materialize_event`` re-derives readiness over the filled state). Materialize
+        those rows and the third run is the empty plan the contract asks for."""
+        played = _played(self._cut(), _ROUND_ONE_UPSETS)
+        applied = _apply(played, self._advance(played, _ordered(8)))
+
+        second = self._advance(applied, _ordered(8))
+
+        assert second.side_fills == ()
+        assert set(second.ready_fixture_ids) == {
+            f.fixture_id for f in applied if f.round == 2
+        }
+        materialized = [
+            dataclasses.replace(f, match_id=MatchId(uuid.UUID(int=6000 + i)))
+            if f.fixture_id in second.ready_fixture_ids
+            else f
+            for i, f in enumerate(applied)
+        ]
+        assert self._advance(materialized, _ordered(8)) == AdvancePlan()
+
+    def test_a_corrected_earlier_result_does_not_re_pair_a_paired_round(self) -> None:
+        """A round-1 result taken back into correction un-decides round 1 — but round 2
+        is already paired and possibly being played, and a fill only ever lands on a
+        wholly unpaired round. So the pairings stand, exactly as single-elim never
+        un-seats a winner."""
+        played = _played(self._cut(), _ROUND_ONE_UPSETS)
+        applied = _apply(played, self._advance(played, _ordered(8)))
+        in_correction = [
+            dataclasses.replace(f, games=None)
+            if f.round == 1 and _seed_of(f.entry_a_id) == 1
+            else f
+            for f in applied
+        ]
+
+        plan = self._advance(in_correction, _ordered(8))
 
         assert plan.side_fills == ()
-        assert plan.ready_fixture_ids == ()
-        assert all(
-            f.entry_a_id is None and f.entry_b_id is None for f in played if f.round > 1
+        assert _seed_pairs(in_correction, 2) == [
+            (1, 4, 5),
+            (2, 2, 7),
+            (3, 3, 6),
+            (4, 1, 8),
+        ]
+
+    def test_an_empty_draw_advances_to_nothing(self) -> None:
+        assert self._advance([], _ordered(8)) == AdvancePlan()
+
+
+class TestSwissByes:
+    """Who has sat out, derived from the rows — because a bye is the *absence* of a
+    row (CONTEXT.md, "Bye") and there is nothing else to read it off."""
+
+    def _byes(
+        self,
+        field: Sequence[int],
+        pairings: Sequence[tuple[int, int, int]],
+        *,
+        undecided: Collection[tuple[int, int, int]] = (),
+    ) -> list[int]:
+        """The byes of a field whose ``pairings`` are ``(round, seed a, seed b)``. Every
+        pairing is decided unless it is named in ``undecided`` — a bye is scored with
+        its round, so the flag is what a round being over means here."""
+        return [
+            entry_id.int
+            for entry_id in swiss_byes(
+                [_entry_id(seed) for seed in field],
+                [
+                    SeatedPairing(
+                        round=round_number,
+                        entry_a_id=_entry_id(a),
+                        entry_b_id=_entry_id(b),
+                        decided=(round_number, a, b) not in undecided,
+                    )
+                    for round_number, a, b in pairings
+                ],
+            )
+        ]
+
+    def test_the_entrant_missing_from_a_paired_round_took_its_bye(self) -> None:
+        assert self._byes([1, 2, 3], [(1, 1, 2)]) == [3]
+
+    def test_an_even_field_byes_nobody(self) -> None:
+        assert self._byes([1, 2, 3, 4], [(1, 1, 2), (1, 3, 4)]) == []
+
+    def test_each_paired_round_yields_its_own_bye(self) -> None:
+        """One id per bye taken, so the multiset carries how many each entrant has —
+        which is what the selection rule ("who has not had one") reads."""
+        assert self._byes([1, 2, 3], [(1, 1, 2), (2, 1, 3)]) == [3, 2]
+
+    def test_the_same_entrant_byed_twice_appears_twice(self) -> None:
+        assert self._byes([1, 2, 3], [(1, 1, 2), (2, 2, 1)]) == [3, 3]
+
+    def test_a_round_nobody_is_paired_into_yields_no_byes(self) -> None:
+        """**The one that stops a freshly cut draw handing everybody a bye.** Rounds 2
+        and 3 of a swiss draw exist as rows with both sides unknown from the moment it
+        is cut, so they contribute no pairings — and a round with no pairing is a round
+        waiting to be paired, not a round the whole field sat out."""
+        assert self._byes([1, 2, 3], [(1, 1, 2)]) == [3]
+
+    def test_a_round_still_being_played_scores_no_bye_yet(self) -> None:
+        """**A bye is scored with its round.** Round 2 is paired but one of its matches
+        is still on, so nobody has a result for that round — and the entrant sitting it
+        out does not get one either. Credit it early and a freshly cut seven-player draw
+        would show its byed entrant top of the table before a ball was hit."""
+        pairings = [(1, 1, 2), (1, 3, 4), (2, 1, 3), (2, 2, 4)]
+
+        assert self._byes([1, 2, 3, 4, 5], pairings, undecided=[(2, 2, 4)]) == [5]
+
+    def test_a_round_of_one_undecided_match_scores_no_bye_at_all(self) -> None:
+        """The same rule at the start of an event: round 1 is paired at the cut, so its
+        pairings exist from day one, and none of them has been played."""
+        assert self._byes([1, 2, 3], [(1, 1, 2)], undecided=[(1, 1, 2)]) == []
+
+    def test_an_entrant_seated_nowhere_is_byed_in_every_paired_round(self) -> None:
+        """The latecomer: a draw cut for four that a fifth player joined seats them in
+        no round at all. They are in the field, so they collect a bye for every round
+        that has been paired — which is what stops the selection rule handing them yet
+        another one."""
+        pairings = [(1, 1, 2), (1, 3, 4), (2, 1, 3), (2, 2, 4)]
+
+        assert self._byes([1, 2, 3, 4, 5], pairings) == [5, 5]
+
+
+class TestSwissPairings:
+    """The pairing rule on its own: an order in, pairs out. Pure, so the branch that
+    matters most — the forced rematch — is pinned directly rather than through a
+    tournament contrived to reach it."""
+
+    def _pairs(
+        self, order: Sequence[int], met: Collection[frozenset[int]] = ()
+    ) -> list[tuple[int, int]]:
+        pairings = swiss_pairings(
+            [_entry_id(seed) for seed in order],
+            {frozenset(_entry_id(seed) for seed in pair) for pair in met},
         )
+        return [(a.int, b.int) for a, b in pairings]
+
+    def test_a_field_that_has_met_nobody_pairs_straight_down_the_order(self) -> None:
+        assert self._pairs([4, 1, 3, 2]) == [(4, 1), (3, 2)]
+
+    def test_an_entrant_already_met_is_skipped_for_the_next_one_down(self) -> None:
+        """The whole rule in one line: 1 has met 2, so 1 takes 3 — and 2, still
+        unpaired, takes the nearest entrant left."""
+        assert self._pairs([1, 2, 3, 4], {frozenset({1, 2})}) == [(1, 3), (2, 4)]
+
+    def test_a_rematch_is_the_last_resort_rather_than_a_refusal(self) -> None:
+        """**Never a refusal.** With 1 having met everybody below them, no rematch-free
+        pairing for 1 exists — and the walk pairs them anyway, with the nearest, rather
+        than returning a short list that would leave a live event with fixtures nobody
+        can play. The repeat is 1v2, and 3v4 is untouched by it."""
+        met = {frozenset({1, 2}), frozenset({1, 3}), frozenset({1, 4})}
+
+        assert self._pairs([1, 2, 3, 4], met) == [(1, 2), (3, 4)]
+
+    def test_a_field_in_which_everyone_has_met_everyone_still_pairs(self) -> None:
+        """The extreme of the same rule — every pair is a repeat, so every pairing is a
+        rematch, and the round still happens."""
+        met = {frozenset(pair) for pair in combinations([1, 2, 3, 4], 2)}
+
+        assert self._pairs([1, 2, 3, 4], met) == [(1, 2), (3, 4)]
+
+    def test_an_odd_order_leaves_its_last_entrant_unpaired(self) -> None:
+        """Total, not raising: the caller takes the bye out before calling, and a
+        miscount that got past it costs a fixture rather than a 500 mid-event."""
+        assert self._pairs([1, 2, 3]) == [(1, 2)]
+
+    def test_an_empty_order_pairs_nothing(self) -> None:
+        assert self._pairs([]) == []
