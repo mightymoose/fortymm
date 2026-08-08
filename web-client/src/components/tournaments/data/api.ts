@@ -557,10 +557,42 @@ const tournamentsListKey = (nearMe?: TournamentsNearMe) =>
       ] as const)
     : TOURNAMENTS_KEY
 
-/** Invalidate both the list and one tournament's detail after a mutation. */
-function invalidateTournament(qc: QueryClient, id: string) {
-  qc.invalidateQueries({ queryKey: TOURNAMENTS_KEY })
-  qc.invalidateQueries({ queryKey: tournamentKey(id) })
+/**
+ * Invalidate both the list and one tournament's detail after a mutation, and **wait for
+ * the data to come back**.
+ *
+ * React Query awaits whatever `onSettled` returns before `mutateAsync` resolves or
+ * rejects, so returning this makes the mutation unfinished until the refetch has landed.
+ * That matters for exactly one class of caller: a mutation whose **refusal is reported
+ * inline**.
+ *
+ * Those surfaces write their notice in the `catch`, scoped to the state it describes
+ * (`useScopedNotice`). Fire-and-forget invalidation puts the refetch in a race with that
+ * write, and the refusals most likely to lose it are the ones that fired *because the
+ * server saw something this client had not* — a draw gone stale under an entry, a draw
+ * already under way on another device. The refetch then moves the scope out from under a
+ * refusal that had only just appeared, and the director gets a flash and no explanation:
+ * the click that did nothing and said nothing, which `drawRefusalNotice` and
+ * `lifecycleRefusalNotice` both exist to make impossible.
+ *
+ * Awaiting it puts the reconciliation *before* the catch, so the notice is stamped against
+ * the state the server actually judged.
+ */
+function reconcileTournament(qc: QueryClient, id: string): Promise<void> {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: TOURNAMENTS_KEY }),
+    qc.invalidateQueries({ queryKey: tournamentKey(id) }),
+  ]).then(() => undefined)
+}
+
+/**
+ * The same invalidation, **fire and forget** — what every mutation here did before, and
+ * what every mutation without an inline refusal to keep on screen still wants. Holding
+ * `isPending` across the refetch would only keep a button disabled for longer than the
+ * write took, for no one's benefit.
+ */
+function invalidateTournament(qc: QueryClient, id: string): void {
+  void reconcileTournament(qc, id)
 }
 
 // ----- queries -------------------------------------------------------------
@@ -885,8 +917,10 @@ export function useTransitionTournament(tournamentId: string) {
           body: { to: edge.to },
         }),
       ),
-    // Reconcile on BOTH paths — the 409 IS the stale-view signal.
-    onSettled: () => invalidateTournament(qc, tournamentId),
+    // Reconcile on BOTH paths — the 409 IS the stale-view signal — and **await it**, so
+    // the header's inline refusal is written against the state the server judged rather
+    // than racing the refetch that proves it (`reconcileTournament`).
+    onSettled: () => reconcileTournament(qc, tournamentId),
   })
 }
 
@@ -1145,8 +1179,9 @@ export function useCutDraw(tournamentId: string) {
       // This is also what stops a bad cut from priming the caller with half a draw.
       return parseFixtures(fixtures)
     },
-    // Reconcile on BOTH paths — see the note above.
-    onSettled: () => invalidateTournament(qc, tournamentId),
+    // Reconcile on BOTH paths — see the note above — and **await it**, so the panel's
+    // inline refusal is written against the state the server judged (`reconcileTournament`).
+    onSettled: () => reconcileTournament(qc, tournamentId),
   })
 }
 
@@ -1181,8 +1216,9 @@ export function useUncutDraw(tournamentId: string) {
         { allowEmpty: true },
       )
     },
-    // Reconcile on BOTH paths — see the note above.
-    onSettled: () => invalidateTournament(qc, tournamentId),
+    // Reconcile on BOTH paths — see the note above — and **await it**, so the panel's
+    // inline refusal is written against the state the server judged (`reconcileTournament`).
+    onSettled: () => reconcileTournament(qc, tournamentId),
   })
 }
 

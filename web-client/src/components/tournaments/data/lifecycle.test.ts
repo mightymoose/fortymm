@@ -360,13 +360,16 @@ describe('lifecycleRefusalScope', () => {
    * re-cutting, which is the bug in its most confusing form: the fix appears not to work.
    */
   it('moves when a stale draw is re-cut over a field of the same size', () => {
-    const entrants = buildEntrants(4)
-    // The same four players, seated differently — what a re-cut produces. Nothing about
-    // the entrant count or the fixture count has moved.
-    const before = buildDrawnEvent({ id: 'ev-1', entrants })
+    const before = buildDrawnEvent({ id: 'ev-1', entrants: buildEntrants(4) })
+    // A cut is wholesale: the server deletes every fixture for the event and plans a
+    // fresh set, so a re-cut mints new ids. Same field, same number of fixtures — only
+    // the identities move, which is the whole point.
     const after = {
       ...before,
-      fixtures: [...before.fixtures].reverse(),
+      fixtures: before.fixtures.map((fixture, i) => ({
+        ...fixture,
+        id: `recut-fx-${i}`,
+      })),
     }
 
     expect(before.entered).toBe(after.entered)
@@ -374,6 +377,31 @@ describe('lifecycleRefusalScope', () => {
     expect(
       lifecycleRefusalScope(buildTournament({ events: [before] })),
     ).not.toBe(lifecycleRefusalScope(buildTournament({ events: [after] })))
+  })
+
+  /**
+   * The live-play case, and the reason the draw half is read as fixture **ids** rather
+   * than as the entry ids seated in them.
+   *
+   * A knockout side is `null` until the fixture feeding it is decided, so every completed
+   * match during live play fills one in. Reading the seated sides made the scope move on
+   * each of those — and the header polls every ~15s while a tournament is live, so a
+   * director reading an End-tournament refusal lost it the moment a bracket slot
+   * resolved. Nothing about that resolution is something a lifecycle refusal asserts.
+   */
+  it('does NOT move when a knockout slot resolves during play', () => {
+    const before = buildDrawnEvent({ id: 'ev-1', entrants: buildEntrants(4) })
+    const [first, ...rest] = before.fixtures
+    // The feeding match finished: this fixture's sides are known now. Same fixture, same
+    // id, same field.
+    const after = {
+      ...before,
+      fixtures: [{ ...first, entryAId: 'entry-1', entryBId: 'entry-2' }, ...rest],
+    }
+
+    expect(lifecycleRefusalScope(buildTournament({ events: [before] }))).toBe(
+      lifecycleRefusalScope(buildTournament({ events: [after] })),
+    )
   })
 
   /** The other half of the same case: the swap itself, which is what makes the draw

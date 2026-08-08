@@ -110,6 +110,30 @@ describe('useScopedNotice', () => {
     })
   })
 
+  /**
+   * The one that fails if the setter closes over its render's scope.
+   *
+   * This is the shape of a refusal the server made against state this client had not
+   * seen: the mutation reconciles (`reconcileTournament`), the page catches up — moving
+   * the scope — and only then does the `catch` write the notice. Holding a setter from
+   * before that reconciliation stamps a scope that is already gone, and the next render
+   * drops the notice: a flash, and no explanation.
+   *
+   * `set` is deliberately captured BEFORE the rerender, because that is exactly what an
+   * async `catch` does — it runs a closure created when the click happened.
+   */
+  it('shows a notice written after the scope moved underneath it', () => {
+    const { result, rerender } = renderScoped('draw-as-this-client-saw-it')
+    const setFromTheClick = result.current[1]
+
+    // The reconciliation lands: this client now agrees with the server.
+    rerender({ scope: 'draw-as-the-server-saw-it' })
+    // …and only now does the rejected mutation's catch write its refusal.
+    act(() => setFromTheClick('This draw is already under way'))
+
+    expect(result.current[0]).toBe('This draw is already under way')
+  })
+
   /** A notice set *after* the scope moved belongs to the new scope, not the old one —
    * the stamp is taken when the setter runs, so a fresh refusal shows immediately. */
   it('stamps a new notice with the scope current when it is set', () => {

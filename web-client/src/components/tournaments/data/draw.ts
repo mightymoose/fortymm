@@ -680,17 +680,24 @@ function drawConfig(
  * before and after the fix, and the refusal telling the director to re-cut would survive
  * their re-cutting. Reading the *identities* is what makes the fix visible.
  *
- * Only the **seating** is read — the two entry ids, in pool/round/position order as the
- * server sends them. A fixture's `scheduledStart`, `pinnedAt`, `matchStatus`,
- * `callNotifiedCount` and `completedAt` are all pointedly absent: those move on a poll
+ * The draw half is read as fixture **ids**, not as the entry ids seated in them, and that
+ * is a correction rather than a shortcut. A cut is wholesale — the server deletes every
+ * fixture for the event and plans a fresh set (`cut_draw`, `api/app/tournament_draws.py`)
+ * — so a re-cut mints new ids and the scope moves, which is the case this function exists
+ * for. Reading the seated sides instead *also* moved it for a reason nobody asked about:
+ * a knockout side is `null` until the fixture feeding it is decided (`TBD_LABEL`), so
+ * every completed match during live play rewrote the string and blinked the director's
+ * standing notice off the screen mid-read.
+ *
+ * Everything else on a fixture is pointedly absent for the same reason: `scheduledStart`,
+ * `pinnedAt`, `matchStatus`, `callNotifiedCount` and `completedAt` all move on a poll
  * tick, on a call, and on every score, and none of them is something a draw refusal or a
- * go-live refusal says anything about. Including one would blink the director's work list
- * off the screen mid-read, which is the failure this whole mechanism exists to prevent.
+ * go-live refusal says anything about.
  */
 export function drawSeating(event: TournamentEvent): string {
   return [
     event.entrants.map((entrant) => entrant.id).join(','),
-    event.fixtures.map((fx) => `${fx.entryAId ?? ''}>${fx.entryBId ?? ''}`).join(','),
+    event.fixtures.map((fixture) => fixture.id).join(','),
   ].join(';')
 }
 
