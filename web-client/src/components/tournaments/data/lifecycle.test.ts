@@ -6,15 +6,18 @@ import {
   entryControlState,
   lifecycleEdgeFor,
   lifecycleRefusalNotice,
+  lifecycleRefusalScope,
   LIFECYCLE_EDGE,
   REGISTRATION_WINDOW,
 } from './lifecycle'
 import {
+  buildDrawnEvent,
   buildEntrant,
   buildEntrants,
   buildEvent,
   buildFullEvent,
   buildIneligibleEvent,
+  buildScheduleSolve,
   buildTournament,
   UNROUNDED_RATING,
 } from './seed.factory'
@@ -315,6 +318,69 @@ describe('lifecycleEdgeFor', () => {
 // The words a refused transition is reported in — the header shows them inline and
 // carries no toast, so this function is the *only* thing standing between a failed click
 // and silence.
+describe('lifecycleRefusalScope', () => {
+  // The three moves that resolve a start refusal. Each is something the director does
+  // *because* the refusal told them to, so each must retire the sentence that asked.
+  it('moves when an event is added — the fix for "this tournament has no events"', () => {
+    const before = buildTournament({ events: [] })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(
+      lifecycleRefusalScope(buildTournament({ events: [buildEvent()] })),
+    )
+  })
+
+  it('moves when an event acquires a draw — the fix for "has no draw yet"', () => {
+    const undrawn = buildTournament({ events: [buildEvent({ id: 'ev-1' })] })
+    const drawn = buildTournament({ events: [buildDrawnEvent({ id: 'ev-1' })] })
+
+    expect(lifecycleRefusalScope(undrawn)).not.toBe(lifecycleRefusalScope(drawn))
+  })
+
+  it('moves when somebody enters — the fix for a draw that no longer seats its entrants', () => {
+    // `entered` is derived from `entrants` by the factory, so moving the list is how a
+    // test moves the count the scope reads.
+    const before = buildTournament({
+      events: [buildEvent({ id: 'ev-1', entrants: buildEntrants(4) })],
+    })
+    const after = buildTournament({
+      events: [buildEvent({ id: 'ev-1', entrants: buildEntrants(5) })],
+    })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
+  })
+
+  it('moves when the status does, so a refusal about this status cannot outlive it', () => {
+    expect(lifecycleRefusalScope(buildTournament({ status: 'draft' }))).not.toBe(
+      lifecycleRefusalScope(buildTournament({ status: 'published' })),
+    )
+  })
+
+  /**
+   * The half that makes the scope a *design* rather than a `JSON.stringify`.
+   *
+   * This page polls (~3s on the Schedule tab), and a refused start hands the director a
+   * work list they read *while* going to fix it. A scope that moved on anything at all
+   * would blink that list off the screen mid-read — so everything no lifecycle refusal
+   * asserts over has to leave it unchanged. `latestScheduleSolve` is the sharp case: it
+   * rewrites itself on every solve tick.
+   */
+  it('does NOT move for state no lifecycle refusal is about', () => {
+    const base = buildTournament()
+    const scope = lifecycleRefusalScope(base)
+
+    expect(lifecycleRefusalScope({ ...base, latestScheduleSolve: buildScheduleSolve() })).toBe(scope)
+    expect(lifecycleRefusalScope({ ...base, name: 'Renamed Open 2026' })).toBe(scope)
+    expect(lifecycleRefusalScope({ ...base, address: null })).toBe(scope)
+    expect(lifecycleRefusalScope({ ...base, description: 'Reworded.' })).toBe(scope)
+  })
+
+  it('is stable across a refetch that changed nothing', () => {
+    expect(lifecycleRefusalScope(buildTournament())).toBe(
+      lifecycleRefusalScope(buildTournament()),
+    )
+  })
+})
+
 describe('lifecycleRefusalNotice', () => {
   const START = LIFECYCLE_EDGE.published!
   const PUBLISH = LIFECYCLE_EDGE.draft!

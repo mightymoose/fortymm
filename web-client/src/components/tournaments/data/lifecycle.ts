@@ -164,6 +164,31 @@ export interface LifecycleRefusal extends Notice {
 }
 
 /**
+ * The facts a lifecycle refusal is **about**, as one string — what `useScopedNotice`
+ * pins the header's notice to, so a refusal clears itself once the director fixes the
+ * thing it named instead of sitting there contradicting the page (#1049, #1216).
+ *
+ * It is deliberately **narrow**, and this list is the place to think before adding to it.
+ * Only `start` has a precondition (ADR-0786), and the precondition is exactly: there is at
+ * least one event, and every event's draw still seats exactly its entrants. So the scope is
+ * the status, plus per event the three numbers that decide it — its identity, how many have
+ * entered, and how many fixtures its draw holds.
+ *
+ * What is **left out** matters as much. The tournament's name, venue, description and
+ * `latestScheduleSolve` are all absent, because no lifecycle refusal asserts anything about
+ * them and this page polls (~3s on the Schedule tab): a scope that moved on a solve tick
+ * would blink the director's work list off the screen mid-read. `publish` and `end` carry
+ * no precondition at all, and their refusals (a 403, a stale-tab 409) are answers about
+ * *this* status — which is in the scope, so they clear when the status moves and not before.
+ */
+export function lifecycleRefusalScope(tournament: Tournament): string {
+  return [
+    tournament.status,
+    ...tournament.events.map((ev) => `${ev.id}:${ev.entered}:${ev.fixtures.length}`),
+  ].join('|')
+}
+
+/**
  * Turn a failed transition into the copy the director reads, beside the button they
  * clicked.
  *
