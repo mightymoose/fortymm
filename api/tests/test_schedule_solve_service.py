@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import Executable
 
@@ -55,6 +56,8 @@ from app.models import (
     DrawType,
     EventFormat,
     Match,
+    MatchGame,
+    MatchGameScore,
     MatchSettings,
     MatchStatus,
     Notification,
@@ -109,7 +112,9 @@ from app.schemas.schedule_solve import (
     parse_placement_conflicts,
 )
 from app.schemas.tournament import ScheduleSolveRead
+from app.tournament_advancement import on_match_completed
 from app.tournament_draws import cut_draw
+from app.tournament_materialization import materialize_event
 from tests._helpers import (
     event_draw_settings,
     event_pools,
@@ -296,10 +301,16 @@ async def _solve_rows(
     )
 
 
-def _run_recorded_job(queue: Queue, expected_solve_id: uuid.UUID) -> None:
-    """Run the oldest recorded job the way a worker would: resolve the dotted
-    path (``job.func`` imports it) and call it with the enqueued args."""
-    job = queue.jobs[0]
+def _run_recorded_job(
+    queue: Queue, expected_solve_id: uuid.UUID, *, index: int = 0
+) -> None:
+    """Run a recorded job the way a worker would: resolve the dotted path
+    (``job.func`` imports it) and call it with the enqueued args.
+
+    ``index`` is which recorded job to run, oldest first — ``0`` (the default)
+    for the single-solve tests, and later indices for a test that solves, moves
+    the tournament on, and solves again."""
+    job = queue.jobs[index]
     assert job.func_name == RUN_SCHEDULE_SOLVE_JOB
     assert job.args == (str(expected_solve_id),)
     job.func(*job.args)
@@ -2233,3 +2244,460 @@ class TestEventWideReservation:
         snapshot_ids = {fixture.id for fixture in inputs.snapshot.fixtures}
         assert str(final.id) not in snapshot_ids
         assert round_one <= snapshot_ids
+
+
+async def _make_swiss_tournament(db: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:
+    """A tournament whose one event is a **swiss** event with **no pools** — the
+    other un-pooled shape (ADR "a pool restricts scheduling, it does not enable
+    it"), and the only one that is un-pooled in every round it will ever play.
+    Four entrants over two tables, in the ``09:00``-``17:00`` window ``BASE``
+    anchors.
+
+    **Two rounds**, deliberately: swiss cuts every round up front, so a second
+    round exists from the cut with both sides ``None``, which is what makes
+    "exactly round one is placed" a statement the seed can actually falsify.
+    Returns ``(tournament_id, event_id)`` as plain ids, for the reason
+    ``_make_tournament`` does.
+    """
+    owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
+    league = await get_default_league(db)
+    assert league is not None, "the autouse default_league fixture seeds this"
+
+    tournament = Tournament(
+        name="Swiss Open",
+        status=TournamentStatus.published,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "1 Shattuck Ave",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94704",
+            "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
+        },
+        tables=venue_tables(("T1", "Main"), ("T2", "Main")),
+        league_id=league.id,
+        created_by_user_id=owner.id,
+    )
+    db.add(tournament)
+    await db.flush()
+
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Swiss",
+        format=EventFormat.singles,
+        draw_settings=event_draw_settings(DrawType.swiss, rounds=2),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": DATE, "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        pools=[],
+    )
+    db.add(event)
+    await db.flush()
+
+    for _ in range(4):
+        player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
+        db.add(TournamentEntry(event_id=event.id, user_id=player.id))
+    await db.flush()
+
+    await cut_draw(db, event)
+    await db.commit()
+    return tournament.id, event.id
+
+
+async def _make_pools_then_knockout_tournament(
+    db: AsyncSession,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """A tournament whose one event is **round-robin-then-knockout**: two pools of
+    three that genuinely restrict — Pool A on table 1 in the morning, Pool B on
+    table 2 in the afternoon — and a knockout stage of four qualifiers (two semis
+    and a final) that belongs to no pool at all.
+
+    The event window spans both pool windows and then some (``09:00``-``19:00``),
+    so a knockout fixture placed over the event-wide reservation has somewhere to
+    go that neither pool would allow, and a pool fixture wrongly given that
+    reservation would still look feasible — which is what makes both halves of
+    the confinement claim falsifiable.
+
+    Its pool fixtures are **materialized into matches** before the return, as
+    go-live does, because the knockout is seeded from *results*: a pool's
+    qualifiers are seated when its matches complete with scores, and a fixture
+    with no match can never complete. Nothing is played here — that is the test's
+    own second act.
+    """
+    owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
+    league = await get_default_league(db)
+    assert league is not None, "the autouse default_league fixture seeds this"
+
+    tournament = Tournament(
+        name="Pools Then Bracket Open",
+        status=TournamentStatus.published,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "1 Shattuck Ave",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94704",
+            "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
+        },
+        tables=venue_tables(("T1", "Main"), ("T2", "Main")),
+        league_id=league.id,
+        created_by_user_id=owner.id,
+    )
+    db.add(tournament)
+    await db.flush()
+
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Pools Then Bracket",
+        format=EventFormat.singles,
+        draw_settings=event_draw_settings(DrawType.rr_then_ko, qualifiers_per_pool=2),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": DATE, "start": "09:00", "end": "19:00"},
+        match_settings={"rated": False, "length_games": 3},
+        pools=event_pools(
+            [
+                {
+                    "name": "Pool A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "13:00"},
+                    "table_ids": ["t1"],
+                },
+                {
+                    "name": "Pool B",
+                    "slot": {"date": DATE, "start": "14:00", "end": "18:00"},
+                    "table_ids": ["t2"],
+                },
+            ],
+            tournament=tournament,
+        ),
+    )
+    db.add(event)
+    await db.flush()
+
+    for _ in range(6):
+        player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
+        db.add(TournamentEntry(event_id=event.id, user_id=player.id))
+    await db.flush()
+
+    await cut_draw(db, event)
+    await materialize_event(db, tournament, event)
+    await db.commit()
+    return tournament.id, event.id
+
+
+async def _pool_reservations(
+    db: AsyncSession, event_id: uuid.UUID
+) -> dict[uuid.UUID, tuple[datetime, datetime, set[str]]]:
+    """What each of the event's pools reserves — ``(window start, window end,
+    table ids)`` per pool id, windows as instants in the venue frame.
+
+    Read from the pool ROWS, never from the snapshot's own fixture→reservation
+    link: a builder that handed a pooled fixture the event-wide reservation would
+    still satisfy "placed inside the reservation it was given"."""
+    windows = {
+        pool_id: (
+            datetime.combine(date.fromisoformat(DATE), start, tzinfo=VENUE_TZ),
+            datetime.combine(date.fromisoformat(DATE), end, tzinfo=VENUE_TZ),
+        )
+        for pool_id, start, end in (
+            await db.execute(
+                select(
+                    TournamentEventPool.id,
+                    TournamentEventPool.slot_start,
+                    TournamentEventPool.slot_end,
+                ).where(TournamentEventPool.event_id == event_id)
+            )
+        ).all()
+    }
+    tables: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
+    for pool_id, table_id in (
+        await db.execute(
+            select(
+                TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id
+            ).where(TournamentEventPoolTable.event_id == event_id)
+        )
+    ).all():
+        tables[pool_id].add(str(table_id))
+    return {
+        pool_id: (start, end, tables[pool_id])
+        for pool_id, (start, end) in windows.items()
+    }
+
+
+def _assert_confined_to_its_pool(
+    fixture: TournamentFixture,
+    reservations: dict[uuid.UUID, tuple[datetime, datetime, set[str]]],
+) -> None:
+    """A pooled fixture is placed on its **own pool's** tables inside its **own
+    pool's** window — not on the event-wide reservation's, which spans every table
+    and a longer day."""
+    assert fixture.pool_id is not None
+    window_start, window_end, tables = reservations[fixture.pool_id]
+    assert fixture.table_id in tables
+    assert fixture.scheduled_start is not None
+    assert window_start <= fixture.scheduled_start
+    assert (
+        fixture.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
+        <= window_end
+    )
+
+
+async def _score_and_complete(
+    db: AsyncSession, fixture: TournamentFixture, *, winner_entry_id: uuid.UUID
+) -> None:
+    """Play ``fixture``'s match out 2-0 for ``winner_entry_id`` and run it through
+    the completion seam a real result acceptance runs
+    (:func:`app.tournament_advancement.on_match_completed`) — which writes the
+    winner back, advances the draw, materializes whatever the result made ready,
+    and requests the re-solve this test is about.
+
+    The board is real games with real scores, not a bare ``winner_entry_id``: a
+    pools-then-knockout draw seats its qualifiers from the **games** each side won
+    (ADR 20260727's tiebreak chain), so a scoreless completion would leave the
+    pool unfinished — or refused outright.
+
+    ``completed_at`` stays ``None`` on purpose. A stamped completion casts a
+    ``REST_MIN`` shadow on both players, and these seeds are dated 2030 while the
+    suite runs today, so every shadow would still be open and would push the
+    knockout around for reasons that have nothing to do with the reservation
+    under test.
+    """
+    assert fixture.match_id is not None
+    match = (
+        await db.execute(
+            select(Match)
+            .options(selectinload(Match.sides))
+            .where(Match.id == fixture.match_id)
+        )
+    ).scalar_one()
+    side_1_wins = winner_entry_id == fixture.entry_a_id
+    for number in (1, 2):
+        game = MatchGame(match_id=match.id, game_number=number)
+        db.add(game)
+        await db.flush()
+        db.add(
+            MatchGameScore(
+                match_game_id=game.id,
+                side_1_points=11 if side_1_wins else 5,
+                side_2_points=5 if side_1_wins else 11,
+            )
+        )
+    for side in match.sides:
+        side.won = (side.side_number == 1) == side_1_wins
+    match.status = MatchStatus.completed
+    await db.flush()
+    await on_match_completed(db, match)
+
+
+async def _play_out_the_pools(db: AsyncSession, event_id: uuid.UUID) -> None:
+    """Decide every **pool** fixture of a pools-then-knockout event, leaving the
+    knockout untouched.
+
+    Each pool gets a strict finishing order rather than a three-way tie: the first
+    fixture's ``entry_a`` wins both of the matches it plays, and the pool's
+    remaining pairing goes to its own ``entry_a``. So the pool comes out 2-0, 1-1,
+    0-2 and its top two are named by the wins alone — this test is about
+    scheduling, and a tiebreak deciding who qualifies would make it about
+    something else.
+    """
+    by_pool: defaultdict[uuid.UUID, list[TournamentFixture]] = defaultdict(list)
+    for fixture in await _fixtures_of(db, event_id):
+        if fixture.pool_id is not None:
+            by_pool[fixture.pool_id].append(fixture)
+    for pool_fixtures in by_pool.values():
+        top = pool_fixtures[0].entry_a_id
+        for fixture in pool_fixtures:
+            entry_a_id, entry_b_id = fixture.entry_a_id, fixture.entry_b_id
+            assert entry_a_id is not None and entry_b_id is not None
+            winner = top if top in (entry_a_id, entry_b_id) else entry_a_id
+            assert winner is not None
+            await _score_and_complete(db, fixture, winner_entry_id=winner)
+    await db.commit()
+
+
+class TestUnPooledDrawShapes:
+    """The two un-pooled shapes that are **not** single-elim ride the same
+    event-wide reservation, with no further production change (ADR "a pool
+    restricts scheduling, it does not enable it"): a swiss draw, which is
+    un-pooled end to end, and a round-robin-then-knockout draw, whose second
+    stage is.
+
+    These run the whole job through the queue and read the fixture ROWS back,
+    rather than reading a snapshot: the claim is that these events' matches now
+    get a table and a time at all, which before this was only ever one a director
+    typed in by hand."""
+
+    async def test_a_swiss_round_is_placed_on_the_tournaments_tables(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """A swiss event's first round is placed over the event's own window on
+        the tournament's own tables. Its second round, cut at the same stroke with
+        both sides still unknown, is left alone — so this cannot pass by placing
+        everything the event holds."""
+        tournament_id, event_id = await _make_swiss_tournament(db_session)
+        fixtures = await _fixtures_of(db_session, event_id)
+        assert all(fixture.pool_id is None for fixture in fixtures)
+        round_one = [fixture.id for fixture in fixtures if fixture.round == 1]
+        round_two = [fixture for fixture in fixtures if fixture.round == 2]
+        assert len(round_one) == 2  # four entrants, two pairings
+        assert len(round_two) == 2
+        assert all(
+            fixture.entry_a_id is None and fixture.entry_b_id is None
+            for fixture in round_two
+        ), "a later swiss round is paired on advance, not at the cut"
+
+        row = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.manual
+        )
+        assert row is not None
+        row_id = row.id
+        await db_session.commit()
+
+        _run_recorded_job(solver_queue, row_id)
+
+        db_session.expire_all()
+        catalogue = set(await table_ids_of(db_session, tournament_id))
+        placed = {
+            fixture.id: fixture for fixture in await _fixtures_of(db_session, event_id)
+        }
+        window_end = BASE + timedelta(hours=8)
+        for fixture_id in round_one:
+            fixture = placed[fixture_id]
+            assert fixture.table_id in catalogue
+            assert fixture.scheduled_start is not None
+            assert BASE <= fixture.scheduled_start
+            assert (
+                fixture.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
+                <= window_end
+            )
+        for fixture in round_two:
+            assert placed[fixture.id].table_id is None
+            assert placed[fixture.id].scheduled_start is None
+        # Two matches, two tables or two times — never one table at one moment.
+        starts = {
+            (placed[fixture_id].table_id, placed[fixture_id].scheduled_start)
+            for fixture_id in round_one
+        }
+        assert len(starts) == 2
+
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 2
+
+    async def test_a_knockout_stage_is_placed_once_its_pools_have_decided(
+        self, db_session: AsyncSession, solver_queue: Queue
+    ) -> None:
+        """The sequence, which is the whole point: a knockout fixture whose sides
+        are unknown is left **unplaced** — never invented a table or a time — and
+        becomes placed by the re-solve a completed match already triggers, once
+        the pool fixtures that feed it are decided.
+
+        A test that only looked at the end state could not tell "the knockout was
+        placed once its feeders landed" from "the knockout was placed all along",
+        so both states are asserted, on the persisted rows, either side of the
+        completions.
+
+        The pools stay confined to their own tables and windows throughout — the
+        event-wide reservation spans both tables and a longer day, so a builder
+        that handed the pooled fixtures that reservation would show up here.
+        """
+        tournament_id, event_id = await _make_pools_then_knockout_tournament(db_session)
+        reservations = await _pool_reservations(db_session, event_id)
+        catalogue = set(await table_ids_of(db_session, tournament_id))
+        fixtures = await _fixtures_of(db_session, event_id)
+        pooled = [fixture.id for fixture in fixtures if fixture.pool_id is not None]
+        knockout = [fixture for fixture in fixtures if fixture.pool_id is None]
+        semis = [fixture.id for fixture in knockout if fixture.round == 1]
+        (final,) = [fixture.id for fixture in knockout if fixture.round == 2]
+        assert len(pooled) == 6  # two pools of three, three pairings each
+        assert len(semis) == 2  # four qualifiers: two semi-finals and a final
+        assert all(
+            fixture.entry_a_id is None and fixture.entry_b_id is None
+            for fixture in knockout
+        ), "nobody has qualified yet"
+
+        first = await request_solve(
+            db_session, tournament_id, ScheduleSolveTrigger.go_live
+        )
+        assert first is not None
+        first_id = first.id
+        await db_session.commit()
+
+        _run_recorded_job(solver_queue, first_id)
+
+        db_session.expire_all()
+        before = {
+            fixture.id: fixture for fixture in await _fixtures_of(db_session, event_id)
+        }
+        for fixture_id in pooled:
+            _assert_confined_to_its_pool(before[fixture_id], reservations)
+        for fixture_id in (*semis, final):
+            assert before[fixture_id].table_id is None
+            assert before[fixture_id].scheduled_start is None
+        (ledger,) = await _solve_rows(db_session, tournament_id)
+        assert ledger.status is ScheduleSolveStatus.succeeded
+        assert ledger.fixtures_placed == 6, "the pools, and nothing else"
+        pool_placements = {
+            fixture_id: (
+                before[fixture_id].table_id,
+                before[fixture_id].scheduled_start,
+            )
+            for fixture_id in pooled
+        }
+
+        await _play_out_the_pools(db_session, event_id)
+
+        db_session.expire_all()
+        seeded = {
+            fixture.id: fixture for fixture in await _fixtures_of(db_session, event_id)
+        }
+        assert all(
+            seeded[fixture_id].entry_a_id is not None
+            and seeded[fixture_id].entry_b_id is not None
+            for fixture_id in semis
+        ), "both pools finished, so all four qualifiers are seated"
+        rows = await _solve_rows(db_session, tournament_id)
+        assert len(rows) == 2, "six completions coalesce onto one queued re-solve"
+        second_id = rows[1].id
+
+        _run_recorded_job(solver_queue, second_id, index=1)
+
+        db_session.expire_all()
+        after = {
+            fixture.id: fixture for fixture in await _fixtures_of(db_session, event_id)
+        }
+        event_start = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
+        event_end = datetime(2030, 1, 1, 19, 0, tzinfo=VENUE_TZ)
+        for fixture_id in semis:
+            semi = after[fixture_id]
+            assert semi.table_id in catalogue
+            assert semi.scheduled_start is not None
+            assert event_start <= semi.scheduled_start
+            assert (
+                semi.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
+                <= event_end
+            )
+        # The final's feeders are the semis, which nobody has played: still TBD,
+        # so still unplaced — in the very same solve that placed the semis.
+        assert after[final].entry_a_id is None and after[final].entry_b_id is None
+        assert after[final].table_id is None
+        assert after[final].scheduled_start is None
+        # The pools were decided, so they are out of the model — their placements
+        # stand exactly as the first solve left them, inside their own pools.
+        for fixture_id in pooled:
+            _assert_confined_to_its_pool(after[fixture_id], reservations)
+            assert (
+                after[fixture_id].table_id,
+                after[fixture_id].scheduled_start,
+            ) == pool_placements[fixture_id]
+        _first, second = await _solve_rows(db_session, tournament_id)
+        assert second.id == second_id
+        assert second.status is ScheduleSolveStatus.succeeded
+        assert second.fixtures_placed == 2, "the two semi-finals, and nothing else"
