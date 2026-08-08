@@ -2790,9 +2790,11 @@ async def test_preview_mcp_unsupported_draw_type_raises_tool_error(
 ) -> None:
     """An event whose draw type is not round-robin (here single-elim) refuses the
     WHOLE preview with an actionable ``ToolError`` naming round-robin — never a
-    partial result — because a preview must not invent a schedule for a format
-    production cannot run. The refusal happens at snapshot build, before anything is
-    queued."""
+    partial result — because a preview covers an event's pool stage and a bracket has
+    none. Production runs the format perfectly well: a live solve places a fixture
+    belonging to no pool over its event's own window (ADR "a pool restricts
+    scheduling, it does not enable it"). The refusal happens at snapshot build, before
+    anything is queued."""
     owner = await make_user(db_session, "preview-mcp-ko-owner")
     raw = await _mint(db_session, owner)
     tournament, _ = await _seed_previewable_tournament(

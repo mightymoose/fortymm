@@ -410,8 +410,10 @@ async def test_preview_snapshot_count_override_resizes_field(
 @pytest.mark.parametrize(
     "draw_type",
     # The two POOL-LESS draw types, which is the whole criterion: both *can* be cut,
-    # but the CP-SAT table scheduler is pool-based and a draw with no pools has no
-    # windows to solve over, so the preview refuses them rather than invent a grid.
+    # but a preview covers an event's POOL stage, and neither draw has one — so the
+    # preview refuses them rather than invent a grid. Not because the scheduler cannot
+    # place them: a live solve places a fixture belonging to no pool over its event's
+    # own window (ADR "a pool restricts scheduling, it does not enable it").
     # Single-elim is the bracket (#785); swiss ranks one field in one table (ADR "swiss
     # pre-cuts every round and pairs each one on advance"). ``rr-then-ko`` is
     # deliberately NOT here: it has a pool stage that schedules perfectly well, so it
@@ -445,9 +447,10 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
     """An ``rr-then-ko`` event is previewed, and what is previewed is its **pools**.
 
     The knockout fixtures the cut emits alongside them (``pool_id IS NULL``) are
-    dropped: the solver places a fixture into its pool's window on its pool's tables,
-    and a bracket has neither. Scheduling it is #1228 — a freshly cut bracket is
-    entirely TBD-sided, so it is placeable only incrementally, as the pools resolve.
+    dropped: at preview time a freshly cut bracket is entirely TBD-sided, so there is
+    no field to lay out. A live solve *does* place them — over the event's own window
+    on the tournament's tables, once their pools decide who is in them (ADR "a pool
+    restricts scheduling, it does not enable it") — which is #1228.
 
     Six synthetic entrants in one pool, so the pool stage is C(6, 2) = 15 pairings and
     the bracket for the top 2 would add 1 more fixture on top. The count is what

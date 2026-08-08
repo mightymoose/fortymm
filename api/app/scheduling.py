@@ -214,7 +214,15 @@ class SchedulePool:
     """A pool as the solver needs to see it: which tables it may use and when.
 
     ``table_ids`` is the slice of the venue catalogue this pool draws on;
-    tables may be shared between pools (per-table no-overlap is global)."""
+    tables may be shared between pools (per-table no-overlap is global).
+
+    A ``SchedulePool`` is a **reservation**, and not always a director's pool.
+    The snapshot builder names one per pool, plus one **event-wide** reservation
+    for an event that has fixtures belonging to no pool — that event's own
+    window over the whole catalogue (ADR "a pool restricts scheduling, it does
+    not enable it"). This module cannot tell the two apart and does not need to:
+    either way a fixture binds to exactly one of them, and every pool-keyed
+    infeasibility reason is reported against whichever one it named."""
 
     id: PoolId
     table_ids: tuple[TableId, ...]

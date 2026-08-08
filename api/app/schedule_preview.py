@@ -28,31 +28,39 @@ cross-event contention a multi-event human would cause — a deliberate,
 honestly-noted simplification, ADR).
 
 **Draw coverage is the POOL stage; a pool-less stage is skipped, and a pool-less
-draw type is refused loud (ADR).** Every event's draw is planned by
+draw type is refused loud (ADR).** That is this **preview's** coverage, not the
+scheduler's reach: since ADR "a pool restricts scheduling, it does not enable it"
+(20260807) a *live* solve places an un-pooled fixture over its event's own window
+on the tournament's tables, so preview and live solve now deliberately differ
+here. A later slice of #1228 revisits *how* this module refuses; *that* it
+refuses is unchanged.
+Every event's draw is planned by
 :func:`app.tournament_draws.strategy_for_event` — the single source of truth
 production's own ``cut_draw`` uses:
 
 * **round-robin** — the whole draw is planned;
 * **rr-then-ko** — the whole draw is planned, and only its **pool stage** is
   previewed: the knockout fixtures (``pool_id IS NULL``) are dropped in the
-  conversion pass below. Scheduling a bracket is #1228 and deliberately out of
-  scope — a freshly cut one is entirely TBD-sided, so it is placeable only
-  incrementally, as pools resolve. The *live* solver already behaves this way for
-  free (``schedule_solves.py`` skips un-pooled and TBD-sided fixtures
-  independently), so this is the preview catching up with it rather than a new
-  rule;
+  conversion pass below. What still *justifies* that drop
+  is the **TBD-side** rule rather than anything about pools: a preview runs before
+  anyone has registered, so no pool has been played, so both sides of every
+  knockout fixture are unknown — and no engine, live or preview, places a fixture
+  with a TBD side. A live solve does schedule that bracket, incrementally, as the
+  pools feeding it resolve; a preview has nothing to resolve it from;
 * **single-elim** — refused loud with :class:`~app.draws.UnsupportedDrawType`. It
-  *has* a draw strategy (#785) — its bracket can be cut — but the table scheduler is
-  pool-based and a pool-less bracket has no windows to solve over, and unlike
-  rr-then-ko there is no other stage left to preview: the refusal is about the whole
-  event, so a partial snapshot would be a fiction rather than a subset. This is the
-  only surviving raiser of ``UnsupportedDrawType``:
+  *has* a draw strategy (#785) — its bracket can be cut, and a live solve places
+  it — but this module previews the **pool stage**, and a bracket has none: unlike
+  rr-then-ko there is no other stage left to preview, so a snapshot of it would be
+  an empty day rather than a subset of a real one, and the refusal is about the
+  whole event. This is the only surviving raiser of ``UnsupportedDrawType``:
   :func:`app.draws.strategy_for` is total, because the enum holds only draw types
   that run (ADR);
 * **swiss** — refused loud too, and it shares single-elim's ``case`` arm because it
   is refused for single-elim's reason: its draw is pool-less **end to end** (ADR
   "swiss pre-cuts every round and pairs each one on advance"), so there is no pool
-  stage for the pool-based scheduler to solve over and no partial preview to give.
+  stage for this builder to preview and no partial preview to give. A live solve
+  does place a swiss event, round by round as each round is paired; this builder
+  shows none of it.
 
 The refusal is per **event** but aborts the whole **tournament**'s preview — this
 builder sits inside a per-event loop of a whole-tournament build. That is why
@@ -265,13 +273,15 @@ def build_preview_snapshot(
 
     Persists nothing: no ``TournamentEntry`` / ``TournamentFixture`` row is
     created. Raises :class:`~app.draws.UnsupportedDrawType` — itself, not from
-    :func:`app.draws.strategy_for`, which is total — for any event this SCHEDULER
-    cannot place *at all*, today meaning single-elim: a bracket has no pools, and pools
-    are where the solver's windows come from. An **rr-then-ko** event is not such an
-    event: its pool stage places exactly as a round-robin's does and is previewed, and
-    only its knockout fixtures are dropped (ADR 20260727) — which matters because this
-    builder is per-tournament, so refusing one event takes every event beside it with
-    it. Also raises
+    :func:`app.draws.strategy_for`, which is total — for any event this PREVIEW does
+    not cover *at all*, today meaning single-elim and swiss: this builder previews an
+    event's pool stage, and neither draw has one. Not a limit of the solver any more —
+    a live solve places an un-pooled fixture over its event's own window (ADR "a pool
+    restricts scheduling, it does not enable it"). An **rr-then-ko** event is not
+    such an event: its pool stage places exactly as a round-robin's does and is
+    previewed, and only its knockout fixtures are dropped (ADR 20260727) — which
+    matters because this builder is per-tournament, so refusing one event takes every
+    event beside it with it. Also raises
     :class:`~app.draws.DegenerateDraw` if a synthesized field is too small for
     the event's pools — a clear domain error either way, never a partial
     snapshot. An event with no pools configured is one such case: the
@@ -307,14 +317,16 @@ def build_preview_snapshot(
             for offset in range(field_size)
         ]
         next_entrant += field_size
-        # The real draw, dispatched exactly as production's ``cut_draw`` does. The table
-        # scheduler is POOL-based (ADR): single-elim *has* a draw strategy (#785) — its
-        # bracket can be cut — but a pool-less bracket has no windows to solve over yet,
-        # so the preview refuses it loud with ``UnsupportedDrawType`` rather than invent
-        # a grid the solver cannot place. This is now the only place that exception is
-        # raised: ``strategy_for`` is total (ADR "the enum holds only what runs"), so
-        # the refusal is this builder's, about scheduling, not the domain's about
-        # planning.
+        # The real draw, dispatched exactly as production's ``cut_draw`` does. This
+        # PREVIEW covers the pool stage (module docstring): single-elim *has* a draw
+        # strategy (#785) — its bracket can be cut, and a live solve now places it over
+        # the event's own window (ADR "a pool restricts scheduling, it does not enable
+        # it") — but there is no pool stage here to preview, so the preview refuses it
+        # loud with ``UnsupportedDrawType`` rather than hand back an empty day dressed
+        # as a schedule. This is now the only place that exception is raised:
+        # ``strategy_for`` is total (ADR "the enum holds only what runs"), so the
+        # refusal is this builder's, about what a preview covers, not the domain's
+        # about planning.
         #
         # ``rr-then-ko`` is planned in FULL and previewed in part: its pools schedule
         # exactly as a round-robin's do, and its knockout fixtures are dropped in the
@@ -416,11 +428,14 @@ def build_preview_snapshot(
         for fixture in plan.fixtures:
             if fixture.pool_id is None:
                 # The knockout stage of an rr-then-ko draw (``pool_id IS NULL`` *is* the
-                # stage, ADR-0786). It is skipped rather than refused: the solver places
-                # fixtures into their pool's window on their pool's tables, and a
-                # bracket has neither — so there is nothing to place it against, and
-                # inventing one would preview a schedule production will never run.
-                # #1228 schedules it, incrementally, as the pools that feed it resolve.
+                # stage, ADR-0786). Dropped here rather than refused, and the drop is
+                # still right for a reason that is no longer about pools: a preview runs
+                # before anyone has registered, so no pool has been played, so both
+                # sides of every one of these fixtures are unknown — and a TBD-sided
+                # fixture is unplaceable in this engine and in the live one alike. A
+                # live solve does schedule the bracket (ADR "a pool restricts
+                # scheduling, it does not enable it"), incrementally, as the pools
+                # feeding it resolve; a preview has nothing to resolve it from.
                 knockout_fixtures += 1
                 continue
             schedule_fixtures.append(
