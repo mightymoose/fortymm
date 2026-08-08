@@ -640,10 +640,35 @@ export type DrawNotice = Notice
 export function drawRefusalScope(event: TournamentEvent): string {
   return [
     event.drawType,
-    event.entered,
-    event.fixtures.length,
+    drawSeating(event),
     event.pools.map((pool) => pool.id).join(','),
   ].join('|')
+}
+
+/**
+ * **Who is entered, and who the draw currently seats against whom** — the one fact both
+ * the draw panel's refusals and go-live's precondition turn on.
+ *
+ * The counts alone are not enough, and the case that proves it is the exact one the
+ * stale-draw refusal exists for: registration stays open right up to go-live, so
+ * "somebody entered, somebody withdrew" leaves `entered` **unchanged** while the standing
+ * draw now seats a player who has left. Re-cutting over that field fixes it and leaves
+ * the fixture count unchanged too — so a scope built from the two counts is byte-identical
+ * before and after the fix, and the refusal telling the director to re-cut would survive
+ * their re-cutting. Reading the *identities* is what makes the fix visible.
+ *
+ * Only the **seating** is read — the two entry ids, in pool/round/position order as the
+ * server sends them. A fixture's `scheduledStart`, `pinnedAt`, `matchStatus`,
+ * `callNotifiedCount` and `completedAt` are all pointedly absent: those move on a poll
+ * tick, on a call, and on every score, and none of them is something a draw refusal or a
+ * go-live refusal says anything about. Including one would blink the director's work list
+ * off the screen mid-read, which is the failure this whole mechanism exists to prevent.
+ */
+export function drawSeating(event: TournamentEvent): string {
+  return [
+    event.entrants.map((entrant) => entrant.id).join(','),
+    event.fixtures.map((fx) => `${fx.entryAId ?? ''}>${fx.entryBId ?? ''}`).join(','),
+  ].join(';')
 }
 
 /**

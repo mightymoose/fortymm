@@ -10,6 +10,7 @@ import { Radio, Rocket, Square, type LucideIcon } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { formatRating } from '@/lib/rating'
 
+import { drawSeating } from './draw'
 import { ENTRY_REFUSAL_NOTICE } from './entry-refusal'
 import { myEntrant, predicateSentence } from './helpers'
 import { fallbackNotice, type Notice } from './notice'
@@ -170,9 +171,15 @@ export interface LifecycleRefusal extends Notice {
  *
  * It is deliberately **narrow**, and this list is the place to think before adding to it.
  * Only `start` has a precondition (ADR-0786), and the precondition is exactly: there is at
- * least one event, and every event's draw still seats exactly its entrants. So the scope is
- * the status, plus per event the three numbers that decide it — its identity, how many have
- * entered, and how many fixtures its draw holds.
+ * least one event, and every event's draw still **seats exactly its entrants**. So the
+ * scope is the status, plus per event its identity and its seating (`drawSeating`).
+ *
+ * The seating is read as identities rather than counts, and that is load-bearing: the
+ * third shape of the refusal is "*has a draw that no longer matches its entrants*", which
+ * arises when somebody enters and somebody withdraws. That leaves `entered` and
+ * `fixtures.length` both unchanged, and re-cutting to fix it leaves them unchanged again —
+ * so a scope built from the counts could not see the director doing the very thing the
+ * sentence asked them to do.
  *
  * What is **left out** matters as much. The tournament's name, venue, description and
  * `latestScheduleSolve` are all absent, because no lifecycle refusal asserts anything about
@@ -184,7 +191,7 @@ export interface LifecycleRefusal extends Notice {
 export function lifecycleRefusalScope(tournament: Tournament): string {
   return [
     tournament.status,
-    ...tournament.events.map((ev) => `${ev.id}:${ev.entered}:${ev.fixtures.length}`),
+    ...tournament.events.map((ev) => `${ev.id}:${drawSeating(ev)}`),
   ].join('|')
 }
 

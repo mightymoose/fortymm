@@ -349,6 +349,52 @@ describe('lifecycleRefusalScope', () => {
     expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
   })
 
+  /**
+   * The refusal's **third** shape — "has a draw that no longer matches its entrants" —
+   * and the one the counts could not see.
+   *
+   * Registration stays open right up to go-live, so the way a draw goes stale is that
+   * somebody enters and somebody withdraws. The field is the same SIZE throughout, and
+   * re-cutting over it produces the same NUMBER of fixtures — so a scope built from
+   * `entered` and `fixtures.length` is byte-identical before the swap, after the swap and
+   * after the re-cut. The refusal telling the director to re-cut would have survived their
+   * re-cutting, which is the bug in its most confusing form: the fix appears not to work.
+   */
+  it('moves when a stale draw is re-cut over a field of the same size', () => {
+    const entrants = buildEntrants(4)
+    // The same four players, seated differently — what a re-cut produces. Nothing about
+    // the entrant count or the fixture count has moved.
+    const before = buildDrawnEvent({ id: 'ev-1', entrants })
+    const after = {
+      ...before,
+      fixtures: [...before.fixtures].reverse(),
+    }
+
+    expect(before.entered).toBe(after.entered)
+    expect(before.fixtures).toHaveLength(after.fixtures.length)
+    expect(
+      lifecycleRefusalScope(buildTournament({ events: [before] })),
+    ).not.toBe(lifecycleRefusalScope(buildTournament({ events: [after] })))
+  })
+
+  /** The other half of the same case: the swap itself, which is what makes the draw
+   * stale. One player out, one player in, and the count never moves. */
+  it('moves when one entrant is swapped for another', () => {
+    const before = buildEvent({ id: 'ev-1', entrants: buildEntrants(4) })
+    const after = {
+      ...before,
+      entrants: [
+        ...before.entrants.slice(0, 3),
+        buildEntrant({ id: 'entry-late', username: 'late.arrival' }),
+      ],
+    }
+
+    expect(before.entered).toBe(after.entered)
+    expect(
+      lifecycleRefusalScope(buildTournament({ events: [before] })),
+    ).not.toBe(lifecycleRefusalScope(buildTournament({ events: [after] })))
+  })
+
   it('moves when the status does, so a refusal about this status cannot outlive it', () => {
     expect(lifecycleRefusalScope(buildTournament({ status: 'draft' }))).not.toBe(
       lifecycleRefusalScope(buildTournament({ status: 'published' })),
