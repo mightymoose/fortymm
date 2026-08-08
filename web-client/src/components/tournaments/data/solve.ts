@@ -801,10 +801,21 @@ export function infeasibilityReasonCopy(
             : `Give ${reason.playerName} fewer matches in this event — a smaller field, or a shorter match format — or widen the event's window; adding tables won't help one player.`,
       }
     case 'no_single_cause':
-      return {
-        sentence: `There's enough total table-time (about ${fmtTableTime(reason.availableMin)} available for about ${fmtTableTime(reason.requiredMin)} of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.`,
-        remedy: `Trim a field, widen a window, or split the event across days — adding tables won't help here.`,
-      }
+      // The "there's enough, so it's a timing conflict" reading only holds when
+      // the day's demand actually fits the venue. It need not: no single
+      // reservation is over capacity on its own, yet two that share tables in
+      // overlapping windows can outgrow the venue between them. Printing "there's
+      // enough" above "37h of matches, 32h available" contradicts its own figures,
+      // and "adding tables won't help" is then the opposite of the truth.
+      return reason.requiredMin > reason.availableMin
+        ? {
+            sentence: `This tournament's matches need about ${fmtTableTime(reason.requiredMin)} of table-time, but the venue only offers about ${fmtTableTime(reason.availableMin)} across every reserved window — and no single pool or event is over its own capacity, so nothing here is wrong on its own.`,
+            remedy: `Add a table, widen a window, trim a field, or split the event across days.`,
+          }
+        : {
+            sentence: `There's enough total table-time (about ${fmtTableTime(reason.availableMin)} available for about ${fmtTableTime(reason.requiredMin)} of matches), so this is a timing conflict — a player is in too many matches too close together, or tables are shared across overlapping windows.`,
+            remedy: `Trim a field, widen a window, or split the event across days — adding tables won't help here.`,
+          }
     case 'past_window':
       // The venue-local `date` is formatted through the tournament's own date
       // formatter (`fmtDate`, tz-safe local-midnight — no hand-slicing, no drift),

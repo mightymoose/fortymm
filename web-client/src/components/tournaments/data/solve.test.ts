@@ -505,6 +505,23 @@ describe('infeasibilityReasonCopy', () => {
     expect(copy.remedy).toContain("adding tables won't help here")
   })
 
+  it('stops claiming there is enough table-time when the day needs more than the venue has', () => {
+    // Reachable whenever two reservations share tables in overlapping windows —
+    // routinely, for a round-robin-then-knockout event, whose knockout is placed
+    // over the same tables as its own pools. Neither is over capacity alone.
+    const copy = infeasibilityReasonCopy({
+      kind: 'no_single_cause',
+      requiredMin: 2220,
+      availableMin: 1920,
+    })
+    expect(copy.sentence).toContain('need about 37h of table-time')
+    expect(copy.sentence).toContain('only offers about 32h')
+    expect(copy.sentence).not.toContain("There's enough")
+    // The opposite of the truth in this state: the venue is short of tables.
+    expect(copy.remedy).not.toContain("adding tables won't help")
+    expect(copy.remedy).toContain('Add a table')
+  })
+
   it('words past_window as a dated "in the past" sentence, remedy "move the date"', () => {
     expect(
       infeasibilityReasonCopy({ kind: 'past_window', date: '2026-07-18' }),
