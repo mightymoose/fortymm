@@ -144,7 +144,8 @@ describe('SchedulePreviewModal', () => {
 
     schedulePreviewModalPage.render()
 
-    // The inline error, with the client's own copy — never the raw server sentence.
+    // The inline error, under the CLIENT's own title (`../data/notice`: the title is
+    // ours, the actionable sentence is the server's).
     const error = await screen.findByTestId('preview-enqueue-error')
     expect(error).toHaveTextContent("This schedule can't be previewed yet")
     // NOT a permanent spinner.
@@ -152,6 +153,50 @@ describe('SchedulePreviewModal', () => {
     // Actionable: a retry and a close.
     expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
     expect(screen.getByTestId('preview-enqueue-close')).toBeInTheDocument()
+  })
+
+  /**
+   * #1221 — the refusal must NAME the offending draw type.
+   *
+   * The API's 422 says which draw type blocked the preview and what to do instead; this
+   * modal used to discard that and print a sentence naming no draw type at all, so a
+   * director with four events was told one of them was the blocker and never which. The
+   * improvement reached raw-API, MCP and iOS callers and stopped at the web client.
+   *
+   * This is the same split the draw panel already makes for a refused cut
+   * (`drawRefusalNotice`): the client owns the title, the server owns the sentence
+   * underneath it, because the server is where the specifics are.
+   */
+  it('shows the server’s sentence, which names the draw type that blocked it', async () => {
+    const detail =
+      'A single-elim draw cannot be scheduled yet. The scheduler places pooled draws ' +
+      'over their pools’ time windows, and a bracket has none to place. Preview a ' +
+      'round-robin event instead.'
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json({ detail }, { status: 422 }),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent('single-elim')
+    expect(error.textContent?.replace(/\s+/g, ' ')).toContain(
+      detail.replace(/\s+/g, ' '),
+    )
+  })
+
+  /** A 422 that arrives without a detail still gets words — the generic sentence is the
+   * floor beneath the echo, not a thing the echo replaced. */
+  it('falls back to its own sentence for a 422 carrying no detail', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(null, { status: 422 }),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent('A preview runs over a round-robin draw')
   })
 
   it('heads a synthetic grid card with the human pool name, not the composite id', async () => {

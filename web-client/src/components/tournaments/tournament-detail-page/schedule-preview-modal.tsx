@@ -101,13 +101,27 @@ interface PreviewEnqueueNotice {
  * previewed yet (only round-robin is); `409` — the tournament is no longer pre-live;
  * `429` — the single preview slot is busy (retry in a moment); `403` — not the
  * owner; status `0` — the server was never reached; anything else — the honest
- * generic. */
+ * generic.
+ *
+ * The **422 shows the server's own sentence**, exactly as `drawRefusalNotice` does for a
+ * refused cut, and for the same reason (`../data/notice`): the title is the client's, the
+ * actionable half is the server's. The API names the offending draw type and says what to
+ * do with it ("A single-elim draw cannot be scheduled yet. The scheduler places pooled
+ * draws over their pools' time windows, and a bracket has none to place. Preview a
+ * round-robin event instead."). This function used to discard that and print a sentence
+ * naming no draw type at all, so a director with four events was told one of them was the
+ * blocker and never which (#1221).
+ *
+ * The generic sentence stays as the `??` floor, for a 422 that arrives without a detail.
+ * The echo is scoped to this one arm deliberately — a 5xx detail is machinery, not copy,
+ * and it falls through to the bottom of this function, which never echoes anything. */
 function previewEnqueueNotice(error: unknown): PreviewEnqueueNotice {
   if (error instanceof ApiError) {
     if (error.status === 422) {
       return {
         title: "This schedule can't be previewed yet",
         description:
+          error.detail ??
           'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.',
       }
     }
