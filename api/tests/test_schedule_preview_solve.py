@@ -505,6 +505,96 @@ async def test_preview_notes_say_a_bracket_event_is_not_previewed_at_all(
     ]
 
 
+#: The draw strategy's own refusal for the configuration a real director hit — one
+#: pool taking one qualifier — and the note the preview wraps it in. Pinned whole
+#: because the domain's sentence reaching the director IS the fix: it names the two
+#: things they can change, and a generic "could not be previewed" names neither.
+_ONE_QUALIFIER_REFUSAL = (
+    "Taking 1 qualifier from a single pool leaves one player in the knockout "
+    "stage, who would have nobody to play — take more qualifiers from each pool, "
+    "or configure more pools."
+)
+_DEGENERATE_EVENT_NOTE = (
+    "Championship is not in this preview: its draw cannot be cut as the event "
+    f"stands. {_ONE_QUALIFIER_REFUSAL}"
+)
+
+
+async def test_preview_notes_carry_a_degenerate_events_own_refusal(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """An event the draw refuses to cut no longer takes its tournament's preview with
+    it, and the strip says — in the domain's own words — why it is missing.
+
+    ``DegenerateDraw`` is raised per event, but the builder runs a per-event loop over
+    a whole tournament, so it blanked the preview of every healthy event beside it.
+    The round-robin's own six matches are asserted present, which the note alone would
+    not claim.
+
+    The note's discriminating part is the strategy's **verbatim** sentence. A skip
+    that reported only "Championship is not in this preview" would pass a test that
+    checked the event was left out, and would leave the director with a schedule
+    missing an event and nothing to change to get it back.
+
+    Run through a **real worker**, not by calling the job body on the in-memory
+    inputs: a skip reason is an RQ job argument, so it reaches the code that writes
+    the note as a pickle. A reason that did not survive that trip would take the
+    director's sentence with it, and an in-process call would never notice.
+    """
+    owner = await make_user(db_session, "prev-degenerate-note")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Open Singles",
+        max_players=4,
+        pools=[_pool(["t1"])],
+    )
+    await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        max_players=6,
+        pools=[_pool(["t2"])],
+        draw_type=DrawType.rr_then_ko,
+        # One pool taking one qualifier: the knockout stage would hold a single
+        # player with nobody to play, so the strategy refuses the cut.
+        qualifiers_per_pool=1,
+    )
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+    # The skeleton payload carries no notes channel to explain a zero, so it names
+    # only the event a field was actually synthesized for.
+    assert [s.field_size for s in enqueued.field_summaries] == [4]
+
+    _run_recorded_preview_job(preview_queue)
+    state = preview_job_state(enqueued.token, tournament.id)
+    assert state.status is PreviewJobStatus.done
+    result = state.result
+    assert result is not None
+
+    # The round-robin is previewed in full — C(4, 2) = 6 — and the refused event keeps
+    # its seat in the breakdown at zero, so it is visibly left out rather than absent.
+    assert {e.name: e.matches for e in result.events} == {
+        "Open Singles": 6,
+        "Championship": 0,
+    }
+    assert result.total_matches == 6
+
+    # The strip, pinned whole: the always-on caveat, the refused event's line carrying
+    # the strategy's sentence, and an assumed-entrants line for the previewed event
+    # ONLY — a count claimed for an event no field was synthesized for would
+    # contradict the line above it.
+    assert result.notes == [
+        "This estimate assumes no player is entered in more than one event; a "
+        "real multi-event field would take longer.",
+        _DEGENERATE_EVENT_NOTE,
+        "Assumed 4 entrants for Open Singles.",
+    ]
+
+
 async def test_a_round_robin_only_previews_notes_carry_no_knockout_caveat(
     db_session: AsyncSession, default_league: League, preview_queue: Queue
 ) -> None:

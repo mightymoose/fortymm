@@ -144,14 +144,161 @@ describe('SchedulePreviewModal', () => {
 
     schedulePreviewModalPage.render()
 
-    // The inline error, with the client's own copy — never the raw server sentence.
+    // The inline error: the client's cause-neutral title over the server's own
+    // director-facing sentence (the 422 detail is domain-authored copy).
     const error = await screen.findByTestId('preview-enqueue-error')
     expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent('Only round-robin draws can be previewed.')
     // NOT a permanent spinner.
     expect(screen.queryByTestId('preview-preparing')).toBeNull()
     // Actionable: a retry and a close.
     expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
     expect(screen.getByTestId('preview-enqueue-close')).toBeInTheDocument()
+  })
+
+  // The bug behind this block: EVERY 422 was mapped to one hardcoded "this
+  // tournament uses a draw type the preview does not support yet" notice, and the
+  // server's `detail` was discarded. A director whose round-robin-then-knockout
+  // event took one qualifier per pool was told the draw type was unsupported — false
+  // twice over (rr-then-ko IS previewed, in part) — instead of being told the one
+  // thing they could act on. The API passes the domain's own sentence through on
+  // purpose (`_draw_refusal`, `case DegenerateDraw(): detail = str(error)`), so the
+  // modal must show it (`web-client/CLAUDE.md`: "surface server 4xx inline, don't
+  // swallow it").
+  describe('the enqueue-refusal notice', () => {
+    /** Drive one enqueue refusal and return the rendered inline notice. */
+    const refuseWith = async (status: number, body: unknown) => {
+      mockSchedulePreviewEnqueueEndpoint(server, () =>
+        HttpResponse.json(body as never, { status }),
+      )
+      schedulePreviewModalPage.render()
+      return await screen.findByTestId('preview-enqueue-error')
+    }
+
+    // The real report, verbatim from the server. This is the assertion that reds
+    // against the pre-fix code — as a text-content diff on an alert that IS on
+    // screen, not a timeout, so the red says "wrong copy" and nothing else.
+    it('shows the degenerate-draw sentence the server sent, not the draw-type guess', async () => {
+      const detail =
+        'Taking 1 qualifier from a single pool leaves one player in the knockout ' +
+        'stage, who would have nobody to play — take more qualifiers from each ' +
+        'pool, or configure more pools.'
+
+      const error = await refuseWith(422, { detail })
+
+      expect(error).toHaveTextContent(detail)
+      // Replaced, not appended: the false draw-type sentence must be gone.
+      expect(error).not.toHaveTextContent(
+        'This tournament uses a draw type the preview does not support yet',
+      )
+      // The title stays cause-neutral, so it cannot contradict the detail.
+      expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    })
+
+    // The route's other 422 — no event of the tournament is previewable. Same path,
+    // and the title has to read honestly over this sentence too.
+    it('shows the no-previewable-event sentence the server sent', async () => {
+      const detail =
+        'A single_elimination draw cannot be previewed, and this tournament has ' +
+        'no other event to preview. A draw of that kind is decided round by round ' +
+        'as it is played, so before anyone has entered there is nothing to lay out.'
+
+      const error = await refuseWith(422, { detail })
+
+      expect(error).toHaveTextContent(detail)
+      expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    })
+
+    // No detail: the generic wording, never a blank description or "undefined".
+    it('falls back to the generic description when the 422 carries no detail', async () => {
+      const error = await refuseWith(422, {})
+
+      expect(error).toHaveTextContent("This schedule can't be previewed yet")
+      expect(error).toHaveTextContent(
+        'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.',
+      )
+      expect(error).not.toHaveTextContent('undefined')
+    })
+
+    // A whitespace-only detail is "no detail" — an empty description would leave the
+    // notice with a title and nothing to act on.
+    it('falls back to the generic description when the 422 detail is blank', async () => {
+      const error = await refuseWith(422, { detail: '   ' })
+
+      expect(error).toHaveTextContent(
+        'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.',
+      )
+    })
+
+    // FastAPI's per-field 422 array is the ONE 422 body whose message is machine
+    // prose ("Input should be a valid integer"), not a sentence anybody wrote for a
+    // director — `extractDetail` still yields a string from it, so the shape decides
+    // (`data/save-failure.ts`: `validationFields` is non-null only for that array).
+    it('does not show Pydantic machine prose from a request-validation 422', async () => {
+      const error = await refuseWith(422, {
+        detail: [
+          {
+            loc: ['body', 'overrides', 'ev-1'],
+            msg: 'Input should be a valid integer',
+          },
+        ],
+      })
+
+      expect(error).not.toHaveTextContent('Input should be a valid integer')
+      expect(error).toHaveTextContent(
+        'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.',
+      )
+    })
+
+    // The detail is TEXT. A server sentence carrying angle brackets is rendered
+    // literally, and injects no element.
+    it('renders the 422 detail as text, not markup', async () => {
+      const error = await refuseWith(422, {
+        detail: 'Take more qualifiers <b>from each pool</b>.',
+      })
+
+      expect(error).toHaveTextContent('Take more qualifiers <b>from each pool</b>.')
+      expect(error.querySelector('b')).toBeNull()
+    })
+
+    // The transport/lifecycle branches are about the request, not the domain, so
+    // their hardcoded copy is right and stays put. Pinned so the 422 change cannot
+    // bleed into them.
+    it('keeps the hardcoded 409 notice, ignoring any server detail', async () => {
+      const error = await refuseWith(409, {
+        detail: 'Tournament is not pre-live.',
+      })
+
+      expect(error).toHaveTextContent('The preview is only for a pre-live schedule')
+      expect(error).toHaveTextContent(
+        'This tournament is already live, so there is nothing to preview — the real schedule is on the board.',
+      )
+      expect(error).not.toHaveTextContent('Tournament is not pre-live.')
+    })
+
+    it('keeps the hardcoded 429 notice, ignoring any server detail', async () => {
+      const error = await refuseWith(429, {
+        detail: 'Rate limited: one preview at a time.',
+      })
+
+      expect(error).toHaveTextContent('A preview is already running')
+      expect(error).toHaveTextContent(
+        'Only one preview runs at a time. Wait a moment for the current one to finish, then try again.',
+      )
+      expect(error).not.toHaveTextContent('Rate limited')
+    })
+
+    it('keeps the hardcoded 403 notice, ignoring any server detail', async () => {
+      const error = await refuseWith(403, {
+        detail: 'You can only preview tournaments you created.',
+      })
+
+      expect(error).toHaveTextContent('The preview wasn’t run')
+      expect(error).toHaveTextContent(
+        'Only the tournament owner can preview the schedule.',
+      )
+      expect(error).not.toHaveTextContent('You can only preview tournaments you created.')
+    })
   })
 
   it('heads a synthetic grid card with the human pool name, not the composite id', async () => {

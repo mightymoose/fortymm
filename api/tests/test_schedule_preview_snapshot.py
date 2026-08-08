@@ -9,10 +9,11 @@ non-persistent solve over a synthetic field"). These tests prove:
   entrants and exactly the round-robin fixture set (``C(N, 2)`` in one pool);
 * the field is disjoint across events (no synthetic player is in two events);
 * a per-event count override changes the field size and the fixture count;
-* an event the preview lays out nothing of (today: single-elim, swiss) is skipped
-  and reported, leaving every event beside it previewed;
-* a tournament with no previewable event at all is refused loud with the
-  unsupported-draw domain error, rather than answered with an empty snapshot;
+* an event the preview lays out nothing of — for its draw type (today: single-elim,
+  swiss) or because the draw refuses its configuration — is skipped and reported,
+  leaving every event beside it previewed;
+* a tournament with no previewable event at all is refused loud with the first
+  skipped event's own domain error, rather than answered with an empty snapshot;
 * no ``TournamentEntry`` / ``TournamentFixture`` row is ever created;
 * the snapshot is coherent enough for the real solver to place.
 """
@@ -41,7 +42,12 @@ from app.models import (
     User,
 )
 from app.models.tournament import DrawType, EventFormat
-from app.schedule_preview import DEFAULT_UNCAPPED_FIELD, build_preview_snapshot
+from app.schedule_preview import (
+    DEFAULT_UNCAPPED_FIELD,
+    DegenerateConfiguration,
+    UnpreviewableDrawType,
+    build_preview_snapshot,
+)
 from tests._helpers import (
     event_draw_settings,
     make_user,
@@ -510,9 +516,9 @@ async def test_an_unpreviewable_event_does_not_abort_the_tournaments_whole_previ
     # the fact the honest-notes strip turns into a line the director reads.
     previewed, skipped = preview.field_summaries
     assert previewed.event_id == scheduling.EventId(str(round_robin.id))
-    assert previewed.unpreviewable_draw_type is None
+    assert previewed.skip_reason is None
     assert skipped.event_id == scheduling.EventId(str(unpreviewable.id))
-    assert skipped.unpreviewable_draw_type is draw_type
+    assert skipped.skip_reason == UnpreviewableDrawType(draw_type)
     # No field was synthesized for it, so it claims no entrants and drops no bracket.
     assert (skipped.field_size, skipped.knockout_fixtures) == (0, 0)
 
@@ -599,6 +605,90 @@ async def test_an_rr_then_ko_event_does_not_abort_the_tournaments_whole_preview(
     }
 
 
+#: The domain's own refusal for the degeneracy a real director hit: an rr-then-ko
+#: event whose single pool takes one qualifier. Pinned whole because it is the
+#: *point* of skipping such an event rather than refusing the tournament — this
+#: sentence names the two numbers the director has to change, and a generic "could
+#: not be previewed" would name nothing.
+_ONE_QUALIFIER_REFUSAL = (
+    "Taking 1 qualifier from a single pool leaves one player in the knockout "
+    "stage, who would have nobody to play — take more qualifiers from each pool, "
+    "or configure more pools."
+)
+
+
+async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """An event whose configuration cannot be cut is SKIPPED, exactly as an
+    unpreviewable draw type is, and every event beside it is previewed.
+
+    ``DegenerateDraw`` is raised per event but this builder is per **tournament**, so
+    letting it propagate took the preview of every healthy event beside it — one
+    misconfigured event and the director saw no schedule at all. The round-robin's own
+    15 fixtures are asserted present, which is the claim a bare "it did not raise"
+    would miss, and the skipped event's pool is asserted absent because a window of an
+    event that was never drawn would otherwise be solved over.
+
+    The skipped event carries the strategy's own sentence, not a generic one: the
+    reason is the actionable part, and only the strategy knows which degeneracy it hit.
+
+    The refused event is created **first** on purpose. It mints no synthetic entrant,
+    so the round-robin behind it still gets the ordinals ``1..6``; an accounting that
+    charged the skipped event its field would push them to ``7..12``, which the
+    ``placeholder-N`` assertion below is what catches.
+    """
+    owner = await make_user(db_session, "prev-degenerate-beside")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    degenerate = await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        draw_type=DrawType.rr_then_ko,
+        # One pool taking one qualifier: the knockout stage would hold a single
+        # player with nobody to play, so ``RrThenKoStrategy.plan_initial`` refuses.
+        qualifiers_per_pool=1,
+        max_players=6,
+        pools=[_one_pool(["t2"])],
+    )
+    round_robin = await _add_event(
+        db_session, tournament, name="Open Singles", max_players=6
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    preview = build_preview_snapshot(loaded)
+
+    # The round-robin event is previewed in full — C(6, 2) = 15 — and it is the only
+    # event with fixtures.
+    by_event: dict[str, int] = {}
+    for fixture in preview.snapshot.fixtures:
+        by_event[fixture.event_id] = by_event.get(fixture.event_id, 0) + 1
+    assert by_event == {scheduling.EventId(str(round_robin.id)): 15}
+    # And it minted the first six ordinals: the refused event ahead of it synthesized
+    # no field, so it consumed none of the id space either.
+    assert _players(preview.snapshot) == {f"placeholder-{n}" for n in range(1, 7)}
+
+    # Nothing of the skipped event reaches the solver: no pool window (which would
+    # move the frame origin and be solved over), and no event settings.
+    assert all(
+        not pool.id.startswith(f"{degenerate.id}:") for pool in preview.snapshot.pools
+    )
+    assert [e.id for e in preview.snapshot.events] == [
+        scheduling.EventId(str(round_robin.id))
+    ]
+
+    skipped, previewed = preview.field_summaries
+    assert previewed.event_id == scheduling.EventId(str(round_robin.id))
+    assert previewed.skip_reason is None
+    assert skipped.event_id == scheduling.EventId(str(degenerate.id))
+    # The domain's own copy, verbatim — the whole reason this is a skip and not a
+    # silent omission. A summary carrying only "unpreviewable" would pass a test that
+    # merely asserted the event was left out.
+    assert skipped.skip_reason == DegenerateConfiguration(_ONE_QUALIFIER_REFUSAL)
+    # No field was synthesized for it, so it claims no entrants and drops no bracket.
+    assert (skipped.field_size, skipped.knockout_fixtures) == (0, 0)
+
+
 async def test_preview_snapshot_event_without_pools_refuses(
     db_session: AsyncSession, default_league: League
 ) -> None:
@@ -611,6 +701,89 @@ async def test_preview_snapshot_event_without_pools_refuses(
     # pool set — a clear domain error, never a partial snapshot.
     with pytest.raises(DegenerateDraw):
         build_preview_snapshot(loaded)
+
+
+async def test_a_tournament_whose_only_event_is_degenerate_is_still_refused(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """The all-unpreviewable refusal, extended to a degenerate configuration: with
+    nothing left to preview, an empty snapshot would solve to "it fits" over zero
+    matches — the false confidence a preview exists to avoid.
+
+    It is refused with the **strategy's own** ``DegenerateDraw``, message intact, so
+    the 422 a director reads names the numbers they have to change (the route passes a
+    ``DegenerateDraw``'s message through verbatim for exactly that reason).
+    """
+    owner = await make_user(db_session, "prev-degenerate-only")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=1,
+        max_players=6,
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    with pytest.raises(DegenerateDraw) as caught:
+        build_preview_snapshot(loaded)
+
+    assert str(caught.value) == _ONE_QUALIFIER_REFUSAL
+
+
+@pytest.mark.parametrize("degenerate_first", [True, False])
+async def test_a_wholly_unpreviewable_tournament_speaks_its_first_events_reason(
+    db_session: AsyncSession, default_league: League, degenerate_first: bool
+) -> None:
+    """Mixed reasons, one rule: with nothing previewable, the refusal is the **first**
+    unpreviewable event's own, in the tournament's own event order.
+
+    Positional, not ranked. Both refusals reach the director as the same 422 through
+    the same mapper, so inventing a priority between them would be a second rule for a
+    reader to learn on top of the one this builder already stated ("the first skipped
+    draw type"). Parametrized both ways because a rule that only holds in one ordering
+    is a coincidence, and the two events are created in the order under test.
+    """
+    owner = await make_user(db_session, f"prev-mixed-{degenerate_first}")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+
+    async def add_degenerate() -> None:
+        await _add_event(
+            db_session,
+            tournament,
+            name="Championship",
+            draw_type=DrawType.rr_then_ko,
+            qualifiers_per_pool=1,
+            max_players=6,
+            pools=[_one_pool(["t2"])],
+        )
+
+    async def add_bracket() -> None:
+        await _add_event(
+            db_session,
+            tournament,
+            name="Cup",
+            draw_type=DrawType.single_elim,
+            max_players=8,
+        )
+
+    if degenerate_first:
+        await add_degenerate()
+        await add_bracket()
+    else:
+        await add_bracket()
+        await add_degenerate()
+    loaded = await _load(db_session, tournament.id)
+
+    if degenerate_first:
+        with pytest.raises(DegenerateDraw) as degenerate:
+            build_preview_snapshot(loaded)
+        assert str(degenerate.value) == _ONE_QUALIFIER_REFUSAL
+    else:
+        with pytest.raises(UnsupportedDrawType) as unsupported:
+            build_preview_snapshot(loaded)
+        assert unsupported.value.draw_type is DrawType.single_elim
 
 
 async def test_preview_snapshot_creates_no_entry_or_fixture_rows(

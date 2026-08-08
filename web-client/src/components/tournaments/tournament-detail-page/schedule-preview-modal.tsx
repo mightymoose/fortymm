@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Loader2, RotateCw, TriangleAlert } from 'lucide-react'
 import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 
-import { ApiError } from '@/api/client'
+import { ApiError, validationFields } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -88,27 +88,66 @@ function fmtPreviewFinish(iso: string): string | null {
   return fmt12(Number(m[1]) * 60 + Number(m[2]))
 }
 
-/** The four refusals the enqueue POST can answer with, each a designed notice in
- * the director's words — never the server's prose (`DEFINITION_OF_COMPLETE.md`).
- * The trigger button is NOT gated on draw type, so a `422` (only round-robin is
- * previewable today) is a real, reachable refusal, not a bug. */
+/** The refusals the enqueue POST can answer with, each a designed inline notice.
+ * The trigger button is NOT gated on draw type, so a `422` is a real, reachable
+ * refusal, not a bug. */
 interface PreviewEnqueueNotice {
   title: string
   description: string
 }
 
-/** Map an enqueue refusal to its inline notice. `422` — the draw type can't be
- * previewed yet (only round-robin is); `409` — the tournament is no longer pre-live;
- * `429` — the single preview slot is busy (retry in a moment); `403` — not the
- * owner; status `0` — the server was never reached; anything else — the honest
- * generic. */
+/** The 422 description when the server sent no sentence of its own — kept verbatim
+ * from the pre-fix code. Note it does name a cause (the draw type), which is only
+ * safe here because we have nothing else to say: it is exactly the guess that was
+ * wrong when it was shown over EVERY 422. A cause-neutral sentence would be a better
+ * fallback; changing it is a follow-up, not part of this fix. */
+const PREVIEW_422_FALLBACK =
+  'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.'
+
+/**
+ * The server's own sentence for a refusal, when that sentence was written for a
+ * director — otherwise `null`.
+ *
+ * The shape decides, not the status. FastAPI's per-field validation array is the one
+ * 422 body whose `msg` is machine prose ("Input should be a valid integer"), and
+ * `extractDetail` happily returns a string from it, so a status-only check would put
+ * Pydantic's words on screen. `validationFields` returns non-`null` **only** for that
+ * array, which is exactly the "are the server's words safe to show" test
+ * (`data/save-failure.ts`, whose `invalid` arm exists because that prose reached a
+ * screen once).
+ */
+function serverSentence(error: ApiError): string | null {
+  if (validationFields(error) !== null) return null
+  const detail = error.detail?.trim()
+  return detail ? detail : null
+}
+
+/**
+ * Map an enqueue refusal to its inline notice.
+ *
+ * `422` is the **domain** speaking, so it speaks: the route composes that detail for
+ * a director and passes the domain's own copy straight through
+ * (`api/app/tournaments.py`, `_draw_refusal` — "the one error whose message is
+ * domain-authored copy"). Only the strategy knows *which* refusal fired and which
+ * numbers the director has to change, so a hardcoded sentence here can only be a
+ * guess, and it was a wrong one: a round-robin-then-knockout event taking one
+ * qualifier per pool was told its draw type is unsupported, hiding a two-click fix
+ * (`web-client/CLAUDE.md`: "surface server 4xx inline, don't swallow it"). The title
+ * stays **cause-neutral** for the same reason — it must not contradict a detail it
+ * has not read.
+ *
+ * The rest are about the transport and the lifecycle, not the domain, so their copy
+ * is ours and the server's words add nothing: `409` — the tournament is no longer
+ * pre-live; `429` — the single preview slot is busy (retry in a moment); `403` — not
+ * the owner; status `0` — the server was never reached; anything else — the honest
+ * generic.
+ */
 function previewEnqueueNotice(error: unknown): PreviewEnqueueNotice {
   if (error instanceof ApiError) {
     if (error.status === 422) {
       return {
         title: "This schedule can't be previewed yet",
-        description:
-          'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.',
+        description: serverSentence(error) ?? PREVIEW_422_FALLBACK,
       }
     }
     if (error.status === 409) {
@@ -281,9 +320,9 @@ const PreviewBody = ({
 
   const eventName = (id: string) => events.find((e) => e.id === id)?.name ?? id
 
-  // Refused loud (ADR): the enqueue POST was rejected (422 unpreviewable draw type,
-  // 409 not pre-live, 429 rate-limited, 403, network), so there is no structure to
-  // render — show the actionable notice with a Close/Retry, never a permanent
+  // Refused loud (ADR): the enqueue POST was rejected (422 the domain will not draw
+  // this, 409 not pre-live, 429 rate-limited, 403, network), so there is no structure
+  // to render — show the actionable notice with a Close/Retry, never a permanent
   // spinner.
   if (!enqueued && enqueue.isError) {
     const notice = previewEnqueueNotice(enqueue.error)
