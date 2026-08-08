@@ -679,6 +679,45 @@ class TestInfeasibility:
         assert isinstance(only, NoSingleCause)
         assert only.required_min <= only.available_min
 
+    def test_overlapping_reservations_do_not_double_count_the_venue(self) -> None:
+        """An rr-then-ko event's shape: its group stage sits in a pool, and its
+        knockout stage — which belongs to no pool — sits in the event-wide
+        reservation, which covers the SAME tables over the SAME window (ADR
+        20260807 "a pool restricts scheduling, it does not enable it"). Both
+        reservations describe one venue, so the day aggregate must describe that
+        venue once.
+
+        ``available_min`` is director-facing — it renders as "there's enough
+        total table-time (about Nh available)" — so summing the two reservations
+        would claim 4 table-hours on a venue that has 2, and would say it beside
+        copy that already asserts the room exists.
+
+        Two tables from 0 to 50, reserved twice over: 100 table-minutes, not 200.
+        Infeasible for a cause no arm proves — P1's two matches plus the rest
+        floor need 60 minutes of P1's own time, and the windows end at 50, yet
+        each match fits its own reservation and no single reservation
+        over-subscribes anyone (one match each)."""
+        p1, p2, p3 = _players(3)
+        table_ids = _tables(2)
+        pool_key = PoolId("E1:A")
+        event_wide_key = PoolId("E1:event-wide")
+        snapshot = ScheduleSnapshot(
+            table_ids=table_ids,
+            pools=(
+                SchedulePool(pool_key, table_ids, Window(0, 50)),
+                SchedulePool(event_wide_key, table_ids, Window(0, 50)),
+            ),
+            events=(EventSettings(EventId("E1"), 3),),
+            fixtures=(
+                _fixture(1, p1, p2, pool=pool_key),  # the group stage
+                _fixture(2, p1, p3, pool=event_wide_key),  # the knockout
+            ),
+            now_min=0,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict is Verdict.infeasible
+        assert result.reasons == (NoSingleCause(required_min=50, available_min=100),)
+
     def test_pool_with_no_tables_is_infeasible(self) -> None:
         p1, p2 = _players(2)
         snapshot = ScheduleSnapshot(

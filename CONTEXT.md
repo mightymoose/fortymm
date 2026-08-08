@@ -472,11 +472,13 @@ longer be added, removed, or re-identified, because every **fixture** names the
 pool it belongs to — but a pool's venue attributes (its tables, its time window)
 and its display name stay editable mid-event, because the venue changes under a
 running tournament (a table breaks, a table frees up).
-A pool **restricts** scheduling rather than enabling it (ADR 20260807): its
-**fixtures** are placed on its tables inside its window, while an event with no
-pools is scheduled across the whole venue over its own window. Every draw type
-may have pools, including the un-pooled ones — a **bracket** has no pool of its
-own, but its event may still reserve one to confine where and when it is played.
+A pool **restricts** scheduling rather than enabling it, and it restricts per
+**fixture** (ADR 20260807): a fixture that names a pool is placed on that pool's
+tables inside its window, while a fixture that names none is placed across the
+whole venue over its **event**'s window. A pool never confines a fixture that
+does not name it — a **knockout stage**'s fixtures take the event-wide
+reservation even though their event has pools, because those pools describe the
+**pool stage**.
 _Avoid_: group (a pool is not a grouping abstraction separate from the venue
 slice), division.
 

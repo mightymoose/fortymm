@@ -228,6 +228,7 @@ from app.schemas.schedule_solve import (
     PlayerOverSubscribedRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
+    ReservationKind,
     ResolvedConflict,
     ResolvedReason,
     TableConflictRead,
@@ -564,13 +565,22 @@ def event_wide_pool_name(event_name: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _PoolResolution:
-    """The DB-side facts an infeasibility reason needs to name a pool a human
-    can act on: its display ``name`` and the ``HH:MM`` clock bounds of its
-    window (already strings on the pool's ``Slot`` — no minute→clock math)."""
+    """The DB-side facts an infeasibility reason needs to name a reservation a
+    human can act on: its display ``name``, the ``HH:MM`` clock bounds of its
+    window (already strings on the pool's ``Slot`` — no minute→clock math), and
+    which kind of ``reservation`` it is.
+
+    ``reservation`` is what stops a remedy naming a control that does not exist
+    (:data:`~app.schemas.schedule_solve.ReservationKind`): "add a table to" and
+    "a smaller pool" are pool verbs, and an event-wide reservation already holds
+    every table the tournament has. It is carried beside the name rather than
+    inferred from it — a display name is copy, and bending copy to carry a fact
+    is how the wrong remedy got rendered in the first place."""
 
     name: str
     window_start: str
     window_end: str
+    reservation: ReservationKind = "pool"
 
 
 @dataclass(frozen=True, slots=True)
@@ -915,6 +925,11 @@ async def _load_solver_inputs(
                 name=event_wide_pool_name(event.name),
                 window_start=event_slot.start,
                 window_end=event_slot.end,
+                # Not a pool: a reason blaming this one must not be answered with
+                # a pool remedy (add a table to it, make it smaller, widen its
+                # window). Its controls are the event's window and the
+                # tournament's table catalogue.
+                reservation="event",
             )
 
     # The minute frame's origin: the earliest reservation window start — a
@@ -1205,13 +1220,16 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
     until it is handled."""
     match reason:
         case PoolHasNoTables():
+            no_tables_pool = inputs.pool_resolutions[reason.pool_id]
             return PoolHasNoTablesRead(
-                pool_name=inputs.pool_resolutions[reason.pool_id].name
+                pool_name=no_tables_pool.name,
+                reservation=no_tables_pool.reservation,
             )
         case WindowTooShortForMatch():
             pool = inputs.pool_resolutions[reason.pool_id]
             return WindowTooShortForMatchRead(
                 pool_name=pool.name,
+                reservation=pool.reservation,
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 best_of=inputs.fixture_best_of[reason.fixture_id],
@@ -1222,6 +1240,7 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             pool = inputs.pool_resolutions[reason.pool_id]
             return PoolOverCapacityRead(
                 pool_name=pool.name,
+                reservation=pool.reservation,
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 required_min=reason.required_min,
@@ -1237,6 +1256,7 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             return PlayerOverSubscribedRead(
                 player_name=inputs.player_names[reason.player_id],
                 pool_name=pool.name,
+                reservation=pool.reservation,
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 match_count=reason.match_count,

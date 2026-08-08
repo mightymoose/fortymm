@@ -247,7 +247,7 @@ test.describe('Tournaments · schedule solve strip', () => {
     page,
   }) => {
     // A `player_over_subscribed` arm of `infeasibility_reasons` crosses the real
-    // wire (MSW off, this stub IS the API) with all seven of its fields; the
+    // wire (MSW off, this stub IS the API) with all eight of its fields; the
     // client Zod-parses it in the queryFn and the strip renders the human-named
     // sentence (ADR "the conflict core is a second, max-placed solve", decision 1).
     const { pom } = await TournamentDetailPage.navigateTo(page, {
@@ -263,6 +263,8 @@ test.describe('Tournaments · schedule solve strip', () => {
             kind: 'player_over_subscribed',
             player_name: 'spiked-frigatebird',
             pool_name: 'Pool A',
+            // A real pool, so the remedy may offer the pool verbs.
+            reservation: 'pool',
             window_start: '09:00',
             window_end: '10:30',
             match_count: 4,
@@ -296,6 +298,58 @@ test.describe('Tournaments · schedule solve strip', () => {
       page,
       'schedule tab — over-subscribed-player infeasible solve on the strip',
     )
+  })
+
+  test('blames the EVENT-WIDE reservation with remedies a director can actually carry out — never a pool control the event does not have', async ({
+    page,
+  }) => {
+    // The same arm, `reservation: 'event'` — an un-pooled fixture (a bracket, a
+    // swiss round, a knockout stage) is placed against the event's own window over
+    // every table in the tournament (ADR 20260807). There is no pool row behind
+    // that reservation, so the remedy must name the event and its field, not a pool
+    // to shrink or a pool window to widen. MSW is off: this stub IS the API, so the
+    // discriminator crosses the real wire and the real Zod parse.
+    const { pom } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      latestSolve: buildScheduleSolveRead({
+        status: 'infeasible',
+        verdict: 'infeasible',
+        trigger: 'manual',
+        fixtures_placed: null,
+        fixtures_pinned: null,
+        infeasibility_reasons: [
+          {
+            kind: 'player_over_subscribed',
+            player_name: 'spiked-frigatebird',
+            pool_name: 'Open Singles (whole venue)',
+            reservation: 'event',
+            window_start: '09:00',
+            window_end: '10:30',
+            match_count: 4,
+            required_min: 150,
+            window_span_min: 90,
+          },
+        ],
+      }),
+    })
+    await pom.openScheduleTab()
+
+    const state = pom.solveStripState('infeasible')
+    await expect(state).toBeVisible()
+    // The same honest figures…
+    await expect(state).toContainText('spiked-frigatebird is in 4 matches')
+    await expect(state).toContainText('they need about 2.5h')
+    // …and a remedy whose every control exists for an un-pooled fixture.
+    await expect(state).toContainText('fewer matches in this event')
+    await expect(state).toContainText('a smaller field')
+    await expect(state).toContainText("widen the event's window")
+    // NOT the pool controls: the event has no pool to shrink, and no pool window.
+    await expect(state).not.toContainText('a smaller pool')
+    await expect(state).not.toContainText('widen its window')
+    // Still a designed state, and the raw wire words stay off screen.
+    await expect(pom.runSchedulerNotice).not.toBeVisible()
+    await expect(state).not.toContainText('player_over_subscribed')
+    await expect(state).not.toContainText('reservation')
   })
 
   test('answers the coded 422 with the designed "cut a draw first" message, inline on the strip', async ({

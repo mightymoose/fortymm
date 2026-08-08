@@ -18,6 +18,7 @@ import { solveLedgerPage } from './solve-ledger-page.page'
 const windowReasonCopy = infeasibilityReasonCopy({
   kind: 'window_too_short_for_match',
   poolName: 'Pool A',
+  reservation: 'pool',
   windowStart: '09:00',
   windowEnd: '10:00',
   bestOf: 5,
@@ -28,6 +29,7 @@ const overSubscribedCopy = infeasibilityReasonCopy({
   kind: 'player_over_subscribed',
   playerName: 'spiked-frigatebird',
   poolName: 'Pool A',
+  reservation: 'pool',
   windowStart: '09:00',
   windowEnd: '10:30',
   matchCount: 4,

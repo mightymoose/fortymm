@@ -490,8 +490,10 @@ class NoSingleCause:
     structural cause (arms above) explains it — the infeasibility lives in the
     combinatorial interaction of windows, rest, and no-double-booking that only
     search sees. Carries the whole-day aggregate for context: ``required_min``
-    (Σ every active fixture's duration) against ``available_min`` (Σ over pools
-    of ``window_span × table_count``). Typically ``required_min ≤ available_min``
+    (Σ every active fixture's duration) against ``available_min``, the venue's
+    own table-minutes — the *union* of what the reservations cover, per table, so
+    two reservations over one table at one hour offer that hour once
+    (:func:`_aggregate_capacity`). Typically ``required_min ≤ available_min``
     here — aggregate room exists, but it cannot be packed."""
 
     required_min: int
@@ -646,19 +648,41 @@ def _no_plan(
 
 def _aggregate_capacity(snapshot: ScheduleSnapshot) -> tuple[int, int]:
     """``(required_min, available_min)`` for the whole day: Σ every active
-    fixture's duration against Σ over pools of ``window_span × table_count``.
+    fixture's duration against the table-minutes the **venue** actually offers.
     The rough aggregate behind :class:`NoSingleCause`. Reads the event map
     directly — a solve only reaches this on a *built* model, so the snapshot's
-    cross-references have already passed :func:`_validated`."""
+    cross-references have already passed :func:`_validated`.
+
+    ``available_min`` is the union of the reservations' coverage, per table, not
+    their sum. **Reservations overlap**: pools may share a table (per-table
+    no-overlap is global, see :class:`SchedulePool`), and a snapshot builder may
+    lay a whole-venue reservation over an event's own pools — which is exactly
+    what an rr-then-ko event carries, a pool for its group stage and an
+    event-wide reservation for its bracket, on the same tables at the same hours.
+    Summing them would count one table's hour once per reservation that reserves
+    it, and this number is *director-facing*: it renders as "there's enough total
+    table-time (about Nh available)". A physical table gives an hour once, so it
+    is counted once, however many reservations claim it."""
     events = {e.id: e for e in snapshot.events}
     required = sum(
         match_minutes(events[f.event_id].length_games)
         for f in snapshot.fixtures
         if not f.completed
     )
+    spans_by_table: dict[TableId, list[tuple[int, int]]] = defaultdict(list)
+    for pool in snapshot.pools:
+        # A degenerate (empty or inverted) window offers nothing — and must not
+        # subtract from what the other reservations offer.
+        if pool.window.end_min <= pool.window.start_min:
+            continue
+        for table_id in pool.table_ids:
+            spans_by_table[table_id].append(
+                (pool.window.start_min, pool.window.end_min)
+            )
     available = sum(
-        (p.window.end_min - p.window.start_min) * len(p.table_ids)
-        for p in snapshot.pools
+        end - start
+        for spans in spans_by_table.values()
+        for start, end in _merge_spans(spans)
     )
     return required, available
 

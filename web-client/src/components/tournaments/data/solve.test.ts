@@ -85,8 +85,9 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       infeasibilityReasonSchema.parse({
         kind: 'pool_has_no_tables',
         pool_name: 'Pool B',
+        reservation: 'pool',
       }),
-    ).toEqual({ kind: 'pool_has_no_tables', poolName: 'Pool B' })
+    ).toEqual({ kind: 'pool_has_no_tables', poolName: 'Pool B', reservation: 'pool' })
   })
 
   it('parses window_too_short_for_match, mapping snake→camel and keeping best_of narrow', () => {
@@ -94,6 +95,7 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       infeasibilityReasonSchema.parse({
         kind: 'window_too_short_for_match',
         pool_name: 'Pool A',
+        reservation: 'pool',
         window_start: '09:00',
         window_end: '09:20',
         best_of: 5,
@@ -103,6 +105,7 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
     ).toEqual({
       kind: 'window_too_short_for_match',
       poolName: 'Pool A',
+      reservation: 'pool',
       windowStart: '09:00',
       windowEnd: '09:20',
       bestOf: 5,
@@ -116,6 +119,7 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       infeasibilityReasonSchema.parse({
         kind: 'pool_over_capacity',
         pool_name: 'Pool C',
+        reservation: 'pool',
         window_start: '09:00',
         window_end: '13:00',
         required_min: 480,
@@ -125,6 +129,7 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
     ).toEqual({
       kind: 'pool_over_capacity',
       poolName: 'Pool C',
+      reservation: 'pool',
       windowStart: '09:00',
       windowEnd: '13:00',
       requiredMin: 480,
@@ -139,6 +144,7 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
         kind: 'player_over_subscribed',
         player_name: 'spiked-frigatebird',
         pool_name: 'Pool A',
+        reservation: 'pool',
         window_start: '09:00',
         window_end: '10:30',
         match_count: 4,
@@ -149,12 +155,52 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       kind: 'player_over_subscribed',
       playerName: 'spiked-frigatebird',
       poolName: 'Pool A',
+      reservation: 'pool',
       windowStart: '09:00',
       windowEnd: '10:30',
       matchCount: 4,
       requiredMin: 150,
       windowSpanMin: 90,
     })
+  })
+
+  it('carries an event-wide reservation through as `event` — the name is not the fact', () => {
+    // The synthetic reservation an un-pooled fixture is placed in (ADR 20260807).
+    // Its `pool_name` is decorated copy ("… (whole venue)"); the *fact* rides in
+    // `reservation`, so the copy below never has to read a name to know what it
+    // may offer as a remedy.
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'pool_has_no_tables',
+        pool_name: 'Open Singles (whole venue)',
+        reservation: 'event',
+      }),
+    ).toEqual({
+      kind: 'pool_has_no_tables',
+      poolName: 'Open Singles (whole venue)',
+      reservation: 'event',
+    })
+  })
+
+  it('refuses a reason that names no reservation kind — the remedy would have to guess', () => {
+    // Not defaulted to `pool`: guessing here is how a director gets told to add a
+    // table to a reservation that already holds every table there is.
+    expect(() =>
+      infeasibilityReasonSchema.parse({
+        kind: 'pool_has_no_tables',
+        pool_name: 'Pool B',
+      }),
+    ).toThrow()
+  })
+
+  it('refuses a reservation kind this client has no words for', () => {
+    expect(() =>
+      infeasibilityReasonSchema.parse({
+        kind: 'pool_has_no_tables',
+        pool_name: 'Pool B',
+        reservation: 'venue',
+      }),
+    ).toThrow()
   })
 
   it('parses no_single_cause (the residual, no pool)', () => {
@@ -186,7 +232,7 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
           status: 'infeasible',
           verdict: 'infeasible',
           infeasibility_reasons: [
-            { kind: 'pool_has_no_tables', pool_name: 'Pool B' },
+            { kind: 'pool_has_no_tables', pool_name: 'Pool B', reservation: 'pool' },
             { kind: 'gremlins' },
           ] as never,
         }),
@@ -199,11 +245,13 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       buildScheduleSolveRead({
         status: 'infeasible',
         verdict: 'infeasible',
-        infeasibility_reasons: [{ kind: 'pool_has_no_tables', pool_name: 'Pool B' }],
+        infeasibility_reasons: [
+          { kind: 'pool_has_no_tables', pool_name: 'Pool B', reservation: 'pool' },
+        ],
       }),
     )
     expect(parsed?.infeasibilityReasons).toEqual([
-      { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+      { kind: 'pool_has_no_tables', poolName: 'Pool B', reservation: 'pool' },
     ])
   })
 
@@ -336,7 +384,11 @@ describe('placementConflictSentence', () => {
 describe('infeasibilityReasonCopy', () => {
   it('words pool_has_no_tables with the pool name interpolated into both lines', () => {
     expect(
-      infeasibilityReasonCopy({ kind: 'pool_has_no_tables', poolName: 'Pool B' }),
+      infeasibilityReasonCopy({
+        kind: 'pool_has_no_tables',
+        poolName: 'Pool B',
+        reservation: 'pool',
+      }),
     ).toEqual({
       sentence: 'Pool B has no tables assigned.',
       remedy: 'Assign at least one table to Pool B, then run the scheduler again.',
@@ -348,6 +400,7 @@ describe('infeasibilityReasonCopy', () => {
       infeasibilityReasonCopy({
         kind: 'window_too_short_for_match',
         poolName: 'Pool A',
+        reservation: 'pool',
         windowStart: '09:00',
         windowEnd: '09:20',
         bestOf: 5,
@@ -366,6 +419,7 @@ describe('infeasibilityReasonCopy', () => {
       infeasibilityReasonCopy({
         kind: 'pool_over_capacity',
         poolName: 'Pool C',
+        reservation: 'pool',
         windowStart: '09:00',
         windowEnd: '13:00',
         requiredMin: 480,
@@ -384,6 +438,7 @@ describe('infeasibilityReasonCopy', () => {
       infeasibilityReasonCopy({
         kind: 'pool_over_capacity',
         poolName: 'Pool D',
+        reservation: 'pool',
         windowStart: '09:00',
         windowEnd: '10:15',
         requiredMin: 90,
@@ -399,6 +454,7 @@ describe('infeasibilityReasonCopy', () => {
         kind: 'player_over_subscribed',
         playerName: 'spiked-frigatebird',
         poolName: 'Pool A',
+        reservation: 'pool',
         windowStart: '09:00',
         windowEnd: '10:30',
         matchCount: 4,
@@ -421,6 +477,7 @@ describe('infeasibilityReasonCopy', () => {
       kind: 'player_over_subscribed',
       playerName: 'spiked-frigatebird',
       poolName: 'Pool A',
+      reservation: 'pool',
       windowStart: '09:00',
       windowEnd: '10:30',
       matchCount: 4,
@@ -467,10 +524,11 @@ describe('infeasibilityReasonCopy', () => {
 
   it('gives each arm a distinct sentence and remedy', () => {
     const arms: InfeasibilityReason[] = [
-      { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+      { kind: 'pool_has_no_tables', poolName: 'Pool B', reservation: 'pool' },
       {
         kind: 'window_too_short_for_match',
         poolName: 'Pool A',
+        reservation: 'pool',
         windowStart: '09:00',
         windowEnd: '09:20',
         bestOf: 3,
@@ -480,6 +538,7 @@ describe('infeasibilityReasonCopy', () => {
       {
         kind: 'pool_over_capacity',
         poolName: 'Pool C',
+        reservation: 'pool',
         windowStart: '09:00',
         windowEnd: '13:00',
         requiredMin: 480,
@@ -490,6 +549,7 @@ describe('infeasibilityReasonCopy', () => {
         kind: 'player_over_subscribed',
         playerName: 'spiked-frigatebird',
         poolName: 'Pool A',
+        reservation: 'pool',
         windowStart: '09:00',
         windowEnd: '10:30',
         matchCount: 4,
@@ -501,6 +561,190 @@ describe('infeasibilityReasonCopy', () => {
     ]
     const sentences = arms.map((a) => infeasibilityReasonCopy(a).sentence)
     expect(new Set(sentences).size).toBe(arms.length)
+  })
+})
+
+// ----- the infeasibility reasons: the POOL copy, pinned ----------------------
+//
+// A director reads these four today, and they are asserted in the API's own
+// tests too. The event-wide reservation (below) must not have moved a byte of
+// them: this block is the regression guard, exact-equality, in one place.
+
+describe('infeasibilityReasonCopy — the pool copy is unchanged', () => {
+  it('pins all four pool-naming arms, byte for byte', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'pool_has_no_tables',
+        poolName: 'Pool B',
+        reservation: 'pool',
+      }),
+    ).toEqual({
+      sentence: 'Pool B has no tables assigned.',
+      remedy: 'Assign at least one table to Pool B, then run the scheduler again.',
+    })
+
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'window_too_short_for_match',
+        poolName: 'Pool A',
+        reservation: 'pool',
+        windowStart: '09:00',
+        windowEnd: '09:20',
+        bestOf: 5,
+        neededMin: 35,
+        windowSpanMin: 20,
+      }),
+    ).toEqual({
+      sentence:
+        "Pool A's 09:00–09:20 window is too short for a best-of-5 match — it needs 35 min but the window is only 20.",
+      remedy: "Widen Pool A's window, or use a shorter match format.",
+    })
+
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'pool_over_capacity',
+        poolName: 'Pool C',
+        reservation: 'pool',
+        windowStart: '09:00',
+        windowEnd: '13:00',
+        requiredMin: 480,
+        capacityMin: 450,
+        tableCount: 5,
+      }),
+    ).toEqual({
+      sentence:
+        "Pool C can't fit all its matches: they need about 8h of table-time, but its 09:00–13:00 window on 5 tables only holds about 7.5h.",
+      remedy: 'Add a table to Pool C, widen its window, or trim the field.',
+    })
+
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'player_over_subscribed',
+        playerName: 'spiked-frigatebird',
+        poolName: 'Pool A',
+        reservation: 'pool',
+        windowStart: '09:00',
+        windowEnd: '10:30',
+        matchCount: 4,
+        requiredMin: 150,
+        windowSpanMin: 90,
+      }),
+    ).toEqual({
+      sentence:
+        "spiked-frigatebird is in 4 matches inside Pool A's 09:00–10:30 window — playing one at a time, with a rest between, they need about 2.5h, but the window is only 1.5h long.",
+      remedy:
+        "Give spiked-frigatebird fewer matches in Pool A — a smaller pool, or a shorter match format — or widen its window; adding tables won't help one player.",
+    })
+  })
+})
+
+// ----- the infeasibility reasons: the EVENT-WIDE reservation ------------------
+//
+// An un-pooled fixture — a bracket, a swiss round, a knockout stage — is placed
+// against the event-wide reservation: the event's own window over every table in
+// the tournament (ADR 20260807). There is no pool row behind it, so a remedy must
+// name a control the director actually has — the tournament's table list, the
+// event's window, the match format, the field size — and must NOT offer a pool
+// verb ("add a table to it", "make it a smaller pool", "assign a table to it").
+// The name it carries is decorated copy, "Open Singles (whole venue)"; the fact
+// is `reservation: 'event'`.
+
+const EVENT_RESERVATION_NAME = 'Open Singles (whole venue)'
+
+describe('infeasibilityReasonCopy — the event-wide reservation', () => {
+  it('sends pool_has_no_tables to the TOURNAMENT\'s table list, not to an assignment that does not exist', () => {
+    const copy = infeasibilityReasonCopy({
+      kind: 'pool_has_no_tables',
+      poolName: EVENT_RESERVATION_NAME,
+      reservation: 'event',
+    })
+    expect(copy.remedy).toBe(
+      'Add at least one table to this tournament, then run the scheduler again.',
+    )
+    // The pool verb: there is nothing to assign a table TO.
+    expect(copy.remedy).not.toContain('Assign at least one table to')
+    expect(copy.remedy).not.toContain(EVENT_RESERVATION_NAME)
+  })
+
+  it("sends window_too_short_for_match to the EVENT's own window, not to a pool's", () => {
+    const copy = infeasibilityReasonCopy({
+      kind: 'window_too_short_for_match',
+      poolName: EVENT_RESERVATION_NAME,
+      reservation: 'event',
+      windowStart: '09:00',
+      windowEnd: '09:20',
+      bestOf: 5,
+      neededMin: 35,
+      windowSpanMin: 20,
+    })
+    expect(copy.remedy).toBe(
+      "Widen the event's window, or use a shorter match format.",
+    )
+    // Not "Widen Open Singles (whole venue)'s window" — that control is a pool's.
+    expect(copy.remedy).not.toContain(EVENT_RESERVATION_NAME)
+    // The figures are the same honest ones the pool form reports.
+    expect(copy.sentence).toContain('it needs 35 min but the window is only 20')
+  })
+
+  it('sends pool_over_capacity to the tournament, the event window and the field — never "add a table to" the reservation', () => {
+    const copy = infeasibilityReasonCopy({
+      kind: 'pool_over_capacity',
+      poolName: EVENT_RESERVATION_NAME,
+      reservation: 'event',
+      windowStart: '09:00',
+      windowEnd: '17:00',
+      requiredMin: 600,
+      capacityMin: 480,
+      tableCount: 4,
+    })
+    expect(copy).toEqual({
+      sentence:
+        "Open Singles (whole venue) can't fit all its matches: they need about 10h of table-time, but the event's 09:00–17:00 window on the tournament's 4 tables only holds about 8h.",
+      remedy:
+        "Add a table to this tournament, widen the event's window, or trim the field.",
+    })
+    // The reservation already holds every table there is: adding one TO IT is
+    // impossible, and the sentence must not claim the window/tables are its own.
+    expect(copy.remedy).not.toContain(`Add a table to ${EVENT_RESERVATION_NAME}`)
+    expect(copy.sentence).not.toContain('but its 09:00–17:00 window')
+  })
+
+  it('offers player_over_subscribed a smaller FIELD and the event\'s window — a "smaller pool" is not a control here', () => {
+    const copy = infeasibilityReasonCopy({
+      kind: 'player_over_subscribed',
+      playerName: 'spiked-frigatebird',
+      poolName: EVENT_RESERVATION_NAME,
+      reservation: 'event',
+      windowStart: '09:00',
+      windowEnd: '10:30',
+      matchCount: 4,
+      requiredMin: 150,
+      windowSpanMin: 90,
+    })
+    expect(copy.remedy).toBe(
+      "Give spiked-frigatebird fewer matches in this event — a smaller field, or a shorter match format — or widen the event's window; adding tables won't help one player.",
+    )
+    // The event has no pool to shrink, and no pool window to widen.
+    expect(copy.remedy).not.toContain('a smaller pool')
+    expect(copy.remedy).not.toContain(EVENT_RESERVATION_NAME)
+    // The arm's own rule still holds: a table is parallelism, one human is not.
+    expect(copy.remedy).not.toMatch(/add (a |another |more )?tables?/i)
+    expect(copy.remedy).toContain("adding tables won't help one player")
+  })
+
+  it('leaves the reservation-blind arms alone — they name no reservation to get wrong', () => {
+    expect(
+      infeasibilityReasonCopy({
+        kind: 'no_single_cause',
+        requiredMin: 360,
+        availableMin: 480,
+      }).remedy,
+    ).toBe(
+      'Trim a field, widen a window, or split the event across days — adding tables won\'t help here.',
+    )
+    expect(
+      infeasibilityReasonCopy({ kind: 'past_window', date: '2026-07-18' }).remedy,
+    ).toBe('Move the event to a future date, then run the scheduler again.')
   })
 })
 

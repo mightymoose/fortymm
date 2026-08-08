@@ -84,15 +84,40 @@ pooled fixture resolves its reservation from its pool, an un-pooled one from its
 event. Deleting the guard outright would feed the solver fixtures with no window
 at all.
 
-**A director gains control by adding pools, not by losing them.** An event with
-no pools uses the whole venue across its own window. A director who wants the
-knockout on Sunday, or confined to tables 1 to 4, creates a pool that says so.
-This is why an event's single-day window is not a limitation in practice: pools
-carry their own dates, so multi-day play is expressed the way it already is.
+**A pool cannot confine an un-pooled fixture, and a director has no other way to
+confine one.** The rule is per **fixture**, not per event. A fixture that names a
+pool is held to that pool's tables and window. A fixture that names none takes
+the whole venue over its event's window, and the event's own pools are not
+consulted — an rr-then-ko event has pools, and its knockout fixtures still take
+the event-wide reservation, which is exactly right, because those pools describe
+the **group** stage and the knockout must not inherit their windows.
 
-**The event-wide reservation needs a name a director can read.** Infeasibility
-copy names the reservation it blames. A synthetic reservation must resolve to
-something meaningful in that copy rather than to a raw id.
+So a director who adds a pool to a single-elim event changes nothing about where
+that bracket is played. The only controls over an un-pooled fixture are the
+event's own window and the tournament's table list.
+
+Whether a director should be able to say "the knockout runs Sunday, on tables 1
+to 4" is a real question this ADR does not answer. It needs a control that is not
+a pool, because a pool already means something else. Left open deliberately
+rather than half-answered.
+
+**The event-wide reservation needs a name a director can read, and a kind.** An
+infeasibility reason names the reservation it blames, so a synthetic one must
+resolve to something meaningful rather than to a raw id. A name alone is not
+enough: the remedies are pool-shaped, and "add a table to it" or "a smaller
+pool" are not things a director can do to an event-wide reservation. Each reason
+therefore carries **which kind** of reservation it blames, so the remedy can name
+a control that exists — the tournament's table list and the event's window,
+rather than a pool's.
+
+**The venue's capacity is counted once per table-hour, however many reservations
+claim it.** The day aggregate summed span times table count over every
+reservation. An event-wide reservation overlaps its event's real pools by
+construction, so a round-robin-then-knockout event double-counted the same tables
+for the same hours and reported roughly twice the table-time a venue has, under
+copy that already asserts "there's enough". It is now the union of coverage per
+table. This also fixes overlapping *pools*, which had the same defect before this
+ADR.
 
 **An event with no tables in its tournament still cannot be scheduled.** That is
 `PoolHasNoTables` doing its job, and it now fires against the event-wide

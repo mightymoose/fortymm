@@ -580,14 +580,24 @@ def _resolve_reason(
     of ``app.schedule_solves._resolve_reason`` (same union, same arms) taking the
     resolution maps directly rather than a ``SolveInputs``. Exhaustive with an
     ``assert_never`` floor: adding an :data:`~app.scheduling.InfeasibilityReason`
-    arm is a type error here until handled."""
+    arm is a type error here until handled.
+
+    Every reservation a preview can blame is a real **pool**: the builder draws
+    over the event's pools and drops an rr-then-ko draw's un-pooled knockout
+    (ADR 20260727, and the honest note that says so), so no event-wide
+    reservation is ever in a preview snapshot. Hence the literal ``"pool"`` — the
+    preview's resolutions carry no reservation kind to read, because there is
+    only one for them to carry."""
     match reason:
         case PoolHasNoTables():
-            return PoolHasNoTablesRead(pool_name=pool_resolutions[reason.pool_id].name)
+            return PoolHasNoTablesRead(
+                pool_name=pool_resolutions[reason.pool_id].name, reservation="pool"
+            )
         case WindowTooShortForMatch():
             pool = pool_resolutions[reason.pool_id]
             return WindowTooShortForMatchRead(
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 best_of=best_of[reason.fixture_id],
@@ -598,6 +608,7 @@ def _resolve_reason(
             pool = pool_resolutions[reason.pool_id]
             return PoolOverCapacityRead(
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 required_min=reason.required_min,
@@ -614,6 +625,7 @@ def _resolve_reason(
             return PlayerOverSubscribedRead(
                 player_name=placeholder_label(reason.player_id),
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 match_count=reason.match_count,
