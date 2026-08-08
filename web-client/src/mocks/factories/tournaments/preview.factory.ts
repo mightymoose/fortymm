@@ -107,7 +107,14 @@ export function buildPreviewEventBreakdown(
 export function buildPoolHasNoTablesRead(
   overrides: Partial<PoolHasNoTablesRead> = {},
 ): PoolHasNoTablesRead {
-  return { kind: 'pool_has_no_tables', pool_name: 'Pool A', ...overrides }
+  // A real pool by default (`reservation: 'pool'`) — the un-pooled case is the
+  // event-wide reservation, which a caller opts into with `reservation: 'event'`.
+  return {
+    kind: 'pool_has_no_tables',
+    pool_name: 'Pool A',
+    reservation: 'pool',
+    ...overrides,
+  }
 }
 
 /** A schedule preview's whole answer on the wire — by default a *fitting* day: an

@@ -228,6 +228,7 @@ from app.schemas.schedule_solve import (
     PlayerOverSubscribedRead,
     PoolHasNoTablesRead,
     PoolOverCapacityRead,
+    ReservationKind,
     ResolvedConflict,
     ResolvedReason,
     TableConflictRead,
@@ -527,15 +528,59 @@ async def latest_solve(
     return locked
 
 
+#: The suffix that spells an event's **event-wide reservation** in the solver's
+#: namespaced ``{event}:{pool}`` id space (ADR "a pool restricts scheduling, it
+#: does not enable it"): the synthetic ``SchedulePool`` an un-pooled fixture is
+#: placed in — the event's own ``slot`` for a window, the whole tournament
+#: catalogue for tables.
+#:
+#: It cannot collide with a real pool's key. A real key's suffix is
+#: ``str(pool.id)`` and ``Pool.id`` is typed ``uuid.UUID`` (server-minted since
+#: ADR 20260801), so every one of them is a UUID's canonical text — 32 hex
+#: digits and four hyphens, and nothing else. ``event-wide`` holds letters that
+#: are not hex digits, so no UUID can ever spell it.
+EVENT_WIDE_POOL_SUFFIX = "event-wide"
+
+
+def event_wide_pool_key(event_id: uuid.UUID) -> PoolId:
+    """The solver ``PoolId`` of ``event_id``'s event-wide reservation — the one
+    spelling of it, so the snapshot's ``SchedulePool``, the fixtures that name
+    it and the resolution maps keyed by it cannot drift apart."""
+    return PoolId(f"{event_id}:{EVENT_WIDE_POOL_SUFFIX}")
+
+
+def event_wide_pool_name(event_name: str) -> str:
+    """What a director reads when an infeasibility reason blames an event-wide
+    reservation (ADR: "the event-wide reservation needs a name a director can
+    read").
+
+    The event's own name plus the ADR's own phrase for what it reserves. Not the
+    bare event name: the no-tables copy reads "<name> has no tables assigned —
+    assign at least one table to <name>", and there is no surface that assigns a
+    table to an *event*, so a bare event name would send the director looking for
+    a control that does not exist. Naming the venue points them at the
+    tournament's table catalogue, which is the thing to fix."""
+    return f"{event_name} (whole venue)"
+
+
 @dataclass(frozen=True, slots=True)
 class _PoolResolution:
-    """The DB-side facts an infeasibility reason needs to name a pool a human
-    can act on: its display ``name`` and the ``HH:MM`` clock bounds of its
-    window (already strings on the pool's ``Slot`` — no minute→clock math)."""
+    """The DB-side facts an infeasibility reason needs to name a reservation a
+    human can act on: its display ``name``, the ``HH:MM`` clock bounds of its
+    window (already strings on the pool's ``Slot`` — no minute→clock math), and
+    which kind of ``reservation`` it is.
+
+    ``reservation`` is what stops a remedy naming a control that does not exist
+    (:data:`~app.schemas.schedule_solve.ReservationKind`): "add a table to" and
+    "a smaller pool" are pool verbs, and an event-wide reservation already holds
+    every table the tournament has. It is carried beside the name rather than
+    inferred from it — a display name is copy, and bending copy to carry a fact
+    is how the wrong remedy got rendered in the first place."""
 
     name: str
     window_start: str
     window_end: str
+    reservation: ReservationKind = "pool"
 
 
 @dataclass(frozen=True, slots=True)
@@ -796,6 +841,13 @@ async def _load_solver_inputs(
         )
         for event in drawn_events
     ]
+    # The event's own ``slot``, parsed once at this boundary with the model the
+    # write boundary validated it with (parse, don't validate). It is the window
+    # an event-wide reservation runs in, and — being a real solver input now —
+    # part of the fingerprint below.
+    event_slots: dict[uuid.UUID, Slot] = {
+        event.id: Slot.model_validate(event.slot) for event, _s, _p in parsed_events
+    }
 
     # Pool ids are per-event value-objects — two events may both hold a
     # "pool-a" — so the solver's PoolId is namespaced by the event id.
@@ -847,10 +899,43 @@ async def _load_solver_inputs(
                 window_start=pool.slot.start,
                 window_end=pool.slot.end,
             )
+        if any(fixture.pool_id is None for fixture in fixtures_by_event[event.id]):
+            # The event-wide reservation (ADR "a pool restricts scheduling, it
+            # does not enable it"): one synthetic pool for the event's un-pooled
+            # fixtures — a single-elim or swiss draw's whole field, an
+            # rr-then-ko draw's knockout stage. Its window is the event's own
+            # ``slot`` read in the event's zone; its tables are the whole
+            # tournament catalogue. No pool row exists or is minted — it lives
+            # only in this snapshot.
+            #
+            # Keyed on "the event HAS an un-pooled fixture", not on "an
+            # un-pooled fixture reached the snapshot": a knockout's fixtures
+            # arrive with their sides still TBD and gain them round by round, so
+            # the placeable-only rule would make the reservation (and with it
+            # ``base``, the minute frame's origin) appear and disappear under a
+            # running tournament. An event-wide reservation carrying no
+            # placeable fixture constrains nothing and can prove no cause — the
+            # pure module's per-pool arms all require unpinned demand.
+            event_wide_key = event_wide_pool_key(event.id)
+            event_slot = event_slots[event.id]
+            start, end = _slot_bounds(event_slot, event_tz)
+            pool_specs.append((event_wide_key, catalogue, start, end))
+            pool_dates[event_wide_key] = date.fromisoformat(event_slot.date)
+            pool_resolutions[event_wide_key] = _PoolResolution(
+                name=event_wide_pool_name(event.name),
+                window_start=event_slot.start,
+                window_end=event_slot.end,
+                # Not a pool: a reason blaming this one must not be answered with
+                # a pool remedy (add a table to it, make it smaller, widen its
+                # window). Its controls are the event's window and the
+                # tournament's table catalogue.
+                reservation="event",
+            )
 
-    # The minute frame's origin: the earliest pool window start. Everything —
-    # windows, pins, previous placements, ``now`` itself — is offset from it,
-    # and the apply converts back with the same base.
+    # The minute frame's origin: the earliest reservation window start — a
+    # pool's, or an event-wide one's. Everything — windows, pins, previous
+    # placements, ``now`` itself — is offset from it, and the apply converts
+    # back with the same base.
     base = min((start for _, _, start, _ in pool_specs), default=now)
 
     def to_min(moment: datetime) -> int:
@@ -878,17 +963,18 @@ async def _load_solver_inputs(
     broken_pin_voids: set[uuid.UUID] = set()
     for event, settings, _pools in parsed_events:
         for fixture in fixtures_by_event[event.id]:
-            if fixture.pool_id is None:
-                # Un-pooled (single-elim / swiss / a KO stage): no pool, no
-                # window — KO scheduling is a later layer (module docstring).
-                #
-                # For swiss this `continue` skips the ENTIRE event rather than a
-                # stage of it: a swiss draw is un-pooled end to end, so no
-                # fixture of one is ever given a SOLVED table or start and
-                # nothing in one is ever placed automatically. The only table
-                # and time a swiss fixture gets is one a director typed in
-                # (module docstring).
-                continue
+            # Which reservation restricts this fixture (ADR "a pool restricts
+            # scheduling, it does not enable it"). A pooled fixture takes its
+            # own pool's tables and window, exactly as it always has. An
+            # un-pooled one — a single-elim or swiss fixture, or an rr-then-ko
+            # draw's knockout stage — takes its event's event-wide reservation,
+            # built above; the branch is present for the event precisely because
+            # this fixture is, so the lookup is total.
+            pool_key = (
+                event_wide_pool_key(event.id)
+                if fixture.pool_id is None
+                else PoolId(f"{event.id}:{fixture.pool_id}")
+            )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it
                 # out (app.scheduling's contract).
@@ -934,7 +1020,7 @@ async def _load_solver_inputs(
                     start_min=to_min(fixture.scheduled_start),
                 )
             fixture_id = FixtureId(str(fixture.id))
-            # Only placeable (pooled, both-sides-known) fixtures reach here, and
+            # Only placeable (both-sides-known) fixtures reach here, and
             # only such a fixture can surface in a WindowTooShortForMatch reason
             # or a placement conflict — so this is exactly the set the apply
             # resolves best_of and matchup names for. Both entries are non-None
@@ -948,7 +1034,7 @@ async def _load_solver_inputs(
                 ScheduleFixture(
                     id=fixture_id,
                     event_id=EventId(str(event.id)),
-                    pool_id=PoolId(f"{event.id}:{fixture.pool_id}"),
+                    pool_id=pool_key,
                     # User-level ids, not entry ids: the no-double-booking and
                     # rest constraints hold across events, on humans.
                     player_a_id=PlayerId(str(entry_user[fixture.entry_a_id])),
@@ -1033,6 +1119,19 @@ async def _load_solver_inputs(
             {
                 "id": str(event.id),
                 "length_games": settings.length_games,
+                # The event's own window and zone: what an event-wide
+                # reservation is built from (ADR "a pool restricts scheduling,
+                # it does not enable it"), so an edit to either is input drift
+                # the apply must discard as stale. Written for EVERY event, not
+                # only the ones that have un-pooled fixtures: a payload whose
+                # *shape* varied with a fact would make that fact unhashed,
+                # which is the very drift this guard exists to catch.
+                "timezone": event.timezone,
+                "slot": {
+                    "date": event_slots[event.id].date,
+                    "start": event_slots[event.id].start,
+                    "end": event_slots[event.id].end,
+                },
                 "pools": [
                     {
                         # ``str``, because the fingerprint is canonical JSON and a
@@ -1121,13 +1220,16 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
     until it is handled."""
     match reason:
         case PoolHasNoTables():
+            no_tables_pool = inputs.pool_resolutions[reason.pool_id]
             return PoolHasNoTablesRead(
-                pool_name=inputs.pool_resolutions[reason.pool_id].name
+                pool_name=no_tables_pool.name,
+                reservation=no_tables_pool.reservation,
             )
         case WindowTooShortForMatch():
             pool = inputs.pool_resolutions[reason.pool_id]
             return WindowTooShortForMatchRead(
                 pool_name=pool.name,
+                reservation=pool.reservation,
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 best_of=inputs.fixture_best_of[reason.fixture_id],
@@ -1138,6 +1240,7 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             pool = inputs.pool_resolutions[reason.pool_id]
             return PoolOverCapacityRead(
                 pool_name=pool.name,
+                reservation=pool.reservation,
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 required_min=reason.required_min,
@@ -1153,6 +1256,7 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             return PlayerOverSubscribedRead(
                 player_name=inputs.player_names[reason.player_id],
                 pool_name=pool.name,
+                reservation=pool.reservation,
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 match_count=reason.match_count,

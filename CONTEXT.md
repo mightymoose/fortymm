@@ -472,6 +472,13 @@ longer be added, removed, or re-identified, because every **fixture** names the
 pool it belongs to — but a pool's venue attributes (its tables, its time window)
 and its display name stay editable mid-event, because the venue changes under a
 running tournament (a table breaks, a table frees up).
+A pool **restricts** scheduling rather than enabling it, and it restricts per
+**fixture** (ADR 20260807): a fixture that names a pool is placed on that pool's
+tables inside its window, while a fixture that names none is placed across the
+whole venue over its **event**'s window. A pool never confines a fixture that
+does not name it — a **knockout stage**'s fixtures take the event-wide
+reservation even though their event has pools, because those pools describe the
+**pool stage**.
 _Avoid_: group (a pool is not a grouping abstraction separate from the venue
 slice), division.
 
@@ -588,7 +595,8 @@ event's), first place.
 **Schedule**:
 Where and when a tournament's **matches** are played: the assignment of each
 **match** to a **table** and a **wall-clock time**, within the reserved window of its
-**pool** (or, for an un-pooled draw, its event). It is **tournament-scoped, not
+**pool** — or, for a fixture with no pool, within its **event**'s own window and on
+any table in the tournament (ADR 20260807). It is **tournament-scoped, not
 per-event** — the venue's tables are shared across events, so "two matches on one
 table at once" is a cross-event fact — which is why it is its own surface rather than
 a panel inside a single event's draw. A **placement** is written two ways that touch

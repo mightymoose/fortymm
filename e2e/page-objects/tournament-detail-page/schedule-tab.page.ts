@@ -40,6 +40,20 @@ export class ScheduleTabPage {
 
   // ----- the solve strip ------------------------------------------------------
 
+  /** The owner's **Run scheduler** button — the director's own way to ask for a solve,
+   * allowed in any tournament status from the moment an event has a cut draw. Hidden for
+   * a non-owner (ADR-0015), and disabled only while a run is already in flight. */
+  get runScheduler(): Locator {
+    return this.page.getByTestId('run-scheduler')
+  }
+
+  /** The refusal a rejected run raises inline — e.g. the designed `no_drawn_events` 422
+   * for running the scheduler before any draw is cut. Asserted *absent* by a spec whose
+   * run must have been accepted. */
+  get runSchedulerNotice(): Locator {
+    return this.page.getByTestId('run-scheduler-notice')
+  }
+
   /** The strip's `succeeded` state — the solver ran and its plan was applied.
    * Its text carries the verdict vocabulary (`VERDICT_LABEL`): "Best possible
    * plan" (OPTIMAL) or "Good plan, found under the time cap" (FEASIBLE). */

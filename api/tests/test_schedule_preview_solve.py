@@ -570,6 +570,10 @@ async def test_preview_solve_infeasible_resolves_its_reasons(
     assert reason.pool_name == "Pool A"
     assert reason.window_start == "09:00"
     assert reason.best_of == 5
+    # A preview schedules pooled fixtures only — it drops an rr-then-ko draw's
+    # un-pooled knockout — so the reservation it blames is always a real pool,
+    # and the remedy the client offers may name a pool control.
+    assert reason.reservation == "pool"
 
 
 async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
@@ -619,6 +623,7 @@ async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
     assert first.match_count == 3
     assert first.required_min == 125  # 3 * 35 + 2 * REST_MIN
     assert first.window_span_min == 120
+    assert first.reservation == "pool"
 
 
 async def test_preview_solve_past_dated_window_resolves_past_window(

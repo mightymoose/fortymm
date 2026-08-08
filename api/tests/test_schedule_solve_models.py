@@ -40,6 +40,10 @@ from app.models import (
     TournamentStatus,
     VenueTable,
 )
+from app.schemas.schedule_solve import (
+    PoolHasNoTablesRead,
+    parse_infeasibility_reasons,
+)
 from app.schemas.tournament import ScheduleSolveRead
 from tests._helpers import event_pools, make_user, venue_tables
 
@@ -316,3 +320,17 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
     assert fresh.pinned_at == called_at
     assert fresh.pinned_at is not None and fresh.pinned_at.tzinfo is not None
     assert fresh.call_notified_count == 2
+
+
+def test_a_reason_stored_before_the_discriminator_reads_as_a_pool() -> None:
+    """The ledger's ``infeasibility_reasons`` is JSONB written at apply, so rows
+    recorded before a reason carried ``reservation`` are still on disk and are
+    read back by this same parser. ``"pool"`` is the true value for every one of
+    them: until the event-wide reservation existed the only thing a reason could
+    blame was a pool row (ADR 20260807)."""
+    (reason,) = parse_infeasibility_reasons(
+        [{"kind": "pool_has_no_tables", "pool_name": "Pool A"}]
+    )
+    assert isinstance(reason, PoolHasNoTablesRead)
+    assert reason.pool_name == "Pool A"
+    assert reason.reservation == "pool"

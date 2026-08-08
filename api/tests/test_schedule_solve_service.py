@@ -26,9 +26,12 @@ load-bearing and the green above isn't scheduler luck.
 import asyncio
 import threading
 import uuid
-from collections.abc import Callable
+from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from itertools import combinations
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import fakeredis
@@ -63,8 +66,8 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventDrawSettings,
     TournamentEventPool,
+    TournamentEventPoolTable,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -79,6 +82,8 @@ from app.schedule_solves import (
 )
 from app.scheduling import (
     REST_MIN,
+    InfeasibilityReason,
+    PastWindow,
     PlacedFixture,
     PlayerId,
     PlayerOverSubscribed,
@@ -89,9 +94,11 @@ from app.scheduling import (
     SolveResult,
     SolveStats,
     Verdict,
+    WindowTooShortForMatch,
 )
 from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
+    NoSingleCauseRead,
     PastWindowReasonRead,
     PlayerConflictRead,
     PlayerOverSubscribedRead,
@@ -104,6 +111,7 @@ from app.schemas.schedule_solve import (
 from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_draws import cut_draw
 from tests._helpers import (
+    event_draw_settings,
     event_pools,
     hijack_solve,
     make_user,
@@ -147,13 +155,36 @@ async def _make_tournament(
     window: tuple[str, str] = ("09:00", "17:00"),
     length_games: int = 3,
     slot_date: str = DATE,
+    draw_type: DrawType = DrawType.round_robin,
+    qualifiers_per_pool: int | None = None,
+    pools: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """A published tournament with a table catalogue, one pooled round-robin
-    event whose single pool spans every table, ``entrants`` entered players,
-    and a cut draw. Written straight to the database — nothing here is about
-    the create routes. Returns ``(tournament_id, event_id)`` as plain ids: the
-    tests expire the session after the job runs, and an expired ORM instance's
-    attribute access would try a sync lazy-load (``MissingGreenlet``)."""
+    """A published tournament with a table catalogue, one event of ``draw_type``,
+    ``entrants`` entered players, and a cut draw. Written straight to the
+    database — nothing here is about the create routes. Returns
+    ``(tournament_id, event_id)`` as plain ids: the tests expire the session
+    after the job runs, and an expired ORM instance's attribute access would try
+    a sync lazy-load (``MissingGreenlet``).
+
+    ``pools`` is the event's pools in the ``{name, slot, table_ids}`` dict shape
+    ``tests._helpers.event_pools`` speaks, naming tables by the positional
+    aliases (``"t1"``, ``"t2"``, …) of this tournament's own catalogue. Left out,
+    the event gets one pool spanning every table for the whole event window,
+    which is what most of this module's tests want.
+
+    ``qualifiers_per_pool`` is the one setting ``rr-then-ko`` carries — how many
+    of each pool's finishers reach the bracket. It goes through the same parse
+    the request boundary uses (``tests._helpers.event_draw_settings``), so a
+    count named for a draw type that has none reds here instead of writing a row
+    the app could not have made.
+
+    Passing ``pools=[]`` is the un-pooled event the event-wide reservation exists
+    for (ADR "a pool restricts scheduling, it does not enable it"): no pool row,
+    so every fixture's ``pool_id`` is NULL. It is spelled that way at the call
+    site, rather than hidden behind a named variant helper, because in those
+    tests the absent pool is the whole subject — an explicit empty list says so
+    louder than a helper name does.
+    """
     owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
@@ -179,26 +210,30 @@ async def _make_tournament(
     db.add(tournament)
     await db.flush()
 
+    pool_specs: Sequence[Mapping[str, Any]] = (
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": slot_date, "start": window[0], "end": window[1]},
+                "table_ids": [str(row.id) for row in catalogue],
+            }
+        ]
+        if pools is None
+        else pools
+    )
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        draw_settings=event_draw_settings(
+            draw_type, qualifiers_per_pool=qualifiers_per_pool
+        ),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
         slot={"date": slot_date, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": length_games},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": slot_date, "start": window[0], "end": window[1]},
-                    "table_ids": [str(row.id) for row in catalogue],
-                }
-            ],
-            tournament=tournament,
-        ),
+        pools=event_pools(pool_specs, tournament=tournament),
     )
     db.add(event)
     await db.flush()
@@ -1370,9 +1405,13 @@ class TestSolveJob:
         assert isinstance(no_tables, PoolHasNoTablesRead)
         # The DISPLAY name, never the namespaced ``{event_id}:pool-a`` id.
         assert no_tables.pool_name == "Pool A"
+        # Blamed reservation: a real pool, so a remedy may name a pool control
+        # ("add a table to Pool A"). It survives the JSONB round-trip.
+        assert no_tables.reservation == "pool"
 
         assert isinstance(over_capacity, PoolOverCapacityRead)
         assert over_capacity.pool_name == "Pool A"
+        assert over_capacity.reservation == "pool"
         assert over_capacity.window_start == "09:00"
         assert over_capacity.window_end == "17:00"
         assert over_capacity.required_min == 600
@@ -1447,6 +1486,7 @@ class TestSolveJob:
         assert reason.match_count == 3
         assert reason.required_min == 95
         assert reason.window_span_min == 60
+        assert reason.reservation == "pool"
 
     async def test_succeeded_apply_leaves_infeasibility_reasons_null(
         self, db_session: AsyncSession, solver_queue: Queue
@@ -1863,3 +1903,333 @@ class TestCalledMatchSlides:
         assert ledger.status is ScheduleSolveStatus.succeeded
         assert ledger.fixtures_placed == 0  # nothing moved
         assert ledger.fixtures_pinned == 1  # the verbatim echo
+
+
+async def _make_two_pool_tournament(
+    db: AsyncSession,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """A round-robin event with **two pools that genuinely restrict**: Pool A on
+    table 1 in the morning, Pool B on table 2 in the afternoon, inside an event
+    window that spans both. The regression bed for "a pool still confines its
+    fixtures" — an event whose single pool spans every table and the whole day
+    (``_make_tournament``'s default pool) could not tell a confined solve from an
+    unconfined one.
+
+    The event window is left at the default whole day deliberately: an event-wide
+    reservation — if one wrongly claimed these fixtures — would look feasible on
+    any table at any hour. That is what makes the pool assertions able to fail.
+
+    Kept as its own name rather than inlined into the one test that seeds it: the
+    test reads its expectations back out of the pool ROWS, so a pool literal
+    sitting beside those reads would look like a round-trip worth deleting."""
+    return await _make_tournament(
+        db,
+        entrants=6,
+        pools=[
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": "09:00", "end": "12:00"},
+                "table_ids": ["t1"],
+            },
+            {
+                "name": "Pool B",
+                "slot": {"date": DATE, "start": "13:00", "end": "17:00"},
+                "table_ids": ["t2"],
+            },
+        ],
+    )
+
+
+class TestEventWideReservation:
+    """A fixture with no pool is placed over its event's whole timeline (ADR "a
+    pool restricts scheduling, it does not enable it"): the event's own ``slot``
+    for a window, every table in the tournament for tables. The snapshot builder
+    synthesizes one such reservation per event that has un-pooled fixtures —
+    nothing is written, no pool row exists, and ``app.scheduling`` is untouched.
+
+    These probe ``_load_solver_inputs`` and run the real solver over what it
+    built, because the claim is about the snapshot the pure module receives."""
+
+    async def test_a_bracket_is_placed_on_the_tournaments_tables_in_its_window(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The headline: a single-elim event's first round gets a table and a
+        time, where before this it got nothing at all. Every placement lands on
+        a table of the tournament's own catalogue, inside the event's window,
+        and two matches never share a table at the same moment."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, draw_type=DrawType.single_elim, pools=[]
+        )
+        catalogue = await table_ids_of(db_session, tournament_id)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        result = scheduling.solve(inputs.snapshot)
+
+        assert result.verdict in (Verdict.optimal, Verdict.feasible)
+        # Both round-1 fixtures of a 4-entrant bracket, placed.
+        fixtures = await _fixtures_of(db_session, event_id)
+        round_one = {str(f.id) for f in fixtures if f.round == 1}
+        assert len(round_one) == 2
+        assert {p.fixture_id for p in result.placements} == round_one
+
+        window_start = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
+        window_end = datetime(2030, 1, 1, 17, 0, tzinfo=VENUE_TZ)
+        for placement in result.placements:
+            assert placement.table_id in catalogue
+            start = inputs.base + timedelta(minutes=placement.start_min)
+            end = inputs.base + timedelta(minutes=placement.end_min)
+            assert window_start <= start
+            assert end <= window_end
+        # "A table at a time": two matches on one table never overlap.
+        for first, second in combinations(result.placements, 2):
+            if first.table_id != second.table_id:
+                continue
+            assert (
+                first.end_min <= second.start_min or second.end_min <= first.start_min
+            )
+
+    async def test_a_pool_still_confines_its_fixtures_to_its_tables_and_window(
+        self, db_session: AsyncSession
+    ) -> None:
+        """THE regression the design rests on: a pooled fixture is placed on its
+        **own pool's** tables inside its **own pool's** window — never on the
+        event-wide reservation's, which here spans both tables and the whole day.
+
+        The expectations come from the pool ROWS, not from the snapshot's own
+        fixture→pool link: a builder that handed these fixtures the event-wide
+        reservation would still satisfy "placed inside the pool it was given",
+        so that assertion would pass while the confinement was gone."""
+        tournament_id, event_id = await _make_two_pool_tournament(db_session)
+
+        pool_rows = (
+            await db_session.execute(
+                select(
+                    TournamentEventPool.id,
+                    TournamentEventPool.slot_start,
+                    TournamentEventPool.slot_end,
+                ).where(TournamentEventPool.event_id == event_id)
+            )
+        ).all()
+        assert len(pool_rows) == 2
+        pool_windows = {
+            pool_id: (
+                datetime.combine(date.fromisoformat(DATE), start, tzinfo=VENUE_TZ),
+                datetime.combine(date.fromisoformat(DATE), end, tzinfo=VENUE_TZ),
+            )
+            for pool_id, start, end in pool_rows
+        }
+        pool_tables: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
+        for pool_id, table_id in (
+            await db_session.execute(
+                select(
+                    TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id
+                ).where(TournamentEventPoolTable.event_id == event_id)
+            )
+        ).all():
+            pool_tables[pool_id].add(str(table_id))
+        assert [len(tables) for tables in pool_tables.values()] == [1, 1]
+
+        fixture_pool = {
+            str(fixture.id): fixture.pool_id
+            for fixture in await _fixtures_of(db_session, event_id)
+        }
+        assert all(pool_id is not None for pool_id in fixture_pool.values())
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        result = scheduling.solve(inputs.snapshot)
+
+        assert result.verdict in (Verdict.optimal, Verdict.feasible)
+        assert len(result.placements) == len(fixture_pool)
+        for placement in result.placements:
+            pool_id = fixture_pool[placement.fixture_id]
+            assert pool_id is not None
+            assert placement.table_id in pool_tables[pool_id]
+            window_start, window_end = pool_windows[pool_id]
+            assert window_start <= inputs.base + timedelta(minutes=placement.start_min)
+            assert inputs.base + timedelta(minutes=placement.end_min) <= window_end
+
+    async def test_a_tournament_with_no_tables_blames_the_reservation_by_name(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A bracket at a venue with no tables is infeasible for the reason it
+        always was — ``PoolHasNoTables`` — now fired against the event-wide
+        reservation, and resolved to something a director can read rather than
+        to the namespaced solver id."""
+        tournament_id, _event_id = await _make_tournament(
+            db_session, draw_type=DrawType.single_elim, pools=[], tables=()
+        )
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        result = scheduling.solve(inputs.snapshot)
+
+        assert result.verdict is Verdict.infeasible
+        (reason,) = [r for r in result.reasons if isinstance(r, PoolHasNoTables)]
+        resolved = schedule_solves._resolve_reason(reason, inputs)
+        assert isinstance(resolved, PoolHasNoTablesRead)
+        # The event a director knows, plus what is actually reserved. Not the
+        # namespaced id, and not the bare event name (which would send them
+        # looking for a table control an event does not have).
+        assert resolved.pool_name == "Open Singles (whole venue)"
+        assert str(reason.pool_id) not in resolved.pool_name
+
+    async def test_a_past_event_window_resolves_to_its_venue_local_date(
+        self, db_session: AsyncSession
+    ) -> None:
+        """``pool_dates`` carries the event-wide reservation too: a pre-live
+        bracket dated in the past is named by the DAY to move (ADR "a past day is
+        named"), which is a ``KeyError`` at exactly the wrong moment if the
+        synthesized reservation is missing from that map."""
+        tournament_id, _event_id = await _make_tournament(
+            db_session,
+            draw_type=DrawType.single_elim,
+            pools=[],
+            slot_date="2020-01-01",
+        )
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session,
+            tournament_id,
+            now=datetime(2020, 1, 2, 9, 0, tzinfo=VENUE_TZ),
+            lock=False,
+        )
+        assert inputs is not None
+        result = scheduling.solve(inputs.snapshot)
+
+        assert result.verdict is Verdict.infeasible
+        (reason,) = [r for r in result.reasons if isinstance(r, PastWindow)]
+        resolved = schedule_solves._resolve_reason(reason, inputs)
+        assert isinstance(resolved, PastWindowReasonRead)
+        assert resolved.date == date(2020, 1, 1)
+
+    async def test_a_reason_says_which_kind_of_reservation_it_blames(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Every reason that names a reservation says whether that reservation is
+        a **pool** or the **event-wide** one, so a client can offer a remedy that
+        names a control the director actually has.
+
+        Without it the pool-shaped copy is offered against a reservation that is
+        not a pool: "add a table to Open Singles (whole venue)", which already
+        holds every table there is, or "give P fewer matches in Open Singles
+        (whole venue) — a smaller pool", which names a pool the event does not
+        have. The name alone cannot carry that distinction, and bending the name
+        to fit the sentence is what produced the problem.
+
+        All four named arms are checked against the event-wide reservation
+        (:class:`~app.scheduling.NoSingleCause` names none, and
+        :class:`~app.scheduling.PastWindow` names only a date). The reasons are
+        built by hand: their *resolution* is what is under test, and a real solve
+        can only be made to prove one arm at a time."""
+        tournament_id, event_id = await _make_tournament(
+            db_session, draw_type=DrawType.single_elim, pools=[]
+        )
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        key = schedule_solves.event_wide_pool_key(event_id)
+        fixture = inputs.snapshot.fixtures[0]
+        reasons: tuple[InfeasibilityReason, ...] = (
+            PoolHasNoTables(pool_id=key),
+            WindowTooShortForMatch(
+                pool_id=key,
+                fixture_id=fixture.id,
+                needed_min=25,
+                window_span_min=10,
+            ),
+            PoolOverCapacity(
+                pool_id=key, required_min=600, capacity_min=480, table_count=2
+            ),
+            PlayerOverSubscribed(
+                pool_id=key,
+                player_id=fixture.player_a_id,
+                match_count=3,
+                required_min=95,
+                window_span_min=60,
+            ),
+        )
+
+        for reason in reasons:
+            resolved = schedule_solves._resolve_reason(reason, inputs)
+            # The two arms that name no reservation are not in this tuple.
+            assert not isinstance(
+                resolved, (NoSingleCauseRead, PastWindowReasonRead)
+            ), resolved
+            assert resolved.reservation == "event"
+            assert resolved.pool_name == "Open Singles (whole venue)"
+
+    async def test_an_rr_then_ko_event_counts_its_venue_once(
+        self, db_session: AsyncSession
+    ) -> None:
+        """An rr-then-ko event carries BOTH reservations at once — a real pool
+        for its group stage, the event-wide one for its bracket — and they cover
+        the same two tables over the same eight hours.
+
+        The day aggregate behind ``no_single_cause`` is director-facing: it
+        renders as "there's enough total table-time (about Nh available)", beside
+        copy that already asserts the room exists. Summing the reservations would
+        report 32 table-hours at a venue that has 16, making a confident claim
+        more wrong. Two tables, 09:00 to 17:00: 960 table-minutes."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            entrants=6,
+            draw_type=DrawType.rr_then_ko,
+            qualifiers_per_pool=2,
+        )
+
+        fixtures = await _fixtures_of(db_session, event_id)
+        # The shape the double-count needs: a pooled group stage and an un-pooled
+        # bracket in one event. Asserted from the fixture rows, so this reds if a
+        # later change stops the draw leaving its knockout un-pooled.
+        assert any(fixture.pool_id is not None for fixture in fixtures)
+        assert any(fixture.pool_id is None for fixture in fixtures)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        pool_key = await _solver_pool_id(db_session, event_id)
+        event_wide_key = schedule_solves.event_wide_pool_key(event_id)
+        by_id = {pool.id: pool for pool in inputs.snapshot.pools}
+        assert set(by_id) == {pool_key, event_wide_key}
+        # They overlap wholesale — same tables, same window — which is why one
+        # venue must not be counted twice.
+        assert set(by_id[pool_key].table_ids) == set(by_id[event_wide_key].table_ids)
+        assert by_id[pool_key].window == by_id[event_wide_key].window
+
+        _required_min, available_min = scheduling._aggregate_capacity(inputs.snapshot)
+        assert available_min == 2 * 8 * 60
+
+    async def test_a_fixture_with_a_side_still_unknown_stays_unplaced(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The TBD guard is what lets a knockout fill in round by round: a
+        4-entrant bracket's final has no sides yet, so it is left out of the
+        snapshot — while its two feeders, which do have sides, are in it. (A
+        test that only asserted the final's absence would pass against a build
+        that skipped the whole event, which is the state before this slice.)"""
+        tournament_id, event_id = await _make_tournament(
+            db_session, draw_type=DrawType.single_elim, pools=[]
+        )
+        fixtures = await _fixtures_of(db_session, event_id)
+        final = next(f for f in fixtures if f.round == 2)
+        assert final.entry_a_id is None and final.entry_b_id is None
+        round_one = {str(f.id) for f in fixtures if f.round == 1}
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+
+        assert inputs is not None
+        snapshot_ids = {fixture.id for fixture in inputs.snapshot.fixtures}
+        assert str(final.id) not in snapshot_ids
+        assert round_one <= snapshot_ids

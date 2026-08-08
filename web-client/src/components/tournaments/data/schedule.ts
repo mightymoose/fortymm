@@ -66,8 +66,24 @@ export interface ScheduleMatch {
   /** The window whose **date** the placement is fixed to: the fixture's pool Slot, or the
    * event Slot when the fixture is un-pooled (ADR-0790). The time picker chooses within it. */
   window: Slot
-  /** The tables the fixture's pool reserves — the natural suggestion for a placement
-   * (empty for an un-pooled fixture, whose whole venue is fair game). */
+  /** **Which reservation** the two fields above came from (ADR 20260807, "a pool restricts
+   * scheduling, it does not enable it"):
+   *
+   * - `pool` — the fixture names a pool, so its window and its tables are that pool's. A
+   *   pool RESTRICTS: it is a strict slice of the venue, and naming it is information.
+   * - `event` — the fixture names no pool (a bracket, a swiss round, a knockout stage), so
+   *   it is scheduled against the **event's own window** over **every table in the
+   *   tournament**. That is not "no reservation": it is the event-wide one.
+   *
+   * Carried rather than re-derived from `poolId` downstream so a reader states the source
+   * once, in the words the ADR uses. */
+  reservation: 'pool' | 'event'
+  /** The tables the fixture's reservation covers — the natural suggestion for a placement:
+   * a pooled fixture's pool tables, and an un-pooled fixture's whole tournament (ADR
+   * 20260807). An un-pooled fixture is therefore offered a suggestion whenever the
+   * tournament has any table at all. A **pooled** one can still be empty, because a pool
+   * that reserves no tables is a real (and infeasible) state — the server's own
+   * `PoolHasNoTables`. */
   suggestedTableIds: string[]
   /** Whether the placement can still be changed. `false` once the match is
    * `completed`/`voided` — its placement is frozen server-side, so the control is hidden
@@ -138,6 +154,11 @@ function toScheduleMatch(
   event: TournamentEvent,
   byId: Map<string, Entrant>,
   poolById: Map<string, TournamentEvent['pools'][number]>,
+  /** Every table the TOURNAMENT reserves — the event-wide reservation an un-pooled
+   * fixture is scheduled against (ADR 20260807). The tournament's own `tableIds`, not
+   * the catalogue passed to `buildSchedule`: the catalogue is what a placement is
+   * *resolved* through, the tournament's ids are what it may be placed *on*. */
+  tournamentTableIds: string[],
 ): ScheduleMatch {
   const pool = fixture.poolId !== null ? (poolById.get(fixture.poolId) ?? null) : null
   return {
@@ -152,7 +173,13 @@ function toScheduleMatch(
     // The pool fixes the date the placement falls on; an un-pooled fixture inherits the
     // event's own Slot (ADR-0790).
     window: pool?.slot ?? event.slot,
-    suggestedTableIds: pool?.tableIds ?? [],
+    reservation: pool ? 'pool' : 'event',
+    // A pool RESTRICTS scheduling, it does not enable it (ADR 20260807): a pooled
+    // fixture is suggested its pool's slice of the venue, and an un-pooled one the
+    // whole tournament — the reservation it is actually scheduled against. An empty
+    // list here would offer a bracket, a swiss round and a knockout stage no
+    // suggestion at all, which is what it used to do.
+    suggestedTableIds: pool?.tableIds ?? tournamentTableIds,
     placeable:
       fixture.matchStatus === null || !FROZEN_STATUSES.has(fixture.matchStatus),
     tier: fixtureTier(fixture),
@@ -198,7 +225,9 @@ export function buildSchedule(
     const byId = new Map(event.entrants.map((e) => [e.id, e]))
     const poolById = new Map(event.pools.map((p) => [p.id, p]))
     for (const fixture of event.fixtures) {
-      matches.push(toScheduleMatch(fixture, event, byId, poolById))
+      matches.push(
+        toScheduleMatch(fixture, event, byId, poolById, tournament.tableIds),
+      )
     }
   }
 
