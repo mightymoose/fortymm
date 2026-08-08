@@ -1134,10 +1134,9 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       "a pool restricts scheduling, it does not enable it"). A director previewing a
       bracket's schedule must be told it is the *draw type* that cannot be previewed,
       not left with the generic sentence, which says the event's own state is at fault
-      and would
-      send them hunting through pools and entrants that are perfectly fine. (The
-      sentence composed below still names the pre-ADR reason: a later slice of #1228
-      revisits how the preview refuses, and rewrites that copy with it.)
+      and would send them hunting through pools and entrants that are perfectly fine.
+      (The sentence composed below still names the pre-ADR reason: a later slice of
+      #1228 revisits how the preview refuses, and rewrites that copy with it.)
     * The fallback arm is a **generic** sentence, never the exception's own. A
       ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
       message nobody wrote for a human — refusing vaguely is a bug report; leaking

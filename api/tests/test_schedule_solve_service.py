@@ -162,7 +162,9 @@ async def _make_tournament(
     slot_date: str = DATE,
     draw_type: DrawType = DrawType.round_robin,
     qualifiers_per_pool: int | None = None,
+    rounds: int | None = None,
     pools: Sequence[Mapping[str, Any]] | None = None,
+    materialize: bool = False,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """A published tournament with a table catalogue, one event of ``draw_type``,
     ``entrants`` entered players, and a cut draw. Written straight to the
@@ -178,10 +180,15 @@ async def _make_tournament(
     which is what most of this module's tests want.
 
     ``qualifiers_per_pool`` is the one setting ``rr-then-ko`` carries — how many
-    of each pool's finishers reach the bracket. It goes through the same parse
-    the request boundary uses (``tests._helpers.event_draw_settings``), so a
-    count named for a draw type that has none reds here instead of writing a row
-    the app could not have made.
+    of each pool's finishers reach the bracket — and ``rounds`` is the one
+    ``swiss`` carries. Both go through the same parse the request boundary uses
+    (``tests._helpers.event_draw_settings``), so a setting named for a draw type
+    that has none reds here instead of writing a row the app could not have made.
+
+    ``materialize`` runs the cut draw's ready fixtures into matches, as go-live
+    does. A test wants it when what it is about happens *after* a result: a
+    fixture with no match can never complete, and a draw seeded from results
+    (``rr-then-ko``) can never advance past its first stage without one.
 
     Passing ``pools=[]`` is the un-pooled event the event-wide reservation exists
     for (ADR "a pool restricts scheduling, it does not enable it"): no pool row,
@@ -231,7 +238,7 @@ async def _make_tournament(
         name="Open Singles",
         format=EventFormat.singles,
         draw_settings=event_draw_settings(
-            draw_type, qualifiers_per_pool=qualifiers_per_pool
+            draw_type, qualifiers_per_pool=qualifiers_per_pool, rounds=rounds
         ),
         max_players=None,
         entry_fee=Decimal("0.00"),
@@ -249,6 +256,8 @@ async def _make_tournament(
     await db.flush()
 
     await cut_draw(db, event)
+    if materialize:
+        await materialize_event(db, tournament, event)
     await db.commit()
     return tournament.id, event.id
 
@@ -2259,53 +2268,7 @@ async def _make_swiss_tournament(db: AsyncSession) -> tuple[uuid.UUID, uuid.UUID
     Returns ``(tournament_id, event_id)`` as plain ids, for the reason
     ``_make_tournament`` does.
     """
-    owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
-    league = await get_default_league(db)
-    assert league is not None, "the autouse default_league fixture seeds this"
-
-    tournament = Tournament(
-        name="Swiss Open",
-        status=TournamentStatus.published,
-        address={
-            "venue": "Berkeley TT Club",
-            "street": "1 Shattuck Ave",
-            "city": "Berkeley",
-            "region": "CA",
-            "postal": "94704",
-            "country": "USA",
-            "latitude": 37.8703,
-            "longitude": -122.2731,
-        },
-        tables=venue_tables(("T1", "Main"), ("T2", "Main")),
-        league_id=league.id,
-        created_by_user_id=owner.id,
-    )
-    db.add(tournament)
-    await db.flush()
-
-    event = TournamentEvent(
-        tournament_id=tournament.id,
-        name="Open Swiss",
-        format=EventFormat.singles,
-        draw_settings=event_draw_settings(DrawType.swiss, rounds=2),
-        max_players=None,
-        entry_fee=Decimal("0.00"),
-        timezone="America/Chicago",
-        slot={"date": DATE, "start": "09:00", "end": "17:00"},
-        match_settings={"rated": False, "length_games": 3},
-        pools=[],
-    )
-    db.add(event)
-    await db.flush()
-
-    for _ in range(4):
-        player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
-        db.add(TournamentEntry(event_id=event.id, user_id=player.id))
-    await db.flush()
-
-    await cut_draw(db, event)
-    await db.commit()
-    return tournament.id, event.id
+    return await _make_tournament(db, draw_type=DrawType.swiss, pools=[], rounds=2)
 
 
 async def _make_pools_then_knockout_tournament(
@@ -2313,14 +2276,27 @@ async def _make_pools_then_knockout_tournament(
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """A tournament whose one event is **round-robin-then-knockout**: two pools of
     three that genuinely restrict — Pool A on table 1 in the morning, Pool B on
-    table 2 in the afternoon — and a knockout stage of four qualifiers (two semis
+    table 1 in the afternoon — and a knockout stage of four qualifiers (two semis
     and a final) that belongs to no pool at all.
 
-    The event window spans both pool windows and then some (``09:00``-``19:00``),
-    so a knockout fixture placed over the event-wide reservation has somewhere to
-    go that neither pool would allow, and a pool fixture wrongly given that
-    reservation would still look feasible — which is what makes both halves of
-    the confinement claim falsifiable.
+    The geometry is contrived, deliberately, so that a knockout **wrongly confined
+    to a pool** is distinguishable from one placed over the event-wide
+    reservation. Both halves of that confinement are ruled out by a fact the
+    solver is forced to produce, because the objective's top tier is makespan:
+
+    * **The event opens at 08:00, an hour before the first pool does.** Once the
+      pools are decided they leave the model, so the two semis are the whole of
+      it, and the earliest finish puts them in that opening hour — a time **no
+      pool's window covers**.
+    * **Table 2 is reserved by no pool**, since both pools share table 1. The two
+      semis have four distinct players, so the earliest finish plays them in
+      parallel, one table each — which puts one of them on a table **no pool
+      holds**.
+
+    Both facts also arm the other half of the claim, the one about *pooled*
+    fixtures: a pool fixture handed the event-wide reservation would be free to
+    take the idle second table, or the hour before its pool opens, and
+    :func:`_assert_confined_to_its_pool` reads exactly that.
 
     Its pool fixtures are **materialized into matches** before the return, as
     go-live does, because the knockout is seeded from *results*: a pool's
@@ -2328,68 +2304,30 @@ async def _make_pools_then_knockout_tournament(
     with no match can never complete. Nothing is played here — that is the test's
     own second act.
     """
-    owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
-    league = await get_default_league(db)
-    assert league is not None, "the autouse default_league fixture seeds this"
-
-    tournament = Tournament(
-        name="Pools Then Bracket Open",
-        status=TournamentStatus.published,
-        address={
-            "venue": "Berkeley TT Club",
-            "street": "1 Shattuck Ave",
-            "city": "Berkeley",
-            "region": "CA",
-            "postal": "94704",
-            "country": "USA",
-            "latitude": 37.8703,
-            "longitude": -122.2731,
-        },
-        tables=venue_tables(("T1", "Main"), ("T2", "Main")),
-        league_id=league.id,
-        created_by_user_id=owner.id,
+    return await _make_tournament(
+        db,
+        entrants=6,
+        # Spelled out rather than left to the default, because the docstring's
+        # geometry is about *this* catalogue: "table 2 is reserved by no pool"
+        # stops being a local fact if the default ever grows a third table.
+        tables=("t1", "t2"),
+        window=("08:00", "19:00"),
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+        pools=[
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": "09:00", "end": "13:00"},
+                "table_ids": ["t1"],
+            },
+            {
+                "name": "Pool B",
+                "slot": {"date": DATE, "start": "14:00", "end": "18:00"},
+                "table_ids": ["t1"],
+            },
+        ],
+        materialize=True,
     )
-    db.add(tournament)
-    await db.flush()
-
-    event = TournamentEvent(
-        tournament_id=tournament.id,
-        name="Open Pools Then Bracket",
-        format=EventFormat.singles,
-        draw_settings=event_draw_settings(DrawType.rr_then_ko, qualifiers_per_pool=2),
-        max_players=None,
-        entry_fee=Decimal("0.00"),
-        timezone="America/Chicago",
-        slot={"date": DATE, "start": "09:00", "end": "19:00"},
-        match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": "09:00", "end": "13:00"},
-                    "table_ids": ["t1"],
-                },
-                {
-                    "name": "Pool B",
-                    "slot": {"date": DATE, "start": "14:00", "end": "18:00"},
-                    "table_ids": ["t2"],
-                },
-            ],
-            tournament=tournament,
-        ),
-    )
-    db.add(event)
-    await db.flush()
-
-    for _ in range(6):
-        player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
-        db.add(TournamentEntry(event_id=event.id, user_id=player.id))
-    await db.flush()
-
-    await cut_draw(db, event)
-    await materialize_event(db, tournament, event)
-    await db.commit()
-    return tournament.id, event.id
 
 
 async def _pool_reservations(
@@ -2447,6 +2385,37 @@ def _assert_confined_to_its_pool(
         fixture.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
         <= window_end
     )
+
+
+def _assert_no_pool_would_have_allowed_it(
+    fixture: TournamentFixture,
+    reservations: dict[uuid.UUID, tuple[datetime, datetime, set[str]]],
+) -> None:
+    """An un-pooled fixture is placed where **no pool of its event would have
+    allowed it** — the discriminating half of "a knockout does not inherit its
+    event's pool windows" (ADR "a pool restricts scheduling, it does not enable
+    it").
+
+    "Inside the event window, on a catalogue table" cannot say this on its own:
+    the event window contains every pool window and the catalogue contains every
+    pool's tables, so a fixture wrongly confined to a pool satisfies both. This
+    asks the opposite question of each pool in turn — could this placement have
+    come out of *your* reservation? — and every answer must be no.
+    ``_make_pools_then_knockout_tournament``'s geometry is what makes that
+    answerable: see its docstring."""
+    assert fixture.table_id is not None
+    assert fixture.scheduled_start is not None
+    end = fixture.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
+    for pool_id, (window_start, window_end, tables) in reservations.items():
+        assert not (
+            fixture.table_id in tables
+            and window_start <= fixture.scheduled_start
+            and end <= window_end
+        ), (
+            f"placed on {fixture.table_id} at {fixture.scheduled_start}, which pool "
+            f"{pool_id} would have allowed — the event-wide reservation is not "
+            "distinguishable from that pool's here"
+        )
 
 
 async def _score_and_complete(
@@ -2604,9 +2573,13 @@ class TestUnPooledDrawShapes:
         so both states are asserted, on the persisted rows, either side of the
         completions.
 
-        The pools stay confined to their own tables and windows throughout — the
-        event-wide reservation spans both tables and a longer day, so a builder
-        that handed the pooled fixtures that reservation would show up here.
+        Where the semis land is the other claim: on a table and at an hour **no
+        pool of this event reserves**, which is the knockout not inheriting its
+        event's pool windows. The pools stay confined to their own table and
+        their own half of the day throughout, so a builder that handed the pooled
+        fixtures the event-wide reservation would show up here too. The seed's
+        geometry is what makes both readable — see
+        ``_make_pools_then_knockout_tournament``.
         """
         tournament_id, event_id = await _make_pools_then_knockout_tournament(db_session)
         reservations = await _pool_reservations(db_session, event_id)
@@ -2618,6 +2591,15 @@ class TestUnPooledDrawShapes:
         (final,) = [fixture.id for fixture in knockout if fixture.round == 2]
         assert len(pooled) == 6  # two pools of three, three pairings each
         assert len(semis) == 2  # four qualifiers: two semi-finals and a final
+        pooled_tables = {
+            table_id
+            for _start, _end, tables in reservations.values()
+            for table_id in tables
+        }
+        assert pooled_tables < catalogue, (
+            "the seed must leave a table no pool reserves, or 'the semis took a "
+            "table no pool holds' is not a claim this test can make"
+        )
         assert all(
             fixture.entry_a_id is None and fixture.entry_b_id is None
             for fixture in knockout
@@ -2673,7 +2655,7 @@ class TestUnPooledDrawShapes:
         after = {
             fixture.id: fixture for fixture in await _fixtures_of(db_session, event_id)
         }
-        event_start = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
+        event_start = datetime(2030, 1, 1, 8, 0, tzinfo=VENUE_TZ)
         event_end = datetime(2030, 1, 1, 19, 0, tzinfo=VENUE_TZ)
         for fixture_id in semis:
             semi = after[fixture_id]
@@ -2684,6 +2666,13 @@ class TestUnPooledDrawShapes:
                 semi.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
                 <= event_end
             )
+            # The whole of the confinement claim: inside the event's own
+            # reservation, and inside none of its pools'.
+            _assert_no_pool_would_have_allowed_it(semi, reservations)
+        # The pair together takes a table no pool reserves — the seed's idle
+        # second one. A knockout confined to a pool has one table between the two
+        # semis, so it could only ever have played them one after the other.
+        assert {after[fixture_id].table_id for fixture_id in semis} == catalogue
         # The final's feeders are the semis, which nobody has played: still TBD,
         # so still unplaced — in the very same solve that placed the semis.
         assert after[final].entry_a_id is None and after[final].entry_b_id is None
