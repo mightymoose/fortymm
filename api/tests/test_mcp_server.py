@@ -2815,6 +2815,14 @@ async def test_preview_mcp_unsupported_draw_type_raises_tool_error(
     # lands on the preview rather than on a scheduler that would now place it.
     assert DrawType.single_elim.value in message, message
     assert "can be previewed" in message, message
+    # Pin a phrase only the CURRENT copy carries. The three assertions above are all
+    # satisfied by the sentence this arc deleted ("…has no schedule generator — only
+    # round-robin draws can be previewed…"), which carried "round-robin",
+    # "single-elim" and "can be previewed" too — so on their own they would stay green
+    # through a revert to copy that blames a scheduler now placing brackets. The HTTP
+    # twin discriminates on "cannot be previewed"; this is the MCP arm's equivalent.
+    assert "No event of this tournament" in message, message
+    assert "no schedule generator" not in message, message
 
     # Nothing was queued — the refusal is raised before the enqueue.
     assert sync_preview_queue.jobs == []
