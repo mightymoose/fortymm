@@ -9,6 +9,8 @@ import { buildTournamentFixtureRead } from '@/mocks/factories/tournaments/tourna
 import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
+import { undrawnLead } from '../../data/draw'
+import { DRAW_TYPES } from '../../data/draw-types'
 import {
   buildBracketDrawnEvent,
   buildDrawnEvent,
@@ -1015,8 +1017,8 @@ describe('DrawPanel', () => {
       await userEvent.click(await page.findGenerateButton('U1500 Singles'))
       expect(await page.findNoticeText()).toContain('fewer than 2 entrants')
 
-      // A sixth player enters. `entered` is the count the scope reads, and the factory
-      // derives it from the list — so both move together, exactly as the server sends them.
+      // A sixth player enters. The scope reads the entrant *ids*, so it is the list that
+      // matters; `entered` rides along because the server sends the two together.
       rerenderWith({
         event: { ...short, entered: 6, entrants: buildEntrants(6) },
       })
@@ -1063,55 +1065,32 @@ describe('DrawPanel', () => {
    * was told to deal its entrants "into its pools".
    */
   describe('the empty state names what THIS draw type would cut', () => {
-    it('does not promise pools to a bracket', () => {
+    /**
+     * The **wiring**, per draw type — that the panel asks `undrawnLead` and renders its
+     * answer. What each sentence actually says is `undrawnLead`'s own claim, asserted
+     * once, in `data/draw.test.ts` ("does not promise pools to a bracket", and the rest).
+     *
+     * Deliberately not re-typed here. A copy pinned in two files is the shape that has
+     * already cost this repo a day: a chore verifies against one file, goes green, and
+     * the other sits stale until a full-suite run months later. Comparing against the
+     * function keeps this file honest about what it is testing — the wiring — and leaves
+     * exactly one place to edit when the copy changes.
+     */
+    it.each(DRAW_TYPES)('renders %s’s own lead for the director', (drawType) => {
       page.render({
-        event: buildEvent({ name: 'Championship Singles', drawType: 'single-elim' }),
+        event: buildEvent({ name: 'Open Singles', drawType }),
         canEdit: true,
       })
 
-      expect(page.getEmptyState()).toHaveTextContent('bracket')
-      expect(page.getEmptyState()).not.toHaveTextContent('pools')
-    })
-
-    it('does not promise pools — or a bracket — to a swiss event', () => {
-      page.render({
-        event: buildEvent({ name: 'Open Swiss', drawType: 'swiss' }),
-        canEdit: true,
-      })
-
-      expect(page.getEmptyState()).toHaveTextContent('rounds')
-      expect(page.getEmptyState()).not.toHaveTextContent('pools')
-      expect(page.getEmptyState()).not.toHaveTextContent('bracket')
-    })
-
-    it('still names pools for a round-robin', () => {
-      page.render({
-        event: buildEvent({ name: 'U1500 Singles', drawType: 'round-robin' }),
-        canEdit: true,
-      })
-
-      expect(page.getEmptyState()).toHaveTextContent('pools')
-    })
-
-    it('names both stages for an rr-then-ko event', () => {
-      page.render({
-        event: buildEvent({
-          name: 'Open Singles',
-          drawType: 'rr-then-ko',
-          qualifiersPerPool: 2,
-        }),
-        canEdit: true,
-      })
-
-      expect(page.getEmptyState()).toHaveTextContent('pools')
-      expect(page.getEmptyState()).toHaveTextContent('bracket')
+      expect(page.getEmptyState()).toHaveTextContent(undrawnLead(drawType))
     })
 
     /** A reader is told the same thing whatever the draw type: the fixtures are not up
-     * yet. Naming the format would only tell a player something they cannot act on. */
-    it('tells a non-owner the same thing whatever the draw type', () => {
+     * yet. Naming the format would only tell a player something they cannot act on — so
+     * this arm asks `undrawnLead` nothing, and must not start. */
+    it.each(DRAW_TYPES)('tells a non-owner the same thing for %s', (drawType) => {
       page.render({
-        event: buildEvent({ name: 'Championship Singles', drawType: 'single-elim' }),
+        event: buildEvent({ name: 'Open Singles', drawType }),
         canEdit: false,
       })
 

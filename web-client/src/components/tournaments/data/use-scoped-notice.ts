@@ -57,15 +57,16 @@ export function useScopedNotice<T>(
   const [held, setHeld] = useState<{ notice: T; scope: string } | null>(null)
 
   // The scope has moved on: the notice described a state that no longer holds, so it is
-  // dropped for good rather than merely hidden (see the doc above on resurrection).
+  // dropped for good rather than merely hidden (see the doc above on resurrection). This
+  // is the ONLY thing that retires a stale notice — the read below deliberately does not
+  // second-guess it. A guard there (`held.scope === scope ? … : null`) would be the exact
+  // negation of this condition, so it could only ever fire in the pass this `setHeld` has
+  // already condemned, and React never commits that pass or shows it to a child. It would
+  // read as a second mechanism while doing no work.
   if (held !== null && held.scope !== scope) setHeld(null)
-
-  // Guarded rather than a bare `held?.notice`, so the discarded pass above renders the
-  // right thing too: the notice is shown only against the scope it was stamped with.
-  const shown = held !== null && held.scope === scope ? held.notice : null
 
   const set = (notice: T | null) =>
     setHeld(notice === null ? null : { notice, scope })
 
-  return [shown, set]
+  return [held?.notice ?? null, set]
 }

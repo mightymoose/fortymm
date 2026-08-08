@@ -337,8 +337,7 @@ describe('lifecycleRefusalScope', () => {
   })
 
   it('moves when somebody enters — the fix for a draw that no longer seats its entrants', () => {
-    // `entered` is derived from `entrants` by the factory, so moving the list is how a
-    // test moves the count the scope reads.
+    // The scope reads entrant *ids*, not the count — so a test moves the list.
     const before = buildTournament({
       events: [buildEvent({ id: 'ev-1', entrants: buildEntrants(4) })],
     })

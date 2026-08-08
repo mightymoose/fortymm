@@ -454,10 +454,58 @@ describe('drawRefusalScope', () => {
   })
 
   it('moves when somebody enters — the fix for "N entrants across M pools"', () => {
-    // `entered` is derived from `entrants` by the factory (the count and the list it
-    // counts cannot disagree), so moving the list is how a test moves the count.
+    // The scope reads entrant *ids*, not the count — so a test moves the list.
     expect(drawRefusalScope(buildEvent({ entrants: [] }))).not.toBe(
       drawRefusalScope(buildEvent({ entrants: buildEntrants(1) })),
+    )
+  })
+
+  /**
+   * The three settings a 422 names but a counts-and-pools scope never read. Each of these
+   * is #1123 wearing a different sentence: the server tells the director to change a
+   * value, they change it, and a scope blind to that value leaves the refusal on screen
+   * as though the fix had not worked.
+   *
+   * The sentences, from `api/app/draws.py` and `api/app/tournament_draws.py`:
+   * - "take fewer qualifiers from each pool, or add entrants" (`rr-then-ko`)
+   * - "play fewer rounds, or add entrants" (`swiss`)
+   * - "a doubles event cannot be given a draw — draws are singles-only"
+   */
+  it('moves when the qualifier count changes — "take fewer qualifiers from each pool"', () => {
+    const before = buildEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 4 })
+
+    expect(drawRefusalScope(before)).not.toBe(
+      drawRefusalScope({ ...before, qualifiersPerPool: 2 }),
+    )
+  })
+
+  it('moves when the swiss round count changes — "play fewer rounds"', () => {
+    const before = buildEvent({ drawType: 'swiss', rounds: 7 })
+
+    expect(drawRefusalScope(before)).not.toBe(
+      drawRefusalScope({ ...before, rounds: 4 }),
+    )
+  })
+
+  it('moves when the format changes — "draws are singles-only"', () => {
+    const before = buildEvent({ format: 'doubles' })
+
+    expect(drawRefusalScope(before)).not.toBe(
+      drawRefusalScope({ ...before, format: 'singles' }),
+    )
+  })
+
+  /** The settings belong to the draw type that has them. A round-robin event carries a
+   * `null` qualifier count and a `null` round count, and neither is a fact about it — so
+   * neither can move its scope. (`drawConfig` is the switch that enforces this.) */
+  it('ignores settings that belong to a different draw type', () => {
+    const rr = buildEvent({ drawType: 'round-robin' })
+
+    expect(drawRefusalScope({ ...rr, qualifiersPerPool: 2 })).toBe(
+      drawRefusalScope({ ...rr, qualifiersPerPool: 8 }),
+    )
+    expect(drawRefusalScope({ ...rr, rounds: 3 })).toBe(
+      drawRefusalScope({ ...rr, rounds: 9 }),
     )
   })
 

@@ -599,50 +599,73 @@ export function drawVerbFreeze(event: TournamentEvent): EditFreeze {
 export type DrawNotice = Notice
 
 /**
- * Turn a failed draw verb into inline copy.
- *
- * `verb` completes "Couldn't <verb>" for the failures that have no designed state of
- * their own ("cut the draw", "remove the draw").
- *
- * **The 409 and the 422 carry the server's own sentence, verbatim.** They are the two
- * refusals a director actually meets, and for both of them the sentence is the *point*:
- * it names the thing they have to change ("5 entrants across 3 pool(s) would leave a
- * pool with fewer than 2 entrants…", "A round-robin draw needs at least one pool."). It is authored
- * for them, on the server, where the numbers are; replacing it with a generic string of
- * ours would throw away the only actionable half of the refusal and leave the director
- * clicking Generate again. The client owns the *title* — the state, in a few words —
- * and nothing more.
- *
- * There is deliberately **no `null` arm**: this panel surfaces its mutation's errors
- * inline, so it must have words for *every* one of them (a 403 the UI does not offer,
- * an expired session, a 5xx, a dead network). A `null` here would be a silent failure —
- * the click that did nothing and said nothing — which is exactly what removing the
- * mutations' global toasts (`web-client/CLAUDE.md`, ## Forms: never both) makes this
- * function responsible for.
- */
-/**
  * The facts a draw refusal is **about**, as one string — what `useScopedNotice` pins the
  * panel's notice to, so a refusal clears itself once the director fixes what it named
  * (#1049, #1123).
  *
- * The 422 arm is the one a director actually meets, and every refusal behind it is a
- * statement about the event's **configuration as it stands**: its draw type, the pools it
- * would deal into, and how many entrants there are to deal ("A single-elim draw cannot be
- * cut yet", "A round-robin draw needs at least one pool", "5 entrants across 3 pool(s)
- * would leave a pool with fewer than 2"). The fixture count carries the 409 arm — evidence
- * of play — and moves when a draw is cut or removed.
+ * Every refusal behind the 422 is a statement about the event **as it stands**, and the
+ * scope has to carry each thing one of those sentences tells the director to change:
  *
- * Narrow on purpose. The event's name, slot, entry fee, predicates and match settings are
- * all absent: no draw refusal asserts anything about them, and this page polls, so a wider
+ * - the **format**, for "a doubles event cannot be given a draw — draws are singles-only";
+ * - the **draw type and its settings** (`drawConfig`), for "a single-elim draw cannot be
+ *   cut yet", "take fewer qualifiers from each pool", "play fewer rounds";
+ * - the **pools**, for "a round-robin draw needs at least one pool";
+ * - the **seating** (`drawSeating`), for "5 entrants across 3 pool(s) would leave a pool
+ *   with fewer than 2", and for the 409's evidence of play.
+ *
+ * That list is the whole design, and getting it short is how the mechanism fails: a
+ * refusal naming something the scope does not read survives the director doing exactly
+ * what it asked, which is #1123 again wearing a different sentence. The settings half goes
+ * through `drawConfig` rather than being listed here so that a fifth draw type cannot
+ * acquire a setting without acquiring a compile error.
+ *
+ * Narrow, still. The event's name, slot, entry fee, predicates and match settings are all
+ * absent: no draw refusal asserts anything about them, and this page polls, so a wider
  * scope would drop the sentence a director is mid-way through acting on. Pool **ids**
  * rather than pool contents, because a renamed pool refuses exactly as it did before.
  */
 export function drawRefusalScope(event: TournamentEvent): string {
   return [
-    event.drawType,
+    event.format,
+    drawConfig(event),
     drawSeating(event),
     event.pools.map((pool) => pool.id).join(','),
   ].join('|')
+}
+
+/**
+ * The draw type **and the settings that type actually has** — the configuration half of
+ * `drawRefusalScope`.
+ *
+ * A `switch` with a `never` default, so a fifth draw type is a compile error here until
+ * somebody says which settings its refusals turn on. That is the entire reason this is a
+ * function and not two more fields inlined above: the cut refuses an `rr-then-ko` event
+ * whose K exceeds its smallest pool ("take fewer qualifiers from each pool") and a `swiss`
+ * event whose R exceeds a rematch-free field ("play fewer rounds"), and a scope blind to
+ * those two numbers would leave both sentences on screen after the director lowered them.
+ *
+ * It mirrors `drawSettingsToApi` (`./api`) deliberately rather than importing it: that one
+ * builds a request body and lives in the mutation layer, and pulling `./api` in here would
+ * drag react-query, the router and the toaster into a module that is pure derivation.
+ */
+function drawConfig(
+  event: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool' | 'rounds'>,
+): string {
+  switch (event.drawType) {
+    case 'rr-then-ko':
+      return `rr-then-ko:${event.qualifiersPerPool}`
+    case 'swiss':
+      return `swiss:${event.rounds}`
+    case 'round-robin':
+    case 'single-elim':
+      // No setting of their own: the refusals these two produce are about the pools and
+      // the field, both of which the scope reads separately.
+      return event.drawType
+    default: {
+      const exhaustive: never = event.drawType
+      return exhaustive
+    }
+  }
 }
 
 /**
@@ -713,6 +736,28 @@ export function undrawnLead(drawType: DrawType): string {
   }
 }
 
+/**
+ * Turn a failed draw verb into inline copy.
+ *
+ * `verb` completes "Couldn't <verb>" for the failures that have no designed state of
+ * their own ("cut the draw", "remove the draw").
+ *
+ * **The 409 and the 422 carry the server's own sentence, verbatim.** They are the two
+ * refusals a director actually meets, and for both of them the sentence is the *point*:
+ * it names the thing they have to change ("5 entrants across 3 pool(s) would leave a
+ * pool with fewer than 2 entrants…", "A round-robin draw needs at least one pool."). It is authored
+ * for them, on the server, where the numbers are; replacing it with a generic string of
+ * ours would throw away the only actionable half of the refusal and leave the director
+ * clicking Generate again. The client owns the *title* — the state, in a few words —
+ * and nothing more.
+ *
+ * There is deliberately **no `null` arm**: this panel surfaces its mutation's errors
+ * inline, so it must have words for *every* one of them (a 403 the UI does not offer,
+ * an expired session, a 5xx, a dead network). A `null` here would be a silent failure —
+ * the click that did nothing and said nothing — which is exactly what removing the
+ * mutations' global toasts (`web-client/CLAUDE.md`, ## Forms: never both) makes this
+ * function responsible for.
+ */
 export function drawRefusalNotice(error: unknown, verb: string): DrawNotice {
   const fallback = fallbackNotice(error, verb)
   if (!(error instanceof ApiError)) return fallback
