@@ -131,26 +131,44 @@ start; the pure module holds its table to ``max(estimated end, now + bucket)``
 so an overrun keeps blocking. A real "match started" fact is a later drop-in
 that replaces one condition here.
 
-Un-pooled fixtures (``pool_id IS NULL`` — single-elim, swiss, and an rr-then-ko
-draw type's KO stage) are not scheduled: the solver's windows come
-from pools (KO-stage
-scheduling is a designed later layer, per the ADR). Fixtures with a TBD side
-cannot be placed and are left out of the snapshot; both still count toward the
-fingerprint, so their arrival or resolution is drift like any other.
+**Un-pooled fixtures (``pool_id IS NULL``) ARE scheduled, over their event's own
+reservation** (ADR "a pool restricts scheduling, it does not enable it",
+20260807). Until that ADR they were skipped outright — the solver's windows and
+tables came from pools, so a fixture naming none had nowhere to go — which is
+why no single-elim match, no swiss match and no rr-then-ko knockout match was
+ever placed. The skip is now a **branch**: a pooled fixture resolves its window
+and its tables from its own pool exactly as it always has, and an un-pooled one
+resolves them from a synthetic **event-wide reservation**
+(:func:`event_wide_pool_key`) carrying the event's own ``slot``, read in the
+event's zone, over the whole tournament catalogue. No pool row is minted, and
+:mod:`app.scheduling` is untouched: a fixture still binds to exactly one
+reservation, and every pool-keyed infeasibility reason reports against whichever
+one it named.
 
-**For swiss that rule costs the WHOLE event, and nothing else states it.**
-Single-elim and rr-then-ko each lose a *stage* to it, but a swiss draw is
-un-pooled end to end (ADR "swiss pre-cuts every round and pairs each one on
-advance"), so **every** fixture of one is skipped here. No swiss fixture is ever
-given a *solved* table or a *solved* start: a swiss event is absent from every
-schedule this module produces, and nothing in one is ever placed automatically.
+**A TBD side is a separate rule, and it did not change.** A fixture missing
+either entrant cannot be placed and is left out of the snapshot, pooled or not.
+Un-pooled and TBD-sided fixtures alike still count toward the fingerprint, so
+their arrival or resolution is drift like any other. That surviving rule is what
+leaves a bracket placed only in part at first. A single-elim first round is
+seeded, so its two sides are known and it is placed straight away; every round
+above it, and every round of an rr-then-ko knockout stage — which waits on the
+pools feeding it — becomes placeable only as its sides resolve, at the very
+re-solve a completed match already triggers.
 
-The only table and time a swiss fixture ever gets is one a director typed in.
-A manual placement (:func:`app.tournaments.place_fixture`) pins whatever it is
-given and never asks the fixture for a pool, and from there the fixture flows
-through the ordinary pin/call machinery like any other hand placement — so a
-hand-placed swiss fixture *is* called, this module simply never plans one.
-Solving swiss for real is unbuilt, not designed away.
+**Swiss rides the same reservation, and for swiss that is the WHOLE event.**
+An rr-then-ko draw carries *one* un-pooled stage, its knockout, while a
+single-elim draw and a swiss draw are un-pooled end to end — so for those two
+the event-wide reservation covers the whole event. Swiss is the case nothing
+else in this module states (ADR "swiss pre-cuts every round and pairs each one
+on advance"): **every** fixture of one takes its event's event-wide
+reservation. Before the 20260807 ADR the only table and time a swiss fixture
+ever got was one a director typed in; this module now plans one like any other,
+round by round as each round is paired and its sides stop being TBD.
+A manual placement (:func:`app.tournaments.place_fixture`) still pins whatever
+it is given and never asks the fixture for a pool, so a hand-placed swiss
+fixture is pinned and called exactly as before — the difference is that the
+solver now packs the free remainder around it rather than leaving it the only
+placement the event will ever have.
 """
 
 import hashlib

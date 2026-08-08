@@ -661,8 +661,11 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
     The knockout line is what stops the strip lying by omission about an
     **rr-then-ko** event: the preview plans that event's whole draw but schedules only
     its pool stage (ADR 20260727 — a bracket is placeable only incrementally, as the
-    pools that feed it resolve, which is #1228), so without a note the director reads a
-    schedule that silently covers part of their event. It is emitted off the count of
+    pools that feed it resolve), so without a note the director reads a
+    schedule that silently covers part of their event. The *live* solve does place
+    that bracket, incrementally (ADR "a pool restricts scheduling, it does not enable
+    it"); a preview run before anyone has registered has nothing to resolve it from,
+    which is why the note stays. It is emitted off the count of
     fixtures actually dropped, so a tournament of plain round-robins — which drops none
     — gets the strip it always had, unchanged."""
     notes = [
