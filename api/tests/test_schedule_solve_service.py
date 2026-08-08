@@ -27,10 +27,11 @@ import asyncio
 import threading
 import uuid
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from itertools import combinations
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import fakeredis
@@ -151,13 +152,29 @@ async def _make_tournament(
     window: tuple[str, str] = ("09:00", "17:00"),
     length_games: int = 3,
     slot_date: str = DATE,
+    draw_type: DrawType = DrawType.round_robin,
+    pools: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """A published tournament with a table catalogue, one pooled round-robin
-    event whose single pool spans every table, ``entrants`` entered players,
-    and a cut draw. Written straight to the database — nothing here is about
-    the create routes. Returns ``(tournament_id, event_id)`` as plain ids: the
-    tests expire the session after the job runs, and an expired ORM instance's
-    attribute access would try a sync lazy-load (``MissingGreenlet``)."""
+    """A published tournament with a table catalogue, one event of ``draw_type``,
+    ``entrants`` entered players, and a cut draw. Written straight to the
+    database — nothing here is about the create routes. Returns
+    ``(tournament_id, event_id)`` as plain ids: the tests expire the session
+    after the job runs, and an expired ORM instance's attribute access would try
+    a sync lazy-load (``MissingGreenlet``).
+
+    ``pools`` is the event's pools in the ``{name, slot, table_ids}`` dict shape
+    ``tests._helpers.event_pools`` speaks, naming tables by the positional
+    aliases (``"t1"``, ``"t2"``, …) of this tournament's own catalogue. Left out,
+    the event gets one pool spanning every table for the whole event window,
+    which is what most of this module's tests want.
+
+    Passing ``pools=[]`` is the un-pooled event the event-wide reservation exists
+    for (ADR "a pool restricts scheduling, it does not enable it"): no pool row,
+    so every fixture's ``pool_id`` is NULL. It is spelled that way at the call
+    site, rather than hidden behind a named variant helper, because in those
+    tests the absent pool is the whole subject — an explicit empty list says so
+    louder than a helper name does.
+    """
     owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
@@ -183,26 +200,28 @@ async def _make_tournament(
     db.add(tournament)
     await db.flush()
 
+    pool_specs: Sequence[Mapping[str, Any]] = (
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": slot_date, "start": window[0], "end": window[1]},
+                "table_ids": [str(row.id) for row in catalogue],
+            }
+        ]
+        if pools is None
+        else pools
+    )
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
         slot={"date": slot_date, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": length_games},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": slot_date, "start": window[0], "end": window[1]},
-                    "table_ids": [str(row.id) for row in catalogue],
-                }
-            ],
-            tournament=tournament,
-        ),
+        pools=event_pools(pool_specs, tournament=tournament),
     )
     db.add(event)
     await db.flush()
@@ -1869,73 +1888,6 @@ class TestCalledMatchSlides:
         assert ledger.fixtures_pinned == 1  # the verbatim echo
 
 
-async def _make_bracket_tournament(
-    db: AsyncSession,
-    *,
-    status: TournamentStatus = TournamentStatus.published,
-    entrants: int = 4,
-    tables: tuple[str, ...] = ("t1", "t2"),
-    window: tuple[str, str] = ("09:00", "17:00"),
-    slot_date: str = DATE,
-) -> tuple[uuid.UUID, uuid.UUID]:
-    """A tournament whose one event is a **single-elimination** event with **no
-    pools** — the un-pooled shape the event-wide reservation exists for (ADR "a
-    pool restricts scheduling, it does not enable it").
-
-    Deliberately not a variant of ``_make_tournament``: the point of this seed is
-    everything it does *not* have (no pool row, so every fixture's ``pool_id`` is
-    NULL), and a flag on that helper would hide exactly that. Returns
-    ``(tournament_id, event_id)`` as plain ids, for the reason it does.
-    """
-    owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
-    league = await get_default_league(db)
-    assert league is not None, "the autouse default_league fixture seeds this"
-
-    tournament = Tournament(
-        name="Bracket Open",
-        status=status,
-        address={
-            "venue": "Berkeley TT Club",
-            "street": "1 Shattuck Ave",
-            "city": "Berkeley",
-            "region": "CA",
-            "postal": "94704",
-            "country": "USA",
-            "latitude": 37.8703,
-            "longitude": -122.2731,
-        },
-        tables=venue_tables(*((table.upper(), "Main") for table in tables)),
-        league_id=league.id,
-        created_by_user_id=owner.id,
-    )
-    db.add(tournament)
-    await db.flush()
-
-    event = TournamentEvent(
-        tournament_id=tournament.id,
-        name="Open Bracket",
-        format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
-        max_players=None,
-        entry_fee=Decimal("0.00"),
-        timezone="America/Chicago",
-        slot={"date": slot_date, "start": window[0], "end": window[1]},
-        match_settings={"rated": False, "length_games": 3},
-        pools=[],
-    )
-    db.add(event)
-    await db.flush()
-
-    for _ in range(entrants):
-        player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
-        db.add(TournamentEntry(event_id=event.id, user_id=player.id))
-    await db.flush()
-
-    await cut_draw(db, event)
-    await db.commit()
-    return tournament.id, event.id
-
-
 async def _make_two_pool_tournament(
     db: AsyncSession,
 ) -> tuple[uuid.UUID, uuid.UUID]:
@@ -1943,74 +1895,32 @@ async def _make_two_pool_tournament(
     table 1 in the morning, Pool B on table 2 in the afternoon, inside an event
     window that spans both. The regression bed for "a pool still confines its
     fixtures" — an event whose single pool spans every table and the whole day
-    (``_make_tournament``) could not tell a confined solve from an unconfined
-    one."""
-    owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
-    league = await get_default_league(db)
-    assert league is not None, "the autouse default_league fixture seeds this"
+    (``_make_tournament``'s default pool) could not tell a confined solve from an
+    unconfined one.
 
-    catalogue = venue_tables(("T1", "Main"), ("T2", "Main"))
-    tournament = Tournament(
-        name="Pooled Open",
-        status=TournamentStatus.published,
-        address={
-            "venue": "Berkeley TT Club",
-            "street": "1 Shattuck Ave",
-            "city": "Berkeley",
-            "region": "CA",
-            "postal": "94704",
-            "country": "USA",
-            "latitude": 37.8703,
-            "longitude": -122.2731,
-        },
-        tables=catalogue,
-        league_id=league.id,
-        created_by_user_id=owner.id,
+    The event window is left at the default whole day deliberately: an event-wide
+    reservation — if one wrongly claimed these fixtures — would look feasible on
+    any table at any hour. That is what makes the pool assertions able to fail.
+
+    Kept as its own name rather than inlined into the one test that seeds it: the
+    test reads its expectations back out of the pool ROWS, so a pool literal
+    sitting beside those reads would look like a round-trip worth deleting."""
+    return await _make_tournament(
+        db,
+        entrants=6,
+        pools=[
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": "09:00", "end": "12:00"},
+                "table_ids": ["t1"],
+            },
+            {
+                "name": "Pool B",
+                "slot": {"date": DATE, "start": "13:00", "end": "17:00"},
+                "table_ids": ["t2"],
+            },
+        ],
     )
-    db.add(tournament)
-    await db.flush()
-
-    event = TournamentEvent(
-        tournament_id=tournament.id,
-        name="Pooled Singles",
-        format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
-        max_players=None,
-        entry_fee=Decimal("0.00"),
-        timezone="America/Chicago",
-        # The event window spans the whole day, so an event-wide reservation —
-        # if one wrongly claimed these fixtures — would look feasible on any
-        # table at any hour. That is what makes the pool assertions below able
-        # to fail.
-        slot={"date": DATE, "start": "09:00", "end": "17:00"},
-        match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": "09:00", "end": "12:00"},
-                    "table_ids": ["t1"],
-                },
-                {
-                    "name": "Pool B",
-                    "slot": {"date": DATE, "start": "13:00", "end": "17:00"},
-                    "table_ids": ["t2"],
-                },
-            ],
-            tournament=tournament,
-        ),
-    )
-    db.add(event)
-    await db.flush()
-
-    for _ in range(6):
-        player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
-        db.add(TournamentEntry(event_id=event.id, user_id=player.id))
-    await db.flush()
-
-    await cut_draw(db, event)
-    await db.commit()
-    return tournament.id, event.id
 
 
 class TestEventWideReservation:
@@ -2030,7 +1940,9 @@ class TestEventWideReservation:
         time, where before this it got nothing at all. Every placement lands on
         a table of the tournament's own catalogue, inside the event's window,
         and two matches never share a table at the same moment."""
-        tournament_id, event_id = await _make_bracket_tournament(db_session)
+        tournament_id, event_id = await _make_tournament(
+            db_session, draw_type=DrawType.single_elim, pools=[]
+        )
         catalogue = await table_ids_of(db_session, tournament_id)
 
         inputs = await schedule_solves._load_solver_inputs(
@@ -2132,7 +2044,9 @@ class TestEventWideReservation:
         always was — ``PoolHasNoTables`` — now fired against the event-wide
         reservation, and resolved to something a director can read rather than
         to the namespaced solver id."""
-        tournament_id, _event_id = await _make_bracket_tournament(db_session, tables=())
+        tournament_id, _event_id = await _make_tournament(
+            db_session, draw_type=DrawType.single_elim, pools=[], tables=()
+        )
 
         inputs = await schedule_solves._load_solver_inputs(
             db_session, tournament_id, now=BASE, lock=False
@@ -2147,7 +2061,7 @@ class TestEventWideReservation:
         # The event a director knows, plus what is actually reserved. Not the
         # namespaced id, and not the bare event name (which would send them
         # looking for a table control an event does not have).
-        assert resolved.pool_name == "Open Bracket (whole venue)"
+        assert resolved.pool_name == "Open Singles (whole venue)"
         assert str(reason.pool_id) not in resolved.pool_name
 
     async def test_a_past_event_window_resolves_to_its_venue_local_date(
@@ -2157,8 +2071,11 @@ class TestEventWideReservation:
         bracket dated in the past is named by the DAY to move (ADR "a past day is
         named"), which is a ``KeyError`` at exactly the wrong moment if the
         synthesized reservation is missing from that map."""
-        tournament_id, _event_id = await _make_bracket_tournament(
-            db_session, slot_date="2020-01-01"
+        tournament_id, _event_id = await _make_tournament(
+            db_session,
+            draw_type=DrawType.single_elim,
+            pools=[],
+            slot_date="2020-01-01",
         )
 
         inputs = await schedule_solves._load_solver_inputs(
@@ -2184,7 +2101,9 @@ class TestEventWideReservation:
         snapshot — while its two feeders, which do have sides, are in it. (A
         test that only asserted the final's absence would pass against a build
         that skipped the whole event, which is the state before this slice.)"""
-        tournament_id, event_id = await _make_bracket_tournament(db_session)
+        tournament_id, event_id = await _make_tournament(
+            db_session, draw_type=DrawType.single_elim, pools=[]
+        )
         fixtures = await _fixtures_of(db_session, event_id)
         final = next(f for f in fixtures if f.round == 2)
         assert final.entry_a_id is None and final.entry_b_id is None

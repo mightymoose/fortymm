@@ -45,7 +45,9 @@ export interface SlotSpec {
   readonly end: string
 }
 
-/** Tomorrow, `YYYY-MM-DD`, UTC — the date the default pool window sits on.
+/** Tomorrow, `YYYY-MM-DD`, UTC — the date a seeded window sits on. The default pool
+ * window uses it, and so does any spec that builds its own `SlotSpec`, so the rule lives
+ * here once.
  *
  * **Computed, never a literal.** This used to be the string `'2026-08-01'`, which
  * was comfortably far-future when it was written and then arrived: from 17:00 UTC
@@ -63,7 +65,7 @@ export interface SlotSpec {
  * UTC because the compose stack's clock is UTC and `seedTournament` anchors its
  * events to `timezone: 'UTC'` — the date and the frame have to agree, or the
  * window drifts by a day either side of midnight. */
-function tomorrowUtc(): string {
+export function tomorrowUtc(): string {
   const DAY_MS = 24 * 60 * 60 * 1000
   return new Date(Date.now() + DAY_MS).toISOString().slice(0, 10)
 }

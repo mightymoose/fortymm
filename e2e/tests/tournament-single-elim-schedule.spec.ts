@@ -8,6 +8,7 @@ import {
   getScheduleDetail,
   seedEntrants,
   seedTournament,
+  tomorrowUtc,
   transitionTournament,
   type FixtureDetail,
   type TableSpec,
@@ -46,16 +47,6 @@ const BRACKET_FIXTURES = 3
  * squeeze this spec engineered. */
 const WINDOW_START = '09:00'
 const WINDOW_END = '17:00'
-
-/** Tomorrow, `YYYY-MM-DD`, UTC — the date the event's window sits on.
- *
- * Computed, never a literal, for the reason `support/tournament-api.ts` computes its own
- * default: the solver never places a fixture in the past, so a window behind `now` is
- * honestly infeasible and would red this spec for a reason that has nothing to do with
- * pools. Tomorrow is ahead of any run, at any hour. */
-function tomorrowUtc(): string {
-  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-}
 
 /** `HH:MM` as minutes since midnight — the form the two window bounds and a placement's
  * own clock time can be compared in. */
@@ -213,17 +204,25 @@ test.describe('Tournament — single-elim schedule', () => {
         `fixture ${fixture.id} belongs to a pool — the premise of this spec is that none do`,
       ).toBeNull()
     }
-    const roundOneIds = cut
-      .filter((fixture) => fixture.round === 1)
-      .map((fixture) => fixture.id)
-    expect(roundOneIds).toHaveLength(ROUND_ONE_FIXTURES)
-    for (const fixture of cut.filter((f) => f.round === 1)) {
+    const cutRoundOne = cut.filter((fixture) => fixture.round === 1)
+    expect(cutRoundOne).toHaveLength(ROUND_ONE_FIXTURES)
+    const roundOneIds = cutRoundOne.map((fixture) => fixture.id)
+    for (const fixture of cutRoundOne) {
       // Both sides known is what makes a fixture placeable at all, so this establishes
       // that a failure below is about the pool rule and not about a TBD side.
       expect(fixture.entry_a_id, `round-1 fixture ${fixture.id} has an A side`).not.toBeNull()
       expect(fixture.entry_b_id, `round-1 fixture ${fixture.id} has a B side`).not.toBeNull()
     }
-    const finalId = cut.find((fixture) => !roundOneIds.includes(fixture.id))!.id
+    // The final is round 2 of a four-slot bracket, named by its round rather than as
+    // "the fixture that is not in round one": an id derived by exclusion still resolves to
+    // something the day the bracket grows a round, and would quietly assert about the
+    // wrong match. An explicit round check fails loudly instead.
+    const finals = cut.filter((fixture) => fixture.round === 2)
+    expect(
+      finals,
+      'a four-slot bracket holds exactly one round-2 fixture: the final',
+    ).toHaveLength(1)
+    const finalId = finals[0].id
 
     // ----- the browser: the director runs the scheduler ------------------------
     const schedule = await detail.openSchedule()
