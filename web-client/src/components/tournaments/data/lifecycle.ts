@@ -184,15 +184,30 @@ export interface LifecycleRefusal extends Notice {
  * What is **left out** matters as much. The tournament's name, venue, description and
  * `latestScheduleSolve` are all absent, because no lifecycle refusal asserts anything about
  * them and this page polls (~3s on the Schedule tab): a scope that moved on a solve tick
- * would blink the director's work list off the screen mid-read. `publish` and `end` carry
- * no precondition at all, and their refusals (a 403, a stale-tab 409) are answers about
- * *this* status — which is in the scope, so they clear when the status moves and not before.
+ * would blink the director's work list off the screen mid-read.
+ *
+ * ## The status is left out too, and that one is not an oversight
+ *
+ * It looks like the obvious first field, and it is the one field that must NOT be here.
+ * The other 409 this surface reports is the **stale tab**: the director published from
+ * their phone, this page still shows a draft, they click Publish, and the server answers
+ * "This tournament is already published." That refusal exists precisely to explain the
+ * reconciliation that lands a moment later — the mutation refetches on settle, and the
+ * badge and button correct themselves from Draft/Publish to Published/Start *under the
+ * notice*.
+ *
+ * So the status changing is not evidence that the refusal is stale. It is the refusal
+ * coming true. A scope carrying `status` would retire the sentence at the exact instant
+ * the page did the confusing thing the sentence was there to explain, leaving the director
+ * watching the button change with no account of why their click did nothing. (This is not
+ * hypothetical: it is what `tournament-lifecycle.spec.ts`'s "the stale view corrects
+ * itself" caught.)
+ *
+ * Nothing is lost by omitting it. Every refusal with a precondition is about the events,
+ * which are here; and a status that moves forward legitimately takes its events with it.
  */
 export function lifecycleRefusalScope(tournament: Tournament): string {
-  return [
-    tournament.status,
-    ...tournament.events.map((ev) => `${ev.id}:${drawSeating(ev)}`),
-  ].join('|')
+  return tournament.events.map((ev) => `${ev.id}:${drawSeating(ev)}`).join('|')
 }
 
 /**

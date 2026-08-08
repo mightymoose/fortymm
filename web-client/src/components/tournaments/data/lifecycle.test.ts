@@ -395,8 +395,19 @@ describe('lifecycleRefusalScope', () => {
     ).not.toBe(lifecycleRefusalScope(buildTournament({ events: [after] })))
   })
 
-  it('moves when the status does, so a refusal about this status cannot outlive it', () => {
-    expect(lifecycleRefusalScope(buildTournament({ status: 'draft' }))).not.toBe(
+  /**
+   * The status is the one field that must NOT be in the scope, and the reason is the
+   * **stale-tab** 409.
+   *
+   * The director published from their phone; this page still shows a draft; they click
+   * Publish and are told "This tournament is already published." That sentence exists to
+   * explain the reconciliation that lands a moment later, when the badge and button
+   * correct themselves under the notice. If the status were in the scope, the refusal
+   * would be retired at the exact instant the page did the confusing thing it was there
+   * to explain.
+   */
+  it('does NOT move when the status does — the stale-tab refusal explains that very change', () => {
+    expect(lifecycleRefusalScope(buildTournament({ status: 'draft' }))).toBe(
       lifecycleRefusalScope(buildTournament({ status: 'published' })),
     )
   })

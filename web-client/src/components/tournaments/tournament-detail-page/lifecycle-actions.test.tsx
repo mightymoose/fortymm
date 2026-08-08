@@ -737,4 +737,46 @@ describe('LifecycleActions · a refusal does not outlive the state it describes'
 
     expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
   })
+
+  /**
+   * The **stale tab**, and the case that says the status must stay out of the scope.
+   *
+   * The director published from their phone; this page still shows a draft. They click
+   * Publish, and the server answers "This tournament is already published." The mutation
+   * reconciles on settle, so the badge and button correct themselves from Draft/Publish
+   * to Published/Start — *under* the notice.
+   *
+   * The status changing is not evidence the refusal went stale. It is the refusal coming
+   * true, and the notice is the only account the director gets of why their click did
+   * nothing. Retiring it here would remove the explanation at the exact moment the page
+   * does the thing that needs explaining. (`tournament-lifecycle.spec.ts` asserts the same
+   * behaviour end-to-end; this is the fast twin, so a regression reds in vitest too.)
+   */
+  it('keeps a stale-tab refusal while the view corrects itself around it', async () => {
+    const STALE = buildTournament({ id: 't-1', status: 'draft' })
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: 'This tournament is already published.' },
+        { status: 409 },
+      ),
+    )
+    const { rerenderWith } = lifecycleActionsPage.render({ tournament: STALE })
+    await userEvent.click(lifecycleActionsPage.getLifecycleButton(/Publish/))
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'already published',
+    )
+
+    // The reconciling refetch lands: this page now agrees with the server.
+    rerenderWith({ tournament: { ...STALE, status: 'published' } })
+
+    // The button has moved on to the next edge — and the explanation is still there.
+    expect(
+      lifecycleActionsPage.queryLifecycleButton(/Start tournament/),
+    ).toBeInTheDocument()
+    expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'already published',
+    )
+  })
 })
