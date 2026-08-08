@@ -2382,8 +2382,9 @@ async def test_build_cut_non_singles_event_raises_readable_tool_error(
 # ``test_draws`` (``strategy_for`` is total). The ``UnsupportedDrawType`` arm of
 # ``_map_draw_refusal_tool_error`` has since been deleted as dead code — the test below
 # is what covers the generic fallback a future raiser would now reach instead. The
-# preview's own ``UnsupportedDrawType`` path (single-elim) is genuinely reachable and
-# keeps both its arm (``_map_preview_draw_error``) and its coverage in
+# preview's own ``UnsupportedDrawType`` path is genuinely reachable — a tournament
+# whose every event is a bracket or a swiss draw has nothing to preview — and keeps
+# both its arm (``_map_preview_draw_error``) and its coverage in
 # ``test_schedule_preview_snapshot``.
 
 
@@ -2788,13 +2789,15 @@ async def test_preview_mcp_unsupported_draw_type_raises_tool_error(
     default_league: League,
     sync_preview_queue: Queue,
 ) -> None:
-    """An event whose draw type is not round-robin (here single-elim) refuses the
-    WHOLE preview with an actionable ``ToolError`` naming round-robin — never a
-    partial result — because a preview covers an event's pool stage and a bracket has
-    none. Production runs the format perfectly well: a live solve places a fixture
-    belonging to no pool over its event's own window (ADR "a pool restricts
-    scheduling, it does not enable it"). The refusal happens at snapshot build, before
-    anything is queued."""
+    """A tournament whose only event is one the preview lays out nothing of (here
+    single-elim) is refused with an actionable ``ToolError`` — never an empty result
+    an agent would read as "it fits".
+
+    The sentence still names round-robin, because that is the actionable half: such an
+    event beside a round-robin one is skipped now, not refused, and the preview covers
+    the rest of the day. What it must NOT say any more is that the scheduler cannot
+    place a bracket — a live solve does (ADR "a pool restricts scheduling, it does not
+    enable it"). The refusal happens at snapshot build, before anything is queued."""
     owner = await make_user(db_session, "preview-mcp-ko-owner")
     raw = await _mint(db_session, owner)
     tournament, _ = await _seed_previewable_tournament(
@@ -2802,10 +2805,24 @@ async def test_preview_mcp_unsupported_draw_type_raises_tool_error(
     )
 
     async with _mcp_client(raw) as client, client:
-        with pytest.raises(ToolError, match="round-robin"):
+        with pytest.raises(ToolError, match="round-robin") as caught:
             await client.call_tool(
                 "preview_schedule", {"tournament_id": str(tournament.id)}
             )
+
+    message = str(caught.value)
+    # The draw type is named off the error's structural ``draw_type``, and the blame
+    # lands on the preview rather than on a scheduler that would now place it.
+    assert DrawType.single_elim.value in message, message
+    assert "can be previewed" in message, message
+    # Pin a phrase only the CURRENT copy carries. The three assertions above are all
+    # satisfied by the sentence this arc deleted ("…has no schedule generator — only
+    # round-robin draws can be previewed…"), which carried "round-robin",
+    # "single-elim" and "can be previewed" too — so on their own they would stay green
+    # through a revert to copy that blames a scheduler now placing brackets. The HTTP
+    # twin discriminates on "cannot be previewed"; this is the MCP arm's equivalent.
+    assert "No event of this tournament" in message, message
+    assert "no schedule generator" not in message, message
 
     # Nothing was queued — the refusal is raised before the enqueue.
     assert sync_preview_queue.jobs == []
