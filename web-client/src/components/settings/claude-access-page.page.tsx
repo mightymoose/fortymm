@@ -40,9 +40,6 @@ export const claudeAccessPagePage = {
   /** Override `POST /v1/settings/agent-access/allow` — the revoked row's write. */
   mockAllowEndpoint: allowAccessButtonPage.mockEndpoint,
 
-  /** Press "Allow Claude to connect" on the revoked row. */
-  clickAllow: allowAccessButtonPage.clickAllow,
-
   /** Override `POST /v1/settings/agent-access/disconnect` — the connected
    * card's write. */
   mockDisconnectEndpoint: disconnectButtonPage.mockEndpoint,

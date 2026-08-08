@@ -138,7 +138,7 @@ export function SetupPanel({ connector, email }: SetupPanelProps) {
           added to the DOM *with* its message is not reliably announced.
           Polite, never assertive — pressing Copy is the player's own doing, so
           interrupting whatever they were reading would be rude, not helpful. */}
-      <p className="fmm-claude__sr-only" role="status" aria-live="polite">
+      <p className="sr-only" role="status" aria-live="polite">
         {announce(outcome)}
       </p>
     </section>

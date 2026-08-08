@@ -46,8 +46,8 @@ export function AllowAccessButton() {
           announces what lands in it; `:empty` keeps it out of the layout. */}
       <p
         className={cn(
-          'fmm-claude__allow-note',
-          isError && 'fmm-claude__allow-note--failed',
+          'fmm-claude__note',
+          isError && 'fmm-claude__note--failed',
         )}
         role="status"
       >

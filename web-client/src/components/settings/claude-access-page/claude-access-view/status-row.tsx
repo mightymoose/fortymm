@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Lock, Mail, PowerOff, TriangleAlert } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 import type { ClaudeAccessStatus } from '../claude-access-query'
 import { AllowAccessButton } from './status-row/allow-access-button'
@@ -34,7 +35,7 @@ export function StatusRow({ status }: StatusRowProps) {
 
   return (
     <section className="fmm-claude__status" aria-labelledby={headingId}>
-      <h2 id={headingId} className="fmm-claude__sr-only">
+      <h2 id={headingId} className="sr-only">
         Connection status
       </h2>
       {status.kind === 'connected' ? (
@@ -63,44 +64,54 @@ function CompactRow({
   )
 }
 
+/** The pill each non-connected state wears: a modifier class, a label, and a
+ * glyph. `ready` is the one state whose glyph is the shared ball-dot rather
+ * than a lucide icon, so its `Icon` is null. Modifier classes are spelled in
+ * full rather than interpolated from the kind, so a grep for the class still
+ * lands on both the CSS and this table. */
+const PILLS: Record<
+  Exclude<ClaudeAccessStatus, { kind: 'connected' }>['kind'],
+  { modifier: string; label: string; Icon: LucideIcon | null }
+> = {
+  unavailable: {
+    modifier: 'fmm-claude__pill--warn',
+    label: 'UNAVAILABLE',
+    Icon: TriangleAlert,
+  },
+  guest: {
+    modifier: 'fmm-claude__pill--warn',
+    label: 'EMAIL NEEDED',
+    Icon: Mail,
+  },
+  gated: {
+    modifier: 'fmm-claude__pill--warn',
+    label: 'NOT ENABLED',
+    Icon: Lock,
+  },
+  revoked: {
+    modifier: 'fmm-claude__pill--off',
+    label: 'TURNED OFF',
+    Icon: PowerOff,
+  },
+  ready: {
+    modifier: 'fmm-claude__pill--ready',
+    label: 'READY TO CONNECT',
+    Icon: null,
+  },
+}
+
 function rowPill(status: Exclude<ClaudeAccessStatus, { kind: 'connected' }>) {
-  switch (status.kind) {
-    case 'unavailable':
-      return (
-        <span className="fmm-claude__pill fmm-claude__pill--warn">
-          <TriangleAlert aria-hidden="true" size={13} strokeWidth={2.5} />
-          UNAVAILABLE
-        </span>
-      )
-    case 'guest':
-      return (
-        <span className="fmm-claude__pill fmm-claude__pill--warn">
-          <Mail aria-hidden="true" size={13} strokeWidth={2.5} />
-          EMAIL NEEDED
-        </span>
-      )
-    case 'gated':
-      return (
-        <span className="fmm-claude__pill fmm-claude__pill--warn">
-          <Lock aria-hidden="true" size={13} strokeWidth={2.5} />
-          NOT ENABLED
-        </span>
-      )
-    case 'revoked':
-      return (
-        <span className="fmm-claude__pill fmm-claude__pill--off">
-          <PowerOff aria-hidden="true" size={13} strokeWidth={2.5} />
-          TURNED OFF
-        </span>
-      )
-    case 'ready':
-      return (
-        <span className="fmm-claude__pill fmm-claude__pill--ready">
-          <span className="ball-dot" aria-hidden="true" />
-          READY TO CONNECT
-        </span>
-      )
-  }
+  const { modifier, label, Icon } = PILLS[status.kind]
+  return (
+    <span className={`fmm-claude__pill ${modifier}`}>
+      {Icon === null ? (
+        <span className="ball-dot" aria-hidden="true" />
+      ) : (
+        <Icon aria-hidden="true" size={13} strokeWidth={2.5} />
+      )}
+      {label}
+    </span>
+  )
 }
 
 function rowCopy(status: Exclude<ClaudeAccessStatus, { kind: 'connected' }>) {

@@ -184,26 +184,21 @@ const allowAgentAccess = async (): Promise<AgentAccessPayload> =>
   )
 
 /**
- * `POST /v1/settings/agent-access/allow` — clear the player's own revocation.
+ * The shape both of this page's writes share: the endpoint answers with the
+ * page's whole new payload, not an acknowledgement, so the success path
+ * **writes it into the cache** instead of invalidating.
  *
- * Revocation is deliberately sticky (there is no timer and no implicit clear),
- * so this is the *only* way back: a revoked player who follows the connector
- * setup steps again is refused by the MCP transport with a silent 401, forever.
- * Hence the control it drives is load-bearing rather than decorative.
- *
- * The response is the page's whole new payload, not an acknowledgement, so the
- * success path **writes it into the cache** instead of invalidating. Two
- * reasons: the server has just told us the answer, so a follow-up GET is a
+ * Two reasons: the server has just told us the answer, so a follow-up GET is a
  * round trip for a fact we already hold; and an invalidation would blank
- * nothing but would let a slow refetch re-render the revoked row after the
- * player has already been told it worked. It is parsed on the way in — a
- * mutation response is as untrusted as any other network payload, and priming
+ * nothing but would let a slow refetch re-render the *old* row after the player
+ * has already been told the write worked. The payload is parsed on the way in —
+ * a mutation response is as untrusted as any other network payload, and priming
  * the cache with an unparsed body would smuggle past the query's own boundary.
  */
-export function useAllowAgentAccess() {
+function useAgentAccessMutation(mutationFn: () => Promise<AgentAccessPayload>) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: allowAgentAccess,
+    mutationFn,
     onSuccess: (payload) => {
       // The options object's own `queryKey`, so the write is type-checked
       // against what the query caches (the payload, before `select`) rather
@@ -211,6 +206,18 @@ export function useAllowAgentAccess() {
       queryClient.setQueryData(claudeAccessQuery().queryKey, payload)
     },
   })
+}
+
+/**
+ * `POST /v1/settings/agent-access/allow` — clear the player's own revocation.
+ *
+ * Revocation is deliberately sticky (there is no timer and no implicit clear),
+ * so this is the *only* way back: a revoked player who follows the connector
+ * setup steps again is refused by the MCP transport with a silent 401, forever.
+ * Hence the control it drives is load-bearing rather than decorative.
+ */
+export function useAllowAgentAccess() {
+  return useAgentAccessMutation(allowAgentAccess)
 }
 
 const disconnectAgentAccess = async (): Promise<AgentAccessPayload> =>
@@ -224,13 +231,6 @@ const disconnectAgentAccess = async (): Promise<AgentAccessPayload> =>
 /**
  * `POST /v1/settings/agent-access/disconnect` — switch agent access off.
  *
- * The mirror image of `useAllowAgentAccess`, and the same shape for the same
- * reasons: the endpoint answers with the page's whole new state, so the success
- * path **parses it and writes it into the cache** rather than invalidating —
- * no follow-up GET for a fact the server has just told us, and no window in
- * which a slow refetch re-renders the connected card after the player has been
- * told it is gone.
- *
  * What it stops is wider than its name: revocation is recorded on the *user*,
  * so it cuts off every agent signed in with this account's email, and it holds
  * against tokens already issued (the MCP transport re-reads the flag per
@@ -238,11 +238,5 @@ const disconnectAgentAccess = async (): Promise<AgentAccessPayload> =>
  * that promise, and this is the call that keeps it.
  */
 export function useDisconnectAgentAccess() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: disconnectAgentAccess,
-    onSuccess: (payload) => {
-      queryClient.setQueryData(claudeAccessQuery().queryKey, payload)
-    },
-  })
+  return useAgentAccessMutation(disconnectAgentAccess)
 }

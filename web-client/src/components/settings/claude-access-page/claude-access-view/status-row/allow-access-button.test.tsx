@@ -69,7 +69,7 @@ describe('AllowAccessButton', () => {
     // Pressing again is the whole remedy, so the button must come back.
     expect(allowAccessButtonPage.getAllowButton()).toBeEnabled()
     expect(allowAccessButtonPage.getAllowNote()).toHaveClass(
-      'fmm-claude__allow-note--failed',
+      'fmm-claude__note--failed',
     )
   })
 

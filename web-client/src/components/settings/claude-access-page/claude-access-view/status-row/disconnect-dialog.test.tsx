@@ -132,7 +132,7 @@ describe('DisconnectDialog', () => {
       FAILURE_NOTE,
     )
     expect(disconnectDialogPage.getConfirmNote()).toHaveClass(
-      'fmm-claude__confirm-note--failed',
+      'fmm-claude__note--failed',
     )
     // Pressing again is the whole remedy, so the button must come back.
     expect(disconnectDialogPage.getConfirmButton()).toBeEnabled()

@@ -18,6 +18,12 @@ const scoped = (container: Container) => {
   return {
     /** The re-allow button. Throws where it must exist. */
     getAllowButton: button,
+    /** Press the re-allow button, scoped to this container — mirroring
+     * `disconnectButtonPage`, so a press cannot escape the surface it was
+     * scoped to. */
+    async clickAllow() {
+      await userEvent.click(button())
+    },
     /**
      * The same, for asserting **absence** — every state but `revoked` must not
      * offer it.
@@ -58,11 +64,6 @@ export const allowAccessButtonPage = {
 
   render() {
     render(<AllowAccessButton />)
-  },
-
-  /** Press the re-allow button. */
-  async clickAllow() {
-    await userEvent.click(screen.getByRole('button', { name: ALLOW_LABEL }))
   },
 
   within(container: Container = screen) {

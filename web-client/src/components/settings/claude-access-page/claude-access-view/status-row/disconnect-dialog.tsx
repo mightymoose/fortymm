@@ -114,8 +114,8 @@ export function DisconnectDialog({
           already watching it; `:empty` keeps it out of the layout. */}
       <p
         className={cn(
-          'fmm-claude__confirm-note',
-          isError && 'fmm-claude__confirm-note--failed',
+          'fmm-claude__note',
+          isError && 'fmm-claude__note--failed',
         )}
         role="status"
       >

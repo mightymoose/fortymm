@@ -89,19 +89,6 @@
   color: var(--fg-muted);
 }
 
-/* Visually hidden, still in the accessibility tree — the status region's name. */
-.fmm-claude__sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
 /* ---------- Status row ---------- */
 .fmm-claude__status {
   margin-bottom: 28px;
@@ -256,7 +243,11 @@ button.fmm-claude__action {
   justify-items: stretch;
 }
 
-.fmm-claude__allow-note {
+/* The live region under an in-flight action — used by both the allow button and
+   the disconnect dialog. Deliberately a BARE selector, never nested under
+   `.fmm-claude`: the dialog portals to <body>, so a nested rule would drop the
+   `:empty` case there and leave the idle dialog reserving a blank row. */
+.fmm-claude__note {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
@@ -265,11 +256,11 @@ button.fmm-claude__action {
 
 /* Idle, the region is present-but-empty so a screen reader is already watching
    it; it must not reserve a row of whitespace while it waits. */
-.fmm-claude__allow-note:empty {
+.fmm-claude__note:empty {
   display: none;
 }
 
-.fmm-claude__allow-note--failed {
+.fmm-claude__note--failed {
   color: var(--loss);
 }
 
@@ -362,21 +353,10 @@ button.fmm-claude__action {
   gap: 10px;
 }
 
-.fmm-claude__confirm-note {
+/* The dialog's note is the shared `.fmm-claude__note`; only its spacing differs,
+   because here it sits below the list rather than under a button. */
+.fmm-claude__confirm .fmm-claude__note {
   margin: 14px 0 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--fg-3);
-}
-
-/* Idle, the region is present-but-empty so a screen reader is already watching
-   it; it must not reserve a row of whitespace while it waits. */
-.fmm-claude__confirm-note:empty {
-  display: none;
-}
-
-.fmm-claude__confirm-note--failed {
-  color: var(--loss);
 }
 
 /* ---------- Permissions summary ---------- */
