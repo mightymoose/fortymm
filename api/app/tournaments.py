@@ -1141,10 +1141,19 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       It can no longer arrive from the **cut** route — ``strategy_for`` is total now
       that the enum holds only what runs (ADR 20260726) — but this mapper is shared
       with the **schedule-preview** route below, and ``app.schedule_preview`` still
-      raises it for ``single_elim``: the CP-SAT scheduler is round-robin-only, so a
-      pool-less bracket has no windows to solve over. That asymmetry is why only the
-      preview route declares the body (``responses={422: …}``): it is the only route
-      that can send it.
+      raises it for ``single_elim`` and ``swiss``: the *preview* covers an event's pool
+      stage, and neither draw has one. The scheduler itself is no longer the limit — a
+      live solve places a fixture belonging to no pool over its event's own window (ADR
+      "a pool restricts scheduling, it does not enable it"). A director previewing a
+      bracket's schedule must be told it is the *draw type* that cannot be previewed,
+      not left with the generic sentence, which says the event's own state is at fault
+      and would send them hunting through pools and entrants that are perfectly fine.
+      (The sentence composed below still names the pre-ADR reason: a later slice of
+      #1228 revisits how the preview refuses, and rewrites that copy with it.)
+
+      That asymmetry — cut cannot send this, preview can — is why only the preview
+      route declares the body (``responses={422: …}``): it is the only route that can
+      send it, so it is the only one whose OpenAPI should promise it.
     * The fallback arm is a **generic** sentence, never the exception's own. A
       ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
       message nobody wrote for a human — refusing vaguely is a bug report; leaking

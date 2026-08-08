@@ -7493,8 +7493,10 @@ internal enum Components {
         /// minutes of *their* time, against a window spanning only ``window_span_min``.
         /// A pigeonhole over one person, so adding tables cannot fix it — the remedy is
         /// fewer matches for them in this pool, or a longer window. Resolved: the
-        /// human's display ``player_name`` and the pool's ``name`` + ``HH:MM`` bounds;
-        /// the minutes stay integers for the client to format.
+        /// human's display ``player_name``, the pool's ``name`` + ``HH:MM`` bounds, and
+        /// which kind of ``reservation`` that name is — "a smaller pool" is not a remedy
+        /// an event-wide reservation has; the minutes stay integers for the client to
+        /// format.
         ///
         /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead`.
         internal struct PlayerOverSubscribedRead: Codable, Hashable, Sendable {
@@ -7508,6 +7510,13 @@ internal enum Components {
             internal var playerName: Swift.String
             /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/pool_name`.
             internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/reservation`.
+            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case pool = "pool"
+                case event = "event"
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/reservation`.
+            internal var reservation: Components.Schemas.PlayerOverSubscribedRead.ReservationPayload?
             /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/window_start`.
             internal var windowStart: Swift.String
             /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/window_end`.
@@ -7524,6 +7533,7 @@ internal enum Components {
             ///   - kind:
             ///   - playerName:
             ///   - poolName:
+            ///   - reservation:
             ///   - windowStart:
             ///   - windowEnd:
             ///   - matchCount:
@@ -7533,6 +7543,7 @@ internal enum Components {
                 kind: Components.Schemas.PlayerOverSubscribedRead.KindPayload? = nil,
                 playerName: Swift.String,
                 poolName: Swift.String,
+                reservation: Components.Schemas.PlayerOverSubscribedRead.ReservationPayload? = nil,
                 windowStart: Swift.String,
                 windowEnd: Swift.String,
                 matchCount: Swift.Int,
@@ -7542,6 +7553,7 @@ internal enum Components {
                 self.kind = kind
                 self.playerName = playerName
                 self.poolName = poolName
+                self.reservation = reservation
                 self.windowStart = windowStart
                 self.windowEnd = windowEnd
                 self.matchCount = matchCount
@@ -7552,6 +7564,7 @@ internal enum Components {
                 case kind
                 case playerName = "player_name"
                 case poolName = "pool_name"
+                case reservation
                 case windowStart = "window_start"
                 case windowEnd = "window_end"
                 case matchCount = "match_count"
@@ -7784,7 +7797,8 @@ internal enum Components {
             }
         }
         /// A pool with active fixtures but no tables at all — nowhere to place them.
-        /// Resolved: the pool's display ``name`` (never the namespaced solver id).
+        /// Resolved: the pool's display ``name`` (never the namespaced solver id) and
+        /// which kind of ``reservation`` that name belongs to.
         ///
         /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead`.
         internal struct PoolHasNoTablesRead: Codable, Hashable, Sendable {
@@ -7796,27 +7810,38 @@ internal enum Components {
             internal var kind: Components.Schemas.PoolHasNoTablesRead.KindPayload?
             /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/pool_name`.
             internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/reservation`.
+            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case pool = "pool"
+                case event = "event"
+            }
+            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/reservation`.
+            internal var reservation: Components.Schemas.PoolHasNoTablesRead.ReservationPayload?
             /// Creates a new `PoolHasNoTablesRead`.
             ///
             /// - Parameters:
             ///   - kind:
             ///   - poolName:
+            ///   - reservation:
             internal init(
                 kind: Components.Schemas.PoolHasNoTablesRead.KindPayload? = nil,
-                poolName: Swift.String
+                poolName: Swift.String,
+                reservation: Components.Schemas.PoolHasNoTablesRead.ReservationPayload? = nil
             ) {
                 self.kind = kind
                 self.poolName = poolName
+                self.reservation = reservation
             }
             internal enum CodingKeys: String, CodingKey {
                 case kind
                 case poolName = "pool_name"
+                case reservation
             }
         }
         /// A pool whose aggregate match-time (``required_min``) exceeds the
         /// table-minutes its window offers (``capacity_min`` = window span ×
-        /// ``table_count``). Resolved: the pool ``name`` and its ``HH:MM`` bounds; the
-        /// minutes stay integers.
+        /// ``table_count``). Resolved: the pool ``name``, which kind of ``reservation``
+        /// it is, and its ``HH:MM`` bounds; the minutes stay integers.
         ///
         /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead`.
         internal struct PoolOverCapacityRead: Codable, Hashable, Sendable {
@@ -7828,6 +7853,13 @@ internal enum Components {
             internal var kind: Components.Schemas.PoolOverCapacityRead.KindPayload?
             /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/pool_name`.
             internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/reservation`.
+            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case pool = "pool"
+                case event = "event"
+            }
+            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/reservation`.
+            internal var reservation: Components.Schemas.PoolOverCapacityRead.ReservationPayload?
             /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/window_start`.
             internal var windowStart: Swift.String
             /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/window_end`.
@@ -7843,6 +7875,7 @@ internal enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - poolName:
+            ///   - reservation:
             ///   - windowStart:
             ///   - windowEnd:
             ///   - requiredMin:
@@ -7851,6 +7884,7 @@ internal enum Components {
             internal init(
                 kind: Components.Schemas.PoolOverCapacityRead.KindPayload? = nil,
                 poolName: Swift.String,
+                reservation: Components.Schemas.PoolOverCapacityRead.ReservationPayload? = nil,
                 windowStart: Swift.String,
                 windowEnd: Swift.String,
                 requiredMin: Swift.Int,
@@ -7859,6 +7893,7 @@ internal enum Components {
             ) {
                 self.kind = kind
                 self.poolName = poolName
+                self.reservation = reservation
                 self.windowStart = windowStart
                 self.windowEnd = windowEnd
                 self.requiredMin = requiredMin
@@ -7868,6 +7903,7 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case kind
                 case poolName = "pool_name"
+                case reservation
                 case windowStart = "window_start"
                 case windowEnd = "window_end"
                 case requiredMin = "required_min"
@@ -12370,8 +12406,9 @@ internal enum Components {
         }
         /// A single fixture whose pool window cannot hold even one match: its
         /// ``best_of`` match needs ``needed_min`` minutes but the window spans only
-        /// ``window_span_min``. Resolved: the pool ``name`` and its ``HH:MM`` window
-        /// bounds; the minutes pass through as integers for the client to format.
+        /// ``window_span_min``. Resolved: the pool ``name``, which kind of
+        /// ``reservation`` it is, and its ``HH:MM`` window bounds; the minutes pass
+        /// through as integers for the client to format.
         ///
         /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead`.
         internal struct WindowTooShortForMatchRead: Codable, Hashable, Sendable {
@@ -12383,6 +12420,13 @@ internal enum Components {
             internal var kind: Components.Schemas.WindowTooShortForMatchRead.KindPayload?
             /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/pool_name`.
             internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/reservation`.
+            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case pool = "pool"
+                case event = "event"
+            }
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/reservation`.
+            internal var reservation: Components.Schemas.WindowTooShortForMatchRead.ReservationPayload?
             /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/window_start`.
             internal var windowStart: Swift.String
             /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/window_end`.
@@ -12405,6 +12449,7 @@ internal enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - poolName:
+            ///   - reservation:
             ///   - windowStart:
             ///   - windowEnd:
             ///   - bestOf:
@@ -12413,6 +12458,7 @@ internal enum Components {
             internal init(
                 kind: Components.Schemas.WindowTooShortForMatchRead.KindPayload? = nil,
                 poolName: Swift.String,
+                reservation: Components.Schemas.WindowTooShortForMatchRead.ReservationPayload? = nil,
                 windowStart: Swift.String,
                 windowEnd: Swift.String,
                 bestOf: Components.Schemas.WindowTooShortForMatchRead.BestOfPayload,
@@ -12421,6 +12467,7 @@ internal enum Components {
             ) {
                 self.kind = kind
                 self.poolName = poolName
+                self.reservation = reservation
                 self.windowStart = windowStart
                 self.windowEnd = windowEnd
                 self.bestOf = bestOf
@@ -12430,6 +12477,7 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case kind
                 case poolName = "pool_name"
+                case reservation
                 case windowStart = "window_start"
                 case windowEnd = "window_end"
                 case bestOf = "best_of"

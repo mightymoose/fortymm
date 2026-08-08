@@ -2067,7 +2067,7 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     refusing to produce fixtures for one of the tournament's events — to an
     actionable ``ToolError``.
 
-    A preview must never invent a schedule for a format production cannot run (the
+    A preview must never invent a schedule for a format it does not cover (the
     false-confidence failure the real-engine decision exists to prevent, ADR "draw
     coverage is round-robin only; every other type is refused loud"), so an
     un-drawable event refuses the *whole* preview, never a partial grid. A ``match``
@@ -2075,9 +2075,12 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     and why, mirroring ``_map_draw_refusal_tool_error`` but in the preview's voice:
 
     * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's
-      draw type has no schedule generator yet (only round-robin does today; single-elim
-      can be *cut* but not yet *placed*), a fact to change on the event, not a
-      transient one to retry. **This arm is the reason the mirror is not exact:**
+      draw type is not one this PREVIEW covers (it previews an event's pool stage, and
+      single-elim and swiss have none), a fact to change on the event, not a
+      transient one to retry. A *live* solve does place those events, over the event's
+      own window (ADR "a pool restricts scheduling, it does not enable it"), so what
+      the caller is told here is that the draw type cannot be **previewed**.
+      **This arm is the reason the mirror is not exact:**
       ``_map_draw_refusal_tool_error`` has no ``UnsupportedDrawType`` arm, because on
       the CUT path the error is unreachable (``strategy_for`` is total). On the PREVIEW
       path it is genuinely raised — ``schedule_preview`` raises it for single-elim — so
@@ -2149,9 +2152,10 @@ async def preview_schedule(
     look at, or it is over).
 
     Draw coverage is ROUND-ROBIN ONLY: an event with any other draw type (today that
-    means single-elim) refuses the WHOLE preview with an actionable ``ToolError`` —
-    never a partial grid — because a preview must not invent a schedule for a format
-    production cannot run.
+    means single-elim or swiss) refuses the WHOLE preview with an actionable
+    ``ToolError`` — never a partial grid — because a preview must not invent a
+    schedule for a format it does not cover. The refusal is the preview's own: a real
+    solve does place a single-elim or swiss event, over the event's own window.
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may preview), when the tournament is no

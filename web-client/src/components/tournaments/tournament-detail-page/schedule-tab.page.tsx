@@ -98,6 +98,15 @@ const scoped = (container: Container) => ({
   queryPlaceEditor(fixtureId: string) {
     return container.queryByTestId(`place-editor-${fixtureId}`)
   },
+  /** The table picker in an open editor. It is a radix `Select`, whose listbox only
+   * exists once opened — but its TRIGGER already renders the chosen option's label,
+   * which is where the `· pool table` mark shows up. So this reads what the director
+   * actually sees on the closed control, with no portal to open. */
+  getPlaceTable(fixtureId: string) {
+    return within(container.getByTestId(`place-editor-${fixtureId}`)).getByRole(
+      'combobox',
+    )
+  },
   /** The predicted-start time input in an open editor. */
   getPlaceTime(fixtureId: string) {
     return container.getByTestId(`place-time-${fixtureId}`) as HTMLInputElement

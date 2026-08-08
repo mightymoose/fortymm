@@ -1,4 +1,5 @@
 import {
+  buildBracketDrawnEvent,
   buildDrawnEvent,
   buildEntrants,
   buildEvent,
@@ -183,6 +184,59 @@ describe('buildSchedule', () => {
     })
     const [match] = buildSchedule(tournament, buildTables()).awaiting
     expect(match.window).toEqual({ date: '2026-07-01', start: '13:00', end: '17:00' })
+  })
+
+  // ----- an UN-POOLED fixture (ADR 20260807, "a pool restricts scheduling, it does
+  // not enable it"): a bracket, a swiss round and a knockout stage carry no pool, so
+  // their reservation is the EVENT's own window over the WHOLE tournament's tables.
+  // A pool must keep restricting — the two claims are pinned as a pair. -----------
+
+  it('inherits an un-pooled fixture’s placement window from its EVENT slot', () => {
+    const tournament = buildTournament({
+      events: [
+        // A single-elim bracket: `pools: []`, every fixture `poolId: null`. Its event
+        // window is the SECOND day of the tournament, deliberately — `buildPool` and
+        // `buildEvent` both default to 2026-06-13, so a fixture left on the default
+        // date could not tell "read the event slot" from "read a pool slot".
+        buildBracketDrawnEvent({
+          slot: { date: '2026-06-14', start: '10:00', end: '16:00' },
+        }),
+      ],
+    })
+    const [match] = buildSchedule(tournament, buildTables()).awaiting
+    expect(match.window).toEqual({ date: '2026-06-14', start: '10:00', end: '16:00' })
+    expect(match.reservation).toBe('event')
+  })
+
+  it('suggests the WHOLE tournament’s tables for an un-pooled fixture', () => {
+    const tournament = buildTournament({ events: [buildBracketDrawnEvent()] })
+    // `buildTournament` reserves t1…t8 while the catalogue runs to t12: the
+    // suggestion is the TOURNAMENT's reservation, not every table that exists.
+    const [match] = buildSchedule(tournament, buildTables()).awaiting
+    expect(match.suggestedTableIds).toEqual([
+      't1',
+      't2',
+      't3',
+      't4',
+      't5',
+      't6',
+      't7',
+      't8',
+    ])
+  })
+
+  it('keeps a POOLED fixture on its own pool’s tables — a pool still restricts', () => {
+    const tournament = buildTournament({
+      events: [
+        buildDrawnEvent({
+          pools: [buildPool({ id: 'p-a', tableIds: ['t2', 't3'] })],
+          fixtures: [buildFixture({ id: 'x', poolId: 'p-a' })],
+        }),
+      ],
+    })
+    const [match] = buildSchedule(tournament, buildTables()).awaiting
+    expect(match.suggestedTableIds).toEqual(['t2', 't3'])
+    expect(match.reservation).toBe('pool')
   })
 })
 

@@ -74,6 +74,7 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
         {
           kind: 'window_too_short_for_match',
           pool_name: 'Pool A',
+          reservation: 'pool',
           window_start: '09:00',
           window_end: '10:00',
           best_of: 5,
@@ -84,6 +85,7 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
           kind: 'player_over_subscribed',
           player_name: 'spiked-frigatebird',
           pool_name: 'Pool A',
+          reservation: 'pool',
           window_start: '09:00',
           window_end: '10:30',
           match_count: 4,

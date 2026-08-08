@@ -580,14 +580,24 @@ def _resolve_reason(
     of ``app.schedule_solves._resolve_reason`` (same union, same arms) taking the
     resolution maps directly rather than a ``SolveInputs``. Exhaustive with an
     ``assert_never`` floor: adding an :data:`~app.scheduling.InfeasibilityReason`
-    arm is a type error here until handled."""
+    arm is a type error here until handled.
+
+    Every reservation a preview can blame is a real **pool**: the builder draws
+    over the event's pools and drops an rr-then-ko draw's un-pooled knockout
+    (ADR 20260727, and the honest note that says so), so no event-wide
+    reservation is ever in a preview snapshot. Hence the literal ``"pool"`` — the
+    preview's resolutions carry no reservation kind to read, because there is
+    only one for them to carry."""
     match reason:
         case PoolHasNoTables():
-            return PoolHasNoTablesRead(pool_name=pool_resolutions[reason.pool_id].name)
+            return PoolHasNoTablesRead(
+                pool_name=pool_resolutions[reason.pool_id].name, reservation="pool"
+            )
         case WindowTooShortForMatch():
             pool = pool_resolutions[reason.pool_id]
             return WindowTooShortForMatchRead(
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 best_of=best_of[reason.fixture_id],
@@ -598,6 +608,7 @@ def _resolve_reason(
             pool = pool_resolutions[reason.pool_id]
             return PoolOverCapacityRead(
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 required_min=reason.required_min,
@@ -614,6 +625,7 @@ def _resolve_reason(
             return PlayerOverSubscribedRead(
                 player_name=placeholder_label(reason.player_id),
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 match_count=reason.match_count,
@@ -649,8 +661,11 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
     The knockout line is what stops the strip lying by omission about an
     **rr-then-ko** event: the preview plans that event's whole draw but schedules only
     its pool stage (ADR 20260727 — a bracket is placeable only incrementally, as the
-    pools that feed it resolve, which is #1228), so without a note the director reads a
-    schedule that silently covers part of their event. It is emitted off the count of
+    pools that feed it resolve), so without a note the director reads a
+    schedule that silently covers part of their event. The *live* solve does place
+    that bracket, incrementally (ADR "a pool restricts scheduling, it does not enable
+    it"); a preview run before anyone has registered has nothing to resolve it from,
+    which is why the note stays. It is emitted off the count of
     fixtures actually dropped, so a tournament of plain round-robins — which drops none
     — gets the strip it always had, unchanged."""
     notes = [

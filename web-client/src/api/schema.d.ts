@@ -3575,8 +3575,10 @@ export interface components {
          *     minutes of *their* time, against a window spanning only ``window_span_min``.
          *     A pigeonhole over one person, so adding tables cannot fix it — the remedy is
          *     fewer matches for them in this pool, or a longer window. Resolved: the
-         *     human's display ``player_name`` and the pool's ``name`` + ``HH:MM`` bounds;
-         *     the minutes stay integers for the client to format.
+         *     human's display ``player_name``, the pool's ``name`` + ``HH:MM`` bounds, and
+         *     which kind of ``reservation`` that name is — "a smaller pool" is not a remedy
+         *     an event-wide reservation has; the minutes stay integers for the client to
+         *     format.
          */
         PlayerOverSubscribedRead: {
             /**
@@ -3588,6 +3590,12 @@ export interface components {
             player_name: string;
             /** Pool Name */
             pool_name: string;
+            /**
+             * Reservation
+             * @default pool
+             * @enum {string}
+             */
+            reservation: "pool" | "event";
             /** Window Start */
             window_start: string;
             /** Window End */
@@ -3717,7 +3725,8 @@ export interface components {
         /**
          * PoolHasNoTablesRead
          * @description A pool with active fixtures but no tables at all — nowhere to place them.
-         *     Resolved: the pool's display ``name`` (never the namespaced solver id).
+         *     Resolved: the pool's display ``name`` (never the namespaced solver id) and
+         *     which kind of ``reservation`` that name belongs to.
          */
         PoolHasNoTablesRead: {
             /**
@@ -3727,13 +3736,19 @@ export interface components {
             kind: "pool_has_no_tables";
             /** Pool Name */
             pool_name: string;
+            /**
+             * Reservation
+             * @default pool
+             * @enum {string}
+             */
+            reservation: "pool" | "event";
         };
         /**
          * PoolOverCapacityRead
          * @description A pool whose aggregate match-time (``required_min``) exceeds the
          *     table-minutes its window offers (``capacity_min`` = window span ×
-         *     ``table_count``). Resolved: the pool ``name`` and its ``HH:MM`` bounds; the
-         *     minutes stay integers.
+         *     ``table_count``). Resolved: the pool ``name``, which kind of ``reservation``
+         *     it is, and its ``HH:MM`` bounds; the minutes stay integers.
          */
         PoolOverCapacityRead: {
             /**
@@ -3743,6 +3758,12 @@ export interface components {
             kind: "pool_over_capacity";
             /** Pool Name */
             pool_name: string;
+            /**
+             * Reservation
+             * @default pool
+             * @enum {string}
+             */
+            reservation: "pool" | "event";
             /** Window Start */
             window_start: string;
             /** Window End */
@@ -5551,8 +5572,9 @@ export interface components {
          * WindowTooShortForMatchRead
          * @description A single fixture whose pool window cannot hold even one match: its
          *     ``best_of`` match needs ``needed_min`` minutes but the window spans only
-         *     ``window_span_min``. Resolved: the pool ``name`` and its ``HH:MM`` window
-         *     bounds; the minutes pass through as integers for the client to format.
+         *     ``window_span_min``. Resolved: the pool ``name``, which kind of
+         *     ``reservation`` it is, and its ``HH:MM`` window bounds; the minutes pass
+         *     through as integers for the client to format.
          */
         WindowTooShortForMatchRead: {
             /**
@@ -5562,6 +5584,12 @@ export interface components {
             kind: "window_too_short_for_match";
             /** Pool Name */
             pool_name: string;
+            /**
+             * Reservation
+             * @default pool
+             * @enum {string}
+             */
+            reservation: "pool" | "event";
             /** Window Start */
             window_start: string;
             /** Window End */

@@ -111,15 +111,15 @@ const Side = ({ side }: { side: FixtureSide }) => {
   }
 }
 
-/** The director's placement editor for one match (owner only): pick a **table** (the
- * pool's own tables are marked as the natural suggestion) and a **time** within the
+/** The director's placement editor for one match (owner only): pick a **table** (a pooled
+ * match's own pool tables are marked as the natural suggestion) and a **time** within the
  * fixture's window, then Save — or Clear an existing placement.
  *
- * Only the **time** is asked: the placement's date is fixed by the pool/event Slot
- * (ADR-0790), so the naive timestamp is composed from that date + this time
- * (`composeScheduledStart`) — no `Date`, no timezone. The control is a plain
- * reveal-on-click panel, not a portal'd popover, so what a director (and a test) sees is
- * the DOM, in place. */
+ * Only the **time** is asked: the placement's date is fixed by the match's reservation —
+ * its pool's Slot, or its event's own Slot when it has no pool (ADR-0790, ADR 20260807) —
+ * so the naive timestamp is composed from that date + this time (`composeScheduledStart`)
+ * — no `Date`, no timezone. The control is a plain reveal-on-click panel, not a portal'd
+ * popover, so what a director (and a test) sees is the DOM, in place. */
 const PlacementControl = ({
   match,
   tables,
@@ -151,9 +151,16 @@ const PlacementControl = ({
     consequence: CallConsequence
   } | null>(null)
 
+  // The `pool table` mark is carried only by a POOLED match (ADR 20260807). A mark is
+  // information only when it discriminates: an un-pooled match is suggested every table
+  // in the tournament, so marking all of them would say nothing — and would name a pool
+  // the match does not have.
   const options = tables.map((t) => ({
     value: t.id,
-    label: match.suggestedTableIds.includes(t.id) ? `${t.label} · pool table` : t.label,
+    label:
+      match.reservation === 'pool' && match.suggestedTableIds.includes(t.id)
+        ? `${t.label} · pool table`
+        : t.label,
   }))
   // A placement can name a table the catalogue no longer lists (a dangling ref, ADR-0790):
   // keep it selectable so the editor can *see* what it is on before moving off it, rather
@@ -579,7 +586,10 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
         title="Schedule"
         subtitle={
           canEdit
-            ? 'Every match, by table. Place a match on a table and a predicted time — the date comes from its pool window.'
+            ? // The date's source is named for BOTH kinds of match (ADR 20260807): a
+              // pooled match takes its pool's window, and an un-pooled one — a bracket,
+              // a swiss round, a knockout stage — takes its event's own.
+              'Every match, by table. Place a match on a table and a predicted time — the date comes from its pool window, or from its event window when it has no pool.'
             : 'Every match, by table, with its predicted start time.'
         }
         action={

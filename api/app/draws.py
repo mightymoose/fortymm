@@ -95,9 +95,13 @@ class UnsupportedDrawType(DrawError):
     strategy by construction, because the enum holds only what runs (ADR "a draw type
     is a seeded row, and the enum holds only what runs"), and :func:`strategy_for` is
     total. What survives is the *caller-specific* refusal —
-    :mod:`app.schedule_preview` raises this for ``single_elim``, a fully supported draw
-    type, because the CP-SAT table scheduler is pool-based and a pool-less bracket has
-    no windows to solve over.
+    :mod:`app.schedule_preview` raises this for ``single_elim`` and ``swiss``, both
+    fully supported draw types, because the **preview** does not cover them.
+
+    It is no longer the scheduler that cannot place them: a live solve places a fixture
+    belonging to no pool over its event's own window, on the tournament's tables (ADR
+    "a pool restricts scheduling, it does not enable it"). The reason the preview
+    refuses is the preview's own, and :mod:`app.schedule_preview` states it in full.
 
     Carries the offending :class:`DrawType` **structurally**, so the HTTP/MCP layers
     compose their own sentence from the fact rather than parsing a message.
@@ -1043,7 +1047,10 @@ class SwissStrategy:
     rank.
 
     Fixtures are **un-pooled** (``pool_id=None``): swiss ranks the whole field in one
-    table, which is why the schedule preview refuses it exactly as it refuses a bracket.
+    table. That no longer keeps them off the schedule — a live solve places an un-pooled
+    fixture over its event's own window (ADR "a pool restricts scheduling, it does not
+    enable it") — but the schedule **preview** still refuses a swiss event exactly as it
+    refuses a bracket, for the reason :mod:`app.schedule_preview` states in full.
     """
 
     #: How many rounds the event plays. ``R >= 1`` is static — a Pydantic constraint at

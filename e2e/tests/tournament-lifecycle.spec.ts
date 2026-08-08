@@ -173,7 +173,10 @@ test.describe('Tournament — round-robin lifecycle', () => {
     await expect(played.standingsChampion(eventId)).toBeVisible()
     await expect(played.standingsChampion(eventId)).toContainText(director.username)
     // And the pool table shows both entrants, with the director in the top row.
-    const standings = played.poolStandings(poolId)
+    // `poolId` is nullable on the seed — a pool-less seed (`pools: []`) has no first
+    // pool — but this seed took the default single pool, so it is a string here.
+    expect(poolId, 'the default seed reserves one pool').not.toBeNull()
+    const standings = played.poolStandings(poolId!)
     await expect(standings).toContainText(director.username)
     await expect(standings).toContainText(opponent.username)
     // Row 0 is the header; row 1 is rank 1 — the director, the champion.

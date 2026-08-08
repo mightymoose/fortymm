@@ -128,10 +128,11 @@ describe('SolveStrip', () => {
         fixturesPlaced: null,
         fixturesPinned: null,
         infeasibilityReasons: [
-          { kind: 'pool_has_no_tables', poolName: 'Pool B' },
+          { kind: 'pool_has_no_tables', poolName: 'Pool B', reservation: 'pool' },
           {
             kind: 'pool_over_capacity',
             poolName: 'Pool A',
+            reservation: 'pool',
             windowStart: '09:00',
             windowEnd: '12:30',
             requiredMin: 480,
@@ -201,6 +202,7 @@ describe('SolveStrip', () => {
             kind: 'player_over_subscribed',
             playerName: 'spiked-frigatebird',
             poolName: 'Pool A',
+            reservation: 'pool',
             windowStart: '09:00',
             windowEnd: '10:30',
             matchCount: 4,
