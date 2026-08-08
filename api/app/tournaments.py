@@ -1126,14 +1126,17 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       nobody to play — and the numbers in that sentence ("5 entrants across 3 pool(s)")
       are the numbers the director has to change. Recomposing it here would be a second
       copy of a rule this route does not own, and the copy that drifts is the one a
-      director reads.
+      director reads. From the **schedule-preview** route it arrives only when the
+      tournament has no other event to preview: one event the draw refuses beside a
+      healthy one is skipped, and the honest-notes strip carries this same sentence.
     * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
       reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
       now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
       with the **schedule-preview** route below, and ``app.schedule_preview`` raises it
-      when *no* event of a tournament can be previewed (every event is a single-elim or
-      a swiss draw). One such event beside a round-robin no longer refuses anything:
-      the builder skips it, previews the rest, and the honest-notes strip names it. A
+      when *no* event of a tournament can be previewed and the first such event is a
+      single-elim or a swiss draw. One such event beside a round-robin no longer
+      refuses anything: the builder skips it, previews the rest, and the honest-notes
+      strip names it. A
       director previewing a bracket-only tournament must be told it is the *draw type*
       that cannot be previewed, not left with the generic sentence, which says the
       event's own state is at fault and would send them hunting through pools and

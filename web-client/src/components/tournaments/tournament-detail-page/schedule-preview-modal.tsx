@@ -3,7 +3,7 @@ import { Loader2, RotateCw, TriangleAlert } from 'lucide-react'
 import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { ApiError } from '@/api/client'
+import { ApiError, validationFields } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -105,10 +105,9 @@ function fmtPreviewFinish(iso: string): string | null {
   return fmt12(Number(m[1]) * 60 + Number(m[2]))
 }
 
-/** The four refusals the enqueue POST can answer with, each a designed notice in
- * the director's words — never the server's prose (`DEFINITION_OF_COMPLETE.md`).
- * The trigger button is NOT gated on draw type, so a `422` (only round-robin is
- * previewable today) is a real, reachable refusal, not a bug. */
+/** The refusals the enqueue POST can answer with, each a designed inline notice.
+ * The trigger button is NOT gated on draw type, so a `422` is a real, reachable
+ * refusal, not a bug. */
 interface PreviewEnqueueNotice {
   title: string
   description: string
@@ -144,38 +143,38 @@ const codedRefusalSchema = z.object({
   }),
 })
 
-/** The 422 copy for a refusal this build has no better words for: the honest generic,
- * naming nothing (it is what a director saw for *every* 422 before #1221). */
-const UNPREVIEWABLE_GENERIC =
+/** The 422 description when the server sent no sentence of its own — kept verbatim
+ * from the pre-fix code. Note it does name a cause (the draw type), which is only
+ * safe here because we have nothing else to say: it is exactly the guess that was
+ * wrong when it was shown over EVERY 422. A cause-neutral sentence would be a better
+ * fallback; changing it is a follow-up, not part of this fix. */
+const PREVIEW_422_FALLBACK =
   'A preview runs over a round-robin draw. This tournament uses a draw type the preview does not support yet.'
 
 /**
- * The server's own sentence for this refusal, when it authored one — a plain-string
- * `detail`, or a coded refusal's `message`.
+ * The server's own sentence for a refusal, when that sentence was written for a
+ * director — otherwise `null`.
  *
- * Deliberately **narrower than `extractDetail`** (`@/api/client`), which has a third arm
- * this surface must not take: it falls through to FastAPI's request-validation array and
- * returns Pydantic's `msg`. That is machinery, not copy. A float typed into a field-size
- * override posts against `dict[uuid.UUID, int]` and would put *"Input should be a valid
- * integer, got a number with a fractional part"* under the heading "This schedule can't
- * be previewed yet" — a raw API string reaching the UI, which the repo forbids
- * (ADR-0968, and `DEFINITION_OF_COMPLETE.md`'s "raw API detail strings never reach the
- * UI" as quoted by that ADR).
+ * **The shape decides, not the status.** FastAPI's per-field validation array is the one
+ * 422 body whose `msg` is machine prose ("Input should be a valid integer, got a number
+ * with a fractional part" — what a float typed into a field-size override earns against
+ * `dict[uuid.UUID, int]`), and `extractDetail` happily returns a string from it, so a
+ * status-only check would put Pydantic's words under "This schedule can't be previewed
+ * yet". `validationFields` returns non-`null` **only** for that array, which is exactly
+ * the "are the server's words safe to show" test (`data/save-failure.ts`, whose
+ * `invalid` arm exists because that prose reached a screen once).
  *
  * The distinction is not fussiness about wording: a validation 422 means **the request
  * was malformed**, not that the schedule was refused, so it is not a refusal sentence at
- * all and there is nothing here worth showing. It takes the generic.
+ * all and there is nothing here worth showing. It takes the fallback.
+ *
+ * `error.detail` covers both shapes a refusal arrives in — a plain-string `detail` and a
+ * coded refusal's `detail.message` — because `extractDetail` already reads both.
  */
-function serverSentence(body: unknown): string | null {
-  const parsed = z
-    .union([
-      z.object({ detail: z.string().trim().min(1) }).transform((b) => b.detail),
-      z
-        .object({ detail: z.object({ message: z.string().trim().min(1) }) })
-        .transform((b) => b.detail.message),
-    ])
-    .safeParse(body)
-  return parsed.success ? parsed.data : null
+function serverSentence(error: ApiError): string | null {
+  if (validationFields(error) !== null) return null
+  const detail = error.detail?.trim()
+  return detail ? detail : null
 }
 
 /**
@@ -195,23 +194,26 @@ function serverSentence(body: unknown): string | null {
  *    draw" is the leak `labelFor` exists to prevent (`drawTypeFreeze`, `data/draw.ts`).
  *    (The server's *own* sentence in arm 2 may still spell the slug — that is its copy
  *    to fix, not a value escaping this mapping. See the `drawTypes` prop doc.)
- * 2. **Any other refusal we have no better words for → the server's own sentence**,
- *    via `serverSentence` above — narrower than `extractDetail`, on purpose, so
- *    FastAPI's validation prose cannot arrive here. This arm is deliberately *not*
- *    limited to coded refusals: the
- *    draw-refusal mapper still answers with prose for `DegenerateDraw`, which genuinely
- *    reaches this route (an `rr-then-ko` event whose qualifiers exceed its smallest
- *    pool — `app/schedule_preview.py` plans the full draw and lets that refusal
- *    propagate). Falling through to the generic there would tell a director their
- *    *draw type* is unsupported when the real cause is their entrant numbers — naming
- *    the wrong thing, while the sentence naming the right one sat unread.
- * 3. No sentence at all (no body, an empty detail) → the generic.
+ * 2. **Any other refusal → the server's own sentence**, via `serverSentence` above.
+ *    `422` is the **domain** speaking, so it speaks: the route composes that detail for
+ *    a director and passes the domain's own copy straight through
+ *    (`api/app/tournaments.py`, `_draw_refusal` — "the one error whose message is
+ *    domain-authored copy"). Only the strategy knows *which* refusal fired and which
+ *    numbers the director has to change, so a hardcoded sentence here can only be a
+ *    guess, and it was a wrong one twice over: an `rr-then-ko` event taking one
+ *    qualifier per pool (#1322), and any `DegenerateDraw`, which genuinely reaches this
+ *    route (`app/schedule_preview.py` plans the full draw and lets that refusal
+ *    propagate). Both were told their *draw type* was unsupported when the real cause
+ *    was their entrant numbers — naming the wrong thing, while the sentence naming the
+ *    right one sat unread and a two-click fix went unmade.
+ * 3. No sentence at all (no body, an empty detail, or a validation 422 whose prose is
+ *    for machines) → the fallback.
  */
 function unpreviewableDrawTypeCopy(
-  body: unknown,
+  error: ApiError,
   drawTypes: DrawTypeOption[],
 ): string {
-  const parsed = codedRefusalSchema.safeParse(body)
+  const parsed = codedRefusalSchema.safeParse(error.body)
   if (parsed.success && parsed.data.detail.code === UNSUPPORTED_DRAW_TYPE_CODE) {
     const slug = drawTypeSchema.safeParse(parsed.data.detail.draw_type)
     const label = slug.success ? labelFor(drawTypes, slug.data, null) : null
@@ -219,14 +221,22 @@ function unpreviewableDrawTypeCopy(
       return `A preview runs over a round-robin draw. This tournament has a “${label}” event, which the preview does not support yet.`
     }
   }
-  return serverSentence(body) ?? UNPREVIEWABLE_GENERIC
+  return serverSentence(error) ?? PREVIEW_422_FALLBACK
 }
 
-/** Map an enqueue refusal to its inline notice. `422` — the draw type can't be
- * previewed yet (only round-robin is), named from the refusal's coded `draw_type`;
- * `409` — the tournament is no longer pre-live; `429` — the single preview slot is
- * busy (retry in a moment); `403` — not the owner; status `0` — the server was never
- * reached; anything else — the honest generic. */
+/**
+ * Map an enqueue refusal to its inline notice.
+ *
+ * `422` — the schedule was refused. The coded `unsupported_draw_type` names the draw
+ * type in the catalogue's own words; every other refusal keeps the **server's** sentence
+ * (see `unpreviewableDrawTypeCopy`). The title stays **cause-neutral**, because it must
+ * not contradict a detail it has not read.
+ *
+ * The rest are about the transport and the lifecycle, not the domain, so their copy is
+ * ours and the server's words add nothing: `409` — the tournament is no longer pre-live;
+ * `429` — the single preview slot is busy (retry in a moment); `403` — not the owner;
+ * status `0` — the server was never reached; anything else — the honest generic.
+ */
 function previewEnqueueNotice(
   error: unknown,
   drawTypes: DrawTypeOption[],
@@ -235,7 +245,7 @@ function previewEnqueueNotice(
     if (error.status === 422) {
       return {
         title: "This schedule can't be previewed yet",
-        description: unpreviewableDrawTypeCopy(error.body, drawTypes),
+        description: unpreviewableDrawTypeCopy(error, drawTypes),
       }
     }
     if (error.status === 409) {
@@ -417,9 +427,9 @@ const PreviewBody = ({
 
   const eventName = (id: string) => events.find((e) => e.id === id)?.name ?? id
 
-  // Refused loud (ADR): the enqueue POST was rejected (422 unpreviewable draw type,
-  // 409 not pre-live, 429 rate-limited, 403, network), so there is no structure to
-  // render — show the actionable notice with a Close/Retry, never a permanent
+  // Refused loud (ADR): the enqueue POST was rejected (422 the domain will not draw
+  // this, 409 not pre-live, 429 rate-limited, 403, network), so there is no structure
+  // to render — show the actionable notice with a Close/Retry, never a permanent
   // spinner.
   if (!enqueued && enqueue.isError) {
     const notice = previewEnqueueNotice(enqueue.error, drawTypes)

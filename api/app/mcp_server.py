@@ -2073,9 +2073,10 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     empty grid. A ``match`` over the error names what the caller has to change and
     why, mirroring ``_map_draw_refusal_tool_error`` but in the preview's voice:
 
-    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — every event of
-      the tournament is a draw type this PREVIEW cannot lay out (single-elim, swiss),
-      a fact to change on an event, not a transient one to retry. One such event
+    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — no event of the
+      tournament can be previewed, and the first that cannot is a draw type this
+      PREVIEW does not lay out (single-elim, swiss): a fact to change on an event, not
+      a transient one to retry. One such event
       *beside* a previewable one refuses nothing now: the builder skips it, previews
       the rest, and the honest-notes strip names it. A *live* solve does place those
       events, over the event's own window (ADR "a pool restricts scheduling, it does
@@ -2090,6 +2091,9 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
       event can never be given a draw (ADR-0788), so it can never be previewed.
     * ``DegenerateDraw``'s message is domain-authored copy (the numbers the director
       must change), passed through so the agent reads exactly what a director would.
+      It arrives only when the tournament has no other event to preview: an event the
+      draw refuses beside a healthy one is skipped, and the honest-notes strip on the
+      finished preview carries this same sentence.
     * The fallback arm is a generic sentence, never a future subclass's own message.
     """
     match error:

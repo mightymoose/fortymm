@@ -49,13 +49,25 @@ production's own ``cut_draw`` uses:
   bracket *has* a draw strategy (#785) and a live solve places it, but a preview
   would be laying out a round or two and guessing at the rest, so this builder
   previews none of it. The event still reaches the caller as an
-  :class:`EventFieldSummary` carrying ``unpreviewable_draw_type``, which is what
-  turns it into an honest note instead of an event that silently vanished;
+  :class:`EventFieldSummary` carrying an :class:`UnpreviewableDrawType` reason,
+  which is what turns it into an honest note instead of an event that silently
+  vanished;
 * **swiss** — skipped the same way, sharing single-elim's ``case`` arm for
   single-elim's reason: a swiss draw pre-cuts a round and pairs each one only on
   advance (ADR "swiss pre-cuts every round and pairs each one on advance"), so
   before a ball is hit there is nothing to lay out. A live solve does place a
   swiss event, round by round as each round is paired.
+
+**A configuration that cannot be cut skips its event too, and says the strategy's
+own sentence.** A draw strategy refuses a config that would not be a competition
+— a pool of one, a knockout stage with a single qualifier in it — with
+:class:`~app.draws.DegenerateDraw`. That refusal is correct and is not weakened
+here: what is wrong is its *blast radius*, because it was raised per event and
+propagated out of a per-tournament loop, so one misconfigured event blanked the
+preview of every healthy event beside it. The event is skipped instead, carrying
+the strategy's **verbatim** message (a :class:`DegenerateConfiguration`), because
+that sentence names the numbers the director has to change and no other layer
+knows them.
 
 **A skipped event costs its tournament nothing else.** This builder sits inside a
 per-event loop of a whole-tournament build, so a refusal raised for one event
@@ -63,22 +75,26 @@ takes the preview of every unrelated event beside it (ADR 20260727 made that the
 reason rr-then-ko's knockout stage is dropped rather than refused). A skipped
 event contributes no fixtures, no pool windows and no event settings to the
 snapshot — its pools are left out of the minute frame too, so a window it happens
-to reserve can never make the rest of the day report a false ``infeasible``.
+to reserve can never make the rest of the day report a false ``infeasible`` — and
+it mints no synthetic entrant.
 
 **One refusal survives, and it is about the whole tournament.** When *no* event is
-previewable, :func:`build_preview_snapshot` raises
-:class:`~app.draws.UnsupportedDrawType` naming the first skipped draw type. A
-snapshot of nothing at all would solve to "it fits" over zero matches, which is
-the false confidence a preview exists to avoid. This is the only surviving raiser
-of that exception: :func:`app.draws.strategy_for` is total, because the enum holds
-only draw types that run (ADR).
+previewable, :func:`build_preview_snapshot` re-raises the **first** skipped
+event's own reason, in the tournament's own event order:
+:class:`~app.draws.UnsupportedDrawType` naming that draw type, or
+:class:`~app.draws.DegenerateDraw` carrying that message. A snapshot of nothing at
+all would solve to "it fits" over zero matches, which is the false confidence a
+preview exists to avoid. This module is the only surviving raiser of
+``UnsupportedDrawType``: :func:`app.draws.strategy_for` is total, because the enum
+holds only draw types that run (ADR).
 
 The per-event :class:`EventFieldSummary` (the count used, how many knockout
-fixtures were left out, and the draw type that made the event unpreviewable) is
-returned alongside the snapshot so :mod:`app.schedule_preview_solve` composes the
-preview's honest-notes strip and per-event breakdown from it without re-deriving
-it — including the notes that tell a director an rr-then-ko event's knockout stage
-is not in the schedule they are looking at, and that a bracket or swiss event is
+fixtures were left out, and the :data:`SkipReason` that left the event out of the
+preview whole) is returned alongside the snapshot so
+:mod:`app.schedule_preview_solve` composes the preview's honest-notes strip and
+per-event breakdown from it without re-deriving it — including the notes that tell
+a director an rr-then-ko event's knockout stage is not in the schedule they are
+looking at, and that a bracket, a swiss event or an event that cannot be cut is
 not in it at all.
 """
 
@@ -91,6 +107,8 @@ from datetime import UTC, datetime
 from typing import assert_never
 
 from app.draws import (
+    DegenerateDraw,
+    DrawError,
     EntryId,
     OrderedEntrant,
     PlannedFixture,
@@ -160,6 +178,63 @@ def preview_pool_key(event_id: uuid.UUID, pool_id: uuid.UUID) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class UnpreviewableDrawType:
+    """This event is out of the preview because of its **draw type** — single-elim or
+    swiss, both fully supported and both placed by a live solve, but decided round by
+    round as they are played, so before anyone has entered there is nothing to lay out.
+
+    Carries the :class:`DrawType` **structurally**, so the layer that writes the
+    director-facing sentence composes it from the fact rather than parsing a message,
+    and so an all-unpreviewable tournament can be refused with an
+    :class:`~app.draws.UnsupportedDrawType` that names the format."""
+
+    draw_type: DrawType
+
+
+@dataclass(frozen=True, slots=True)
+class DegenerateConfiguration:
+    """This event is out of the preview because its **configuration cannot be cut** —
+    the draw strategy refused it with :class:`~app.draws.DegenerateDraw` (a pool that
+    would hold one entrant, a knockout stage that would hold one qualifier, an event
+    with no pools at all).
+
+    Carries the strategy's message **verbatim**, and that is the whole point: a
+    ``DegenerateDraw``'s message is domain-authored copy naming the numbers the
+    director has to change, and only the strategy knows which degeneracy it hit
+    (``app.tournaments._draw_refusal`` passes it through unaltered for the same
+    reason). A generic "could not be previewed" here would leave the director with
+    nothing to act on."""
+
+    message: str
+
+
+#: Why this preview covers **nothing** of an event — a closed set, so the note the
+#: director reads is written by an exhaustive ``match`` and a third reason is a type
+#: error until it is handled. Two cases with genuinely different content: a draw type
+#: (structural, no message to carry) and a refused configuration (a message and
+#: nothing else), which is why this is a union rather than one class with two
+#: optional fields that could contradict each other.
+SkipReason = UnpreviewableDrawType | DegenerateConfiguration
+
+
+def skip_refusal(reason: SkipReason) -> DrawError:
+    """The whole-tournament refusal that a :data:`SkipReason` becomes when it is the
+    **only** thing a tournament had to say — see :func:`build_preview_snapshot`.
+
+    One place, so the mapping from "why this event was left out" to "why this
+    tournament cannot be previewed at all" cannot drift between them, and each error
+    keeps the payload its own transport arm reads: ``UnsupportedDrawType`` its
+    structural ``draw_type``, ``DegenerateDraw`` the strategy's verbatim message."""
+    match reason:
+        case UnpreviewableDrawType():
+            return UnsupportedDrawType(reason.draw_type)
+        case DegenerateConfiguration():
+            return DegenerateDraw(reason.message)
+        case _:
+            assert_never(reason)
+
+
+@dataclass(frozen=True, slots=True)
 class EventFieldSummary:
     """What one event contributed to the synthetic field — the honest-notes
     ingredients (ADR "always an honest-notes strip"), per event.
@@ -175,20 +250,20 @@ class EventFieldSummary:
     from it says something is missing exactly when something is (api/CLAUDE.md —
     don't carry a field and its own derivation).
 
-    ``unpreviewable_draw_type`` is the draw type that made this builder skip the
-    **whole** event (single-elim or swiss), and ``None`` for an event that was
-    previewed. A skipped event still gets a summary — that is the channel the
-    caller's honest note is written from, and the reason the director is told the
-    event was left out instead of wondering where it went. Nothing was synthesized
-    for it, so its ``field_size`` and ``knockout_fixtures`` are ``0``: no field was
-    minted, no draw was planned, and the caller reports the skip rather than an
-    assumed count.
+    ``skip_reason`` is why this builder skipped the **whole** event — its draw type
+    (single-elim or swiss) or a configuration the draw refused — and ``None`` for an
+    event that was previewed. A skipped event still gets a summary: that is the
+    channel the caller's honest note is written from, and the reason the director is
+    told the event was left out instead of wondering where it went. Nothing was
+    synthesized for it, so its ``field_size`` and ``knockout_fixtures`` are ``0``: no
+    field was minted, no draw was planned, and the caller reports the skip rather than
+    an assumed count.
     """
 
     event_id: EventId
     field_size: int
     knockout_fixtures: int
-    unpreviewable_draw_type: DrawType | None = None
+    skip_reason: SkipReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,17 +336,19 @@ class _EventPlan:
 
 @dataclass(frozen=True, slots=True)
 class _SkippedEvent:
-    """One event this preview covers **nothing** of, and the ``draw_type`` that is
-    why (single-elim or swiss).
+    """One event this preview covers **nothing** of, and the :data:`SkipReason` that
+    is why — its draw type, or a configuration the draw refused.
 
     A sibling of :class:`_EventPlan` rather than a flag on it, so a skipped event
     cannot carry a field size, a pool window or a fixture it never had: it keeps its
     place in the tournament's event order (the second pass walks both kinds in one
     list) and contributes only its summary, which the caller turns into the honest
-    note naming it."""
+    note naming it. One kind of skipped event, whatever the reason, so a degenerate
+    configuration inherits every one of those guarantees rather than getting a second,
+    weaker path to the same place."""
 
     event: TournamentEvent
-    draw_type: DrawType
+    reason: SkipReason
 
 
 def build_preview_snapshot(
@@ -306,26 +383,33 @@ def build_preview_snapshot(
     Persists nothing: no ``TournamentEntry`` / ``TournamentFixture`` row is
     created.
 
-    An event this PREVIEW covers nothing of — today single-elim and swiss, whose
-    every fixture is TBD-sided before a ball is hit — is **skipped**, not refused:
-    it contributes no fixtures, no pool windows and no event settings, and comes
-    back as an :class:`EventFieldSummary` carrying ``unpreviewable_draw_type`` for
-    the caller to write an honest note from. Every other event of the tournament is
-    previewed as usual, which is the point: this builder is per-tournament, so a
-    refusal raised for one event takes every event beside it with it. An
-    **rr-then-ko** event is not skipped at all — its pool stage places exactly as a
-    round-robin's does and is previewed, and only its knockout fixtures are dropped
-    (ADR 20260727).
+    An event this PREVIEW covers nothing of is **skipped**, not refused: it
+    contributes no fixtures, no pool windows, no event settings and no synthetic
+    entrants, and comes back as an :class:`EventFieldSummary` carrying its
+    :data:`SkipReason` for the caller to write an honest note from. Two things put an
+    event there:
 
-    Raises :class:`~app.draws.UnsupportedDrawType` — itself, not from
-    :func:`app.draws.strategy_for`, which is total — only when **no** event of the
-    tournament is previewable, naming the first skipped draw type: there is nothing
-    left to hand back, and an empty snapshot would solve to "it fits" over zero
-    matches. Also raises :class:`~app.draws.DegenerateDraw` if a synthesized field
-    is too small for the event's pools — a clear domain error either way, never a
-    partial snapshot. An event with no pools configured is one such case: the
-    round-robin strategy refuses an empty pool set with
-    :class:`~app.draws.DegenerateDraw`, which propagates.
+    * its **draw type** — today single-elim and swiss, whose every fixture is
+      TBD-sided before a ball is hit (:class:`UnpreviewableDrawType`);
+    * its **configuration** — the draw strategy refusing a cut that would not be a
+      competition, with :class:`~app.draws.DegenerateDraw`
+      (:class:`DegenerateConfiguration`, carrying that refusal's message verbatim).
+      An event with no pools configured is one such case.
+
+    Every other event of the tournament is previewed as usual, which is the point:
+    this builder is per-tournament, so a refusal raised for one event takes every
+    event beside it with it. An **rr-then-ko** event is not skipped for its draw type
+    at all — its pool stage places exactly as a round-robin's does and is previewed,
+    and only its knockout fixtures are dropped (ADR 20260727).
+
+    Raises only when **no** event of the tournament is previewable, and raises the
+    **first** skipped event's own reason (:func:`skip_refusal`): there is nothing left
+    to hand back, and an empty snapshot would solve to "it fits" over zero matches. So
+    a bracket-only tournament is an :class:`~app.draws.UnsupportedDrawType` naming
+    that draw type — this module raises it itself; :func:`app.draws.strategy_for` is
+    total — and a tournament whose one event cannot be cut is the strategy's own
+    :class:`~app.draws.DegenerateDraw`, message intact, which is what puts the numbers
+    the director must change in the 422 they read.
     """
     overrides = count_overrides or {}
     now = now if now is not None else datetime.now(UTC)
@@ -370,9 +454,8 @@ def build_preview_snapshot(
                     )
                     for offset in range(field_size)
                 ]
-                next_entrant += field_size
-                plans.append(
-                    _EventPlan(
+                try:
+                    planned = _EventPlan(
                         event=event,
                         pools=event_pools(event),
                         settings=MatchSettings.model_validate(event.match_settings),
@@ -381,7 +464,29 @@ def build_preview_snapshot(
                         ),
                         field_size=field_size,
                     )
-                )
+                except DegenerateDraw as refusal:
+                    # The draw refusing a configuration that would not be a
+                    # competition — a pool of one, a knockout stage of one qualifier,
+                    # no pools at all. The refusal is right and is left alone; only its
+                    # reach is fixed. It is raised per event, but this loop builds one
+                    # TOURNAMENT, so letting it propagate blanked the preview of every
+                    # healthy event beside it (exactly the defect a skipped draw type
+                    # was already fixed for). The strategy's message rides along
+                    # verbatim: it names the numbers the director has to change, and
+                    # recomposing it here would be a second copy of a rule this module
+                    # does not own.
+                    plans.append(
+                        _SkippedEvent(
+                            event=event,
+                            reason=DegenerateConfiguration(str(refusal)),
+                        )
+                    )
+                    continue
+                # Only a planned event consumes its slice of the id space — a skipped
+                # one mints no entrant, so the counter advances past the fields that
+                # actually exist.
+                next_entrant += field_size
+                plans.append(planned)
             case DrawType.single_elim | DrawType.swiss:
                 # Skipped, not refused — and skipped for a reason that is no longer
                 # about pools. A live solve does place both of these, over the event's
@@ -393,20 +498,25 @@ def build_preview_snapshot(
                 # beside it (the same reasoning ADR 20260727 applied to rr-then-ko's
                 # knockout stage). Swiss shares the arm for single-elim's reason (ADR
                 # "swiss pre-cuts every round and pairs each one on advance").
-                plans.append(_SkippedEvent(event=event, draw_type=draw_type))
+                plans.append(
+                    _SkippedEvent(event=event, reason=UnpreviewableDrawType(draw_type))
+                )
             case _:
                 assert_never(draw_type)
 
     # The one refusal left, and it is about the whole tournament rather than an
     # event: nothing at all is previewable here, so there is no partial preview to
     # give and an empty snapshot would solve to "it fits" over zero matches — the
-    # false confidence a preview exists to avoid. Named after the first skipped draw
-    # type, so the director-facing sentence says which format it is. A tournament with
-    # no events at all is *not* this case: it has nothing to preview and nothing to
-    # blame, and keeps answering with an empty snapshot.
+    # false confidence a preview exists to avoid. It speaks the FIRST skipped event's
+    # own reason, in the tournament's own event order — the same positional rule as
+    # before, generalized from "the first skipped draw type" to "the first event that
+    # could not be previewed, and why" — so a mixed tournament needs no priority
+    # ranking between two refusals that reach the director through the one 422 mapper.
+    # A tournament with no events at all is *not* this case: it has nothing to preview
+    # and nothing to blame, and keeps answering with an empty snapshot.
     skipped = [plan for plan in plans if isinstance(plan, _SkippedEvent)]
     if skipped and len(skipped) == len(plans):
-        raise UnsupportedDrawType(skipped[0].draw_type)
+        raise skip_refusal(skipped[0].reason)
 
     # The minute frame's origin: the earliest pool window start across every
     # previewable event — the same anchor ``_load_solver_inputs`` uses, so ``now_min``
@@ -454,18 +564,18 @@ def build_preview_snapshot(
     for plan in plans:
         event_id = EventId(str(plan.event.id))
         if isinstance(plan, _SkippedEvent):
-            # The whole contribution of a skipped event: a summary naming the draw
-            # type that made it unpreviewable. No fixtures, no pools, no
-            # ``EventSettings`` — the snapshot must not carry an event the solver
-            # would then have nothing to place — but it keeps its seat in the
-            # tournament's event order so the caller's note, and the per-event
-            # breakdown built beside it, still name the event the director is missing.
+            # The whole contribution of a skipped event: a summary carrying the reason
+            # it was left out. No fixtures, no pools, no ``EventSettings`` — the
+            # snapshot must not carry an event the solver would then have nothing to
+            # place — but it keeps its seat in the tournament's event order so the
+            # caller's note, and the per-event breakdown built beside it, still name
+            # the event the director is missing.
             summaries.append(
                 EventFieldSummary(
                     event_id=event_id,
                     field_size=0,
                     knockout_fixtures=0,
-                    unpreviewable_draw_type=plan.draw_type,
+                    skip_reason=plan.reason,
                 )
             )
             continue

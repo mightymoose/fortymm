@@ -14,17 +14,17 @@ type Backend = typeof server | typeof worker
 /** Resolver for the **schedule-preview enqueue** endpoint (ADR "a schedule
  * preview is a non-persistent solve over a synthetic field") — the `202`
  * `PreviewEnqueued` (token + the instant structure), or an error envelope: 403
- * (not the owner), 409/422 (not pre-live, or an unpreviewable draw type), 429
+ * (not the owner), 409 (not pre-live), 422 (the domain will not draw this), 429
  * (rate-limited), 404. The body is the optional per-event field-size overrides.
  *
- * The unpreviewable-draw-type `422` is the generated `UnsupportedDrawTypeResponse`
- * — a **coded** detail carrying the offending `draw_type` structurally (ADR
- * "a refusal carries a code and the client owns the sentence") — so a test driving
- * that path is typed by the wire rather than by a hand-written object. The plain
- * `ErrorBody` stays in the union for the other `DrawError` arms, whose `detail` is
- * still a bare sentence, and the open `CodedErrorBody` is what lets a test drive a
- * refusal code this build predates — the degradation path the server's `message`
- * exists for. */
+ * The `422` arrives in two shapes, and the union carries both. Most `DrawError` arms
+ * send a bare `ErrorBody` whose `detail` **is** the director-facing sentence the modal
+ * shows. The unpreviewable-draw-type one is the generated
+ * `UnsupportedDrawTypeResponse` — a **coded** detail carrying the offending `draw_type`
+ * structurally (ADR "a refusal carries a code and the client owns the sentence") — so a
+ * test driving that path is typed by the wire rather than by a hand-written object. The
+ * open `CodedErrorBody` is what lets a test drive a refusal code this build predates —
+ * the degradation path the server's `message` exists for. */
 export type SchedulePreviewEnqueueResolver = HttpResponseResolver<
   { tournamentId: string },
   components['schemas']['PreviewRequest'] | null,
