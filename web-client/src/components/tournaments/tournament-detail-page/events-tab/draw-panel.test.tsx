@@ -947,4 +947,177 @@ describe('DrawPanel', () => {
       await waitFor(() => expect(page.queryNotice()).toBeNull())
     })
   })
+
+  /**
+   * A refusal is a statement about a **moment** (#1123, #1049 repro B).
+   *
+   * The panel's notice used to be cleared only by the *next* Generate, and the card is
+   * keyed by event id, so the panel does not remount when the event editor saves. A
+   * director refused with "A single-elim draw cannot be cut yet. Change the event's draw
+   * type to one that can" could therefore change the draw type to Round robin, save, and
+   * still be reading the old sentence — a refusal about a state the event was no longer
+   * in.
+   *
+   * Both halves are the design. It clears when the director fixes what it named, and it
+   * survives everything else: the sentence names numbers they have to go and change, and
+   * this page polls.
+   */
+  describe('a refusal does not outlive the state it describes', () => {
+    const SINGLE_ELIM_REFUSAL =
+      'A single-elim draw cannot be cut yet. Change the event’s draw type to one that ' +
+      'can, or wait for support.'
+
+    /** The event the refusal is about: a single-elim event the planner will not cut. */
+    const BRACKET = buildEvent({
+      id: 'ev-champs',
+      name: 'Championship Singles',
+      drawType: 'single-elim',
+      entrants: buildEntrants(4),
+      pools: [],
+    })
+
+    /** Get the 422 onto the screen, and hand back the render handle so the test can move
+     * the event underneath it. */
+    async function refusedCut() {
+      mockEventCutDrawEndpoint(server, () =>
+        HttpResponse.json({ detail: SINGLE_ELIM_REFUSAL }, { status: 422 }),
+      )
+      const utils = page.render({ event: BRACKET })
+      await userEvent.click(await page.findGenerateButton('Championship Singles'))
+      expect(await page.findNoticeText()).toContain('cannot be cut yet')
+      return utils
+    }
+
+    it('clears once the draw type changes to one that can be cut', async () => {
+      const { rerenderWith } = await refusedCut()
+
+      rerenderWith({
+        event: { ...BRACKET, drawType: 'round-robin', pools: [buildPool({ id: 'p-a' })] },
+      })
+
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    it('clears once somebody enters, for a refusal about the entrant count', async () => {
+      const detail =
+        '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants.'
+      mockEventCutDrawEndpoint(server, () =>
+        HttpResponse.json({ detail }, { status: 422 }),
+      )
+      const short = buildEvent({
+        id: 'ev-rr',
+        name: 'U1500 Singles',
+        drawType: 'round-robin',
+        entrants: buildEntrants(5),
+        pools: [buildPool({ id: 'p-a' })],
+      })
+      const { rerenderWith } = page.render({ event: short })
+      await userEvent.click(await page.findGenerateButton('U1500 Singles'))
+      expect(await page.findNoticeText()).toContain('fewer than 2 entrants')
+
+      // A sixth player enters. `entered` is the count the scope reads, and the factory
+      // derives it from the list — so both move together, exactly as the server sends them.
+      rerenderWith({
+        event: { ...short, entered: 6, entrants: buildEntrants(6) },
+      })
+
+      expect(page.queryNotice()).toBeNull()
+    })
+
+    /**
+     * The discriminating half. A blunt "clear whenever the event object changed" passes
+     * both tests above, and then throws away the sentence a director is mid-way through
+     * acting on the next time anything at all ticks. Here the event genuinely changes —
+     * renamed, re-priced, a pool renamed — in ways no draw refusal asserts over.
+     */
+    it('keeps the refusal through a change it says nothing about', async () => {
+      const { rerenderWith } = await refusedCut()
+
+      rerenderWith({
+        event: {
+          ...BRACKET,
+          name: 'Championship Singles (renamed)',
+          entryFee: 45,
+        },
+      })
+
+      expect(page.queryNotice()).not.toBeNull()
+      expect(await page.findNoticeText()).toContain('cannot be cut yet')
+    })
+
+    it('keeps the refusal through a refetch that changed nothing', async () => {
+      const { rerenderWith } = await refusedCut()
+
+      rerenderWith({ event: { ...BRACKET } })
+
+      expect(page.queryNotice()).not.toBeNull()
+    })
+  })
+
+  /**
+   * What a cut would actually produce, per draw type (#1220).
+   *
+   * The sentence was written for #786's round-robin and hard-coded, so it rendered on
+   * every event whatever its type — unreachable on a bracket until single-elimination
+   * became cuttable through the UI, and then plainly wrong: a director of a bracket event
+   * was told to deal its entrants "into its pools".
+   */
+  describe('the empty state names what THIS draw type would cut', () => {
+    it('does not promise pools to a bracket', () => {
+      page.render({
+        event: buildEvent({ name: 'Championship Singles', drawType: 'single-elim' }),
+        canEdit: true,
+      })
+
+      expect(page.getEmptyState()).toHaveTextContent('bracket')
+      expect(page.getEmptyState()).not.toHaveTextContent('pools')
+    })
+
+    it('does not promise pools — or a bracket — to a swiss event', () => {
+      page.render({
+        event: buildEvent({ name: 'Open Swiss', drawType: 'swiss' }),
+        canEdit: true,
+      })
+
+      expect(page.getEmptyState()).toHaveTextContent('rounds')
+      expect(page.getEmptyState()).not.toHaveTextContent('pools')
+      expect(page.getEmptyState()).not.toHaveTextContent('bracket')
+    })
+
+    it('still names pools for a round-robin', () => {
+      page.render({
+        event: buildEvent({ name: 'U1500 Singles', drawType: 'round-robin' }),
+        canEdit: true,
+      })
+
+      expect(page.getEmptyState()).toHaveTextContent('pools')
+    })
+
+    it('names both stages for an rr-then-ko event', () => {
+      page.render({
+        event: buildEvent({
+          name: 'Open Singles',
+          drawType: 'rr-then-ko',
+          qualifiersPerPool: 2,
+        }),
+        canEdit: true,
+      })
+
+      expect(page.getEmptyState()).toHaveTextContent('pools')
+      expect(page.getEmptyState()).toHaveTextContent('bracket')
+    })
+
+    /** A reader is told the same thing whatever the draw type: the fixtures are not up
+     * yet. Naming the format would only tell a player something they cannot act on. */
+    it('tells a non-owner the same thing whatever the draw type', () => {
+      page.render({
+        event: buildEvent({ name: 'Championship Singles', drawType: 'single-elim' }),
+        canEdit: false,
+      })
+
+      expect(page.getEmptyState()).toHaveTextContent(
+        'The fixtures will appear here once the director cuts the draw.',
+      )
+    })
+  })
 })

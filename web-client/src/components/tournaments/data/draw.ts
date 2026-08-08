@@ -620,6 +620,74 @@ export type DrawNotice = Notice
  * mutations' global toasts (`web-client/CLAUDE.md`, ## Forms: never both) makes this
  * function responsible for.
  */
+/**
+ * The facts a draw refusal is **about**, as one string — what `useScopedNotice` pins the
+ * panel's notice to, so a refusal clears itself once the director fixes what it named
+ * (#1049, #1123).
+ *
+ * The 422 arm is the one a director actually meets, and every refusal behind it is a
+ * statement about the event's **configuration as it stands**: its draw type, the pools it
+ * would deal into, and how many entrants there are to deal ("A single-elim draw cannot be
+ * cut yet", "A round-robin draw needs at least one pool", "5 entrants across 3 pool(s)
+ * would leave a pool with fewer than 2"). The fixture count carries the 409 arm — evidence
+ * of play — and moves when a draw is cut or removed.
+ *
+ * Narrow on purpose. The event's name, slot, entry fee, predicates and match settings are
+ * all absent: no draw refusal asserts anything about them, and this page polls, so a wider
+ * scope would drop the sentence a director is mid-way through acting on. Pool **ids**
+ * rather than pool contents, because a renamed pool refuses exactly as it did before.
+ */
+export function drawRefusalScope(event: TournamentEvent): string {
+  return [
+    event.drawType,
+    event.entered,
+    event.fixtures.length,
+    event.pools.map((pool) => pool.id).join(','),
+  ].join('|')
+}
+
+/**
+ * What cutting this event's draw would actually **do**, in the director's words — the
+ * second half of the "No draw yet." empty state on an un-cut event.
+ *
+ * Exhaustive over `DrawType` with a `never` default, so a fifth draw type is a compile
+ * error here until somebody says what its cut produces. It has to be its own table:
+ * the sentence was a single hard-coded round-robin one ("deal this event's entrants into
+ * its pools"), which rendered on **every** event regardless of type, and told the director
+ * of a single-elimination event to deal entrants into pools a bracket does not have
+ * (#1220). The copy was written for #786's round-robin and was simply unreachable on a
+ * bracket until single-elimination became cuttable through the UI.
+ *
+ * Deliberately **not** derived from `unpooledShape`: that function answers a different
+ * question — which view already-cut, pool-less *fixtures* get — and an un-cut event has no
+ * fixtures to ask about. Routing this off it would be the same class of mistake as the
+ * `pool_id IS NULL` check it replaced: a predicate borrowed from one question to answer
+ * another it only coincidentally agrees with. (They already disagree: round-robin answers
+ * `'orphaned'` there, which says nothing about what a cut deals into.)
+ */
+export function undrawnLead(drawType: DrawType): string {
+  switch (drawType) {
+    case 'round-robin':
+      return 'Generate the draw to deal this event’s entrants into its pools and plan their fixtures.'
+    case 'rr-then-ko':
+      // Both stages, in the order they are played: the pool stage is what the cut deals
+      // now, and the bracket is what the qualifiers reach — naming only the first would
+      // describe half the draw this event is about to get.
+      return 'Generate the draw to deal this event’s entrants into its pools, then bracket the qualifiers from each one.'
+    case 'single-elim':
+      return 'Generate the draw to seed this event’s entrants into a bracket and plan their fixtures.'
+    case 'swiss':
+      // "Pair into rounds", never "seed into a bracket": swiss eliminates nobody, so a
+      // bracket's vocabulary would be a lie in the empty state before it was one in the
+      // draw (`unpooledShape` makes the same distinction for the cut draw).
+      return 'Generate the draw to pair this event’s entrants into rounds and plan their fixtures.'
+    default: {
+      const exhaustive: never = drawType
+      return exhaustive
+    }
+  }
+}
+
 export function drawRefusalNotice(error: unknown, verb: string): DrawNotice {
   const fallback = fallbackNotice(error, verb)
   if (!(error instanceof ApiError)) return fallback
