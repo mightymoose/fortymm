@@ -15,10 +15,12 @@ status codes:
 * ``DELETE …/schedule/preview/{token}`` best-effort cancels — ``204`` for a real
   token (dropping the job so it can no longer be polled) and ``204`` for a token
   Redis never knew (a no-op success, never a ``500``);
-* a non-owner is ``403``, a ``live``/``archived`` tournament ``409``, an event
-  whose draw type the scheduler cannot place (single-elim) ``422`` — a coded
-  ``detail`` carrying the offending draw type structurally — and exceeding the
-  per-session rate limit ``429``.
+* a non-owner is ``403``, a ``live``/``archived`` tournament ``409``, a tournament
+  with no previewable event at all (only a single-elim one) ``422`` — a coded
+  ``detail`` carrying the offending draw type structurally, beside the sentence —
+  and exceeding the per-session rate limit ``429``. One such event *beside* a
+  round-robin is skipped, not refused: the preview is still enqueued and still
+  covers the round-robin.
 
 Under the async (record-only) ``preview_queue`` fixture the enqueued job is
 inspected and then run through a real in-process worker (the DB-blind preview job
@@ -105,12 +107,15 @@ async def _make_tournament(
     status: TournamentStatus = TournamentStatus.draft,
     with_event: bool = True,
     draw_type: DrawType = DrawType.round_robin,
+    with_single_elim_event: bool = False,
 ) -> uuid.UUID:
     """A tournament owned by ``owner`` (a two-table catalogue and, unless
     ``with_event=False``, one pooled event of ``draw_type`` capped at four players
-    over both tables). Written straight to the database — creation routes are not
-    under test here. No ``TournamentEntry`` rows: a preview draws a synthetic
-    field."""
+    over both tables). ``with_single_elim_event`` adds a second event the preview
+    lays out nothing of, to prove it costs the first event nothing; it needs no pools,
+    since a skipped event's pools are never read. Written straight to the database —
+    creation routes are not under test here. No ``TournamentEntry`` rows: a preview
+    draws a synthetic field."""
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
 
@@ -161,6 +166,25 @@ async def _make_tournament(
             ),
         )
         db.add(event)
+        await db.flush()
+
+    if with_single_elim_event:
+        db.add(
+            TournamentEvent(
+                tournament_id=tournament.id,
+                name="Championship",
+                format=EventFormat.singles,
+                draw_settings=TournamentEventDrawSettings.for_draw_type(
+                    DrawType.single_elim
+                ),
+                max_players=8,
+                entry_fee=Decimal("0.00"),
+                slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
+                match_settings={"rated": False, "length_games": 3},
+                timezone="America/Los_Angeles",
+                pools=[],
+            )
+        )
         await db.flush()
 
     await db.commit()
@@ -455,25 +479,26 @@ async def test_preview_on_a_post_live_tournament_is_409(
     assert preview_queue.jobs == []
 
 
-async def test_preview_of_a_single_elim_event_is_a_coded_422_carrying_the_draw_type(
+async def test_preview_of_a_bracket_only_tournament_is_a_coded_422_with_the_draw_type(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     preview_queue: Queue,
 ) -> None:
-    """A single-elim event is a 422 whose ``detail`` is an **object**: the
-    machine-readable ``code``, the offending ``draw_type`` as a field, and the sentence
-    demoted to a ``message`` fallback (ADR "a refusal carries a code and the client owns
-    the sentence").
+    """A tournament whose only event is a single-elim one is a 422 whose ``detail`` is
+    an **object**: the machine-readable ``code``, the offending ``draw_type`` as a
+    field, and the sentence demoted to a ``message`` fallback (ADR "a refusal carries a
+    code and the client owns the sentence"). That sentence names the **draw type** —
+    the one thing the director has to change — not the generic "as the event stands".
 
-    ``app.schedule_preview`` is the last live raiser of ``UnsupportedDrawType``: the
-    CP-SAT scheduler places pooled draws over their pools' windows and a bracket has
-    none, so the preview refuses rather than invent a grid. That refusal reaches this
-    route through ``_draw_refusal`` — the mapper the **cut** route shares, where the
-    error is now unreachable because ``strategy_for`` is total. That asymmetry is
-    exactly the trap: the arm looks dead from the cut route's side, and deleting it
-    still leaves this route answering 422 — just with the generic fallback, which
-    blames the event's own pools and field and sends the director hunting through two
-    things that are perfectly fine.
+    ``app.schedule_preview`` is the last live raiser of ``UnsupportedDrawType``, and
+    it raises it only when nothing at all can be previewed: a preview runs before
+    anyone has registered, so a draw decided as it is played has nothing to lay out.
+    That refusal reaches this route through ``_draw_refusal`` — the mapper the **cut**
+    route shares, where the error is now unreachable because ``strategy_for`` is
+    total. That asymmetry is exactly the trap: the arm looks dead from the cut route's
+    side, and deleting it still leaves this route answering 422 — just with the
+    generic fallback, which blames the event's own pools and field and sends the
+    director hunting through two things that are perfectly fine.
 
     So the assertion is on the **shape**, not the status. ``status_code == 422`` passes
     with the arm deleted, and passed for the whole time the route sent a bare sentence
@@ -505,9 +530,41 @@ async def test_preview_of_a_single_elim_event_is_a_coded_422_carrying_the_draw_t
     # And it is not the generic fallback, which is about the event's state (and, in
     # the cut route's voice, about cutting — a verb this route never performs).
     assert "cannot be cut" not in body.detail.message
-    # Nothing is queued: an un-schedulable event refuses the whole preview up front,
-    # never a partial solve over the events that would have worked.
+    # The sentence blames the PREVIEW, not the scheduler: a live solve does place a
+    # bracket now (ADR "a pool restricts scheduling, it does not enable it"), so copy
+    # saying the scheduler cannot would send the director to fix a thing that works.
+    assert "cannot be previewed" in body.detail.message, body.detail.message
+    # Nothing is queued: with nothing previewable there is no partial solve to run.
     assert preview_queue.jobs == []
+
+
+async def test_a_bracket_event_beside_a_round_robin_still_enqueues_a_preview(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    preview_queue: Queue,
+) -> None:
+    """The other side of the 422 above, at the route: a single-elim event sitting
+    beside a round-robin one is **skipped**, and the round-robin is previewed.
+
+    The route is where this used to hurt. One bracket in a director's day turned the
+    whole preview into a 422, so they saw no schedule for events that were perfectly
+    schedulable. The round-robin's own six fixtures are asserted in the 202 body,
+    which is the claim "not a 422" alone would not make.
+    """
+    client, owner = authed_client
+    tournament_id = await _make_tournament(
+        db_session, owner, with_single_elim_event=True
+    )
+
+    response = await client.post(_preview_url(tournament_id))
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    # The round-robin event is previewed in full — C(4, 2) = 6 — and it is the only
+    # event a synthetic field was made for.
+    assert len(body["fixtures"]) == 6
+    assert [s["field_size"] for s in body["field_summaries"]] == [4]
+    assert len(preview_queue.jobs) == 1
 
 
 async def test_exceeding_the_rate_limit_is_429(

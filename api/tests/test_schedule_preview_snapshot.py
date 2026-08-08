@@ -9,8 +9,10 @@ non-persistent solve over a synthetic field"). These tests prove:
   entrants and exactly the round-robin fixture set (``C(N, 2)`` in one pool);
 * the field is disjoint across events (no synthetic player is in two events);
 * a per-event count override changes the field size and the fixture count;
-* every non-round-robin draw type (today: single-elim) is refused loud with
-  the unsupported-draw domain error and produces no partial snapshot;
+* an event the preview lays out nothing of (today: single-elim, swiss) is skipped
+  and reported, leaving every event beside it previewed;
+* a tournament with no previewable event at all is refused loud with the
+  unsupported-draw domain error, rather than answered with an empty snapshot;
 * no ``TournamentEntry`` / ``TournamentFixture`` row is ever created;
 * the snapshot is coherent enough for the real solver to place.
 """
@@ -409,20 +411,26 @@ async def test_preview_snapshot_count_override_resizes_field(
 
 @pytest.mark.parametrize(
     "draw_type",
-    # The two POOL-LESS draw types, which is the whole criterion: both *can* be cut,
-    # but a preview covers an event's POOL stage, and neither draw has one — so the
-    # preview refuses them rather than invent a grid. Not because the scheduler cannot
-    # place them: a live solve places a fixture belonging to no pool over its event's
-    # own window (ADR "a pool restricts scheduling, it does not enable it").
-    # Single-elim is the bracket (#785); swiss ranks one field in one table (ADR "swiss
-    # pre-cuts every round and pairs each one on advance"). ``rr-then-ko`` is
-    # deliberately NOT here: it has a pool stage that schedules perfectly well, so it
-    # is previewed in part rather than refused (see the two tests below).
+    # The two draw types a preview lays out NOTHING of: both *can* be cut and a live
+    # solve now places both (ADR "a pool restricts scheduling, it does not enable
+    # it"), but a preview runs before anyone has registered, so a draw decided as it
+    # is played has nothing to lay out. Single-elim is the bracket (#785); swiss
+    # pre-cuts a round and pairs it only on advance. ``rr-then-ko`` is deliberately
+    # NOT here: it has a pool stage that schedules perfectly well, so it is previewed
+    # in part (see the tests below).
     [DrawType.single_elim, DrawType.swiss],
 )
-async def test_preview_snapshot_unsupported_draw_raises(
+async def test_a_tournament_with_no_previewable_event_at_all_is_refused(
     db_session: AsyncSession, default_league: League, draw_type: DrawType
 ) -> None:
+    """The one refusal that survives: nothing here can be previewed, so there is no
+    partial preview to hand back.
+
+    Skipping the event instead would answer with an empty snapshot, which the solver
+    calls ``optimal`` over zero matches — a director reading "it fits" about a day
+    that was never evaluated. That false confidence is the whole reason a preview
+    refuses anything, so an all-unpreviewable tournament stays loud.
+    """
     owner = await make_user(db_session, f"prev-unsup-{draw_type.value}")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     await _add_event(
@@ -430,15 +438,83 @@ async def test_preview_snapshot_unsupported_draw_raises(
         tournament,
         draw_type=draw_type,
         # Swiss requires a round count on its settings arm; single-elim carries no
-        # setting at all. The refusal is about neither — it is about the pools these
-        # draw types do not have.
+        # setting at all. The refusal is about neither — it is about a draw that is
+        # decided as it is played.
         rounds=3 if draw_type is DrawType.swiss else None,
         max_players=8,
     )
     loaded = await _load(db_session, tournament.id)
 
-    with pytest.raises(UnsupportedDrawType):
+    with pytest.raises(UnsupportedDrawType) as caught:
         build_preview_snapshot(loaded)
+
+    # Structural, so the director-facing sentence composed from it names the format.
+    assert caught.value.draw_type is draw_type
+
+
+@pytest.mark.parametrize("draw_type", [DrawType.single_elim, DrawType.swiss])
+async def test_an_unpreviewable_event_does_not_abort_the_tournaments_whole_preview(
+    db_session: AsyncSession, default_league: League, draw_type: DrawType
+) -> None:
+    """The behaviour this slice buys: an event the preview cannot lay out is SKIPPED,
+    and every event beside it is previewed as it always was.
+
+    This builder runs a per-event loop inside a whole-tournament build, so raising for
+    one event was never scoped to that event — it took the preview of every unrelated
+    round-robin beside it, and the director saw no schedule at all. The round-robin
+    event's own 15 fixtures are asserted present, which is the claim a bare "it did
+    not raise" would miss.
+
+    The skipped event's **pool** is asserted absent too, and that is the part a
+    fixture-count test would wave through: a pool of a skipped event reaching the
+    snapshot would be solved over, so an empty or past-dated window on an event that
+    was never drawn could report the whole day infeasible.
+    """
+    owner = await make_user(db_session, f"prev-beside-{draw_type.value}")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    round_robin = await _add_event(
+        db_session, tournament, name="Open Singles", max_players=6
+    )
+    unpreviewable = await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        draw_type=draw_type,
+        rounds=3 if draw_type is DrawType.swiss else None,
+        max_players=8,
+        pools=[_one_pool(["t2"])],
+    )
+    loaded = await _load(db_session, tournament.id)
+
+    preview = build_preview_snapshot(loaded)
+
+    # The round-robin event is previewed in full — C(6, 2) = 15 — and it is the only
+    # event with fixtures.
+    by_event: dict[str, int] = {}
+    for fixture in preview.snapshot.fixtures:
+        by_event[fixture.event_id] = by_event.get(fixture.event_id, 0) + 1
+    assert by_event == {scheduling.EventId(str(round_robin.id)): 15}
+
+    # Nothing of the skipped event reaches the solver: no pool window (which would
+    # move the frame origin and be solved over), and no event settings.
+    assert all(
+        not pool.id.startswith(f"{unpreviewable.id}:")
+        for pool in preview.snapshot.pools
+    )
+    assert [e.id for e in preview.snapshot.events] == [
+        scheduling.EventId(str(round_robin.id))
+    ]
+
+    # It is *reported*, not silently dropped: the summary keeps the event's seat in
+    # the tournament's order and names the draw type that made it unpreviewable —
+    # the fact the honest-notes strip turns into a line the director reads.
+    previewed, skipped = preview.field_summaries
+    assert previewed.event_id == scheduling.EventId(str(round_robin.id))
+    assert previewed.unpreviewable_draw_type is None
+    assert skipped.event_id == scheduling.EventId(str(unpreviewable.id))
+    assert skipped.unpreviewable_draw_type is draw_type
+    # No field was synthesized for it, so it claims no entrants and drops no bracket.
+    assert (skipped.field_size, skipped.knockout_fixtures) == (0, 0)
 
 
 async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(

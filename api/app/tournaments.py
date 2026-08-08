@@ -1127,29 +1127,31 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       are the numbers the director has to change. Recomposing it here would be a second
       copy of a rule this route does not own, and the copy that drifts is the one a
       director reads.
-    * ``UnsupportedDrawType`` is the one arm whose ``detail`` is a **coded object**
-      rather than a sentence — ``{"code": "unsupported_draw_type", "draw_type": …,
-      "message": …}`` (ADR "a refusal carries a code and the client owns the sentence",
-      extending ADR-0968 past the entry endpoint). It carries its ``draw_type``
-      **structurally**, and now so does the response: the client switches on the
-      ``code`` and names the draw type off the field, instead of being handed English
-      to either parse or — as the schedule-preview modal did (#1221) — throw away and
-      replace with copy that names nothing, leaving a director with four events unable
-      to tell which one is the blocker. The sentence survives as ``message``, a
-      fallback for a consumer with no copy of its own, never a contract.
+    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
+      reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
+      now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
+      with the **schedule-preview** route below, and ``app.schedule_preview`` raises it
+      when *no* event of a tournament can be previewed (every event is a single-elim or
+      a swiss draw). One such event beside a round-robin no longer refuses anything:
+      the builder skips it, previews the rest, and the honest-notes strip names it. A
+      director previewing a bracket-only tournament must be told it is the *draw type*
+      that cannot be previewed, not left with the generic sentence, which says the
+      event's own state is at fault and would send them hunting through pools and
+      entrants that are perfectly fine. The sentence blames the right thing now: not
+      the scheduler, which does place a bracket over its event's own window (ADR "a
+      pool restricts scheduling, it does not enable it"), but the preview, which runs
+      before anyone has entered and so has no field to lay a played-out draw over.
 
-      It can no longer arrive from the **cut** route — ``strategy_for`` is total now
-      that the enum holds only what runs (ADR 20260726) — but this mapper is shared
-      with the **schedule-preview** route below, and ``app.schedule_preview`` still
-      raises it for ``single_elim`` and ``swiss``: the *preview* covers an event's pool
-      stage, and neither draw has one. The scheduler itself is no longer the limit — a
-      live solve places a fixture belonging to no pool over its event's own window (ADR
-      "a pool restricts scheduling, it does not enable it"). A director previewing a
-      bracket's schedule must be told it is the *draw type* that cannot be previewed,
-      not left with the generic sentence, which says the event's own state is at fault
-      and would send them hunting through pools and entrants that are perfectly fine.
-      (The sentence composed below still names the pre-ADR reason: a later slice of
-      #1228 revisits how the preview refuses, and rewrites that copy with it.)
+      It is also the one arm whose ``detail`` is a **coded object** rather than a
+      sentence — ``{"code": "unsupported_draw_type", "draw_type": …, "message": …}``
+      (ADR "a refusal carries a code and the client owns the sentence", extending
+      ADR-0968 past the entry endpoint). The structural ``draw_type`` reaches the
+      client as a field, so it switches on the ``code`` and names the draw type off
+      that field, instead of being handed English to either parse or — as the
+      schedule-preview modal did (#1221) — throw away and replace with copy that names
+      nothing, leaving a director unable to tell which event is the blocker. The
+      sentence above survives as ``message``: a fallback for a consumer with no copy of
+      its own, never a contract.
 
       That asymmetry — cut cannot send this, preview can — is why only the preview
       route declares the body (``responses={422: …}``): it is the only route that can
@@ -1176,7 +1178,8 @@ def _draw_refusal(error: DrawError) -> HTTPException:
             detail = str(error)
         case UnsupportedDrawType():
             # Reachable from the SCHEDULE-PREVIEW route only (the cut route's
-            # ``strategy_for`` is total). The one arm that returns early, because it is
+            # ``strategy_for`` is total), and only when the tournament has no
+            # previewable event at all. The one arm that returns early, because it is
             # the one whose ``detail`` is an OBJECT rather than a sentence: the
             # structural ``draw_type`` travels as a field beside the machine-readable
             # ``code``, and the sentence rides along as ``message`` — fallback prose for
@@ -1192,10 +1195,11 @@ def _draw_refusal(error: DrawError) -> HTTPException:
                 detail=UnsupportedDrawTypeRefusal(
                     draw_type=error.draw_type,
                     message=(
-                        f"A {error.draw_type.value} draw cannot be scheduled yet. The "
-                        "scheduler places pooled draws over their pools' time windows, "
-                        "and a bracket has none to place. Preview a round-robin event "
-                        "instead."
+                        f"A {error.draw_type.value} draw cannot be previewed, and this "
+                        "tournament has no other event to preview. A draw of that kind "
+                        "is decided round by round as it is played, so before anyone "
+                        "has entered there is nothing to lay out. The scheduler does "
+                        "place it once the tournament is live."
                     ),
                 ).model_dump(mode="json"),
             )
@@ -1745,11 +1749,15 @@ async def request_schedule_preview(
         # question, refused with the status-carrying sentence the domain authored.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DrawError as error:
-        # A non-round-robin (or otherwise degenerate) draw the synthetic field
-        # cannot be planned — the same 422 the cut route produces. This is the only
-        # route that can reach the ``UnsupportedDrawType`` arm, and so the only one
-        # that sends the coded ``{"code", "draw_type", "message"}`` detail the
-        # ``responses={422: …}`` above declares; the other arms are still prose.
+        # A draw the synthetic field cannot be planned (a degenerate one), or a
+        # tournament whose every event is a draw type the preview cannot lay out —
+        # the same 422 the cut route produces. A single unpreviewable event beside a
+        # previewable one is not this: it is skipped, and the honest-notes strip on the
+        # finished preview names it.
+        #
+        # This is the only route that can reach the ``UnsupportedDrawType`` arm, and so
+        # the only one that sends the coded ``{"code", "draw_type", "message"}`` detail
+        # the ``responses={422: …}`` above declares; the other arms are still prose.
         raise _draw_refusal(error) from error
     except ScheduleQueueUnavailableError as exc:
         raise HTTPException(

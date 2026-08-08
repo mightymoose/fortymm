@@ -59,7 +59,7 @@ from app import queue as queue_module
 from app import scheduling
 from app.config import get_settings
 from app.match_calls import _wall_now
-from app.models import Tournament, TournamentStatus, User
+from app.models import DrawType, Tournament, TournamentStatus, User
 from app.schedule_preview import (
     build_preview_snapshot,
     placeholder_label,
@@ -158,12 +158,19 @@ class _PreviewEventMeta:
     drawn fixtures the preview **left out** — ``knockout_fixtures``, the un-pooled
     knockout stage of an rr-then-ko draw, ``0`` for a plain round-robin. Carried from
     the enqueue verb (which has the loaded events) to the job (which has only the pure
-    snapshot, from which "a bracket was dropped" is no longer visible)."""
+    snapshot, from which "a bracket was dropped" is no longer visible).
+
+    ``unpreviewable_draw_type`` is the draw type that made the builder skip the whole
+    event (single-elim or swiss), ``None`` for an event that was previewed. Such an
+    event is in this tuple precisely *because* nothing of it is in the snapshot: it is
+    the only place the job can learn the event exists, and the note it writes from it
+    is what tells the director the event was left out rather than lost."""
 
     event_id: str
     name: str
     field_size: int
     knockout_fixtures: int
+    unpreviewable_draw_type: DrawType | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,8 +306,11 @@ async def request_schedule_preview(
     ``count_overrides`` (event id → synthetic field size) lets a caller explore
     "what if 24 show up"; omitted, each event fills to its cap (or the uncapped
     default). Propagates :class:`~app.draws.UnsupportedDrawType` /
-    :class:`~app.draws.DegenerateDraw` from the builder untouched — a preview is
-    refused loud for any non-round-robin draw, never a partial grid. Raises
+    :class:`~app.draws.DegenerateDraw` from the builder untouched. An event the
+    preview covers nothing of (single-elim, swiss) no longer refuses anything: the
+    builder skips it, every other event is previewed, and the honest-notes strip
+    names it. ``UnsupportedDrawType`` now arrives only when *no* event of the
+    tournament is previewable, so there is no partial grid to hand back. Raises
     :class:`ScheduleQueueUnavailableError` if the enqueue cannot be placed (Redis
     down), mirroring the real solve verb, so the return type stays non-optional.
 
@@ -335,6 +345,7 @@ async def request_schedule_preview(
                 name=event_names.get(summary.event_id, summary.event_id),
                 field_size=summary.field_size,
                 knockout_fixtures=summary.knockout_fixtures,
+                unpreviewable_draw_type=summary.unpreviewable_draw_type,
             )
             for summary in preview.field_summaries
         ),
@@ -354,10 +365,15 @@ async def request_schedule_preview(
     return PreviewEnqueued(
         token=job.id,
         field_summaries=[
+            # Only the events a field was actually synthesized for. A skipped event
+            # (single-elim, swiss) has none, and this skeleton payload carries no
+            # notes channel to explain a zero — so it is left out here and named in
+            # the honest-notes strip the finished result carries instead.
             PreviewFieldSummary(
                 event_id=summary.event_id, field_size=summary.field_size
             )
             for summary in preview.field_summaries
+            if summary.unpreviewable_draw_type is None
         ],
         fixtures=[
             PreviewFixture(
@@ -654,9 +670,18 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
     """The always-present honest-notes strip (ADR): first the disjoint-field
     caveat that makes a preview *optimistic* (its synthetic fields are disjoint
     across events, so it ignores multi-event contention), then a line for each event
-    whose knockout stage this preview left out, then one line per event naming the
-    synthetic count it assumed — so the estimate reads as the floor it is, never a
-    hidden simplification.
+    this preview left out **whole**, then a line for each event whose knockout stage
+    it left out, then one line per previewed event naming the synthetic count it
+    assumed — so the estimate reads as the floor it is, never a hidden
+    simplification.
+
+    The skipped-event line is what makes skipping an unpreviewable event honest
+    rather than silent. The builder no longer refuses a whole tournament because one
+    of its events is a bracket or a swiss draw (that refusal took every unrelated
+    event's preview with it); it previews everything else and reports the event it
+    could not lay out. Without the line, the director would read a schedule that is
+    quietly missing an event and have nothing to tell them why — so the note names the
+    event, names the draw type, and says the live scheduler does place it.
 
     The knockout line is what stops the strip lying by omission about an
     **rr-then-ko** event: the preview plans that event's whole draw but schedules only
@@ -667,11 +692,26 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
     it"); a preview run before anyone has registered has nothing to resolve it from,
     which is why the note stays. It is emitted off the count of
     fixtures actually dropped, so a tournament of plain round-robins — which drops none
-    — gets the strip it always had, unchanged."""
+    — gets the strip it always had, unchanged.
+
+    A skipped event earns **no** "Assumed N entrants" line: no field was synthesized
+    for it, so claiming one would contradict the line above it."""
     notes = [
         "This estimate assumes no player is entered in more than one event; a "
         "real multi-event field would take longer."
     ]
+    for meta in inputs.events:
+        # Bound before the guard rather than read through it: the draw type is what
+        # the sentence names, and narrowing it here keeps the note total.
+        draw_type = meta.unpreviewable_draw_type
+        if draw_type is None:
+            continue
+        notes.append(
+            f"{meta.name} is not in this preview: a {draw_type.value} draw is "
+            "decided round by round as it is played, so before anyone has entered "
+            "there is nothing to lay out. The scheduler does place it once the "
+            "tournament is live."
+        )
     notes.extend(
         f"Only the pool stage of {meta.name} is scheduled here: its knockout "
         f"bracket ({meta.knockout_fixtures} further "
@@ -681,7 +721,9 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
         if meta.knockout_fixtures > 0
     )
     notes.extend(
-        f"Assumed {meta.field_size} entrants for {meta.name}." for meta in inputs.events
+        f"Assumed {meta.field_size} entrants for {meta.name}."
+        for meta in inputs.events
+        if meta.unpreviewable_draw_type is None
     )
     return notes
 

@@ -2068,23 +2068,23 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     actionable ``ToolError``.
 
     A preview must never invent a schedule for a format it does not cover (the
-    false-confidence failure the real-engine decision exists to prevent, ADR "draw
-    coverage is round-robin only; every other type is refused loud"), so an
-    un-drawable event refuses the *whole* preview, never a partial grid. A ``match``
-    over the error names which of the caller's events is not schedulable to preview
-    and why, mirroring ``_map_draw_refusal_tool_error`` but in the preview's voice:
+    false-confidence failure the real-engine decision exists to prevent), so a
+    tournament it can lay out **nothing** of is refused rather than answered with an
+    empty grid. A ``match`` over the error names what the caller has to change and
+    why, mirroring ``_map_draw_refusal_tool_error`` but in the preview's voice:
 
-    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — the event's
-      draw type is not one this PREVIEW covers (it previews an event's pool stage, and
-      single-elim and swiss have none), a fact to change on the event, not a
-      transient one to retry. A *live* solve does place those events, over the event's
-      own window (ADR "a pool restricts scheduling, it does not enable it"), so what
-      the caller is told here is that the draw type cannot be **previewed**.
-      **This arm is the reason the mirror is not exact:**
+    * ``UnsupportedDrawType`` carries its ``draw_type`` structurally — every event of
+      the tournament is a draw type this PREVIEW cannot lay out (single-elim, swiss),
+      a fact to change on an event, not a transient one to retry. One such event
+      *beside* a previewable one refuses nothing now: the builder skips it, previews
+      the rest, and the honest-notes strip names it. A *live* solve does place those
+      events, over the event's own window (ADR "a pool restricts scheduling, it does
+      not enable it"), so what the caller is told here is that the draw type cannot be
+      **previewed**. **This arm is the reason the mirror is not exact:**
       ``_map_draw_refusal_tool_error`` has no ``UnsupportedDrawType`` arm, because on
       the CUT path the error is unreachable (``strategy_for`` is total). On the PREVIEW
-      path it is genuinely raised — ``schedule_preview`` raises it for single-elim — so
-      the arm here is live code with its own coverage in
+      path it is genuinely raised — ``schedule_preview`` raises it for a tournament of
+      nothing but brackets — so the arm here is live code with its own coverage in
       ``test_schedule_preview_snapshot``.
     * ``NonSinglesDraw`` carries its ``event_format`` structurally — a doubles/teams
       event can never be given a draw (ADR-0788), so it can never be previewed.
@@ -2095,10 +2095,11 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
     match error:
         case UnsupportedDrawType():
             return ToolError(
-                f"This tournament isn't schedulable to preview yet: an event's "
-                f"{error.draw_type.value} draw has no schedule generator — only "
-                "round-robin draws can be previewed. Change the event's draw type "
-                "to round-robin, or wait for support."
+                f"No event of this tournament can be previewed: a "
+                f"{error.draw_type.value} draw is decided round by round as it is "
+                "played, so before anyone has entered there is nothing to lay out. "
+                "A round-robin event beside it would still be previewed, and the "
+                "scheduler does place this one once the tournament is live."
             )
         case NonSinglesDraw():
             return ToolError(
@@ -2151,18 +2152,21 @@ async def preview_schedule(
     ``archived`` tournament is refused (there is a real field and a real solve to
     look at, or it is over).
 
-    Draw coverage is ROUND-ROBIN ONLY: an event with any other draw type (today that
-    means single-elim or swiss) refuses the WHOLE preview with an actionable
-    ``ToolError`` — never a partial grid — because a preview must not invent a
-    schedule for a format it does not cover. The refusal is the preview's own: a real
-    solve does place a single-elim or swiss event, over the event's own window.
+    Draw coverage is the POOL STAGE: an event whose draw is decided as it is played
+    (today single-elim or swiss) is SKIPPED, and the ``notes`` strip says which event
+    was left out and why. Every other event of the tournament is previewed as usual,
+    so one bracket no longer costs the day its whole preview. Skipping is the preview's
+    own limit, not the scheduler's: a real solve does place a single-elim or swiss
+    event, over the event's own window. Only a tournament with NO previewable event at
+    all refuses, with an actionable ``ToolError`` — there is nothing to hand back, and
+    an empty grid would read as "it fits".
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may preview), when the tournament is no
-    longer pre-live (``live`` / ``archived``), when an event's draw type is not
-    round-robin (not schedulable to preview yet — change it or wait for support),
-    when the preview queue is unreachable (nothing was queued; safe to retry), or
-    when the solve is still running past the internal wait (still solving — retry).
+    longer pre-live (``live`` / ``archived``), when no event of the tournament can be
+    previewed (every one of them is a bracket or a swiss draw), when the preview queue
+    is unreachable (nothing was queued; safe to retry), or when the solve is still
+    running past the internal wait (still solving — retry).
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -2191,8 +2195,8 @@ async def preview_schedule(
                 "Try again in a moment."
             ) from exc
         except DrawError as error:
-            # A non-round-robin (or otherwise un-drawable) event refuses the whole
-            # preview loud — never a partial grid. The enqueue already rolled back
+            # An un-drawable event, or a tournament with nothing previewable in it at
+            # all, refuses loud — never a partial grid. The enqueue already rolled back
             # (nothing was written or queued).
             raise _map_preview_draw_error(error) from error
 

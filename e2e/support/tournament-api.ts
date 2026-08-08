@@ -206,6 +206,44 @@ export interface StoredAddress extends Coords {
  * skip the surface they exist to test. */
 export type SeededDrawType = 'round-robin' | 'single-elim'
 
+/** Optional knobs on `addEvent` — one event of an existing tournament.
+ *
+ * Every knob is also a `seedTournament` knob, because `seedTournament` is
+ * "`createTournament` + one `addEvent`". The one field only this interface carries is
+ * `name`: a tournament's name is `seedTournament`'s own positional argument, and its
+ * one event has always been called `Open Singles`. A caller adding a **second** event
+ * has to be able to tell the two apart — the preview's honest notes, its synthetic-field
+ * line and its per-event override boxes all name an event by name, so a spec that reads
+ * them needs two names it chose itself. */
+export interface SeedEventOptions {
+  /** The event's name. Omitted = `Open Singles`, the name every existing spec's single
+   * event carries and asserts on. */
+  readonly name?: string
+  /** The event's draw type. Omitted = `round-robin`, the original minimal shape.
+   *
+   * `single-elim` is what `tournament-single-elim-schedule.spec.ts` seeds, and it is
+   * seeded **with `pools: []`**: a bracket is un-pooled end to end (ADR-0786), so a pool
+   * on such an event would reserve a slice of the venue no fixture is ever drawn into —
+   * and the spec's whole subject is what the scheduler does with a fixture that names no
+   * pool (ADR 20260807, "a pool restricts scheduling, it does not enable it"). */
+  readonly drawType?: SeededDrawType
+  /** The window both the event and its pools carry. Omitted = tomorrow, 09:00–17:00. */
+  readonly slot?: SlotSpec
+  /** The event's pools, **in the director's order** — see
+   * `SeedTournamentOptions.pools`, which is this same option. */
+  readonly pools?: ReadonlyArray<PoolSpec>
+  /** The event's `max_players` cap. Omitted = uncapped — see
+   * `SeedTournamentOptions.maxPlayers`. */
+  readonly maxPlayers?: number
+}
+
+/** One event as `addEvent` reads it back: the uuid the server minted for it, and its
+ * pools **as stored** (empty for an event seeded with `pools: []`). */
+export interface SeededEvent {
+  readonly eventId: string
+  readonly pools: ReadonlyArray<StoredPool>
+}
+
 /** Optional knobs on `seedTournament`. Defaults reproduce the original minimal
  * shape (one round-robin, one table, one pool, a far-future window), so existing specs
  * are untouched; the solver-schedule spec overrides two of them — its pool window must
@@ -361,24 +399,19 @@ export async function createTournament(
  * can drive the whole thing. `max_players` is left uncapped (omitted): the spec
  * enters exactly two, and a cap only adds a way to fail.
  *
- * Two API calls, both as the director: `POST /tournaments` then
- * `POST /tournaments/{id}/events`. The lifecycle (publish → cut → go live) and
- * the entries are the browser's job.
+ * Two API calls, both as the director: `createTournament` then one `addEvent`. A
+ * tournament that needs a **second** event calls `addEvent` again itself, with the
+ * catalogue this returned. The lifecycle (publish → cut → go live) and the entries are
+ * the browser's job.
  */
 export async function seedTournament(
   director: Guest,
   name: string,
   options: SeedTournamentOptions = {},
 ): Promise<SeededTournament> {
-  const slot = options.slot ?? {
-    date: tomorrowUtc(),
-    start: '09:00',
-    end: '17:00',
-  }
   const tables = options.tables ?? [{ label: TABLE_LABEL, court: 'A' }]
-  const pools = options.pools ?? [{ name: POOL_NAME }]
   // Resolve the catalogue HERE and pass it down, rather than letting
-  // `createTournament` default it again: the pools below reserve tables out of the
+  // `createTournament` default it again: the event's pools reserve tables out of the
   // catalogue it creates, so the two must be the same list by construction. What comes
   // back (`storedTables`) is that same list carrying the ids the server minted — the
   // only form in which a pool can name a table on the wire.
@@ -388,12 +421,64 @@ export async function seedTournament(
     { ...options, tables },
   )
 
+  // The options are forwarded ONE BY ONE rather than spread. `SeedTournamentOptions`
+  // also carries `tables` and `address`, which are the *tournament's*, and a spread
+  // would hand them to an event that has no such fields. `pools` in particular must
+  // travel as-is: an explicit `[]` is "this event has NO pools", and only an *omitted*
+  // option may fall back to the single `Pool A`.
+  const { eventId, pools } = await addEvent(director, tournamentId, storedTables, {
+    drawType: options.drawType,
+    slot: options.slot,
+    pools: options.pools,
+    maxPlayers: options.maxPlayers,
+  })
+
+  return {
+    tournamentId,
+    tables: storedTables,
+    eventId,
+    pools,
+    poolId: pools[0]?.id ?? null,
+  }
+}
+
+/**
+ * Add **one event** to an existing tournament (`POST …/events`), against a catalogue
+ * that already exists — the seam `seedTournament` is built out of, exported so a spec
+ * can seed a tournament holding **more than one** event.
+ *
+ * The multi-event seed is not a convenience: some behaviour only exists between events.
+ * `schedule-preview-mixed-draw.spec.ts` needs a round-robin event standing beside a
+ * single-elimination one, because the fact under test is that the unpreviewable event is
+ * skipped **and the other one is still previewed** — which a one-event tournament cannot
+ * express either way.
+ *
+ * `catalogue` is the tournament's stored tables (from `createTournament` or
+ * `seedTournament`), because a pool names the tables it reserves by catalogue **id** and
+ * a caller only holds labels — see `PoolSpec`.
+ */
+export async function addEvent(
+  director: Guest,
+  tournamentId: string,
+  catalogue: ReadonlyArray<StoredTable>,
+  options: SeedEventOptions = {},
+): Promise<SeededEvent> {
+  const slot = options.slot ?? {
+    date: tomorrowUtc(),
+    start: '09:00',
+    end: '17:00',
+  }
+  // `??`, never `||` or a truthiness test: `[]` is a MEANINGFUL value here ("this event
+  // has no pools", which is what an un-pooled draw type wants), and a truthy check would
+  // quietly give it `Pool A` back and destroy the premise of any spec that asked for one.
+  const pools = options.pools ?? [{ name: POOL_NAME }]
+
   const eventRes = await director.ctx.post(
     `${API}/tournaments/${tournamentId}/events`,
     {
       headers: { [CSRF_HEADER]: director.csrf },
       data: {
-        name: 'Open Singles',
+        name: options.name ?? 'Open Singles',
         // The compose stack's clock is UTC, and the solver-schedule spec builds
         // its pool window around the stack's real NOW; anchoring the event to
         // UTC keeps a naive wall-clock window resolving to the same instant it
@@ -428,7 +513,7 @@ export async function seedTournament(
           // are catalogue ids on the wire, and a stale one is silently intersected
           // away by the solver ("a stale ref is a table the pool cannot use"), so a
           // typo would surface as an inexplicably infeasible day rather than an error.
-          table_ids: tableIdsFor(storedTables, pool.tableLabels),
+          table_ids: tableIdsFor(catalogue, pool.tableLabels),
         })),
       },
     },
@@ -452,13 +537,7 @@ export async function seedTournament(
     )
   }
 
-  return {
-    tournamentId,
-    tables: storedTables,
-    eventId: created.id,
-    pools: created.pools,
-    poolId: created.pools[0]?.id ?? null,
-  }
+  return { eventId: created.id, pools: created.pools }
 }
 
 /** Resolve a pool's reserved-table **labels** to the catalogue ids the wire wants;
