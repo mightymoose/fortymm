@@ -430,6 +430,81 @@ async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_sche
     assert "Assumed 6 entrants for Championship." in result.notes
 
 
+#: The exact honest note an event the preview lays out NOTHING of earns, pinned so
+#: the wording a director reads cannot drift silently.
+_SKIPPED_EVENT_NOTE = (
+    "Championship is not in this preview: a single-elim draw is decided round by "
+    "round as it is played, so before anyone has entered there is nothing to lay "
+    "out. The scheduler does place it once the tournament is live."
+)
+
+
+async def test_preview_notes_say_a_bracket_event_is_not_previewed_at_all(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """A single-elim event no longer refuses its tournament's preview: it is skipped,
+    the round-robin beside it is previewed as usual, and the strip says which event
+    was left out and why.
+
+    The note is the whole point of skipping rather than refusing. Silently omitting an
+    event would leave the director reading a schedule that is missing a day's worth of
+    play with nothing to explain it — a quieter version of the failure the loud
+    refusal existed to prevent.
+
+    The round-robin's own six matches are asserted present, which is the claim the
+    note alone would not make: this is a per-event loop over a whole tournament, so
+    the old refusal took the round-robin's preview down with the bracket's.
+    """
+    owner = await make_user(db_session, "prev-skip-note")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Open Singles",
+        max_players=4,
+        pools=[_pool(["t1"])],
+    )
+    await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        max_players=8,
+        pools=[_pool(["t2"])],
+        draw_type=DrawType.single_elim,
+    )
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+    # The skeleton payload carries no notes channel to explain a zero, so it names
+    # only the event a field was actually synthesized for.
+    assert [s.field_size for s in enqueued.field_summaries] == [4]
+
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    assert isinstance(inputs, PreviewJobInputs)
+
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+
+    # The round-robin is previewed in full — C(4, 2) = 6 — and the skipped event keeps
+    # its seat in the breakdown at zero, so it is visibly left out rather than absent.
+    assert {e.name: e.matches for e in result.events} == {
+        "Open Singles": 6,
+        "Championship": 0,
+    }
+    assert result.total_matches == 6
+
+    # The strip, pinned whole: the always-on caveat, the skipped event's line, and an
+    # assumed-entrants line for the previewed event ONLY. A count claimed for an event
+    # no field was synthesized for would contradict the line above it.
+    assert result.notes == [
+        "This estimate assumes no player is entered in more than one event; a "
+        "real multi-event field would take longer.",
+        _SKIPPED_EVENT_NOTE,
+        "Assumed 4 entrants for Open Singles.",
+    ]
+
+
 async def test_a_round_robin_only_previews_notes_carry_no_knockout_caveat(
     db_session: AsyncSession, default_league: League, preview_queue: Queue
 ) -> None:
