@@ -37,7 +37,15 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.schemas.tournament import Address, TournamentEventCreate, TournamentEventUpdate
+from app.schemas.tournament import (
+    Address,
+    DrawStructure,
+    PoolMembershipMode,
+    StructuralSettingOwner,
+    TournamentEventCreate,
+    TournamentEventUpdate,
+)
+from app.tournament_draw_settings import draw_settings_of
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
@@ -48,6 +56,7 @@ from app.tournament_errors import (
 from app.tournament_events import create_event, delete_event, update_event
 from app.tournament_pools import pool_read
 from tests._helpers import (
+    event_draw_settings,
     event_pools,
     make_user,
     venue_tables,
@@ -662,6 +671,8 @@ async def _add_cut_event(
     tournament: Tournament,
     *,
     draw_type: DrawType = DrawType.round_robin,
+    qualifiers_per_pool: int | None = None,
+    draw_structure: DrawStructure | None = None,
     timezone: str = "America/Chicago",
     scheduled_start: datetime | None = None,
 ) -> TournamentEvent:
@@ -670,12 +681,21 @@ async def _add_cut_event(
     ``scheduled_start`` placement, for the timezone-reanchor path.
 
     The pool's id is minted here (``event_pools``) rather than by the column's default,
-    because the fixture below has to name it before either row is flushed."""
+    because the fixture below has to name it before either row is flushed.
+
+    The settings row goes through ``event_draw_settings``, which routes the pair through
+    the same parse the request boundary uses — so a draw type that REQUIRES a setting
+    (``rr-then-ko``'s qualifier count) reds here when the seed omits it, rather than
+    writing a row the app could not have made and failing at the next read."""
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Cut Singles",
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
+        draw_settings=event_draw_settings(
+            draw_type,
+            qualifiers_per_pool=qualifiers_per_pool,
+            draw_structure=draw_structure,
+        ),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone=timezone,
@@ -889,6 +909,247 @@ async def test_update_event_re_sending_the_same_draw_type_is_not_frozen(
     assert league_id == default_league.id
     assert updated.name == "Renamed Under Draw"
     assert updated.draw_settings.draw_type is DrawType.round_robin
+
+
+async def test_update_event_changing_only_an_ownership_mode_is_not_frozen(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A cut draw does NOT freeze the ownership modes: a director may say who owns the
+    pool count, or that they will place entrants at cut time, while fixtures stand.
+
+    The freeze exists to stop a payload contradicting fixtures that already exist (ADR-
+    0786). The modes contradict none: the pools a cut draw has are its pool rows, which
+    their own freeze already holds, and membership is dealt by the snake either way
+    until the cut screen exists (#1324). What the fixtures WERE dealt from — the draw
+    type and the qualifier count — is still frozen, and the test above and its neighbour
+    say so.
+
+    Without the exemption this edit would be refused, and refused in the qualifier
+    count's words: ``_draw_settings_frozen_detail`` asks the arm which setting moved,
+    and the ``rr-then-ko`` arm answers "the number of qualifiers per pool is frozen" for
+    any change at all. A refusal naming a number the director never touched is the
+    defect
+    #1320 was filed about, so this is the test that keeps
+    ``configuration_the_draw_was_dealt_from`` from being deleted as dead weight.
+    """
+    owner = await make_user(db_session, "events-update-modes-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+    )
+    event_id = event.id
+
+    updated, _ = await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {
+                "draw_type": "rr-then-ko",
+                "qualifiers_per_pool": 2,
+                "draw_structure": {
+                    "pool_count_mode": "manual",
+                    "manual_pool_count": 4,
+                    "membership_mode": "manual",
+                },
+            }
+        ),
+    )
+
+    stored = draw_settings_of(updated.draw_settings)
+    assert stored.draw_structure == DrawStructure(
+        pool_count_mode=StructuralSettingOwner.manual,
+        manual_pool_count=4,
+        membership_mode=PoolMembershipMode.manual,
+    )
+    # The qualifier count is untouched by the edit, which is what makes this a test
+    # about the modes rather than about a configuration that happened to be equal
+    # anyway.
+    assert stored.qualifiers_per_pool == 2
+
+
+#: What a director owns on the events the two tests below edit: a pool count they typed,
+#: a pool size they typed and then handed back to the system, and hand assignment at cut
+#: time. Three different numbers and one non-default membership, so a patch that lost or
+#: swapped any of them reds.
+_DIRECTOR_OWNED_STRUCTURE = DrawStructure(
+    pool_count_mode=StructuralSettingOwner.manual,
+    manual_pool_count=6,
+    pool_size_mode=StructuralSettingOwner.automatic,
+    manual_pool_size=5,
+    membership_mode=PoolMembershipMode.manual,
+)
+
+
+async def test_update_event_omitting_the_structure_leaves_the_stored_modes_alone(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A patch that names the draw configuration but sends **no** ``draw_structure``
+    leaves the director's ownership exactly as it was. Omitted is unchanged.
+
+    This is the rule every other field on this verb already follows — ``changes`` is
+    ``model_dump(exclude_unset=True)``, so a key the caller never sent is not in it and
+    nothing is written. The draw configuration cannot get that for free, because it is
+    rebuilt as a whole arm from the loose fields beside ``draw_type``, and a rebuilt
+    arm fills ``draw_structure`` with the model's default of all-automatic. So the
+    patch path resolves the omission against the stored arm
+    (``TournamentEventUpdate.draw_settings_over``).
+
+    Without that, the damage would not have been theoretical or rare. Today's iOS app
+    and the MCP server both patch events and neither knows this field exists, so **a
+    rename would have discarded a pool count the director typed on the web** — the
+    silent change the ownership ADR forbids outright. It would also have slipped past
+    the freeze on a cut draw, because the modes are deliberately not part of what the
+    freeze compares.
+
+    A cut event is used here for exactly that reason: it is the case with no second line
+    of defence.
+    """
+    owner = await make_user(db_session, "events-update-structure-kept-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+        draw_structure=_DIRECTOR_OWNED_STRUCTURE,
+    )
+    event_id = event.id
+    # The seed is asserted before the edit. Without this the test would pass against an
+    # event that never had a manual mode to lose, which is the shape of "green because
+    # nothing happened".
+    seeded = draw_settings_of(event.draw_settings)
+    assert seeded.draw_structure == _DIRECTOR_OWNED_STRUCTURE
+
+    updated, _ = await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {
+                "name": "Renamed By An Older Client",
+                "draw_type": "rr-then-ko",
+                "qualifiers_per_pool": 2,
+            }
+        ),
+    )
+
+    assert updated.name == "Renamed By An Older Client"
+    stored = draw_settings_of(updated.draw_settings)
+    assert stored.draw_structure == _DIRECTOR_OWNED_STRUCTURE, (
+        "a patch that never mentioned draw_structure must not touch it: the director's "
+        "pool count, their remembered pool size and their membership choice all survive"
+    )
+
+    # Persisted, not merely returned — the resolved arm reached the settings row.
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert draw_settings_of(row.draw_settings).draw_structure == (
+        _DIRECTOR_OWNED_STRUCTURE
+    )
+
+
+async def test_update_event_sending_a_structure_replaces_the_stored_one_wholesale(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The other half of the rule: a structure that IS sent replaces the stored one
+    entirely, mode by mode, including back to automatic.
+
+    Both semantics have to be pinned together, because the fix for the omission case is
+    a carry-forward and the obvious over-correction is to merge the two structures
+    instead of replacing. A merge would make "Use automatic" unsendable — the click
+    that returns a setting to the system would arrive as a field with nothing in it and
+    be read as "unstated".
+
+    So the sent structure wins in full: the manual pool count is gone because this
+    payload says pool count is automatic, and the remembered pool size is gone with it
+    because this payload does not carry one.
+    """
+    owner = await make_user(db_session, "events-update-structure-replaced-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+        draw_structure=_DIRECTOR_OWNED_STRUCTURE,
+    )
+    event_id = event.id
+
+    updated, _ = await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {
+                "draw_type": "rr-then-ko",
+                "qualifiers_per_pool": 2,
+                "draw_structure": {
+                    "pool_size_mode": "manual",
+                    "manual_pool_size": 8,
+                },
+            }
+        ),
+    )
+
+    stored = draw_settings_of(updated.draw_settings)
+    assert stored.draw_structure == DrawStructure(
+        pool_size_mode=StructuralSettingOwner.manual,
+        manual_pool_size=8,
+    ), (
+        "a sent structure is the whole structure: pool count is back to automatic with "
+        "no remembered number, and membership is back to the snake"
+    )
+
+
+async def test_update_event_changing_the_qualifier_count_is_still_frozen(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The other side of the exemption above: the qualifier count a cut bracket was
+    sized from is still frozen, and a patch that moves it is still refused (ADR
+    20260727).
+
+    Sent with a structure alongside it, because that is the shape the editor sends and
+    because the exemption must not become "any payload carrying a structure passes"."""
+    owner = await make_user(db_session, "events-update-frozen-k-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_pool=2,
+    )
+    event_id = event.id
+
+    with pytest.raises(DrawTypeFrozenError) as refusal:
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "draw_type": "rr-then-ko",
+                    "qualifiers_per_pool": 3,
+                    "draw_structure": {"membership_mode": "manual"},
+                }
+            ),
+        )
+    assert "qualifiers per pool is frozen" in str(refusal.value)
 
 
 async def test_update_event_timezone_change_reanchors_placements(

@@ -1,9 +1,10 @@
+import enum
 import uuid
 from collections import Counter
 from collections.abc import Mapping
 from datetime import date, datetime, time
 from decimal import ROUND_DOWN, Decimal
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -184,6 +185,138 @@ not become
 unwritable when a player withdraws."""
 
 
+MAX_MANUAL_POOL_DIMENSION = MAX_EVENT_PLAYERS
+"""The ceiling on a pool count and on a pool size the **director types**.
+
+The same kind of bound ``MAX_QUALIFIERS_PER_POOL`` is, and not the domain rule either:
+the rules that decide whether a structure is playable move with the field and belong to
+the derivation (chore 4b), not to this boundary. This is the boundary refusing numbers
+that are nonsense on their face. ``MAX_EVENT_PLAYERS`` is the largest field this API
+holds, so more pools than that — or more players in one pool than that — is not a
+structure whatever else is set, and the derivation that builds one list entry per pool
+never has to size a list from a number a client chose."""
+
+ManualPoolCount = Annotated[int, Field(ge=1, le=MAX_MANUAL_POOL_DIMENSION)]
+"""How many pools the director says the field splits into, when they own the count.
+
+``1 <= n <= MAX_MANUAL_POOL_DIMENSION`` is a **representational** floor and ceiling, in
+the sense ``QualifiersPerPool``'s is: a draw of zero pools is not a draw, and a negative
+count is not a count. Whether the number the director typed *fits their field* is a
+different question with a different answer — the app reports the disagreement and keeps
+both numbers (ADR "a structural setting is owned by the director or derived by the
+system"), so it is deliberately NOT refused here."""
+
+ManualPoolSize = Annotated[int, Field(ge=1, le=MAX_MANUAL_POOL_DIMENSION)]
+"""How many players the director targets in each pool, when they own the size. The same
+representational bounds :data:`ManualPoolCount` carries, for the same reasons — a pool
+of one player is a real refusal, but it is the *cut's* (``DegenerateDraw``), not this
+boundary's."""
+
+
+class StructuralSettingOwner(enum.Enum):
+    # Who owns one of an ``rr-then-ko`` draw's numeric structural settings (ADR "a
+    # structural setting is owned by the director or derived by the system"): the system
+    # derives it from the event, or the director typed it.
+    #
+    # Stored as its own mode, NEVER inferred from whether a value is present. A derived
+    # value is a number too, so reading ownership off "is the field filled in" would
+    # make every derived draw look director-owned the moment it was shown — and the two
+    # states must behave differently the next time the field changes.
+    #
+    # No docstring on purpose: Pydantic emits an enum's ``__doc__`` as the OpenAPI
+    # ``description``, so prose here would cross the wire into both generated clients.
+    automatic = "automatic"
+    manual = "manual"
+
+
+class PoolMembershipMode(enum.Enum):
+    # How entrants land in the pools of an ``rr-then-ko`` draw. Ownership again, but its
+    # two values are named for what they DO rather than for who chose them, because the
+    # automatic answer is a specific algorithm the director can read: ``snake`` is the
+    # 1, 2, 3, 3, 2, 1 deal ``_snake()`` in ``app.draws`` already performs on every cut.
+    #
+    # ``manual`` is "assign at cut time" — the director places entrants themselves once
+    # registration closes. Storing the mode is all this does: the cut screen that
+    # honours it is #1324, and until then a ``manual`` event still cuts by snake.
+    #
+    # No docstring on purpose — see :class:`StructuralSettingOwner`.
+    snake = "snake"
+    manual = "manual"
+
+
+# ``DrawStructure``'s rationale lives out here, in comments, and only its contract lives
+# in the docstring below. A model's ``__doc__`` becomes the OpenAPI ``description`` and
+# crosses into both generated clients, so the reasoning a reviewer of THIS file wants is
+# noise in ``schema.d.ts`` and ``Types.swift`` — the same reason the two enums above
+# carry no docstring at all.
+#
+# **Every mode has a default, and the defaults are today's behaviour.** An event that
+# predates this work stores ``{"qualifiers_per_pool": K}`` with no ``draw_structure``
+# key, and it parses into this model's defaults: every mode automatic, no manual
+# numbers. That is what makes the change need no migration — "not set" and "set to
+# automatic" are the same event, which is exactly what the ADR asks for.
+#
+# **A manual number is KEPT when its mode is automatic**, and that pairing is a legal
+# state on purpose. It is the director's number, remembered: a director who switches a
+# row back to Automatic to see what the system would say, and then switches back, gets
+# their own number returned rather than a blank box. Nothing derives anything from a
+# manual number whose mode is automatic — the mode is the only thing a reader asks. The
+# alternative, clearing the number, would make "Use automatic" a destructive act.
+#
+# **What "automatic qualifiers" means for a value that is always stored.**
+# ``qualifiers_per_pool`` is required on every ``rr-then-ko`` event and always has been,
+# so unlike the two pool numbers it has no absent state to fall back to. The reading
+# this work commits to: the stored K is the **manual slot** for qualifiers — the
+# director's number, kept — and ``qualifiers_mode`` says whether anybody should read it.
+# When the mode is ``automatic``, a reader derives ``ceil(8 / pool count)`` from the
+# target bracket size and ignores the stored number, which is what the client already
+# does (``web-client/src/components/tournaments/data/draw-structure.ts``).
+#
+# That leaves one gap, named here rather than papered over: ``app.draws`` still cuts
+# from the **stored** K whatever the mode says, so an automatic event can display a
+# derived qualifier count and cut a different one. Closing it is the API-side
+# derivation's job (chores 4a/5c); this model only records the ownership the cut will
+# later have to honour.
+#
+# One model for the write and the read, unlike ``AddressInput``/``Address``: every value
+# in here was written through this same model, so the read boundary is not being asked
+# to stay permissive about history it could not have produced.
+class DrawStructure(BaseModel):
+    """Which of a round-robin-then-knockout draw's structural settings the **director
+    owns**, and the numbers they chose.
+
+    Four settings, each with its ownership stored rather than guessed: the pool count,
+    the pool size, the qualifier count (whose value is the event's own
+    ``qualifiers_per_pool``), and how entrants reach their pools. Every mode defaults to
+    the derived answer, so an event that sets nothing behaves exactly as it does today.
+
+    A manual number is kept while its mode is ``automatic``: it is the director's
+    number, remembered for the next time they take the setting back.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Who owns the pool count. ``automatic`` derives it — from the event's pool rows,
+    #: or from the field and a manual pool size (ADR "an event's pool count is its pool
+    #: rows and a derived count is a projection").
+    pool_count_mode: StructuralSettingOwner = StructuralSettingOwner.automatic
+    #: The pool count the director typed, or ``None`` if they never typed one. Read only
+    #: when ``pool_count_mode`` is ``manual``; kept either way.
+    manual_pool_count: ManualPoolCount | None = None
+    #: Who owns the pool size. ``automatic`` splits the field across the pool count.
+    pool_size_mode: StructuralSettingOwner = StructuralSettingOwner.automatic
+    #: The per-pool target the director typed, or ``None``. Read only when
+    #: ``pool_size_mode`` is ``manual``; kept either way.
+    manual_pool_size: ManualPoolSize | None = None
+    #: Who owns the qualifier count. Its **value** is the arm's ``qualifiers_per_pool``,
+    #: because that key already exists on every event and a second copy would be a field
+    #: and its own derivation in one object (api/CLAUDE.md).
+    qualifiers_mode: StructuralSettingOwner = StructuralSettingOwner.automatic
+    #: How entrants reach their pools: the snake, or the director placing them at cut
+    #: time. There is no automatic/manual pair here because there is no number to own.
+    membership_mode: PoolMembershipMode = PoolMembershipMode.snake
+
+
 class DrawSettingsWriteBase(BaseModel):
     """What every arm of the draw-settings union shares: ``extra="forbid"``, and the
     serialization onto the settings column.
@@ -212,6 +345,51 @@ class DrawSettingsWriteBase(BaseModel):
         representation of "no configuration" — never ``NULL``.
         """
         return self.model_dump(mode="json", exclude={"draw_type"})
+
+    def carrying_unstated_settings_of(self, stored: "DrawSettingsWriteBase") -> Self:
+        """This configuration with any setting the caller **did not state** taken from
+        ``stored`` — what the edit path writes.
+
+        A PATCH leaves an omitted field alone: ``update_event`` builds its change set
+        with ``model_dump(exclude_unset=True)``, so a key the caller never sent is not
+        in it. The draw configuration cannot follow that rule by omission alone,
+        because it is rebuilt as a whole arm from the loose fields beside
+        ``draw_type`` — and a rebuilt arm fills every field the caller left out with
+        the arm's own default. For ``draw_structure`` that default is "every mode
+        automatic", so a rename sent by a client that has never heard of the field
+        would silently discard the director's ownership modes. The ADR forbids exactly
+        that ("the system never silently changes a director's number"), and it would
+        have been every iOS and MCP edit.
+
+        So the omission is repaired here, against what the event already has. **A
+        stated structure still replaces wholesale** — that is the editor's save, and it
+        is how a director returns a setting to automatic.
+
+        ``self`` on the three arms with no unstateable setting. The ``rr-then-ko`` arm
+        overrides it.
+        """
+        return self
+
+    def configuration_the_draw_was_dealt_from(self) -> "DrawSettingsWriteBase":
+        """This configuration with the settings a **standing draw does not depend on**
+        normalized away — what the edit path's freeze compares (ADR-0786).
+
+        The freeze asks one question: would this patch contradict fixtures that already
+        exist? The draw type dealt them, and both configured counts sized them, so those
+        are frozen. The four ownership modes size nothing that is already on the table —
+        the pool count a cut draw has is its pool rows, which their own freeze already
+        holds, and membership is dealt by the snake either way until the cut screen
+        exists (#1324).
+
+        So this is not an exemption granted for convenience: comparing whole arms would
+        answer a ``membership_mode`` toggle with
+        ``_qualifiers_per_pool_frozen_detail``'s sentence, which is a refusal naming a
+        cause the director did not touch — the exact defect #1320 was filed about.
+
+        ``self`` on the three arms that carry no structure. The ``rr-then-ko`` arm
+        overrides it.
+        """
+        return self
 
 
 class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
@@ -246,6 +424,14 @@ class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
         question, and the field's absence is what refuses the key on the wire."""
         return None
 
+    @property
+    def draw_structure(self) -> DrawStructure | None:
+        """``None`` — a plain round-robin has no knockout stage to aim at, so it has no
+        structural settings to own (ADR "a structural setting is owned by the director
+        or derived by the system" is scoped to ``rr-then-ko``). A property for the
+        reason :meth:`qualifiers_per_pool` is one."""
+        return None
+
 
 class SingleElimDrawSettingsWrite(DrawSettingsWriteBase):
     """A single-elimination event's draw configuration: the draw type, and nothing else.
@@ -264,6 +450,12 @@ class SingleElimDrawSettingsWrite(DrawSettingsWriteBase):
         """``None`` — a bracket's depth is derived from the field, not chosen."""
         return None
 
+    @property
+    def draw_structure(self) -> DrawStructure | None:
+        """``None`` — a bracket has no pools, so it has none of the pool-to-knockout
+        settings a director can own."""
+        return None
+
 
 class RrThenKoDrawSettingsWrite(DrawSettingsWriteBase):
     """A round-robin-then-knockout event's draw configuration: the draw type **and** its
@@ -276,6 +468,24 @@ class RrThenKoDrawSettingsWrite(DrawSettingsWriteBase):
 
     draw_type: Literal[DrawType.rr_then_ko] = DrawType.rr_then_ko
     qualifiers_per_pool: QualifiersPerPool
+    # Which structural settings the director owns, and the numbers they typed (ADR "a
+    # structural setting is owned by the director or derived by the system"). The ONE
+    # arm that carries them: the ADR is scoped to this draw type, and ``extra="forbid"``
+    # on the others is what makes a pool-size mode on a swiss event a 422 rather than a
+    # key nothing will ever read.
+    #
+    # ``default_factory``, so an event stored before this work —
+    # ``{"qualifiers_per_pool": K}``, no ``draw_structure`` key — parses into "every
+    # mode automatic, no manual numbers", which is precisely today's behaviour. That is
+    # the whole of the migration: there isn't one (ADR "a draw type's settings are one
+    # NOT NULL JSON object" made the settings a JSON object so that adding keys costs no
+    # DDL).
+    #
+    # It is a ``default_factory`` rather than a shared default instance for the ordinary
+    # reason — a mutable default shared by every arm ever parsed — and it also keeps the
+    # emitted JSON schema free of a ``default`` key, so the generated TypeScript reads
+    # ``draw_structure?:`` rather than making it required (api/CLAUDE.md).
+    draw_structure: DrawStructure = Field(default_factory=DrawStructure)
 
     @property
     def rounds(self) -> int | None:
@@ -283,6 +493,43 @@ class RrThenKoDrawSettingsWrite(DrawSettingsWriteBase):
         the pools are dealt by the circle method and the bracket's depth follows from
         the qualifier count."""
         return None
+
+    def carrying_unstated_settings_of(self, stored: "DrawSettingsWriteBase") -> Self:
+        """This arm with ``draw_structure`` taken from ``stored`` — the repair the base
+        method describes, and the one arm that needs it.
+
+        The ownership modes are the only setting a caller can leave out of a draw
+        configuration and still send a valid one: ``qualifiers_per_pool`` and ``rounds``
+        are required by the arms that have them, so an omission there is already a 422.
+
+        ``stored`` is whatever the event currently holds, which is **not** always an
+        ``rr-then-ko`` arm — a patch may be switching the draw type *to* this one. There
+        is nothing to carry forward from a round-robin event, and the arm's own defaults
+        (every mode automatic) are the right answer for a structure the event has never
+        had.
+
+        "Stated" is ``model_fields_set``, which is exact rather than approximate here:
+        :func:`_draw_settings_write` puts ``draw_structure`` into the payload it
+        validates only when the request carried one, so the field is in this arm's
+        ``model_fields_set`` if and only if the caller sent it. An explicit ``null`` is
+        an absent one — the schema turns both into "not stated" — because ``null`` is
+        what a client sends when it has nothing to say about a field, and reading it as
+        "reset the director's modes" would be the same silent discard by another route.
+        """
+        stated = "draw_structure" in self.model_fields_set
+        if stated or not isinstance(stored, RrThenKoDrawSettingsWrite):
+            return self
+        return self.model_copy(update={"draw_structure": stored.draw_structure})
+
+    def configuration_the_draw_was_dealt_from(self) -> "DrawSettingsWriteBase":
+        """This arm with its structural settings back at their defaults — the draw type
+        and the qualifier count, which are the two facts a cut ``rr-then-ko`` draw's
+        fixtures were actually dealt from.
+
+        See the base method for why the modes are left out of the freeze. The defaults
+        are substituted rather than the field being excluded from a dump, so what the
+        freeze compares stays a parsed arm and equality stays the union's own."""
+        return self.model_copy(update={"draw_structure": DrawStructure()})
 
 
 class SwissDrawSettingsWrite(DrawSettingsWriteBase):
@@ -304,6 +551,12 @@ class SwissDrawSettingsWrite(DrawSettingsWriteBase):
     def qualifiers_per_pool(self) -> int | None:
         """``None`` — swiss is pool-less and eliminates nobody, so there is nothing to
         qualify out of or into."""
+        return None
+
+    @property
+    def draw_structure(self) -> DrawStructure | None:
+        """``None`` — swiss is pool-less, so it has no pool count, no pool size and no
+        membership to own."""
         return None
 
 
@@ -346,10 +599,13 @@ _DRAW_SETTINGS_WRITE: TypeAdapter[DrawSettingsWriteArm] = TypeAdapter(DrawSettin
 
 
 def _draw_settings_write(
-    draw_type: DrawType, qualifiers_per_pool: int | None, rounds: int | None
+    draw_type: DrawType,
+    qualifiers_per_pool: int | None,
+    rounds: int | None,
+    draw_structure: DrawStructure | None = None,
 ) -> DrawSettingsWriteArm:
-    """Parse a ``(draw_type, qualifiers_per_pool, rounds)`` triple into the union arm it
-    names, or raise :class:`ValueError` — a 422 — when it names none.
+    """Parse a ``(draw_type, qualifiers_per_pool, rounds, draw_structure)`` payload into
+    the union arm it names, or raise :class:`ValueError` — a 422 — when it names none.
 
     The settings are **flat on the wire** and a union in the interior. Nesting them
     (``draw: {…}``) would express the union in the generated clients too, at the cost of
@@ -369,12 +625,22 @@ def _draw_settings_write(
     The refusal text is the **union's own**, re-raised as a ``ValueError`` so FastAPI
     renders it as an ordinary 422 body. Composing a friendlier sentence here would be a
     second statement of a rule the arms already make, and the two would drift.
+
+    An omitted ``draw_structure`` therefore lands on the arm's **default** — every mode
+    automatic — which is the right answer on a create, where the event has no history to
+    keep. On a patch it is not: the event may already carry modes the director chose,
+    and this function cannot see them. The edit path repairs that afterwards, against
+    the stored arm (:meth:`TournamentEventUpdate.draw_settings_over`). The omission is
+    still visible to it, because a field this function did not put in the payload is not
+    in the resulting arm's ``model_fields_set``.
     """
     payload: dict[str, object] = {"draw_type": draw_type}
     if qualifiers_per_pool is not None:
         payload["qualifiers_per_pool"] = qualifiers_per_pool
     if rounds is not None:
         payload["rounds"] = rounds
+    if draw_structure is not None:
+        payload["draw_structure"] = draw_structure
     try:
         return _DRAW_SETTINGS_WRITE.validate_python(payload)
     except ValidationError as exc:
@@ -1754,6 +2020,23 @@ class TournamentEventRead(BaseModel):
     # it and has no default. ``null`` for every other draw type, and that is a fact
     # rather than missing data — none of them has a chosen round count.
     rounds: int | None
+    # Which structural settings this event's director owns, and the numbers they typed —
+    # off the same parsed arm the two counts above come from, so the modes and the
+    # qualifier count cannot be read from two places and disagree.
+    #
+    # ``null`` for every draw type but ``rr-then-ko``, and a *fact* rather than missing
+    # data: the ownership ADR is scoped to that one draw type, so a round-robin event
+    # has no structural setting to own. For an ``rr-then-ko`` event it is never null —
+    # an event stored before this work reads back as every mode automatic, which is what
+    # it has always behaved as.
+    #
+    # It is on the read for the reason the qualifier count is: the editor patches the
+    # draw configuration as a unit, so it has to be able to send back what the event
+    # already has — a director who edits one mode is sending all four. A caller that
+    # omits it does not lose the stored modes (the patch path carries them forward,
+    # ``TournamentEventUpdate.draw_settings_over``), but it cannot CHANGE one without
+    # first reading them, which is what this field is for.
+    draw_structure: DrawStructure | None
     # ``null`` means the event is uncapped — there is no entrant limit (ADR-0935).
     max_players: int | None
     # Typed ``float`` so JSON emits a number, not a Decimal string. The
@@ -2165,6 +2448,18 @@ class TournamentEventCreate(BaseModel):
     # ``SwissRounds`` restates the ``1 <= R <= 32`` bound the arm carries so both reach
     # the generated clients.
     rounds: SwissRounds | None = None
+    # Which structural settings the director owns, and only for the one draw type that
+    # has any — flat beside ``draw_type`` exactly as the two counts above are, and
+    # parsed into the same union by the validator below, so a pool-size mode on a swiss
+    # event is a 422 here (ADR "a structural setting is owned by the director or derived
+    # by the system").
+    #
+    # Omitted is "every mode automatic", which is what an event created before this work
+    # has and what a client that knows nothing about draw structure keeps producing. It
+    # is a nested object rather than six more flat fields because the four settings are
+    # one thing a director sets on one tab, and the group has to be replaceable as a
+    # unit.
+    draw_structure: DrawStructure | None = None
     # ``None`` (or omitted) is the uncapped event — the "no cap" sentinel of ADR-0935,
     # not a cap of zero. When a cap IS supplied it is an ``EventMaxPlayers``: ``gt=0``
     # (a cap of zero admits nobody, which is not an event) and ``le=512`` (the column
@@ -2227,7 +2522,7 @@ class TournamentEventCreate(BaseModel):
         (:attr:`_draw_settings`) rather than discarded — parse once, at the boundary,
         and carry the parsed value inward."""
         self._draw_settings = _draw_settings_write(
-            self.draw_type, self.qualifiers_per_pool, self.rounds
+            self.draw_type, self.qualifiers_per_pool, self.rounds, self.draw_structure
         )
         return self
 
@@ -2267,6 +2562,22 @@ class TournamentEventUpdate(BaseModel):
     # is — and ``null`` means the same thing here as absent does ("this draw type takes
     # no round count"), which is what patching a swiss event back to a round-robin says.
     rounds: SwissRounds | None = None
+    # The ownership modes, patched with their draw type and never alone, exactly as the
+    # two counts are — but with the opposite reading of an omission. ``null`` and absent
+    # both mean **unchanged**: the event keeps the structure it already has
+    # (:meth:`draw_settings_over`, which is how this verb honours the same
+    # "omitted is untouched" rule ``model_dump(exclude_unset=True)`` gives every other
+    # field). A structure that IS sent replaces the stored one wholesale, which is how a
+    # director returns a setting to automatic.
+    #
+    # The asymmetry with ``qualifiers_per_pool`` is not an inconsistency, it is what the
+    # two fields' histories force. Every event has a stored qualifier count and the arm
+    # requires one, so the editor must send it on every patch; nothing can be inferred
+    # from its absence because there is no valid patch that omits it. A structure can be
+    # omitted by any caller that predates the field — today's iOS app and the MCP server
+    # — and reading that as "reset every mode to automatic" would let a rename discard a
+    # director's choices, which the ownership ADR forbids outright.
+    draw_structure: DrawStructure | None = None
     max_players: EventMaxPlayers | None = None
     entry_fee: EventEntryFee | None = None
     # The same validated IANA zone create requires — correcting the venue timezone is a
@@ -2318,13 +2629,39 @@ class TournamentEventUpdate(BaseModel):
 
     @property
     def draw_settings(self) -> DrawSettingsWriteArm | None:
-        """The parsed draw configuration this patch asks for, or ``None`` when it is not
+        """The draw configuration this patch **stated**, or ``None`` when it is not
         patching the draw configuration at all.
 
         Total by the time anybody can call it, exactly as the create schema's is and
         for the same reason: :meth:`_parse_draw_settings` ran the parse during
-        validation and kept the arm."""
+        validation and kept the arm.
+
+        **This is not the configuration to write.** A setting the caller left out is
+        filled in here with the arm's default, which for ``draw_structure`` means "every
+        mode automatic" — a value nobody asked for. :meth:`draw_settings_over` is what
+        resolves that against the event; writers take it, and this stays the record of
+        what the request actually said."""
         return self._draw_settings
+
+    def draw_settings_over(
+        self, stored: DrawSettingsWriteArm
+    ) -> DrawSettingsWriteArm | None:
+        """The draw configuration to **write**, resolved against the one the event has
+        — or ``None`` when this patch does not touch the draw configuration at all.
+
+        A PATCH leaves omitted fields alone (``model_dump(exclude_unset=True)``), and
+        this is how the draw configuration keeps that promise even though it is rebuilt
+        as a whole arm rather than field by field. See
+        :meth:`DrawSettingsWriteBase.carrying_unstated_settings_of` for what "unstated"
+        covers and why the alternative — defaulting the modes on every patch — would let
+        a rename from an older client discard a director's ownership.
+
+        Both readers on the edit path (the freeze, then the write) take this same
+        resolved arm, so the configuration that is judged is the configuration that
+        lands."""
+        if self._draw_settings is None:
+            return None
+        return self._draw_settings.carrying_unstated_settings_of(stored)
 
     @model_validator(mode="after")
     def _parse_draw_settings(self) -> "TournamentEventUpdate":
@@ -2350,9 +2687,17 @@ class TournamentEventUpdate(BaseModel):
                 "rounds is part of an event's draw configuration and is patched with "
                 "it: send draw_type alongside it."
             )
+        if self.draw_type is None and self.draw_structure is not None:
+            raise ValueError(
+                "draw_structure is part of an event's draw configuration and is "
+                "patched with it: send draw_type alongside it."
+            )
         if self.draw_type is not None:
             self._draw_settings = _draw_settings_write(
-                self.draw_type, self.qualifiers_per_pool, self.rounds
+                self.draw_type,
+                self.qualifiers_per_pool,
+                self.rounds,
+                self.draw_structure,
             )
         return self
 

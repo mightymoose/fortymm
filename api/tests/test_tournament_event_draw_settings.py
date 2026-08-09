@@ -30,6 +30,7 @@ column on ``tournament_events`` to cross-check it against, which is the point.
 
 import uuid
 from collections.abc import AsyncIterator
+from itertools import product
 from typing import Any, get_args
 
 import pytest
@@ -50,9 +51,12 @@ from app.models import (
 from app.schemas.tournament import (
     DrawSettingsWrite,
     DrawSettingsWriteArm,
+    DrawStructure,
+    PoolMembershipMode,
     RoundRobinDrawSettingsWrite,
     RrThenKoDrawSettingsWrite,
     SingleElimDrawSettingsWrite,
+    StructuralSettingOwner,
     SwissDrawSettingsWrite,
     draw_settings_from_storage,
 )
@@ -647,3 +651,316 @@ async def test_a_seeded_draw_type_cannot_be_deleted_while_an_event_uses_it(
             sa.text("DELETE FROM draw_types WHERE key = 'round-robin'")
         )
     await db_session.rollback()
+
+
+# ----- the draw structure: who owns each setting (#1320) --------------------
+#
+# ADR "a structural setting is owned by the director or derived by the system". The
+# ownership modes are four more keys inside the SAME settings object, which is what
+# makes them free of a migration (ADR "a draw type's settings are one NOT NULL JSON
+# object"). So the two claims that matter here are storage claims: an event written
+# before the keys existed still reads, and every combination of the keys survives the
+# round trip.
+
+#: The two ownership modes, and the two membership modes — spelled as tuples so the
+#: combination sweep below is a ``product`` over them rather than sixteen literals.
+OWNERS = (StructuralSettingOwner.automatic, StructuralSettingOwner.manual)
+MEMBERSHIPS = (PoolMembershipMode.snake, PoolMembershipMode.manual)
+
+#: Three DIFFERENT numbers, on purpose. A sweep that used one number for the pool count,
+#: the pool size and the qualifier count would stay green against an encoder that wrote
+#: any of them into the wrong key.
+MANUAL_POOL_COUNT = 6
+MANUAL_POOL_SIZE = 5
+MANUAL_QUALIFIERS = 3
+
+
+async def test_an_event_stored_before_the_draw_structure_reads_as_all_automatic(
+    db_session: AsyncSession,
+) -> None:
+    """**The no-migration claim.** A settings object carrying none of the ownership keys
+    — which is every ``rr-then-ko`` event written before #1320 — parses into every mode
+    automatic and no manual numbers.
+
+    That is not a convenience. ADR "a structural setting is owned by the director or
+    derived by the system" says setting nothing must reproduce today's behaviour, and
+    today's behaviour IS all-automatic: the pool count is the pool row count, the pool
+    size is the field split across those rows, membership is the snake, and the
+    qualifier count is the one the director already typed. So an existing event needs no
+    backfill and gets none — the row is left exactly as it was written, which this test
+    asserts of the stored blob as well as of the parse.
+
+    Both halves are asserted separately. A default change on the ``manual_*`` fields
+    would slip past a test that only checked the modes, and vice versa.
+    """
+    parsed = draw_settings_from_storage(
+        DrawType.rr_then_ko, {"qualifiers_per_pool": MANUAL_QUALIFIERS}
+    )
+    assert isinstance(parsed, RrThenKoDrawSettingsWrite)
+    structure = parsed.draw_structure
+    assert structure.pool_count_mode is StructuralSettingOwner.automatic
+    assert structure.pool_size_mode is StructuralSettingOwner.automatic
+    assert structure.qualifiers_mode is StructuralSettingOwner.automatic
+    assert structure.membership_mode is PoolMembershipMode.snake
+    assert structure.manual_pool_count is None
+    assert structure.manual_pool_size is None
+
+    # And through a real row written the way a pre-#1320 event's row was written: the
+    # raw-mapping door, which does not parse (see ``for_draw_type``'s docstring). What
+    # comes back out of Postgres is the object that went in, with nothing added to it.
+    row = TournamentEventDrawSettings.for_draw_type(
+        DrawType.rr_then_ko, settings={"qualifiers_per_pool": MANUAL_QUALIFIERS}
+    )
+    db_session.add(row)
+    await db_session.flush()
+    settings_id = row.id
+    db_session.expire_all()
+
+    stored = (
+        await db_session.execute(
+            select(TournamentEventDrawSettings).where(
+                TournamentEventDrawSettings.id == settings_id
+            )
+        )
+    ).scalar_one()
+    assert stored.settings == {"qualifiers_per_pool": MANUAL_QUALIFIERS}, (
+        "an event that predates this work must not be rewritten by reading it: the "
+        "absent keys ARE the automatic modes"
+    )
+    assert draw_settings_of(stored) == RrThenKoDrawSettingsWrite(
+        qualifiers_per_pool=MANUAL_QUALIFIERS
+    )
+
+    await db_session.rollback()
+
+
+async def test_every_combination_of_ownership_modes_round_trips(
+    db_session: AsyncSession,
+) -> None:
+    """What is written is what is read, for all sixteen combinations of the four modes.
+
+    Every combination carries **both** manual numbers, including the combinations whose
+    modes are automatic. That is deliberate: a manual number is kept while its mode is
+    automatic (see
+    :func:`test_a_manual_number_is_kept_while_its_mode_is_automatic`), so a sweep that
+    only attached numbers to manual modes would never exercise the pairing the product
+    actually stores.
+
+    The rows are flushed and expired before the read, so what is parsed is what Postgres
+    holds rather than the dict the encoder left in memory.
+    """
+    structures = [
+        DrawStructure(
+            pool_count_mode=count_mode,
+            manual_pool_count=MANUAL_POOL_COUNT,
+            pool_size_mode=size_mode,
+            manual_pool_size=MANUAL_POOL_SIZE,
+            qualifiers_mode=qualifiers_mode,
+            membership_mode=membership,
+        )
+        for count_mode, size_mode, qualifiers_mode, membership in product(
+            OWNERS, OWNERS, OWNERS, MEMBERSHIPS
+        )
+    ]
+    assert len(structures) == 16, "2 × 2 × 2 ownership modes × 2 membership modes"
+
+    arms = [
+        RrThenKoDrawSettingsWrite(
+            qualifiers_per_pool=MANUAL_QUALIFIERS, draw_structure=structure
+        )
+        for structure in structures
+    ]
+    rows = [draw_settings_row(arm) for arm in arms]
+    db_session.add_all(rows)
+    await db_session.flush()
+    ids = [row.id for row in rows]
+    db_session.expire_all()
+
+    for arm, settings_id in zip(arms, ids, strict=True):
+        stored = (
+            await db_session.execute(
+                select(TournamentEventDrawSettings).where(
+                    TournamentEventDrawSettings.id == settings_id
+                )
+            )
+        ).scalar_one()
+        assert draw_settings_of(stored) == arm, arm.draw_structure
+
+    # The stored shape itself, asserted once: the modes are their wire slugs inside one
+    # nested object beside the qualifier count, not enum reprs and not six flat keys. An
+    # equality over the whole blob is what would red if a key were renamed, since the
+    # round trip above would go on agreeing with itself.
+    all_manual = (
+        await db_session.execute(
+            select(TournamentEventDrawSettings).where(
+                TournamentEventDrawSettings.id == ids[-1]
+            )
+        )
+    ).scalar_one()
+    assert all_manual.settings == {
+        "qualifiers_per_pool": MANUAL_QUALIFIERS,
+        "draw_structure": {
+            "pool_count_mode": "manual",
+            "manual_pool_count": MANUAL_POOL_COUNT,
+            "pool_size_mode": "manual",
+            "manual_pool_size": MANUAL_POOL_SIZE,
+            "qualifiers_mode": "manual",
+            "membership_mode": "manual",
+        },
+    }
+
+    await db_session.rollback()
+
+
+async def test_a_manual_number_is_kept_while_its_mode_is_automatic(
+    db_session: AsyncSession,
+) -> None:
+    """**The retention decision, stated as a test.** A pool count and a pool size the
+    director typed are kept when their modes go back to automatic. They are not dropped.
+
+    A manual number with an automatic mode is therefore a legal stored state, and it
+    means one thing only: this is the director's number, remembered. Nothing derives
+    anything from it while the mode is automatic — the mode is the only thing a reader
+    asks — so the pair cannot contradict itself.
+
+    The alternative (clear the number when the mode goes automatic) was rejected because
+    a director who switches a row to Automatic to see what the system would say, and
+    then switches back, would be handed an empty box instead of their own number.
+    """
+    remembered = DrawStructure(
+        pool_count_mode=StructuralSettingOwner.automatic,
+        manual_pool_count=MANUAL_POOL_COUNT,
+        pool_size_mode=StructuralSettingOwner.automatic,
+        manual_pool_size=MANUAL_POOL_SIZE,
+    )
+    row = draw_settings_row(
+        RrThenKoDrawSettingsWrite(
+            qualifiers_per_pool=MANUAL_QUALIFIERS, draw_structure=remembered
+        )
+    )
+    db_session.add(row)
+    await db_session.flush()
+    settings_id = row.id
+    db_session.expire_all()
+
+    stored = (
+        await db_session.execute(
+            select(TournamentEventDrawSettings).where(
+                TournamentEventDrawSettings.id == settings_id
+            )
+        )
+    ).scalar_one()
+    parsed = draw_settings_of(stored)
+    assert isinstance(parsed, RrThenKoDrawSettingsWrite)
+    assert parsed.draw_structure.manual_pool_count == MANUAL_POOL_COUNT
+    assert parsed.draw_structure.manual_pool_size == MANUAL_POOL_SIZE
+    assert parsed.draw_structure.pool_count_mode is StructuralSettingOwner.automatic
+    assert parsed.draw_structure.pool_size_mode is StructuralSettingOwner.automatic
+
+    await db_session.rollback()
+
+
+async def test_a_directors_structure_survives_create_patch_and_re_read(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The whole seam, over HTTP: a structure sent on create reads back on create, is
+    still there in the database, and a PATCH replaces it.
+
+    The PATCH half is the one a storage-level round trip cannot cover. The ownership
+    modes are a key inside the settings row's JSON object and not a column on the event,
+    so an edit routed through the update verb's generic ``setattr`` loop would bind an
+    attribute the mapper never persists — accepted, and dropped. This asserts the
+    database after the edit, not the response body the edit returned.
+    """
+    client, _ = authed_client
+    created_structure = {
+        "pool_count_mode": "manual",
+        "manual_pool_count": MANUAL_POOL_COUNT,
+        "pool_size_mode": "automatic",
+        "manual_pool_size": None,
+        "qualifiers_mode": "manual",
+        "membership_mode": "snake",
+    }
+    tournament = await client.post("/v1/tournaments", json=_tournament_payload())
+    assert tournament.status_code == 201, tournament.text
+    tournament_id = tournament.json()["id"]
+    created = await client.post(
+        f"/v1/tournaments/{tournament_id}/events",
+        json=_event_payload(
+            draw_type="rr-then-ko",
+            qualifiers_per_pool=MANUAL_QUALIFIERS,
+            draw_structure=created_structure,
+        ),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["draw_structure"] == created_structure
+    event_id = uuid.UUID(created.json()["id"])
+
+    (event,) = await _load_events(db_session, event_id)
+    assert draw_settings_of(event.draw_settings) == RrThenKoDrawSettingsWrite(
+        qualifiers_per_pool=MANUAL_QUALIFIERS,
+        draw_structure=DrawStructure(
+            pool_count_mode=StructuralSettingOwner.manual,
+            manual_pool_count=MANUAL_POOL_COUNT,
+            qualifiers_mode=StructuralSettingOwner.manual,
+        ),
+    )
+
+    # The editor patches the draw configuration as a unit — type, count and structure
+    # together — which is the shape the event form already sends.
+    patched_structure = {
+        "pool_count_mode": "automatic",
+        "manual_pool_count": MANUAL_POOL_COUNT,
+        "pool_size_mode": "manual",
+        "manual_pool_size": MANUAL_POOL_SIZE,
+        "qualifiers_mode": "automatic",
+        "membership_mode": "manual",
+    }
+    patched = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={
+            "draw_type": "rr-then-ko",
+            "qualifiers_per_pool": MANUAL_QUALIFIERS,
+            "draw_structure": patched_structure,
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["draw_structure"] == patched_structure
+
+    (event,) = await _load_events(db_session, event_id)
+    assert event.draw_settings.settings["draw_structure"] == patched_structure
+
+
+async def test_a_draw_type_with_no_structure_refuses_one_and_reads_back_null(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The ownership ADR is scoped to ``rr-then-ko``, and the union is what scopes it.
+
+    A round-robin event has no knockout stage to aim at, so it has no pool-to-knockout
+    settings: sending some is a 422 at the boundary (``extra="forbid"`` on the arm, the
+    same refusal a qualifier count on a round-robin gets), and reading one back gives
+    ``null`` — a fact about the draw type, not missing data.
+    """
+    client, _ = authed_client
+    tournament = await client.post("/v1/tournaments", json=_tournament_payload())
+    assert tournament.status_code == 201, tournament.text
+    tournament_id = tournament.json()["id"]
+
+    refused = await client.post(
+        f"/v1/tournaments/{tournament_id}/events",
+        json=_event_payload(
+            draw_type="round-robin",
+            draw_structure={"pool_count_mode": "manual", "manual_pool_count": 6},
+        ),
+    )
+    assert refused.status_code == 422, refused.text
+    assert "draw_structure" in refused.text
+
+    created = await client.post(
+        f"/v1/tournaments/{tournament_id}/events",
+        json=_event_payload(draw_type="round-robin"),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["draw_structure"] is None

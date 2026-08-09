@@ -396,7 +396,11 @@ async def _enforce_pool_set_frozen(
 
 
 async def _enforce_draw_settings_frozen(
-    db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
+    db: AsyncSession,
+    event: TournamentEvent,
+    *,
+    stored: DrawSettingsWriteArm,
+    incoming: DrawSettingsWriteArm | None,
 ) -> None:
     """Raise :class:`DrawTypeFrozenError` once a draw-configuration payload would change
     the **draw type or the setting that goes with it** — rr-then-ko's qualifier count,
@@ -425,22 +429,33 @@ async def _enforce_draw_settings_frozen(
     the freeze exists to permit. Asked **before** anything is written, under the
     tournament's row lock the verb holds.
 
-    What the event *currently* has is read off its ``draw_settings`` row — the one home
-    of that fact (ADR "an event's draw configuration is a row, not a column") — and read
-    once, before the caller's ``setattr`` loop, so what is compared is the stored
-    configuration and not the one the payload is asking for. Both sides of the
-    comparison are the **parsed arm**, so "did the configuration move" is one equality
+    Both configurations are handed in rather than read here, and both come from the
+    caller's single read: ``stored`` is the event's own row parsed once (ADR "an event's
+    draw configuration is a row, not a column"), and ``incoming`` is the payload
+    **already resolved against it**
+    (:meth:`~app.schemas.tournament.TournamentEventUpdate.draw_settings_over`). That
+    sharing is the point — the arm this guard judges has to be the arm the write lands,
+    or the freeze is answering a question about a configuration nobody is asking for.
+    Both sides are the **parsed arm**, so "did the configuration move" is one equality
     over the whole union rather than a field-by-field walk that a new setting could fall
     out of.
+
+    ``incoming`` is ``None`` when the patch does not touch the draw configuration at
+    all: the schema refuses an explicit ``null`` on ``draw_type`` (422) and refuses a
+    ``qualifiers_per_pool`` with no ``draw_type`` beside it, so an absent draw type
+    means an absent configuration.
     """
-    # ``None`` is "this patch does not touch the draw configuration": the schema refuses
-    # an explicit ``null`` on ``draw_type`` (422) and refuses a ``qualifiers_per_pool``
-    # with no ``draw_type`` beside it, so an absent draw type means an absent pair.
-    incoming = updates.draw_settings
     if incoming is None:
         return
-    stored = draw_settings_of(event.draw_settings)
-    if incoming == stored:
+    # Compared as the DRAW WAS DEALT, not field for field: an ``rr-then-ko`` event's
+    # ownership modes size nothing the cut already put on the table, so changing one is
+    # not a contradiction and must not be refused — least of all by the qualifier-count
+    # sentence, which would name a number the director never touched. See
+    # ``DrawSettingsWriteBase.configuration_the_draw_was_dealt_from``.
+    if (
+        incoming.configuration_the_draw_was_dealt_from()
+        == stored.configuration_the_draw_was_dealt_from()
+    ):
         return
     current = stored.draw_type
     # Only now the query — and only for a payload that really moves the configuration.
@@ -615,10 +630,26 @@ async def update_event(
     # adapter so the read it shapes need not re-query that column.
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
+    # The event's stored draw configuration, parsed ONCE — off the settings row that
+    # rides along with the event (``lazy="joined"``), so this is no query. Both the
+    # freeze below and the write further down take what this resolves to, which is what
+    # keeps "the configuration that was judged" and "the configuration that landed" the
+    # same object.
+    stored_draw_settings = draw_settings_of(event.draw_settings)
+    # The configuration to WRITE, not the one the payload literally stated: a patch that
+    # names the draw type without a ``draw_structure`` keeps the modes the event already
+    # has, exactly as omitting any other field leaves it alone (that rule is
+    # ``model_dump(exclude_unset=True)`` below; the draw configuration cannot use it,
+    # because it is rebuilt as a whole arm). Reading ``updates.draw_settings`` here
+    # instead would reset a director's ownership on every edit sent by a client that has
+    # not been taught the field.
+    draw_settings = updates.draw_settings_over(stored_draw_settings)
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
     await _enforce_pool_set_frozen(db, event, updates)
-    await _enforce_draw_settings_frozen(db, event, updates)
+    await _enforce_draw_settings_frozen(
+        db, event, stored=stored_draw_settings, incoming=draw_settings
+    )
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to
@@ -641,6 +672,11 @@ async def update_event(
     # settings row's JSON object, not on the event, so the loop would bind an unmapped
     # attribute and drop the edit silently.
     changes.pop("rounds", None)
+    # And the ownership modes, which are one more key inside that same JSON object. Left
+    # in the loop, ``setattr(event, "draw_structure", …)`` would bind a plain Python
+    # attribute the mapper never persists: the PATCH would answer 200 with the structure
+    # the director sent and the next GET would answer with the old one.
+    changes.pop("draw_structure", None)
     # Pools are rows, so they are taken OUT of the generic setattr loop entirely and
     # applied as a diff (:func:`app.tournament_pools.apply_event_pools`) — assigning the
     # dumped payload would put dicts where the relationship expects
@@ -655,12 +691,13 @@ async def update_event(
     # a clear for an absence. The applying happens after the loop below, with the other
     # writes, so a payload that touches nothing else still reaches it.
     changes.pop("pools", None)
-    # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
-    # does not touch the draw configuration, and when it is not, the pair it carries is
-    # one the write union accepted at the request boundary (ADR 20260727). That union is
-    # the only thing that checks the pairing now — the settings table's ``CASE``
-    # ``CHECK`` was dropped with the column it named.
-    draw_settings = updates.draw_settings
+    # ``draw_settings`` — the resolved union arm, not the loose keys — was worked out at
+    # the top of this verb, beside the stored configuration it was resolved against, so
+    # that the freeze and this write share one value. It is ``None`` exactly when the
+    # patch does not touch the draw configuration, and when it is not, the pair it
+    # carries is one the write union accepted at the request boundary (ADR 20260727).
+    # That union is the only thing that checks the pairing now — the settings table's
+    # ``CASE`` ``CHECK`` was dropped with the column it named.
     for key, value in changes.items():
         setattr(event, key, value)
     if updates.pools is not None:
