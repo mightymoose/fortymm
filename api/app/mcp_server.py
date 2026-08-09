@@ -156,6 +156,7 @@ from app.tournament_errors import (
     FixtureNotFoundError,
     FixturePlacementFrozenError,
     IllegalTournamentTransitionError,
+    ImpossibleDrawStructureError,
     LeagueNotEditableError,
     LeagueNotFoundError,
     NoDefaultLeagueError,
@@ -1340,8 +1341,13 @@ async def create_event(
     ``TournamentEventRead`` from the caller's perspective (its ``entry_state`` is the
     caller's own, judged on the tournament's ladder).
 
-    Raises a ``ToolError`` when no tournament with that id exists, or when you are not
-    the tournament's owner.
+    An ``rr-then-ko`` event must describe a competition that can be PLAYED: a pool of
+    fewer than two, a knockout of one, or more qualifiers than the smallest pool holds
+    are each refused, in the words that say which (#1320). The numbers are judged
+    against the event's player cap, or against a 16-player field when it has none.
+
+    Raises a ``ToolError`` when no tournament with that id exists, when you are not
+    the tournament's owner, or when the draw configuration cannot be played.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1356,6 +1362,11 @@ async def create_event(
             raise _map_tournament_write_tool_error(
                 exc, tournament_id=tournament_id, owner_denial="add events to"
             ) from exc
+        except ImpossibleDrawStructureError as exc:
+            # The HTTP surface answers this on the ``draw_structure`` field; an agent
+            # reads prose, so the derivation's own sentence — which names the numbers
+            # and the way out — is the whole ``ToolError``.
+            raise ToolError(str(exc)) from exc
         # The verb returns the tournament's ``league_id`` (the ladder the caller's
         # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
         # so the shared shaping helper needs no re-query — the same helper the HTTP
@@ -1399,9 +1410,16 @@ async def update_event(
     and results survive the edit; its ``entry_state`` is the caller's own, recomputed
     from the event as it now stands).
 
+    An ``rr-then-ko`` event must be LEFT playable: a pool of fewer than two, a knockout
+    of one, or more qualifiers than the smallest pool holds are each refused (#1320).
+    The check is on the event as this patch would leave it, not on the fields the patch
+    carries — so an event that is already unplayable is still readable and still takes
+    the patch that fixes it, even when the fix moves two numbers at once.
+
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
-    tournament's owner, when no event with that id exists under the tournament, or when
-    the edit would change the frozen pool set or draw type of a cut-draw event.
+    tournament's owner, when no event with that id exists under the tournament, when the
+    edit would change the frozen pool set or draw type of a cut-draw event, or when it
+    would leave a draw configuration that cannot be played.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1435,6 +1453,10 @@ async def update_event(
             raise ToolError(
                 f"{exc} (pools entry {exc.index} names “{exc.pool_id}”)."
             ) from exc
+        except ImpossibleDrawStructureError as exc:
+            # The post-state would be unplayable (#1320): the derivation's own sentence,
+            # verbatim, exactly as the create tool answers it.
+            raise ToolError(str(exc)) from exc
         # The verb returns the tournament's ``league_id`` (the ladder the caller's
         # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
         # so the shared shaping helper needs no re-query — the same helper the HTTP

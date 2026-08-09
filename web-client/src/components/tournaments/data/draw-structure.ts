@@ -23,11 +23,19 @@
 // `1 pool reservations`: this module does not pluralise copy the reference does not
 // pluralise, because a silent improvement here reds the Python vectors later and the diff
 // looks like a Python bug.
+//
+// **One rule is stated here rather than in the README.** The automatic qualifier count is
+// capped at the smallest pool (see `deriveDrawStructure`), and the automatic qualifier row
+// has a second sentence for the capped case, which is copy the reference does not carry.
+// The Python derivation carries the same cap.
 
 /** The knockout the automatic qualifier count aims at. **A constant, not stored state**
  * (ADR 20260808-a-structural-setting-is-owned-by-the-director-or-derived-by-the-system):
  * nothing in the reference writes it, so no UI exposes it. A director who wants a
- * different bracket sets the qualifiers themselves, which is a setting they own. */
+ * different bracket sets the qualifiers themselves, which is a setting they own.
+ *
+ * It is a target, **not a floor**: the automatic count stops at the smallest pool, so a
+ * field too small to fill this bracket gets a smaller one rather than a refusal. */
 export const TARGET_BRACKET_SIZE = 8
 
 /** Who a structural setting belongs to: the system derived it, or the director typed it.
@@ -251,9 +259,19 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
   const smallestPool = Math.min(...poolSizes)
   const largestPool = Math.max(...poolSizes)
 
+  // Qualifiers. The automatic count aims at the target bracket and **never takes more from
+  // a pool than it holds**: a number the system derives for itself must be one it will
+  // accept, and `qualifiers > min(sizes)` is a refusal the API enforces at the write. Before
+  // the cap, every capped `rr-then-ko` event under eight players derived its own refusal and
+  // became unsaveable — a rename included.
+  //
+  // ⚠️ **The cap is on the automatic branch only.** A count the director typed stands exactly
+  // as typed, and is still refused when it cannot be played. That is their number and their
+  // refusal, and moving it would be the silent reshaping #1320 exists to remove.
+  const automaticQualifierTarget = Math.ceil(TARGET_BRACKET_SIZE / poolCount)
   const qualifiersPerPool = setQualifiers
     ? atLeastOne(manualQualifiers)
-    : atLeastOne(Math.ceil(TARGET_BRACKET_SIZE / poolCount))
+    : atLeastOne(Math.min(automaticQualifierTarget, smallestPool))
 
   const knockoutBracketSize = poolCount * qualifiersPerPool
   // `max(2, …)` is what makes a one-player knockout report ONE bye rather than none: the
@@ -309,9 +327,18 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
       },
       qualifiers: {
         ownership: setQualifiers ? 'manual' : 'automatic',
+        // ⚠️ The capped form is **new copy the reference does not have**. The README writes
+        // one automatic sentence, from when the count was `ceil(8 / pools)` and nothing else.
+        // Now that the smallest pool can hold the number down, that sentence would report a
+        // bracket the event is not playing, so the capped case says what actually bound it.
+        // The test compares `qualifiersPerPool` against the target rather than the smallest
+        // pool: with a field of zero across eight pools the target is already one, so the cap
+        // never bit and the row must not claim it did.
         sentence: setQualifiers
           ? 'You set this.'
-          : `Aiming at an ${TARGET_BRACKET_SIZE}-player knockout across ${poolCount} pools.`,
+          : qualifiersPerPool < automaticQualifierTarget
+            ? `Aiming at an ${TARGET_BRACKET_SIZE}-player knockout. The smallest pool only holds ${smallestPool}.`
+            : `Aiming at an ${TARGET_BRACKET_SIZE}-player knockout across ${poolCount} pools.`,
       },
     },
     disagreement,

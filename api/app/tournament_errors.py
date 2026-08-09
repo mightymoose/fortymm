@@ -332,6 +332,31 @@ class DrawTypeFrozenError(Exception):
         self.draw_type = draw_type
 
 
+class ImpossibleDrawStructureError(Exception):
+    """Raised by the create- and update-event verbs when the configuration the request
+    would leave describes a competition that **cannot be played** (#1320): a pool of
+    fewer than two, a knockout of one, or more qualifiers than the smallest pool holds.
+
+    A **422**, not a 409 — unlike the two freezes beside it, nothing about the event's
+    state is in the way. The numbers in the body do not describe a runnable draw, and
+    the same request would be refused against an empty event. The HTTP adapter shapes it
+    as a validation error on ``draw_structure`` so the body is the operation's already
+    documented ``HTTPValidationError``.
+
+    **It judges the post-state, never the delta** (ADR "draw-structure derivation runs
+    on both sides and shares its vectors"): an event that is already impossible still
+    loads, and a patch that fixes it — pool count and qualifiers moving in one request —
+    is accepted. Only a save that would *leave* the event unplayable is refused.
+
+    Carries the derivation's own sentence (``str(exc)``), which is the cut's sentence
+    wherever the cut has one, plus the problem's ``kind`` for an adapter that wants to
+    reshape rather than echo. Never an ``HTTPException``."""
+
+    def __init__(self, message: str, *, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 class DrawUnderWayError(Exception):
     """Raised by the draw verbs when an event's draw shows **evidence of play** — a
     fixture with a recorded winner or a linked match — the single gate on both

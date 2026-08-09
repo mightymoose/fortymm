@@ -111,6 +111,11 @@ This row has no numeric input. It shows one of two values.
 - Unit: `through from each pool`
 - Source when manual: `You set this.`
 - Source when automatic: `Aiming at an 8-player knockout across {count} pools.`
+- Source when automatic and the smallest pool binds the count:
+  `Aiming at an 8-player knockout. The smallest pool only holds {smallestPool}.`
+  Ours, not the reference's. It follows the `min(…, smallestPool)` rule below, which the
+  reference does not have, and it is shown when the derived count falls short of the
+  target rather than when the pool merely happens to be small.
 
 ## The derivation
 
@@ -160,10 +165,23 @@ sizes[i] = base + (1 if i < extra else 0)
 ### Qualifiers, bracket and byes
 
 ```
-qualifiers = manual ? max(1, manualQualifiers) : max(1, ceil(8 / poolCount))
+qualifiers = manual ? max(1, manualQualifiers)
+                    : max(1, min(ceil(8 / poolCount), smallestPool))
 bracket    = poolCount * qualifiers
 byes       = 2 ^ ceil(log2(max(2, bracket))) - bracket
 ```
+
+**The `min(…, smallestPool)` is ours, not the reference's.** The reference derives
+`ceil(8 / poolCount)` and stops, so the system can choose a number it then refuses as
+an impossible competition: two pools against a cap of six aim at four qualifiers from
+pools of three. Once the API enforces that refusal at the write, every capped event
+with fewer than eight players becomes unsaveable, a rename included, though the
+qualifier count it already stored was playable. #1320 requires that an existing event
+keep working, so a value the system chooses for itself has to be one it will accept.
+
+It binds the **automatic** branch only. A count the director typed is preserved
+exactly and still refused when it cannot work, which is what keeps the required case —
+one pool taking its top 1 — an impossible one-player knockout.
 
 ### Pool matches
 

@@ -68,6 +68,7 @@ from app.tournament_errors import (
     FixtureNotFoundError,
     FixturePlacementFrozenError,
     IllegalTournamentTransitionError,
+    ImpossibleDrawStructureError,
     LeagueNotEditableError,
     LeagueNotFoundError,
     NoDefaultLeagueError,
@@ -701,6 +702,42 @@ async def create_tournament_transition(
 # ----- event routes --------------------------------------------------------
 
 
+def _impossible_draw_structure(
+    exc: ImpossibleDrawStructureError,
+) -> RequestValidationError:
+    """The 422 for a draw configuration that names a competition nobody can play
+    (#1320) — as a **validation error on the body**, not a hand-rolled envelope.
+
+    A ``RequestValidationError`` for the reason :func:`_placement_table_not_found` is
+    one: this really is "the body did not validate", and the only reason the schema
+    could not judge it is that the answer needs three fields at once — the draw
+    structure, the pool list and the player cap — plus, on a patch, the event they land
+    on. Raising the exception the schema raises puts it through
+    ``app.main.validation_error_handler``, so the body is the ``HTTPValidationError``
+    this operation already documents and no new response schema reaches the generated
+    clients.
+
+    The ``loc`` is ``["body", "draw_structure"]`` on every one of the three problems.
+    That is where the numbers are read and where the client renders them (the Draw
+    structure tab), and it is the only honest single answer: a pool of one is as much
+    the pool count's doing as the cap's, and pointing at whichever field the request
+    happened to move would name a different cause for the same broken state.
+
+    No ``input`` key, unlike its two siblings, because there is no single offending
+    value to echo — the refusal is about the combination. ``msg`` carries the
+    derivation's own sentence, which is the cut's own sentence wherever the cut has one.
+    """
+    return RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body", "draw_structure"),
+                "msg": str(exc),
+            }
+        ]
+    )
+
+
 @router.post(
     "/tournaments/{tournament_id}/events",
     response_model=TournamentEventRead,
@@ -718,12 +755,18 @@ async def create_event(
     # exact status + body it produced before (via ``_map_tournament_write_error``), so
     # the wire contract is unchanged:
     #
-    #   TournamentNotFoundError  -> 404 "Tournament not found."
-    #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
+    #   TournamentNotFoundError        -> 404 "Tournament not found."
+    #   NotTournamentOwnerError        -> 403 "You can only modify tournaments you …"
+    #   ImpossibleDrawStructureError   -> 422 on ``draw_structure`` (see below)
     try:
         event, league_id = await create_event_core(
             db, tournament_id=tournament_id, actor=current_user, payload=payload
         )
+    except ImpossibleDrawStructureError as exc:
+        # An ``rr-then-ko`` configuration naming a competition nobody can play: a field
+        # refusal, shaped like every other 422 on this route (see
+        # ``_impossible_draw_structure``).
+        raise _impossible_draw_structure(exc) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's
@@ -801,12 +844,25 @@ async def update_event(
       its draw does not have. Re-sending the draw type the event already has is not a
       change, and is not refused.
 
-    Nothing else freezes. The event's name, fee, rules and `max_players`, and each
-    pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
-    venues change under a running tournament, and recording that must never cost a
-    director the draw. To change the pools themselves or the draw type, remove the draw
-    (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
-    are ordinary fields.
+    Nothing else *freezes*. The event's name, fee, rules and `max_players`, and each
+    pool's `table_ids`, `slot` and `name`, are not frozen by a standing draw — venues
+    change under a running tournament, and recording that must never cost a director the
+    draw. (They are still subject to the playability rule below, which is a different
+    question and applies whether or not a draw exists.) To change the pools themselves
+    or the draw type, remove the draw (`DELETE …/draw`), edit, and cut again. With no
+    draw cut, `pools` and `draw_type` are ordinary fields.
+
+    **An `rr-then-ko` event must be left playable.** The pool count, the pool size, the
+    player cap and `qualifiers_per_pool` together describe a competition, and three of
+    those descriptions cannot be played: a pool of fewer than two, a knockout of one,
+    and more qualifiers than the smallest pool holds. A patch that would leave the event
+    in one of them is refused with a `422` on `draw_structure`, saying which. The check
+    is on the event **as this patch would leave it**, not on the fields the patch
+    carries — so an event that is already unplayable still loads, and one request that
+    changes the pool count and the qualifier count together is accepted. The flip side:
+    while the event stays unplayable, even a `name` patch is refused, because the result
+    is still a competition nobody can play. Numbers that merely *disagree* — six pools
+    of five against a field of forty — still save; only the cut is unavailable.
 
     Owner-only.
     """
@@ -822,6 +878,7 @@ async def update_event(
     #   EventNotFoundError       -> 404 "Event not found."
     #   PoolSetFrozenError       -> 409 (its carried, domain-authored sentence)
     #   DrawTypeFrozenError      -> 409 (its carried, domain-authored sentence)
+    #   ImpossibleDrawStructureError -> 422 on ``draw_structure`` (#1320)
     try:
         event, league_id = await update_event_core(
             db,
@@ -838,6 +895,10 @@ async def update_event(
         # A pools entry cited an id this event does not have: a field refusal, shaped
         # like every other 422 on this route (see ``_pool_not_in_event``).
         raise _pool_not_in_event(exc) from exc
+    except ImpossibleDrawStructureError as exc:
+        # The patch would leave an unplayable ``rr-then-ko`` competition: the same field
+        # refusal the create route answers, judged on the post-state (#1320).
+        raise _impossible_draw_structure(exc) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's

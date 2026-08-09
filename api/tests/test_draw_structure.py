@@ -59,6 +59,7 @@ from app.draw_structure import (
     ImpossibleProblemKind,
     SettingOwnership,
     derive_draw_structure,
+    pool_too_small_for_pool_size_message,
     pool_too_small_message,
     too_many_qualifiers_message,
 )
@@ -76,6 +77,25 @@ def _pool_problem(field_size: int, pool_count: int) -> tuple[ImpossibleProblem, 
         ImpossibleProblem(
             kind=ImpossibleProblemKind.pool,
             message=pool_too_small_message(field_size, pool_count),
+        ),
+    )
+
+
+def _pool_size_problem(
+    field_size: int, pool_size: int
+) -> tuple[ImpossibleProblem, ...]:
+    """The same pool problem, worded for a pool size the DIRECTOR set.
+
+    Two helpers because the sentence follows the knob that produced the sizes, not the
+    condition: a size the director typed is filled greedily, so blaming the pool count
+    would name a number they do not own (#1320's own defect). Which vectors use which is
+    the contract — a vector that swapped them would be asserting a refusal that
+    misattributes.
+    """
+    return (
+        ImpossibleProblem(
+            kind=ImpossibleProblemKind.pool,
+            message=pool_too_small_for_pool_size_message(field_size, pool_size),
         ),
     )
 
@@ -291,10 +311,15 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
     # The three impossible competitions.
     # -----------------------------------------------------------------------------
     DrawStructureVector(
-        # The reference's "Field too small" screen — and the ORDERING case. Four pools
-        # of one means the pool rule fires, and the automatic two qualifiers out of a
-        # pool of one means the qualifier rule would fire too. Only the pool problem is
-        # reported: it is the one the director can act on, the other is its echo.
+        # The reference's "Field too small" screen. Four pools of one means the pool
+        # rule fires, and that is the only rule left to fire here: the automatic count
+        # clamps to the smallest pool, so it is one qualifier out of a pool of one, and
+        # ``1 > 1`` is false. The pool-over-qualifier ORDERING now lives in the "empty
+        # field" vector below, where one qualifier out of a pool of nobody would fire
+        # the qualifier rule and the pool problem wins anyway.
+        #
+        # The name is kept as the client's table has it, so the two still scroll
+        # together, even though the clamp has taken the qualifier half of it away.
         name=(
             "field too small: 8 players across 6 pools reports the pool, "
             "not the qualifier"
@@ -312,10 +337,10 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
         expected=DrawStructure(
             pool_count=6,
             pool_sizes=(2, 2, 1, 1, 1, 1),
-            qualifiers_per_pool=2,
-            total_qualifiers=12,
-            knockout_bracket_size=12,
-            first_round_byes=4,
+            qualifiers_per_pool=1,
+            total_qualifiers=6,
+            knockout_bracket_size=6,
+            first_round_byes=2,
             pool_match_count=2,
             ownership=DrawStructureOwnership(
                 pool_count=MANUAL, pool_size=AUTOMATIC, qualifiers=AUTOMATIC
@@ -435,6 +460,10 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
         # divide into eight fives. A balanced split would give ``5,5,5,5,5,5,5,4,4`` and
         # hide the problem by editing a number the director typed — so the fill stays
         # greedy and the pool of one is reported.
+        #
+        # And it is reported in the POOL SIZE's words. 41 balanced across nine pools
+        # leaves nobody stranded, so the count sentence would blame a number this
+        # director does not own — the misattribution #1320 was filed about.
         name="greedy fill: 41 players in pools of 5 leaves a pool of one",
         options=DrawStructureOptions(
             preview_field_size=41,
@@ -459,7 +488,7 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
             ),
             disagreement=None,
             is_uneven=True,
-            impossible_problems=_pool_problem(41, 9),
+            impossible_problems=_pool_size_problem(41, 5),
         ),
     ),
     # -----------------------------------------------------------------------------
@@ -526,8 +555,47 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
         ),
     ),
     DrawStructureVector(
+        # THE REGRESSION. The pair of the vector above: one pool again, but a cap of
+        # six, so the aim of eight does not fit. The automatic count is
+        # ``min(ceil(8 / 1), 6)`` — six, not eight — and the structure is playable.
+        #
+        # Unclamped, this derived eight qualifiers out of a pool of six and then refused
+        # its own number, which made every save on a capped one-pool event impossible,
+        # a rename included, while the qualifier count the event had stored was fine.
+        #
+        # Six out of six means the WHOLE POOL qualifies, and that is the specified
+        # answer rather than an oversight: a director who wants a narrower knockout out
+        # of one pool types the number, which makes it theirs.
+        name="one pool under a cap of 8: the automatic count clamps to the pool",
+        options=DrawStructureOptions(
+            preview_field_size=6,
+            pool_reservation_count=1,
+            pool_count_mode=AUTOMATIC,
+            manual_pool_count=None,
+            pool_size_mode=AUTOMATIC,
+            manual_pool_size=None,
+            qualifiers_mode=AUTOMATIC,
+            manual_qualifiers=None,
+        ),
+        expected=DrawStructure(
+            pool_count=1,
+            pool_sizes=(6,),
+            qualifiers_per_pool=6,
+            total_qualifiers=6,
+            knockout_bracket_size=6,
+            first_round_byes=2,
+            pool_match_count=15,
+            ownership=ALL_AUTOMATIC,
+            disagreement=None,
+            is_uneven=False,
+            impossible_problems=(),
+        ),
+    ),
+    DrawStructureVector(
         # A director typing a zero into the pool-size box. It clamps to one, and the
-        # clamped value is what the derivation divides by.
+        # clamped value is what the derivation divides by — and what the refusal says
+        # out loud, since the size is the number this director owns. The automatic
+        # qualifier count clamps to the pool of one alongside it.
         name="a manual pool size of zero clamps to one, in the maths and in the copy",
         options=DrawStructureOptions(
             preview_field_size=3,
@@ -542,21 +610,24 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
         expected=DrawStructure(
             pool_count=3,
             pool_sizes=(1, 1, 1),
-            qualifiers_per_pool=3,
-            total_qualifiers=9,
-            knockout_bracket_size=9,
-            first_round_byes=7,
+            qualifiers_per_pool=1,
+            total_qualifiers=3,
+            knockout_bracket_size=3,
+            first_round_byes=1,
             pool_match_count=0,
             ownership=DrawStructureOwnership(
                 pool_count=AUTOMATIC, pool_size=MANUAL, qualifiers=AUTOMATIC
             ),
             disagreement=None,
             is_uneven=False,
-            impossible_problems=_pool_problem(3, 3),
+            impossible_problems=_pool_size_problem(3, 1),
         ),
     ),
     DrawStructureVector(
         # A field of nobody — the state a brand-new event with a zero cap would preview.
+        # This is now the ORDERING case: the automatic count floors at one qualifier,
+        # one out of a pool of zero would fire the qualifier rule, and the pool problem
+        # is reported instead because it is the fact the director can act on.
         name="an empty field: the pools have no players at all",
         options=DrawStructureOptions(
             preview_field_size=0,
@@ -571,10 +642,10 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
         expected=DrawStructure(
             pool_count=3,
             pool_sizes=(0, 0, 0),
-            qualifiers_per_pool=3,
-            total_qualifiers=9,
-            knockout_bracket_size=9,
-            first_round_byes=7,
+            qualifiers_per_pool=1,
+            total_qualifiers=3,
+            knockout_bracket_size=3,
+            first_round_byes=1,
             pool_match_count=0,
             ownership=ALL_AUTOMATIC,
             disagreement=None,
@@ -624,11 +695,11 @@ def test_derive_draw_structure(vector: DrawStructureVector) -> None:
 
 
 def test_the_table_covers_every_case_the_client_table_does() -> None:
-    """A guard on the transcription itself. The client table holds sixteen vectors, and
-    a Python table that quietly held fifteen would still be green — the drift this ADR
-    is about is precisely a case that exists on one side only."""
-    assert len(DRAW_STRUCTURE_VECTORS) == 16
-    assert len({vector.name for vector in DRAW_STRUCTURE_VECTORS}) == 16
+    """A guard on the transcription itself. The client table holds seventeen vectors,
+    and a Python table that quietly held sixteen would still be green — the drift this
+    ADR is about is precisely a case that exists on one side only."""
+    assert len(DRAW_STRUCTURE_VECTORS) == 17
+    assert len({vector.name for vector in DRAW_STRUCTURE_VECTORS}) == 17
 
 
 def _vector(name: str) -> DrawStructureVector:

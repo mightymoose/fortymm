@@ -90,6 +90,7 @@ from app.tournament_draws import cut_draw
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
+    event_draw_settings,
     event_pools,
     grant_permissions,
     make_user,
@@ -3442,6 +3443,56 @@ async def test_create_event_unknown_tournament_raises_tool_error(
             )
 
 
+async def test_create_event_with_an_unplayable_draw_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """An ``rr-then-ko`` configuration that cannot be played is refused for an agent
+    too, in the derivation's own sentence (#1320).
+
+    This is the reason the refusal moved out of React: "impossible configurations
+    disable Save changes" is a claim about the app, and the MCP server writes events
+    without ever loading the tab that would have disabled the button.
+    """
+    owner = await make_user(db_session, "mcp-create-event-unplayable")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Unplayable Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+    payload = {
+        **_event_payload(),
+        "draw_type": "rr-then-ko",
+        "qualifiers_per_pool": 2,
+        "max_players": 4,
+        "pools": [
+            {
+                "name": f"Pool {letter}",
+                "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+                "table_ids": [],
+            }
+            for letter in "ABCD"
+        ],
+    }
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="fewer than 2 entrants"):
+            await client.call_tool(
+                "create_event",
+                {"tournament_id": str(tournament_id), "payload": payload},
+            )
+
+    # Nothing was created.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.tournament_id == tournament_id
+            )
+        )
+    ).scalar_one_or_none() is None
+
+
 async def test_delete_event_owner_removes_it_and_confirms(
     db_session: AsyncSession,
     default_league: League,
@@ -3665,6 +3716,74 @@ async def test_update_event_frozen_change_raises_tool_error(
     ).scalar_one()
     assert persisted.draw_settings.draw_type is DrawType.round_robin
     assert persisted.name == "Cut Singles"
+
+
+async def test_update_event_that_would_be_unplayable_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A patch that would leave an ``rr-then-ko`` event unplayable is refused for an
+    agent too, and writes nothing (#1320).
+
+    The patch states one number, ``max_players``, and it is refused for the pools it
+    does **not** state: the check is on the event as the patch would leave it. An agent
+    is exactly the caller that cannot see the tab where the web client would have
+    disabled the button.
+    """
+    owner = await make_user(db_session, "mcp-update-event-unplayable")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session,
+        owner,
+        default_league,
+        "Unplayable Edits Cup",
+        TournamentStatus.draft,
+    )
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_settings=event_draw_settings(DrawType.rr_then_ko, qualifiers_per_pool=2),
+        max_players=16,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        pools=event_pools(
+            [
+                {
+                    "name": f"Pool {letter}",
+                    "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+                    "table_ids": [],
+                }
+                for letter in "ABCD"
+            ]
+        ),
+    )
+    db_session.add(event)
+    await db_session.commit()
+    tournament_id, event_id = tournament.id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="fewer than 2 entrants"):
+            await client.call_tool(
+                "update_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "updates": {"max_players": 4},
+                },
+            )
+
+    # The refusal wrote nothing — the cap is untouched.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert persisted.max_players == 16
 
 
 async def test_update_event_non_owner_raises_tool_error_and_writes_nothing(

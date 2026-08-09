@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import PoolId
+from app.event_draw_structure import impossible_draw_structure
 from app.models import (
     DrawType,
     ScheduleSolveTrigger,
@@ -57,6 +58,7 @@ from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
+    ImpossibleDrawStructureError,
     PoolSetFrozenError,
 )
 from app.tournament_pools import apply_event_pools, stored_pools
@@ -105,6 +107,9 @@ async def create_event(
     * **403** — a caller who is not the tournament's creator raises
       :class:`NotTournamentOwnerError`. Event authoring is owner-gated
       (``created_by_user_id == actor.id``), not RBAC-gated.
+    * **422** — an ``rr-then-ko`` configuration describing a competition that cannot be
+      played raises :class:`ImpossibleDrawStructureError` (#1320,
+      :func:`_enforce_playable_draw_structure`), judged before the row is composed.
 
     Then it writes the event exactly as the HTTP handler did inline — the nested
     value-objects (``slot``, ``match_settings``, ``predicates``) persist as plain JSONB
@@ -120,6 +125,15 @@ async def create_event(
     it is judged on, ADR-0783) without re-querying the column the verb just loaded.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    # 404 → 403 → 422: the draw structure is judged before the row is composed, so an
+    # unplayable configuration writes nothing. Every input is the state THIS request
+    # would produce — its arm, its pools, its cap — because a create has no prior state
+    # to blend with.
+    _enforce_playable_draw_structure(
+        draw_settings=payload.draw_settings,
+        pool_count=len(payload.pools),
+        max_players=payload.max_players,
+    )
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=payload.name,
@@ -317,6 +331,53 @@ def _draw_settings_frozen_detail(stored: DrawSettingsWriteArm) -> str:
             # because the honest fallback for "the configuration moved" is to name the
             # configuration.
             return _draw_type_frozen_detail(stored.draw_type)
+
+
+def _enforce_playable_draw_structure(
+    *,
+    draw_settings: DrawSettingsWriteArm,
+    pool_count: int,
+    max_players: int | None,
+) -> None:
+    """Raise :class:`ImpossibleDrawStructureError` once the configuration a write would
+    **leave the event with** describes a competition nobody can play (#1320).
+
+    The three conditions are the derivation's (:func:`app.event_draw_structure.
+    impossible_draw_structure`): a pool of fewer than two, a knockout of one, and more
+    qualifiers than the smallest pool holds. They were already refused — at the cut,
+    hours later, by ``app.draws``, in a sentence that names the cut. Refusing them here
+    is what makes the tab's disabled Save button a rule of the *app* rather than of one
+    browser: ``ios/`` and the MCP server write events too.
+
+    **Every argument is the post-state, and that is the whole design** (ADR
+    ``20260808-draw-structure-derivation-runs-on-both-sides-and-shares-its-vectors``).
+    The caller resolves each of the three against the request before calling: the arm
+    the write will store, the pools the write will leave, and the cap the write will
+    leave. An event that is already impossible therefore still saves the request that
+    fixes it — a pool count and a qualifier count moving together in one PATCH — which
+    is the exact escape #1320's director needs. Judging the delta instead would strand
+    them.
+
+    **A disagreement is not refused.** Six pools of five seat thirty and the field is
+    forty: both numbers were typed on purpose, so the event saves and the app states the
+    arithmetic (the cut is what stays unavailable). Only ``impossible_problems`` reaches
+    this guard, and the narrowing lives in the derivation bridge so both verbs get it.
+
+    Synchronous and query-free: it is arithmetic over values the caller already holds.
+    Asked **before** anything is written, like every other judge-then-write guard here,
+    so a refusal persists nothing.
+    """
+    problem = impossible_draw_structure(
+        draw_settings=draw_settings,
+        pool_count=pool_count,
+        max_players=max_players,
+    )
+    if problem is None:
+        return
+    # The derivation's own words — which are the cut's own words wherever the cut has a
+    # sentence for the condition (``app.draw_structure``). No second set of copy is
+    # minted here: a refusal a director meets twice must not be worded twice.
+    raise ImpossibleDrawStructureError(problem.message, kind=problem.kind.value)
 
 
 async def _enforce_pool_set_frozen(
@@ -593,6 +654,11 @@ async def update_event(
       draw type **or its qualifier count** (ADR 20260727) raises
       :class:`DrawTypeFrozenError`. Both are judged **before** anything is
       written, so a refusal persists nothing.
+    * **422** — a patch that would leave the event describing an ``rr-then-ko``
+      competition nobody can play raises :class:`ImpossibleDrawStructureError` (#1320,
+      :func:`_enforce_playable_draw_structure`). Judged on the **post-state**, so an
+      event that is already unplayable still loads and still takes the patch that fixes
+      it.
 
     Then the partial apply (``model_dump(exclude_unset=True)`` serializes the nested
     value-objects to plain dicts/lists, so one ``setattr`` loop covers the JSONB and
@@ -649,6 +715,28 @@ async def update_event(
     await _enforce_pool_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(
         db, event, stored=stored_draw_settings, incoming=draw_settings
+    )
+    # …then the 422, over the event AS THIS PATCH WOULD LEAVE IT. Each of the three
+    # inputs is resolved against the payload rather than read off the row, because an
+    # event that is already unplayable has to be fixable — and the request that fixes it
+    # is one request, moving two of these at once.
+    #
+    # ``model_fields_set`` and not ``is not None`` for the cap: ``max_players`` is the
+    # one field here whose explicit ``null`` is meaningful (it clears the cap,
+    # ADR-0935), so "sent" and "not sent" is the only reading that can tell an uncapping
+    # from an omission.
+    _enforce_playable_draw_structure(
+        draw_settings=(
+            draw_settings if draw_settings is not None else stored_draw_settings
+        ),
+        pool_count=(
+            len(updates.pools) if updates.pools is not None else len(event_pools(event))
+        ),
+        max_players=(
+            updates.max_players
+            if "max_players" in updates.model_fields_set
+            else event.max_players
+        ),
     )
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the

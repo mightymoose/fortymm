@@ -314,10 +314,16 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   // ---------------------------------------------------------------------------------
 
   {
-    // The reference's "Field too small" screen — and the ORDERING case. Four pools of one
-    // means the pool rule fires, and the automatic two qualifiers out of a pool of one
-    // means the qualifier rule would fire too. Only the pool problem is reported: it is
-    // the one the director can act on, and the other is its echo.
+    // The reference's "Field too small" screen. Four pools of one, so the pool rule fires.
+    //
+    // The automatic count is capped at the smallest pool, so it is ONE here, not two — the
+    // system does not derive a number it would then refuse. That also means the qualifier
+    // rule no longer fires alongside the pool rule in this vector; the pool-over-qualifier
+    // ordering it used to prove is now pinned by the empty-field vector below, where the
+    // clamp to one still exceeds a pool of zero.
+    //
+    // The name stays as it was, so the two tables still scroll together, even though the
+    // cap has taken the qualifier half of the case away.
     name: 'field too small: 8 players across 6 pools reports the pool, not the qualifier',
     input: {
       previewFieldSize: 8,
@@ -332,10 +338,10 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     expected: {
       poolCount: 6,
       poolSizes: [2, 2, 1, 1, 1, 1],
-      qualifiersPerPool: 2,
-      totalQualifiers: 12,
-      knockoutBracketSize: 12,
-      firstRoundByes: 4,
+      qualifiersPerPool: 1,
+      totalQualifiers: 6,
+      knockoutBracketSize: 6,
+      firstRoundByes: 2,
       poolMatchCount: 2,
       sources: {
         poolCount: {
@@ -345,7 +351,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
         poolSize: { ownership: 'automatic', sentence: '8 players ÷ 6 pools' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 6 pools.',
+          sentence: 'Aiming at an 8-player knockout. The smallest pool only holds 1.',
         },
       },
       disagreement: null,
@@ -366,8 +372,8 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
 
   {
     // One pool taking one qualifier. The pools are fine, so the BRACKET rule is the one
-    // that fires — and this is the only vector that catches a missing `max(2, …)` in the
-    // byes formula: `2 ^ ceil(log2(max(2, 1))) - 1` is one bye, not none.
+    // that fires — and this is one of the two vectors that catch a missing `max(2, …)` in
+    // the byes formula: `2 ^ ceil(log2(max(2, 1))) - 1` is one bye, not none.
     name: 'one-player knockout: 1 pool taking its top 1',
     input: {
       previewFieldSize: 8,
@@ -632,6 +638,48 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
+    // THE REGRESSION. An existing capped event, nothing set, one pool: `ceil(8 / 1)` aims at
+    // eight qualifiers out of a pool of six, which the API refuses — so a structure the
+    // system derived for itself made the event unsaveable, a rename included. The automatic
+    // count is capped at the smallest pool, so the whole pool goes through and the draw is
+    // playable. #1320 requires an existing event to keep loading with an equivalent outcome.
+    name: 'one pool under a cap of 8: the automatic count clamps to the pool',
+    input: {
+      previewFieldSize: 6,
+      poolReservationCount: 1,
+      poolCountMode: 'automatic',
+      manualPoolCount: null,
+      poolSizeMode: 'automatic',
+      manualPoolSize: null,
+      qualifiersMode: 'automatic',
+      manualQualifiers: null,
+    },
+    expected: {
+      poolCount: 1,
+      poolSizes: [6],
+      qualifiersPerPool: 6,
+      totalQualifiers: 6,
+      knockoutBracketSize: 6,
+      firstRoundByes: 2,
+      poolMatchCount: 15,
+      sources: {
+        poolCount: {
+          ownership: 'automatic',
+          sentence: "1 pool reservations · today's behaviour",
+        },
+        poolSize: { ownership: 'automatic', sentence: '6 players ÷ 1 pools' },
+        qualifiers: {
+          ownership: 'automatic',
+          sentence: 'Aiming at an 8-player knockout. The smallest pool only holds 6.',
+        },
+      },
+      disagreement: null,
+      unevenDistribution: null,
+      impossibleProblems: [],
+    },
+  },
+
+  {
     // A director typing a zero into the pool-size box. It clamps to one, and — the same
     // rule as the reservation sentence above — the copy reports the clamped value, not
     // the zero, because that is the division that was actually done.
@@ -649,10 +697,10 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     expected: {
       poolCount: 3,
       poolSizes: [1, 1, 1],
-      qualifiersPerPool: 3,
-      totalQualifiers: 9,
-      knockoutBracketSize: 9,
-      firstRoundByes: 7,
+      qualifiersPerPool: 1,
+      totalQualifiers: 3,
+      knockoutBracketSize: 3,
+      firstRoundByes: 1,
       poolMatchCount: 0,
       sources: {
         poolCount: { ownership: 'automatic', sentence: '3 players ÷ about 1 per pool' },
@@ -662,7 +710,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
         },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 3 pools.',
+          sentence: 'Aiming at an 8-player knockout. The smallest pool only holds 1.',
         },
       },
       disagreement: null,
@@ -680,6 +728,11 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   {
     // A field of nobody — the state a brand-new event with a zero cap would preview. The
     // pool refusal has a second sentence for it: `no players`, not `one player`.
+    //
+    // It is also the AUTOMATIC ordering case. The cap takes the qualifier count down to the
+    // smallest pool, but `max(1, …)` floors it at one, and one out of a pool of zero still
+    // trips the qualifier rule. The pool rule is reported and the qualifier rule is not,
+    // which is the pool-before-qualifier order.
     name: 'an empty field: the pools have no players at all',
     input: {
       previewFieldSize: 0,
@@ -694,10 +747,10 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     expected: {
       poolCount: 3,
       poolSizes: [0, 0, 0],
-      qualifiersPerPool: 3,
-      totalQualifiers: 9,
-      knockoutBracketSize: 9,
-      firstRoundByes: 7,
+      qualifiersPerPool: 1,
+      totalQualifiers: 3,
+      knockoutBracketSize: 3,
+      firstRoundByes: 1,
       poolMatchCount: 0,
       sources: {
         poolCount: {
@@ -707,7 +760,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
         poolSize: { ownership: 'automatic', sentence: '0 players ÷ 3 pools' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 3 pools.',
+          sentence: 'Aiming at an 8-player knockout. The smallest pool only holds 0.',
         },
       },
       disagreement: null,

@@ -20,10 +20,15 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.draw_structure import (
+    ONE_PLAYER_KNOCKOUT_MESSAGE,
+    pool_too_small_message,
+    too_many_qualifiers_message,
+)
 from app.models import (
     DrawType,
     EventFormat,
@@ -49,6 +54,7 @@ from app.tournament_draw_settings import draw_settings_of
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
+    ImpossibleDrawStructureError,
     NotTournamentOwnerError,
     PoolSetFrozenError,
     TournamentNotFoundError,
@@ -1590,3 +1596,354 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
             )
         )
     ).scalar_one() == created_at
+
+
+# ----- an unplayable draw structure (#1320) ---------------------------------
+#
+# The three impossible competitions used to be refused at the CUT, hours after the save
+# that authored them and in a sentence that named the cut. They are refused at the write
+# now, in the derivation's own words (``app.draw_structure``), on both verbs.
+#
+# What every test down here is really about is WHICH STATE is judged. It is the state
+# the request would leave the event in — never the fields the request carries — because
+# the director this issue is about already has an impossible event, and the only way out
+# of one is a request that moves two numbers at once.
+
+
+def _pool_list(count: int) -> list[dict[str, Any]]:
+    """``count`` pool rows, named A, B, C…
+
+    Only the COUNT matters to the derivation: an event's pool count is the number of its
+    pool rows (ADR "an event's pool count is its pool rows and a derived count is a
+    projection"), and nothing else about a pool reaches the arithmetic.
+    """
+    return [
+        {
+            "name": f"Pool {chr(ord('A') + index)}",
+            "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+            "table_ids": [],
+        }
+        for index in range(count)
+    ]
+
+
+async def _add_impossible_event(
+    db: AsyncSession, tournament: Tournament
+) -> TournamentEvent:
+    """An event that is **already unplayable**, seeded straight through the ORM.
+
+    It has to be seeded, not created: ``create_event`` is exactly what now refuses this
+    configuration, so a test about escaping one cannot use it to build one. Which is not
+    a contrivance — the rows it writes are the rows the app wrote happily until this
+    chore, and every director holding one today got it that way.
+
+    Four pool rows against a cap of four: the balanced split is ``1, 1, 1, 1``, and each
+    of those four players would have nobody to play.
+    """
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Impossible Singles",
+        format=EventFormat.singles,
+        draw_settings=event_draw_settings(DrawType.rr_then_ko, qualifiers_per_pool=2),
+        max_players=4,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        pools=event_pools(_pool_list(4)),
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+@pytest.mark.parametrize(
+    ("username", "why", "overrides", "expected"),
+    [
+        (
+            "events-impossible-pool",
+            "four players across four pools leaves four pools of one",
+            {"max_players": 4, "pools": _pool_list(4), "qualifiers_per_pool": 2},
+            pool_too_small_message(4, 4),
+        ),
+        (
+            "events-impossible-bracket",
+            "one pool taking its top one leaves a knockout of one",
+            {
+                "max_players": 8,
+                "pools": _pool_list(1),
+                "qualifiers_per_pool": 1,
+                "draw_structure": {"qualifiers_mode": "manual"},
+            },
+            ONE_PLAYER_KNOCKOUT_MESSAGE,
+        ),
+        (
+            "events-impossible-qualifier",
+            "five qualifiers out of pools of four is five out of four",
+            {
+                "max_players": 8,
+                "pools": _pool_list(2),
+                "qualifiers_per_pool": 5,
+                "draw_structure": {"qualifiers_mode": "manual"},
+            },
+            too_many_qualifiers_message(5, 4),
+        ),
+    ],
+    ids=["a pool of one", "a knockout of one", "too many qualifiers"],
+)
+async def test_create_refuses_a_competition_that_cannot_be_played(
+    db_session: AsyncSession,
+    default_league: League,
+    username: str,
+    why: str,
+    overrides: dict[str, Any],
+    expected: str,
+) -> None:
+    """Each of the three impossible competitions is refused at the create, in the
+    derivation's own sentence, and nothing is written.
+
+    The words are asserted rather than the exception type alone, because the sentence is
+    the whole point of moving the refusal here: the cut already said all three, hours
+    later, and #1320 is a complaint about a refusal that named the wrong cause.
+
+    Note which numbers the first case leans on. It is judged against the event's **pool
+    rows** and its **cap** — neither of them a setting the director typed — and the
+    qualifier count it carries is never read, because that mode is automatic.
+    """
+    owner = await make_user(db_session, username)
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+
+    with pytest.raises(ImpossibleDrawStructureError) as refusal:
+        await create_event(
+            db_session,
+            tournament_id=tournament_id,
+            actor=owner,
+            payload=_event_payload(draw_type="rr-then-ko", **overrides),
+        )
+
+    assert str(refusal.value) == expected, why
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TournamentEvent)
+            .where(TournamentEvent.tournament_id == tournament_id)
+        )
+    ).scalar_one() == 0, why
+
+
+async def test_create_accepts_numbers_that_merely_disagree(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Six pools of five seat thirty and the field is forty. **That saves.**
+
+    A disagreement is not a refusal (ADR "a structural setting is owned by the director
+    or derived by the system"): both numbers were typed on purpose, so the app states
+    the arithmetic rather than reshaping one of them, and the director may be about to
+    raise the cap or add the rows. Only the *cut* is unavailable.
+
+    It is asserted here rather than left implied because it is the easiest thing for
+    this guard to break — one ``if derived.disagreement`` too many and every
+    part-configured event stops saving, which is slice 5's whole premise gone.
+    """
+    owner = await make_user(db_session, "events-disagreement-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=_event_payload(
+            draw_type="rr-then-ko",
+            qualifiers_per_pool=2,
+            max_players=40,
+            pools=_pool_list(6),
+            draw_structure={
+                "pool_count_mode": "manual",
+                "manual_pool_count": 6,
+                "pool_size_mode": "manual",
+                "manual_pool_size": 5,
+            },
+        ),
+    )
+
+    stored = draw_settings_of(event.draw_settings)
+    assert stored.draw_structure == DrawStructure(
+        pool_count_mode=StructuralSettingOwner.manual,
+        manual_pool_count=6,
+        pool_size_mode=StructuralSettingOwner.manual,
+        manual_pool_size=5,
+    )
+
+
+async def test_create_leaves_the_other_draw_types_alone(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Four pool rows against a cap of four is unplayable as an ``rr-then-ko`` event and
+    perfectly ordinary as a **round-robin** one, which saves.
+
+    The three conditions are about a pool stage feeding a knockout, and no other draw
+    type has one — a round robin plays its pools and stops, a bracket has no pools at
+    all, and swiss is pool-less. So the guard is scoped to the one arm that carries a
+    draw structure, and this is the test that says a new refusal did not quietly become
+    every draw type's problem.
+    """
+    owner = await make_user(db_session, "events-other-draw-types-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=_event_payload(
+            draw_type="round-robin", max_players=4, pools=_pool_list(4)
+        ),
+    )
+
+    assert event.max_players == 4
+    assert len(event.pools) == 4
+
+
+async def test_update_refuses_a_cap_that_would_starve_this_events_pools(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A patch carrying only ``max_players`` is refused, because of the pools it does
+    **not** carry.
+
+    This is the post-state rule doing its work in the ordinary direction: the cap comes
+    from the payload, the pool rows come from the event, and the competition the two
+    describe together is the one judged. A guard reading only the fields the request
+    stated would see a legal number and let a director lower a cap onto four pools that
+    then hold one player each.
+    """
+    owner = await make_user(db_session, "events-cap-starves-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=_event_payload(
+            draw_type="rr-then-ko",
+            qualifiers_per_pool=2,
+            max_players=16,
+            pools=_pool_list(4),
+        ),
+    )
+    event_id = event.id
+
+    with pytest.raises(ImpossibleDrawStructureError) as refusal:
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate({"max_players": 4}),
+        )
+
+    assert str(refusal.value) == pool_too_small_message(4, 4)
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert persisted.max_players == 16
+
+
+async def test_update_lets_a_director_out_of_an_event_that_is_already_impossible(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """**The escape.** An event that is already unplayable takes the one request that
+    fixes it — and that request has to move two numbers at once.
+
+    Four pools of one, against a cap of four. Taking two qualifiers alone leaves the
+    pools of one, so the pool count has to move as well, and this request moves both —
+    the case the ADR says the post-state rule exists for: "their event is already
+    impossible, and they must be able to change pool count and qualifiers in one
+    request".
+
+    Halving the pools alone would now be enough on its own, because an automatic
+    qualifier count never exceeds the smallest pool: two pools of two derive two
+    qualifiers, not four. So a request carrying both numbers is the shape a director
+    with a MANUAL qualifier count needs, which is the one this test sends.
+
+    Judging the DELTA instead — refusing any number a request states that leaves the
+    event impossible — would red exactly here, with the director stuck.
+    """
+    owner = await make_user(db_session, "events-escape-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_impossible_event(db_session, tournament)
+    event_id = event.id
+    kept = [
+        str(pool.id) for pool in sorted(event.pools, key=lambda pool: pool.position)
+    ][:2]
+
+    updated, _ = await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {
+                # Two pool rows, cited by ids the event already has, so the other two
+                # are removed — a pool count IS its pool rows.
+                "pools": [
+                    {**pool, "id": pool_id}
+                    for pool, pool_id in zip(_pool_list(2), kept, strict=True)
+                ],
+                "draw_type": "rr-then-ko",
+                "qualifiers_per_pool": 2,
+                "draw_structure": {"qualifiers_mode": "manual"},
+            }
+        ),
+    )
+
+    assert len(updated.pools) == 2
+    stored = draw_settings_of(updated.draw_settings)
+    assert stored.qualifiers_per_pool == 2
+    assert stored.draw_structure is not None
+    assert stored.draw_structure.qualifiers_mode is StructuralSettingOwner.manual
+
+
+async def test_update_refuses_an_edit_that_leaves_the_event_impossible(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The other half of the escape, and the price of it: renaming an already-impossible
+    event is refused, because the event is still impossible afterwards.
+
+    Only the save is judged, and it is judged on the result — so a patch that leaves an
+    unplayable competition unplayable is refused however innocent the field it carries
+    (ADR: "only the save is refused, and only while the result would still be
+    impossible"). The way out is to fix the numbers, which the test above proves is
+    available in one request.
+    """
+    owner = await make_user(db_session, "events-still-impossible-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_impossible_event(db_session, tournament)
+    event_id = event.id
+
+    with pytest.raises(ImpossibleDrawStructureError) as refusal:
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate({"name": "Renamed Singles"}),
+        )
+
+    assert str(refusal.value) == pool_too_small_message(4, 4)
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert persisted.name == "Impossible Singles"

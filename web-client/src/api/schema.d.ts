@@ -1192,12 +1192,25 @@ export interface paths {
          *       its draw does not have. Re-sending the draw type the event already has is not a
          *       change, and is not refused.
          *
-         *     Nothing else freezes. The event's name, fee, rules and `max_players`, and each
-         *     pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
-         *     venues change under a running tournament, and recording that must never cost a
-         *     director the draw. To change the pools themselves or the draw type, remove the draw
-         *     (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
-         *     are ordinary fields.
+         *     Nothing else *freezes*. The event's name, fee, rules and `max_players`, and each
+         *     pool's `table_ids`, `slot` and `name`, are not frozen by a standing draw — venues
+         *     change under a running tournament, and recording that must never cost a director the
+         *     draw. (They are still subject to the playability rule below, which is a different
+         *     question and applies whether or not a draw exists.) To change the pools themselves
+         *     or the draw type, remove the draw (`DELETE …/draw`), edit, and cut again. With no
+         *     draw cut, `pools` and `draw_type` are ordinary fields.
+         *
+         *     **An `rr-then-ko` event must be left playable.** The pool count, the pool size, the
+         *     player cap and `qualifiers_per_pool` together describe a competition, and three of
+         *     those descriptions cannot be played: a pool of fewer than two, a knockout of one,
+         *     and more qualifiers than the smallest pool holds. A patch that would leave the event
+         *     in one of them is refused with a `422` on `draw_structure`, saying which. The check
+         *     is on the event **as this patch would leave it**, not on the fields the patch
+         *     carries — so an event that is already unplayable still loads, and one request that
+         *     changes the pool count and the qualifier count together is accepted. The flip side:
+         *     while the event stays unplayable, even a `name` patch is refused, because the result
+         *     is still a competition nobody can play. Numbers that merely *disagree* — six pools
+         *     of five against a field of forty — still save; only the cut is unavailable.
          *
          *     Owner-only.
          */

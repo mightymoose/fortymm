@@ -26,7 +26,10 @@ pinned by five test modules. They live here now, as
 :func:`pool_too_small_message`, :data:`ONE_PLAYER_KNOCKOUT_MESSAGE` and
 :func:`too_many_qualifiers_message`, and :mod:`app.draws` imports them — so the cut and
 the derivation refuse in the same words by construction rather than by two authors
-agreeing. The import runs this way round because this module must stay a leaf:
+agreeing. **One sentence is this module's own**, because the cut has no state that
+reaches it: :func:`pool_too_small_for_pool_size_message` is the pool refusal for a pool
+size the *director* set, which the snake deal cannot produce. The import runs this way
+round because this module must stay a leaf:
 :mod:`app.draws` pulls in the ORM enums and the request schemas, and nothing that
 imports *this* should have to.
 
@@ -39,9 +42,11 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 
-#: The knockout the automatic qualifier count aims at. **A constant, not stored state**
-#: (ADR ``20260808-a-structural-setting-is-owned-by-the-director-or-derived-by-the-
-#: system``): nothing writes it, so no request carries it. A director who wants a
+#: The knockout the automatic qualifier count **aims at** — an aim, not a floor: the
+#: automatic count never takes more out of a pool than it holds, so a small field
+#: derives a smaller bracket rather than an impossible one. **A constant, not stored
+#: state** (ADR ``20260808-a-structural-setting-is-owned-by-the-director-or-derived-by-
+#: the-system``): nothing writes it, so no request carries it. A director who wants a
 #: different bracket sets the qualifiers themselves, which is a setting they own.
 TARGET_BRACKET_SIZE = 8
 
@@ -62,6 +67,27 @@ def pool_too_small_message(entrant_count: int, pool_count: int) -> str:
     return (
         f"{entrant_count} {entrant_noun} across {pool_count} {pool_noun} would "
         "leave a pool with fewer than 2 entrants, who would have nobody to play."
+    )
+
+
+def pool_too_small_for_pool_size_message(entrant_count: int, pool_size: int) -> str:
+    """A pool holding fewer than two entrants **when the director owns the pool size**.
+
+    The sibling of :func:`pool_too_small_message`, and the one sentence here the cut
+    does not share. The cut deals by snake, which divides the field evenly, so the pool
+    *count* is the only knob that can starve a pool and naming it is honest. A manual
+    pool size is filled greedily instead (:func:`_greedy_sizes`), and 41 entrants in
+    pools of 5 leaves a pool of one that 41 balanced across nine would not — so the
+    count sentence would blame a number the director does not own, which is the defect
+    #1320 was filed about. This one names the number they typed.
+
+    It covers the both-manual case too, where every pool is exactly the size that was
+    typed: there the count sentence is not merely misattributed, it is untrue.
+    """
+    entrant_noun = "entrant" if entrant_count == 1 else "entrants"
+    return (
+        f"{entrant_count} {entrant_noun} in pools of {pool_size} would leave a pool "
+        "with fewer than 2 entrants, who would have nobody to play."
     )
 
 
@@ -333,7 +359,20 @@ def derive_draw_structure(options: DrawStructureOptions) -> DrawStructure:
     if manual_qualifiers is not None:
         qualifiers_per_pool = _at_least_one(manual_qualifiers)
     else:
-        qualifiers_per_pool = _at_least_one(_ceil_div(TARGET_BRACKET_SIZE, pool_count))
+        # **A number the system chooses must be one the system will accept.** Aim at the
+        # eight-player knockout, but never take more out of a pool than it holds. The
+        # unclamped ``ceil(8 / pool_count)`` derived a count and then refused that same
+        # count: one pool under a cap of eight made every save impossible, a rename
+        # included, while the qualifier count the event already stored was playable.
+        #
+        # ``smallest_pool`` is read here rather than recomputed because the pool sizes
+        # do not depend on the qualifier count, so there is no cycle to unwind.
+        #
+        # The manual branch above is deliberately untouched: a number the director typed
+        # is theirs, and so is the refusal it earns.
+        qualifiers_per_pool = _at_least_one(
+            min(_ceil_div(TARGET_BRACKET_SIZE, pool_count), smallest_pool)
+        )
 
     knockout_bracket_size = pool_count * qualifiers_per_pool
     # ``max(2, …)`` is what makes a one-player knockout report ONE bye rather than none:
@@ -398,6 +437,11 @@ def derive_draw_structure(options: DrawStructureOptions) -> DrawStructure:
         impossible_problems=_impossible_problems(
             field_size=field_size,
             pool_count=pool_count,
+            # The director's pool size, or ``None`` when the sizes came from splitting
+            # the field across a count. It decides which of the two pool sentences is
+            # honest, and nothing else — see
+            # :func:`pool_too_small_for_pool_size_message`.
+            pool_size=target_size,
             smallest_pool=smallest_pool,
             knockout_bracket_size=knockout_bracket_size,
             qualifiers_per_pool=qualifiers_per_pool,
@@ -409,23 +453,30 @@ def _impossible_problems(
     *,
     field_size: int,
     pool_count: int,
+    pool_size: int | None,
     smallest_pool: int,
     knockout_bracket_size: int,
     qualifiers_per_pool: int,
 ) -> tuple[ImpossibleProblem, ...]:
     """The three impossible competitions, **tested in order, first hit only**.
 
-    The order is not arbitrary. A pool of one trips the qualifier rule too, and a field
-    of one trips all three — but the pool is the fact a director can act on, and the
-    other two are echoes of it. Reporting the echoes alongside it would make one mistake
-    look like three.
+    The order is not arbitrary. A pool too small to play is often a pool too small to
+    qualify from — an empty pool trips the qualifier rule whatever the count is, and a
+    pool of one trips it under any manual count above one — but the pool is the fact a
+    director can act on, and the rest are echoes of it. Reporting the echoes alongside
+    it would make one mistake look like several.
     """
-    # 1. A pool nobody can play in.
+    # 1. A pool nobody can play in — named by the knob that produced the sizes, which is
+    #    the pool size when the director typed one and the pool count otherwise.
     if smallest_pool < 2:
         return (
             ImpossibleProblem(
                 kind=ImpossibleProblemKind.pool,
-                message=pool_too_small_message(field_size, pool_count),
+                message=(
+                    pool_too_small_message(field_size, pool_count)
+                    if pool_size is None
+                    else pool_too_small_for_pool_size_message(field_size, pool_size)
+                ),
             ),
         )
 

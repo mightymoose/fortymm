@@ -33,6 +33,7 @@ from sqlalchemy.orm import selectinload
 
 from app import match_calls
 from app.account_merge import merge_user
+from app.draw_structure import pool_too_small_message
 from app.draws import DrawError
 from app.geocoding import FakeGeocoder, compose_address
 from app.leagues import seed_user_league_rating
@@ -88,6 +89,8 @@ from tests._helpers import (
     accept_standing_result,
     assert_tournament_address_is_sql_null,
     counted_statements,
+    event_draw_settings,
+    event_pools,
     grant_permissions,
     make_client,
     make_user,
@@ -737,6 +740,96 @@ async def test_create_event_requires_a_timezone(
         f"/v1/tournaments/{created['id']}/events", json=payload
     )
     assert response.status_code == 422
+
+
+#: Four pool rows against a cap of four — the balanced split is ``1, 1, 1, 1``, so every
+#: entrant is alone in a pool with nobody to play. The state #1320 is about, in the two
+#: numbers that produce it.
+_UNPLAYABLE_POOLS = [
+    {
+        "name": f"Pool {letter}",
+        "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+        "table_ids": [],
+    }
+    for letter in "ABCD"
+]
+
+
+async def test_create_event_with_an_unplayable_draw_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """An ``rr-then-ko`` configuration naming a competition nobody can play is refused
+    at the write (#1320), where it used to save happily and fail hours later at the cut.
+
+    The body is the operation's already-documented ``HTTPValidationError``, not a
+    hand-rolled envelope: one error, located on ``draw_structure``, carrying the
+    derivation's own sentence. Locating it on the structure rather than on whichever
+    field the request happened to move is deliberate — a pool of one is as much the
+    cap's doing as the pool count's, and the client renders the refusal on the tab that
+    holds all of them.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            draw_type="rr-then-ko",
+            qualifiers_per_pool=2,
+            max_players=4,
+            pools=_UNPLAYABLE_POOLS,
+        ),
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert [error["loc"] for error in detail] == [["body", "draw_structure"]]
+    assert detail[0]["msg"] == pool_too_small_message(4, 4)
+
+    # And nothing was created: the detail read still shows no events.
+    assert (await client.get(f"/v1/tournaments/{created['id']}")).json()["events"] == []
+
+
+async def test_a_tournament_holding_an_unplayable_event_still_reads(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """**A read is never refused.** An event that is already unplayable — every one
+    written before this chore could be — still loads, with its numbers, so the director
+    can see what they have and fix it.
+
+    Seeded through the ORM because the create verb is what now refuses this shape. The
+    ADR names the alternative and rejects it outright: refusing to read the event, or
+    refusing every patch to it, would strand the one director this issue is about.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    db_session.add(
+        TournamentEvent(
+            tournament_id=uuid.UUID(created["id"]),
+            name="Impossible Singles",
+            format=EventFormat.singles,
+            draw_settings=event_draw_settings(
+                DrawType.rr_then_ko, qualifiers_per_pool=2
+            ),
+            max_players=4,
+            entry_fee=Decimal("0.00"),
+            timezone="America/Chicago",
+            slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
+            match_settings={"rated": False, "length_games": 3},
+            predicates=[],
+            pools=event_pools(_UNPLAYABLE_POOLS),
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get(f"/v1/tournaments/{created['id']}")
+
+    assert response.status_code == 200
+    event = response.json()["events"][0]
+    assert event["name"] == "Impossible Singles"
+    assert event["max_players"] == 4
+    assert len(event["pools"]) == 4
 
 
 async def test_patch_event_updates_the_timezone(
