@@ -193,18 +193,26 @@ export interface StoredAddress extends Coords {
   readonly venue: string
 }
 
-/** The draw types this seed can author. Two, because these are the two shapes the seed
- * itself can express: `round-robin`, whose draw settings are the empty object, and
- * `single-elim`, whose settings are empty too (`SingleElimDrawSettingsWrite` — a bracket
- * has no pools to qualify out of and its depth is derived from the field).
+/** The draw types this seed can author.
  *
- * The two formats that DO carry a setting are deliberately absent. `rr-then-ko` needs
- * `qualifiers_per_pool` and `swiss` needs `rounds`, both **required with no default** on
- * their arm of the server's draw-settings union — and both are authored through the event
- * editor **in the browser** by the specs that use them, because the payload that editor
- * builds is the seam their 422 lived in. Adding them here would give those specs a way to
- * skip the surface they exist to test. */
-export type SeededDrawType = 'round-robin' | 'single-elim'
+ * `round-robin` and `single-elim` carry no draw settings at all (their arms of the
+ * server's union are the empty object — a bracket has no pools to qualify out of and its
+ * depth is derived from the field), so seeding them is one key on the wire.
+ *
+ * `rr-then-ko` carries **K** (`qualifiers_per_pool`), required with no default on its arm,
+ * so seeding it means sending `SeedEventOptions.qualifiersPerPool` too — the option says
+ * what happens when you don't.
+ *
+ * ⚠️ **`swiss` is still deliberately absent, and `rr-then-ko`'s CREATE PAYLOAD is still
+ * the browser's job.** The payload the event editor builds (`drawSettingsToApi`) is the
+ * seam the arc's 422 lived in — the client named `rr-then-ko` and sent no K — and no
+ * mocked suite can see it. `tournament-rr-then-ko.spec.ts` and `tournament-swiss.spec.ts`
+ * therefore author their event **through the sheet**, and must go on doing so: this
+ * option exists for the specs whose subject is the **read** path (what the server sends
+ * back and the client renders from it), not the write one. Seeding an rr-then-ko event
+ * here to test the create would prove only that the server accepts a body the test itself
+ * composed. */
+export type SeededDrawType = 'round-robin' | 'single-elim' | 'rr-then-ko'
 
 /** Optional knobs on `addEvent` — one event of an existing tournament.
  *
@@ -227,6 +235,14 @@ export interface SeedEventOptions {
    * and the spec's whole subject is what the scheduler does with a fixture that names no
    * pool (ADR 20260807, "a pool restricts scheduling, it does not enable it"). */
   readonly drawType?: SeededDrawType
+  /** **K** — how many finishers of each pool reach the knockout. Sent only when given,
+   * because the key is a **422 naming itself** on every arm but `rr-then-ko`: the union's
+   * arms are `extra="forbid"`, and a qualifier count on a format with no knockout stage is
+   * refused at the request boundary rather than dropped.
+   *
+   * Required *with* `drawType: 'rr-then-ko'`, and required in the other direction too —
+   * that arm has no default. Omitting it there is the same 422, naming the field. */
+  readonly qualifiersPerPool?: number
   /** The window both the event and its pools carry. Omitted = tomorrow, 09:00–17:00. */
   readonly slot?: SlotSpec
   /** The event's pools, **in the director's order** — see
@@ -258,6 +274,9 @@ export interface SeedTournamentOptions {
    * and the spec's whole subject is what the scheduler does with a fixture that names no
    * pool (ADR 20260807, "a pool restricts scheduling, it does not enable it"). */
   readonly drawType?: SeededDrawType
+  /** **K** — see `SeedEventOptions.qualifiersPerPool`, which is this same option on the
+   * one event `seedTournament` adds. */
+  readonly qualifiersPerPool?: number
   /** The window both the event and its single pool carry. */
   readonly slot?: SlotSpec
   /** The table catalogue; the pool references every listed table. */
@@ -428,6 +447,7 @@ export async function seedTournament(
   // option may fall back to the single `Pool A`.
   const { eventId, pools } = await addEvent(director, tournamentId, storedTables, {
     drawType: options.drawType,
+    qualifiersPerPool: options.qualifiersPerPool,
     slot: options.slot,
     pools: options.pools,
     maxPlayers: options.maxPlayers,
@@ -486,11 +506,16 @@ export async function addEvent(
         // timezone-aware instants"), so the window still brackets NOW.
         timezone: 'UTC',
         format: 'singles',
-        // The caller's draw type, defaulting to the original round-robin. Both types
-        // this seed can author take **no** further draw settings, so there is nothing
-        // to send beside it (see `SeededDrawType` for the two that do, and why they
-        // are authored in the browser instead).
+        // The caller's draw type, defaulting to the original round-robin.
         draw_type: options.drawType ?? 'round-robin',
+        // **K**, beside the draw type it belongs to — the server parses the two as one
+        // pair (ADR 20260727). Sent only when the caller gives it: the key is refused on
+        // every other arm of the union (`extra="forbid"`), so an unconditional
+        // `qualifiers_per_pool: null` would 422 every round-robin this helper has ever
+        // seeded.
+        ...(options.qualifiersPerPool !== undefined
+          ? { qualifiers_per_pool: options.qualifiersPerPool }
+          : {}),
         entry_fee: 0,
         // Only sent when the caller caps the field; omitting the key leaves the
         // event uncapped (the API treats a missing `max_players` as no cap).
