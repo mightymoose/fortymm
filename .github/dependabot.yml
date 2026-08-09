@@ -25,6 +25,18 @@ updates:
       - dependency-name: typescript
         versions:
           - ">=7.0.0"
+      # @tanstack/react-router 1.170.19 shipped a breaking rewrite as a semver
+      # patch ("lane-based scheduler"), and it drops a `beforeLoad` redirect
+      # unless the caller awaits `router.load()` before rendering. `main.tsx`
+      # renders `<RouterProvider>` directly, like the docs show, so a returning
+      # user hitting `/` stays on the landing page instead of going to
+      # `/dashboard`. Measured in a real browser: 1.170.18 lands on
+      # `/dashboard`, 1.170.20 stays on `/`. Still broken on 1.170.25.
+      # Drop this once upstream restores the redirect, or once we decide to
+      # await the initial load at bootstrap. Tracked in #1344.
+      - dependency-name: "@tanstack/react-router"
+        versions:
+          - ">=1.170.19"
     groups:
       web-client-minor-patch:
         update-types:
