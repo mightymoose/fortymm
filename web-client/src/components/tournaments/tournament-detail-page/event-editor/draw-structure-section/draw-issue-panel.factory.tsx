@@ -68,6 +68,58 @@ export function buildImpossibleDrawFixes(): DrawStructureFix[] {
 }
 
 /**
+ * The reference's **"Numbers disagree"** state
+ * (`docs/designs/rr-then-ko-draw-structure/numbers-disagree-panel.png`), and #1320's
+ * required case: a field of 40 against six manual pools of five manual, which seat thirty
+ * and leave ten entrants with nowhere to go.
+ *
+ * The numbers are the derivation's, and `data/draw-structure.test.ts` pins that it produces
+ * exactly these for these inputs — a fixture cannot invent a standoff the derivation would
+ * not report.
+ */
+export function buildDisagreementDrawIssue(
+  overrides: Partial<Extract<DrawIssue, { kind: 'disagreement' }>['disagreement']> = {},
+): DrawIssue {
+  return {
+    kind: 'disagreement',
+    disagreement: {
+      poolCount: 6,
+      poolSize: 5,
+      seats: 30,
+      fieldSize: 40,
+      direction: 'unseated',
+      count: 10,
+      ...overrides,
+    },
+  }
+}
+
+/** The three resolutions that same state offers — `disagreementFixes` computes them
+ * (`./draw-issue-fix.test.ts` pins that), and this is what they come out as for 40 players
+ * over 6 pools of 5. */
+export function buildDisagreementDrawFixes(): DrawStructureFix[] {
+  return [
+    {
+      kind: 'player-limit',
+      label: 'Cap the field at 30',
+      detail: 'Your structure stays exact.',
+      maxPlayers: 30,
+    },
+    {
+      kind: 'pool-count',
+      label: 'Use 8 pools of 5',
+      detail: 'Everyone gets a seat.',
+      poolCount: 8,
+    },
+    {
+      kind: 'automatic-pool-size',
+      label: 'Allow uneven pools',
+      detail: '4 × 7 and 2 × 6 players.',
+    },
+  ]
+}
+
+/**
  * Props for `DrawIssuePanel` — the uneven notice above, which is the variant with nothing
  * to apply.
  *

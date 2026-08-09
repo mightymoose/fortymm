@@ -44,6 +44,27 @@ const eventTooSmallForItsPools = (
     ...overrides,
   })
 
+/**
+ * The reference's **"Numbers disagree"** state
+ * (`docs/designs/rr-then-ko-draw-structure/numbers-disagree-panel.png`), and #1320's
+ * required case: a field of **40** against **six** manual pools of **five** manual, which
+ * seat thirty and leave ten entrants with nowhere to go.
+ *
+ * ⚠️ It keeps the "Nothing set" event's **four** pool rows, and that gap is deliberate: a
+ * derived count in excess of the rows is reported, never materialised (ADR 20260808's point
+ * 3). `Use 8 pools of 5` is the one act that closes it.
+ */
+const numbersDisagree = (overrides: Partial<Omit<TournamentEvent, 'entered'>> = {}) =>
+  eventOwning(
+    {
+      poolCountMode: 'manual',
+      manualPoolCount: 6,
+      poolSizeMode: 'manual',
+      manualPoolSize: 5,
+    },
+    { maxPlayers: 40, ...overrides },
+  )
+
 describe('DrawStructureSection', () => {
   it('says what the tab is for, in the reference’s words', () => {
     drawStructureSectionPage.render()
@@ -772,9 +793,9 @@ describe('DrawStructureSection', () => {
      * invented, and a projection in excess of the rows is reported, never materialised.
      * Here 32 players in pools of 5 projects 7 pools over 4 reservations.
      *
-     * Chore 5b's disagreement panel is what reports the gap, and its
-     * `Use {n} pools of {size}` is what appends the rows — through the same
-     * `reconcilePoolsToCount` the box types through.
+     * The disagreement panel is what reports the gap, and its `Use {n} pools of {size}` is
+     * what appends the rows — through the same `reconcilePoolsToCount` the box types
+     * through.
      */
     it('creates no pool row when the director merely takes the setting', async () => {
       const onPoolsChange = vi.fn()
@@ -1146,33 +1167,26 @@ describe('DrawStructureSection', () => {
     })
 
     /**
-     * ⚠️ **The reference's "Numbers disagree" state, reachable for the first time in this
-     * chore** — a disagreement needs pool count AND pool size both manual, which nothing
-     * could set until now. 40 players over 6 pools of 5 seats 30.
+     * ⚠️ **The reference's "Numbers disagree" state** — 40 players over 6 pools of 5 seats
+     * 30, and #1320's required case. A disagreement needs pool count AND pool size both
+     * manual.
      *
-     * The panel for it is chore 5a, so the tab shows **nothing** rather than a
-     * half-written notice — and the director is not left guessing, because the preview
-     * beside it says so in the reference's words. This test is the guard on that split:
-     * it reds the day a panel appears here without its `Apply` fixes, and it reds the day
-     * the preview stops saying it.
+     * The notice and the preview say the same thing about the same draw, in the two
+     * registers the tab has: the panel asks the question under the settings that raise it,
+     * and the badge states the verdict beside them.
      */
-    it('leaves the disagreement to the preview — 6 pools of 5, 40 players', () => {
-      drawStructureSectionPage.render({
-        event: eventOwning(
-          {
-            poolCountMode: 'manual',
-            manualPoolCount: 6,
-            poolSizeMode: 'manual',
-            manualPoolSize: 5,
-          },
-          { maxPlayers: 40 },
-        ),
-      })
+    it('asks for a decision — 6 pools of 5, 40 players', () => {
+      drawStructureSectionPage.render({ event: numbersDisagree() })
 
       expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
         'Your numbers disagree',
       )
-      expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+      expect(
+        drawStructureSectionPage.issuePanel.getPanel(),
+      ).toHaveAttribute('data-issue-kind', 'disagreement')
+      expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+        '6 pools of 5 seat 30. Your field is 40.',
+      )
       // Both of the director's numbers stand, unedited — the app states the arithmetic
       // rather than moving one of them (ADR 20260808).
       expect(drawStructureSectionPage.preview.getEquation()).toHaveTextContent(
@@ -1183,6 +1197,61 @@ describe('DrawStructureSection', () => {
       expect(
         drawStructureSectionPage.preview.getFact('Pool reservations'),
       ).toHaveTextContent('4')
+    })
+
+    /**
+     * ⚠️ **The claim the whole variant exists for.** Nothing on this tab may add a pool or
+     * enlarge one to make the arithmetic come out: reporting a standoff is not an occasion
+     * to resolve it (ADR 20260808 — report, do not reshape).
+     *
+     * The rows and the boxes are necessary but not sufficient — a write that landed and was
+     * then re-derived away would leave both looking right. The teeth are that rendering
+     * this state writes **nothing at all**: no event, no pool list.
+     */
+    it('writes neither number, and mints no pool, merely by reporting it', () => {
+      const onChange = vi.fn()
+      const onPoolsChange = vi.fn()
+      drawStructureSectionPage.render({
+        event: numbersDisagree(),
+        onChange,
+        onPoolsChange,
+      })
+
+      expect(onChange).not.toHaveBeenCalled()
+      expect(onPoolsChange).not.toHaveBeenCalled()
+      // Both boxes still read what the director typed…
+      expect(
+        drawStructureSectionPage.setting('Pool count').getInput(),
+      ).toHaveValue('6')
+      expect(
+        drawStructureSectionPage.setting('Pool size').getInput(),
+      ).toHaveValue('5')
+      // …and the six pools are six pools of five, not five and a bigger one.
+      expect(drawStructureSectionPage.preview.getPoolCards()).toHaveLength(6)
+    })
+
+    /**
+     * A reader gets a **view** (ADR-0015): the standoff is stated, because a preview
+     * reading `Your call` with no cause beside it is a dead end — and nothing is offered,
+     * because none of these settings is theirs to resolve.
+     *
+     * ⚠️ **Not a duplicate of the refusal's reader guard.** This is the only read-only
+     * state on the tab where **both** dimension settings are the director's, so it is the
+     * one guard that proves the two manual boxes are gated on `canEdit` and not merely on
+     * the stored mode. The refusal's guard runs on an event that owns nothing, and has no
+     * box to leak.
+     */
+    it('offers a reader no resolution, and still states the standoff', () => {
+      drawStructureSectionPage.render({
+        event: numbersDisagree(),
+        canEdit: false,
+      })
+
+      expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+        '6 pools of 5 seat 30. Your field is 40.',
+      )
+      expect(drawStructureSectionPage.issuePanel.getFixes()).toHaveLength(0)
+      expect(drawStructureSectionPage.getFormElements()).toHaveLength(0)
     })
 
     /**
@@ -1494,6 +1563,264 @@ describe('DrawStructureSection', () => {
         expect(
           drawStructureSectionPage.issuePanel.getPanel(),
         ).toHaveAttribute('data-issue-kind', 'uneven')
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+      })
+    })
+
+    /**
+     * **The reference's "Numbers disagree" state, resolved three ways** — 40 players over
+     * six pools of five, which seat thirty.
+     *
+     * Every one of the three is a named act the director chooses, and the two they do not
+     * choose leave their numbers exactly as they were. The labels and their arithmetic are
+     * pinned by `draw-issue-fix.test.ts`; what these pin is what a click *does*, and that
+     * the draw it leaves behind no longer disagrees.
+     */
+    describe('numbers that disagree — 6 pools of 5, 40 players', () => {
+      const renderDisagreement = (
+        overrides: Partial<Parameters<typeof drawStructureSectionPage.render>[0]> = {},
+      ) => {
+        const onChange = vi.fn()
+        const onPoolsChange = vi.fn()
+        const event = numbersDisagree()
+        drawStructureSectionPage.render({
+          event,
+          onChange,
+          onPoolsChange,
+          ...overrides,
+        })
+        return { onChange, onPoolsChange, event }
+      }
+
+      it('offers all three of the reference’s resolutions, in order', () => {
+        renderDisagreement()
+
+        expect(drawStructureSectionPage.issuePanel.getFixLabels()).toEqual([
+          'Cap the field at 30',
+          'Use 8 pools of 5',
+          'Allow uneven pools',
+        ])
+      })
+
+      /** The field moves to the structure. `Your structure stays exact.` is literal: the
+       * cap is the only thing written, and both of the director's numbers survive it. */
+      it('caps the field without touching either of the director’s numbers', async () => {
+        const { onChange, onPoolsChange } = renderDisagreement()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Cap the field at 30'),
+        )
+
+        expect(onChange.mock.lastCall?.[0].maxPlayers).toBe(30)
+        expect(onChange.mock.lastCall?.[0].drawOwnership).toEqual(
+          expect.objectContaining({
+            poolCountMode: 'manual',
+            manualPoolCount: 6,
+            poolSizeMode: 'manual',
+            manualPoolSize: 5,
+          }),
+        )
+        expect(onPoolsChange).not.toHaveBeenCalled()
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+      })
+
+      it('leaves a draw whose numbers agree', async () => {
+        const { onChange, onPoolsChange, event } = renderDisagreement()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Cap the field at 30'),
+        )
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+
+        // 6 pools of 5 seat exactly the 30 the field now holds.
+        expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+      })
+
+      /**
+       * ⚠️ **`Use 8 pools of 5` is eight pool RESERVATIONS**, not a number written into the
+       * ownership record beside four rows (ADR 20260808). This is the resolution that
+       * materialises the projection `Set myself` deliberately does not, and it does it
+       * through `reconcilePoolsToCount` — the seam the Pool count box types through.
+       */
+      it('appends the pool rows the count needs, in the same act as the count', async () => {
+        const { onChange, onPoolsChange } = renderDisagreement()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 8 pools of 5'),
+        )
+
+        expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(8)
+        expect(
+          onPoolsChange.mock.lastCall?.[0].map((pool: PoolEntry) => pool.name),
+        ).toEqual([
+          'Pool A',
+          'Pool B',
+          'Pool C',
+          'Pool D',
+          'Pool E',
+          'Pool F',
+          'Pool G',
+          'Pool H',
+        ])
+      })
+
+      it('leaves a draw whose numbers agree, and a reservation for every pool', async () => {
+        const { onChange, onPoolsChange, event } = renderDisagreement()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 8 pools of 5'),
+        )
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+
+        expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+        // The gap this resolution exists to close: eight pools, eight reservations.
+        expect(
+          drawStructureSectionPage.preview.getFact('Pool reservations'),
+        ).toHaveTextContent('8')
+      })
+
+      /**
+       * ⚠️ **The pool count is the director's and survives.** `Allow uneven pools` is an
+       * answer about the pool *size*: it hands that one setting back and touches nothing
+       * else — not the count, not the count's mode, and not a pool row. Clearing the count
+       * with it would discard a number they typed to answer a question about a different
+       * one.
+       *
+       * The size they typed is remembered, unset rather than erased, exactly as the Pool
+       * size row's own `Use automatic` leaves it (`data/draw-ownership`).
+       */
+      it('hands the pool SIZE back, and keeps the count the director typed', async () => {
+        const { onChange, onPoolsChange } = renderDisagreement()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Allow uneven pools'),
+        )
+
+        expect(onChange.mock.lastCall?.[0].drawOwnership).toEqual(
+          expect.objectContaining({
+            poolSizeMode: 'automatic',
+            poolCountMode: 'manual',
+            manualPoolCount: 6,
+            manualPoolSize: 5,
+          }),
+        )
+        expect(onChange.mock.lastCall?.[0].maxPlayers).toBe(40)
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+
+      /** …and the split it promised is the split it produces: 40 across the director's six
+       * pools is `7, 7, 7, 7, 6, 6`. Uneven is the point — the resolution is called
+       * `Allow uneven pools` — so the tab goes on saying so, in the notice for a legal
+       * split. What it stops saying is that the numbers disagree. */
+      it('leaves the 4 × 7 and 2 × 6 it promised, legal and merely uneven', async () => {
+        const { onChange, onPoolsChange, event } = renderDisagreement()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Allow uneven pools'),
+        )
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+
+        expect(
+          drawStructureSectionPage.issuePanel.getPanel(),
+        ).toHaveAttribute('data-issue-kind', 'uneven')
+        expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+          '4 pools of 7 · 2 pools of 6',
+        )
+        expect(
+          drawStructureSectionPage.setting('Pool size').getValue(),
+        ).toHaveTextContent('6–7')
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+      })
+    })
+
+    /**
+     * ⚠️ **A resolution that lowers the pool count is priced like every other lowered pool
+     * count.** 12 players over six pools of three seat eighteen, and `Use 4 pools of 3`
+     * discards two reservations — so it goes through the *same* gate (`requestPoolCount`)
+     * and the same confirm the box does, naming them before any of them goes (ADR
+     * 20260806). Without this vector the required case only ever appends, and "the fix
+     * reuses the gate" would be an inheritance rather than a claim.
+     */
+    describe('a resolution that drops reservations — 12 players, 6 pools of 3', () => {
+      const renderCostly = () => {
+        const onChange = vi.fn()
+        const onPoolsChange = vi.fn()
+        const event = eventOwning(
+          {
+            poolCountMode: 'manual',
+            manualPoolCount: 6,
+            poolSizeMode: 'manual',
+            manualPoolSize: 3,
+          },
+          {
+            maxPlayers: 12,
+            pools: Array.from({ length: 6 }, (_, i) =>
+              buildPool({
+                id: `p-${poolLetter(i).toLowerCase()}`,
+                name: `Pool ${poolLetter(i)}`,
+                position: i,
+              }),
+            ),
+          },
+        )
+        drawStructureSectionPage.render({ event, onChange, onPoolsChange })
+        return { onChange, onPoolsChange, event }
+      }
+
+      it('names the reservations it would drop, and writes nothing yet', async () => {
+        const { onChange, onPoolsChange } = renderCostly()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 4 pools of 3'),
+        )
+
+        expect(drawStructureSectionPage.confirm.getDialog()).toHaveTextContent(
+          'Pool E',
+        )
+        expect(drawStructureSectionPage.confirm.getDialog()).toHaveTextContent(
+          'Pool F',
+        )
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+
+      it('drops them on the confirm, and leaves a draw whose numbers agree', async () => {
+        const { onChange, onPoolsChange, event } = renderCostly()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 4 pools of 3'),
+        )
+        await userEvent.click(drawStructureSectionPage.confirm.getConfirmButton())
+
+        expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(4)
+        expect(
+          onPoolsChange.mock.lastCall?.[0].map((pool: PoolEntry) => pool.name),
+        ).toEqual(['Pool A', 'Pool B', 'Pool C', 'Pool D'])
+
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+        expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
         expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
           'Ready to save',
         )

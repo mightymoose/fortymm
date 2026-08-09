@@ -29,22 +29,22 @@ const scoped = (container: Container) => ({
     return container.getByTestId('draw-issue-panel')
   },
   /** The panel, or `null` — **the accessor the precedence claims use**. Only one notice
-   * shows at a time, and the one unbuilt kind (chore 5a) shows none at all, so "there is
+   * shows at a time, and a draw whose numbers divide evenly gets none at all, so "there is
    * no panel" is a state a test has to be able to state. */
   queryPanel() {
     return container.queryByTestId('draw-issue-panel')
   },
-  /** The topline — `Can’t save` or `Legal, but uneven`. Read as TEXT: the dot beside it
-   * is decoration, and a notice whose meaning is a colour has no meaning to a screen
-   * reader. */
+  /** The topline — `Can’t save`, `Needs your call` or `Legal, but uneven`. Read as TEXT:
+   * the dot beside it is decoration, and a notice whose meaning is a colour has no meaning
+   * to a screen reader. */
   getTopline(words: string) {
     return container.getByText(words)
   },
   queryTopline(words: string) {
     return container.queryByText(words)
   },
-  /** The size tally (`2 pools of 6 · 2 pools of 5`), or the refusal's cause
-   * (`Pool C would have one player`). */
+  /** The size tally (`2 pools of 6 · 2 pools of 5`), the refusal's cause (`Pool C would
+   * have one player`), or the standoff (`6 pools of 5 seat 30. Your field is 40.`). */
   getTitle() {
     return container.getByTestId('draw-issue-panel-title')
   },

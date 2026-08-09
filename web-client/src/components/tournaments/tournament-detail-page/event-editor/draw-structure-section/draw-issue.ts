@@ -4,9 +4,8 @@
 // independently and says out loud that it will not order them: more than one holds at
 // once routinely, and picking between them is a layout question a derivation has no
 // business answering. This module is the answer, and it is the ONLY place the answer
-// exists — `DrawIssuePanel` renders whichever kind it is handed, the live preview reads
-// its verdict badge off the same call, and chore 5a adds the last variant to that
-// renderer without touching this file.
+// exists — `DrawIssuePanel` renders whichever kind it is handed, and the live preview reads
+// its verdict badge off the same call.
 
 import type {
   DrawStructure,

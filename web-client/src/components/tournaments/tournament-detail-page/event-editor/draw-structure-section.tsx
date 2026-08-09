@@ -19,6 +19,7 @@ import {
 } from '../confirm-irreversible-act-dialog'
 import { drawIssueFor } from './draw-structure-section/draw-issue'
 import {
+  disagreementFixes,
   impossibleFixes,
   type DrawStructureFix,
 } from './draw-structure-section/draw-issue-fix'
@@ -181,9 +182,9 @@ export interface DrawStructureSectionProps {
  * - **`Set myself`.** It seeds the box from the *derived* count, which is a projection —
  *   and a projection in excess of the rows is reported, never materialised (the ADR's
  *   point 3). Creating four reservations off a field the app invented is precisely what
- *   that rule forbids. The gap is chore 5b's disagreement panel to report, and its
- *   `Use {n} pools of {size}` resolution appends through `reconcilePoolsToCount` — the
- *   same seam this row types through.
+ *   that rule forbids. The disagreement panel is what reports the gap, and its
+ *   `Use {n} pools of {size}` resolution is what materialises it — appending through
+ *   `reconcilePoolsToCount`, the same seam this row types through.
  *
  * ## The arithmetic is not here
  *
@@ -318,7 +319,7 @@ export const DrawStructureSection = ({
   }
 
   /**
-   * Apply one of the refusal panel's named ways out.
+   * Apply one of the notice's named ways out — a refusal's, or a disagreement's.
    *
    * **Every arm writes through a seam that already exists**, and that is the point: a fix
    * is a shortcut to a setting the director could have changed themselves, not a second
@@ -326,12 +327,20 @@ export const DrawStructureSection = ({
    *
    * - `pool-count` goes through `requestPoolCount`, so it creates or removes pool rows in
    *   the one act ADR 20260808 demands, and buys any removal with the same confirm the
-   *   Pool count box does.
+   *   Pool count box does. `Use 8 pools of 5` is not a number written somewhere: it is
+   *   eight pool reservations.
    * - `player-limit` writes the event's cap, which lives on Basics — the same `onChange`
    *   the Basics tab writes through, so the limit has one owner and this tab is not it.
+   *   Both `Raise the player limit to 12` and `Cap the field at 30` are this one act.
    * - `qualifiers` **takes the setting** as well as setting the number. The director asked
    *   for this count, so the row must say `Yours`: left automatic, the derivation would go
    *   on aiming at a bracket of eight and hand the number straight back.
+   * - `automatic-pool-size` gives one setting back and touches nothing else. It is the Pool
+   *   size row's own `Use automatic`, which keeps the director's number for the next time
+   *   they take it (`data/draw-ownership`) — and it must leave `poolCountMode`,
+   *   `manualPoolCount` and every pool row exactly where they are. The count is theirs;
+   *   `Allow uneven pools` is a choice about the *size*, and clearing the count with it
+   *   would discard a number they typed to answer a question about a different one.
    */
   const applyFix = (fix: DrawStructureFix) => {
     switch (fix.kind) {
@@ -343,6 +352,9 @@ export const DrawStructureSection = ({
         return
       case 'qualifiers':
         own({ qualifiersMode: 'manual' }, fix.qualifiersPerPool)
+        return
+      case 'automatic-pool-size':
+        own({ poolSizeMode: 'automatic' })
     }
   }
 
@@ -361,14 +373,17 @@ export const DrawStructureSection = ({
   // never re-derives it.
   const issue = drawIssueFor(structure)
 
-  // The named ways out of a refusal, and **nothing for a reader**: a read-only surface is
-  // a view, not a disabled form (ADR-0015), so the panel still states the cause and offers
-  // no button to press. The other two kinds carry no fixes at all — the uneven notice has
-  // nothing to fix, and the disagreement's three resolutions are chore 5b.
-  const fixes: DrawStructureFix[] =
-    canEdit && issue?.kind === 'impossible'
+  // The named ways out, and **nothing for a reader**: a read-only surface is a view, not a
+  // disabled form (ADR-0015), so the panel still states the cause and offers no button to
+  // press. The uneven notice carries no fixes in any case — a legal split has nothing to
+  // fix, and saying so is the whole notice.
+  const fixes: DrawStructureFix[] = !canEdit
+    ? []
+    : issue?.kind === 'impossible'
       ? impossibleFixes(issue.problem, structure, fieldSize)
-      : []
+      : issue?.kind === 'disagreement'
+        ? disagreementFixes(issue.disagreement)
+        : []
 
   return (
     <div className="flex flex-col gap-6" data-testid="draw-structure-section">
@@ -484,10 +499,10 @@ export const DrawStructureSection = ({
                         // Seeded from the count the row was already showing — and, again,
                         // **no row is created**. That count is a projection while pool size
                         // is manual, and a projection in excess of the rows is reported,
-                        // never materialised (ADR 20260808, point 3). Chore 5b's
-                        // disagreement panel is what reports it, and its
-                        // `Use {n} pools of {size}` is what appends the rows, through the
-                        // same `reconcilePoolsToCount` this row types through.
+                        // never materialised (ADR 20260808, point 3). The disagreement
+                        // panel is what reports it, and its `Use {n} pools of {size}` is
+                        // what appends the rows, through the same `reconcilePoolsToCount`
+                        // this row types through.
                         onClick: () =>
                           own({
                             poolCountMode: 'manual',

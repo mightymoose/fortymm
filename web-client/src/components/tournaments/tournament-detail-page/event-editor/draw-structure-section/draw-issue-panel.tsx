@@ -6,13 +6,85 @@ import { Button } from '@/components/ui/button'
 import type { DrawIssue } from './draw-issue'
 import type { DrawStructureFix } from './draw-issue-fix'
 
+/**
+ * The offered ways out, as a list of rows: a label, a detail line, and one `Apply`.
+ *
+ * **One list, two panels.** The refusal offers up to two and the disagreement offers three,
+ * which is a `columns` apart and nothing else — and the a11y-critical part (the per-fix
+ * `aria-label`, because every visible button reads only `Apply`) is exactly the part that
+ * forks when identical markup is copied. This repo has measured that fork: see the
+ * `interactiveElementsIn` note in `web-client/CLAUDE.md`, where one sweep copy-pasted three
+ * ways left six of eight guards with a hole in them.
+ *
+ * Renders nothing for an empty list, which is the usual case: an uneven split has nothing
+ * to fix, and a reader is offered nothing anywhere on this tab (ADR-0015).
+ */
+const FixList = ({
+  fixes,
+  columns,
+  onApplyFix,
+}: {
+  fixes: DrawStructureFix[]
+  /** The grid at `sm` and up — as many columns as the panel has fixes. Below `sm` they
+   * stack: a row of a label, a detail line and a button does not fit a phone beside
+   * another one. */
+  columns: string
+  onApplyFix: (fix: DrawStructureFix) => void
+}) => {
+  if (fixes.length === 0) return null
+  return (
+    <ul className={`mt-3 grid grid-cols-1 gap-2 ${columns}`}>
+      {fixes.map((fix) => (
+        // Keyed by the label, which is the fix: two fixes for one problem never read the
+        // same, and an index key would reattach the wrong button the moment the problem
+        // changed under it.
+        <li
+          key={fix.label}
+          data-testid="draw-issue-fix"
+          className="flex items-start justify-between gap-3 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)] px-3 py-2"
+        >
+          <div className="min-w-0">
+            <p
+              data-testid="draw-issue-fix-label"
+              className="text-[13px] leading-snug font-semibold text-[color:var(--fg-1)]"
+            >
+              {fix.label}
+            </p>
+            <p
+              data-testid="draw-issue-fix-detail"
+              className="mt-0.5 text-[12px] leading-snug text-[color:var(--fg-3)]"
+            >
+              {fix.detail}
+            </p>
+          </div>
+          <Button
+            variant="link"
+            size="sm"
+            data-testid="draw-issue-fix-apply"
+            className="h-auto shrink-0 p-0 text-[13px]"
+            // Every one of these buttons says `Apply`, so the visible words alone name no
+            // fix — and a list of buttons is how a screen-reader user meets them. The
+            // visible word comes FIRST, so what a director says out loud to a voice-control
+            // tool still matches (the `SettingRow` action's rule).
+            aria-label={`Apply ${fix.label}`}
+            onClick={() => onApplyFix(fix)}
+          >
+            Apply
+          </Button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export interface DrawIssuePanelProps {
   /** The issue to state, already chosen by `drawIssueFor`. The panel never picks: given
    * one it renders one, which is what keeps the precedence in a single place. */
   issue: DrawIssue
   /**
-   * The named ways out, already worked out by `impossibleFixes` (`./draw-issue-fix`) —
-   * their labels, their detail lines, and the numbers they would write.
+   * The named ways out, already worked out by `impossibleFixes` or `disagreementFixes`
+   * (`./draw-issue-fix`) — their labels, their detail lines, and the numbers they would
+   * write.
    *
    * **Empty is a real answer, and it is the usual one**: an uneven split has nothing to
    * fix, and a reader (`canEdit: false`) is offered nothing anywhere on this tab (ADR-0015
@@ -53,12 +125,14 @@ export interface DrawIssuePanelProps {
  * decoration on top of them, so a reader who cannot separate red from blue reads the same
  * notice everyone else does.
  *
- * ## What this chore renders
+ * ## The three variants
  *
- * The **impossible** and **uneven** variants. `Needs your call` — the disagreement, with
- * its three resolutions — is chore 5a; until then the tab shows nothing in that state
- * rather than a half-written panel, and the director is not left guessing, because the
- * live preview beside it already reads `Your numbers disagree`.
+ * `Can’t save` reports a blocked act, so it is an `alert` and wears the refusal's colour.
+ * `Needs your call` and `Legal, but uneven` are both `status`: neither disables anything,
+ * and a draw whose numbers disagree still saves (`event-draw-structure.ts` — the gate reads
+ * `impossibleProblems` only). What separates those two is that the disagreement is a
+ * question — it carries three resolutions and a warning tint — while the uneven notice is
+ * an observation and carries neither.
  */
 export const DrawIssuePanel = ({
   issue,
@@ -106,59 +180,70 @@ export const DrawIssuePanel = ({
           {issue.problem.body}
         </p>
 
-        {fixes.length > 0 && (
-          // Side by side above `sm`, stacked below it — the pool case offers two, and two
-          // rows of a label, a detail line and a button do not fit a phone in one line.
-          <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {fixes.map((fix) => (
-              // Keyed by the label, which is the fix: two fixes for one problem never
-              // read the same, and an index key would reattach the wrong button the
-              // moment the problem changed under it.
-              <li
-                key={fix.label}
-                data-testid="draw-issue-fix"
-                className="flex items-start justify-between gap-3 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)] px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <p
-                    data-testid="draw-issue-fix-label"
-                    className="text-[13px] leading-snug font-semibold text-[color:var(--fg-1)]"
-                  >
-                    {fix.label}
-                  </p>
-                  <p
-                    data-testid="draw-issue-fix-detail"
-                    className="mt-0.5 text-[12px] leading-snug text-[color:var(--fg-3)]"
-                  >
-                    {fix.detail}
-                  </p>
-                </div>
-                <Button
-                  variant="link"
-                  size="sm"
-                  data-testid="draw-issue-fix-apply"
-                  className="h-auto shrink-0 p-0 text-[13px]"
-                  // Every one of these buttons says `Apply`, so the visible words alone
-                  // name no fix — and a list of buttons is how a screen-reader user meets
-                  // them. The visible word comes FIRST, so what a director says out loud
-                  // to a voice-control tool still matches (the `SettingRow` action's rule).
-                  aria-label={`Apply ${fix.label}`}
-                  onClick={() => onApplyFix(fix)}
-                >
-                  Apply
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+        {/* Two ways out at most, so two columns. */}
+        <FixList fixes={fixes} columns="sm:grid-cols-2" onApplyFix={onApplyFix} />
       </div>
     )
   }
 
-  // Chore 5a (disagreement, role `status`, yellow dot, three fixes) renders here. Until
-  // then the tab shows nothing in that state rather than a half-written panel: the live
-  // preview beside it already reads `Your numbers disagree`, so the state is not silent.
-  if (issue.kind !== 'uneven') return null
+  if (issue.kind === 'disagreement') {
+    const { poolCount, poolSize, seats, fieldSize, direction, count } =
+      issue.disagreement
+    return (
+      // `status`, not `alert`. **This is legal**: the save gate reads `impossibleProblems`
+      // only, so a draw whose numbers disagree saves exactly as it stands. The director is
+      // being asked a question, not stopped, and a question that interrupts what they were
+      // reading would be answering it for them.
+      <div
+        role="status"
+        data-testid="draw-issue-panel"
+        data-issue-kind={issue.kind}
+        // Tinted, like the refusal and unlike the uneven notice: the reference draws this
+        // one in its `Your call` colour, the same `--warn` the preview's badge wears. On
+        // top of the words, never instead of them.
+        className="rounded-xl border border-[color:var(--warn)]/40 bg-[color:var(--warn)]/5 px-4 py-3"
+      >
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            className="size-1.5 shrink-0 rounded-full bg-[color:var(--warn)]"
+          />
+          {/* No colour of its own: `.fortymm-theme .fortymm-overline` is unlayered and
+              beats a Tailwind text-colour utility set here anyway. */}
+          <Overline as="span">Needs your call</Overline>
+        </div>
+
+        {/* ⚠️ **Both of the director's numbers, printed back at them unchanged**, and the
+            product they actually make. Nothing on this panel adds a pool or enlarges one to
+            make the arithmetic come out: the app states the standoff and offers three named
+            ways out of it (ADR 20260808 — report, do not reshape).
+
+            Unpluralised, so `1 pools of 5 seat 5.` is reachable. That is the reference's
+            string, transcribed rather than improved, for the reason `Use 1 pools` is pinned
+            in `./draw-issue-fix.test.ts`. */}
+        <p
+          data-testid="draw-issue-panel-title"
+          className="mt-1.5 text-[15px] leading-snug font-semibold text-[color:var(--fg-1)]"
+        >
+          {`${poolCount} pools of ${poolSize} seat ${seats}. Your field is ${fieldSize}.`}
+        </p>
+        {/* The shortfall in the direction it actually runs — entrants with nowhere to go,
+            or seats nobody fills. `direction` carries the sign so neither sentence has to
+            read a negative number aloud. */}
+        <p
+          data-testid="draw-issue-panel-body"
+          className="mt-1 text-[13px] leading-snug text-[color:var(--fg-3)]"
+        >
+          {direction === 'unseated'
+            ? `${count} entrants have nowhere to go. We won’t change your numbers behind your back.`
+            : `${count} seats would be empty. We won’t change your numbers behind your back.`}
+        </p>
+
+        {/* Three resolutions, so three columns. */}
+        <FixList fixes={fixes} columns="sm:grid-cols-3" onApplyFix={onApplyFix} />
+      </div>
+    )
+  }
 
   return (
     // `status`, not `alert`: an uneven split is legal. It is announced when the reader

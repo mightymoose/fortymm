@@ -1,6 +1,8 @@
 import userEvent from '@testing-library/user-event'
 
 import {
+  buildDisagreementDrawFixes,
+  buildDisagreementDrawIssue,
   buildImpossibleDrawFixes,
   buildImpossibleDrawIssue,
   buildUnevenDrawIssue,
@@ -211,26 +213,136 @@ describe('DrawIssuePanel', () => {
     })
   })
 
-  // The disagreement's panel comes with three resolutions no derivation can supply, so the
-  // tab shows nothing rather than half of one. The live preview beside it already reads
-  // `Your numbers disagree`, so the state is not silent.
-  describe('the variant that is not built yet', () => {
-    it('renders nothing for the disagreement kind (chore 5a)', () => {
+  /**
+   * The reference's **"Numbers disagree"** state
+   * (`docs/designs/rr-then-ko-draw-structure/numbers-disagree-panel.png`): 40 players
+   * against six manual pools of five manual, which seat thirty.
+   */
+  describe('the disagreement', () => {
+    const renderDisagreement = (
+      overrides: Parameters<typeof drawIssuePanelPage.render>[0] = {},
+    ) => {
+      const onApplyFix = vi.fn()
       drawIssuePanelPage.render({
-        issue: {
-          kind: 'disagreement',
-          disagreement: {
-            poolCount: 6,
-            poolSize: 5,
-            seats: 30,
-            fieldSize: 40,
-            direction: 'unseated',
-            count: 10,
-          },
-        },
+        issue: buildDisagreementDrawIssue(),
+        fixes: buildDisagreementDrawFixes(),
+        onApplyFix,
+        ...overrides,
+      })
+      return { onApplyFix }
+    }
+
+    it('asks for a decision, in words rather than in a colour', () => {
+      renderDisagreement()
+
+      expect(
+        drawIssuePanelPage.getTopline('Needs your call'),
+      ).toBeInTheDocument()
+    })
+
+    /**
+     * ⚠️ **Both of the director's numbers, read back at them exactly as typed**, and the
+     * product they make. This is the claim the whole panel exists for: the app states the
+     * standoff and never resolves it by moving one of the two numbers (ADR 20260808 —
+     * report, do not reshape).
+     */
+    it('states both of the director’s numbers, and what they seat', () => {
+      renderDisagreement()
+
+      expect(drawIssuePanelPage.getTitle()).toHaveTextContent(
+        '6 pools of 5 seat 30. Your field is 40.',
+      )
+    })
+
+    it('counts the entrants with nowhere to go, and promises not to move a number', () => {
+      renderDisagreement()
+
+      expect(drawIssuePanelPage.getBody()).toHaveTextContent(
+        '10 entrants have nowhere to go. We won’t change your numbers behind your back.',
+      )
+    })
+
+    /** The other direction: eight pools of six seat 48 against a field of 40, so seats go
+     * empty rather than entrants going unseated. The same promise, and no negative number
+     * read aloud. */
+    it('counts the empty seats instead, when the structure is the bigger one', () => {
+      renderDisagreement({
+        issue: buildDisagreementDrawIssue({
+          poolCount: 8,
+          poolSize: 6,
+          seats: 48,
+          direction: 'empty-seats',
+          count: 8,
+        }),
       })
 
-      expect(drawIssuePanelPage.queryPanel()).toBeNull()
+      expect(drawIssuePanelPage.getTitle()).toHaveTextContent(
+        '8 pools of 6 seat 48. Your field is 40.',
+      )
+      expect(drawIssuePanelPage.getBody()).toHaveTextContent(
+        '8 seats would be empty. We won’t change your numbers behind your back.',
+      )
+    })
+
+    /**
+     * `status`, not `alert`. **This is legal**: the save gate reads `impossibleProblems`
+     * only (`event-draw-structure.ts`), so a draw whose numbers disagree saves as it
+     * stands. The director is being asked, not stopped, and a question that interrupted
+     * what they were reading would be answering it for them.
+     */
+    it('asks politely, as a status and not an alert', () => {
+      renderDisagreement()
+
+      expect(drawIssuePanelPage.getPanel()).toHaveAttribute('role', 'status')
+      expect(drawIssuePanelPage.getPanel()).not.toHaveAttribute('role', 'alert')
+    })
+
+    /** Three ways out, in the reference's order — cap the field, add the pools, or hand
+     * the size back. A test that only counted the rows would pass on any order. */
+    it('lists all three resolutions it was handed, in order', () => {
+      renderDisagreement()
+
+      expect(drawIssuePanelPage.getFixLabels()).toEqual([
+        'Cap the field at 30',
+        'Use 8 pools of 5',
+        'Allow uneven pools',
+      ])
+    })
+
+    /** The third one says what it would produce before it is taken — `4 × 7 and 2 × 6`, a
+     * multiplication sign and not the letter x. */
+    it('states the split `Allow uneven pools` would make', () => {
+      renderDisagreement()
+
+      const [, , uneven] = drawIssuePanelPage.getFixes()
+      expect(uneven.getDetail()).toHaveTextContent('4 × 7 and 2 × 6 players.')
+      expect(uneven.getApply()).toHaveTextContent('Apply')
+    })
+
+    it('names each resolution in its button’s accessible name', async () => {
+      const { onApplyFix } = renderDisagreement()
+
+      await userEvent.click(
+        drawIssuePanelPage.getApplyButton('Allow uneven pools'),
+      )
+
+      expect(onApplyFix).toHaveBeenCalledWith({
+        kind: 'automatic-pool-size',
+        label: 'Allow uneven pools',
+        detail: '4 × 7 and 2 × 6 players.',
+      })
+    })
+
+    /** A reader is handed no resolutions (ADR-0015 — a read-only surface is a view, not a
+     * disabled form), and the standoff still has to be stated: a preview badge reading
+     * `Your call` with no cause beside it is the dead end that rule exists to avoid. */
+    it('still states the standoff when there is nothing to offer', () => {
+      renderDisagreement({ fixes: [] })
+
+      expect(drawIssuePanelPage.getTitle()).toHaveTextContent(
+        '6 pools of 5 seat 30. Your field is 40.',
+      )
+      expect(drawIssuePanelPage.getFixes()).toHaveLength(0)
     })
   })
 })

@@ -1,23 +1,29 @@
-// **The named ways out of a refusal** (#1320): what the `Can’t save` panel offers, in the
-// reference's words and with the reference's arithmetic.
+// **The named ways out** (#1320): what the `Can’t save` and `Needs your call` panels offer,
+// in the reference's words and with the reference's arithmetic.
 //
 // The derivation (`../../../data/draw-structure`) reports the three impossible
-// competitions and stops there, deliberately: a fix is a button, and a button is not a
-// derivation. This module is the other half — the label, the detail line, and **the number
-// the fix would write** — and it is data rather than a handler, so the panel can render a
-// fix without knowing how to apply one and the tab can apply one without re-deriving its
-// label.
+// competitions and the disagreement, and stops there, deliberately: a fix is a button, and
+// a button is not a derivation. This module is the other half — the label, the detail line,
+// and **the number the fix would write** — and it is data rather than a handler, so the
+// panel can render a fix without knowing how to apply one and the tab can apply one without
+// re-deriving its label.
 //
-// The copy and the maths are the README's "Impossible" section
+// The copy and the maths are the README's "Impossible" and "Disagreement" sections
 // (`docs/designs/rr-then-ko-draw-structure/README.md`), verbatim.
 //
 // ⚠️ **A fix is not a promise that the draw becomes legal.** `Use {floor(field / 2)} pools`
 // against a manual pool size of one leaves every pool at one player, because both numbers
 // are the director's and the app does not silently move the other one. That is the
 // reference's arithmetic and it stays: the panel offers the named way out, the derivation
-// re-runs, and if the draw is still impossible it says so again.
+// re-runs, and if the draw is still impossible it says so again. The same holds for
+// `Use {ceil(field / size)} pools of {size}` — see `disagreementFixes`.
 
-import type { DrawStructure, ImpossibleProblem } from '../../../data/draw-structure'
+import {
+  tallyBalancedSplit,
+  type DrawStructure,
+  type DrawStructureDisagreement,
+  type ImpossibleProblem,
+} from '../../../data/draw-structure'
 
 /**
  * One offered fix: what it says, and what it would set.
@@ -49,6 +55,20 @@ export type DrawStructureFix =
       detail: string
       /** How many finishers come out of each pool. */
       qualifiersPerPool: number
+    }
+  | {
+      /**
+       * Hand the **pool size** back to the system, and nothing else: the director's pool
+       * count stands, and the field splits across it.
+       *
+       * It carries no number, and that is the point — it is the one resolution that resolves
+       * a disagreement by *un*-setting a number rather than by writing one. The other two
+       * arms write; this one gives a setting back, through the same `Use automatic` the Pool
+       * size row already offers.
+       */
+      kind: 'automatic-pool-size'
+      label: string
+      detail: string
     }
 
 /**
@@ -114,4 +134,75 @@ export function impossibleFixes(
       ]
     }
   }
+}
+
+/**
+ * The balanced split written out the way `Allow uneven pools` says it — `4 × 7 and 2 × 6`.
+ *
+ * ⚠️ **A multiplication sign** (`U+00D7`), not the letter `x`, and joined with ` and `
+ * rather than the uneven notice's ` · `. The same two numbers are stated in two formats a
+ * few pixels apart (`4 pools of 7 · 2 pools of 6` in the notice's title), and both are the
+ * reference's. Do not unify them.
+ *
+ * A balanced split holds `base` and `base + 1` and nothing else, so this is one term or
+ * two. There is no n-way join, because there is no split that would use one.
+ */
+function balancedSplitPhrase(fieldSize: number, poolCount: number): string {
+  return tallyBalancedSplit(fieldSize, poolCount)
+    .map((tally) => `${tally.pools} × ${tally.size}`)
+    .join(' and ')
+}
+
+/**
+ * The three resolutions for **numbers that disagree** — the reference's "Disagreement"
+ * panel, in its order.
+ *
+ * The director set a pool count and a pool size whose product misses their field. Both
+ * numbers were typed on purpose, so nothing here moves one of them on its own: each
+ * resolution is a named act the director chooses, and the two they did not choose leave
+ * their numbers exactly as they are.
+ *
+ * 1. **`Cap the field at {seats}`** moves the *field* to the structure — the player limit,
+ *    which lives on Basics. `Your structure stays exact.` is literal: both of their numbers
+ *    survive untouched.
+ * 2. **`Use {ceil(field / size)} pools of {size}`** keeps the size and takes as many pools
+ *    as the field needs — and therefore that many pool ROWS (ADR 20260808).
+ * 3. **`Allow uneven pools`** keeps the count and hands the *size* back to the system, which
+ *    splits the field across it. The detail states the split that would produce, so the
+ *    director reads the answer before taking it.
+ *
+ * ⚠️ **`Use {ceil(field / size)} pools of {size}` does not always clear the disagreement**,
+ * and the ceiling is why: 40 players in pools of 6 needs 7 pools, and 7 pools of 6 seat 42.
+ * Everyone gets a seat — which is exactly what the detail line promises, and all it promises
+ * — and two of them are empty, so the panel says so again with smaller numbers. That is the
+ * reference's arithmetic, and correcting it to `floor` would seat 36 of the 40.
+ *
+ * Nothing is pluralised. `1 pools of 5` is reachable and is what the reference writes, for
+ * the reason `Use 1 pools` is pinned above.
+ */
+export function disagreementFixes(
+  disagreement: DrawStructureDisagreement,
+): DrawStructureFix[] {
+  const { poolCount, poolSize, seats, fieldSize } = disagreement
+  const pooledCount = Math.max(1, Math.ceil(fieldSize / poolSize))
+  return [
+    {
+      kind: 'player-limit',
+      label: `Cap the field at ${seats}`,
+      detail: 'Your structure stays exact.',
+      maxPlayers: seats,
+    },
+    {
+      kind: 'pool-count',
+      label: `Use ${pooledCount} pools of ${poolSize}`,
+      detail: 'Everyone gets a seat.',
+      poolCount: pooledCount,
+    },
+    {
+      kind: 'automatic-pool-size',
+      label: 'Allow uneven pools',
+      // The count the director keeps, split across the field they have.
+      detail: `${balancedSplitPhrase(fieldSize, poolCount)} players.`,
+    },
+  ]
 }

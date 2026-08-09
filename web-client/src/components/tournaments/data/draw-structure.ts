@@ -204,6 +204,26 @@ function greedySizes(fieldSize: number, poolCount: number, poolSize: number): nu
   })
 }
 
+/**
+ * What the balanced split of `fieldSize` across `poolCount` pools would tally to, largest
+ * pool first — `4 × 7 and 2 × 6` for 40 across 6.
+ *
+ * **No new arithmetic.** It composes the two functions the derivation already uses, and
+ * both are pinned by the shared vectors through `poolSizes` and `unevenDistribution`. The
+ * disagreement panel's `Allow uneven pools` has to say what that resolution would produce
+ * *before* the director takes it, and re-dividing the field in the renderer would be a
+ * second implementation of the split with no vector holding it to this one.
+ *
+ * **At most two entries, always**: a balanced split is `base` and `base + 1` and nothing
+ * else. A caller joining them can rely on that.
+ */
+export function tallyBalancedSplit(
+  fieldSize: number,
+  poolCount: number,
+): PoolSizeTally[] {
+  return tallySizes(balancedSizes(fieldSize, atLeastOne(poolCount)))
+}
+
 /** The size tally the uneven notice reads out, largest pool first. */
 function tallySizes(sizes: number[]): PoolSizeTally[] {
   const counts = new Map<number, number>()
