@@ -34,21 +34,23 @@ describe('Pill', () => {
     })
   })
 
+  // Tracking is read off the declared style, not `toHaveStyle`. jsdom 30
+  // resolves `em` against the font size in computed style, so 0.08em at 11px
+  // reads back as `0.88px`. Asserting that product would pin arithmetic and
+  // lose the design intent, which is relative tracking.
   it('renders non-mono in the UI face, uppercased', () => {
     pillPage.render({ children: 'BO5' })
 
-    expect(pillPage.getText('BO5')).toHaveStyle({
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-    })
+    const pill = pillPage.getText('BO5')
+    expect(pill).toHaveStyle({ textTransform: 'uppercase' })
+    expect(pill.style.letterSpacing).toBe('0.08em')
   })
 
   it('renders the mono variant in the monospace face without uppercasing', () => {
     pillPage.render({ children: '21-19', mono: true })
 
-    expect(pillPage.getText('21-19')).toHaveStyle({
-      textTransform: 'none',
-      letterSpacing: '0.04em',
-    })
+    const pill = pillPage.getText('21-19')
+    expect(pill).toHaveStyle({ textTransform: 'none' })
+    expect(pill.style.letterSpacing).toBe('0.04em')
   })
 })
