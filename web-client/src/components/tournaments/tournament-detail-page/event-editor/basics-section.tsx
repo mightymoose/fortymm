@@ -4,8 +4,6 @@ import type { EditFreeze } from '../../data/draw'
 import {
   ENTRY_FEE_MAX,
   PLAYERS_MAX,
-  QUALIFIERS_PER_POOL_MAX,
-  QUALIFIERS_PER_POOL_MIN,
   SWISS_ROUNDS_MAX,
   SWISS_ROUNDS_MIN,
 } from '../../data/event-validation'
@@ -28,10 +26,6 @@ import { TimezoneSelect } from './timezone-select'
  * drops the hint slot in its read-only branch (ADR 0015). */
 export interface BasicsFieldErrors {
   name?: string
-  /** The qualifier count's inline red — only ever present for an `rr-then-ko` event,
-   * since that is the only draw type the resolver asks the question of (and the only one
-   * whose control is on screen). */
-  qualifiersPerPool?: string
   /** The round count's inline red — only ever present for a `swiss` event, since that is
    * the only draw type the resolver asks the question of (and the only one whose control
    * is on screen). */
@@ -90,14 +84,16 @@ const numericValue = (n: number | null): number | null =>
   n === null || Number.isNaN(n) ? null : n
 
 /**
- * One **draw setting** the director types a number into — `rr-then-ko`'s qualifiers per
- * pool (K) and swiss's round count (R) are the same row, twice.
+ * One **draw setting** the director types a number into — today only swiss's round count
+ * (R). `rr-then-ko`'s qualifiers per pool (K) used to be its second call site, and moved
+ * to the Draw structure tab in chore 3e: K is a *structural* setting, and the other three
+ * structural settings live together there (ADR 20260808).
  *
- * They are the same row because they are the same *kind of fact*: a number the chosen draw
+ * **The component stays, with one caller.** It is the shape of "a number the chosen draw
  * type asks for, that the planner deals the fixtures by, and that the server freezes the
- * moment a draw exists. Written out twice, they were two places to get the same freeze
- * wiring right — and this tab has already got that wiring wrong once: its draw-type select
- * carried the freeze while describing nothing. So the mechanics live here, once:
+ * moment a draw exists" — and this tab has got that wiring wrong once already: its
+ * draw-type select carried the freeze while describing nothing. Inlining it back into the
+ * one row would put those mechanics somewhere they read as incidental:
  *
  * - **The freeze is the draw type's** (`drawTypeFreeze`, `data/draw`), because on the server
  *   it is the same guard: `_enforce_draw_settings_frozen` compares the whole configuration,
@@ -294,40 +290,23 @@ export const BasicsSection = ({
             />
           )}
         </Field>
-        {/* **K**, and only for the one draw type that has a knockout stage to qualify
-            for (ADR 20260727). Not disabled, not em-dashed — ABSENT: a qualifier count
-            is not a field a round-robin event leaves blank, it is a question that format
-            does not ask, and the server says the same thing by refusing the key outright
-            on that arm of its draw-settings union (`extra="forbid"` — a 422, not a
-            silently dropped value). A control that stayed on screen would invite a
-            director to answer a question whose answer their event cannot hold.
+        {/* ⚠️ **The qualifier count is NOT here** (chore 3e). It is a structural setting,
+            so it sits with the other three on the Draw structure tab — the fifth tab, and
+            the only one that has the derivation, the ownership badge and the cut-draw
+            freeze that a two-stage draw's numbers need. This tab keeps the draw TYPE, the
+            player limit and the swiss round count, and a box for K here would be a second
+            control writing one field.
 
-            The freeze, the advisory bounds and the blank-is-null handling are
-            `DrawSettingField`'s — this row says only what is true of K. */}
-        {event.drawType === 'rr-then-ko' && (
-          <DrawSettingField
-            label="Qualifiers per pool"
-            value={event.qualifiersPerPool}
-            min={QUALIFIERS_PER_POOL_MIN}
-            max={QUALIFIERS_PER_POOL_MAX}
-            hint="How many of each pool’s finishers advance to the knockout stage."
-            error={errors.qualifiersPerPool}
-            freeze={drawTypeFreeze}
-            readOnly={readOnly}
-            onChange={(qualifiersPerPool) => set({ qualifiersPerPool })}
-          />
-        )}
-        {/* **R**, and only for the one draw type whose round count anybody chooses (ADR
+            **R**, and only for the one draw type whose round count anybody chooses (ADR
             "swiss pre-cuts every round and pairs each one on advance"). Absent for the
-            other three, exactly as the qualifier count above is absent for theirs, and for
-            the same reason: a round-robin's rounds are dealt by the circle method and a
+            other three: a round-robin's rounds are dealt by the circle method and a
             bracket's depth follows from the field, so this is not a box those formats leave
             blank — it is a question they do not ask. The server says the same thing by
             refusing the key outright on their arms of the draw-settings union
             (`extra="forbid"` — a 422, not a silently dropped value).
 
             Everything else about the row — the freeze it rides, its advisory bounds, its
-            blank-is-null handling — is `DrawSettingField`'s, shared with K above. */}
+            blank-is-null handling — is `DrawSettingField`'s. */}
         {event.drawType === 'swiss' && (
           <DrawSettingField
             label="Rounds"

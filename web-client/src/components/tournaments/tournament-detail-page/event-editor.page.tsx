@@ -95,13 +95,16 @@ const scoped = (container: Container) => ({
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
   },
-  /** **K** — the qualifier-count box on Basics, which exists only while the draft's draw
-   * type is `rr-then-ko` (ADR 20260727). */
-  getQualifiersInput() {
-    return container.getByLabelText(/Qualifiers per pool/)
-  },
-  /** …and its `query` twin, for the claim that the row is not on screen at all for a
-   * draw type with no knockout stage. */
+  /** **K** — the qualifier count's box, on the **Draw structure** tab since chore 3e.
+   *
+   * It is reached through `drawStructure.setting('Qualifiers per pool')` like every other
+   * setting on that tab; what is left here is the editor-scoped `query`, for the one claim
+   * this level makes — that no box for K is on screen.
+   *
+   * ⚠️ It proves *absence only where a box could be*. Radix unmounts an inactive tab's
+   * panel, so this is null for a two-stage event standing on Basics too — which is exactly
+   * what makes it the right query for "Basics does not render one", and the wrong one for
+   * "the tab is gone". Pair it with `querySectionTab('Draw structure')` for that. */
   queryQualifiersInput() {
     return container.queryByLabelText(/Qualifiers per pool/)
   },

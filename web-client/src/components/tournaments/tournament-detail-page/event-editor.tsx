@@ -15,7 +15,12 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import { drawTypeFreeze, poolSetFreeze, type EditFreeze } from '../data/draw'
+import {
+  drawTypeFreeze,
+  poolSetFreeze,
+  qualifiersPerPoolFreeze,
+  type EditFreeze,
+} from '../data/draw'
 import { poolNameIssues } from '../data/event-validation'
 import { eligibilityIssues } from '../data/predicate-validation'
 import {
@@ -274,11 +279,17 @@ export const EventEditor = ({
 
   const basicsErrors = {
     name: errors.name?.message,
-    qualifiersPerPool: errors.qualifiersPerPool?.message,
     rounds: errors.rounds?.message,
     maxPlayers: errors.maxPlayers?.message,
     entryFee: errors.entryFee?.message,
     timezone: errors.timezone?.message,
+  }
+
+  // …and the qualifier count's red, on the tab the count now lives on (chore 3e). It is
+  // the same `errors` object read one field over — the resolver has one verdict, and the
+  // tab that holds the box is the tab that shows it.
+  const drawStructureErrors = {
+    qualifiersPerPool: errors.qualifiersPerPool?.message,
   }
 
   // **What a cut draw freezes** (ADR-0786), derived from the SAVED event and never from
@@ -287,13 +298,16 @@ export const EventEditor = ({
   // still being created (`event === null`) has no draw, and cannot: there is nobody
   // entered to deal.
   //
-  // Two freezes, two controls, two different tabs — so they are two values, not one
-  // `frozen: boolean` handed to both. The pools section may not add or remove a pool;
-  // the Basics tab may not re-label the draw type. Everything else on both tabs stays
-  // live, including — pointedly — a pool's tables, window and name.
+  // THREE freezes, three controls, three different tabs — so they are three values, not
+  // one `frozen: boolean` handed to all of them. The pools section may not add or remove a
+  // pool; the Basics tab may not re-label the draw type; the Draw structure tab may not
+  // move the qualifier count the bracket was cut for. Everything else on all three tabs
+  // stays live, including — pointedly — a pool's tables, window and name, and the other
+  // three structural settings, whose ownership the server excludes from its own freeze.
   const OPEN: EditFreeze = { kind: 'open' }
   const poolsFreeze = event ? poolSetFreeze(event) : OPEN
   const drawTypeLock = event ? drawTypeFreeze(event, drawTypes) : OPEN
+  const qualifiersLock = event ? qualifiersPerPoolFreeze(event) : OPEN
 
   // ⚠️ Keyed off the **draft's** draw type, not the saved event's. The Basics picker
   // writes the draft, so the tab appears the moment a director picks the two-stage
@@ -304,12 +318,12 @@ export const EventEditor = ({
     ? [...SECTIONS, DRAW_STRUCTURE_SECTION]
     : SECTIONS
   // …and that disappearance is why the active tab is DERIVED rather than read straight
-  // out of state. A `Tabs` whose `value` matches no trigger renders no panel at all —
-  // a blank sheet with nothing selected. Today nothing reaches that: the draw-type
-  // picker is on Basics, so a director necessarily leaves this tab before they can
-  // remove it. It is three lines of insurance against the next thing that sets the
-  // section (chore 3e moves a field onto this tab, and a refused save jumps to the tab
-  // holding it). Adjusted at render, never in an effect — the render already knows
+  // out of state. A `Tabs` whose `value` matches no trigger renders no panel at all — a
+  // blank sheet with nothing selected. Two things now set the section, and the second one
+  // is why this is not merely insurance: the draw-type picker (on Basics, so a director
+  // necessarily leaves this tab before they can remove it), and a REFUSED SAVE, which
+  // since chore 3e jumps to `draw-structure` for a bad qualifier count. Adjusted at
+  // render, never in an effect — the render already knows
   // (https://react.dev/learn/you-might-not-need-an-effect).
   const activeSection = sections.some((s) => s.value === section)
     ? section
@@ -409,6 +423,8 @@ export const EventEditor = ({
                   <DrawStructureSection
                     event={draft}
                     canEdit={canEdit}
+                    errors={drawStructureErrors}
+                    qualifiersFreeze={qualifiersLock}
                     onChange={applyChange}
                     onGoToBasics={() => setSection('basics')}
                   />

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
+import type { EditFreeze } from '../../../data/draw'
 import { acceptedManualEntry } from '../../../data/draw-ownership'
 import type { SettingOwnership } from '../../../data/draw-structure'
 
@@ -90,6 +91,27 @@ export interface SettingRowProps {
   /** One more line under the source, for a consequence the setting carries — today only
    * Membership's `Repeat protection turns off when you assign pools by hand.` */
   note?: string
+  /**
+   * The inline red, when the resolver (or the server) rejected the value this row holds.
+   *
+   * Only the qualifier count can produce one today: it is the one setting on this tab the
+   * event *must* carry a value for (the server's `rr-then-ko` arm requires K), so it is
+   * the one whose box can be left in a state the save is refused for. The row it moved
+   * from carried the same slot; a row that dropped it would send a refused save to a tab
+   * with nothing red on it — the dead end `firstInvalidSection` exists to prevent.
+   */
+  error?: string
+  /**
+   * Whether this setting may still be changed at all (`EditFreeze`, `data/draw`) — a cut
+   * draw freezes the qualifier count, because the bracket was cut for it.
+   *
+   * Frozen means the box and the action are **present, disabled, and pointing at the
+   * reason** (`aria-describedby`), never absent: what changed is the state of the event,
+   * not who the director is, so the fix for the dead end is the explanation and not a
+   * vanishing control (ADR 20260806, the freeze/confirm table). A disabled control is not
+   * focusable and carries no tooltip, so the description is the only channel it has left.
+   */
+  freeze?: EditFreeze
 }
 
 /**
@@ -113,6 +135,13 @@ export interface SettingRowProps {
  * would bring a spinner, a scroll-wheel that silently changes a saved number, and a
  * control a screen reader calls a `spinbutton`; a director setting six pools types `6`
  * and a director correcting it selects the number and replaces it outright.
+ *
+ * ## One message slot, and the error outranks the freeze
+ *
+ * A row has at most one thing to say about why it is not simply working: the resolver's
+ * red, or the reason it is frozen. They cannot both be true — a frozen row's value is the
+ * one the draw was cut from, which is by construction a value the resolver accepts — so
+ * they share a slot, in that order, exactly as the Basics row this one replaced did.
  */
 export const SettingRow = ({
   name,
@@ -125,8 +154,18 @@ export const SettingRow = ({
   entry,
   action,
   note,
+  error,
+  freeze,
 }: SettingRowProps) => {
   const nameId = useId()
+  const messageId = useId()
+  const frozen = freeze?.kind === 'frozen'
+  const message = error ?? (frozen ? freeze.reason : undefined)
+  // The box and the action POINT at the message, they do not merely sit above it — and a
+  // disabled control has no other channel left. Undefined rather than an empty string when
+  // there is nothing to point at: an `aria-describedby` naming an empty node is a
+  // description a screen reader reads as silence.
+  const describedBy = message === undefined ? undefined : messageId
   return (
     // A named `region`, so the row is addressable by the setting it holds rather than by
     // its position in the list — the four rows are otherwise identical markup.
@@ -163,6 +202,9 @@ export const SettingRow = ({
               inputMode="numeric"
               data-testid="draw-setting-input"
               aria-labelledby={nameId}
+              aria-invalid={!!error}
+              aria-describedby={describedBy}
+              disabled={frozen}
               className="w-[84px] shrink-0 py-1.5 text-center font-mono text-[20px] leading-none font-semibold"
               // `''` for a cleared box, never a `0`: the two are different answers, and
               // one of them is a 422.
@@ -221,6 +263,22 @@ export const SettingRow = ({
             {note}
           </p>
         )}
+        {/* The red, or the reason — one slot, and the test id says which, so a test
+            cannot pass on a freeze reason rendered where an error belongs. */}
+        {message !== undefined && (
+          <p
+            id={messageId}
+            data-testid={error ? 'draw-setting-error' : 'draw-setting-freeze'}
+            className={cn(
+              'mt-1.5 text-[12px] leading-snug',
+              error
+                ? 'text-[color:var(--loss)]'
+                : 'text-[color:var(--fg-3)]',
+            )}
+          >
+            {message}
+          </p>
+        )}
       </div>
 
       {action && (
@@ -230,6 +288,8 @@ export const SettingRow = ({
             size="sm"
             data-testid="draw-setting-action"
             className="h-auto p-0 text-[13px]"
+            disabled={frozen}
+            aria-describedby={describedBy}
             // Three rows offer `Set myself`, so the visible words alone name no setting —
             // and a list of buttons is how a screen-reader user meets them, where the
             // row's own region label is nowhere in earshot. The visible words come FIRST,

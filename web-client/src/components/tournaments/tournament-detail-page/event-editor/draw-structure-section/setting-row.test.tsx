@@ -218,4 +218,99 @@ describe('SettingRow', () => {
 
     expect(settingRowPage.queryNote()).toBeNull()
   })
+
+  /**
+   * The two things a row can say about why it is not simply working: the resolver's red,
+   * and the reason it is frozen. They share one slot and the error outranks the freeze —
+   * the same order the Basics row this pattern came from used, and the same reason: the
+   * thing that is wrong outranks the thing that is merely worth knowing.
+   */
+  describe('the message slot', () => {
+    it('says nothing when the value is accepted and the setting is open', () => {
+      settingRowPage.render({ freeze: { kind: 'open' } })
+
+      expect(settingRowPage.queryError()).toBeNull()
+      expect(settingRowPage.queryFreezeReason()).toBeNull()
+    })
+
+    it('prints the resolver’s red, and marks the box invalid', () => {
+      settingRowPage.render({
+        entry: { value: null, max: 1000, onChange: vi.fn() },
+        error: 'Say how many players advance from each pool.',
+      })
+
+      expect(settingRowPage.queryError()).toHaveTextContent(
+        'Say how many players advance from each pool.',
+      )
+      const input = settingRowPage.getInput()
+      expect(input).toHaveAttribute('aria-invalid', 'true')
+      // POINTED at, not merely printed nearby — the channel a screen reader has.
+      expect(settingRowPage.describedNodeOf(input)).toHaveTextContent(
+        'Say how many players advance from each pool.',
+      )
+    })
+
+    /**
+     * A frozen row: the box and the action stay on screen, **disabled, with the reason**
+     * (ADR 20260806). Not hidden — what changed is the state of the event, not who the
+     * director is, and a control that vanishes from under somebody entitled to it asks a
+     * loud question and answers none of it.
+     *
+     * The action is asserted too, and deliberately: on a cut event `Set myself` seeds the
+     * box from the DERIVED count, so it writes K just as typing does. A freeze that left
+     * it live would leave the 409 exactly one click away.
+     */
+    it('disables the box and the action, and points both at the reason', () => {
+      settingRowPage.render({
+        entry: { value: 2, max: 1000, onChange: vi.fn() },
+        action: { label: 'Use automatic', onClick: vi.fn() },
+        freeze: { kind: 'frozen', reason: 'The bracket was cut for the top 2.' },
+      })
+
+      const input = settingRowPage.getInput()
+      const action = settingRowPage.getAction()
+      expect(input).toBeDisabled()
+      expect(action).toBeDisabled()
+      expect(settingRowPage.queryFreezeReason()).toHaveTextContent(
+        'The bracket was cut for the top 2.',
+      )
+      expect(settingRowPage.describedNodeOf(input)).toHaveTextContent(
+        'The bracket was cut for the top 2.',
+      )
+      expect(settingRowPage.describedNodeOf(action)).toHaveTextContent(
+        'The bracket was cut for the top 2.',
+      )
+    })
+
+    // …and a frozen box takes no input, which is the whole point of the freeze. The
+    // disabled attribute is what stops it, so this is the behaviour behind the attribute
+    // rather than a second reading of it.
+    it('writes nothing while frozen', async () => {
+      const onChange = vi.fn()
+      settingRowPage.render({
+        entry: { value: 2, max: 1000, onChange },
+        freeze: { kind: 'frozen', reason: 'The bracket was cut for the top 2.' },
+      })
+
+      await userEvent.type(settingRowPage.getInput(), '3')
+
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    // One slot, and the error wins it: a row cannot be both refused and frozen in
+    // practice — a frozen row holds the value the draw was cut from, which the resolver
+    // accepts — so the slot states the one that is actionable.
+    it('shows the error rather than the freeze when both are given', () => {
+      settingRowPage.render({
+        entry: { value: null, max: 1000, onChange: vi.fn() },
+        error: 'Say how many players advance from each pool.',
+        freeze: { kind: 'frozen', reason: 'The bracket was cut for the top 2.' },
+      })
+
+      expect(settingRowPage.queryError()).toHaveTextContent(
+        'Say how many players advance from each pool.',
+      )
+      expect(settingRowPage.queryFreezeReason()).toBeNull()
+    })
+  })
 })

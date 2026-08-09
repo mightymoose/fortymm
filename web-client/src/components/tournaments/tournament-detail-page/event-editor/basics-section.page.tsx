@@ -21,23 +21,23 @@ const scoped = (container: Container) => ({
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
   },
-  /** **K** — the qualifier-count box, which exists only for an `rr-then-ko` event
-   * (ADR 20260727). `get` for the case that expects it. */
-  getQualifiersInput() {
-    return container.getByLabelText(/Qualifiers per pool/)
-  },
-  /** …and the `query` twin, because "this control is NOT on screen" is the claim for
-   * every other draw type: a qualifier count is not a blank field a round-robin event
-   * has, it is a question that format does not ask. Asked by LABEL rather than by
-   * `getFormElements().length`, so it discriminates "the row is absent" from "some other
-   * row went missing too". */
-  queryQualifiersInput() {
+  /** **K** — kept as a `query` and nothing else, because the only claim this tab has left
+   * to make about the qualifier count is that it is **not here** (chore 3e). It moved to
+   * the Draw structure tab, and a box that came back would be a second control writing one
+   * field: the two would disagree the moment either changed.
+   *
+   * Asked by LABEL, and by the WHOLE row rather than by `getFormElements().length`, so it
+   * discriminates "the qualifier count is gone" from "some other row went missing too".
+   * There is deliberately no `get` twin: no test on this tab should be able to demand it. */
+  queryQualifiersControl() {
     return container.queryByLabelText(/Qualifiers per pool/)
   },
-  /** The qualifier count as a **reader** sees it — the `Field` read-only branch's value
-   * under its label (ADR 0015). Use `queryQualifiersInput` for the "row absent" claim. */
-  getQualifiersValue() {
-    return fieldPage.within(container).getFieldValue('Qualifiers per pool')
+  /** …and the same claim one level out, which is the one a READER needs: a read-only row
+   * has no control to query for, only a label and a value (ADR 0015), so "the control is
+   * gone" would pass on a row that is still there in text. The LABEL is what both branches
+   * of the row share. */
+  queryQualifiersRow() {
+    return container.queryByText('Qualifiers per pool', { selector: 'label' })
   },
   /** **R** — the round-count box, which exists only for a `swiss` event (the swiss ADR).
    * `get` for the case that expects it. */

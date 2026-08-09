@@ -2253,6 +2253,95 @@ describe('the draw type freezes while a draw exists', () => {
     expect(result.ok).toBe(true)
     expect(eventOf(ROUND_ROBIN).draw_type).toBe('single-elim')
   })
+
+  /**
+   * **The other half of the same configuration** (ADR 20260727, chore 3e). The server
+   * freezes what the draw was DEALT from, not just its label: an `rr-then-ko` bracket is
+   * cut upfront for `P × K`, so a K the fixtures were not cut for leaves qualifiers with no
+   * slot to be seated into — a 409 with its own sentence.
+   *
+   * ⚠️ This mock **could not produce that refusal** until now: it compared `draw_type`
+   * alone, so the Draw structure tab's `Set myself` — which seeds the count from the
+   * DERIVED value, routinely not the stored one on a cut event — looked fine in
+   * `npm run dev` and in vitest, and 409'd against the real server. A stub laxer than the
+   * server it stands in for is a trap, and this is the shape the trap took.
+   */
+  describe('and so does the number the draw was sized by', () => {
+    const drawnTwoStage = () => {
+      expect(uncutDraw(TOURNAMENT, FULL_SINGLES).ok).toBe(true)
+      const patched = updateEvent(TOURNAMENT, FULL_SINGLES, {
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 2,
+        pools: [
+          { name: 'Pool 1', slot: SLOT, table_ids: [] },
+          { name: 'Pool 2', slot: SLOT, table_ids: [] },
+        ],
+      })
+      expect(patched.ok).toBe(true)
+      expect(cutDraw(TOURNAMENT, FULL_SINGLES).ok).toBe(true)
+    }
+
+    it('refuses a PATCH that moves the qualifier count of a cut draw', () => {
+      drawnTwoStage()
+
+      const result = updateEvent(TOURNAMENT, FULL_SINGLES, {
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 3,
+      })
+
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.status).toBe(409)
+      // The count's own sentence, not the draw type's: the type did not move, and naming
+      // it would send the director looking for a change they never made.
+      expect(result.status === 409 && result.detail).toContain(
+        'the number of qualifiers per pool is frozen',
+      )
+      expect(result.status === 409 && result.detail).toContain('remove the draw')
+      // A refused write writes nothing.
+      expect(eventOf(FULL_SINGLES).qualifiers_per_pool).toBe(2)
+    })
+
+    // The whole-form save again, one field over: the editor PATCHes the count back
+    // unchanged on every save, so re-sending it must stay a 200.
+    it('ALLOWS a PATCH that re-sends the SAME count', () => {
+      drawnTwoStage()
+
+      const result = updateEvent(TOURNAMENT, FULL_SINGLES, {
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 2,
+        name: 'Renamed',
+      })
+
+      expect(result.ok).toBe(true)
+      expect(eventOf(FULL_SINGLES).name).toBe('Renamed')
+    })
+
+    /** ⚠️ The **asymmetry**, and the server's own: ownership modes are excluded from
+     * `configuration_the_draw_was_dealt_from`, because they size nothing the cut already
+     * put on the table. A director may still take the pool count on a cut event, and a mock
+     * that refused it would be *stricter* than the server — which drives a client to
+     * disable work the API allows. */
+    it('leaves the ownership modes free on a cut draw', () => {
+      drawnTwoStage()
+
+      const result = updateEvent(TOURNAMENT, FULL_SINGLES, {
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 2,
+        draw_structure: {
+          pool_count_mode: 'manual',
+          manual_pool_count: 6,
+          pool_size_mode: 'automatic',
+          manual_pool_size: null,
+          membership_mode: 'snake',
+          qualifiers_mode: 'automatic',
+        },
+      })
+
+      expect(result.ok).toBe(true)
+      expect(eventOf(FULL_SINGLES).draw_structure?.manual_pool_count).toBe(6)
+    })
+  })
 })
 
 // ----- the solve tick's calling pass (ADR "the schedule is solved; the call is

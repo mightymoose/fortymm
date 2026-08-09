@@ -6,6 +6,7 @@ import {
   drawTypeFreeze,
   drawVerbFreeze,
   poolSetFreeze,
+  qualifiersPerPoolFreeze,
   unpooledShape,
   type DrawState,
   type FixtureSide,
@@ -22,6 +23,7 @@ import {
   buildMaterializedDrawnEvent,
   buildPlayedDrawnEvent,
   buildPool,
+  buildRrThenKoEvent,
   buildSwissDrawnEvent,
   buildSwissOddDrawnEvent,
   buildSwissOddMidEvent,
@@ -602,6 +604,55 @@ describe('drawTypeFreeze', () => {
     expect(freeze.reason).not.toContain('dealt as')
     expect(freeze.reason).toContain('its draw type is frozen')
     expect(freeze.reason).toContain('Delete the draw to change the type')
+  })
+})
+
+/**
+ * The draw type's other half, one column over (ADR 20260727, chore 3e). The server freezes
+ * the whole configuration its draw was dealt from, and for a two-stage event K is half of
+ * it: the bracket is cut upfront for `P × K`, so a moved count leaves qualifiers with no
+ * slot to be seated into (`_qualifiers_per_pool_frozen_detail`, a 409).
+ */
+describe('qualifiersPerPoolFreeze', () => {
+  it('is open while no draw is cut', () => {
+    expect(qualifiersPerPoolFreeze(buildRrThenKoEvent()).kind).toBe('open')
+  })
+
+  it('freezes once the draw is cut, naming the count the bracket was cut for', () => {
+    const freeze = qualifiersPerPoolFreeze(
+      buildTwoStageDrawnEvent({ qualifiersPerPool: 2 }),
+    )
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen qualifier count')
+
+    expect(freeze.reason).toContain('the top 2 out of each pool')
+    // A refusal with no way out is a dead end; this one has an exit and names it.
+    expect(freeze.reason).toContain('Delete the draw')
+    expect(freeze.reason).toContain('cut it again')
+  })
+
+  /** No stored count on a cut event is a state the server does not allow (K is required on
+   * the `rr-then-ko` write arm), so this is the same belt `drawTypeFreeze` wears over a
+   * missing label: the clause naming the number is dropped, and the half that gets a stuck
+   * director unstuck is still there. Never `top null`. */
+  it('drops the number rather than printing a null', () => {
+    const freeze = qualifiersPerPoolFreeze(
+      buildTwoStageDrawnEvent({ qualifiersPerPool: null }),
+    )
+    if (freeze.kind !== 'frozen') throw new Error('expected a frozen qualifier count')
+
+    expect(freeze.reason).not.toContain('null')
+    expect(freeze.reason).not.toContain('out of each pool')
+    expect(freeze.reason).toContain('qualifiers per pool is frozen')
+    expect(freeze.reason).toContain('Delete the draw')
+  })
+
+  /** It rides the DRAW, not the play, exactly as the draw type's does: the bracket exists
+   * from the cut, and a K it was not cut for contradicts it whether or not anybody has
+   * played yet. (`drawVerbFreeze` is the one that waits for evidence.) */
+  it('freezes on a cut draw that nobody has played', () => {
+    const cut = buildTwoStageDrawnEvent({ qualifiersPerPool: 2 })
+    expect(drawVerbFreeze(cut).kind).toBe('open')
+    expect(qualifiersPerPoolFreeze(cut).kind).toBe('frozen')
   })
 })
 
