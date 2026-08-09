@@ -1,5 +1,6 @@
 import { buildPool, buildRrThenKoEvent } from '../../data/seed.factory'
 import { poolLetter } from '../../data/draw-structure'
+import { keepPools } from '../../data/pool-entries'
 import type { TournamentEvent } from '../../data/types'
 import type { DrawStructureSectionProps } from './draw-structure-section'
 
@@ -42,15 +43,26 @@ export function buildDrawStructureEvent(
 export function buildDrawStructureSectionProps(
   overrides: Partial<DrawStructureSectionProps> = {},
 ): DrawStructureSectionProps {
+  // ONE list of pools, cited as the form would hold it. ⚠️ Derived from the event's own
+  // rows rather than built beside them: an event with four pools and a `pools` prop holding
+  // three is the very drift ADR 20260808 exists to remove, and a test given both could pin
+  // `4 pool reservations` off the event while the reconciliation read a different list.
+  const event = overrides.event ?? buildDrawStructureEvent()
   return {
-    event: buildDrawStructureEvent(),
+    event,
+    pools: keepPools(event.pools),
     canEdit: true,
     // **Open by default, and stated rather than defaulted in the component**: the "Nothing
     // set" event has no draw, so the qualifier count is a setting a director may still
     // move. The freeze test asks for the other state explicitly, which is what makes "a
     // cut event refuses the row" a claim a test makes rather than one it inherits.
     qualifiersFreeze: { kind: 'open' },
+    // …and the same for the pool set, for the same reason: the "Nothing set" event has no
+    // draw, so its pool count is a setting a director may still move. A cut event's frozen
+    // row is a state a test asks for.
+    poolSetFreeze: { kind: 'open' },
     onChange: () => {},
+    onPoolsChange: () => {},
     onGoToBasics: () => {},
     ...overrides,
   }

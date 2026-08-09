@@ -32,6 +32,17 @@ export interface SettingRowEntry {
    * for a cleared box — a keystroke that would author neither is ignored, so nothing
    * downstream has to defend against a `0`. */
   onChange: (value: number | null) => void
+  /**
+   * The director has **finished** typing this number — they left the box, or pressed
+   * Enter. Optional, because only one setting needs the distinction.
+   *
+   * `onChange` fires per keystroke, which is right for a number that merely gets stored
+   * and wrong for one that **spends** something. The pool count is the second kind: it is
+   * a number of pool rows (ADR 20260808), so lowering it discards reservations and has to
+   * be priced by a confirm first. Priced per keystroke, `12` would be unreachable — the
+   * `1` opens a modal dialog, focus leaves the box, and the `2` never lands.
+   */
+  onCommit?: () => void
 }
 
 /** The row's one quiet text action — `Set myself` / `Use automatic`, or Membership's
@@ -216,6 +227,15 @@ export const SettingRow = ({
                 // NOT clamped to the bound: the system never silently changes a
                 // director's number (ADR 20260808).
                 if (accepted !== undefined) entry.onChange(accepted)
+              }}
+              // The two ways a director says they are **done typing** this number (see
+              // `onCommit`). Both, not one: leaving the box is how a mouse user finishes,
+              // and Enter is how somebody who never leaves the keyboard does. Enter
+              // submits nothing — the editor's Save is a button, not a form submit — so
+              // there is no default to prevent.
+              onBlur={entry.onCommit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') entry.onCommit?.()
               }}
             />
           ) : (

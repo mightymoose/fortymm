@@ -60,6 +60,22 @@ export function buildEndTournamentConsequence(
   }
 }
 
+/** The **lowered pool count** consequence — two of `Men's Singles`' pool reservations
+ * going, with the windows and the tables they hold (ADR 20260808). Two names rather than
+ * one, because the plural is the ordinary case and the singular is the edge. */
+export function buildRemovePoolReservationsConsequence(
+  overrides: Partial<
+    Extract<IrreversibleActConsequence, { variant: 'remove-pool-reservations' }>
+  > = {},
+): IrreversibleActConsequence {
+  return {
+    variant: 'remove-pool-reservations',
+    eventName: "Men's Singles",
+    poolNames: ['Pool E', 'Pool F'],
+    ...overrides,
+  }
+}
+
 /** Props for `ConfirmIrreversibleActDialog` — an open **re-cut** confirm on
  * `Men's Singles`. A test that wants the delete act passes a `consequence` of its own. */
 export function buildConfirmIrreversibleActDialogProps(

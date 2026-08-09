@@ -32,6 +32,7 @@ import {
 import type {
   DrawTypeOption,
   EditedEvent,
+  PoolEntry,
   TournamentEvent,
   TournamentTable,
 } from '../data/types'
@@ -246,6 +247,25 @@ export const EventEditor = ({
     form.setValue('match', next.match, opts)
   }
 
+  /**
+   * Write the **pool list** back — the one field `applyChange` above cannot carry.
+   *
+   * `TournamentEvent.pools` is the read model's `Pool[]`, while the form holds the
+   * organizer's `PoolEntry[]` diff (ADR 20260801), so the pools travel on a channel of
+   * their own rather than riding a bridged draft that would have to lie about their type.
+   *
+   * It writes the **same `pools` field the Table pools tab drives** through its
+   * `useFieldArray` — RHF's `setValue` on a field-array name republishes the array, so the
+   * cards over there re-render from this list. That is what makes the two tabs one list:
+   * the Draw structure tab's pool count and the Table pools tab's cards cannot report
+   * different numbers, because there is only one number (ADR 20260808).
+   */
+  const applyPoolsChange = (pools: PoolEntry[]) =>
+    form.setValue('pools', pools, {
+      shouldDirty: true,
+      shouldValidate: isSubmitted,
+    })
+
   const submit = form.handleSubmit(
     async (formValues) => {
       if (!event) return
@@ -422,10 +442,19 @@ export const EventEditor = ({
                 <TabsContent value="draw-structure">
                   <DrawStructureSection
                     event={draft}
+                    // The pool ENTRIES, off the same watch the pool-name reds read — not
+                    // `draft.pools`, which is typed as the read model's rows and is these
+                    // entries at runtime. This tab now writes the list, so it is given the
+                    // shape it writes.
+                    pools={watchedPools ?? []}
                     canEdit={canEdit}
                     errors={drawStructureErrors}
                     qualifiersFreeze={qualifiersLock}
+                    // The SAME freeze the Table pools tab is given, threaded to the second
+                    // control that can now change the pool set (a typed pool count).
+                    poolSetFreeze={poolsFreeze}
                     onChange={applyChange}
+                    onPoolsChange={applyPoolsChange}
                     onGoToBasics={() => setSection('basics')}
                   />
                 </TabsContent>
