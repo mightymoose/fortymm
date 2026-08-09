@@ -113,7 +113,11 @@ export const DrawStructureSection = ({
           `auto`, so `minmax(0, …)` on both tracks is what keeps a long source sentence
           from widening the column past the sheet and hiding behind a horizontal
           scrollbar nothing advertises (the bug this editor has shipped twice). */}
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,280px)]">
+      {/* 320px, not 280: at 280 the knockout card's `{n}-player bracket` wraps onto a
+          second line beside its byes/matches column, which the reference keeps on one.
+          Verified in a browser at the 1280px desktop width — jsdom does no layout, so
+          no unit test can hold this number. */}
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
         <div className="flex min-w-0 flex-col">
           <Overline className="text-[color:var(--ball-500)]">
             Draw structure
