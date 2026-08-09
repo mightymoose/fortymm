@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildFixtureTimeRead,
   DRAW_TYPE_CATALOGUE,
+  EVERY_SETTING_AUTOMATIC,
   planDraw,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
@@ -602,6 +603,43 @@ describe('the rest of the event surface still holds', () => {
     })
     if (!result.ok) throw new Error('create failed')
     expect(result.event.max_players).toBeNull()
+  })
+
+  /**
+   * **A created event's structural ownership follows its draw type** (ADR 20260808).
+   *
+   * Both arms in one test, because the claim is the *branch*, not either value: only an
+   * `rr-then-ko` event has a pool count, a pool size, a qualifier count and a membership
+   * rule for a director to take, so it is born owning none of them, and every other draw
+   * type is born with no structure at all. Asserted against the factory's own
+   * `EVERY_SETTING_AUTOMATIC` rather than a re-typed literal — a second copy of the
+   * settings list here would simply agree with itself while the two drifted.
+   */
+  it('gives a created event the structure its draw type implies, and no other', () => {
+    const twoStage = createEvent(TOURNAMENT, {
+      name: 'Two-stage Singles',
+      format: 'singles',
+      draw_type: 'rr-then-ko',
+      // Required on this arm of the write union — the count the bracket is sized from.
+      qualifiers_per_pool: 2,
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+    })
+    const bracketOnly = createEvent(TOURNAMENT, {
+      name: 'Bracket Singles',
+      format: 'singles',
+      draw_type: 'single-elim',
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+    })
+    if (!twoStage.ok || !bracketOnly.ok) throw new Error('create failed')
+
+    expect(twoStage.event.draw_structure).toEqual(EVERY_SETTING_AUTOMATIC)
+    expect(bracketOnly.event.draw_structure).toBeNull()
   })
 
   // An explicit null clears the cap; `??` would have kept the old value. This is

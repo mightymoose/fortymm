@@ -950,6 +950,11 @@ describe('eventToCreateBody', () => {
       // …and the round count the same way, for the same reason: omitted on the way out for
       // a round-robin event, an explicit `null` on the way back.
       rounds: null,
+      // …and the structural-ownership block the same way once more (ADR 20260808). A
+      // round-robin event has no pool count, pool size, qualifier count or membership rule
+      // for a director to take, so the read carries `null` — only an `rr-then-ko` event
+      // comes back with a structure at all.
+      draw_structure: null,
       id: event.id,
       tournament_id: 't-1',
       // The registrations are server-owned and absent from the create body;
