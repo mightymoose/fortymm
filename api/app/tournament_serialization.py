@@ -686,6 +686,11 @@ def serialize_event(
             # rule: a property on the arms that have no round count, so this line asks
             # every arm one question rather than deciding which draw types have one.
             "rounds": draw_settings.rounds,
+            # And the ownership modes, off the same arm and by the same rule — ``None``
+            # on the three draw types that have no structural settings, because that is
+            # what their arms answer, not because this line decided it (ADR "a
+            # structural setting is owned by the director or derived by the system").
+            "draw_structure": draw_settings.draw_structure,
             "max_players": e.max_players,
             "entry_fee": e.entry_fee,
             # The event's venue timezone anchors its wall-clock ``Slot`` windows to

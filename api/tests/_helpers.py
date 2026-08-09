@@ -42,7 +42,7 @@ from app.notifications.dependencies import get_push_sender
 from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
 from app.scheduling import ScheduleSnapshot, SolveResult
 from app.schemas.notification import NotificationJob
-from app.schemas.tournament import draw_settings_from_storage
+from app.schemas.tournament import DrawStructure, draw_settings_from_storage
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 from app.tournament_draw_settings import draw_settings_row
 
@@ -157,12 +157,16 @@ def event_draw_settings(
     *,
     qualifiers_per_pool: int | None = None,
     rounds: int | None = None,
+    draw_structure: DrawStructure | None = None,
 ) -> TournamentEventDrawSettings:
     """The draw-settings row for an event a test seeds straight through the ORM, built
-    from the draw type and whichever setting that draw type carries — the qualifier
-    count for ``rr-then-ko``, the round count for ``swiss``.
+    from the draw type and whichever settings that draw type carries — the qualifier
+    count and the ownership modes for ``rr-then-ko``, the round count for ``swiss``.
 
-    Neither is a column any more — both are keys inside the row's ``settings`` JSON
+    ``draw_structure`` omitted seeds the row the way an event written before #1320 is
+    stored: no such key at all, which reads back as every mode automatic.
+
+    None of them is a column — all three are keys inside the row's ``settings`` JSON
     object (ADR "a draw type's settings are one NOT NULL JSON object") — so this is the
     one translation from the values the tests speak to the stored shape, and it goes
     through the same parse and the same writer the request boundary uses. Which means a
@@ -172,11 +176,13 @@ def event_draw_settings(
 
     Both ``None`` is "this draw type takes no configuration", and it stores ``{}``.
     """
-    settings: dict[str, int] = {}
+    settings: dict[str, Any] = {}
     if qualifiers_per_pool is not None:
         settings["qualifiers_per_pool"] = qualifiers_per_pool
     if rounds is not None:
         settings["rounds"] = rounds
+    if draw_structure is not None:
+        settings["draw_structure"] = draw_structure.model_dump(mode="json")
     return draw_settings_row(draw_settings_from_storage(draw_type, settings))
 
 
