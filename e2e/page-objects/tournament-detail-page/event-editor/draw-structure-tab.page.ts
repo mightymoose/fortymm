@@ -1,4 +1,4 @@
-import { Locator, Page } from '@playwright/test'
+import { expect, Locator, Page } from '@playwright/test'
 
 /**
  * The event editor's **Draw structure** tab (#1320) — the four structural settings of a
@@ -61,9 +61,51 @@ export class DrawStructureTabPage {
     return this.page.getByRole('region', { name, exact: true })
   }
 
-  /** The number (or phrase) the row currently reads. */
+  /** The number (or phrase) the row currently reads, **as text**.
+   *
+   * ⚠️ Present only while the value is the system's — a setting the director owns renders
+   * a box instead, so this locator resolves nothing there and `settingInput` is what reads
+   * the number. The two are never both present, which is what makes
+   * `expect(settingInput(name)).toHaveCount(0)` a real statement that the setting went
+   * back to being automatic. */
   settingValue(name: string): Locator {
     return this.settingRow(name).getByTestId('draw-setting-value')
+  }
+
+  /** The **manual box**, present only while the director owns this setting and may edit
+   * it (there is no disabled box on this tab — ADR-0015).
+   *
+   * Addressed by the row's own heading, which is the box's accessible name
+   * (`aria-labelledby` onto the setting's name): a box whose only label were the unit
+   * after it would announce as `pools`, which is four indistinguishable boxes. Scoped to
+   * the row as well, so a spec naming the wrong setting resolves nothing rather than
+   * something. */
+  settingInput(name: string): Locator {
+    return this.settingRow(name).getByRole('textbox', { name, exact: true })
+  }
+
+  /**
+   * The row's one action — the quiet text button that hands the setting over or gives it
+   * back.
+   *
+   * **The label is an argument, not a return value**, so asking for the button is also a
+   * statement about which way the row currently points: `Set myself` on a row the director
+   * already owns resolves nothing, and the spec fails at the click rather than three
+   * assertions later.
+   *
+   * Matched on the **whole** accessible name, `{label} {name}`. Three rows offer
+   * `Set myself`, so the visible words alone name no setting, and the button's `aria-label`
+   * says both — an `aria-label` replaces the text content for name matching, so a locator
+   * asking for `Set myself` alone would resolve nothing at all.
+   */
+  settingAction(
+    name: string,
+    label: 'Set myself' | 'Use automatic' | 'Assign myself' | 'Use snake',
+  ): Locator {
+    return this.settingRow(name).getByRole('button', {
+      name: `${label} ${name}`,
+      exact: true,
+    })
   }
 
   /** The plain words after the value — `pools`, `players per pool`. A `Membership` row
@@ -83,6 +125,28 @@ export class DrawStructureTabPage {
    * the number it describes, so this string and the value above it cannot fork. */
   settingSource(name: string): Locator {
     return this.settingRow(name).getByTestId('draw-setting-source')
+  }
+
+  /**
+   * **Take a numeric setting and type a number into it** — the two-step act that is now
+   * the only way to author one of these numbers, performed as one call for a spec that
+   * wants the end state rather than the steps.
+   *
+   * ⚠️ **`Set myself` seeds the box from what the row was already showing**, so a caller
+   * that wanted a particular number must always type it afterwards — which is what this
+   * does. The seeded value is a live derivation, so it moves with the rest of the draft:
+   * the qualifier count seeds at `ceil(8 / pool count)`, which is a different number
+   * before and after the pools are added. **Set the pools first**, or the number typed
+   * here is the only thing standing between the spec and a draw it did not ask for.
+   *
+   * Reads the value back for the reason `EventEditorPage.setRounds` does: a box that
+   * dropped the keystroke leaves a spec asserting three screens later on a number the
+   * form never held.
+   */
+  async setManually(name: string, value: number): Promise<void> {
+    await this.settingAction(name, 'Set myself').click()
+    await this.settingInput(name).fill(String(value))
+    await expect(this.settingInput(name)).toHaveValue(String(value))
   }
 
   // ----- the live preview ----------------------------------------------------

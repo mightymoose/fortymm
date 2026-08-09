@@ -36,18 +36,20 @@ export class EventEditorPage {
     return this.page.getByRole('combobox', { name: 'Draw type' })
   }
 
-  /** **K** — the per-pool qualifier count. Present for `rr-then-ko` and for nothing
-   * else: the control is ABSENT, not disabled, for a draw type with no knockout stage
-   * to qualify for, so its visibility is itself the assertion that the picker's choice
-   * reached the form. */
-  get qualifiersInput(): Locator {
-    return this.page.getByLabel('Qualifiers per pool')
-  }
+  // **K has no box on this tab, and that absence is deliberate.** The per-pool qualifier
+  // count is a structural setting, so it moved onto the Draw structure tab beside the
+  // other three (ADR 20260808) — and there it has a box only once the director takes it
+  // (`DrawStructureTabPage.setManually`). A `qualifiersInput` getter left here would still
+  // *resolve*, because the tab's box takes its accessible name from the same words, so it
+  // would quietly find a control on a different tab and only in one of its two states.
+  // The surface that is now present for `rr-then-ko` and for nothing else is the **tab**:
+  // `tab('Draw structure')`, which is what a spec asserts to prove the picker's choice
+  // reached the form.
 
   /** **R** — the round count a `swiss` event plays. Present for `swiss` and for nothing
-   * else, exactly as `qualifiersInput` is present only for `rr-then-ko`: a round count is
-   * a question the other three formats do not ask, and the server's draw-settings union
-   * says the same by refusing the key on their arms.
+   * else, exactly as the Draw structure tab is present only for `rr-then-ko`: a round
+   * count is a question the other three formats do not ask, and the server's
+   * draw-settings union says the same by refusing the key on their arms.
    *
    * Matched by a `^Rounds` regex rather than an exact label, because the row is `required`
    * and the `Field` renders its asterisk into the accessible name. */
@@ -75,16 +77,9 @@ export class EventEditorPage {
     await expect(this.drawTypeSelect).toContainText(label)
   }
 
-  /** Type the qualifier count. A blank box is a *missing answer* for this draw type
-   * (never `0`), so it is filled with a real number and read back. */
-  async setQualifiersPerPool(count: number): Promise<void> {
-    await this.qualifiersInput.fill(String(count))
-    await expect(this.qualifiersInput).toHaveValue(String(count))
-  }
-
   /** Type the round count. A blank box is a *missing answer* for this draw type (never
    * `0`, which would be a swiss that plays nothing), so it is filled with a real number
-   * and read back — the same shape `setQualifiersPerPool` takes. */
+   * and read back — the same shape `DrawStructureTabPage.setManually` takes. */
   async setRounds(rounds: number): Promise<void> {
     await this.roundsInput.fill(String(rounds))
     await expect(this.roundsInput).toHaveValue(String(rounds))
@@ -165,5 +160,32 @@ export class EventEditorPage {
    * for an existing one — the same button, so a spec names the act it is performing. */
   get createEventButton(): Locator {
     return this.page.getByRole('button', { name: 'Create event' })
+  }
+
+  /** The same button on an **existing** event's sheet. Named apart from
+   * `createEventButton` for the reason that one is named: the word on it says which act
+   * the spec is performing, and a spec that meant to save an edit and got a create is a
+   * spec that opened the wrong sheet. */
+  get saveChangesButton(): Locator {
+    return this.page.getByRole('button', { name: 'Save changes' })
+  }
+
+  /**
+   * Save an existing event's changes and wait for the sheet to **close**.
+   *
+   * The close is the success signal, and it is the editor's own contract: it awaits the
+   * update and closes itself only when the promise RESOLVES, staying open over a rejection
+   * so a refused save is reported instead of binning what was typed (#933, #934). So a
+   * spec that reloads without waiting here would read the server before the write landed,
+   * and blame the *reload* for a save that had merely not finished.
+   *
+   * The refusal alert is asserted absent first, because "the sheet is still open with a
+   * red banner in it" is a far more legible failure than a number that did not survive a
+   * reload three steps later.
+   */
+  async saveChanges(): Promise<void> {
+    await this.saveChangesButton.click()
+    await expect(this.errorAlert).toHaveCount(0)
+    await expect(this.saveChangesButton).toHaveCount(0)
   }
 }

@@ -625,10 +625,37 @@ export async function enterPlayer(
  * they are read as a pair. Reading them back is what turns "the create request did not
  * 422" into "the server holds the configuration the director typed" — a 201 alone would
  * also be returned by a server that had quietly dropped K. */
+/** **Who owns each of an `rr-then-ko` draw's structural settings, as the server stores
+ * it** — the event's `draw_structure` object (ADR 20260808).
+ *
+ * The two pool numbers are named beside their modes because the pair is the whole fact: a
+ * `manual` mode with the number dropped, and an `automatic` mode with the director's number
+ * discarded, are both silent losses of work the ADR forbids and neither is visible from a
+ * mode alone.
+ *
+ * There is no manual *qualifier* number, and that absence is the wire's: the event's own
+ * `qualifiers_per_pool` is the manual slot, and `qualifiers_mode` says whether anybody
+ * should read it. */
+export interface StoredDrawStructure {
+  readonly pool_count_mode: 'automatic' | 'manual'
+  readonly manual_pool_count: number | null
+  readonly pool_size_mode: 'automatic' | 'manual'
+  readonly manual_pool_size: number | null
+  readonly qualifiers_mode: 'automatic' | 'manual'
+  readonly membership_mode: 'snake' | 'manual'
+}
+
 export interface EventDrawConfig {
   readonly id: string
   readonly name: string
   readonly draw_type: string
+  /** The ownership record above, or **`null` for every draw type that has no pool stage
+   * to structure** — only the `rr-then-ko` arm carries one.
+   *
+   * Read back for the reason `qualifiers_per_pool` is: a 200 on the save would also come
+   * back from a server that stored the event and dropped the modes, and the modes are
+   * exactly what the Draw structure tab's badge is rendered from. */
+  readonly draw_structure: StoredDrawStructure | null
   /** **K**. `null` for every draw type that has no knockout stage to qualify for. */
   readonly qualifiers_per_pool: number | null
   /** **R** — how many rounds a `swiss` event plays. `null` for every other draw type,

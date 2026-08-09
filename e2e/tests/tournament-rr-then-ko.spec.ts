@@ -27,7 +27,12 @@ const DRAW_TYPE_LABEL = 'Round-robin then knockout'
  * is nearly free). */
 const POOL_COUNT = 3
 /** `K` — the qualifiers per pool. The number this whole spec exists to get onto the
- * wire: an `rr-then-ko` create body without it is a **422** at the request boundary. */
+ * wire: an `rr-then-ko` create body without it is a **422** at the request boundary.
+ *
+ * **Two, and the director types it.** The form supplies the derived `ceil(8 / P)` for an
+ * event that carries no count the server would accept, so this event would go in with 3
+ * if nobody touched the row — and three out of a pool of three is every entrant
+ * advancing. Half the assertions below are about the three who do *not*. */
 const QUALIFIERS_PER_POOL = 2
 /** `N` — nine entrants, dealt three to a pool. Enough to satisfy the cut's two
  * entrant-dependent refusals (`K ≤ ⌊N/P⌋` = 3, and `P × K ≥ 2`) with room to spare, and
@@ -218,12 +223,27 @@ test.describe('Tournament — rr-then-ko draw', () => {
     const editor = await detail.openNewEvent()
     await editor.nameInput.fill(EVENT_NAME)
     await editor.chooseDrawType(DRAW_TYPE_LABEL)
-    // The qualifier box exists ONLY for this draw type — it is absent, not disabled,
-    // for a format with no knockout stage to qualify for. So its appearance is the
-    // proof the picker's choice reached the form, before anything is submitted.
-    await expect(editor.qualifiersInput).toBeVisible()
-    await editor.setQualifiersPerPool(QUALIFIERS_PER_POOL)
+    // The **Draw structure tab** exists ONLY for this draw type — it is absent, not
+    // disabled, for a format with no knockout stage to qualify for (ADR 20260808). So its
+    // appearance is the proof the picker's choice reached the form, before anything is
+    // submitted. The qualifier box on Basics used to carry that proof; the setting moved
+    // onto this tab, and the tab inherited it.
+    await expect(editor.tab('Draw structure')).toBeVisible()
+
+    // **The pools FIRST**, because the qualifier count is derived from them.
     await editor.addPools(POOL_COUNT)
+
+    // **K is typed, and this spec is about the typed one.** A director who never touches
+    // the row now gets the derived count, which across three pools is `ceil(8 / 3)` = 3 —
+    // and 3 qualifiers out of a pool of three is every entrant advancing. That draw has no
+    // eliminated three for the bracket to exclude and a pool stage that decides nothing,
+    // which is precisely the claim below (`the bracket names exactly the six who qualified
+    // and none of the three who did not`). So the director takes the setting and types 2.
+    //
+    // Taking it also seeds the box with that 3, which is why the number is typed *after*
+    // the pools exist and not before: seeded against one pool it would have been 8.
+    const drawStructure = await editor.openDrawStructure()
+    await drawStructure.setManually('Qualifiers per pool', QUALIFIERS_PER_POOL)
 
     // THE 422 GATE. The create body is the client's own, and its status is asserted
     // directly: a body missing `qualifiers_per_pool` is refused at the request boundary,
