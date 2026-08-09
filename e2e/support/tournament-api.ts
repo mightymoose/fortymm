@@ -565,6 +565,91 @@ export async function addEvent(
   return { eventId: created.id, pools: created.pools }
 }
 
+/** A draw's **ownership record** as a client sends it (`DrawStructure` on the wire) —
+ * every mode optional, because every one of them defaults to the derived answer.
+ *
+ * Only the two keys a caller has needed so far are named. The others exist on the wire and
+ * can be added when a spec wants them; naming all six here would invite a caller to send a
+ * record it has no opinion about, and a mode sent is a mode stored. */
+export interface DrawStructureSpec {
+  readonly qualifiers_mode?: 'automatic' | 'manual'
+  readonly pool_count_mode?: 'automatic' | 'manual'
+}
+
+/** A draw configuration as `PATCH …/events/{id}` takes it: the type, its qualifier count,
+ * and who owns the four structural settings. The three travel together because the server
+ * parses them as one arm (ADR 20260727 for the pair, ADR 20260808 for the record). */
+export interface DrawConfigPatch {
+  readonly drawType: SeededDrawType
+  readonly qualifiersPerPool?: number
+  readonly drawStructure?: DrawStructureSpec
+}
+
+/**
+ * **PATCH an event's draw configuration and hand the raw response back**, status and all
+ * — the seam a spec uses to ask the *server* whether it agrees with the browser.
+ *
+ * Raw, in the shape `listTournamentsRaw` already takes, because the interesting answers
+ * here are the refusals: a draw nobody can play is a **422** whose `detail[0].msg` is the
+ * derivation's own sentence and whose `loc` is `["body", "draw_structure"]` (#1320). A
+ * helper that threw on a non-200 could not express that at all.
+ *
+ * Sends nothing but the draw configuration. Every other field of the event is left
+ * unset, which on a PATCH means unchanged — so the pool count and the player cap the
+ * guard judges against are the ones the event already has, and the request states only
+ * the thing under test.
+ */
+export async function patchEventDrawRaw(
+  director: Guest,
+  tournamentId: string,
+  eventId: string,
+  config: DrawConfigPatch,
+): Promise<APIResponse> {
+  return director.ctx.patch(
+    `${API}/tournaments/${tournamentId}/events/${eventId}`,
+    {
+      headers: { [CSRF_HEADER]: director.csrf },
+      data: {
+        draw_type: config.drawType,
+        // Same rule as `addEvent`'s: the key is refused outright on every arm but
+        // `rr-then-ko`, so it is sent only when the caller means it.
+        ...(config.qualifiersPerPool !== undefined
+          ? { qualifiers_per_pool: config.qualifiersPerPool }
+          : {}),
+        ...(config.drawStructure !== undefined
+          ? { draw_structure: config.drawStructure }
+          : {}),
+      },
+    },
+  )
+}
+
+/** One entry of a FastAPI `HTTPValidationError` body — the shape every 422 from this API
+ * takes, including the draw-structure refusal, which is raised as a validation error on
+ * the body rather than a hand-rolled envelope. */
+export interface ValidationErrorDetail {
+  readonly type: string
+  readonly loc: ReadonlyArray<string>
+  readonly msg: string
+}
+
+/** Read a 422's `detail` list off a raw response. Throws when the body carries none,
+ * which is the honest report of a request that was refused for some other reason —
+ * far more legible than an assertion against `undefined`. */
+export async function validationDetails(
+  res: APIResponse,
+): Promise<ReadonlyArray<ValidationErrorDetail>> {
+  const body = (await res.json()) as {
+    detail?: ReadonlyArray<ValidationErrorDetail>
+  }
+  if (!body.detail) {
+    throw new Error(
+      `expected a validation-error body, got ${res.status()}: ${JSON.stringify(body)}`,
+    )
+  }
+  return body.detail
+}
+
 /** Resolve a pool's reserved-table **labels** to the catalogue ids the wire wants;
  * omitted labels reserve the whole catalogue (the single-pool default).
  *

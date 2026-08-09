@@ -171,6 +171,31 @@ export class EventEditorPage {
   }
 
   /**
+   * **The save button while the draw structure cannot be played** (#1320).
+   *
+   * The same button as `saveChangesButton`, under the other name it takes: a disabled
+   * control still reading `Save changes` looks broken, so it says the act that would
+   * re-enable it instead. Named separately for the reason the create/save pair is —
+   * asking for this locator is a statement about which state the sheet is in, and a spec
+   * that meant to find a live Save and found this one has found the bug.
+   *
+   * ⚠️ Assert it **visible and disabled**, never `saveChangesButton` at `toHaveCount(0)`:
+   * that count is also zero after a successful save closes the sheet, so it cannot tell a
+   * withheld save from a completed one.
+   */
+  get blockedSaveButton(): Locator {
+    return this.page.getByRole('button', { name: 'Fix the structure to save' })
+  }
+
+  /** The line above the footer saying **why** the save is unavailable — the derivation's
+   * own cause, plus where to fix it. It is the disabled button's `aria-describedby`
+   * target, and it lives outside the tab panel on purpose: Radix unmounts an inactive
+   * tab's content, and Basics is a tab that can *cause* this state. */
+  get saveBlockedReason(): Locator {
+    return this.page.getByTestId('event-editor-save-blocked')
+  }
+
+  /**
    * Save an existing event's changes and wait for the sheet to **close**.
    *
    * The close is the success signal, and it is the editor's own contract: it awaits the

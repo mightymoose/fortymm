@@ -149,6 +149,60 @@ export class DrawStructureTabPage {
     await expect(this.settingInput(name)).toHaveValue(String(value))
   }
 
+  // ----- the one notice under the settings -----------------------------------
+  //
+  // At most one is on screen at a time, and which one is the derivation's choice — so a
+  // spec that reads these is reading a decision, not a layout. The `Needs your call`
+  // variant does not exist yet (slice 5), and nothing here reaches for it.
+
+  /** The notice panel — the refusal (`Can’t save`) or the uneven notice (`Legal, but
+   * uneven`). **Absent** when the numbers are sound, which is why every assertion that
+   * a draw is fine reads `toHaveCount(0)` here rather than merely reading a green
+   * verdict off the preview. */
+  get issue(): Locator {
+    return this.page.getByTestId('draw-issue-panel')
+  }
+
+  /** What is wrong, in the derivation's own words — `The knockout would have one
+   * player`, `Pool M would have one player`, the uneven size tally.
+   *
+   * **This is the assertion a spec about a refusal is for.** The panel, the disabled
+   * button and the `Can’t save` topline are all present for every one of the three
+   * impossible competitions, so a spec that reads only those cannot tell a refusal that
+   * names the real cause from the wrong-cause message #1320 was filed about. */
+  get issueTitle(): Locator {
+    return this.page.getByTestId('draw-issue-panel-title')
+  }
+
+  /** The line under it: what to do about the refusal, or what uneven costs. */
+  get issueBody(): Locator {
+    return this.page.getByTestId('draw-issue-panel-body')
+  }
+
+  /** Every offered fix's label, in the order the panel lists them — so a spec can state
+   * that the refusal offers *these ways out and no others* with one
+   * `toHaveText([...])`. Empty for a notice with nothing to fix. */
+  get issueFixLabels(): Locator {
+    return this.page.getByTestId('draw-issue-fix-label')
+  }
+
+  /** The line under one fix's label, saying what it costs or keeps. Scoped to that
+   * fix's own row, because a refusal can offer two. */
+  issueFixDetail(label: string): Locator {
+    return this.page
+      .getByTestId('draw-issue-fix')
+      .filter({ has: this.page.getByText(label, { exact: true }) })
+      .getByTestId('draw-issue-fix-detail')
+  }
+
+  /** Apply one, the way a director does — by the button's accessible name, which is
+   * `Apply {label}`. Every visible label on these buttons reads only `Apply`, so the
+   * words alone name no fix and a locator asking for `Apply` would resolve the wrong
+   * row the moment a refusal offered two. */
+  applyFix(label: string): Locator {
+    return this.page.getByRole('button', { name: `Apply ${label}`, exact: true })
+  }
+
   // ----- the live preview ----------------------------------------------------
 
   /** The sticky preview panel — `The draw as it stands`. */

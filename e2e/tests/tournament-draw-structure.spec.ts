@@ -8,6 +8,8 @@ import {
   addEvent,
   createTournament,
   findEventByName,
+  patchEventDrawRaw,
+  validationDetails,
   type PoolSpec,
   type StoredTable,
 } from '../support/tournament-api'
@@ -113,6 +115,82 @@ const MANUAL_POOL_SIZE_SOURCE = 'You set the target. We derived the pool count.'
  * does not promise every pool that size. */
 const DERIVED_POOL_COUNT_SOURCE = `${FIELD_CAP} players ÷ about ${MANUAL_POOL_SIZE} per pool`
 
+// ----- the third spec's numbers: the configuration #1320 WAS FILED ABOUT ------
+//
+// A real director took one pool and one qualifier per pool. That sends one player to the
+// bracket, so the draw could not be cut — and the app named the wrong cause, hours later,
+// at the cut. Kept apart from the two scenarios above for the same reason those are kept
+// apart from each other: not one number here is the same question as a number there.
+
+/** **One** pool row, reserving no tables. The pool count is the row count (ADR 20260808),
+ * so this single row is the whole of "one pool" — and it is seeded rather than reached
+ * through the pool section, because what is under test is the qualifier count. */
+const SINGLE_POOL: ReadonlyArray<PoolSpec> = [{ name: 'Pool A', tableLabels: [] }]
+
+/** `32 ÷ 1`. Comfortably playable, and that matters twice: the pool rule is tested first,
+ * so a pool that could not be played would mask the bracket refusal entirely — the panel
+ * would name the pool and this spec would pass while proving the wrong thing. */
+const LONE_POOL_SIZE = FIELD_CAP
+
+/** What the **automatic** qualifier count derives to across one pool: `ceil(8 / 1)` = 8,
+ * capped at the smallest pool, which holds 32. Asserted before anything is taken, because
+ * it is the reason this scenario needs a manual count at all: the automatic branch clamps
+ * to a number it will accept, so an automatically-configured event **cannot** reach the
+ * refusal below. Only a count the director typed can, and it is preserved exactly as
+ * typed (ADR 20260808). */
+const AUTOMATIC_LONE_POOL_QUALIFIERS = 8
+
+/** The K this event is **seeded** with. Three, and deliberately neither the 8 the
+ * derivation shows nor the 2 the fix writes: the save at the end is read back off the
+ * server, and a seed of 2 would leave `qualifiers_per_pool === 2` true of a server that
+ * had dropped the write on the floor. */
+const SEEDED_LONE_POOL_QUALIFIERS = 3
+
+/** The number the director types, and the whole of #1320's configuration: one out of one
+ * pool. */
+const REFUSED_QUALIFIERS = 1
+/** …and what the offered fix writes instead. `1 × 2` is a two-player knockout, which is
+ * the smallest one that can be drawn. */
+const FIXED_QUALIFIERS = 2
+
+/** **The cause, verbatim** — the derivation's own words, and the one assertion this whole
+ * spec exists for. A refusal that named a pool count or a scheduling problem would still
+ * disable the button, still show a panel and still say `Can’t save`, so every other
+ * reading below passes just as happily against the wrong-cause message #1320 reported. */
+const ONE_PLAYER_KNOCKOUT_TITLE = 'The knockout would have one player'
+/** What to do about it. A right single quote is not in play in this pair; the reference's
+ * `U+2019` rule bites on `Can’t save` and on the preview's verdict below. */
+const ONE_PLAYER_KNOCKOUT_BODY =
+  'One player has nobody to play. Take more qualifiers or run more pools.'
+/** The refusal's topline. `U+2019`, as the reference writes every apostrophe but
+ * `today's behaviour`. */
+const CANT_SAVE = 'Can’t save'
+/** The preview's verdict and badge while the draw cannot be played. */
+const IMPOSSIBLE_VERDICT = 'This draw can’t work yet'
+const IMPOSSIBLE_BADGE = 'Impossible'
+
+/** The one way out this refusal offers, and the line under it. */
+const OFFERED_FIX = 'Take top 2'
+const OFFERED_FIX_DETAIL = 'Creates a playable knockout.'
+
+/** The line above the footer, which is the disabled button's `aria-describedby` target:
+ * the derivation's cause, plus where to fix it. */
+const SAVE_BLOCKED_REASON = `${ONE_PLAYER_KNOCKOUT_TITLE}. Fix it on the Draw structure tab.`
+/** What the save button reads while it is refusing. A disabled control still saying
+ * `Save changes` looks broken; this names the act that would re-enable it. */
+const BLOCKED_SAVE_LABEL = 'Fix the structure to save'
+
+/** **The server's sentence for the same cause**, verbatim (`app/draw_structure.py`).
+ *
+ * Longer than the client's, and deliberately not the same string: the panel also offers a
+ * button and the API cannot, so the API's copy carries the way out inside the sentence.
+ * What has to match is the **cause**, which both name — one player in the knockout, with
+ * nobody to play. */
+const SERVER_ONE_PLAYER_KNOCKOUT_REFUSAL =
+  'Taking 1 qualifier from a single pool leaves one player in the ' +
+  'knockout stage, who would have nobody to play — take more qualifiers ' +
+  'from each pool, or configure more pools.'
+
 /**
  * The tournament both specs are about: one `rr-then-ko` event, capped at 32, over four
  * pool rows that reserve no tables — the state the whole tab is derived from.
@@ -124,12 +202,25 @@ const DERIVED_POOL_COUNT_SOURCE = `${FIELD_CAP} players ÷ about ${MANUAL_POOL_S
  * The tournament name is returned because it is the only handle a spec has on the page
  * having rendered at all — the hero's `h1` — and the catalogue because a second event is
  * added against it.
+ *
+ * **The two overrides are the pool rows and K, and no others.** They are the pair the
+ * derivation's whole answer turns on, so a scenario about a different draw shape changes
+ * them and leaves the cap, the draw type and the name alone — which is what keeps every
+ * number this file asserts traceable to one of the two. Both default to the four-pool
+ * event the first two specs read.
  */
-async function seedTwoStageTournament(page: Page): Promise<{
+async function seedTwoStageTournament(
+  page: Page,
+  options: {
+    readonly pools?: ReadonlyArray<PoolSpec>
+    readonly qualifiersPerPool?: number
+  } = {},
+): Promise<{
   director: Guest
   tournamentId: string
   tables: ReadonlyArray<StoredTable>
   name: string
+  eventId: string
 }> {
   const director = await guestFromContext(page.request)
   grantBetaTester(director.username)
@@ -137,15 +228,15 @@ async function seedTwoStageTournament(page: Page): Promise<{
   const name = `Draw structure ${faker.string.alphanumeric(8)}`
   const { tournamentId, tables } = await createTournament(director, name)
 
-  await addEvent(director, tournamentId, tables, {
+  const { eventId } = await addEvent(director, tournamentId, tables, {
     name: RR_KO_EVENT,
     drawType: 'rr-then-ko',
-    qualifiersPerPool: STORED_QUALIFIERS_PER_POOL,
+    qualifiersPerPool: options.qualifiersPerPool ?? STORED_QUALIFIERS_PER_POOL,
     maxPlayers: FIELD_CAP,
-    pools: POOLS,
+    pools: options.pools ?? POOLS,
   })
 
-  return { director, tournamentId, tables, name }
+  return { director, tournamentId, tables, name, eventId }
 }
 
 /**
@@ -465,5 +556,196 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     // pool rows the event has had all along.
     await expect(handedBack.previewEquation).toHaveText(EQUATION)
     await expect(handedBack.previewPoolCards).toHaveCount(POOL_COUNT)
+  })
+
+  /**
+   * **The bug #1320 opens with, refused by name and at the right moment.**
+   *
+   * A real director configured one pool and one qualifier per pool. One player reaches the
+   * bracket, so the draw could not be cut — and the two things that were wrong with that
+   * are the two halves this test asserts:
+   *
+   * 1. **When.** The refusal arrived hours later, at the cut, against a configuration the
+   *    app had cheerfully saved. It now arrives as the configuration is saved: the Save
+   *    button is unavailable and says why, and the API refuses the same body.
+   * 2. **What.** The message named the wrong cause. It now names the real one — the
+   *    knockout having one player — in the derivation's own words.
+   *
+   * ## Why the qualifier count has to be the DIRECTOR'S
+   *
+   * An automatic count can no longer reach this state. It aims at an eight-player knockout
+   * and stops at the smallest pool (`app/draw_structure.py`, and its TypeScript twin), so
+   * across one pool of 32 it derives 8 and the draw is sound. That clamp is deliberate: a
+   * number the system chooses for itself must be one it will accept, or a capped event
+   * derives its own refusal and cannot be saved at all. A count the director **typed**
+   * stands exactly as typed and is still refused when it cannot be played — their number,
+   * their refusal — which is the only route to the configuration #1320 reported.
+   *
+   * So the spec reads the automatic 8 first, then takes the setting and types the 1. The
+   * first reading is not scenery: it is what makes the refusal a consequence of the
+   * director's number rather than of the seed.
+   *
+   * ## What only this suite can say
+   *
+   * That the **client gate and the server guard agree**. They are two independent
+   * implementations of one rule (ADR
+   * 20260808-draw-structure-derivation-runs-on-both-sides-and-shares-its-vectors) — the
+   * client's so the tab never lags a keystroke, the server's because `ios/` and the MCP
+   * server write events too and a rule enforced only in React is not enforced. The vector
+   * tables pin the arithmetic on both sides; nothing but a composed stack can show one
+   * browser being refused and the real API refusing the same body for the same cause.
+   *
+   * The API half is deliberately a **raw request**, not a second browser: what is being
+   * asked is whether the server refuses a body the button would not send, so the body has
+   * to come from somewhere other than the button.
+   *
+   * ## …and that the way out works
+   *
+   * A refusal that only says no is a dead end (ADR-0015). So the last third of the test
+   * presses the offered fix and saves for real, and reads the result back off the server —
+   * against a seeded K of **three**, so `2` on the way out is a number that was written
+   * rather than one that was already there.
+   */
+  test('a director who takes one pool and one qualifier is told the knockout would have one player', async ({
+    page,
+    baseURL,
+  }) => {
+    expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
+
+    // One pool row, and a stored K that is none of the numbers this test asserts.
+    const { director, tournamentId, eventId, name } = await seedTwoStageTournament(
+      page,
+      { pools: SINGLE_POOL, qualifiersPerPool: SEEDED_LONE_POOL_QUALIFIERS },
+    )
+
+    const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
+    // The long timeout is the composed web-client's first compile of this route, not the
+    // app — see the same wait in the two specs above.
+    await expect(detail.title).toContainText(name, { timeout: 60_000 })
+
+    const editor = await detail.openEvent(RR_KO_EVENT)
+    const drawStructure = await editor.openDrawStructure()
+    await expect(drawStructure.section).toBeVisible()
+
+    // ----- 1. one pool, and an AUTOMATIC count that is deliberately playable -
+    // The control the whole test rests on. If the tab arrived already refusing, every
+    // assertion below would be about the seed rather than about what the director did.
+    await expect(drawStructure.previewPoolCards).toHaveCount(1)
+    await expect(drawStructure.previewPoolCard('A')).toContainText(
+      String(LONE_POOL_SIZE),
+    )
+    await expect(drawStructure.settingValue('Qualifiers per pool')).toHaveText(
+      String(AUTOMATIC_LONE_POOL_QUALIFIERS),
+    )
+    await expect(drawStructure.settingOwnership('Qualifiers per pool')).toHaveText(
+      'Automatic',
+    )
+    await expect(drawStructure.previewVerdict).toHaveText('Ready to save')
+    // No notice at all, which is a stronger statement than a green verdict: the panel is
+    // absent when the numbers are sound, so its later appearance is a change of state.
+    await expect(drawStructure.issue).toHaveCount(0)
+    await expect(editor.saveChangesButton).toBeEnabled()
+
+    // ----- 2. the director takes the count and types the one --------------
+    await drawStructure.setManually('Qualifiers per pool', REFUSED_QUALIFIERS)
+    // Their number, kept exactly as typed — not clamped back up to a playable 8, which is
+    // the silent reshaping ADR 20260808 forbids and the reason this state is reachable.
+    await expect(drawStructure.settingOwnership('Qualifiers per pool')).toHaveText(
+      'Yours',
+    )
+
+    // ----- 3. THE ASSERTION: the refusal names the REAL cause -------------
+    await expect(drawStructure.issue).toBeVisible()
+    // An `alert`, not a `status`: this one reports a blocked act, so it interrupts rather
+    // than waiting to be reached.
+    await expect(drawStructure.issue).toHaveRole('alert')
+    await expect(drawStructure.issue).toContainText(CANT_SAVE)
+    // The one line this chore exists for. Exact, because every other reading in this
+    // section is equally true of the three other things the app could have blamed.
+    await expect(drawStructure.issueTitle).toHaveText(ONE_PLAYER_KNOCKOUT_TITLE)
+    await expect(drawStructure.issueBody).toHaveText(ONE_PLAYER_KNOCKOUT_BODY)
+    // …and the negative half, stated out loud rather than left to the exactness above.
+    // Both strings are the panel's OWN pool-case copy — its title and its body — so both
+    // are reachable and both would really fire. Thirty-two players in one pool is a fine
+    // pool: nothing here is a pool-count problem, and the card below says so too.
+    await expect(drawStructure.issue).not.toContainText('Pool A would have')
+    await expect(drawStructure.issue).not.toContainText(
+      'Use fewer pools or raise the player limit',
+    )
+    await expect(drawStructure.previewPoolCard('A')).not.toContainText('Too small')
+
+    // The preview agrees, in its own words — read together, because a `Sound` badge over
+    // a refusal panel would be worse than either alone.
+    await expect(drawStructure.previewVerdict).toHaveText(IMPOSSIBLE_VERDICT)
+    await expect(drawStructure.previewBadge).toHaveText(IMPOSSIBLE_BADGE)
+    // The bracket the numbers actually describe: one player, and the empty half of the
+    // smallest drawable bracket beside them.
+    await expect(drawStructure.previewKnockout).toContainText('1-player bracket')
+    await expect(drawStructure.previewKnockout).toContainText('1 first-round bye')
+
+    // ----- 4. the save is UNAVAILABLE, and says why -----------------------
+    // Visible and disabled under its refusing name — never `Save changes` at count zero,
+    // which is also true of a sheet that saved and closed.
+    await expect(editor.blockedSaveButton).toBeVisible()
+    await expect(editor.blockedSaveButton).toBeDisabled()
+    await expect(editor.saveBlockedReason).toHaveText(SAVE_BLOCKED_REASON)
+
+    // ----- 5. and the SERVER refuses the same body, for the same cause -----
+    // The other implementation of the one rule. Sent raw, because the point is that the
+    // refusal does not depend on the button: `ios/` and the MCP server write events too.
+    const refused = await patchEventDrawRaw(director, tournamentId, eventId, {
+      drawType: 'rr-then-ko',
+      qualifiersPerPool: REFUSED_QUALIFIERS,
+      // Without this the count is automatic, the server clamps it to a playable 8, and
+      // the request is accepted — the same reason the browser had to take the setting.
+      drawStructure: { qualifiers_mode: 'manual' },
+    })
+    expect(refused.status()).toBe(422)
+    const [problem] = await validationDetails(refused)
+    // The API's sentence is its own — longer, because it carries the way out inside the
+    // text where the panel has a button — but it names the same cause.
+    expect(problem.msg).toBe(SERVER_ONE_PLAYER_KNOCKOUT_REFUSAL)
+    // Pointed at the draw structure as a whole, which is the only honest single answer:
+    // the qualifier count and the pool count are as much to blame as each other.
+    expect(problem.loc).toEqual(['body', 'draw_structure'])
+    // A refusal writes nothing. The event still holds the K it was seeded with, so the
+    // 422 above is a rejected request rather than a rejected response to a landed write.
+    const untouched = await findEventByName(director, tournamentId, RR_KO_EVENT)
+    expect(untouched.qualifiers_per_pool).toBe(SEEDED_LONE_POOL_QUALIFIERS)
+
+    // ----- 6. the way out is offered, and it works ------------------------
+    // One fix, and only one: a knockout of one is reachable from exactly one pool taking
+    // exactly one qualifier, so taking two is the whole of the answer.
+    await expect(drawStructure.issueFixLabels).toHaveText([OFFERED_FIX])
+    await expect(drawStructure.issueFixDetail(OFFERED_FIX)).toHaveText(
+      OFFERED_FIX_DETAIL,
+    )
+    await drawStructure.applyFix(OFFERED_FIX).click()
+
+    // The notice is gone — not replaced by a different one, which is what a fix that
+    // traded one impossible competition for another would leave behind.
+    await expect(drawStructure.issue).toHaveCount(0)
+    await expect(drawStructure.previewVerdict).toHaveText('Ready to save')
+    await expect(drawStructure.previewBadge).toHaveText('Sound')
+    await expect(drawStructure.previewKnockout).toContainText('2-player bracket')
+    await expect(drawStructure.previewKnockout).toContainText('No first-round byes')
+    // The fix takes the setting as well as setting the number: left automatic, the
+    // derivation would aim at eight again and hand the director's 2 straight back.
+    await expect(drawStructure.settingInput('Qualifiers per pool')).toHaveValue(
+      String(FIXED_QUALIFIERS),
+    )
+    await expect(drawStructure.settingOwnership('Qualifiers per pool')).toHaveText(
+      'Yours',
+    )
+
+    // ----- 7. …and the editor will save it --------------------------------
+    await expect(editor.blockedSaveButton).toHaveCount(0)
+    await editor.saveChanges()
+
+    // Read back off the server, against a seed of three: this `2` was written by the
+    // fix, and the mode came with it.
+    const saved = await findEventByName(director, tournamentId, RR_KO_EVENT)
+    expect(saved.qualifiers_per_pool).toBe(FIXED_QUALIFIERS)
+    expect(saved.draw_structure?.qualifiers_mode).toBe('manual')
   })
 })
