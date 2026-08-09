@@ -5,6 +5,7 @@ import {
   type DrawStructureSectionProps,
 } from './draw-structure-section'
 import { buildDrawStructureSectionProps } from './draw-structure-section.factory'
+import { drawPreviewPage } from './draw-structure-section/draw-preview.page'
 import { settingRowPage } from './draw-structure-section/setting-row.page'
 
 const scoped = (container: Container) => ({
@@ -43,10 +44,13 @@ const scoped = (container: Container) => ({
       within(container.getByRole('region', { name })),
     )
   },
-  /** The column chore 2c fills with the live preview. Present and empty this chore. */
+  /** The right column, which holds the live preview. */
   getPreviewSlot() {
     return container.getByTestId('draw-structure-preview-slot')
   },
+  /** The live preview's own accessors (`drawPreviewPage`), scoped to the tab. The
+   * preview's content is pinned by its own tests — the tab asserts it wired it in. */
+  preview: drawPreviewPage.within(container),
 })
 
 /** Test page-object for `DrawStructureSection`, the event editor's fifth tab. */

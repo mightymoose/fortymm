@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 
 import { deriveDrawStructure } from '../../data/draw-structure'
 import type { TournamentEvent } from '../../data/types'
+import { DrawPreview } from './draw-structure-section/draw-preview'
 import {
   previewBasisLabel,
   previewFieldSize,
@@ -51,10 +52,12 @@ export interface DrawStructureSectionProps {
  * input arrive with the ownership modes (chore 3c) — and they are *absent* until then,
  * never a disabled box, which is the unexplained dead end ADR-0015 forbids.
  *
- * The right column is a **slot for the live preview** (chore 2c), and the uneven /
- * disagreement / impossible notices are chore 2d. What this tab already carries of them
- * is the Pool size row's own copy: an uneven split reads `{min}–{max} players · uneven`,
- * because that is row copy and not a panel.
+ * The right column carries the live preview (`DrawPreview`) — **the tab's one verdict**,
+ * and the only summary of the draw anywhere on it. The uneven / disagreement /
+ * impossible *notices*, which explain those states and offer fixes, are chores 2d, 5a
+ * and 4c and land in this left column. What this tab already carries of them is the Pool
+ * size row's own copy: an uneven split reads `{min}–{max} players · uneven`, because that
+ * is row copy and not a panel.
  *
  * ## The arithmetic is not here
  *
@@ -68,6 +71,10 @@ export const DrawStructureSection = ({
   onGoToBasics,
 }: DrawStructureSectionProps) => {
   const fieldSize = previewFieldSize(event.maxPlayers)
+  // ONE call, two readers — the heading block and the preview's `Preview basis` fact.
+  // Called twice they could eventually be called with different arguments, and two
+  // sentences about the same number is exactly the confusion #1320 removes.
+  const previewBasis = previewBasisLabel(event.maxPlayers)
   const structure = deriveDrawStructure({
     previewFieldSize: fieldSize,
     // One pool reservation is one pool — today's behaviour, and the automatic source of
@@ -136,7 +143,7 @@ export const DrawStructureSection = ({
               data-testid="draw-structure-preview-basis"
               className="mt-1 text-[11px] text-[color:var(--fg-3)]"
             >
-              {previewBasisLabel(event.maxPlayers)}
+              {previewBasis}
             </p>
             <Button
               variant="link"
@@ -200,10 +207,22 @@ export const DrawStructureSection = ({
           </div>
         </div>
 
-        {/* The live preview's column (chore 2c). Empty on purpose and empty to a screen
-            reader too — a placeholder that said "coming soon" would be a promise this
-            tab is not making to a director. */}
-        <div className="min-w-0" data-testid="draw-structure-preview-slot" />
+        {/* The live preview's column. The preview is sticky inside it, so the draw stays
+            on screen while the director scrolls the settings that change it — which
+            works because a grid item stretches to the row's height by default. */}
+        <div className="min-w-0" data-testid="draw-structure-preview-slot">
+          <DrawPreview
+            structure={structure}
+            fieldSize={fieldSize}
+            // ⚠️ The event's real pool ROWS, not `max(rows, derived)` as the reference
+            // shows (ADR 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-
+            // count-is-a-projection). Nothing sets a manual pool count this chore, so
+            // the two are equal today; taking the max would hide the gap the moment
+            // chore 3c lets a director type one.
+            poolReservationCount={event.pools.length}
+            previewBasis={previewBasis}
+          />
+        </div>
       </div>
     </div>
   )

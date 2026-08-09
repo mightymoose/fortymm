@@ -170,11 +170,54 @@ describe('DrawStructureSection', () => {
     })
   })
 
-  // Chore 2c fills this. It is present so the two-column layout is the layout the
-  // preview will land in, rather than one it forces a re-shuffle of.
-  it('leaves the preview column empty', () => {
-    drawStructureSectionPage.render()
+  /**
+   * Wiring only: the preview's copy, states and arithmetic are pinned by
+   * `draw-preview.test.tsx`. What the tab owns is that the preview sits in the right
+   * column and is fed the same derivation the rows read.
+   */
+  describe('the live preview', () => {
+    it('fills the right-hand column', () => {
+      drawStructureSectionPage.render()
 
-    expect(drawStructureSectionPage.getPreviewSlot()).toBeEmptyDOMElement()
+      expect(drawStructureSectionPage.getPreviewSlot()).toContainElement(
+        drawStructureSectionPage.preview.getPreview(),
+      )
+    })
+
+    it('is derived from the same numbers the rows read out', () => {
+      drawStructureSectionPage.render()
+
+      expect(drawStructureSectionPage.preview.getEquation()).toHaveTextContent(
+        '32 players ÷ 4 pools = 8 per pool',
+      )
+      expect(
+        drawStructureSectionPage.preview.getFact('Pool reservations'),
+      ).toHaveTextContent('4')
+    })
+
+    // One call to `previewBasisLabel`, two readers — so the heading block and the
+    // preview can never come to say different things about the same number.
+    it('says the same thing about the preview field as the heading block does', () => {
+      drawStructureSectionPage.render({
+        event: buildDrawStructureEvent({ maxPlayers: null }),
+      })
+
+      const basis = '16 players because this event has no cap'
+      expect(drawStructureSectionPage.getPreviewBasis()).toHaveTextContent(basis)
+      expect(
+        drawStructureSectionPage.preview.getFact('Preview basis'),
+      ).toHaveTextContent(basis)
+    })
+
+    // There is exactly one verdict on this tab. A second summary would give a director
+    // two places to look and let one of them go stale.
+    it('is the tab’s only summary of the draw', () => {
+      drawStructureSectionPage.render()
+
+      expect(drawStructureSectionPage.preview.queryAllPreviews()).toHaveLength(1)
+      expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+        'Ready to save',
+      )
+    })
   })
 })
