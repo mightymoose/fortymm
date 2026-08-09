@@ -369,6 +369,100 @@ describe('DrawStructureSection', () => {
   })
 
   /**
+   * **A cut draw freezes the qualifier count, and nothing else on this tab** (chore 3e,
+   * the defect chore 3c surfaced).
+   *
+   * The knockout bracket is cut upfront for `P × K` and the qualifiers are seated into
+   * predetermined slots as each pool finishes, so a K the fixtures were not cut for leaves
+   * qualifiers with nowhere to sit — a 409 (`_qualifiers_per_pool_frozen_detail`). The
+   * click that authored it looked harmless: `Set myself` seeds the box from the DERIVED
+   * count, which on a cut event is routinely not the stored one.
+   *
+   * ⚠️ The **asymmetry is the point, and it is not symmetric on the server either.** The
+   * other three settings' ownership modes are excluded from the server's freeze
+   * (`configuration_the_draw_was_dealt_from`) because they size nothing the cut already put
+   * on the table, so a director may still take the pool count on a cut event. Freezing the
+   * whole tab would refuse work the server allows.
+   */
+  describe('a cut draw', () => {
+    const FROZEN = {
+      kind: 'frozen',
+      reason: 'This event’s draw is cut, so the number of qualifiers per pool is frozen.',
+    } as const
+
+    it('disables the qualifier box and its action, and states why', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ qualifiersMode: 'manual' }),
+        qualifiersFreeze: FROZEN,
+      })
+
+      const row = drawStructureSectionPage.setting('Qualifiers per pool')
+      expect(row.getInput()).toBeDisabled()
+      expect(row.getAction()).toBeDisabled()
+      expect(row.queryFreezeReason()).toHaveTextContent(FROZEN.reason)
+    })
+
+    // `Use automatic` writes the MODE and nothing else, which the server permits outright —
+    // so this row is frozen by the CLIENT's choice, not by a 409. It is refused because it
+    // is a one-way door: hand the setting back and the row reports the derived count rather
+    // than the one the bracket was cut for, and `Set myself` — the only way back — is
+    // frozen. The comment on `qualifiersPerPoolFreeze` says so; this pins the behaviour.
+    it('refuses even the mode flip on that row', async () => {
+      const onChange = vi.fn()
+      drawStructureSectionPage.render({
+        event: eventOwning({ qualifiersMode: 'manual' }),
+        qualifiersFreeze: FROZEN,
+        onChange,
+      })
+
+      await userEvent.click(
+        drawStructureSectionPage.setting('Qualifiers per pool').getAction(),
+      )
+
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it.each(['Pool count', 'Pool size', 'Membership'])(
+      'leaves %s alone — the server does not freeze its ownership',
+      (name) => {
+        drawStructureSectionPage.render({
+          event: eventOwning({ qualifiersMode: 'manual' }),
+          qualifiersFreeze: FROZEN,
+        })
+
+        const row = drawStructureSectionPage.setting(name)
+        expect(row.getAction()).toBeEnabled()
+        expect(row.queryFreezeReason()).toBeNull()
+      },
+    )
+  })
+
+  /**
+   * **K is the one setting on this tab that can be left in a state the save refuses**, and
+   * so the one with a red. It is required on every `rr-then-ko` event, and its box is the
+   * only one a director can empty (the other three boxes drop a keystroke the schema would
+   * reject rather than storing it).
+   *
+   * The row it moved from carried the same slot. Without it, a save refused for the count
+   * would open this tab — `firstInvalidSection` sends it here now — with nothing red on it.
+   */
+  it('prints the resolver’s red on the qualifier row, and nowhere else', () => {
+    drawStructureSectionPage.render({
+      event: eventOwning({ qualifiersMode: 'manual' }, { qualifiersPerPool: null }),
+      errors: { qualifiersPerPool: 'Say how many players advance from each pool.' },
+    })
+
+    const row = drawStructureSectionPage.setting('Qualifiers per pool')
+    expect(row.queryError()).toHaveTextContent(
+      'Say how many players advance from each pool.',
+    )
+    expect(row.getInput()).toHaveAttribute('aria-invalid', 'true')
+    expect(
+      drawStructureSectionPage.setting('Pool count').queryError(),
+    ).toBeNull()
+  })
+
+  /**
    * A non-creator gets a **view** (ADR-0015): every value as text, and not one control —
    * no box, no action, and no imperative sending them to a tab where the cap is not
    * theirs to change either. Swept by `@/test/read-only`, which is the one sweep, never a
@@ -400,6 +494,25 @@ describe('DrawStructureSection', () => {
       const row = drawStructureSectionPage.setting('Pool count')
       expect(row.getValue()).toHaveTextContent('6')
       expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
+    })
+
+    /** …and the **qualifier count** by name, because it is the row that moved here (chore
+     * 3e) and the claim came with it: a reader used to read K off the Basics tab, and a
+     * move that dropped the read-only half would leave them with no way to see it at all.
+     *
+     * It also tightens the sweep above, which never sets `qualifiersMode` — so that guard
+     * passes today whether or not this row honours `canEdit`. */
+    it('reads out the qualifier count a director owns, as a value and not a box', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ qualifiersMode: 'manual' }, { qualifiersPerPool: 3 }),
+        canEdit: false,
+      })
+
+      const row = drawStructureSectionPage.setting('Qualifiers per pool')
+      expect(row.getValue()).toHaveTextContent('3')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
+      expect(row.queryInput()).toBeNull()
+      expect(row.queryAction()).toBeNull()
     })
   })
 

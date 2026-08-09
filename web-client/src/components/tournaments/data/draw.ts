@@ -551,6 +551,58 @@ export function drawTypeFreeze(
 }
 
 /**
+ * May the director change this event's **qualifier count** — K, the number of finishers
+ * each pool sends to the knockout?
+ *
+ * Frozen the moment a draw exists, and by the server's own guard rather than a new one:
+ * `_enforce_draw_settings_frozen` compares the whole *dealt configuration*, of which K is
+ * half for an `rr-then-ko` event. A bracket is cut **upfront** for `P × K` and the
+ * qualifiers are seated into predetermined slots as each pool finishes, so a bracket cut
+ * at `K = 2` and advanced at `K = 3` has three pools' worth of thirds with nowhere to sit
+ * (`_qualifiers_per_pool_frozen_detail`, a 409).
+ *
+ * **The whole row is frozen, and only some of it by the server.** Three things on the
+ * Draw structure tab's qualifiers row could change K's story, and they are not all
+ * refused by the same authority:
+ *
+ * - typing in the manual box writes K — the server's 409;
+ * - `Set myself` seeds the box from the DERIVED count, which on a cut event is routinely
+ *   not the stored one, so it too writes K — the same 409, and the defect this freeze was
+ *   written for;
+ * - `Use automatic` writes the **mode** and nothing else. The server explicitly permits
+ *   it: ownership modes are excluded from `configuration_the_draw_was_dealt_from`, so the
+ *   PATCH would be a 200.
+ *
+ * The client declines to offer that third one anyway, and **not** because the server would
+ * refuse it — do not "fix" this against the API. It is offered nowhere because it is a
+ * one-way door onto a lie: handing the setting back makes the row report the *derived*
+ * count, which is not the count this event's bracket was cut for, and `Set myself` — the
+ * only way back — is frozen. Ownership of a number that cannot move is not a choice worth
+ * offering.
+ *
+ * Asked of the two-stage event's row only: the row exists for no other draw type
+ * (`DrawStructureSection`), which is what lets the reason name a knockout bracket.
+ */
+export function qualifiersPerPoolFreeze(event: TournamentEvent): EditFreeze {
+  if (!hasDraw(event)) return { kind: 'open' }
+  // The count the bracket was actually cut for, when the event has one to name. `null` is
+  // not a state a cut `rr-then-ko` event can be in (the server requires K on that arm), so
+  // this is the same belt `drawTypeFreeze` wears over its missing label: the way out is
+  // what a stuck director needs, and that half never depended on the number.
+  const cutFor =
+    event.qualifiersPerPool === null
+      ? ''
+      : ` — its knockout bracket was cut for the top ${event.qualifiersPerPool} out of each pool`
+  return {
+    kind: 'frozen',
+    reason:
+      `This event’s draw is cut, so the number of qualifiers per pool is frozen${cutFor}. ` +
+      `A qualifier the bracket has no slot for has nowhere to be seated. Delete the draw ` +
+      `to change the count, then cut it again.`,
+  }
+}
+
+/**
  * May the director **re-cut or remove** this event's draw?
  *
  * The third freeze, and the one whose refusal has **no way out**. Its two siblings are

@@ -314,15 +314,43 @@ describe('firstInvalidSection', () => {
     )
   })
 
-  // It lives on Basics, beside the draw type that decides whether it is asked at all —
-  // and a save refused on a tab you cannot see is indistinguishable from a dead button.
-  it('sends a broken qualifier count to Basics', () => {
+  /**
+   * **The count moved tabs, and this map moved with it** (chore 3e). K is a structural
+   * setting, so its box is on Draw structure now, and a save refused for it has to open
+   * the tab holding the box.
+   *
+   * This is the assertion the move can break silently: leave the field mapped to `basics`
+   * and every other test still passes — the resolver still refuses, the sheet still stays
+   * open, the red is still rendered. It is rendered on a tab the director is not looking
+   * at, which is indistinguishable from a dead Save button.
+   */
+  it('sends a broken qualifier count to Draw structure — the tab its box is on', () => {
     expect(
       firstInvalidSection({ qualifiersPerPool: { type: 'custom', message: 'x' } }),
-    ).toBe('basics')
+    ).toBe('draw-structure')
   })
 
-  // …and the round count, which lives on the same tab beside the same picker.
+  // The manual pool numbers land on the same tab, from the same arm.
+  it('sends a broken ownership record to Draw structure', () => {
+    expect(
+      firstInvalidSection({ drawOwnership: { type: 'custom', message: 'x' } }),
+    ).toBe('draw-structure')
+  })
+
+  // …and the ORDER: Draw structure is the fifth tab, so a form broken there and on an
+  // earlier tab opens the earlier one. Landing on the last tab would leave the empty name
+  // behind them, unseen — the same rule the name/rule pair below states.
+  it('prefers an earlier tab when the qualifier count is broken too', () => {
+    expect(
+      firstInvalidSection({
+        pools: { type: 'custom', message: 'x' },
+        qualifiersPerPool: { type: 'custom', message: 'x' },
+      }),
+    ).toBe('pools')
+  })
+
+  // The round count, which stays on Basics beside the picker that decides whether it is
+  // asked at all — the half of the pair that did NOT move.
   it('sends a broken round count to Basics', () => {
     expect(firstInvalidSection({ rounds: { type: 'custom', message: 'x' } })).toBe(
       'basics',

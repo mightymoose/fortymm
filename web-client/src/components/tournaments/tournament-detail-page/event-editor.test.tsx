@@ -47,26 +47,53 @@ describe('EventEditor', () => {
    * **K**, through the whole editor (ADR 20260727) — the picker, the resolver, and the
    * body that leaves the client.
    *
-   * The section's own tests prove the row is conditional; these prove the three things
-   * only the *editor* can: that switching the served picker reveals and hides it, that a
-   * bad count is refused BEFORE anything is sent, and — the one that matters most — that
-   * the value a director types is on the object handed to `onSave`, which is what
-   * `eventToUpdateBody` turns into the request. A test that stopped at form state would
-   * pass just as happily against a mapper that dropped the field on the floor.
+   * ⚠️ **The box is on the Draw structure tab** (chore 3e, ADR 20260808): the qualifier
+   * count is a structural setting, and it moved off Basics to sit with the other three.
+   * So every test here opens that tab first, and the two claims about *Basics* are that
+   * the box is not there.
+   *
+   * The section's own tests prove what the row says. These prove the things only the
+   * *editor* can: that a bad count is refused BEFORE anything is sent, that a refused save
+   * opens the tab holding the box, and — the one that matters most — that the value a
+   * director types is on the object handed to `onSave`, which is what `eventToUpdateBody`
+   * turns into the request. A test that stopped at form state would pass just as happily
+   * against a mapper that dropped the field on the floor.
    */
   describe('the qualifier count, end to end', () => {
-    it('reveals the control when the director picks the two-stage format, and hides it again', async () => {
+    /** The qualifiers row, reached the way a director reaches it. */
+    const openQualifiersRow = async () => {
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      return eventEditorPage.drawStructure.setting('Qualifiers per pool')
+    }
+
+    /** A two-stage event whose director already **owns** the count, which is what puts a
+     * direct-entry box on the row rather than a derived number read out as text. */
+    const ownsQualifiers = (qualifiersPerPool: number) =>
+      buildRrThenKoEvent({
+        qualifiersPerPool,
+        drawOwnership: {
+          ...everySettingAutomatic(),
+          qualifiersMode: 'manual',
+        },
+      })
+
+    it('is nowhere on the sheet for a draw type with no knockout stage', () => {
       eventEditorPage.render({ event: buildEvent({ drawType: 'round-robin' }) })
+
+      expect(eventEditorPage.queryQualifiersInput()).toBeNull()
+      expect(eventEditorPage.querySectionTab('Draw structure')).toBeNull()
+    })
+
+    // The move itself, at the level that can see both tabs at once: Basics opens with no
+    // box for K, and the box is one tab over. A control in both places is the state chore
+    // 3e ended — two boxes over one field, showing the stored count and the derived one.
+    it('is set on the Draw structure tab, and not on Basics', async () => {
+      eventEditorPage.render({ event: ownsQualifiers(2) })
+
       expect(eventEditorPage.queryQualifiersInput()).toBeNull()
 
-      // The label is the SERVER's (`draw_type_catalogue`), not a string this client keeps.
-      await eventEditorPage.chooseDrawType('Round-robin then knockout')
-      expect(await screen.findByLabelText(/Qualifiers per pool/)).toBeInTheDocument()
-
-      await eventEditorPage.chooseDrawType('Round robin')
-      await waitFor(() =>
-        expect(eventEditorPage.queryQualifiersInput()).toBeNull(),
-      )
+      const row = await openQualifiersRow()
+      expect(row.getInput()).toHaveValue('2')
     })
 
     // ⚠️ THE CLAIM IS ABOUT THE REQUEST, not the box. `onSave` receives the event the
@@ -74,14 +101,10 @@ describe('EventEditor', () => {
     // really put on the wire — and 2 is neither the planner's fallback (1) nor absent.
     it('SENDS the configured count — the value reaches the request body', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
-      eventEditorPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerPool: 1 }),
-        onSave,
-      })
+      eventEditorPage.render({ event: ownsQualifiers(1), onSave })
 
-      fireEvent.change(eventEditorPage.getQualifiersInput(), {
-        target: { value: '2' },
-      })
+      const row = await openQualifiersRow()
+      fireEvent.change(row.getInput(), { target: { value: '2' } })
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
@@ -109,40 +132,107 @@ describe('EventEditor', () => {
       expect('qualifiers_per_pool' in body).toBe(false)
     })
 
-    // Refused HERE, so nothing was sent — `onSave` not called at all is the assertion
-    // that separates "told the director" from "asked the server and read the answer out".
-    it.each([
-      ['0', 'At least 1 player must advance from each pool.'],
-      ['-1', 'At least 1 player must advance from each pool.'],
-      ['', 'Say how many players advance from each pool.'],
-    ])(
-      'refuses %s inline and sends NOTHING',
-      async (typed, message) => {
-        const onSave = vi.fn()
-        eventEditorPage.render({
-          event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
-          onSave,
-        })
+    /**
+     * Refused HERE, so nothing was sent — `onSave` not called at all is the assertion that
+     * separates "told the director" from "asked the server and read the answer out".
+     *
+     * **An emptied box is the only way in now**, and that is a tightening the move brought
+     * with it: the row's box parses each keystroke (`acceptedManualEntry`), so `0` and `-1`
+     * are dropped as characters and never become form state. The old Basics box was an
+     * `<input type=number>` that accepted both. Only "the director cleared it" is left,
+     * and it is exactly the case a required count must still refuse.
+     */
+    it('refuses an emptied count inline and sends NOTHING', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: ownsQualifiers(2), onSave })
 
-        fireEvent.change(eventEditorPage.getQualifiersInput(), {
-          target: { value: typed },
-        })
-        await userEvent.click(eventEditorPage.getSaveButton())
+      const row = await openQualifiersRow()
+      fireEvent.change(row.getInput(), { target: { value: '' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
 
-        await waitFor(() =>
-          expect(eventEditorPage.queryFieldError(message)).toBeInTheDocument(),
-        )
-        expect(onSave).not.toHaveBeenCalled()
-      },
-    )
+      await waitFor(() =>
+        expect(row.queryError()).toHaveTextContent(
+          'Say how many players advance from each pool.',
+        ),
+      )
+      expect(onSave).not.toHaveBeenCalled()
+      // The red is UNDER the box and pointed at by it — the channel a screen reader has.
+      expect(row.getInput()).toHaveAttribute('aria-invalid', 'true')
+      expect(row.describedNodeOf(row.getInput())).toHaveTextContent(
+        'Say how many players advance from each pool.',
+      )
+    })
+
+    /**
+     * …and the refusal opens **the tab the box is on** — the field-to-tab map, end to end
+     * (`firstInvalidSection`).
+     *
+     * This is the assertion the move can break in silence. Leave `qualifiersPerPool`
+     * mapped to `basics` and everything above still passes: the save is still refused,
+     * nothing is still sent, the red is still rendered on a tab the director was walked
+     * away from. A message on a tab you cannot see is indistinguishable from a Save button
+     * that does nothing, which is the whole reason that map exists. So the test starts on
+     * Basics deliberately, and the claim is *which tab is selected afterwards*.
+     */
+    it('opens the Draw structure tab when the save is refused for the count', async () => {
+      eventEditorPage.render({ event: ownsQualifiers(2), onSave: vi.fn() })
+
+      const row = await openQualifiersRow()
+      fireEvent.change(row.getInput(), { target: { value: '' } })
+      await userEvent.click(eventEditorPage.getSectionTab('Basics'))
+      expect(eventEditorPage.getSectionTab('Basics')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() =>
+        expect(eventEditorPage.getSectionTab('Draw structure')).toHaveAttribute(
+          'aria-selected',
+          'true',
+        ),
+      )
+    })
 
     // The far half of the round trip (chores 3c/3d): what the SERVER stored is what the
     // control opens on. Without this the editor could show a default while the event ran
     // at a different K — the quiet failure the whole server-side detour was to prevent.
-    it('opens on the count the server sent back', () => {
-      eventEditorPage.render({ event: buildRrThenKoEvent({ qualifiersPerPool: 3 }) })
+    it('opens on the count the server sent back', async () => {
+      eventEditorPage.render({ event: ownsQualifiers(3) })
 
-      expect(eventEditorPage.getQualifiersInput()).toHaveValue(3)
+      const row = await openQualifiersRow()
+      expect(row.getInput()).toHaveValue('3')
+    })
+
+    /**
+     * **A cut event refuses the row, and says why** — the defect chore 3c surfaced.
+     *
+     * The server freezes the configuration its draw was dealt from, and K is half of it
+     * for a two-stage event: a bracket cut for `P × K` and advanced at a different K has
+     * qualifiers with no slot to sit in, so the PATCH is a 409. `Set myself` seeds the box
+     * from the DERIVED count, which on a cut event is routinely not the stored one — so
+     * the click that looked harmless was the click that authored the refusal.
+     *
+     * The editor derives the freeze from the SAVED event (`qualifiersPerPoolFreeze`) and
+     * hands it to the tab; this is the wiring, and the row's own test pins what frozen
+     * looks like.
+     */
+    it('freezes the row once the draw is cut, with the reason the box points at', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          qualifiersPerPool: 2,
+          drawOwnership: { ...everySettingAutomatic(), qualifiersMode: 'manual' },
+          fixtures: [buildFixture()],
+        }),
+      })
+
+      const row = await openQualifiersRow()
+      expect(row.getInput()).toBeDisabled()
+      expect(row.getAction()).toBeDisabled()
+      expect(row.describedNodeOf(row.getInput())).toHaveTextContent(
+        /qualifiers per pool is frozen/i,
+      )
     })
   })
 

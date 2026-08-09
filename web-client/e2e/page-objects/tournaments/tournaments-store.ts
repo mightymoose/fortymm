@@ -1082,16 +1082,20 @@ function poolSetFrozenDetail(
 }
 
 /** Why this event PATCH is refused by a standing draw — or `null` when it is not
- * (`_enforce_pool_set_frozen` / `_enforce_draw_type_frozen`, both a 409).
+ * (`_enforce_pool_set_frozen` / `_enforce_draw_settings_frozen`, both a 409).
  *
  * Two facts are frozen while fixtures exist, and **only** these two:
  * - the **set of pool ids**, because a fixture names the pool it was dealt into — remove
  *   one and its fixtures point at nothing, add one and it arrives with no fixtures;
- * - the **draw type**, because it is not a label on an event but the strategy that DEALT
- *   these fixtures.
+ * - the **configuration the draw was dealt from**, which is the draw type *and* the number
+ *   that sized it: an `rr-then-ko` bracket is cut upfront for `P × K`, and a swiss draw
+ *   writes all `R` rounds at the cut. A count the fixtures were not cut for is exactly as
+ *   contradictory as a type they were not dealt by, and much quieter.
  *
  * Everything else about a pool — its name, its tables, its window, its place in the order
- * — stays editable, and so does the rest of the event.
+ * — stays editable, and so does the rest of the event, **including the ownership modes**:
+ * the server excludes `draw_structure` from this comparison on purpose, because a mode
+ * sizes nothing the cut already put on the table.
  *
  * **Re-identifying a pool is no longer one of the refusals**, because it is no longer a
  * payload a client can send (ADR 20260801): a pool id is minted by the server, so an
@@ -1103,6 +1107,8 @@ function frozenDetail(event: TournamentEventRead, body: unknown): string | null 
   const patch = body as {
     pools?: { id?: string | null }[] | null
     draw_type?: string | null
+    qualifiers_per_pool?: number | null
+    rounds?: number | null
   } | null
 
   if (patch?.pools) {
@@ -1117,11 +1123,53 @@ function frozenDetail(event: TournamentEventRead, body: unknown): string | null 
     if (!same) return poolSetFrozenDetail(event, patch.pools)
   }
 
-  if (patch?.draw_type && patch.draw_type !== event.draw_type) {
+  // An absent draw type means the patch is not touching the configuration at all: the
+  // schema refuses an explicit `null` there, and refuses a count with no type beside it.
+  if (!patch?.draw_type) return null
+
+  if (patch.draw_type !== event.draw_type) {
     return (
       "This event's draw is already cut, so its draw type is frozen: its fixtures were " +
       `dealt as a “${event.draw_type}” draw, and changing the type would leave the event ` +
       'claiming a shape its draw does not have. To change the draw type, remove the draw ' +
+      'first, then cut it again.'
+    )
+  }
+
+  // Same type, so the only thing left that can have moved is the setting that sized the
+  // draw. The MSW store enforces the same rule, in the same words
+  // (`drawSettingsFrozenDetail`, `src/mocks/tournaments-store.ts`) — this stub is the one
+  // the browser specs run against, and a stub laxer than the server hides the 409 rather
+  // than reporting it.
+  // ⚠️ **An ABSENT setting reads as unchanged, not as `null`.** On the server an arm
+  // missing its own setting never reaches this guard — `rr-then-ko` requires
+  // `qualifiers_per_pool` and `swiss` requires `rounds`, both with no default, so the
+  // schema answers 422 first. A 409 here for that body would make this stub stricter than
+  // the server, which drives a client to disable work the API allows.
+  if (
+    event.draw_type === 'rr-then-ko' &&
+    'qualifiers_per_pool' in patch &&
+    (patch.qualifiers_per_pool ?? null) !== event.qualifiers_per_pool
+  ) {
+    return (
+      "This event's draw is already cut, so the number of qualifiers per pool is " +
+      `frozen: its knockout bracket was cut for the top ${event.qualifiers_per_pool} out of each ` +
+      `pool of a “${event.draw_type}” draw, and changing that count would leave ` +
+      'qualifiers with no slot to be seated into. To change it, remove the draw ' +
+      'first, then cut it again.'
+    )
+  }
+
+  if (
+    event.draw_type === 'swiss' &&
+    'rounds' in patch &&
+    (patch.rounds ?? null) !== event.rounds
+  ) {
+    const roundNoun = event.rounds === 1 ? 'round' : 'rounds'
+    return (
+      "This event's draw is already cut, so its number of rounds is frozen: all " +
+      `${event.rounds} ${roundNoun} were cut at once, and changing the count would leave ` +
+      'the draw with rounds it has no fixtures for. To change it, remove the draw ' +
       'first, then cut it again.'
     )
   }

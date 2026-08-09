@@ -1,6 +1,7 @@
 import { Overline } from '@/components/overline'
 import { Button } from '@/components/ui/button'
 
+import type { EditFreeze } from '../../data/draw'
 import {
   MANUAL_POOL_DIMENSION_MAX,
   everySettingAutomatic,
@@ -17,6 +18,15 @@ import {
   previewFieldSize,
 } from './draw-structure-section/preview-field'
 import { SettingRow } from './draw-structure-section/setting-row'
+
+/** Inline validation messages for the settings this tab owns, mapped from the editor's
+ * React-Hook-Form state. Only the qualifier count can carry one: the other three settings
+ * are typed through boxes that refuse a keystroke the schema would reject
+ * (`acceptedManualEntry`), while K is a value the event must have and a box the director
+ * can empty. Never shown to a reader — a reader has no box to be wrong in. */
+export interface DrawStructureFieldErrors {
+  qualifiersPerPool?: string
+}
 
 export interface DrawStructureSectionProps {
   /**
@@ -51,6 +61,22 @@ export interface DrawStructureSectionProps {
    * unsaved draft.
    */
   onGoToBasics: () => void
+  /** The resolver's red for the qualifier count, surfaced on its row. The tab does not
+   * *decide* it: the editor resolves the whole form on submit and hands each tab its share,
+   * so "may I save?" and "what does this row say in red?" are one answer computed once —
+   * exactly as the Basics tab already works. */
+  errors?: DrawStructureFieldErrors
+  /** Whether the **qualifier count** may still be changed (`qualifiersPerPoolFreeze`,
+   * `data/draw`). Frozen once the event's draw is cut: the knockout bracket was cut
+   * upfront for `P × K`, so a moved K leaves qualifiers with no slot to be seated into — a
+   * 409 on the server. Frozen means a disabled box and a disabled action, both pointing at
+   * the reason (ADR 20260806); it does not mean a hidden row. The other three settings are
+   * untouched by it — their modes size nothing the cut already put on the table, and the
+   * server excludes them from the freeze on purpose.
+   *
+   * **Required, not optional.** A freeze a call site can forget is a freeze that silently
+   * does not happen, and this one guards a 409. */
+  qualifiersFreeze: EditFreeze
 }
 
 /**
@@ -96,6 +122,8 @@ export const DrawStructureSection = ({
   canEdit,
   onChange,
   onGoToBasics,
+  errors = {},
+  qualifiersFreeze,
 }: DrawStructureSectionProps) => {
   const fieldSize = previewFieldSize(event.maxPlayers)
   // ONE call, two readers — the heading block and the preview's `Preview basis` fact.
@@ -342,9 +370,13 @@ export const DrawStructureSection = ({
                   : undefined
               }
             />
-            {/* ⚠️ Still on Basics as well, this slice. Chore 3e moves it here for good;
-                until then the director sees the stored K on Basics and the DERIVED one
-                here, and the two can disagree. That is deliberate and temporary. */}
+            {/* **K, and this is now the only place it is set** (chore 3e): it is a
+                structural setting, so it moved off the Basics tab and in beside the other
+                three (ADR 20260808). Which is why this row carries two slots the other
+                three do not — the resolver's red, and the cut-draw freeze — both of which
+                the Basics row it replaced already had. Dropping either in the move would
+                have sent a refused save to a tab with nothing red on it, or offered a
+                director a click that can only 409. */}
             <SettingRow
               name="Qualifiers per pool"
               hint="How many finishers from each pool reach the knockout."
@@ -353,11 +385,13 @@ export const DrawStructureSection = ({
               unit="through from each pool"
               ownership={structure.sources.qualifiers.ownership}
               source={structure.sources.qualifiers.sentence}
+              error={errors.qualifiersPerPool}
+              freeze={qualifiersFreeze}
               entry={
                 canEdit && ownership.qualifiersMode === 'manual'
                   ? {
-                      // The event's own K — the manual slot for this setting, and the
-                      // number the Basics box shows too until chore 3e moves it here.
+                      // The event's own K — the manual slot for this setting. There is no
+                      // `manual_qualifiers` on the wire: the stored count IS the slot.
                       value: event.qualifiersPerPool,
                       max: QUALIFIERS_PER_POOL_MAX,
                       onChange: (value) => own({}, value),

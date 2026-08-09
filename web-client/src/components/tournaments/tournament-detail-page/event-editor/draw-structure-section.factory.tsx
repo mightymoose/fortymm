@@ -45,6 +45,11 @@ export function buildDrawStructureSectionProps(
   return {
     event: buildDrawStructureEvent(),
     canEdit: true,
+    // **Open by default, and stated rather than defaulted in the component**: the "Nothing
+    // set" event has no draw, so the qualifier count is a setting a director may still
+    // move. The freeze test asks for the other state explicitly, which is what makes "a
+    // cut event refuses the row" a claim a test makes rather than one it inherits.
+    qualifiersFreeze: { kind: 'open' },
     onChange: () => {},
     onGoToBasics: () => {},
     ...overrides,

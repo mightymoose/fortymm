@@ -206,7 +206,7 @@ export const eventSchema = z.object({
   // rather than on the field.
   //
   // Only the `rr-then-ko` arm is asked at all: for the other two, `qualifiersPerPool` is
-  // `null`, there is no control on screen (the Basics tab renders it only for the
+  // `null`, there is no control on screen (the Draw structure tab exists only for the
   // two-stage type), and the write body omits the key entirely (`eventToApiFields`,
   // `data/api`) — so a rule that fired there would refuse a save for a reason the
   // director cannot see, let alone fix. The issue is raised **at the field's own path**,
@@ -338,20 +338,20 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
  * A message on a tab you cannot see is indistinguishable from a button that does
  * nothing, which is exactly what Save looked like before this existed.
  *
- * Basics before Eligibility before Table pools, deliberately: that is the order the
- * tabs are in, and with more than one broken, the name is the field they are most
- * likely to have simply not filled in — landing on a *later* tab would leave the empty
- * name behind them, unseen.
+ * Basics before Eligibility before Table pools before Draw structure, deliberately: that
+ * is the order the tabs are in, and with more than one broken, the name is the field they
+ * are most likely to have simply not filled in — landing on a *later* tab would leave the
+ * empty name behind them, unseen.
  */
 export function firstInvalidSection(
   errors: FieldErrors<EventFormValues>,
 ): EventSection | null {
-  // `qualifiersPerPool` and `rounds` both live on Basics beside the draw type that decides
-  // whether either is asked at all, so a refused two-stage or swiss save opens the tab
-  // holding the empty box.
+  // `rounds` lives on Basics beside the draw type that decides whether it is asked at all,
+  // so a refused swiss save opens the tab holding the empty box. `qualifiersPerPool` used
+  // to be asked here too, and is asked LAST now — it moved tabs in chore 3e, and this map
+  // has to move with it or a refused two-stage save lands on a tab with nothing red on it.
   if (
     errors.name ||
-    errors.qualifiersPerPool ||
     errors.rounds ||
     errors.maxPlayers ||
     errors.entryFee ||
@@ -359,17 +359,21 @@ export function firstInvalidSection(
   )
     return 'basics'
   if (errors.predicates) return 'eligibility'
-  // The manual pool numbers, on the tab that sets them. **Insurance, not a path a director
-  // can walk today**: the boxes parse each keystroke (`acceptedManualEntry`,
-  // `data/draw-ownership`) and never accept a value `drawOwnershipSchema` would reject, so
-  // this arm exists for the day something else writes the record. Without it a refusal
-  // here would land the director on Basics with no red anywhere, which is the dead end
-  // this function exists to prevent.
-  if (errors.drawOwnership) return 'draw-structure'
   // A pool with a cleared name (`poolNameSchema`). RHF reports it per row
   // (`errors.pools[2].name`) *and* sets the array key, so the truthiness of `pools` is
   // the whole question here — which row it is, the card itself says, in red, under the
   // box. Match settings has no arm: every control on it is a closed picker.
   if (errors.pools) return 'pools'
+  // The FIFTH tab, so it is asked last (`SECTIONS` + `DRAW_STRUCTURE_SECTION`,
+  // `./event-editor`). Two fields land here, and they are reached very differently:
+  //
+  // - **`qualifiersPerPool`** is the one a director walks into. K is required on every
+  //   `rr-then-ko` event, its box is on this tab, and emptying that box is a refused save
+  //   — which has to open the tab holding the box, with the red under it.
+  // - **`drawOwnership`** is insurance. The manual boxes parse each keystroke
+  //   (`acceptedManualEntry`, `data/draw-ownership`) and never accept a value
+  //   `drawOwnershipSchema` would reject, so this arm exists for the day something else
+  //   writes the record.
+  if (errors.qualifiersPerPool || errors.drawOwnership) return 'draw-structure'
   return null
 }

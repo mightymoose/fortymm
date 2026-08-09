@@ -65,6 +65,25 @@ const scoped = (container: Container) => ({
   queryNote() {
     return container.queryByTestId('draw-setting-note')
   },
+  /** The resolver's red for this row's value. Distinct test id from the freeze reason
+   * below, even though the two share one slot, so a test cannot pass on a freeze rendered
+   * where an error belongs. */
+  queryError() {
+    return container.queryByTestId('draw-setting-error')
+  },
+  /** The reason this row is frozen — a cut draw's refusal, in words (ADR 20260806). */
+  queryFreezeReason() {
+    return container.queryByTestId('draw-setting-freeze')
+  },
+  /** Whatever the box or the action POINTS at (`aria-describedby`), resolved to the node
+   * itself. A disabled control is not focusable and carries no tooltip, so this is the
+   * only channel its reason has left — and asserting the text sits *somewhere* on the row
+   * would pass on a reason nothing points at (#1223, the bug in the frozen draw-type
+   * select). `null` when the control describes nothing. */
+  describedNodeOf(control: HTMLElement) {
+    const id = control.getAttribute('aria-describedby')
+    return id === null ? null : document.getElementById(id)
+  },
   /** The row's interactive controls — the one sweep (`@/test/read-only`), composed
    * rather than re-typed. Screen scope only, for the reason `getRow` gives; the tab's
    * own guard sweeps the whole tab (`drawStructureSectionPage.getFormElements`). */

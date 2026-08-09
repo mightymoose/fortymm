@@ -2334,7 +2334,8 @@ export function updateEvent(
   // reason a stranger's request is refused. (The *schema's* 422s come before all of it —
   // the handler asks them at the boundary; see `validateEventBody`. The diff's own 422,
   // below, comes after, so a cut event answers the freeze.)
-  const frozen = poolSetFrozenDetail(event, patch) ?? drawTypeFrozenDetail(event, patch)
+  const frozen =
+    poolSetFrozenDetail(event, patch) ?? drawSettingsFrozenDetail(event, patch)
   if (frozen !== null) return { ok: false, status: 409, detail: frozen }
   // The diff runs BEFORE anything is written, so an entry citing an unknown id leaves the
   // event exactly as it was — never written, not merely rolled back.
@@ -2525,29 +2526,116 @@ function poolSetFrozenDetail(
   )
 }
 
-/** Why this event's `draw_type` may not be replaced right now, or `null` when it may be
- * (`_enforce_draw_type_frozen`, ADR-0786). The pool-set freeze's sibling, one field over:
- * a draw type is not a label on an event, it is the strategy that DEALT its fixtures, and
- * re-labelling it under a standing draw leaves the event claiming a shape its draw does
- * not have (a `single-elim` event holding pooled round-robin fixtures — the PATCH the
- * server used to answer **200**).
+/**
+ * **The configuration a draw was DEALT from**, as one comparable value — the mock's twin
+ * of `DrawSettingsWriteBase.configuration_the_draw_was_dealt_from`.
+ *
+ * A draw type is not a label on an event, it is the strategy that dealt its fixtures — and
+ * for two of the four types a *number* is part of that strategy: an `rr-then-ko` bracket is
+ * cut upfront for `P × K`, and a swiss draw writes all `R` rounds at the cut. So the thing
+ * a standing draw freezes is the type **and** the setting that sized it, together, in one
+ * comparison rather than a field-by-field walk a new setting could fall out of.
+ *
+ * ⚠️ The ownership modes (`draw_structure`) are deliberately **not** in it, exactly as they
+ * are not on the server: they size nothing the cut already put on the table, so taking the
+ * pool count on a cut event is a legal PATCH and must not be refused — least of all by the
+ * qualifier-count sentence, which would name a number the director never touched.
+ */
+function dealtConfiguration(
+  drawType: StoredEvent['draw_type'],
+  qualifiersPerPool: number | null,
+  rounds: number | null,
+): string {
+  switch (drawType) {
+    case 'rr-then-ko':
+      return `rr-then-ko:${qualifiersPerPool}`
+    case 'swiss':
+      return `swiss:${rounds}`
+    case 'round-robin':
+    case 'single-elim':
+      // No setting of their own — the type IS the configuration.
+      return drawType
+    default: {
+      const exhaustive: never = drawType
+      return exhaustive
+    }
+  }
+}
+
+/** Why this event's **draw configuration** may not be replaced right now, or `null` when
+ * it may be (`_enforce_draw_settings_frozen`, ADR-0786 / ADR 20260727 / the swiss ADR).
+ * The pool-set freeze's sibling: re-labelling the type under a standing draw leaves the
+ * event claiming a shape its draw does not have (a `single-elim` event holding pooled
+ * round-robin fixtures — the PATCH the server used to answer **200**), and moving the
+ * number the draw was sized by is exactly as contradictory and much quieter.
+ *
+ * ⚠️ **It used to compare `draw_type` alone, and that gap hid a real defect.** The Draw
+ * structure tab's `Set myself` seeds the qualifier count from the DERIVED value, which on a
+ * cut event is routinely not the stored one — so the click authored a 409 the server would
+ * answer and this mock would not, which is precisely the "looks perfect in `npm run dev`"
+ * trap the rest of this file exists to avoid. A stub that cannot produce the server's
+ * refusal is a stub no test can catch the refusal with.
  *
  * **Presence is not enough — the CHANGE is what is refused.** The editor PATCHes the
- * whole form back, `draw_type` included, to move a pool's tables; a mock that fired on
- * the mere presence of the key would refuse the very edit the freeze exists to permit,
- * and the pools editor would look broken in `npm run dev` against a server that allows
- * it. */
-function drawTypeFrozenDetail(
+ * whole form back, `draw_type` and count included, to move a pool's tables; a mock that
+ * fired on the mere presence of the key would refuse the very edit the freeze exists to
+ * permit, and the pools editor would look broken against a server that allows it. */
+function drawSettingsFrozenDetail(
   event: StoredEvent,
   patch: TournamentEventUpdate,
 ): string | null {
+  // The schema refuses an explicit `null` on `draw_type`, and refuses a count with no draw
+  // type beside it — so an absent draw type means the patch is not touching the
+  // configuration at all.
   if (patch.draw_type === undefined || patch.draw_type === null) return null
-  if (patch.draw_type === event.draw_type) return null
+  const stored = dealtConfiguration(
+    event.draw_type,
+    event.qualifiers_per_pool,
+    event.rounds,
+  )
+  // ⚠️ **An ABSENT setting reads as unchanged, not as `null`.** On the server an arm
+  // missing its own setting never reaches this guard: `rr-then-ko` requires
+  // `qualifiers_per_pool` and `swiss` requires `rounds`, both with no default, so such a
+  // body is a **422 at the schema** (`validateEventBody`, `mocks/handlers`) and the freeze
+  // is never asked about it. Reading the absence as a moved setting would make this mock
+  // answer 409 where the server answers 422 — the mirror image of the laxness this guard
+  // was tightened to fix, and just as misleading.
+  const incoming = dealtConfiguration(
+    patch.draw_type,
+    'qualifiers_per_pool' in patch
+      ? (patch.qualifiers_per_pool ?? null)
+      : event.qualifiers_per_pool,
+    'rounds' in patch ? (patch.rounds ?? null) : event.rounds,
+  )
+  if (stored === incoming) return null
   if (event.fixtures.length === 0) return null
+  // The draw type is named first when both moved: it is the bigger claim, and the
+  // qualifier-count sentence would be describing a bracket the event is no longer asking
+  // to have.
+  if (patch.draw_type !== event.draw_type) {
+    return (
+      "This event's draw is already cut, so its draw type is frozen: its fixtures were " +
+      `dealt as a “${event.draw_type}” draw, and changing the type would leave the event ` +
+      'claiming a shape its draw does not have. To change the draw type, remove the draw ' +
+      'first, then cut it again.'
+    )
+  }
+  // Same type, moved setting — the server's own sentence for each, verbatim, because the
+  // editor shows a refusal's detail verbatim in its inline banner.
+  if (event.draw_type === 'rr-then-ko') {
+    return (
+      "This event's draw is already cut, so the number of qualifiers per pool is " +
+      `frozen: its knockout bracket was cut for the top ${event.qualifiers_per_pool} out of each ` +
+      `pool of a “${event.draw_type}” draw, and changing that count would leave ` +
+      'qualifiers with no slot to be seated into. To change it, remove the draw ' +
+      'first, then cut it again.'
+    )
+  }
+  const roundNoun = event.rounds === 1 ? 'round' : 'rounds'
   return (
-    "This event's draw is already cut, so its draw type is frozen: its fixtures were " +
-    `dealt as a “${event.draw_type}” draw, and changing the type would leave the event ` +
-    'claiming a shape its draw does not have. To change the draw type, remove the draw ' +
+    "This event's draw is already cut, so its number of rounds is frozen: all " +
+    `${event.rounds} ${roundNoun} were cut at once, and changing the count would leave ` +
+    'the draw with rounds it has no fixtures for. To change it, remove the draw ' +
     'first, then cut it again.'
   )
 }
