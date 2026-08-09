@@ -4347,6 +4347,99 @@ internal enum Components {
                 case registered
             }
         }
+        /// Which of a round-robin-then-knockout draw's structural settings the **director
+        /// owns**, and the numbers they chose.
+        ///
+        /// Four settings, each with its ownership stored rather than guessed: the pool count,
+        /// the pool size, the qualifier count (whose value is the event's own
+        /// ``qualifiers_per_pool``), and how entrants reach their pools. Every mode defaults to
+        /// the derived answer, so an event that sets nothing behaves exactly as it does today.
+        ///
+        /// A manual number is kept while its mode is ``automatic``: it is the director's
+        /// number, remembered for the next time they take the setting back.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DrawStructure`.
+        internal struct DrawStructure: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DrawStructure/pool_count_mode`.
+            internal var poolCountMode: Components.Schemas.StructuralSettingOwner?
+            /// - Remark: Generated from `#/components/schemas/DrawStructure/manual_pool_count`.
+            internal var manualPoolCount: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DrawStructure/pool_size_mode`.
+            internal var poolSizeMode: Components.Schemas.StructuralSettingOwner?
+            /// - Remark: Generated from `#/components/schemas/DrawStructure/manual_pool_size`.
+            internal var manualPoolSize: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DrawStructure/qualifiers_mode`.
+            internal var qualifiersMode: Components.Schemas.StructuralSettingOwner?
+            /// - Remark: Generated from `#/components/schemas/DrawStructure/membership_mode`.
+            internal var membershipMode: Components.Schemas.PoolMembershipMode?
+            /// Creates a new `DrawStructure`.
+            ///
+            /// - Parameters:
+            ///   - poolCountMode:
+            ///   - manualPoolCount:
+            ///   - poolSizeMode:
+            ///   - manualPoolSize:
+            ///   - qualifiersMode:
+            ///   - membershipMode:
+            internal init(
+                poolCountMode: Components.Schemas.StructuralSettingOwner? = nil,
+                manualPoolCount: Swift.Int? = nil,
+                poolSizeMode: Components.Schemas.StructuralSettingOwner? = nil,
+                manualPoolSize: Swift.Int? = nil,
+                qualifiersMode: Components.Schemas.StructuralSettingOwner? = nil,
+                membershipMode: Components.Schemas.PoolMembershipMode? = nil
+            ) {
+                self.poolCountMode = poolCountMode
+                self.manualPoolCount = manualPoolCount
+                self.poolSizeMode = poolSizeMode
+                self.manualPoolSize = manualPoolSize
+                self.qualifiersMode = qualifiersMode
+                self.membershipMode = membershipMode
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case poolCountMode = "pool_count_mode"
+                case manualPoolCount = "manual_pool_count"
+                case poolSizeMode = "pool_size_mode"
+                case manualPoolSize = "manual_pool_size"
+                case qualifiersMode = "qualifiers_mode"
+                case membershipMode = "membership_mode"
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.poolCountMode = try container.decodeIfPresent(
+                    Components.Schemas.StructuralSettingOwner.self,
+                    forKey: .poolCountMode
+                )
+                self.manualPoolCount = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .manualPoolCount
+                )
+                self.poolSizeMode = try container.decodeIfPresent(
+                    Components.Schemas.StructuralSettingOwner.self,
+                    forKey: .poolSizeMode
+                )
+                self.manualPoolSize = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .manualPoolSize
+                )
+                self.qualifiersMode = try container.decodeIfPresent(
+                    Components.Schemas.StructuralSettingOwner.self,
+                    forKey: .qualifiersMode
+                )
+                self.membershipMode = try container.decodeIfPresent(
+                    Components.Schemas.PoolMembershipMode.self,
+                    forKey: .membershipMode
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "pool_count_mode",
+                    "manual_pool_count",
+                    "pool_size_mode",
+                    "manual_pool_size",
+                    "qualifiers_mode",
+                    "membership_mode"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/DrawType`.
         internal enum DrawType: String, Codable, Hashable, Sendable, CaseIterable {
             case singleElim = "single-elim"
@@ -7824,6 +7917,11 @@ internal enum Components {
                 case reservation
             }
         }
+        /// - Remark: Generated from `#/components/schemas/PoolMembershipMode`.
+        internal enum PoolMembershipMode: String, Codable, Hashable, Sendable, CaseIterable {
+            case snake = "snake"
+            case manual = "manual"
+        }
         /// A pool whose aggregate match-time (``required_min``) exceeds the
         /// table-minutes its window offers (``capacity_min`` = window span ×
         /// ``table_count``). Resolved: the pool ``name``, which kind of ``reservation``
@@ -9990,6 +10088,11 @@ internal enum Components {
             case live = "live"
             case final = "final"
         }
+        /// - Remark: Generated from `#/components/schemas/StructuralSettingOwner`.
+        internal enum StructuralSettingOwner: String, Codable, Hashable, Sendable, CaseIterable {
+            case automatic = "automatic"
+            case manual = "manual"
+        }
         /// One entry's line in a **swiss** table: every column a pool's row carries, plus
         /// the **Buchholz** figure that ordered it.
         ///
@@ -10606,6 +10709,26 @@ internal enum Components {
             internal var qualifiersPerPool: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/rounds`.
             internal var rounds: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/draw_structure`.
+            internal struct DrawStructurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/draw_structure/value1`.
+                internal var value1: Components.Schemas.DrawStructure
+                /// Creates a new `DrawStructurePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.DrawStructure) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/draw_structure`.
+            internal var drawStructure: Components.Schemas.TournamentEventCreate.DrawStructurePayload?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/max_players`.
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/entry_fee`.
@@ -10628,6 +10751,7 @@ internal enum Components {
             ///   - drawType:
             ///   - qualifiersPerPool:
             ///   - rounds:
+            ///   - drawStructure:
             ///   - maxPlayers:
             ///   - entryFee:
             ///   - timezone:
@@ -10641,6 +10765,7 @@ internal enum Components {
                 drawType: Components.Schemas.DrawType,
                 qualifiersPerPool: Swift.Int? = nil,
                 rounds: Swift.Int? = nil,
+                drawStructure: Components.Schemas.TournamentEventCreate.DrawStructurePayload? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
                 timezone: Swift.String,
@@ -10654,6 +10779,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.qualifiersPerPool = qualifiersPerPool
                 self.rounds = rounds
+                self.drawStructure = drawStructure
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
                 self.timezone = timezone
@@ -10668,6 +10794,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case qualifiersPerPool = "qualifiers_per_pool"
                 case rounds
+                case drawStructure = "draw_structure"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
                 case timezone
@@ -10697,6 +10824,10 @@ internal enum Components {
                 self.rounds = try container.decodeIfPresent(
                     Swift.Int.self,
                     forKey: .rounds
+                )
+                self.drawStructure = try container.decodeIfPresent(
+                    Components.Schemas.TournamentEventCreate.DrawStructurePayload.self,
+                    forKey: .drawStructure
                 )
                 self.maxPlayers = try container.decodeIfPresent(
                     Swift.Int.self,
@@ -10732,6 +10863,7 @@ internal enum Components {
                     "draw_type",
                     "qualifiers_per_pool",
                     "rounds",
+                    "draw_structure",
                     "max_players",
                     "entry_fee",
                     "timezone",
@@ -10758,6 +10890,26 @@ internal enum Components {
             internal var qualifiersPerPool: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/rounds`.
             internal var rounds: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/draw_structure`.
+            internal struct DrawStructurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/draw_structure/value1`.
+                internal var value1: Components.Schemas.DrawStructure
+                /// Creates a new `DrawStructurePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.DrawStructure) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/draw_structure`.
+            internal var drawStructure: Components.Schemas.TournamentEventRead.DrawStructurePayload?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/max_players`.
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_fee`.
@@ -10894,6 +11046,7 @@ internal enum Components {
             ///   - drawType:
             ///   - qualifiersPerPool:
             ///   - rounds:
+            ///   - drawStructure:
             ///   - maxPlayers:
             ///   - entryFee:
             ///   - timezone:
@@ -10916,6 +11069,7 @@ internal enum Components {
                 drawType: Components.Schemas.DrawType,
                 qualifiersPerPool: Swift.Int? = nil,
                 rounds: Swift.Int? = nil,
+                drawStructure: Components.Schemas.TournamentEventRead.DrawStructurePayload? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
                 timezone: Swift.String,
@@ -10938,6 +11092,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.qualifiersPerPool = qualifiersPerPool
                 self.rounds = rounds
+                self.drawStructure = drawStructure
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
                 self.timezone = timezone
@@ -10961,6 +11116,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case qualifiersPerPool = "qualifiers_per_pool"
                 case rounds
+                case drawStructure = "draw_structure"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
                 case timezone
@@ -11045,6 +11201,26 @@ internal enum Components {
             internal var qualifiersPerPool: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/rounds`.
             internal var rounds: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/draw_structure`.
+            internal struct DrawStructurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/draw_structure/value1`.
+                internal var value1: Components.Schemas.DrawStructure
+                /// Creates a new `DrawStructurePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.DrawStructure) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/draw_structure`.
+            internal var drawStructure: Components.Schemas.TournamentEventUpdate.DrawStructurePayload?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/max_players`.
             internal var maxPlayers: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/entry_fee`.
@@ -11103,6 +11279,7 @@ internal enum Components {
             ///   - drawType:
             ///   - qualifiersPerPool:
             ///   - rounds:
+            ///   - drawStructure:
             ///   - maxPlayers:
             ///   - entryFee:
             ///   - timezone:
@@ -11116,6 +11293,7 @@ internal enum Components {
                 drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload? = nil,
                 qualifiersPerPool: Swift.Int? = nil,
                 rounds: Swift.Int? = nil,
+                drawStructure: Components.Schemas.TournamentEventUpdate.DrawStructurePayload? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double? = nil,
                 timezone: Swift.String? = nil,
@@ -11129,6 +11307,7 @@ internal enum Components {
                 self.drawType = drawType
                 self.qualifiersPerPool = qualifiersPerPool
                 self.rounds = rounds
+                self.drawStructure = drawStructure
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
                 self.timezone = timezone
@@ -11143,6 +11322,7 @@ internal enum Components {
                 case drawType = "draw_type"
                 case qualifiersPerPool = "qualifiers_per_pool"
                 case rounds
+                case drawStructure = "draw_structure"
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
                 case timezone
@@ -11172,6 +11352,10 @@ internal enum Components {
                 self.rounds = try container.decodeIfPresent(
                     Swift.Int.self,
                     forKey: .rounds
+                )
+                self.drawStructure = try container.decodeIfPresent(
+                    Components.Schemas.TournamentEventUpdate.DrawStructurePayload.self,
+                    forKey: .drawStructure
                 )
                 self.maxPlayers = try container.decodeIfPresent(
                     Swift.Int.self,
@@ -11207,6 +11391,7 @@ internal enum Components {
                     "draw_type",
                     "qualifiers_per_pool",
                     "rounds",
+                    "draw_structure",
                     "max_players",
                     "entry_fee",
                     "timezone",

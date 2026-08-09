@@ -2277,6 +2277,33 @@ export interface components {
             registered: boolean;
         };
         /**
+         * DrawStructure
+         * @description Which of a round-robin-then-knockout draw's structural settings the **director
+         *     owns**, and the numbers they chose.
+         *
+         *     Four settings, each with its ownership stored rather than guessed: the pool count,
+         *     the pool size, the qualifier count (whose value is the event's own
+         *     ``qualifiers_per_pool``), and how entrants reach their pools. Every mode defaults to
+         *     the derived answer, so an event that sets nothing behaves exactly as it does today.
+         *
+         *     A manual number is kept while its mode is ``automatic``: it is the director's
+         *     number, remembered for the next time they take the setting back.
+         */
+        DrawStructure: {
+            /** @default automatic */
+            pool_count_mode: components["schemas"]["StructuralSettingOwner"];
+            /** Manual Pool Count */
+            manual_pool_count?: number | null;
+            /** @default automatic */
+            pool_size_mode: components["schemas"]["StructuralSettingOwner"];
+            /** Manual Pool Size */
+            manual_pool_size?: number | null;
+            /** @default automatic */
+            qualifiers_mode: components["schemas"]["StructuralSettingOwner"];
+            /** @default snake */
+            membership_mode: components["schemas"]["PoolMembershipMode"];
+        };
+        /**
          * DrawType
          * @enum {string}
          */
@@ -3737,6 +3764,11 @@ export interface components {
             reservation: "pool" | "event";
         };
         /**
+         * PoolMembershipMode
+         * @enum {string}
+         */
+        PoolMembershipMode: "snake" | "manual";
+        /**
          * PoolOverCapacityRead
          * @description A pool whose aggregate match-time (``required_min``) exceeds the
          *     table-minutes its window offers (``capacity_min`` = window span ×
@@ -4630,6 +4662,11 @@ export interface components {
          */
         Status: "scheduled" | "live" | "final";
         /**
+         * StructuralSettingOwner
+         * @enum {string}
+         */
+        StructuralSettingOwner: "automatic" | "manual";
+        /**
          * SwissStandingRowRead
          * @description One entry's line in a **swiss** table: every column a pool's row carries, plus
          *     the **Buchholz** figure that ordered it.
@@ -4911,6 +4948,7 @@ export interface components {
             qualifiers_per_pool?: number | null;
             /** Rounds */
             rounds?: number | null;
+            draw_structure?: components["schemas"]["DrawStructure"] | null;
             /** Max Players */
             max_players?: number | null;
             /** Entry Fee */
@@ -4944,6 +4982,7 @@ export interface components {
             qualifiers_per_pool: number | null;
             /** Rounds */
             rounds: number | null;
+            draw_structure: components["schemas"]["DrawStructure"] | null;
             /** Max Players */
             max_players: number | null;
             /** Entry Fee */
@@ -5015,6 +5054,7 @@ export interface components {
             qualifiers_per_pool?: number | null;
             /** Rounds */
             rounds?: number | null;
+            draw_structure?: components["schemas"]["DrawStructure"] | null;
             /** Max Players */
             max_players?: number | null;
             /** Entry Fee */

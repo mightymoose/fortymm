@@ -1126,6 +1126,29 @@ export function entryStateFor(
     : { state: 'open' }
 }
 
+/** What an `rr-then-ko` event holds before a director takes any setting for
+ * themselves: the system owns all three numbers and deals membership by snake. It is
+ * also what every event that predates the Draw structure tab reads back as, which is
+ * the ADR's "an event that sets nothing behaves exactly as it does today".
+ *
+ * Exported because the MSW store (`src/mocks/tournaments-store.ts`) seeds and mints
+ * `rr-then-ko` events too, and "all-automatic" is one value, not two literals that
+ * would have to be kept agreeing as the settings list grows.
+ *
+ * ⚠️ **Spread it at every use site**, never hand the object itself to an event. `as const`
+ * makes the properties readonly, and TypeScript does not check readonly modifiers on
+ * assignment — so the moment anything writes a mode through an event (which is exactly
+ * what the ownership toggle will do), an unspread constant would rewrite the structure of
+ * every other event sharing it. A row per event is also what the database holds. */
+export const EVERY_SETTING_AUTOMATIC = {
+  pool_count_mode: 'automatic',
+  manual_pool_count: null,
+  pool_size_mode: 'automatic',
+  manual_pool_size: null,
+  qualifiers_mode: 'automatic',
+  membership_mode: 'snake',
+} as const satisfies NonNullable<TournamentEventRead['draw_structure']>
+
 /**
  * A rated Bo5 "Open Singles" event with one morning pool, as returned by the
  * tournament detail/list endpoints. Defaults are internally consistent so a
@@ -1203,6 +1226,17 @@ export function buildTournamentEventRead(
     // for the reason the qualifier count is — the field is required-and-nullable on the read
     // shape while `Partial<…>` admits an explicit `undefined`.
     rounds: overrides.rounds ?? null,
+    // **Every structural setting derived**, which is what an event that has never seen
+    // the Draw structure tab holds (ADR 20260808). Only an `rr-then-ko` event carries
+    // one at all — the other three arms have no structure to own, and the read says so
+    // with `null`. Stated AFTER the spread for the reason the two fields above are: it
+    // is required-and-nullable on the read shape while `Partial<…>` admits an explicit
+    // `undefined`.
+    draw_structure:
+      overrides.draw_structure ??
+      ((overrides.draw_type ?? 'round-robin') === 'rr-then-ko'
+        ? { ...EVERY_SETTING_AUTOMATIC }
+        : null),
   } satisfies Omit<TournamentEventRead, 'entered'>
   return {
     ...event,

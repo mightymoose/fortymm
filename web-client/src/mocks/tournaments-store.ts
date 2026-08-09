@@ -24,6 +24,7 @@ import {
   buildTournamentFixtureRead,
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
+  EVERY_SETTING_AUTOMATIC,
   planDraw,
   planRoundRobinFixtures,
   type DrawPlan,
@@ -111,7 +112,16 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  * draw at the cut (`R × ⌊n/2⌋` fixtures, all of them written up front), it is `null` for
  * every draw type but `swiss`, and `null` is not "unset" there either — a round-robin's
  * rounds come off the circle method and a bracket's depth follows from the field, so
- * neither is a number anybody chooses. */
+ * neither is a number anybody chooses.
+ *
+ * `draw_structure` — **who owns each of a two-stage draw's structural settings** (ADR
+ * 20260808) — is stored on those same terms once more, and it is `null` for every draw
+ * type but `rr-then-ko`: the other three arms have no pool count, pool size, qualifier
+ * count or membership rule to hand anybody, so there is no structure for them to own.
+ * The two `rr-then-ko` rows below hold `EVERY_SETTING_AUTOMATIC` — the factory's one
+ * declaration of "the director has taken nothing", which is what an event that has never
+ * seen the Draw structure tab reads back as. Same discipline as the two fields above:
+ * the seed states the bare value and says no more. */
 type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
@@ -573,6 +583,7 @@ function seed(): StoredTournament[] {
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 64,
           entry_fee: 45,
           timezone: 'America/Chicago',
@@ -621,6 +632,7 @@ function seed(): StoredTournament[] {
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 48,
           entry_fee: 30,
           timezone: 'America/Los_Angeles',
@@ -646,6 +658,7 @@ function seed(): StoredTournament[] {
           draw_type: 'single-elim',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 16,
           entry_fee: 60,
           timezone: 'America/Los_Angeles',
@@ -682,6 +695,7 @@ function seed(): StoredTournament[] {
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 24,
           entry_fee: 20,
           timezone: 'America/Los_Angeles',
@@ -747,6 +761,7 @@ function seed(): StoredTournament[] {
           draw_type: 'single-elim',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 32,
           entry_fee: 25,
           timezone: 'America/Los_Angeles',
@@ -807,6 +822,7 @@ function seed(): StoredTournament[] {
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 16,
           entry_fee: 20,
           timezone: 'America/New_York',
@@ -870,6 +886,7 @@ function seed(): StoredTournament[] {
           draw_type: 'single-elim',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 32,
           entry_fee: 40,
           timezone: 'America/Los_Angeles',
@@ -968,6 +985,7 @@ function seed(): StoredTournament[] {
           draw_type: 'round-robin',
           qualifiers_per_pool: null,
           rounds: null,
+          draw_structure: null,
           max_players: 8,
           entry_fee: 0,
           timezone: 'America/Los_Angeles',
@@ -1038,6 +1056,10 @@ function seed(): StoredTournament[] {
           // for is exactly what this draw type has.
           qualifiers_per_pool: 2,
           rounds: null,
+          // Nothing taken by the director (ADR 20260808) — the system owns all three
+          // numbers and deals membership by snake, which is what this event's pools and
+          // bracket were dealt as. Spread, so this event owns its row (see the constant).
+          draw_structure: { ...EVERY_SETTING_AUTOMATIC },
           max_players: 8,
           entry_fee: 35,
           timezone: 'America/Los_Angeles',
@@ -1128,6 +1150,9 @@ function seed(): StoredTournament[] {
           // exists purely to seed (ADR 20260727).
           qualifiers_per_pool: 2,
           rounds: null,
+          // All-automatic here too: this seed shows the two-stage results states, not a
+          // director's structural choices.
+          draw_structure: { ...EVERY_SETTING_AUTOMATIC },
           max_players: 6,
           entry_fee: 25,
           timezone: 'America/Los_Angeles',
@@ -2236,6 +2261,15 @@ export function createEvent(
     // choose, which is `null`, never `undefined` and never an invented number — the day
     // this event's draw is cut, this is how many rounds get written.
     rounds: body.rounds ?? null,
+    // **Who owns each structural setting** (ADR 20260808), DERIVED from the draw type the
+    // caller sent rather than stated: only an `rr-then-ko` event has a structure to own,
+    // and a new one has had nothing taken from the system yet — which is the ADR's "an
+    // event that sets nothing behaves exactly as it does today". Hardcoding either arm
+    // would make the mock disagree with the server about a designed state: a `null` on a
+    // two-stage event would leave the Draw structure tab reading a shape the API never
+    // sends, and a structure on any other type is a row the settings table cannot hold.
+    draw_structure:
+      body.draw_type === 'rr-then-ko' ? { ...EVERY_SETTING_AUTOMATIC } : null,
     // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
     max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
