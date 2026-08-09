@@ -512,6 +512,12 @@ describe('EventEditor', () => {
           manual_pool_count: 6,
         }),
       )
+      // ⚠️ **The rows travel with the number, in the same request.** The Save click is
+      // what blurs the box, so the count is written *during* that click — and
+      // `writePoolCount` fires two callbacks. A body carrying `manual_pool_count: 6` over
+      // two pools would be a count without its reservations, which is the one act ADR
+      // 20260808 forbids splitting.
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).pools).toHaveLength(6)
     })
 
     // The other half: what the server stored is what the director sees when they come
@@ -576,8 +582,8 @@ describe('EventEditor', () => {
         { target: { value } },
       )
 
-    /** …and this is the director saying they are done with it. A **lowered** count is
-     * priced here rather than on the keystroke — see the multi-digit spec below. */
+    /** …and this is the director saying they are done with it. **No count is written
+     * before it**, up or down — see the two multi-digit specs below. */
     const finishTypingPoolCount = () =>
       fireEvent.blur(eventEditorPage.drawStructure.setting('Pool count').getInput())
 
@@ -590,6 +596,7 @@ describe('EventEditor', () => {
         eventEditorPage.drawStructure.setting('Pool count').getAction(),
       )
       typePoolCount('5')
+      finishTypingPoolCount()
 
       await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
       // Named by continuing the sequence, and each new card is a real, editable pool —
@@ -680,6 +687,9 @@ describe('EventEditor', () => {
      * what happens *between* keystrokes, and a whole-value `fireEvent.change` cannot see
      * it — that spelling passes whether the confirm is priced on the keystroke or on the
      * commit.
+     *
+     * The number the director **finished** typing is then the one that lands, on the
+     * commit and in one act — which is why the tail asserts twelve cards and not one.
      */
     it('lets a director type a count whose first digit is a removal', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
@@ -701,8 +711,88 @@ describe('EventEditor', () => {
       expect(
         eventEditorPage.drawStructure.setting('Pool count').getInput(),
       ).toHaveValue('12')
+
+      finishTypingPoolCount()
+
       await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
       expect(eventEditorPage.getPoolNameInputs()).toHaveLength(12)
+    })
+
+    /**
+     * ⚠️ **…and a count whose first digit RAISES must not mint its rows either.** Against
+     * two pools, `55` produces the value `5` first: written on that keystroke it creates
+     * three reservations, and the `55` then creates fifty more — so a director correcting
+     * the number back down is met by a confirm naming pools the app invented for them.
+     *
+     * Typed one character at a time, and read off the preview's `Pool reservations` fact
+     * rather than the Table pools cards: the fact counts the very list the cards render,
+     * and reading it needs no click, so the claim is about the state *between* keystrokes
+     * and not about what a blur then did.
+     */
+    it('creates no pool row for the first digit of a raised count', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+      const poolReservations = () =>
+        eventEditorPage.drawStructure.preview.getFact('Pool reservations')
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.setting('Pool count').getAction(),
+      )
+      await userEvent.clear(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+      )
+
+      await userEvent.type(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+        '5',
+      )
+      expect(poolReservations()).toHaveTextContent('2')
+
+      await userEvent.type(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+        '5',
+      )
+      expect(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+      ).toHaveValue('55')
+      expect(poolReservations()).toHaveTextContent('2')
+
+      finishTypingPoolCount()
+
+      expect(poolReservations()).toHaveTextContent('55')
+      expect(eventEditorPage.drawStructure.confirm.queryDialog()).toBeNull()
+    })
+
+    /**
+     * **A count the director never finished is discarded when they leave the tab** — and
+     * this is a *pinned* consequence of the commit, not an accident.
+     *
+     * A Radix tab switches on `mousedown`, so React unmounts the panel — box and all —
+     * before focus ever moves: no blur fires, and nothing is committed. The same has been
+     * true of a held *lowering* since the confirm was added, and it is what keeps the two
+     * directions one rule.
+     *
+     * ⚠️ It is also why an unmount-time flush would be wrong: a lowering cannot be priced
+     * from a panel that is gone, so flushing would write the raise and drop the removal —
+     * the very asymmetry this box no longer has. If that is ever reconsidered, this spec
+     * is the one that must be answered first.
+     */
+    it('discards a count the director never finished before leaving the tab', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.setting('Pool count').getAction(),
+      )
+      typePoolCount('5')
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(eventEditorPage.getPoolNameInputs()).toHaveLength(2)
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      expect(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+      ).toHaveValue('2')
     })
 
     /**

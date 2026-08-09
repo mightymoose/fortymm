@@ -37,10 +37,12 @@ export interface SettingRowEntry {
    * Enter. Optional, because only one setting needs the distinction.
    *
    * `onChange` fires per keystroke, which is right for a number that merely gets stored
-   * and wrong for one that **spends** something. The pool count is the second kind: it is
-   * a number of pool rows (ADR 20260808), so lowering it discards reservations and has to
-   * be priced by a confirm first. Priced per keystroke, `12` would be unreachable — the
-   * `1` opens a modal dialog, focus leaves the box, and the `2` never lands.
+   * and wrong for one that **materialises** something. The pool count is the second kind:
+   * it is a number of pool rows (ADR 20260808), so a keystroke would mint or drop real
+   * reservations for a value that is only a prefix of the number being typed. Against four
+   * pools, `55` would mint one row and then fifty more, and `12` would open the removal
+   * confirm on its `1` — focus leaves the box, and the `2` never lands. So the whole
+   * number waits for this signal, whichever way it moves.
    */
   onCommit?: () => void
 }

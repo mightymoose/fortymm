@@ -163,12 +163,16 @@ export interface DrawStructureSectionProps {
  * edits and the save already sends — one write, one save, and no way for the two tabs to
  * disagree about how many pools the event has.
  *
- * Raising the count **appends** rows that continue the letter sequence and inherit the
- * last pool's window, with no tables, and it writes on the keystroke like every other box
- * here — it spends nothing. Lowering it **removes** rows from the end, which discards
- * reservations, so it is *held* until the director finishes typing and then priced by a
- * confirm that names them (ADR 20260806). Held rather than priced per keystroke because
- * `12` begins with `1`: see `typedPoolCount`.
+ * **The box is held while the director types**, in both directions, and written when they
+ * say they are done — off blur or Enter. A keystroke is only a prefix of the number being
+ * typed (`55` begins with `5`, `12` begins with `1`), and this box mints and drops real
+ * pool rows, so acting on a prefix reshapes the event around a count nobody asked for:
+ * see `typedPoolCount`.
+ *
+ * The committed count then **appends** rows that continue the letter sequence and inherit
+ * the last pool's window, with no tables, or **removes** rows from the end. A removal
+ * discards reservations, so it is priced first by a confirm that names them (ADR
+ * 20260806) — priced on the committed number, never on a keystroke.
  *
  * Two things deliberately do *not* reconcile:
  *
@@ -242,19 +246,28 @@ export const DrawStructureSection = ({
     })
 
   /**
-   * A pool count the director has typed but **not finished typing** — one below the rows
-   * the event has, so it is not written yet. `null` the rest of the time.
+   * A pool count the director has typed but **not finished typing**. `null` whenever
+   * nothing is held — which is also what a cleared box leaves behind, since an empty box
+   * is not a count at all.
    *
-   * ⚠️ **This is why the confirm is not opened on the keystroke**, and the reason is
-   * arithmetic rather than taste. Against six pools, typing `12` produces the value `1`
-   * first: priced per keystroke, that `1` opens a modal dialog, focus leaves the box, and
-   * the `2` never lands. Every count with a smaller leading digit than the event has pools
-   * would be unreachable in a box whose ceiling is 512.
+   * ⚠️ **Every typed count is held, in both directions**, and written once the director
+   * says they are done (`commitPoolCount`, off blur or Enter). The reason is arithmetic
+   * rather than taste: a keystroke is a *prefix* of the number being typed, and this box
+   * materialises pool rows, so acting on a prefix acts on a number nobody asked for.
    *
-   * So a lowered count is *held* — the box shows what was typed, nothing is written — and
-   * priced when the director says they are done (`commitPoolCount`, off blur or Enter). A
-   * *raised* count needs none of this: it spends nothing, so it writes on the keystroke
-   * like every other box on the tab.
+   * - Lowering. Against six pools, typing `12` produces the value `1` first. Priced per
+   *   keystroke, that `1` opens a modal dialog, focus leaves the box, and the `2` never
+   *   lands — every count with a smaller leading digit than the event has pools would be
+   *   unreachable in a box whose ceiling is 512.
+   * - Raising. Against four pools, typing `55` produces `5` first. Written per keystroke,
+   *   that `5` mints a pool row and the `55` then mints fifty more, so backspacing to the
+   *   `5` that was meant is now a removal, priced by a confirm naming fifty reservations
+   *   the director never asked for.
+   *
+   * One box, one rule: the box shows what was typed, nothing is written, and the number
+   * the director finished typing is the only one the event ever sees. A lowering that
+   * drops reservations is still priced by the confirm at that point, on the committed
+   * value (ADR 20260806).
    */
   const [typedPoolCount, setTypedPoolCount] = useState<number | null>(null)
 
@@ -289,18 +302,15 @@ export const DrawStructureSection = ({
       own({ manualPoolCount: null })
       return
     }
-    // Below the rows the event has: destructive, so it is held rather than written, and
-    // the next keystroke may well raise it back above them.
-    if (value < pools.length) {
-      setTypedPoolCount(value)
-      return
-    }
-    writePoolCount(value)
+    // Held, whichever way it moves: a keystroke is a prefix, and a prefix of `55` is a
+    // `5` that would mint a pool row nobody asked for. The box shows it, the event does
+    // not get it until `commitPoolCount`.
+    setTypedPoolCount(value)
   }
 
-  /** The director is done typing (they left the box, or pressed Enter). A held count is
-   * priced now: the confirm names the reservations that would go before any of them does
-   * (ADR 20260806). */
+  /** The director is done typing (they left the box, or pressed Enter). The held count is
+   * written now — and priced first if it drops reservations: the confirm names the ones
+   * that would go before any of them does (ADR 20260806). */
   const commitPoolCount = () => {
     // Nothing held, or a dialog already asking about it — the confirm's own focus move
     // blurs the box a second time, and one question is enough.

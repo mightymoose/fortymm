@@ -483,8 +483,9 @@ describe('DrawStructureSection', () => {
         target: { value },
       })
 
-    /** The director says they are done — they left the box. A *lowered* count is priced
-     * here rather than on the keystroke, because `12` begins with `1`. */
+    /** The director says they are done — they left the box. **Nothing is written before
+     * this**, whichever way the count moved: a keystroke is only a prefix of the number
+     * being typed, and `55` begins with `5` exactly as `12` begins with `1`. */
     const finishTyping = () =>
       fireEvent.blur(drawStructureSectionPage.setting('Pool count').getInput())
 
@@ -493,16 +494,49 @@ describe('DrawStructureSection', () => {
         const { onChange, onPoolsChange } = renderOwningCount()
 
         typeCount('6')
+        finishTyping()
 
         // ONE act: the stored number and the rows, written together.
         expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(6)
         expect(onPoolsChange.mock.lastCall?.[0]).toHaveLength(6)
       })
 
+      /**
+       * ⚠️ **A raised count is held until the director finishes typing it**, and this is
+       * the assertion that says why. Against four pools, `55` produces the value `5`
+       * first: written on that keystroke it mints a fifth pool, and the `55` then mints
+       * fifty more — so backspacing to the `5` the director meant is a *removal*, priced
+       * by a confirm naming fifty reservations they never asked for.
+       *
+       * The pool list must be untouched until the number is finished, and then written
+       * **once**, for the number that was finished.
+       */
+      it('mints no row for the prefix of a longer number, and writes the finished one once', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+
+        typeCount('5')
+
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+
+        typeCount('55')
+
+        expect(onPoolsChange).not.toHaveBeenCalled()
+        expect(drawStructureSectionPage.setting('Pool count').getInput()).toHaveValue('55')
+
+        finishTyping()
+
+        expect(onPoolsChange).toHaveBeenCalledTimes(1)
+        expect(onPoolsChange.mock.lastCall?.[0]).toHaveLength(55)
+        expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(55)
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+      })
+
       it('continues the letter sequence rather than restarting it', () => {
         const { onPoolsChange } = renderOwningCount()
 
         typeCount('6')
+        finishTyping()
 
         expect(
           onPoolsChange.mock.lastCall?.[0].map((pool: PoolEntry) => pool.name),
@@ -516,6 +550,7 @@ describe('DrawStructureSection', () => {
         const { onPoolsChange } = renderOwningCount()
 
         typeCount('5')
+        finishTyping()
 
         const appended = onPoolsChange.mock.lastCall?.[0].at(-1)
         expect(appended.slot).toEqual({
@@ -534,6 +569,7 @@ describe('DrawStructureSection', () => {
         const { onPoolsChange } = renderOwningCount()
 
         typeCount('6')
+        finishTyping()
 
         const written: PoolEntry[] = onPoolsChange.mock.lastCall?.[0]
         expect(written.slice(0, 4).map((pool) => pool.kind)).toEqual([
@@ -555,6 +591,7 @@ describe('DrawStructureSection', () => {
         renderOwningCount()
 
         typeCount('6')
+        finishTyping()
 
         expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
       })
@@ -594,16 +631,25 @@ describe('DrawStructureSection', () => {
         expect(onPoolsChange).not.toHaveBeenCalled()
       })
 
-      /** …and the next digit takes it back above the row count, which writes at once —
-       * nothing is discarded, so nothing is priced. */
-      it('writes the moment the number typed is no longer a removal', () => {
+      /** …and the next digit takes it back above the row count, so the number the
+       * director finished typing is the one that lands — with no confirm, because it
+       * discards nothing. The `1` that was on its way there is priced by nothing and
+       * writes nothing. */
+      it('writes the finished number when a later digit undoes the removal', () => {
         const { onChange, onPoolsChange } = renderOwningCount()
 
         typeCount('1')
         typeCount('12')
 
         expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+
+        finishTyping()
+
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
         expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(12)
+        expect(onPoolsChange).toHaveBeenCalledTimes(1)
         expect(onPoolsChange.mock.lastCall?.[0]).toHaveLength(12)
       })
 
@@ -733,6 +779,7 @@ describe('DrawStructureSection', () => {
       })
 
       typeCount('4')
+      finishTyping()
 
       expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
       expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(4)
