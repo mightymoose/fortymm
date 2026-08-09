@@ -1,5 +1,7 @@
 import { expect, Locator, Page } from '@playwright/test'
 
+import { DrawStructureTabPage } from './event-editor/draw-structure-tab.page'
+
 /**
  * The **event editor** — the slide-in sheet the Events tab opens for "New event" and
  * for any event card. Scoped to what the rr-then-ko spec authors through it: the name,
@@ -88,11 +90,48 @@ export class EventEditorPage {
     await expect(this.roundsInput).toHaveValue(String(rounds))
   }
 
+  // ----- the sheet's tabs ---------------------------------------------------
+
+  /** One of the sheet's section tabs, by the word on it.
+   *
+   * The union is the tab list itself, and `Draw structure` is the **conditional** member
+   * (ADR 20260808): it exists only while the draft's draw type is `rr-then-ko`, so a spec
+   * reaching for it on any other format is asking for a tab that is deliberately not
+   * there. Typed rather than left as a bare `string` so that "assert this tab is absent"
+   * cannot quietly become "assert a tab I misspelled is absent", which passes for free. */
+  tab(
+    name:
+      | 'Basics'
+      | 'Eligibility'
+      | 'Match settings'
+      | 'Table pools'
+      | 'Draw structure',
+  ): Locator {
+    return this.page.getByRole('tab', { name, exact: true })
+  }
+
+  // ----- Draw structure (rr-then-ko only) -----------------------------------
+
+  /** The **Draw structure** tab's surfaces, composed as a child page object. A getter
+   * rather than a field, so it cannot depend on whether a field initializer runs before
+   * or after the constructor's parameter property — and a page object holds no state, so
+   * handing back a fresh one costs nothing. */
+  get drawStructure(): DrawStructureTabPage {
+    return new DrawStructureTabPage(this.page)
+  }
+
+  /** Switch to the Draw structure tab and return its page object — plain component
+   * state, no navigation, the same shape `TournamentDetailPage.openSchedule` takes. */
+  async openDrawStructure(): Promise<DrawStructureTabPage> {
+    await this.tab('Draw structure').click()
+    return this.drawStructure
+  }
+
   // ----- Table pools --------------------------------------------------------
 
   /** The "Table pools" tab of the sheet — plain component state, no navigation. */
   get poolsTab(): Locator {
-    return this.page.getByRole('tab', { name: 'Table pools' })
+    return this.tab('Table pools')
   }
 
   /** Every pool card currently in the draft, so a spec can count them. */

@@ -221,6 +221,37 @@ export class TournamentDetailPage {
     return new EventEditorPage(this.page)
   }
 
+  /** The **full-card open target** for one event — a stretched `<button>` sibling of the
+   * card, named `Edit {event}` for the director and `View {event}` for everyone else.
+   *
+   * `exact`, for the reason `publishButton` and `poolDrawNamed` are: `getByRole`'s name
+   * option is a *substring* match, so `Edit Open` would also resolve `Edit Open Singles`
+   * — and a spec that seeds two events on one tournament (the only way to state "this
+   * format has the tab and that one does not") is exactly where two events' names overlap. */
+  openEventButton(eventName: string): Locator {
+    return this.page.getByRole('button', {
+      name: `Edit ${eventName}`,
+      exact: true,
+    })
+  }
+
+  /**
+   * Open an **existing** event's editor by clicking its card, and return the editor's
+   * page object — the read-back counterpart of `openNewEvent`.
+   *
+   * ⚠️ **Clicked near its top-left corner, not at its centre.** The open target is a
+   * `z-0` button stretched under the card, and the card raises its own *controls* above it
+   * (`relative z-10`) — the Enter control and the whole draw panel, whose Generate /
+   * Re-cut / Delete would otherwise never receive a click. On a tall card the overlay's
+   * geometric centre (where a bare `.click()` lands) is inside the draw panel, so the
+   * click hits the panel and the editor never opens. The same positioned click is what
+   * `web-client/e2e`'s own detail page object does, for the same reason.
+   */
+  async openEvent(eventName: string): Promise<EventEditorPage> {
+    await this.openEventButton(eventName).click({ position: { x: 30, y: 20 } })
+    return new EventEditorPage(this.page)
+  }
+
   // ----- entry (event card) -------------------------------------------------
 
   /** The self-registration **Enter** button on an event's card, by event name. */

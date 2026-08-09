@@ -464,8 +464,17 @@ export class TournamentDetailPage {
     return this.page.getByRole('button', { name: /Create event|Save changes/ })
   }
 
-  /** One of the editor's four section tabs. */
-  editorTab(name: 'Basics' | 'Eligibility' | 'Match settings' | 'Table pools'): Locator {
+  /** One of the editor's section tabs. `Draw structure` is the **conditional** one: it
+   * exists only while the event's draw type is `rr-then-ko` (ADR 20260808), so a spec
+   * that reaches for it on any other format is asking for a tab that is not there. */
+  editorTab(
+    name:
+      | 'Basics'
+      | 'Eligibility'
+      | 'Match settings'
+      | 'Table pools'
+      | 'Draw structure',
+  ): Locator {
     return this.page.getByRole('tab', { name })
   }
 

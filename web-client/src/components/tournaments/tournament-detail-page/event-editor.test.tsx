@@ -13,6 +13,7 @@ import {
   buildPool,
   buildPredicate,
   buildRrThenKoEvent,
+  buildSwissEvent,
   buildTournament,
 } from '../data/seed.factory'
 import { eventEditorPage } from './event-editor.page'
@@ -141,6 +142,120 @@ describe('EventEditor', () => {
       eventEditorPage.render({ event: buildRrThenKoEvent({ qualifiersPerPool: 3 }) })
 
       expect(eventEditorPage.getQualifiersInput()).toHaveValue(3)
+    })
+  })
+
+  /**
+   * **The Draw structure tab is conditional** (ADR 20260808, #1320). Only `rr-then-ko`
+   * has a pool stage feeding a knockout, so only `rr-then-ko` has a structure to set:
+   * for the other three formats the tab is *absent*, not empty and not disabled.
+   *
+   * The section's own tests pin what the tab says. These pin the three things only the
+   * editor can: that the tab is on the list, that it is off the list for every other
+   * draw type, and that switching format out from under a director standing on it does
+   * not leave them looking at a blank sheet.
+   */
+  describe('the Draw structure tab', () => {
+    it('is the fifth tab for a two-stage event', () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      expect(eventEditorPage.getSectionTabLabels()).toEqual([
+        'Basics',
+        'Eligibility',
+        'Match settings',
+        'Table pools',
+        'Draw structure',
+      ])
+    })
+
+    it.each([
+      ['round-robin', () => buildEvent({ drawType: 'round-robin' })],
+      ['single-elim', () => buildEvent({ drawType: 'single-elim', pools: [] })],
+      ['swiss', () => buildSwissEvent()],
+    ] as const)('is absent for %s', (_drawType, build) => {
+      eventEditorPage.render({ event: build() })
+
+      expect(eventEditorPage.querySectionTab('Draw structure')).toBeNull()
+      expect(eventEditorPage.getSectionTabLabels()).toHaveLength(4)
+    })
+
+    it('opens onto the four settings, derived from the draft', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          maxPlayers: 32,
+          pools: [
+            buildPool({ id: 'p-a', name: 'Pool A', position: 0 }),
+            buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
+          ],
+        }),
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+
+      // Wiring only: every value and sentence is pinned by the section's own tests.
+      expect(eventEditorPage.drawStructure.getSettingNames()).toEqual([
+        'Pool count',
+        'Pool size',
+        'Membership',
+        'Qualifiers per pool',
+      ])
+      expect(
+        eventEditorPage.drawStructure.setting('Pool size').getSource(),
+      ).toHaveTextContent('32 players ÷ 2 pools')
+    })
+
+    // The draft is what the tab is keyed on, so the picker reveals and hides it live —
+    // the same claim the qualifier-count row makes one tab over.
+    it('appears when the director picks the two-stage format', async () => {
+      eventEditorPage.render({ event: buildEvent({ drawType: 'round-robin' }) })
+      expect(eventEditorPage.querySectionTab('Draw structure')).toBeNull()
+
+      await eventEditorPage.chooseDrawType('Round-robin then knockout')
+
+      expect(
+        await screen.findByRole('tab', { name: 'Draw structure' }),
+      ).toBeInTheDocument()
+    })
+
+    /**
+     * …and goes again when they change their mind — the round trip, and the case that
+     * leaves a director looking at a blank sheet if the tab list and the panel ever
+     * disagree (Radix renders no panel for a `value` that matches no trigger).
+     *
+     * The picker lives on Basics, so a director necessarily walks back there to switch
+     * format: the assertion is that they are still standing on a real tab afterwards.
+     */
+    it('goes again when the director switches away, leaving them on a live tab', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(eventEditorPage.getSectionTab('Basics'))
+      await eventEditorPage.chooseDrawType('Round robin')
+
+      await waitFor(() =>
+        expect(eventEditorPage.querySectionTab('Draw structure')).toBeNull(),
+      )
+      expect(eventEditorPage.getSectionTab('Basics')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(eventEditorPage.getNameInput()).toBeInTheDocument()
+    })
+
+    // The tab reaches back to the tab that owns the number it derives against.
+    it('takes the director to Basics from the preview-field block', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.getChangeInBasicsButton(),
+      )
+
+      expect(eventEditorPage.getSectionTab('Basics')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(eventEditorPage.getPlayerLimitInput()).toBeInTheDocument()
     })
   })
 
