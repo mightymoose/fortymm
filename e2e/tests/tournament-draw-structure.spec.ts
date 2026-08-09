@@ -8,7 +8,10 @@ import {
   addEvent,
   createTournament,
   findEventByName,
+  getEventPools,
   patchEventDrawRaw,
+  seedEntrants,
+  transitionTournament,
   validationDetails,
   type PoolSpec,
   type StoredTable,
@@ -191,6 +194,159 @@ const SERVER_ONE_PLAYER_KNOCKOUT_REFUSAL =
   'knockout stage, who would have nobody to play — take more qualifiers ' +
   'from each pool, or configure more pools.'
 
+// ----- the fourth spec's numbers: two manual numbers that DISAGREE -----------
+//
+// The reference's own worked example, and the ADR's: six pools of five seat thirty, and a
+// field of forty leaves ten entrants with nowhere to go. Nothing here is shared with the
+// three scenarios above, for the reason none of those share anything with each other —
+// every number below is an input to, or a consequence of, one standoff.
+
+/** The cap this standoff is measured against. **Forty**, and it has to be a number the
+ * manual pair misses: 32 over six pools of five would be a *two*-seat overshoot in the
+ * other direction, which is the half of the disagreement that changes nothing anywhere. */
+const DISAGREEMENT_FIELD_CAP = 40
+/** Six pool rows, reserving no tables. Six because the director's manual count agrees with
+ * their pool rows here — the standoff under test is between the count and the *size*, and a
+ * count that also disagreed with the rows would be a second argument in the same panel. */
+const DISAGREEMENT_POOLS: ReadonlyArray<PoolSpec> = [
+  'A',
+  'B',
+  'C',
+  'D',
+  'E',
+  'F',
+].map((letter) => ({ name: `Pool ${letter}`, tableLabels: [] }))
+const MANUAL_POOL_COUNT = 6
+/** The size the director types over the seven the row was showing (`Set myself` seeds the
+ * **largest** derived pool, and 40 across 6 is `7,7,7,7,6,6`). */
+const DISAGREEING_POOL_SIZE = 5
+/** `6 × 5` — what the structure actually seats. */
+const SEATS = MANUAL_POOL_COUNT * DISAGREEING_POOL_SIZE
+/** `40 − 30`, the entrants the structure has no seat for. */
+const UNSEATED = DISAGREEMENT_FIELD_CAP - SEATS
+
+/** The uneven notice the tab shows **before** either setting is taken — the control that
+ * makes the disagreement below a change of state rather than a panel that was there all
+ * along. 40 across 6 pool rows is `7,7,7,7,6,6`, which this app calls legal and says so.
+ *
+ * A **middle dot** (`·`, U+00B7) between the tallies, and note it is *not* the ` and ` of
+ * `Allow uneven pools`'s detail line: the same two numbers are written two ways a few
+ * pixels apart and both are the reference's. */
+const UNEVEN_TOPLINE = 'Legal, but uneven'
+const UNEVEN_TITLE = '4 pools of 7 · 2 pools of 6'
+
+/** **The topline of a notice that is not a refusal.** `Needs your call`, over a `status`
+ * role: the numbers disagree, the app says so, and nothing is disabled. */
+const NEEDS_YOUR_CALL = 'Needs your call'
+/** **The standoff, in the reference's own sentence** — both of the director's numbers
+ * printed back at them unchanged, and the product they make. Unpluralised throughout,
+ * which is the reference's transcription rather than an improvement on it. */
+const DISAGREEMENT_TITLE = `${MANUAL_POOL_COUNT} pools of ${DISAGREEING_POOL_SIZE} seat ${SEATS}. Your field is ${DISAGREEMENT_FIELD_CAP}.`
+/** …and the promise under it. A right single quote (`U+2019`) in `won’t`, as the reference
+ * writes every apostrophe but `today's behaviour`. */
+const DISAGREEMENT_BODY = `${UNSEATED} entrants have nowhere to go. We won’t change your numbers behind your back.`
+/** The preview's verdict and badge while the two numbers disagree — neither the `Sound`
+ * of a draw that adds up nor the `Impossible` of one nobody can play. */
+const DISAGREEMENT_VERDICT = 'Your numbers disagree'
+const DISAGREEMENT_BADGE = 'Your call'
+
+/** `6 × 2` qualifiers into the next power of two. Asserted because the preview describes
+ * the structure the director **typed**, not one the app quietly rounded into shape. */
+const DISAGREEING_BRACKET_SIZE = 12
+const DISAGREEING_BYES = 4
+/** `6 × C(5,2)`. */
+const DISAGREEING_POOL_MATCHES = 60
+
+/** **The three ways out, in the panel's order**, and the line under each.
+ *
+ * Every label carries a number the derivation worked out: `30` is the seats, `8` is
+ * `ceil(40 / 5)`, and the split phrase is `tallyBalancedSplit(40, 6)` written with a
+ * multiplication sign (`×`, U+00D7) and joined with ` and `. The README states that last
+ * one as its own worked example, so it is pinned twice on purpose. */
+const CAP_THE_FIELD = `Cap the field at ${SEATS}`
+const CAP_THE_FIELD_DETAIL = 'Your structure stays exact.'
+const SEAT_EVERYONE = `Use 8 pools of ${DISAGREEING_POOL_SIZE}`
+const SEAT_EVERYONE_DETAIL = 'Everyone gets a seat.'
+const ALLOW_UNEVEN = 'Allow uneven pools'
+const ALLOW_UNEVEN_DETAIL = '4 × 7 and 2 × 6 players.'
+
+/** What `Use 8 pools of 5` leaves behind: eight pool **rows**, because a pool count is its
+ * rows (ADR 20260808) and the fix writes through the same `reconcilePoolsToCount` the Pool
+ * count box types through. `8 × 5` is exactly 40, so the standoff is over. */
+const SEATED_POOL_COUNT = 8
+
+// ----- the fifth spec's numbers: the CUT, which cannot wait for an answer ----
+//
+// Smaller than the scenario above, and deliberately its own event: the cut judges the
+// **real registered field**, not the cap, so every entrant this scenario needs is a guest
+// minted and entered one at a time. Ten is the smallest field that states the case with
+// every noun plural in both directions.
+
+/** The cap, and the field: exactly ten enter, so the tab's preview field and the cut's real
+ * field are the same number — which is what lets one sentence on screen and one from the
+ * API be compared as statements about one standoff. */
+const CUT_FIELD = 10
+/** Two pool rows, matching the manual count below. */
+const CUT_POOLS: ReadonlyArray<PoolSpec> = ['A', 'B'].map((letter) => ({
+  name: `Pool ${letter}`,
+  tableLabels: [],
+}))
+const CUT_MANUAL_POOL_COUNT = 2
+const CUT_MANUAL_POOL_SIZE = 4
+/** `2 × 4`, against a field of ten: two entrants with nowhere to go. */
+const CUT_SEATS = CUT_MANUAL_POOL_COUNT * CUT_MANUAL_POOL_SIZE
+const CUT_UNSEATED = CUT_FIELD - CUT_SEATS
+
+/** **K as this event stores it**, and the reason it is two rather than the derivation's
+ * number: the strategy judges the *stored* count against the smallest pool the snake really
+ * deals (`RrThenKoStrategy.plan_initial`), and it runs **before** the unseated guard. Ten
+ * entrants across three rows deal `4,3,3`, so a stored count above three would refuse the
+ * second cut for a different reason entirely — a green-looking red that says `qualifiers`
+ * where this spec claims `nowhere to go`. Two clears every pool in both states, and it is
+ * read back off the server before each cut so a wrong-reason refusal names itself. */
+const CUT_QUALIFIERS = 2
+
+/** The tab's own sentence about the standoff, before anybody cuts anything. */
+const CUT_DISAGREEMENT_TITLE = `${CUT_MANUAL_POOL_COUNT} pools of ${CUT_MANUAL_POOL_SIZE} seat ${CUT_SEATS}. Your field is ${CUT_FIELD}.`
+const CUT_DISAGREEMENT_BODY = `${CUT_UNSEATED} entrants have nowhere to go. We won’t change your numbers behind your back.`
+
+/** **The server's refusal at the cut, verbatim** (`app.draw_structure.unseated_entrants_
+ * message`) — quoted source, transcribed rather than tidied.
+ *
+ * An **em dash** (`—`, U+2014) before the shortfall, and the same numbers the tab was
+ * showing: what the structure seats, what the field is, how many have nowhere to go. It is
+ * longer than the panel's, and for the panel's own reason — the API has no button to offer,
+ * so the way out has to be inside the sentence. */
+const SERVER_UNSEATED_REFUSAL =
+  `${CUT_MANUAL_POOL_COUNT} pools of ${CUT_MANUAL_POOL_SIZE} seat ${CUT_SEATS}, ` +
+  `and this event has ${CUT_FIELD} entrants — ${CUT_UNSEATED} entrants have ` +
+  'nowhere to go. Cutting would have to change one of those numbers for you, ' +
+  'so change the pool count or the pool size, then cut again.'
+/** The heading the card's refusal alert puts over that sentence.
+ *
+ * ⚠️ A **straight** apostrophe (U+0027) in `can't`. This one is the *client's* own literal
+ * (`drawRefusalNotice`, `data/draw.ts`) and not the design reference's copy, so the
+ * `U+2019` rule that governs `Can’t save` does not reach it. Copied byte for byte from the
+ * file rather than typed. */
+const CUT_REFUSAL_TITLE = "This event can't be drawn yet"
+
+/** The resolution this spec takes: `ceil(10 / 4)` pools, keeping the size. */
+const CUT_RESOLUTION = `Use 3 pools of ${CUT_MANUAL_POOL_SIZE}`
+const RESOLVED_POOL_COUNT = 3
+/** …and **the state it lands in, which is still a disagreement** — `3 × 4` seats twelve
+ * against a field of ten. The fix's detail line promises only that everyone gets a seat,
+ * and the ceiling is why two of them are spare.
+ *
+ * ⚠️ **This is the asymmetry, and it is load-bearing — do not tidy it into symmetry.** The
+ * tab still says `Needs your call`, and the cut goes through anyway: only the `unseated`
+ * direction stops a cut, because empty seats deal the legal uneven split this app already
+ * calls legal one panel over (`entrants_with_nowhere_to_go`). Refusing them would dead-end
+ * the director on the app's own offered fix. */
+const RESOLVED_SEATS = RESOLVED_POOL_COUNT * CUT_MANUAL_POOL_SIZE
+const SPARE_SEATS = RESOLVED_SEATS - CUT_FIELD
+const SPARE_SEATS_TITLE = `${RESOLVED_POOL_COUNT} pools of ${CUT_MANUAL_POOL_SIZE} seat ${RESOLVED_SEATS}. Your field is ${CUT_FIELD}.`
+const SPARE_SEATS_BODY = `${SPARE_SEATS} seats would be empty. We won’t change your numbers behind your back.`
+
 /**
  * The tournament both specs are about: one `rr-then-ko` event, capped at 32, over four
  * pool rows that reserve no tables — the state the whole tab is derived from.
@@ -203,17 +359,21 @@ const SERVER_ONE_PLAYER_KNOCKOUT_REFUSAL =
  * having rendered at all — the hero's `h1` — and the catalogue because a second event is
  * added against it.
  *
- * **The two overrides are the pool rows and K, and no others.** They are the pair the
- * derivation's whole answer turns on, so a scenario about a different draw shape changes
- * them and leaves the cap, the draw type and the name alone — which is what keeps every
- * number this file asserts traceable to one of the two. Both default to the four-pool
- * event the first two specs read.
+ * **The three overrides are the pool rows, K and the cap, and no others.** They are what
+ * the derivation's whole answer turns on, so a scenario about a different draw shape
+ * changes them and leaves the draw type and the name alone — which is what keeps every
+ * number this file asserts traceable to one of the three. All three default to the
+ * four-pool, 32-player event the first two specs read.
+ *
+ * The cap is a knob because a **disagreement** is a statement about the field: the manual
+ * pair has to miss it, and 32 is divisible by too much of what these scenarios type.
  */
 async function seedTwoStageTournament(
   page: Page,
   options: {
     readonly pools?: ReadonlyArray<PoolSpec>
     readonly qualifiersPerPool?: number
+    readonly maxPlayers?: number
   } = {},
 ): Promise<{
   director: Guest
@@ -232,7 +392,7 @@ async function seedTwoStageTournament(
     name: RR_KO_EVENT,
     drawType: 'rr-then-ko',
     qualifiersPerPool: options.qualifiersPerPool ?? STORED_QUALIFIERS_PER_POOL,
-    maxPlayers: FIELD_CAP,
+    maxPlayers: options.maxPlayers ?? FIELD_CAP,
     pools: options.pools ?? POOLS,
   })
 
@@ -747,5 +907,377 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     const saved = await findEventByName(director, tournamentId, RR_KO_EVENT)
     expect(saved.qualifiers_per_pool).toBe(FIXED_QUALIFIERS)
     expect(saved.draw_structure?.qualifiers_mode).toBe('manual')
+  })
+
+  /**
+   * **Two numbers the director typed that do not seat their field — reported, and nothing
+   * touched.**
+   *
+   * Six pools of five seat thirty. Their field is forty. Ten entrants have nowhere to go,
+   * and the app says exactly that and then does nothing else: both numbers stay as typed,
+   * the save stays available, and the way out is three named acts the director chooses
+   * between (ADR 20260808 — report, do not reshape).
+   *
+   * ## Why this is not the refusal one spec up
+   *
+   * It looks like one and is deliberately not one, and every discriminator is asserted:
+   *
+   * | | Refusal | This |
+   * | --- | --- | --- |
+   * | Role | `alert` | **`status`** |
+   * | Topline | `Can’t save` | **`Needs your call`** |
+   * | Save | withheld, and says why | **available, and it works** |
+   * | Verdict | `This draw can’t work yet` | **`Your numbers disagree`** |
+   *
+   * The save is the one that matters most and the one a screen cannot state: a disagreement
+   * is two playable numbers that miss each other, and a director may be mid-thought. So the
+   * event is really saved, and read back off the server holding **both** manual numbers —
+   * which is also the only way to tell "the tab kept them on screen" from "the write kept
+   * them".
+   *
+   * ## What only this suite can say
+   *
+   * That `Use 8 pools of 5` **is eight pool rows**. The fix carries a number, but ADR
+   * 20260808 says a pool count is its rows, so applying it has to create two
+   * `tournament_event_pools` — and the only place that claim can be tested as a claim about
+   * pools rather than about a number is a stack where the Table pools tab and the server's
+   * own pool list can be read after the save. A unit test can only watch a callback fire
+   * with an eight in it.
+   */
+  test('a director whose six pools of five miss a forty-player field is told so, and offered three ways out', async ({
+    page,
+    baseURL,
+  }) => {
+    expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
+
+    const { director, tournamentId, name, eventId } = await seedTwoStageTournament(
+      page,
+      { pools: DISAGREEMENT_POOLS, maxPlayers: DISAGREEMENT_FIELD_CAP },
+    )
+
+    const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
+    // The long timeout is the composed web-client's first compile of this route, not the
+    // app — see the same wait in the three specs above.
+    await expect(detail.title).toContainText(name, { timeout: 60_000 })
+
+    const editor = await detail.openEvent(RR_KO_EVENT)
+    const drawStructure = await editor.openDrawStructure()
+    await expect(drawStructure.section).toBeVisible()
+
+    // ----- 1. the control: nobody owns anything, and the draw is LEGAL -------
+    // 40 across six pool rows is `7,7,7,7,6,6` — uneven, which this app calls legal and
+    // says so in its own panel. Asserted first because the whole claim below is that the
+    // notice *changed*, and a panel that was there all along would satisfy every
+    // "the panel is visible" reading on its own.
+    await expect(drawStructure.fieldSize).toHaveText(String(DISAGREEMENT_FIELD_CAP))
+    await expect(drawStructure.issue).toHaveRole('status')
+    await expect(drawStructure.issue).toContainText(UNEVEN_TOPLINE)
+    await expect(drawStructure.issueTitle).toHaveText(UNEVEN_TITLE)
+    await expect(drawStructure.previewVerdict).toHaveText('Ready to save')
+    await expect(drawStructure.previewBadge).toHaveText('Sound')
+
+    // ----- 2. the director takes the pool count — and it is still legal ------
+    // Six, which is the number the row was already showing. One manual setting is not a
+    // disagreement: it takes two to disagree, and this half-way state is what says the
+    // panel below is about the pair rather than about either number alone.
+    await drawStructure.setManually('Pool count', MANUAL_POOL_COUNT)
+    await expect(drawStructure.issue).toContainText(UNEVEN_TOPLINE)
+    await expect(drawStructure.issue).not.toContainText(NEEDS_YOUR_CALL)
+    // The same split as before it was taken, tally for tally: taking a setting changes the
+    // OWNER, not the number, so nothing about the draw moved on that click.
+    await expect(drawStructure.issueTitle).toHaveText(UNEVEN_TITLE)
+
+    // ----- 3. …and then the pool size, which is where they stop agreeing -----
+    await drawStructure.setManually('Pool size', DISAGREEING_POOL_SIZE)
+
+    // ----- 4. THE ASSERTION: the standoff, stated and not resolved -----------
+    await expect(drawStructure.issue).toBeVisible()
+    // A `status`, not an `alert`: this one interrupts nothing, because it blocks nothing.
+    await expect(drawStructure.issue).toHaveRole('status')
+    await expect(drawStructure.issue).toContainText(NEEDS_YOUR_CALL)
+    await expect(drawStructure.issueTitle).toHaveText(DISAGREEMENT_TITLE)
+    await expect(drawStructure.issueBody).toHaveText(DISAGREEMENT_BODY)
+    // The negative half, said out loud rather than left to the exactness above: the panel
+    // is neither of the other two, and both of those strings are reachable copy on this
+    // very tab.
+    await expect(drawStructure.issue).not.toContainText(CANT_SAVE)
+    await expect(drawStructure.issue).not.toContainText(UNEVEN_TOPLINE)
+    await expect(drawStructure.previewVerdict).toHaveText(DISAGREEMENT_VERDICT)
+    await expect(drawStructure.previewBadge).toHaveText(DISAGREEMENT_BADGE)
+
+    // ----- 5. NOTHING WAS RESHAPED, which is this slice's whole claim --------
+    // Both numbers, exactly as typed, under badges saying whose they are. A `6` that had
+    // become a `7`, or a `5` quietly grown to seat the field, would leave every reading
+    // above true and the ADR broken.
+    await expect(drawStructure.settingInput('Pool count')).toHaveValue(
+      String(MANUAL_POOL_COUNT),
+    )
+    await expect(drawStructure.settingOwnership('Pool count')).toHaveText('Yours')
+    await expect(drawStructure.settingInput('Pool size')).toHaveValue(
+      String(DISAGREEING_POOL_SIZE),
+    )
+    await expect(drawStructure.settingOwnership('Pool size')).toHaveText('Yours')
+    // …and the preview describes the structure they typed, not one rounded into shape:
+    // six pools of five, the twelve-player bracket that follows and the 60 pool matches
+    // it takes — none of which is the draw a forty-player field would have got.
+    await expect(drawStructure.previewEquation).toHaveText(
+      `${DISAGREEMENT_FIELD_CAP} players ÷ ${MANUAL_POOL_COUNT} pools = ${DISAGREEING_POOL_SIZE} per pool`,
+    )
+    await expect(drawStructure.previewPoolCards).toHaveCount(MANUAL_POOL_COUNT)
+    await expect(drawStructure.previewKnockout).toContainText(
+      `${DISAGREEING_BRACKET_SIZE}-player bracket`,
+    )
+    await expect(drawStructure.previewKnockout).toContainText(
+      `${DISAGREEING_BYES} first-round byes`,
+    )
+    await expect(drawStructure.previewKnockout).toContainText(
+      `${DISAGREEING_POOL_MATCHES} pool matches`,
+    )
+
+    // ----- 6. the three ways out, in order, with their costs -----------------
+    // One statement pinning the labels, the count and the order — `Cap the field at 30`
+    // alone would be equally true of a panel that had lost the other two.
+    await expect(drawStructure.issueFixLabels).toHaveText([
+      CAP_THE_FIELD,
+      SEAT_EVERYONE,
+      ALLOW_UNEVEN,
+    ])
+    await expect(drawStructure.issueFixDetail(CAP_THE_FIELD)).toHaveText(
+      CAP_THE_FIELD_DETAIL,
+    )
+    await expect(drawStructure.issueFixDetail(SEAT_EVERYONE)).toHaveText(
+      SEAT_EVERYONE_DETAIL,
+    )
+    await expect(drawStructure.issueFixDetail(ALLOW_UNEVEN)).toHaveText(
+      ALLOW_UNEVEN_DETAIL,
+    )
+
+    // ----- 7. SAVING STAYS AVAILABLE, and actually lands ---------------------
+    // The discriminator no screen can state and no fixture can fake. Both halves: the
+    // refusal's furniture is absent, and the save really happens.
+    await expect(editor.blockedSaveButton).toHaveCount(0)
+    await expect(editor.saveBlockedReason).toHaveCount(0)
+    await expect(editor.saveChangesButton).toBeEnabled()
+    await editor.saveChanges()
+
+    // Both manual numbers, off the server. A save that had "helped" by writing 7, or by
+    // dropping one of the modes, answers 200 just as happily.
+    const stored = await findEventByName(director, tournamentId, RR_KO_EVENT)
+    expect(stored.draw_structure?.pool_count_mode).toBe('manual')
+    expect(stored.draw_structure?.manual_pool_count).toBe(MANUAL_POOL_COUNT)
+    expect(stored.draw_structure?.pool_size_mode).toBe('manual')
+    expect(stored.draw_structure?.manual_pool_size).toBe(DISAGREEING_POOL_SIZE)
+    // The pool ROWS were not touched either: the panel offers to add two and nobody has
+    // pressed it yet.
+    expect(await getEventPools(director, tournamentId, eventId)).toHaveLength(
+      MANUAL_POOL_COUNT,
+    )
+
+    // ----- 8. reopen, and take the second way out ----------------------------
+    // Reloaded rather than re-clicking through the closing sheet — the same reason the
+    // spec above reloads: the modal's overlay covers the card it was opened from.
+    await detail.reload(tournamentId)
+    await expect(detail.title).toContainText(name)
+    const reopened = await detail.openEvent(RR_KO_EVENT)
+    const reloaded = await reopened.openDrawStructure()
+    // The standoff came back with the numbers, which is what makes the fix below an act
+    // on a stored state rather than on an unsaved draft.
+    await expect(reloaded.issueTitle).toHaveText(DISAGREEMENT_TITLE)
+    await reloaded.applyFix(SEAT_EVERYONE).click()
+
+    // ----- 9. …and it is EIGHT POOL ROWS, not a number in a box --------------
+    await expect(reloaded.settingInput('Pool count')).toHaveValue(
+      String(SEATED_POOL_COUNT),
+    )
+    // The size is untouched — this resolution keeps it and moves the count, which is the
+    // half of the offer that distinguishes it from `Cap the field at 30`.
+    await expect(reloaded.settingInput('Pool size')).toHaveValue(
+      String(DISAGREEING_POOL_SIZE),
+    )
+    // `8 × 5` is exactly the field, so the standoff is over — and no *other* notice
+    // replaced it, which is what a resolution that traded one problem for another would
+    // leave behind.
+    await expect(reloaded.issue).toHaveCount(0)
+    await expect(reloaded.previewVerdict).toHaveText('Ready to save')
+    await expect(reloaded.previewBadge).toHaveText('Sound')
+    await expect(reloaded.previewEquation).toHaveText(
+      `${DISAGREEMENT_FIELD_CAP} players ÷ ${SEATED_POOL_COUNT} pools = ${DISAGREEING_POOL_SIZE} per pool`,
+    )
+    await expect(reloaded.previewPoolCards).toHaveCount(SEATED_POOL_COUNT)
+
+    // **The ADR's rule, on the tab that owns pools.** Eight cards in the pool section, not
+    // eight in a projection: the preview above draws a card per derived pool whatever the
+    // event holds, so only this count says two rows were really created.
+    await reopened.poolsTab.click()
+    await expect(reopened.poolCards).toHaveCount(SEATED_POOL_COUNT)
+
+    await reopened.saveChanges()
+    // …and the server holds eight pools, which is the same claim with the client removed.
+    expect(await getEventPools(director, tournamentId, eventId)).toHaveLength(
+      SEATED_POOL_COUNT,
+    )
+    const resized = await findEventByName(director, tournamentId, RR_KO_EVENT)
+    expect(resized.draw_structure?.manual_pool_count).toBe(SEATED_POOL_COUNT)
+    expect(resized.draw_structure?.manual_pool_size).toBe(DISAGREEING_POOL_SIZE)
+  })
+
+  /**
+   * **The cut cannot wait for an answer — and only in one direction.**
+   *
+   * A save may carry a standoff (the spec above), because a director may be mid-thought.
+   * A **cut** may not: it has to seat every entrant somewhere, and every somewhere
+   * available to it contradicts one of the two numbers the director typed. So two pools of
+   * four against ten entrants is refused at the cut, in the derivation's own numbers, on the
+   * card where the click was.
+   *
+   * ## …and seats to spare still cut, which is the correction worth pinning
+   *
+   * The resolution the app itself offers — `Use ceil(field / size) pools of {size}`,
+   * labelled "Everyone gets a seat." — **rounds up**. Three pools of four seat twelve
+   * against a field of ten, so applying it lands on a disagreement in the *other*
+   * direction, and the tab goes on saying `Needs your call`. That draw cuts anyway: it
+   * deals `4,3,3`, the legal uneven split this app already calls legal one panel over. A
+   * guard tidied into symmetry would refuse the director's escape at the exact moment they
+   * took the app's own advice, so the asymmetry is asserted rather than left implied — the
+   * tab's `Needs your call` and the cut's `201`, three lines apart.
+   *
+   * ## Why the field is ten real entrants and not a cap
+   *
+   * The cut judges the field it actually deals (`entrants_with_nowhere_to_go`), so ten
+   * guests are minted and director-entered one at a time. The cap is set to the same ten so
+   * the tab's preview field and the cut's real field are one number — which is what lets
+   * the sentence on screen before the cut and the sentence in the refusal be compared as
+   * two statements about the same standoff rather than about two different fields.
+   *
+   * ## What only this suite can say
+   *
+   * That the two implementations of one rule agree **at two different moments**. The tab
+   * refuses nothing and says so; the API refuses the cut and says why; and the numbers in
+   * the two sentences are the same numbers. Nothing short of a real field in a real
+   * database, cut through the real button, can put those beside each other.
+   */
+  test('a cut is refused while entrants have nowhere to go, and goes through once seats are spare', async ({
+    page,
+    baseURL,
+  }) => {
+    // Ten guests are minted and entered one at a time — see the seed's own note. The
+    // budget is the seed's, not the app's.
+    test.setTimeout(300_000)
+    expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
+
+    const { director, tournamentId, eventId, name } = await seedTwoStageTournament(
+      page,
+      {
+        pools: CUT_POOLS,
+        maxPlayers: CUT_FIELD,
+        qualifiersPerPool: CUT_QUALIFIERS,
+      },
+    )
+
+    // ----- 1. a real field, over the API -------------------------------------
+    // Registration has to be open before anybody can be entered, and the entries are
+    // scaffolding: what is under test is the cut.
+    await transitionTournament(director, tournamentId, 'published')
+    await seedEntrants(director, baseURL!, tournamentId, eventId, CUT_FIELD)
+    // Asked of the SERVER, never counted off the roster on screen — that list truncates at
+    // eight chips and a `+N more` line.
+    const filled = await findEventByName(director, tournamentId, RR_KO_EVENT)
+    expect(filled.entered).toBe(CUT_FIELD)
+
+    const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
+    // The long timeout is the composed web-client's first compile of this route.
+    await expect(detail.title).toContainText(name, { timeout: 60_000 })
+
+    // ----- 2. the director types the two numbers, and saves them -------------
+    const editor = await detail.openEvent(RR_KO_EVENT)
+    const drawStructure = await editor.openDrawStructure()
+    await expect(drawStructure.section).toBeVisible()
+    await drawStructure.setManually('Pool count', CUT_MANUAL_POOL_COUNT)
+    await drawStructure.setManually('Pool size', CUT_MANUAL_POOL_SIZE)
+
+    // The same standoff the spec above states at forty, at the scale a real field can be
+    // seeded to. Read here so the sentence the API is about to write can be compared with
+    // the one the director was looking at.
+    await expect(drawStructure.issue).toHaveRole('status')
+    await expect(drawStructure.issue).toContainText(NEEDS_YOUR_CALL)
+    await expect(drawStructure.issueTitle).toHaveText(CUT_DISAGREEMENT_TITLE)
+    await expect(drawStructure.issueBody).toHaveText(CUT_DISAGREEMENT_BODY)
+    // A disagreement is not a refusal — of the save.
+    await expect(editor.blockedSaveButton).toHaveCount(0)
+    await editor.saveChanges()
+
+    const saved = await findEventByName(director, tournamentId, RR_KO_EVENT)
+    expect(saved.draw_structure?.manual_pool_count).toBe(CUT_MANUAL_POOL_COUNT)
+    expect(saved.draw_structure?.manual_pool_size).toBe(CUT_MANUAL_POOL_SIZE)
+    // **The stored K, before the cut is attempted.** The strategy judges this number
+    // against the smallest pool it deals, and it runs *before* the unseated guard — so a
+    // count that had drifted would refuse the cut below for a cause this spec is not
+    // about, and the 422 would look like a pass.
+    expect(saved.qualifiers_per_pool).toBe(CUT_QUALIFIERS)
+
+    // ----- 3. THE REFUSAL: the cut will not choose for them ------------------
+    await detail.reload(tournamentId)
+    const refusedPost = page.waitForResponse(
+      (r) => r.url().endsWith('/draw') && r.request().method() === 'POST',
+    )
+    await detail.generateDrawButton(RR_KO_EVENT).click()
+    const refused = await refusedPost
+    expect(refused.status()).toBe(422)
+    // The server's own sentence, whole. Its numbers are the tab's numbers, in the order
+    // the ADR states them: what the structure seats, what the field is, who is left over.
+    expect(((await refused.json()) as { detail: string }).detail).toBe(
+      SERVER_UNSEATED_REFUSAL,
+    )
+    // …and the director READS it, which is the half a raw request cannot show: the panel
+    // renders the API's `detail` unchanged, so this is the same sentence on the card.
+    await expect(detail.drawNotice(eventId)).toContainText(CUT_REFUSAL_TITLE)
+    await expect(detail.drawNotice(eventId)).toContainText(SERVER_UNSEATED_REFUSAL)
+    // A refusal writes nothing: no pool of the draw exists, and the verb is still on offer.
+    await expect(detail.poolDraws(eventId)).toHaveCount(0)
+    await expect(detail.generateDrawButton(RR_KO_EVENT)).toBeVisible()
+
+    // ----- 4. the director takes the way out the app offers ------------------
+    await detail.reload(tournamentId)
+    const reopened = await detail.openEvent(RR_KO_EVENT)
+    const reloaded = await reopened.openDrawStructure()
+    await expect(reloaded.issueTitle).toHaveText(CUT_DISAGREEMENT_TITLE)
+    await reloaded.applyFix(CUT_RESOLUTION).click()
+
+    // ----- 5. …which lands on a disagreement the OTHER way round -------------
+    // `ceil(10 / 4)` is three, and three pools of four seat twelve. The tab still asks for
+    // a call, and the numbers say why. **This is the state the cut below succeeds from** —
+    // do not "fix" the ceiling, and do not expect the panel to be gone.
+    await expect(reloaded.settingInput('Pool count')).toHaveValue(
+      String(RESOLVED_POOL_COUNT),
+    )
+    await expect(reloaded.issue).toContainText(NEEDS_YOUR_CALL)
+    await expect(reloaded.issueTitle).toHaveText(SPARE_SEATS_TITLE)
+    await expect(reloaded.issueBody).toHaveText(SPARE_SEATS_BODY)
+    await expect(reloaded.previewVerdict).toHaveText(DISAGREEMENT_VERDICT)
+
+    await reopened.poolsTab.click()
+    await expect(reopened.poolCards).toHaveCount(RESOLVED_POOL_COUNT)
+    await reopened.saveChanges()
+
+    const resolved = await findEventByName(director, tournamentId, RR_KO_EVENT)
+    expect(resolved.draw_structure?.manual_pool_count).toBe(RESOLVED_POOL_COUNT)
+    // K again, before the second cut: `4,3,3` leaves a smallest pool of three, so the two
+    // this event stores is what keeps the 201 below a statement about the unseated guard.
+    expect(resolved.qualifiers_per_pool).toBe(CUT_QUALIFIERS)
+
+    // ----- 6. THE ASYMMETRY: empty seats do not stop a cut -------------------
+    await detail.reload(tournamentId)
+    const cutPost = page.waitForResponse(
+      (r) => r.url().endsWith('/draw') && r.request().method() === 'POST',
+    )
+    await detail.generateDrawButton(RR_KO_EVENT).click()
+    const cut = await cutPost
+    expect(
+      cut.status(),
+      `cutting the draw was refused: ${await cut.text()}`,
+    ).toBe(201)
+    // Three pools on the page, dealt `4,3,3` out of a structure that offered twelve seats
+    // to ten players. The 201 alone would also be answered by a cut that produced nothing.
+    await expect(detail.poolDraws(eventId)).toHaveCount(RESOLVED_POOL_COUNT)
   })
 })

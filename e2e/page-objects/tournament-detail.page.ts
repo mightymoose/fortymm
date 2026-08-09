@@ -282,6 +282,26 @@ export class TournamentDetailPage {
     return this.page.getByTestId(`draw-panel-${eventId}`)
   }
 
+  /**
+   * **The refusal a rejected cut leaves on the card** — an `Alert`, where the click was,
+   * rather than a toast that carries the one sentence away after four seconds.
+   *
+   * Its description is the **server's own** words: the route hands a `DegenerateDraw`
+   * through as the 422's `detail` (`_draw_refusal`, `app/tournaments.py`) and the panel
+   * renders `error.detail` unchanged (`drawRefusalNotice`, `data/draw.ts`). So a spec that
+   * reads this is reading the API's sentence on the director's screen, which is the only
+   * place the two can be shown to be the same one.
+   *
+   * ⚠️ **Suppressed once the draw verbs freeze**, and it is cleared when the next attempt
+   * starts — so assert it *before* the cut that succeeds, never after. "The notice is gone"
+   * is not evidence of anything: it is also what a freeze looks like.
+   *
+   * Addressed by testid rather than by role, exactly as the panel's own comment asks: the
+   * frozen notice beside it is an `Alert` too, so "the alert" names neither. */
+  drawNotice(eventId: string): Locator {
+    return this.page.getByTestId(`draw-notice-${eventId}`)
+  }
+
   /** The "View match" deep-link a fixture grows once it materializes at go-live. */
   viewMatchLink(eventId: string): Locator {
     return this.drawPanel(eventId).getByRole('link', { name: /View match/ })
