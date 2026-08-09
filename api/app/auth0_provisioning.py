@@ -13,6 +13,7 @@ lookup itself is reused from there (``resolve_linked_user``), never
 reimplemented.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -54,6 +55,8 @@ async def resolve_or_provision_user(
     sub: str,
     email: str | None,
     email_verified: bool,
+    *,
+    may_write: Callable[[], Awaitable[bool]] | None = None,
 ) -> User | None:
     """Turn a verified Auth0 token into the fortymm ``User`` it acts as.
 
@@ -73,6 +76,15 @@ async def resolve_or_provision_user(
 
     Writes on the first token for a new identity (a bind, or an INSERT); every
     later token resolves via step 1 with no write.
+
+    ``may_write`` is an optional gate the caller supplies, awaited **immediately
+    before** the bind or the INSERT and never on a path that only reads. The MCP
+    verifier passes its per-IP provisioning rate limit, whose ``check`` consumes
+    a token — so this ordering is what makes the limit price *writes* rather
+    than requests. A refusal above (no verified email, a revoked account, an
+    email already claimed by another identity) returns without ever calling it,
+    and therefore costs the caller's bucket nothing. Returning ``False`` refuses
+    the write and resolves to ``None`` (→ the verifier 401s).
 
     Both binding paths stamp ``agent_access_linked_at`` with the moment the
     identity bound, so the agent-access settings surface can say "Connected
@@ -107,6 +119,11 @@ async def resolve_or_provision_user(
             # explicit re-allow (clearing the stamp) lets the email match again.
             return None
         if matched.auth0_sub is None:
+            # About to write to an existing account on behalf of an as-yet
+            # unauthorized caller — the first point on this path where the gate
+            # is owed anything.
+            if may_write is not None and not await may_write():
+                return None
             matched.auth0_sub = sub
             # Stamp *when* the identity bound, for "Connected <date>". This is a
             # bind-site-only write: the linked-sub path above returns without
@@ -135,7 +152,10 @@ async def resolve_or_provision_user(
         # the two accounts are merged by magic-link confirm).
         return None
 
-    # No account holds the email → provision a fresh registered account.
+    # No account holds the email → provision a fresh registered account. This is
+    # the account-creation case the caller's gate exists for.
+    if may_write is not None and not await may_write():
+        return None
     return await _provision_user(db, sub, email)
 
 

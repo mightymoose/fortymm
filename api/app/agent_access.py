@@ -185,11 +185,26 @@ async def disconnect_agent_access(
         # that moment. Re-stamping would also make the idempotency claim weaker
         # than it is — a second call is a genuine no-op.
         current_user.agent_access_revoked_at = datetime.now(UTC)
-    # Cosmetic, per the ADR: the stamp above is what actually holds. Clearing the
-    # binding is what makes this page's reported state honest, and is only safe
-    # to do because the revocation blocks ``resolve_or_provision_user`` from
-    # matching this account by email and silently re-binding the same ``sub``.
-    current_user.auth0_sub = None
+    # The binding is deliberately LEFT INTACT. Clearing it was once thought to
+    # make the page's state honest; it does not. ``resolve_agent_access_state``
+    # ranks ``revoked`` above ``connected``, so while the stamp above is set the
+    # page reads ``revoked`` whether or not a ``sub`` is still bound — the clear
+    # bought no honesty, and it cost two things:
+    #
+    #   * every request from the agent's still-valid token then missed
+    #     ``resolve_linked_user`` and fell into the write path, consuming a token
+    #     from the per-IP PROVISIONING rate limit before being refused. That
+    #     bucket is shared — Claude.ai's connector egress IP is common to many
+    #     players — so one disconnected player's polling agent could exhaust it
+    #     and block other players' first-ever bind.
+    #   * after a re-allow the page reported ``ready`` and walked the player back
+    #     through setup steps they did not need, since the next token re-bound
+    #     the same identity by verified email anyway.
+    #
+    # Leaving it bound keeps the hot path, so a revoked token is refused at
+    # ``FortymmAuth0TokenVerifier`` with no bucket consumed, and a re-allow
+    # restores the connection the player switched off — which is what the
+    # dialog's "switch Claude access back on" already promises.
     await db.commit()
     return await _describe(db, current_user)
 
@@ -201,9 +216,13 @@ async def allow_agent_access(
 ) -> AgentAccessResponse:
     """Let agents connect to this account again, and report the page's new state.
 
-    This clears the player's own revocation and nothing else — it does not
-    reconnect anything. The next agent that signs in with this account's email
-    binds itself, as it did the first time.
+    This clears the player's own revocation and nothing else. Disconnect leaves
+    the ``auth0_sub`` binding in place, so for an account that had one this
+    *restores* the connection the player switched off — the agent's existing
+    token starts working on its next request and the page reads ``connected``
+    again, with the original link date. An account with no binding (revoked
+    before it ever connected) reads ``ready``, and the next agent to sign in
+    with its verified email binds itself as it would have the first time.
 
     It exists because revocation is deliberately sticky: with no explicit way
     back, a disconnected player who followed the connector setup steps again

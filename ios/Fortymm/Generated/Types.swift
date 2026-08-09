@@ -1060,9 +1060,13 @@ internal protocol APIProtocol: Sendable {
     ///
     /// Let agents connect to this account again, and report the page's new state.
     ///
-    /// This clears the player's own revocation and nothing else — it does not
-    /// reconnect anything. The next agent that signs in with this account's email
-    /// binds itself, as it did the first time.
+    /// This clears the player's own revocation and nothing else. Disconnect leaves
+    /// the ``auth0_sub`` binding in place, so for an account that had one this
+    /// *restores* the connection the player switched off — the agent's existing
+    /// token starts working on its next request and the page reads ``connected``
+    /// again, with the original link date. An account with no binding (revoked
+    /// before it ever connected) reads ``ready``, and the next agent to sign in
+    /// with its verified email binds itself as it would have the first time.
     ///
     /// It exists because revocation is deliberately sticky: with no explicit way
     /// back, a disconnected player who followed the connector setup steps again
@@ -2674,9 +2678,13 @@ extension APIProtocol {
     ///
     /// Let agents connect to this account again, and report the page's new state.
     ///
-    /// This clears the player's own revocation and nothing else — it does not
-    /// reconnect anything. The next agent that signs in with this account's email
-    /// binds itself, as it did the first time.
+    /// This clears the player's own revocation and nothing else. Disconnect leaves
+    /// the ``auth0_sub`` binding in place, so for an account that had one this
+    /// *restores* the connection the player switched off — the agent's existing
+    /// token starts working on its next request and the page reads ``connected``
+    /// again, with the original link date. An account with no binding (revoked
+    /// before it ever connected) reads ``ready``, and the next agent to sign in
+    /// with its verified email binds itself as it would have the first time.
     ///
     /// It exists because revocation is deliberately sticky: with no explicit way
     /// back, a disconnected player who followed the connector setup steps again
@@ -26980,9 +26988,13 @@ internal enum Operations {
     ///
     /// Let agents connect to this account again, and report the page's new state.
     ///
-    /// This clears the player's own revocation and nothing else — it does not
-    /// reconnect anything. The next agent that signs in with this account's email
-    /// binds itself, as it did the first time.
+    /// This clears the player's own revocation and nothing else. Disconnect leaves
+    /// the ``auth0_sub`` binding in place, so for an account that had one this
+    /// *restores* the connection the player switched off — the agent's existing
+    /// token starts working on its next request and the page reads ``connected``
+    /// again, with the original link date. An account with no binding (revoked
+    /// before it ever connected) reads ``ready``, and the next agent to sign in
+    /// with its verified email binds itself as it would have the first time.
     ///
     /// It exists because revocation is deliberately sticky: with no explicit way
     /// back, a disconnected player who followed the connector setup steps again

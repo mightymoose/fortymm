@@ -603,6 +603,72 @@ async def test_write_path_is_rate_limited_per_ip(
     assert over_user.auth0_sub is None
 
 
+async def test_a_refused_write_path_token_does_not_spend_the_bucket(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write-path token that resolves to NOTHING must not consume the per-IP
+    provision budget: the limiter prices writes, and a refusal writes nothing.
+
+    This is not academic. The bucket is keyed on client IP and Claude.ai's
+    connector egress IP is shared between players, so charging refusals let one
+    player's rejected agent — e.g. one polling on after a disconnect — exhaust
+    20/hour and block a stranger's first-ever bind. With the ceiling pinned to
+    1/hour, three refusals must leave that one token intact for the legitimate
+    bind that follows."""
+    _pin_client_ip(monkeypatch, "203.0.113.11")
+    monkeypatch.setattr(
+        mcp_server,
+        "_provision_ip_rate_limit",
+        RedisRateLimiter(
+            rates=[Rate(1, Duration.HOUR)],
+            bucket_key="mcp-provision-ip-test-refusals",
+        ),
+    )
+
+    # A revoked account: matchable by verified email, but refused after a READ
+    # (``resolve_or_provision_user`` will not bind onto a revoked account).
+    revoked = await make_user(db_session, "mcp-refusal-revoked")
+    revoked.email = "refusal-revoked@example.com"
+    revoked.agent_access_revoked_at = datetime.now(UTC)
+    await db_session.commit()
+    await _grant_mcp_access(db_session, revoked)
+
+    verifier = _email_verifier()
+    for _ in range(3):
+        token = _sign_token(
+            sub="auth0|" + uuid.uuid4().hex,
+            extra_claims={
+                AUTH0_EMAIL_CLAIM: revoked.email,
+                AUTH0_EMAIL_VERIFIED_CLAIM: True,
+            },
+        )
+        assert await verifier.verify_token(token) is None
+
+    await db_session.refresh(revoked)
+    assert revoked.auth0_sub is None
+
+    # The budget is untouched, so a genuine bind still gets its one token.
+    binder = await make_user(db_session, "mcp-refusal-binder")
+    binder.email = "refusal-binder@example.com"
+    await db_session.commit()
+    await _grant_mcp_access(db_session, binder)
+    bind_sub = "auth0|" + uuid.uuid4().hex
+    access = await verifier.verify_token(
+        _sign_token(
+            sub=bind_sub,
+            extra_claims={
+                AUTH0_EMAIL_CLAIM: binder.email,
+                AUTH0_EMAIL_VERIFIED_CLAIM: True,
+            },
+        )
+    )
+    assert access is not None
+    assert access.claims["user_id"] == str(binder.id)
+    await db_session.refresh(binder)
+    assert binder.auth0_sub == bind_sub
+
+
 async def test_linked_hot_path_is_not_rate_limited(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

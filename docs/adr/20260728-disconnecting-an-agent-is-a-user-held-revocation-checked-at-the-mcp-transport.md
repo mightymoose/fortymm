@@ -68,11 +68,31 @@ the MCP transport — not an unlinking.**
    a caller whose user is revoked. Revocation is therefore effective against
    already-issued, still-valid JWTs — the property decision #3 promised.
 
-3. **Revocation blocks the auto-bind, so unlinking is safe to do alongside it.**
+3. **Revocation blocks the auto-bind, and the binding is left in place.**
    `resolve_or_provision_user` must not match-and-bind onto a revoked account.
-   Disconnect clears `auth0_sub` *and* stamps `agent_access_revoked_at`; the
-   clear is cosmetic (it makes the page's state honest) and the stamp is what
-   actually holds.
+   Disconnect stamps `agent_access_revoked_at` and stops there — it does *not*
+   clear `auth0_sub`.
+
+   An earlier draft cleared the binding too, called "cosmetic: it makes the
+   page's state honest". That was wrong on its own terms. `resolve_agent_access_state`
+   ranks `revoked` above `connected`, so while the stamp is set the page reads
+   `revoked` whether or not a `sub` is bound — the clear made nothing more
+   honest, and it cost two things:
+
+   - **A shared rate-limit bucket.** With no linked `sub`, every request from
+     the agent's still-valid token missed the write-free `resolve_linked_user`
+     path and fell into the provisioning path, spending a token from the per-IP
+     limit before being refused. Claude.ai's connector egress IP is shared
+     between players, so one disconnected player's polling agent could exhaust
+     it and block strangers' first-ever bind. (Decision #5 now spends that
+     bucket only on a write, which independently fixes this; leaving the
+     binding alone keeps the request on the hot path in the first place.)
+   - **A misleading way back.** After a re-allow the page reported `ready` and
+     walked the player through setup steps they did not need — the next token
+     re-bound the same identity by verified email regardless.
+
+   Leaving it bound makes re-allow mean what the dialog says: "switch Claude
+   access back on" restores the connection rather than asking for it again.
 
 4. **Reconnecting is an explicit user act.** Revocation is sticky — there is no
    timer and no implicit clear, or the disconnect would be a lie again. The
