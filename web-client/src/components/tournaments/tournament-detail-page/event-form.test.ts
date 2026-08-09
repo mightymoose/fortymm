@@ -1,8 +1,10 @@
+import { everySettingAutomatic } from '../data/draw-ownership'
 import { buildEvent, buildPool, buildPredicate } from '../data/seed.factory'
 import {
   eventSchema,
   eventToFormValues,
   firstInvalidSection,
+  withSuppliedQualifiers,
   type EventFormValues,
 } from './event-form'
 
@@ -45,8 +47,20 @@ describe('eventSchema', () => {
    * under a control that is not even rendered.
    */
   describe('the qualifier count', () => {
+    /**
+     * A two-stage event whose director **owns** the count (ADR 20260808).
+     *
+     * ⚠️ The ownership is the fixture's load-bearing half, not decoration: every rule below
+     * is asked of a director's number, and only of a director's number. A setting the
+     * SYSTEM owns has an answer already — the derived one — so the resolver asks nothing of
+     * it (the case its own test states, straight after this block's bounds).
+     */
     const twoStage = (qualifiersPerPool: number | null) =>
-      formFor({ drawType: 'rr-then-ko', qualifiersPerPool })
+      formFor({
+        drawType: 'rr-then-ko',
+        qualifiersPerPool,
+        drawOwnership: { ...everySettingAutomatic(), qualifiersMode: 'manual' },
+      })
 
     it('requires a count for rr-then-ko, and blames the field by name', () => {
       expect(rejectedFields(twoStage(null))).toEqual(['qualifiersPerPool'])
@@ -107,6 +121,115 @@ describe('eventSchema', () => {
         rejectedFields(formFor({ drawType: 'round-robin', qualifiersPerPool: 2 })),
       ).toEqual([])
     })
+
+    /**
+     * ⚠️ **A count the SYSTEM owns is never refused** (ADR 20260808, #1320) — the defect
+     * chore 3e shipped, and the one this whole pair of rules exists to keep shut.
+     *
+     * An automatic setting already has an answer: the derived count the Draw structure tab
+     * is displaying, which `withSuppliedQualifiers` puts on the wire. Refusing the save for
+     * a missing number therefore refuses it for nothing — and says so with an imperative
+     * ("Say how many players advance from each pool.") pointing at a row that renders
+     * **text**, because an automatic setting has no box. That is exactly the unactionable
+     * refusal #1320 was filed about, which is why this case is stated twice: once here at
+     * the resolver, and once end to end in the editor's own test.
+     */
+    it.each([
+      ['a record that says automatic', everySettingAutomatic()],
+      // The state a director is really in the second they pick the two-stage format on
+      // Basics: nothing has written a record yet, and no record means nothing was taken
+      // from the system.
+      ['no ownership record at all', null],
+    ] as const)('asks nothing of a count the system owns — %s', (_case, drawOwnership) => {
+      expect(
+        rejectedFields(
+          formFor({ drawType: 'rr-then-ko', qualifiersPerPool: null, drawOwnership }),
+        ),
+      ).toEqual([])
+    })
+  })
+
+  /**
+   * **What the save sends for a count nobody typed** (`withSuppliedQualifiers`) — the other
+   * half of the rule above, and the reason relaxing it is safe.
+   *
+   * The server's `rr-then-ko` arm requires `qualifiers_per_pool`, so "the resolver asks
+   * nothing" only works if something else answers. These are the four states it can be in.
+   */
+  describe('the qualifier count the system supplies', () => {
+    /** Two pools of a 32-player field: the derived count is `ceil(8 / 2)` = **4**, which is
+     * none of the numbers a bug would land on by accident — not the pool count (2), not the
+     * target bracket (8), not the planner's floor (1), and not the fixtures' usual K (2). */
+    const twoPools = (overrides: Parameters<typeof buildEvent>[0] = {}) =>
+      formFor({
+        drawType: 'rr-then-ko',
+        maxPlayers: 32,
+        pools: [
+          buildPool({ id: 'p-a', name: 'Pool A' }),
+          buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
+        ],
+        ...overrides,
+      })
+
+    it('derives the count for an event that has none', () => {
+      const values = twoPools({ qualifiersPerPool: null })
+
+      expect(withSuppliedQualifiers(values).qualifiersPerPool).toBe(4)
+    })
+
+    // …and it is the DERIVATION's number, not a constant: change the pools and the supplied
+    // count moves with the row the tab is showing.
+    it('derives it from the pool count the tab derived it from', () => {
+      const values = twoPools({
+        qualifiersPerPool: null,
+        pools: [
+          buildPool({ id: 'p-a', name: 'Pool A' }),
+          buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
+          buildPool({ id: 'p-c', name: 'Pool C', position: 2 }),
+        ],
+      })
+
+      // `ceil(8 / 3)`, the number the row reads out — never `8 / 3`, and never the target.
+      expect(withSuppliedQualifiers(values).qualifiersPerPool).toBe(3)
+    })
+
+    /**
+     * ⚠️ **A stored count is LEFT ALONE**, and this is the assertion that keeps it so.
+     *
+     * Under an automatic mode the stored K is the count the event's bracket was cut for,
+     * and the server freezes the configuration its draw was dealt from
+     * (`_enforce_draw_settings_frozen`). Supplying the derived number here instead would
+     * turn a save of the event's *name* into a 409 naming a qualifier count the director
+     * never touched — #1320's own bug, wearing the fix's clothes.
+     */
+    it('leaves a stored count alone, so a cut event is not re-configured behind the director', () => {
+      const values = twoPools({ qualifiersPerPool: 2 })
+
+      expect(withSuppliedQualifiers(values).qualifiersPerPool).toBe(2)
+    })
+
+    // The director's number is theirs, right or wrong: the resolver refuses a broken one
+    // and nothing is sent, so a substitute here would be a save of a count they did not ask
+    // for — quietly, past a red they never saw.
+    it('leaves a count the director owns alone, even when they have cleared it', () => {
+      const values = twoPools({
+        qualifiersPerPool: null,
+        drawOwnership: { ...everySettingAutomatic(), qualifiersMode: 'manual' },
+      })
+
+      expect(withSuppliedQualifiers(values).qualifiersPerPool).toBeNull()
+    })
+
+    // The three arms with no knockout stage carry `null` and send no key at all
+    // (`drawSettingsToApi`), so there is nothing here to answer.
+    it.each(['round-robin', 'single-elim', 'swiss'] as const)(
+      'supplies nothing to %s, which has no qualifiers',
+      (drawType) => {
+        const values = formFor({ drawType, qualifiersPerPool: null, rounds: 3 })
+
+        expect(withSuppliedQualifiers(values).qualifiersPerPool).toBeNull()
+      },
+    )
   })
 
   /**

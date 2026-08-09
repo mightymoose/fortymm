@@ -53,6 +53,7 @@ import {
   eventSchema,
   eventToFormValues,
   firstInvalidSection,
+  withSuppliedQualifiers,
   type EventFormValues,
 } from './event-form'
 
@@ -341,7 +342,14 @@ export const EventEditor = ({
       // `TournamentEvent`: the form holds entries, and an entry is not a pool. Handing
       // the read model's pools back instead would re-send the ids on a create (a 422) and
       // lose the added/kept distinction on a patch.
-      const saved: EditedEvent = { ...event, ...formValues }
+      //
+      // …and with the **qualifier count the system owes** filled in
+      // (`withSuppliedQualifiers`, `./event-form`). An `rr-then-ko` event must carry a K,
+      // the resolver deliberately asks the director for one only when they own the setting,
+      // and this is what closes that pair: automatic means the derived count goes on the
+      // wire, not that nothing does. The two halves live in one module so neither can be
+      // changed without the other in view.
+      const saved: EditedEvent = { ...event, ...withSuppliedQualifiers(formValues) }
       setFailure(null)
       try {
         await onSave(saved)
