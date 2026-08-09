@@ -53,18 +53,30 @@ describe('selectClaudeAccess', () => {
     })
   })
 
-  it('reports every state as unavailable when the deployment has no connector', () => {
-    for (const state of [
-      'guest',
-      'gated',
-      'revoked',
-      'ready',
-      'connected',
-    ] as const) {
+  it('empties only the ready row when the deployment has no connector', () => {
+    // `ready` is the one state the setup panel IS, so without a connector it
+    // has nothing left to show.
+    expect(
+      selectClaudeAccess(buildAgentAccess({ state: 'ready', connector: null }))
+        .status,
+    ).toEqual({ kind: 'unavailable' })
+  })
+
+  it('keeps every other state, and its action, when there is no connector', () => {
+    // A missing connector must not outrank these. It did once, and it took the
+    // Disconnect button off a connected page and the re-allow button off a
+    // revoked one — a live agent with no off switch.
+    for (const state of ['guest', 'gated', 'revoked'] as const) {
       expect(
         selectClaudeAccess(buildAgentAccess({ state, connector: null })).status,
-      ).toEqual({ kind: 'unavailable' })
+      ).toEqual({ kind: state })
     }
+
+    expect(
+      selectClaudeAccess(
+        buildAgentAccess({ state: 'connected', connector: null }),
+      ).status.kind,
+    ).toBe('connected')
   })
 
   it('refuses the ready row when there is no email to name in it', () => {

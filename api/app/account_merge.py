@@ -525,9 +525,13 @@ async def merge_user(
     #
     # The cost is a false positive: a guest who hit disconnect (the endpoint is
     # open to guests, though a guest can never connect) switches off the account it
-    # merges into. That is recoverable in one click via the explicit re-allow the
-    # ADR requires, and is visible on the settings page — whereas the failure in
-    # the other direction is silent and is a re-grant of revoked access. The
+    # merges into. That is the right direction to fail — the error the other way is
+    # silent, and is a re-grant of revoked access — but the remedy is NOT always
+    # one click. ``resolve_agent_access_state`` ranks ``gated`` above ``revoked``,
+    # so a survivor without the ``mcp.access`` grant reads "Not enabled" and is
+    # offered no re-allow control at all: for them the stamp is invisible and stays
+    # until an operator grants the permission. Since most survivors do not hold the
+    # beta bundle, that is the common case, not the edge one. The
     # tombstone KEEPS its own stamp: revocation is a historical fact about that
     # account, its session cookie still resolves to the row, and nothing in this
     # merge is entitled to un-revoke an account.

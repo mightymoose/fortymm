@@ -29,6 +29,17 @@ config:
   # advertised metadata has to name the public path, not the internal mount.
   MCP_PUBLIC_BASE_URL: https://uat.fortymm.com/api
   MCP_PUBLIC_RESOURCE_URL: https://uat.fortymm.com/api/mcp
+  # The client id players paste into Claude's "Add custom connector", shown on
+  # /settings/claude. This is the FIRST-PARTY NATIVE application's client id
+  # from the Auth0 dashboard — NOT the M2M "(Test Application)" that creating
+  # the API auto-spawned, which is not a login client. It is a public PKCE
+  # identifier, so it is committed here like AUTH0_DOMAIN / AUTH0_AUDIENCE.
+  #
+  # STILL EMPTY: `Settings.mcp_connector` is all-or-nothing, so until this is
+  # filled in, UAT serves `connector: null` and every `ready` player sees the
+  # "we couldn't load your account and connector details" row instead of the
+  # setup steps. Paste the Native app's Client ID here to finish the wiring.
+  MCP_OAUTH_CLIENT_ID: ""
   # --- Venue geocoding ---
   # UAT is on the FAKE geocoder ON PURPOSE, because it has no Google Geocoding
   # key yet (issue #1205). This is a decision, not an oversight: the provider

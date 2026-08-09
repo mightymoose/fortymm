@@ -76,8 +76,9 @@ export interface ClaudeAccessView {
   /** The one status row to render. */
   status: ClaudeAccessStatus
   /** The connector pair for the setup panel, or `null` when this deployment has
-   * none — in which case `status` is `unavailable` and the panel must not
-   * render at all (rather than render with empty fields). */
+   * none — in which case the panel must not render at all (rather than render
+   * with empty fields). A `ready` player then reads `unavailable`; every other
+   * state keeps its own row and its own action. */
   connector: ClaudeConnector | null
   /** Whether to render the "what you're granting" summary. Hidden once an agent
    * is connected: the grant has already been made, and the card above it says
@@ -88,19 +89,23 @@ export interface ClaudeAccessView {
 /**
  * Project the BFF payload onto the page's view model.
  *
- * Two readings are deliberately fail-closed, and both collapse to
- * `unavailable` — the row that says "we couldn't load your account and
- * connector details":
+ * Two readings are deliberately fail-closed, and both collapse the **`ready`**
+ * row — and only that row — to `unavailable`, the row that says "we couldn't
+ * load your account and connector details":
  *
  * 1. **No connector.** The deployment has no MCP OAuth configuration, so there
- *    is nothing for the player to paste. Reported independently of the player's
- *    own state, so it wins over all five of them — including `revoked`, whose
- *    re-allow control exists to stop a player following the setup steps into a
- *    silent 401. With no connector there are no setup steps to follow, so that
- *    dead end cannot open and the honest report is that we have nothing to show.
+ *    is nothing for the player to paste, and the setup panel is the whole of
+ *    what `ready` means.
  * 2. **`ready` with no email.** The server cannot produce this (a player with no
  *    email resolves to `guest`), but the ready row's whole content is *which
  *    email to sign in with* — "Use —" is a dead end, so we decline to render it.
+ *
+ * Neither reading may outrank the other states, and a missing connector
+ * emphatically must not: it once won over all five, which took the Disconnect
+ * button off a `connected` page and the re-allow button off a `revoked` one —
+ * a live agent with no off switch, under copy claiming we could not load the
+ * account. What the *deployment* advertises says nothing about whether *this
+ * player* is connected, and once they are, the action is the point.
  *
  * `connected` is never collapsed, even with fields missing: telling a player an
  * agent is connected is more important than the two facts about it, so those
@@ -122,7 +127,6 @@ export function selectClaudeAccess(
 }
 
 function resolveStatus(payload: AgentAccessPayload): ClaudeAccessStatus {
-  if (payload.connector === null) return { kind: 'unavailable' }
   switch (payload.state) {
     case 'guest':
       return { kind: 'guest' }
@@ -131,7 +135,18 @@ function resolveStatus(payload: AgentAccessPayload): ClaudeAccessStatus {
     case 'revoked':
       return { kind: 'revoked' }
     case 'ready':
-      return payload.email === null
+      // `ready` is the ONE state a missing connector can empty out: the setup
+      // panel is its whole content, so with nothing to paste there is nothing
+      // to show but the fail-closed row. A missing email is the same dead end
+      // ("Use —"), so both fail the same way.
+      //
+      // A missing connector must NOT outrank the states below it. It used to,
+      // and that took the Disconnect button off a `connected` page and the
+      // re-allow button off a `revoked` one — leaving a live agent with no off
+      // switch, under copy claiming we could not load the account. Whether the
+      // deployment advertises a connector says nothing about whether THIS
+      // player is connected, and only the actions matter once they are.
+      return payload.email === null || payload.connector === null
         ? { kind: 'unavailable' }
         : { kind: 'ready', email: payload.email }
     case 'connected':

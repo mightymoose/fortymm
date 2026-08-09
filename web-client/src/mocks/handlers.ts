@@ -1231,6 +1231,13 @@ export const handlers = [
   // backend. `connected_on` goes with it: nothing is linked any more, and a
   // "connected on 12 May" left lying in the payload would resurface the moment
   // the account reconnects.
+  //
+  // Unlike the `allow` handler above, this assignment is NOT a no-op against the
+  // committed `ready` seed — it writes `revoked`, and `agentAccessNow` is module
+  // state shared by every later GET in the same module instance. A test that
+  // reaches this default without overriding it therefore poisons the ones after
+  // it. Today every test overrides both, so this is latent; override the
+  // endpoint rather than relying on the default if you add one that does not.
   http.post('*/v1/settings/agent-access/disconnect', async () => {
     await delay(300)
     agentAccessNow = { ...agentAccessNow, state: 'revoked', connected_on: null }
