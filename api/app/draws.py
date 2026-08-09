@@ -49,6 +49,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import NewType, Protocol
 
+from app.draw_structure import (
+    ONE_PLAYER_KNOCKOUT_MESSAGE,
+    pool_too_small_message,
+    too_many_qualifiers_message,
+)
 from app.models.tournament import DrawType, EventFormat
 from app.pool_finishing_order import (
     EntryTally,
@@ -883,20 +888,14 @@ class RrThenKoStrategy:
         smallest = min(len(members) for _, members in pools)
         if self.qualifiers_per_pool > smallest:
             raise DegenerateDraw(
-                f"Taking {self.qualifiers_per_pool} qualifiers from each pool is more "
-                f"than the {smallest} entrants in the smallest pool — take fewer "
-                "qualifiers from each pool, or add entrants."
+                too_many_qualifiers_message(self.qualifiers_per_pool, smallest)
             )
         if len(pools) * self.qualifiers_per_pool < 2:
             # ``K ≥ 1`` is static and the snake guarantees ``P ≥ 1``, so the *only* way
             # to arrive here is one pool taking one qualifier: the sentence is fully
             # determined, and interpolating the counts would only add branches no input
             # can reach.
-            raise DegenerateDraw(
-                "Taking 1 qualifier from a single pool leaves one player in the "
-                "knockout stage, who would have nobody to play — take more qualifiers "
-                "from each pool, or configure more pools."
-            )
+            raise DegenerateDraw(ONE_PLAYER_KNOCKOUT_MESSAGE)
         qualifier_count = len(pools) * self.qualifiers_per_pool
         fixtures = RoundRobinStrategy().plan_initial(config, ordered_entrants)
         # Cut in the same stroke: every side TBD (nobody has qualified), ``pool_id``
@@ -1904,13 +1903,10 @@ def _snake(
     # Asked of the dealt pools themselves, not of arithmetic on N and P: the refusal
     # should hold whatever the distribution does.
     if any(len(pool_members) < 2 for pool_members in members):
-        entrant_count = len(ordered_entrants)
-        entrant_noun = "entrant" if entrant_count == 1 else "entrants"
-        pool_noun = "pool" if pool_count == 1 else "pools"
-        raise DegenerateDraw(
-            f"{entrant_count} {entrant_noun} across {pool_count} {pool_noun} would "
-            "leave a pool with fewer than 2 entrants, who would have nobody to play."
-        )
+        # The sentence itself lives in :mod:`app.draw_structure`, which refuses the same
+        # condition *before* the row is written (#1320). One copy, so the cut and the
+        # editor cannot come to say it differently.
+        raise DegenerateDraw(pool_too_small_message(len(ordered_entrants), pool_count))
 
     return [
         (pool_id, tuple(pool_members))
