@@ -459,9 +459,16 @@ export class TournamentDetailPage {
     return this.page.getByRole('button', { name: 'New event' })
   }
 
-  /** The editor's own Save/Create action. */
+  /** The editor's own Save/Create action.
+   *
+   * ⚠️ **Three labels, one button.** It reads `Fix the structure to save` while an
+   * `rr-then-ko` event's draw structure is impossible (#1320), and it is disabled in that
+   * state. Matched by all three so a spec finds the same node whatever it currently says —
+   * otherwise "the button is gone" and "the button is refusing" look identical. */
   get saveEventButton(): Locator {
-    return this.page.getByRole('button', { name: /Create event|Save changes/ })
+    return this.page.getByRole('button', {
+      name: /Create event|Save changes|Fix the structure to save/,
+    })
   }
 
   /** One of the editor's section tabs. `Draw structure` is the **conditional** one: it

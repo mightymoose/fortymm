@@ -559,6 +559,189 @@ describe('EventEditor', () => {
   })
 
   /**
+   * **A draw that cannot be played is not sent** (#1320's action bar, and ADR 20260808's
+   * "three refusals stay"). A pool of one, a knockout of one, or more qualifiers than the
+   * smallest pool holds are impossible competitions: there is no draw to cut and nothing a
+   * later screen could resolve, so the save is unavailable and the button says what would
+   * make it available again.
+   *
+   * ⚠️ **This is not a validity gate**, and the difference is the whole reason it is
+   * derived from the structure rather than from `formState`. Pressing Save is still how an
+   * organizer finds out about a blank name (`CLAUDE.md`, `## Forms`); what is refused here
+   * is one specific, named, fixable configuration.
+   */
+  describe('a draw structure that cannot be played', () => {
+    /** Two pool reservations and a field of two: one player per pool, and nobody for
+     * either of them to play. */
+    const impossibleEvent = () => buildRrThenKoEvent({ maxPlayers: 2 })
+
+    it('makes the save unavailable, and says what would make it available', () => {
+      eventEditorPage.render({ event: impossibleEvent() })
+
+      expect(eventEditorPage.getSaveButton()).toBeDisabled()
+      expect(eventEditorPage.getSaveButton()).toHaveTextContent(
+        'Fix the structure to save',
+      )
+    })
+
+    /**
+     * A disabled control with no reason is the dead end ADR-0015 forbids, and a disabled
+     * one is neither focusable nor tooltip-able — the description is the only channel it
+     * has left.
+     *
+     * ⚠️ The reason is asserted **from the Basics tab**, where the editor opens. Radix
+     * unmounts an inactive tab's content, so the Draw structure tab's refusal panel is not
+     * on screen here at all: a description that pointed at the panel would dangle exactly
+     * when it was needed most, which is why the line lives beside the button.
+     */
+    it('points the dead button at the reason, from a tab that does not show it', () => {
+      eventEditorPage.render({ event: impossibleEvent() })
+
+      expect(eventEditorPage.drawStructure.issuePanel.queryPanel()).toBeNull()
+      expect(
+        eventEditorPage.describedNodeOf(eventEditorPage.getSaveButton()),
+      ).toHaveTextContent('Pool A would have one player')
+    })
+
+    /** The gate reads the **draft**, not the saved event. Lowering the player limit is a
+     * Basics edit, and it is what breaks the draw structure two tabs away. */
+    it('blocks a save the director has just broken from Basics', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      // 32 across 2 pools is sound; 2 across 2 pools is a pool of one apiece.
+      expect(eventEditorPage.getSaveButton()).toBeEnabled()
+      fireEvent.change(eventEditorPage.getPlayerLimitInput(), {
+        target: { value: '2' },
+      })
+
+      await waitFor(() =>
+        expect(eventEditorPage.getSaveButton()).toBeDisabled(),
+      )
+      expect(eventEditorPage.getSaveButton()).toHaveTextContent(
+        'Fix the structure to save',
+      )
+    })
+
+    /** …and lets go again the moment the structure works, without a reload or a re-open. */
+    it('releases the save when the structure is fixed', async () => {
+      eventEditorPage.render({ event: impossibleEvent() })
+
+      fireEvent.change(eventEditorPage.getPlayerLimitInput(), {
+        target: { value: '32' },
+      })
+
+      await waitFor(() => expect(eventEditorPage.getSaveButton()).toBeEnabled())
+      expect(eventEditorPage.getSaveButton()).toHaveTextContent('Save changes')
+      expect(eventEditorPage.querySaveBlockedReason()).toBeNull()
+    })
+
+    /**
+     * ⚠️ **A disagreement is not a refusal** (ADR 20260808). Six pools of five seat thirty
+     * and the field is forty; the app keeps both of the director's numbers and **saves**.
+     * Only the cut is unavailable, and that is a different screen.
+     *
+     * This is the guard on the gate's one narrowing that a boolean would have got wrong.
+     * It reds the day the gate is widened to "any issue".
+     */
+    it('still saves a draw whose numbers merely disagree', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          maxPlayers: 40,
+          drawOwnership: {
+            ...everySettingAutomatic(),
+            poolCountMode: 'manual',
+            manualPoolCount: 6,
+            poolSizeMode: 'manual',
+            manualPoolSize: 5,
+          },
+        }),
+        onSave,
+      })
+
+      expect(eventEditorPage.getSaveButton()).toBeEnabled()
+      expect(eventEditorPage.getSaveButton()).toHaveTextContent('Save changes')
+      expect(eventEditorPage.querySaveBlockedReason()).toBeNull()
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+    })
+
+    /**
+     * …and the other narrowing: only `rr-then-ko` has a pool stage feeding a knockout, so
+     * only `rr-then-ko` can be refused for the shape of one. These are the *same numbers*
+     * that block the two-stage event above — one pool, a field of two, and a qualifier
+     * count the system would aim at eight — on an event that has no knockout to aim at.
+     */
+    it('never blocks a draw type with no knockout to aim at', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildEvent({ maxPlayers: 2 }), onSave })
+
+      expect(eventEditorPage.getSaveButton()).toBeEnabled()
+      expect(eventEditorPage.getSaveButton()).toHaveTextContent('Save changes')
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+    })
+
+    /**
+     * **The seam between the refusal panel and the action bar** — the interaction the two
+     * halves exist for: press the way out the panel offers, and the save comes back.
+     *
+     * Only the editor can make this claim. The panel's `Apply` writes the pool list through
+     * `onPoolsChange`, which is `form.setValue('pools', …)`, and the gate re-derives from
+     * the **watched** list — so the button's two inputs travel by two different channels
+     * and this is the one write path that proves they meet.
+     *
+     * The reference's own "Field too small" state (8 players over six pool reservations),
+     * not the two-player event above: `floor(8 / 2)` gives the grammatical `Use 4 pools`.
+     */
+    it('lets go the moment the director applies a fix the panel offered', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          maxPlayers: 8,
+          pools: ['A', 'B', 'C', 'D', 'E', 'F'].map((letter, i) =>
+            buildPool({
+              id: `p-${letter.toLowerCase()}`,
+              name: `Pool ${letter}`,
+              position: i,
+            }),
+          ),
+        }),
+      })
+
+      expect(eventEditorPage.getSaveButton()).toBeDisabled()
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.issuePanel.getApplyButton('Use 4 pools'),
+      )
+      // Two reservations go with the fix, so it is priced first — the same confirm the
+      // Pool count box buys a removal with (ADR 20260806).
+      await userEvent.click(eventEditorPage.confirm.getConfirmButton())
+
+      await waitFor(() => expect(eventEditorPage.getSaveButton()).toBeEnabled())
+      expect(eventEditorPage.getSaveButton()).toHaveTextContent('Save changes')
+      expect(eventEditorPage.querySaveBlockedReason()).toBeNull()
+      // …and the fix really did reshape the event, rather than merely quieting the gate:
+      // four pool rows, on the tab that owns them.
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(eventEditorPage.getPoolNameInputs()).toHaveLength(4)
+    })
+
+    /** A reader has no Save button to explain, so there is nothing to explain (ADR-0015 —
+     * the mutating affordance is hidden, not disabled). */
+    it('shows a reader no dead button and no reason for one', () => {
+      eventEditorPage.render({ event: impossibleEvent(), canEdit: false })
+
+      expect(eventEditorPage.querySaveButton()).toBeNull()
+      expect(eventEditorPage.querySaveBlockedReason()).toBeNull()
+    })
+  })
+
+  /**
    * **The Draw structure tab's pool count and the Table pools tab's cards are ONE list**
    * (ADR 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-count-is-a-
    * projection). An event's pool count is the number of pool rows it has; nothing stores a

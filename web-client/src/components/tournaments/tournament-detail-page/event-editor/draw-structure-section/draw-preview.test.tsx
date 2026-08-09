@@ -100,6 +100,27 @@ describe('DrawPreview', () => {
   })
 
   /**
+   * ⚠️ **An uneven split is sound.** The tab says so under the settings
+   * (`Legal, but uneven`) and the draw saves, so the verdict here is the ready one.
+   *
+   * This is the guard on the verdict's one non-obvious mapping. The preview asks
+   * `drawIssueFor` which notice the tab is showing — one precedence, shared with the
+   * panel — and that function reports FOUR outcomes against three verdicts. A lookup keyed
+   * straight off the issue kind would leave this state with no verdict at all.
+   */
+  it('still calls an uneven draw ready', () => {
+    drawPreviewPage.render(
+      buildDrawPreviewPropsFor({
+        previewFieldSize: 22,
+        poolReservationCount: 4,
+      }),
+    )
+
+    expect(drawPreviewPage.getVerdict()).toHaveTextContent('Ready to save')
+    expect(drawPreviewPage.getBadge()).toHaveTextContent('Sound')
+  })
+
+  /**
    * The reference's **"Numbers disagree"** state
    * (`docs/designs/rr-then-ko-draw-structure/numbers-disagree.png`): 6 pools of 5 seat
    * 30, and the field is 40.

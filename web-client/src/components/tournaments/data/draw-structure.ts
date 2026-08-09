@@ -376,7 +376,12 @@ function impossibleProblemsFor({
     return [
       {
         kind: 'qualifier',
-        title: `You can't take ${qualifiersPerPool} qualifiers from a pool of ${smallestPool}`,
+        // ⚠️ A **right single quote** (`U+2019`) in `can’t`, like every other apostrophe
+        // the reference writes. The one exception is `today's behaviour` above, which the
+        // reference spells with a straight `U+0027`. Both are transcribed, neither is
+        // normalised: the README says so out loud, and a Python twin transcribing this
+        // table has to land on the same glyph.
+        title: `You can’t take ${qualifiersPerPool} qualifiers from a pool of ${smallestPool}`,
         body: `Take ${smallestPool} or fewer, or make the smallest pool bigger.`,
       },
     ]

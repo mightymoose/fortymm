@@ -110,8 +110,31 @@ const scoped = (container: Container) => ({
   getOverline() {
     return container.getByTestId('event-editor-overline')
   },
+  /** The footer's **primary action**, whatever it currently says.
+   *
+   * ⚠️ Three labels, one button: `Create event`, `Save changes`, and
+   * `Fix the structure to save` when the draw structure is impossible (#1320). Addressed
+   * by all three on purpose — a test asking "is saving available?" must find the same node
+   * in every state, or "the button is gone" and "the button is disabled" become
+   * indistinguishable. What it says is a claim a test makes with `toHaveTextContent`. */
   getSaveButton() {
-    return container.getByRole('button', { name: /Create event|Save changes/ })
+    return container.getByRole('button', {
+      name: /Create event|Save changes|Fix the structure to save/,
+    })
+  },
+  /** Why the primary action is dead, when it is — the line the disabled button points at
+   * with `aria-describedby`. Absent whenever saving is available. */
+  querySaveBlockedReason() {
+    return container.queryByTestId('event-editor-save-blocked')
+  },
+  /** The node a control's `aria-describedby` names, or `null` when it names nothing —
+   * **the association itself**, not merely the presence of an explanation somewhere on
+   * screen. A disabled control is not focusable and carries no tooltip, so the description
+   * is the only channel it has left (ADR-0015). The same accessor `settingRowPage` gives
+   * the frozen rows. */
+  describedNodeOf(control: HTMLElement) {
+    const id = control.getAttribute('aria-describedby')
+    return id === null ? null : document.getElementById(id)
   },
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
@@ -147,9 +170,12 @@ const scoped = (container: Container) => ({
     return container.queryByText(message)
   },
   /** The save/create action — absent for a non-creator (`canEdit: false`),
-   * who gets a read-only view. */
+   * who gets a read-only view. All three of its labels, for the reason
+   * `getSaveButton` gives. */
   querySaveButton() {
-    return container.queryByRole('button', { name: /Create event|Save changes/ })
+    return container.queryByRole('button', {
+      name: /Create event|Save changes|Fix the structure to save/,
+    })
   },
   getCancelButton() {
     return container.getByRole('button', { name: 'Cancel' })

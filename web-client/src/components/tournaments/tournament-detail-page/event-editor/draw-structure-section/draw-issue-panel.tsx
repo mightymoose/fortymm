@@ -1,13 +1,29 @@
 import { Fragment } from 'react'
 
 import { Overline } from '@/components/overline'
+import { Button } from '@/components/ui/button'
 
 import type { DrawIssue } from './draw-issue'
+import type { DrawStructureFix } from './draw-issue-fix'
 
 export interface DrawIssuePanelProps {
   /** The issue to state, already chosen by `drawIssueFor`. The panel never picks: given
    * one it renders one, which is what keeps the precedence in a single place. */
   issue: DrawIssue
+  /**
+   * The named ways out, already worked out by `impossibleFixes` (`./draw-issue-fix`) —
+   * their labels, their detail lines, and the numbers they would write.
+   *
+   * **Empty is a real answer, and it is the usual one**: an uneven split has nothing to
+   * fix, and a reader (`canEdit: false`) is offered nothing anywhere on this tab (ADR-0015
+   * — a read-only surface is a view, not a disabled form). The panel renders the fix list
+   * it is handed and never derives one, for the same reason it never picks the kind.
+   */
+  fixes: DrawStructureFix[]
+  /** Apply one. **The panel does not know what a fix does** — the tab routes it to the
+   * pool rows, to the player limit on Basics, or to the qualifier count, through the same
+   * seams the setting rows write through. */
+  onApplyFix: (fix: DrawStructureFix) => void
 }
 
 /**
@@ -28,27 +44,120 @@ export interface DrawIssuePanelProps {
  * field being set. After overriding its `bg-card`, its padding and its two slot faces to
  * reach the tab's tokens there is about three utility classes of it left, so this is a
  * small purpose-built panel instead. It still composes the tab's primitives: `Overline`
- * for the topline, and the `--border-subtle` / `--bg-raised` / `--info` tokens the
- * preview beside it already uses.
+ * for the topline, and the `--border-subtle` / `--bg-raised` / `--info` / `--loss` tokens
+ * the preview beside it already uses.
  *
  * ## The meaning is the words, never the dot
  *
- * `Legal, but uneven` is visible text. The coloured dot is `aria-hidden` decoration on
- * top of it, so a reader who cannot separate blue from yellow reads the same notice
- * everyone else does.
+ * `Can’t save` and `Legal, but uneven` are visible text. The coloured dot is `aria-hidden`
+ * decoration on top of them, so a reader who cannot separate red from blue reads the same
+ * notice everyone else does.
  *
  * ## What this chore renders
  *
- * **Only the uneven variant.** `Can’t save` is chore 4c and `Needs your call` is chore
- * 5a — both come with fixes and `Apply` buttons that no derivation can supply, so
- * inventing their copy here would be inventing the fixes too.
+ * The **impossible** and **uneven** variants. `Needs your call` — the disagreement, with
+ * its three resolutions — is chore 5a; until then the tab shows nothing in that state
+ * rather than a half-written panel, and the director is not left guessing, because the
+ * live preview beside it already reads `Your numbers disagree`.
  */
-export const DrawIssuePanel = ({ issue }: DrawIssuePanelProps) => {
-  // Chores 4c (impossible, role `alert`, red dot, up to two fixes) and 5a (disagreement,
-  // role `status`, yellow dot, three fixes) render here. Until then the tab shows nothing
-  // in those states rather than a half-written panel: the live preview beside it already
-  // reads `This draw can’t work yet` / `Your numbers disagree`, so neither state is
-  // silent.
+export const DrawIssuePanel = ({
+  issue,
+  fixes,
+  onApplyFix,
+}: DrawIssuePanelProps) => {
+  if (issue.kind === 'impossible') {
+    return (
+      // `alert`, not `status`: this one reports a **blocked act**. The save is unavailable
+      // while it is on screen (`event-editor.tsx`), so it interrupts rather than waits to
+      // be reached — the opposite call from the uneven notice below, and the reason the
+      // role is variant data.
+      <div
+        role="alert"
+        data-testid="draw-issue-panel"
+        data-issue-kind={issue.kind}
+        // Tinted, unlike the uneven notice's plain raised surface: the reference draws
+        // this one in its refusal colour, border and field alike. The colour is on top of
+        // the words, never instead of them — `Can’t save` is visible text.
+        className="rounded-xl border border-[color:var(--loss)]/40 bg-[color:var(--loss)]/5 px-4 py-3"
+      >
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            className="size-1.5 shrink-0 rounded-full bg-[color:var(--loss)]"
+          />
+          {/* No colour of its own: `.fortymm-theme .fortymm-overline` is unlayered and
+              beats a Tailwind text-colour utility set here anyway. */}
+          <Overline as="span">Can’t save</Overline>
+        </div>
+
+        {/* The derivation's words, both of them — the cause and what to do about it. The
+            panel writes neither: `deriveDrawStructure` names the first impossible
+            competition, and naming it a second time here is how the two copies drift. */}
+        <p
+          data-testid="draw-issue-panel-title"
+          className="mt-1.5 text-[15px] leading-snug font-semibold text-[color:var(--fg-1)]"
+        >
+          {issue.problem.title}
+        </p>
+        <p
+          data-testid="draw-issue-panel-body"
+          className="mt-1 text-[13px] leading-snug text-[color:var(--fg-3)]"
+        >
+          {issue.problem.body}
+        </p>
+
+        {fixes.length > 0 && (
+          // Side by side above `sm`, stacked below it — the pool case offers two, and two
+          // rows of a label, a detail line and a button do not fit a phone in one line.
+          <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {fixes.map((fix) => (
+              // Keyed by the label, which is the fix: two fixes for one problem never
+              // read the same, and an index key would reattach the wrong button the
+              // moment the problem changed under it.
+              <li
+                key={fix.label}
+                data-testid="draw-issue-fix"
+                className="flex items-start justify-between gap-3 rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)] px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p
+                    data-testid="draw-issue-fix-label"
+                    className="text-[13px] leading-snug font-semibold text-[color:var(--fg-1)]"
+                  >
+                    {fix.label}
+                  </p>
+                  <p
+                    data-testid="draw-issue-fix-detail"
+                    className="mt-0.5 text-[12px] leading-snug text-[color:var(--fg-3)]"
+                  >
+                    {fix.detail}
+                  </p>
+                </div>
+                <Button
+                  variant="link"
+                  size="sm"
+                  data-testid="draw-issue-fix-apply"
+                  className="h-auto shrink-0 p-0 text-[13px]"
+                  // Every one of these buttons says `Apply`, so the visible words alone
+                  // name no fix — and a list of buttons is how a screen-reader user meets
+                  // them. The visible word comes FIRST, so what a director says out loud
+                  // to a voice-control tool still matches (the `SettingRow` action's rule).
+                  aria-label={`Apply ${fix.label}`}
+                  onClick={() => onApplyFix(fix)}
+                >
+                  Apply
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    )
+  }
+
+  // Chore 5a (disagreement, role `status`, yellow dot, three fixes) renders here. Until
+  // then the tab shows nothing in that state rather than a half-written panel: the live
+  // preview beside it already reads `Your numbers disagree`, so the state is not silent.
   if (issue.kind !== 'uneven') return null
 
   return (

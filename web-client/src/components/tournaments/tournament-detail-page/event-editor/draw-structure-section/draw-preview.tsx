@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 
 import type { PoolMembershipMode } from '../../../data/draw-ownership'
 import { poolLetter, type DrawStructure } from '../../../data/draw-structure'
+import { drawIssueFor, type DrawIssue } from './draw-issue'
 import { PoolCard } from './draw-preview/pool-card'
 
 /** The `Membership` fact, in the reference's words — two of them, because the fact is a
@@ -21,11 +22,18 @@ const MEMBERSHIP_FACT: Record<PoolMembershipMode, string> = {
  * not an inventory. */
 const MAX_POOL_CARDS = 8
 
+/** One verdict: the heading and the badge that go with it. */
+interface Verdict {
+  heading: string
+  badge: string
+  badgeClass: string
+}
+
 /** The three states the preview can be in, in the words the reference uses. **The
  * heading and the badge are one decision**, so they are one table — split across two
  * conditionals they would eventually disagree, and a `Sound` badge over
  * `This draw can’t work yet` is worse than either alone. */
-const VERDICTS = {
+const VERDICTS: Record<'impossible' | 'disagreement' | 'sound', Verdict> = {
   impossible: {
     heading: 'This draw can’t work yet',
     badge: 'Impossible',
@@ -41,7 +49,20 @@ const VERDICTS = {
     badge: 'Sound',
     badgeClass: 'border-[color:var(--serve-500)]/50 text-[color:var(--serve-500)]',
   },
-} as const
+}
+
+/** Which verdict each of the three issues carries.
+ *
+ * ⚠️ **`uneven` is `sound`, and that is the whole reason this is a table.** An uneven
+ * split is legal: the tab says so under the settings (`Legal, but uneven`) and the draw is
+ * saveable, so the preview reads `Ready to save`. A lookup keyed straight off the issue
+ * kind would leave an uneven draw with no verdict at all, and the type checker is what
+ * makes that unsayable here. */
+const VERDICT_FOR_ISSUE: Record<DrawIssue['kind'], Verdict> = {
+  impossible: VERDICTS.impossible,
+  disagreement: VERDICTS.disagreement,
+  uneven: VERDICTS.sound,
+}
 
 export interface DrawPreviewProps {
   /** The whole derivation, already done. **Every number the preview shows is read off
@@ -107,15 +128,16 @@ export const DrawPreview = ({
   previewBasis,
 }: DrawPreviewProps) => {
   const overlineId = useId()
+  const issue = drawIssueFor(structure)
 
-  // The precedence is the reference's, and it is the order a director can act in: a draw
-  // that cannot be played is not "your call".
+  // **The precedence is `drawIssueFor`'s, and this asks it rather than re-deciding it.**
+  // The order (impossible, then disagreement) is the reference's and is the order a
+  // director can act in — a draw that cannot be played is not "your call" — and it used to
+  // be written out a second time here, one conditional away from the notice panel's copy
+  // of it saying something else. Now the badge and the notice under the settings are two
+  // renderings of one answer.
   const verdict =
-    structure.impossibleProblems.length > 0
-      ? VERDICTS.impossible
-      : structure.disagreement !== null
-        ? VERDICTS.disagreement
-        : VERDICTS.sound
+    issue === null ? VERDICTS.sound : VERDICT_FOR_ISSUE[issue.kind]
 
   // Read off the derived sizes rather than divided out again — the pools are routinely
   // unequal, and `8` where the draw holds `6–5` would be the silent reshaping #1320

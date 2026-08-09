@@ -444,7 +444,8 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       impossibleProblems: [
         {
           kind: 'qualifier',
-          title: "You can't take 3 qualifiers from a pool of 2",
+          // The reference's glyph: `can’t` with a right single quote (`U+2019`).
+          title: 'You can’t take 3 qualifiers from a pool of 2',
           body: 'Take 2 or fewer, or make the smallest pool bigger.',
         },
       ],

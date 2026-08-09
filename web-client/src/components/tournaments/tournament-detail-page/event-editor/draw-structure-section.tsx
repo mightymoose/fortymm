@@ -10,7 +10,6 @@ import {
   everySettingAutomatic,
   type DrawOwnership,
 } from '../../data/draw-ownership'
-import { deriveDrawStructure } from '../../data/draw-structure'
 import { QUALIFIERS_PER_POOL_MAX } from '../../data/event-validation'
 import { reconcilePoolsToCount } from '../../data/pool-reconciliation'
 import type { PoolEntry, TournamentEvent } from '../../data/types'
@@ -19,8 +18,13 @@ import {
   type PoolCountActConsequence,
 } from '../confirm-irreversible-act-dialog'
 import { drawIssueFor } from './draw-structure-section/draw-issue'
+import {
+  impossibleFixes,
+  type DrawStructureFix,
+} from './draw-structure-section/draw-issue-fix'
 import { DrawIssuePanel } from './draw-structure-section/draw-issue-panel'
 import { DrawPreview } from './draw-structure-section/draw-preview'
+import { eventDrawStructure } from './draw-structure-section/event-draw-structure'
 import {
   previewBasisLabel,
   previewFieldSize,
@@ -211,25 +215,13 @@ export const DrawStructureSection = ({
   // event's toggle rewrote.
   const ownership = event.drawOwnership ?? everySettingAutomatic()
 
-  const structure = deriveDrawStructure({
-    previewFieldSize: fieldSize,
-    // One pool reservation is one pool — today's behaviour, and the automatic source of
-    // the pool count (ADR 20260808). Read off the FORM's pool list, which is what the
-    // reconciliation below writes, so the source sentence
-    // (`{n} pool reservations · today's behaviour`) states a number that is true of the
-    // draft the director is looking at.
-    poolReservationCount: pools.length,
-    poolCountMode: ownership.poolCountMode,
-    manualPoolCount: ownership.manualPoolCount,
-    poolSizeMode: ownership.poolSizeMode,
-    manualPoolSize: ownership.manualPoolSize,
-    qualifiersMode: ownership.qualifiersMode,
-    // **The event's own K is the manual slot.** There is no `manual_qualifiers` on the
-    // wire: every `rr-then-ko` event already carries a qualifier count, and the mode is
-    // what says whether anybody should read it. Passed unconditionally, exactly as the
-    // API's comment describes, so the derivation's own `qualifiersMode` check decides.
-    manualQualifiers: event.qualifiersPerPool,
-  })
+  // The eight inputs are assembled in ONE place (`eventDrawStructure`), and this tab is
+  // not it — the editor's action bar asks the same derivation whether the configuration is
+  // impossible, and a second assembly here would eventually mean a different pool list or
+  // a different field size from the one the Save button is judging. One pool reservation
+  // is one pool (ADR 20260808), counted off the FORM's list, which is what the
+  // reconciliation below writes.
+  const structure = eventDrawStructure(event, pools)
 
   /** Write a changed ownership record — always a **replacement**, never a mutation. The
    * `as const` on the wire-side twin gives readonly modifiers TypeScript does not check
@@ -298,19 +290,60 @@ export const DrawStructureSection = ({
     writePoolCount(value)
   }
 
+  /**
+   * Ask for a pool count — **the one gate every pool count passes through**, whether it
+   * was typed into the box or clicked on a fix in the refusal panel.
+   *
+   * Constructive counts are written. A count that would drop reservations is *priced*
+   * first: the confirm names them before any of them goes (ADR 20260806). There is one
+   * copy of that rule, so `Use 4 pools` against six reservations cannot be the quiet way
+   * to discard two of them.
+   */
+  const requestPoolCount = (count: number) => {
+    const { removed } = reconcilePoolsToCount(pools, count, event.slot)
+    if (removed.length > 0) {
+      setPendingRemoval({ count, removed })
+      return
+    }
+    writePoolCount(count)
+  }
+
   /** The director is done typing (they left the box, or pressed Enter). A held count is
-   * priced now: the confirm names the reservations that would go before any of them does
-   * (ADR 20260806). */
+   * priced now, through the gate above. */
   const commitPoolCount = () => {
     // Nothing held, or a dialog already asking about it — the confirm's own focus move
     // blurs the box a second time, and one question is enough.
     if (typedPoolCount === null || pendingRemoval !== null) return
-    const { removed } = reconcilePoolsToCount(pools, typedPoolCount, event.slot)
-    if (removed.length > 0) {
-      setPendingRemoval({ count: typedPoolCount, removed })
-      return
+    requestPoolCount(typedPoolCount)
+  }
+
+  /**
+   * Apply one of the refusal panel's named ways out.
+   *
+   * **Every arm writes through a seam that already exists**, and that is the point: a fix
+   * is a shortcut to a setting the director could have changed themselves, not a second
+   * way to change it.
+   *
+   * - `pool-count` goes through `requestPoolCount`, so it creates or removes pool rows in
+   *   the one act ADR 20260808 demands, and buys any removal with the same confirm the
+   *   Pool count box does.
+   * - `player-limit` writes the event's cap, which lives on Basics — the same `onChange`
+   *   the Basics tab writes through, so the limit has one owner and this tab is not it.
+   * - `qualifiers` **takes the setting** as well as setting the number. The director asked
+   *   for this count, so the row must say `Yours`: left automatic, the derivation would go
+   *   on aiming at a bracket of eight and hand the number straight back.
+   */
+  const applyFix = (fix: DrawStructureFix) => {
+    switch (fix.kind) {
+      case 'pool-count':
+        requestPoolCount(fix.poolCount)
+        return
+      case 'player-limit':
+        onChange({ ...event, maxPlayers: fix.maxPlayers })
+        return
+      case 'qualifiers':
+        own({ qualifiersMode: 'manual' }, fix.qualifiersPerPool)
     }
-    writePoolCount(typedPoolCount)
   }
 
   // Read off the derived sizes rather than divided out again — the pools are routinely
@@ -327,6 +360,15 @@ export const DrawStructureSection = ({
   // last four pools have one player each), so the choice is `drawIssueFor`'s and this tab
   // never re-derives it.
   const issue = drawIssueFor(structure)
+
+  // The named ways out of a refusal, and **nothing for a reader**: a read-only surface is
+  // a view, not a disabled form (ADR-0015), so the panel still states the cause and offers
+  // no button to press. The other two kinds carry no fixes at all — the uneven notice has
+  // nothing to fix, and the disagreement's three resolutions are chore 5b.
+  const fixes: DrawStructureFix[] =
+    canEdit && issue?.kind === 'impossible'
+      ? impossibleFixes(issue.problem, structure, fieldSize)
+      : []
 
   return (
     <div className="flex flex-col gap-6" data-testid="draw-structure-section">
@@ -600,7 +642,11 @@ export const DrawStructureSection = ({
               this states the one thing worth saying about it. */}
           {issue !== null && (
             <div className="mt-5">
-              <DrawIssuePanel issue={issue} />
+              <DrawIssuePanel
+                issue={issue}
+                fixes={fixes}
+                onApplyFix={applyFix}
+              />
             </div>
           )}
         </div>

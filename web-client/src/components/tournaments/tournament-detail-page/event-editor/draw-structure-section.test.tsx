@@ -1,8 +1,10 @@
 import userEvent from '@testing-library/user-event'
 
-import { fireEvent } from '@/test/utilities'
+import { cleanup, fireEvent } from '@/test/utilities'
 
 import { everySettingAutomatic } from '../../data/draw-ownership'
+import { poolLetter } from '../../data/draw-structure'
+import { keepPools } from '../../data/pool-entries'
 import { buildPool } from '../../data/seed.factory'
 import type { DrawOwnership, PoolEntry, TournamentEvent } from '../../data/types'
 import { buildDrawStructureEvent } from './draw-structure-section.factory'
@@ -16,6 +18,29 @@ const eventOwning = (
 ) =>
   buildDrawStructureEvent({
     drawOwnership: { ...everySettingAutomatic(), ...taken },
+    ...overrides,
+  })
+
+/**
+ * The reference's **"Field too small"** state
+ * (`docs/designs/rr-then-ko-draw-structure/field-too-small-panel.png`): 8 players over
+ * **six** pool reservations, which splits `2, 2, 1, 1, 1, 1`.
+ *
+ * The rows are lettered the way the tab letters them, because the fixes that reduce the
+ * count name the reservations they would drop.
+ */
+const eventTooSmallForItsPools = (
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+) =>
+  buildDrawStructureEvent({
+    maxPlayers: 8,
+    pools: Array.from({ length: 6 }, (_, i) =>
+      buildPool({
+        id: `p-${poolLetter(i).toLowerCase()}`,
+        name: `Pool ${poolLetter(i)}`,
+        position: i,
+      }),
+    ),
     ...overrides,
   })
 
@@ -1170,24 +1195,325 @@ describe('DrawStructureSection', () => {
      * also pass on a draw that is not uneven at all, and prove nothing about the order.
      */
     it('drops the uneven notice when a pool cannot be played — 8 across 6', () => {
-      drawStructureSectionPage.render({
-        event: buildDrawStructureEvent({
-          maxPlayers: 8,
-          pools: Array.from({ length: 6 }, (_, i) =>
-            buildPool({ id: `p-${i}`, name: `Pool ${i}`, position: i }),
-          ),
-        }),
-      })
+      drawStructureSectionPage.render({ event: eventTooSmallForItsPools() })
 
       const row = drawStructureSectionPage.setting('Pool size')
       expect(row.getValue()).toHaveTextContent('1–2')
       expect(row.queryUnit()).toHaveTextContent('players · uneven')
 
-      expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
-      // …and the director is not left guessing: the preview says so.
+      // The refusal, not the tally: `Legal, but uneven` is not the thing to say about a
+      // pool with one player in it.
+      expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+        'Pool C would have one player',
+      )
+      expect(
+        drawStructureSectionPage.issuePanel.getPanel(),
+      ).toHaveAttribute('data-issue-kind', 'impossible')
+      // …and the preview beside it says the same thing about the same draw.
       expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
         'This draw can’t work yet',
       )
+    })
+  })
+
+  /**
+   * **The named ways out of a refusal** (#1320's `Can’t save` panel). Each `Apply` writes
+   * through a seam that already exists — the pool rows, the player limit on Basics, the
+   * qualifier count — so a fix is a shortcut to a setting the director could have changed
+   * themselves and never a second way to change it.
+   *
+   * The labels and their arithmetic are pinned by `draw-issue-fix.test.ts`, and the panel's
+   * markup by `draw-issue-panel.test.tsx`. What the tab owns is what a click *does*, and
+   * that the draw it leaves behind is one the editor would save.
+   */
+  describe('applying a fix', () => {
+    /**
+     * Re-render the tab on the event and pools a fix produced — the state the director is
+     * actually left looking at, which is the only way to say "this fix works".
+     *
+     * These props are spies, so nothing feeds the write back into the component: the test
+     * closes that loop itself, the way the editor's form does. `cleanup` first, because a
+     * second `render` would otherwise leave two tabs on screen and every screen-scoped
+     * query would throw on the ambiguity.
+     *
+     * A fix that wrote only one of the two (the event, or the pool list) falls back to
+     * what was already there — which is exactly how a half-applied fix shows up as a
+     * refusal that will not clear.
+     */
+    const rerenderOn = (
+      onChange: ReturnType<typeof vi.fn>,
+      onPoolsChange: ReturnType<typeof vi.fn>,
+      previous: { event: TournamentEvent; pools: PoolEntry[] },
+    ) => {
+      const event: TournamentEvent = onChange.mock.lastCall?.[0] ?? previous.event
+      const pools: PoolEntry[] = onPoolsChange.mock.lastCall?.[0] ?? previous.pools
+      cleanup()
+      drawStructureSectionPage.render({ event, pools })
+      return { event, pools }
+    }
+
+    describe('a pool nobody can play in — 8 players over 6 pools', () => {
+      const renderTooSmall = () => {
+        const onChange = vi.fn()
+        const onPoolsChange = vi.fn()
+        const event = eventTooSmallForItsPools()
+        drawStructureSectionPage.render({ event, onChange, onPoolsChange })
+        return { onChange, onPoolsChange, event }
+      }
+
+      it('offers both of the reference’s ways out', () => {
+        renderTooSmall()
+
+        expect(drawStructureSectionPage.issuePanel.getFixLabels()).toEqual([
+          'Use 4 pools',
+          'Raise the player limit to 12',
+        ])
+      })
+
+      /**
+       * ⚠️ **Fewer pools means fewer pool ROWS** (ADR 20260808), so this fix discards two
+       * reservations — and it is priced by the same confirm the Pool count box is, naming
+       * them before any of them goes (ADR 20260806). A fix that quietly dropped a
+       * reservation would be the one unpriced path to an act every other path prices.
+       */
+      it('prices the reservations `Use 4 pools` would drop', async () => {
+        renderTooSmall()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 4 pools'),
+        )
+
+        expect(
+          drawStructureSectionPage.confirm.getDialog(),
+        ).toHaveTextContent('Pool E')
+        expect(
+          drawStructureSectionPage.confirm.getDialog(),
+        ).toHaveTextContent('Pool F')
+      })
+
+      it('writes neither the count nor the rows until that is confirmed', async () => {
+        const { onChange, onPoolsChange } = renderTooSmall()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 4 pools'),
+        )
+
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+
+      /** The number and the rows, in ONE act — the ADR's demand, and the claim that would
+       * red if the fix wrote its count straight to the ownership record and left the six
+       * reservations standing. */
+      it('drops the rows from the end on the confirm, and stores the count with them', async () => {
+        const { onChange, onPoolsChange } = renderTooSmall()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 4 pools'),
+        )
+        await userEvent.click(drawStructureSectionPage.confirm.getConfirmButton())
+
+        expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(4)
+        expect(
+          onPoolsChange.mock.lastCall?.[0].map((pool: PoolEntry) => pool.name),
+        ).toEqual(['Pool A', 'Pool B', 'Pool C', 'Pool D'])
+      })
+
+      it('leaves a draw the editor would save', async () => {
+        const { onChange, onPoolsChange, event } = renderTooSmall()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Use 4 pools'),
+        )
+        await userEvent.click(drawStructureSectionPage.confirm.getConfirmButton())
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+
+        // 8 across 4 is 2, 2, 2, 2 — no pool of one, no notice at all.
+        expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+      })
+
+      /** The other direction, and the one setting on this tab that is not on this tab: the
+       * player limit lives on Basics, and the fix writes it through the same `onChange`
+       * the Basics tab writes through. **No pool row moves** — that is what
+       * `Keeps your pool count.` promises. */
+      it('raises the player limit without touching a reservation', async () => {
+        const { onChange, onPoolsChange } = renderTooSmall()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton(
+            'Raise the player limit to 12',
+          ),
+        )
+
+        expect(onChange.mock.lastCall?.[0].maxPlayers).toBe(12)
+        expect(onPoolsChange).not.toHaveBeenCalled()
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+      })
+
+      it('leaves a draw the editor would save, that way too', async () => {
+        const { onChange, onPoolsChange, event } = renderTooSmall()
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton(
+            'Raise the player limit to 12',
+          ),
+        )
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+
+        // 12 across the same 6 pools is 2 apiece.
+        expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+      })
+    })
+
+    /**
+     * #1320's own case: one pool taking one qualifier sends one player to the knockout,
+     * and the app used to refuse the *cut* with a message naming the wrong cause.
+     */
+    describe('a one-player knockout — 1 pool, top 1', () => {
+      const onePoolTakingOne = () =>
+        eventOwning(
+          { qualifiersMode: 'manual' },
+          {
+            maxPlayers: 16,
+            qualifiersPerPool: 1,
+            pools: [buildPool({ id: 'p-a', name: 'Pool A', position: 0 })],
+          },
+        )
+
+      it('names the cause and offers the one way out', () => {
+        drawStructureSectionPage.render({ event: onePoolTakingOne() })
+
+        expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+          'The knockout would have one player',
+        )
+        expect(drawStructureSectionPage.issuePanel.getFixLabels()).toEqual([
+          'Take top 2',
+        ])
+      })
+
+      /** The count **and** the ownership: the director asked for two through, so the row
+       * must read `Yours`. Left automatic, the derivation would go on aiming at a bracket
+       * of eight and hand the number straight back. */
+      it('takes the qualifier setting as well as setting the number', async () => {
+        const onChange = vi.fn()
+        drawStructureSectionPage.render({ event: onePoolTakingOne(), onChange })
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Take top 2'),
+        )
+
+        expect(onChange.mock.lastCall?.[0].qualifiersPerPool).toBe(2)
+        expect(onChange.mock.lastCall?.[0].drawOwnership.qualifiersMode).toBe(
+          'manual',
+        )
+      })
+
+      it('leaves a draw the editor would save', async () => {
+        const onChange = vi.fn()
+        const onPoolsChange = vi.fn()
+        const event = onePoolTakingOne()
+        drawStructureSectionPage.render({ event, onChange, onPoolsChange })
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Take top 2'),
+        )
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+
+        expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+      })
+    })
+
+    /**
+     * Three through from a pool that holds two. 10 players over 4 pools splits
+     * `3, 3, 2, 2`, so the fix names **two** — the smallest pool, not the average.
+     */
+    describe('more qualifiers than the smallest pool holds — top 3 from a pool of 2', () => {
+      const topThreeFromTwo = () =>
+        eventOwning(
+          { poolCountMode: 'manual', manualPoolCount: 4, qualifiersMode: 'manual' },
+          { maxPlayers: 10, qualifiersPerPool: 3 },
+        )
+
+      it('names the cause in the reference’s words, apostrophe and all', () => {
+        drawStructureSectionPage.render({ event: topThreeFromTwo() })
+
+        expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+          'You can’t take 3 qualifiers from a pool of 2',
+        )
+        expect(drawStructureSectionPage.issuePanel.getFixLabels()).toEqual([
+          'Take top 2',
+        ])
+      })
+
+      it('cuts the qualifier count down to what the smallest pool holds', async () => {
+        const onChange = vi.fn()
+        drawStructureSectionPage.render({ event: topThreeFromTwo(), onChange })
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Take top 2'),
+        )
+
+        expect(onChange.mock.lastCall?.[0].qualifiersPerPool).toBe(2)
+      })
+
+      /** Saveable is **not** the same as silent: 10 across 4 is still an uneven split, and
+       * the tab goes on saying so. What it stops saying is that the draw cannot be
+       * played. */
+      it('leaves a draw the editor would save, still uneven', async () => {
+        const onChange = vi.fn()
+        const onPoolsChange = vi.fn()
+        const event = topThreeFromTwo()
+        drawStructureSectionPage.render({ event, onChange, onPoolsChange })
+
+        await userEvent.click(
+          drawStructureSectionPage.issuePanel.getApplyButton('Take top 2'),
+        )
+        rerenderOn(onChange, onPoolsChange, {
+          event,
+          pools: keepPools(event.pools),
+        })
+
+        expect(
+          drawStructureSectionPage.issuePanel.getPanel(),
+        ).toHaveAttribute('data-issue-kind', 'uneven')
+        expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+          'Ready to save',
+        )
+      })
+    })
+
+    /** A reader gets a **view** (ADR-0015). The refusal still says why the draw cannot be
+     * played — hiding that would leave them reading a preview badge with no cause — and it
+     * offers nothing to press, because none of these settings is theirs. */
+    it('offers a reader no way to apply one', () => {
+      drawStructureSectionPage.render({
+        event: eventTooSmallForItsPools(),
+        canEdit: false,
+      })
+
+      expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+        'Pool C would have one player',
+      )
+      expect(drawStructureSectionPage.issuePanel.getFixes()).toHaveLength(0)
+      expect(drawStructureSectionPage.getFormElements()).toHaveLength(0)
     })
   })
 })

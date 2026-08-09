@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm, useWatch } from 'react-hook-form'
 import { Check, Trash2, TriangleAlert } from 'lucide-react'
@@ -46,6 +46,7 @@ import {
 } from './confirm-irreversible-act-dialog'
 import { BasicsSection } from './event-editor/basics-section'
 import { DrawStructureSection } from './event-editor/draw-structure-section'
+import { impossibleDrawStructure } from './event-editor/draw-structure-section/event-draw-structure'
 import { EligibilitySection } from './event-editor/eligibility-section'
 import { MatchSection } from './event-editor/match-section'
 import { PoolsSection } from './event-editor/pools-section'
@@ -162,6 +163,8 @@ export const EventEditor = ({
   onDelete,
   saving = false,
 }: EventEditorProps) => {
+  /** What the disabled Save button points at — see `blockedBy` below. */
+  const blockedReasonId = useId()
   const [section, setSection] = useState('basics')
   const [seenEvent, setSeenEvent] = useState(event)
   /** How the last save was refused, or `null`. A classified failure — never a raw
@@ -424,6 +427,26 @@ export const EventEditor = ({
     ? section
     : 'basics'
 
+  /**
+   * **The competition this draft cannot play**, or `null` — the save gate (#1320).
+   *
+   * A pool of one, a knockout of one, or more qualifiers than the smallest pool holds are
+   * impossible competitions rather than disagreements: there is no draw to cut and nothing
+   * a later screen could resolve, so the editor does not send one (ADR 20260808 — "three
+   * refusals stay"). What it is emphatically **not** gated on is validity: pressing Save is
+   * still how an organizer finds out about a blank name (`CLAUDE.md`, `## Forms`).
+   *
+   * Three narrowings live inside `impossibleDrawStructure`, not here: only `rr-then-ko` can
+   * be refused this way, only `impossibleProblems` count (a **disagreement still saves**),
+   * and a draft-less editor has nothing to judge.
+   *
+   * ⚠️ Derived from the **draft** and the watched pool list — the same two values the Draw
+   * structure tab renders from, through the same function. Read off the saved event
+   * instead, the button would block on a structure the director had already fixed, or
+   * cheerfully send one they had just broken by lowering the player limit on Basics.
+   */
+  const blockedBy = impossibleDrawStructure(draft, watchedPools ?? [])
+
   return (
     <Sheet
       open={open}
@@ -607,6 +630,29 @@ export const EventEditor = ({
           </div>
         )}
 
+        {/* **Why the Save button is dead** — the one thing a disabled control owes the
+            person looking at it (ADR-0015: an unexplained dead end is the failure mode).
+            The button points at this line with `aria-describedby`, and it is here rather
+            than in the tab's refusal panel for a reason that is not cosmetic: Radix
+            unmounts an inactive tab's content, so a description living in the panel would
+            dangle the moment the director stood on Basics — which is a tab that can *cause*
+            this state, by lowering the player limit.
+
+            The cause is the derivation's own words (`ImpossibleProblem.title`), never a
+            second sentence about the same condition. What is added is where to fix it,
+            which the reference's single-screen mockup never had to say. */}
+        {canEdit && blockedBy && (
+          <div className="px-6 pb-1">
+            <p
+              id={blockedReasonId}
+              data-testid="event-editor-save-blocked"
+              className="text-[12px] leading-snug text-[color:var(--fg-3)]"
+            >
+              {blockedBy.title}. Fix it on the Draw structure tab.
+            </p>
+          </div>
+        )}
+
         {/* **A row above `sm`, a stack below it.** Three buttons in a `flex-row` that
             cannot wrap need ~390px, and on a 375px phone the last of them — "Save
             changes", the primary action, the whole reason the sheet is open — was CLIPPED
@@ -640,9 +686,23 @@ export const EventEditor = ({
             // (#1231 QA). Both are asked, so it re-enables only once BOTH are done —
             // and a rejected save re-enables it, because both go false, which is what
             // lets the organizer retry the failure the `Alert` above is reporting.
-            <Button disabled={!draft || isSubmitting || saving} onClick={submit}>
+            // …and a THIRD reason, which is not "in the air" at all: the draw structure
+            // cannot be played (`blockedBy`). That one is a refusal rather than a wait, so
+            // it also changes what the button says — a disabled control that still reads
+            // `Save changes` looks broken, while `Fix the structure to save` names the act
+            // that would re-enable it (the reference's own wording), and the line above the
+            // footer says what to fix.
+            <Button
+              disabled={!draft || isSubmitting || saving || blockedBy !== null}
+              aria-describedby={blockedBy ? blockedReasonId : undefined}
+              onClick={submit}
+            >
               <Check size={16} />
-              {isNew ? 'Create event' : 'Save changes'}
+              {blockedBy
+                ? 'Fix the structure to save'
+                : isNew
+                  ? 'Create event'
+                  : 'Save changes'}
             </Button>
           )}
         </SheetFooter>
