@@ -13,6 +13,7 @@ import {
   buildInfeasiblePreviewResult,
   buildPreviewJobState,
   buildPreviewResult,
+  buildUnsupportedDrawTypeRefusal,
 } from '@/mocks/factories/tournaments/preview.factory'
 import { server } from '@/mocks/server'
 import {
@@ -136,24 +137,189 @@ describe('SchedulePreviewModal', () => {
   // hang forever on "Preparing preview…".
   it('surfaces an enqueue refusal as an actionable error, not a permanent spinner', async () => {
     mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(buildUnsupportedDrawTypeRefusal(), { status: 422 }),
+    )
+
+    schedulePreviewModalPage.render()
+
+    // The inline error: the client's cause-neutral title over a sentence that names
+    // the blocker. This fixture is the CODED refusal, so the copy comes from the
+    // draw-type catalogue rather than from the server's `message` — the #1221 arm,
+    // pinned in its own test below. Every *other* 422 keeps the server's own
+    // director-facing sentence, which "the enqueue-refusal notice" block covers.
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'This tournament has a “Single elimination” event',
+    )
+    // NOT a permanent spinner.
+    expect(screen.queryByTestId('preview-preparing')).toBeNull()
+    // Actionable: a retry and a close.
+    expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
+    expect(screen.getByTestId('preview-enqueue-close')).toBeInTheDocument()
+  })
+
+  // #1221: the refusal's whole point. The old copy named nothing ("a draw type the
+  // preview does not support yet"), so a director with four events could not tell
+  // WHICH one blocks the preview. The server now sends the offending type
+  // structurally — `detail.draw_type`, the hyphenated wire slug — beside a
+  // machine-readable `code`, and the client resolves it through the SERVED
+  // draw-type catalogue, so the notice says "Single elimination".
+  it('names the offending draw type, in the director’s words, on a coded 422', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
       HttpResponse.json(
-        { detail: 'Only round-robin draws can be previewed.' },
+        buildUnsupportedDrawTypeRefusal({ draw_type: 'single-elim' }),
         { status: 422 },
       ),
     )
 
     schedulePreviewModalPage.render()
 
-    // The inline error: the client's cause-neutral title over the server's own
-    // director-facing sentence (the 422 detail is domain-authored copy).
+    const error = await screen.findByTestId('preview-enqueue-error')
+    // The load-bearing assertion: the draw type is NAMED, in the words the event
+    // editor's picker shows.
+    expect(error).toHaveTextContent('Single elimination')
+    // …and never the wire slug, nor the server's own sentence (which says
+    // "single-elim"), nor the old copy that named nothing.
+    expect(error).not.toHaveTextContent('single-elim')
+    expect(error).not.toHaveTextContent(
+      'This tournament uses a draw type the preview does not support yet',
+    )
+  })
+
+  // The deliberate degradation the server's `message` exists for: a refusal code
+  // minted AFTER this build shipped still decodes, and the director reads the
+  // server's fallback prose rather than a code, an `undefined`, or a crash.
+  it('falls back to the server’s message for a 422 code it does not recognise', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail: {
+            code: 'a_refusal_from_the_future',
+            message: 'This tournament has an event the scheduler cannot place.',
+          },
+        },
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
     const error = await screen.findByTestId('preview-enqueue-error')
     expect(error).toHaveTextContent("This schedule can't be previewed yet")
-    expect(error).toHaveTextContent('Only round-robin draws can be previewed.')
-    // NOT a permanent spinner.
-    expect(screen.queryByTestId('preview-preparing')).toBeNull()
-    // Actionable: a retry and a close.
+    expect(error).toHaveTextContent(
+      'This tournament has an event the scheduler cannot place.',
+    )
+    // Never the code itself, and never a hole where a fact should be.
+    expect(error).not.toHaveTextContent('a_refusal_from_the_future')
+    expect(error).not.toHaveTextContent('undefined')
+  })
+
+  // A detail that is not a coded object at all — the draw-refusal mapper still answers
+  // with a plain-string `detail` for its other arms, and `DegenerateDraw` genuinely
+  // reaches this route (an `rr-then-ko` event whose qualifiers exceed its smallest
+  // pool). The server's sentence names the real cause and the numbers behind it, so it
+  // is shown; falling through to the generic would tell a director their *draw type*
+  // was unsupported when their entrant counts were the problem.
+  it("shows the server's own sentence for a 422 that is not a coded refusal", async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail:
+            'Taking 3 qualifiers from each pool is more than the 2 entrants in the smallest pool.',
+        },
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'more than the 2 entrants in the smallest pool',
+    )
+    // The generic would have named the wrong cause entirely.
+    expect(error).not.toHaveTextContent(
+      'uses a draw type the preview does not support yet',
+    )
+    expect(error).not.toHaveTextContent('undefined')
+    // Still actionable — the modal is intact, not a blown-up boundary.
     expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
-    expect(screen.getByTestId('preview-enqueue-close')).toBeInTheDocument()
+  })
+
+  // Nothing to read at all: no body, so no sentence to borrow. This is the only case
+  // the generic is for, and it must still be reachable.
+  it('falls back to the generic copy for a 422 carrying no sentence at all', async () => {
+    mockSchedulePreviewEnqueueEndpoint(
+      server,
+      () => new HttpResponse(null, { status: 422 }),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'This tournament uses a draw type the preview does not support yet',
+    )
+    expect(error).not.toHaveTextContent('undefined')
+    expect(screen.getByTestId('preview-enqueue-retry')).toBeInTheDocument()
+  })
+
+  // FastAPI's own request-validation 422, which is shaped nothing like a refusal: a
+  // `detail` ARRAY of Pydantic errors. `extractDetail` would happily return
+  // `errors[0].msg` from it — that is how "Input should be a valid integer, got a
+  // number with a fractional part" once reached a director, under a heading promising
+  // to talk about their schedule. A malformed request is not a refusal, and Pydantic's
+  // phrasing is machinery, so this must take the generic and say nothing about ints.
+  it('never shows validation machinery for a malformed request', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(
+        {
+          detail: [
+            {
+              type: 'int_from_float',
+              loc: ['body', 'overrides', 'ev-1'],
+              msg: 'Input should be a valid integer, got a number with a fractional part',
+              input: 2.5,
+            },
+          ],
+        },
+        { status: 422 },
+      ),
+    )
+
+    schedulePreviewModalPage.render()
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent("This schedule can't be previewed yet")
+    expect(error).toHaveTextContent(
+      'This tournament uses a draw type the preview does not support yet',
+    )
+    expect(error).not.toHaveTextContent('valid integer')
+    expect(error).not.toHaveTextContent('fractional')
+    // The echoed input must not surface either — it is the director's own value, but
+    // through a channel nobody designed for it.
+    expect(error).not.toHaveTextContent('2.5')
+  })
+
+  // A slug this build has no word for (an empty catalogue stands in for "the
+  // payload withheld it" / "a draw type seeded after this build"). Naming it
+  // "single-elim" would be exactly the raw-slug leak `labelFor` exists to prevent,
+  // so the notice drops to the server's fallback sentence instead.
+  it('falls back to the server’s message when the catalogue has no word for the draw type', async () => {
+    mockSchedulePreviewEnqueueEndpoint(server, () =>
+      HttpResponse.json(buildUnsupportedDrawTypeRefusal(), { status: 422 }),
+    )
+
+    schedulePreviewModalPage.render({ drawTypes: [] })
+
+    const error = await screen.findByTestId('preview-enqueue-error')
+    expect(error).toHaveTextContent(
+      'A single-elim draw cannot be scheduled yet.',
+    )
+    expect(error).not.toHaveTextContent('undefined')
   })
 
   // The bug behind this block: EVERY 422 was mapped to one hardcoded "this
@@ -377,7 +543,7 @@ describe('SchedulePreviewModal', () => {
 
     // The user SEES which field is wrong and why — the load-bearing assertion.
     const error = await schedulePreviewModalPage.findOverrideError('ev-1')
-    expect(error).toHaveTextContent('Enter a number of at least 2')
+    expect(error).toHaveTextContent('Enter a whole number of at least 2')
     // …and the input is flagged and points at that message.
     expect(input).toHaveAttribute('aria-invalid', 'true')
     expect(input).toHaveAttribute(
@@ -388,7 +554,17 @@ describe('SchedulePreviewModal', () => {
     // what makes the disabled state legible).
     expect(schedulePreviewModalPage.getRerunButton()).toBeDisabled()
 
+    // A FRACTIONAL field size is caught here too, and this is the one that matters
+    // most: the server takes `dict[uuid.UUID, int]`, so 2.5 used to sail past this
+    // guard, 422 from FastAPI's own validator, and come back as Pydantic prose under
+    // a heading about the schedule. Refused at the field, in words about the field.
+    await userEvent.type(input, '2.5')
+    const fractional = await schedulePreviewModalPage.findOverrideError('ev-1')
+    expect(fractional).toHaveTextContent('Enter a whole number of at least 2')
+    expect(schedulePreviewModalPage.getRerunButton()).toBeDisabled()
+
     // Typing a valid count clears both the message and the flag.
+    await userEvent.clear(input)
     await userEvent.type(input, '6')
     await waitFor(() =>
       expect(schedulePreviewModalPage.queryOverrideError('ev-1')).toBeNull(),

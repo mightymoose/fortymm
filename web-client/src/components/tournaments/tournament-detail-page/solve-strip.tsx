@@ -6,6 +6,7 @@ import {
   Clock,
   Loader2,
   Play,
+  TimerOff,
   TriangleAlert,
 } from 'lucide-react'
 
@@ -43,7 +44,7 @@ export interface SolveStripProps {
   onRun: () => Promise<void>
 }
 
-/** One visual grammar for the five states: an icon in the state's tint, a
+/** One visual grammar for the six states: an icon in the state's tint, a
  * headline, and a quieter line under it. */
 const Line = ({
   icon,
@@ -199,6 +200,30 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
         </div>
       )
     }
+    case 'timed_out': {
+      // NOT the failed arm: the run did not break, it ran out of time before it
+      // had anything to say (ADR "a time-capped solve is its own outcome, not a
+      // failure"). So it takes the warn tint of the other terminal not-a-plan
+      // outcome rather than the crash's `--loss`, and — the whole point — it
+      // does NOT advise running it again: the same model against the same cap
+      // does the same thing. The lever is a smaller problem, or a longer cap.
+      const wall = fmtWallTime(state.wallTimeMs)
+      return (
+        <div data-testid="solve-strip-timed-out">
+          <Line
+            icon={<TimerOff size={18} />}
+            tint="text-[color:var(--warn)]"
+            title="The scheduler ran out of time"
+          >
+            The run hit its time cap{wall ? ` after ${wall}` : ''} before it found
+            any plan, so it proved nothing — the schedule is unchanged. Solving the
+            same day again won't help on its own: make the problem smaller — trim a
+            field, give a match fewer candidate tables, or solve fewer events at
+            once — or give the solver longer.
+          </Line>
+        </div>
+      )
+    }
     case 'failed':
       return (
         <div data-testid="solve-strip-failed">
@@ -266,8 +291,11 @@ const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
  * owner's **Run scheduler** button.
  *
  * Every status is a *designed* state of one sum type (`solveStripState`) —
- * including `infeasible`, which is the point of pre-live solves, and "no solve
- * yet", which is the state every tournament is born in. Raw wire strings never
+ * including `infeasible`, which is the point of pre-live solves, `timed_out`,
+ * which proved nothing and so earns neither of the other two terminal sentences,
+ * and "no solve yet", which is the state every tournament is born in. The three
+ * terminal not-a-success outcomes read as three different things on purpose (ADR
+ * "a time-capped solve is its own outcome, not a failure"). Raw wire strings never
  * reach this surface: triggers and verdicts render through the copy tables in
  * `../data/solve`, and a refused run renders through `runSchedulerNotice`. The one
  * exception is a `failed` run's `error` sentence, shown as detail under the
@@ -279,9 +307,22 @@ const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
  * arrives — the double-click family (#436).
  */
 export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
-  // The last refusal, in words. Cleared when a new attempt starts — a notice
-  // about the click before last is worse than none. (The `LifecycleActions`
-  // pattern, which is the page's other inline-refusal surface.)
+  // The last refusal, in words. Cleared when a new attempt starts — a notice about the
+  // click before last is worse than none.
+  //
+  // A DELIBERATE non-adopter of `useExpiringNotice` (`../data/expiring-notice`), which
+  // the header's lifecycle alert and the draw panel both use so a refusal is withdrawn
+  // once the state it described has moved (`CONTEXT.md`, "Refusal"). This strip's
+  // `no_drawn_events` refusal is the same *class* of statement — a work list that stops
+  // being true once the director cuts a draw — but a draw is cut on the **Events** tab,
+  // and the tab set does not `forceMount`, so navigating away to do the work unmounts
+  // this component and takes the notice with it. `LifecycleActions` needed the hook
+  // precisely because it sits in the always-mounted header and has no such escape.
+  //
+  // The gap that remains: a draw cut in a second tab or on another device, or fresh data
+  // arriving by poll, leaves this refusal standing. If that is ever worth closing, the
+  // fingerprint is `tournament.events.some((e) => e.fixtures.length > 0)` — the one fact
+  // this refusal turns on — and it belongs here, not in a wider one.
   const [notice, setNotice] = useState<RunSchedulerNotice | null>(null)
   // The strip's OWN in-flight latch: set synchronously on click, so the second
   // click of a double-click cannot land in a render gap (#436 family). It spans

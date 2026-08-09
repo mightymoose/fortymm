@@ -19,7 +19,7 @@ function noDrawnEventsError(): ApiError {
 }
 
 describe('SolveStrip', () => {
-  // ----- the five designed states -------------------------------------------
+  // ----- the six designed states --------------------------------------------
 
   it('renders the designed "no plan yet" state — never an error — when no solve was ever requested', () => {
     solveStripPage.render({ solve: null })
@@ -259,10 +259,97 @@ describe('SolveStrip', () => {
     })
     const text = solveStripPage.getStateText('failed')
     expect(text).toContain('The scheduler hit a problem')
+    // The crash copy, in full — the regression a fourth arm could plausibly cause.
+    expect(text).toContain('The run broke before it could finish')
+    expect(text).toContain('Run it again.')
     expect(text).toContain('worker crashed: OOM')
     // A broken job is NOT the infeasible outcome — no resolved reason leaks in.
     expect(text).not.toContain('has no tables assigned')
     expect(text).not.toContain("The day doesn't fit")
+    // …and NOT the timed-out outcome either.
+    expect(solveStripPage.queryState('timed-out')).toBeNull()
+    expect(text).not.toContain('ran out of time')
+  })
+
+  // ----- the time-capped run: its own outcome, not a crash -------------------
+  //
+  // ADR "a time-capped solve is its own outcome, not a failure": the run did not
+  // break, it proved NOTHING — so it earns neither the crash's "the run broke,
+  // run it again" nor the infeasible arm's "the day doesn't fit".
+
+  it('renders a timed-out run as its OWN state — the cap ran out, the run proved nothing — never the crash copy', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'timed_out',
+        verdict: null,
+        wallTimeMs: 30_000,
+        fixturesPlaced: null,
+        fixturesPinned: null,
+        error: 'time cap exhausted without a solution',
+      }),
+    })
+    // Its own designed block — NOT the failed or infeasible ones.
+    expect(solveStripPage.queryState('timed-out')).not.toBeNull()
+    expect(solveStripPage.queryState('failed')).toBeNull()
+    expect(solveStripPage.queryState('infeasible')).toBeNull()
+
+    const text = solveStripPage.getStateText('timed-out')
+    expect(text).toContain('The scheduler ran out of time')
+    expect(text).toContain('hit its time cap')
+    // Honest about what it did and did not establish.
+    expect(text).toContain('proved nothing')
+    expect(text).toContain('the schedule is unchanged')
+    // The size of the cap, so "give it longer" is a judgeable lever.
+    expect(text).toContain('after 30.0s')
+
+    // NOT the crash copy — the whole point of the fourth arm.
+    expect(text).not.toContain('The scheduler hit a problem')
+    expect(text).not.toContain('The run broke')
+    // NOT the infeasible claim either: nothing was proved about fitting.
+    expect(text).not.toContain("doesn't fit")
+    // The raw wire status never reaches the UI…
+    expect(text).not.toContain('timed_out')
+    // …nor does the server's cap sentence (detail, never a discriminator).
+    expect(text).not.toContain('time cap exhausted without a solution')
+    // And it is a state, not a refusal: no notice rings.
+    expect(solveStripPage.queryNotice()).toBeNull()
+  })
+
+  it('does NOT advise simply re-running a timed-out solve — it names the levers that can actually change the answer', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'timed_out',
+        verdict: null,
+        wallTimeMs: 30_000,
+        fixturesPlaced: null,
+        fixturesPinned: null,
+      }),
+    })
+    const text = solveStripPage.getStateText('timed-out')
+    // The crash arm's advice, which is wrong here: the same model against the
+    // same cap does the same thing.
+    expect(text).not.toContain('Run it again')
+    expect(text).not.toContain('run the scheduler again')
+    expect(text).toContain("won't help")
+    // The two remediations that CAN change the answer.
+    expect(text).toContain('make the problem smaller')
+    expect(text).toContain('give the solver longer')
+  })
+
+  it('drops the elapsed clause when a timed-out run recorded no wall time', () => {
+    solveStripPage.render({
+      solve: buildScheduleSolve({
+        status: 'timed_out',
+        verdict: null,
+        wallTimeMs: null,
+        fixturesPlaced: null,
+        fixturesPinned: null,
+      }),
+    })
+    const text = solveStripPage.getStateText('timed-out')
+    expect(text).toContain('The scheduler ran out of time')
+    expect(text).toContain('The run hit its time cap before it found any plan')
+    expect(text).not.toContain('after')
   })
 
   // ----- the placed-board caution: overlapping in-progress matches -----------

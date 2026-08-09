@@ -15,6 +15,11 @@ import {
   type SwissByes,
   type UnpooledShape,
 } from '../../data/draw'
+import {
+  noticeFingerprint,
+  useExpiringNotice,
+  type NoticeFingerprint,
+} from '../../data/expiring-notice'
 import type { TournamentEvent } from '../../data/types'
 import {
   ConfirmIrreversibleActDialog,
@@ -104,6 +109,75 @@ export interface DrawPanelProps {
 }
 
 /**
+ * The state a **draw refusal** turns on — the fingerprint this panel holds its notice
+ * against (`../../data/expiring-notice`), so a refusal is withdrawn the moment it stops
+ * being true rather than sitting there contradicting the card around it.
+ *
+ * It is the event's **draw configuration**: exactly the values the planner reads before
+ * it deals a single fixture (`plan_initial`, `api/app/draws.py`), which is the whole of
+ * what a 422 from this panel can be about.
+ *
+ * - **`format`** — a doubles or teams event cannot be given a draw at all
+ *   (`NonSinglesDraw`: "a fixture seats one entrant on each side"). Switch the event to
+ *   singles and that refusal is over.
+ * - **`drawType`** — it chooses the strategy, and therefore *which* of the refusals below
+ *   can even apply. #1123: a director reading "a single-elimination draw needs at least 2
+ *   entrants" who changes the type to round robin has made that sentence untrue, and it
+ *   went on being shown until they clicked Generate again.
+ * - **`pools.length`** — "A round-robin draw needs at least one pool."
+ * - **`entrants.length`** — with the pool count, the snake's floor: "0 entrants across 2
+ *   pool(s) would leave a pool with fewer than 2 entrants, who would have nobody to
+ *   play." (#1049 Repro B: a player enters, and the sentence is about a field that no
+ *   longer exists.) It is also single-elim's own floor ("a bracket of one has nobody to
+ *   play").
+ * - **`qualifiersPerPool`** — K, for an `rr-then-ko` event: "Taking 3 qualifiers from
+ *   each pool is more than the 2 entrants in the smallest pool…". It is a refusal about a
+ *   number the director can go and change, so the change has to withdraw it.
+ * - **`rounds`** — R, for a `swiss` event, and here for exactly the same reason as K: the
+ *   cut refuses a round count below one (`SwissDrawSettings`, `api/app/draws.py`), and
+ *   that is a number the director goes and fixes. Added when swiss landed (#1284) — a
+ *   draw type whose settings a refusal can name has to be in this fingerprint, or the
+ *   refusal outlives the fix and #1123 is back for the new type.
+ *
+ * **Counts, not id sets** — the opposite of the choice the header's lifecycle refusal
+ * makes next door, for the opposite reason. Go-live compares the entrant *set* against
+ * the seated set, so a swap (one withdraws, one enters) flips its answer while every
+ * count holds still. The planner only ever *counts*: swap an entrant here, or replace one
+ * pool with another, and "5 entrants across 3 pool(s)…" is still true word for word — an
+ * id set would withdraw a refusal the director still has to act on, which is the
+ * expensive half of this mistake (the work list taken away mid-fix).
+ *
+ * ⚠️ **Nothing about the FIXTURES is in here, deliberately.** The panel's other refusal
+ * is the 409 play guard — "This event's draw is already under way — at least one fixture
+ * has a match or a recorded winner — so it can no longer be cut or removed" — and that
+ * refusal is *about* a state change (`CONTEXT.md`, "Refusal"). The click that earns it
+ * reconciles the tournament on settle, failure path included (`../../data/api`), so the
+ * very fixtures that make it true land in the same beat it appears. Fingerprint the
+ * fixtures — their count, their match ids, their winners — and the 409 deletes itself
+ * before the director can read why their Delete draw did nothing. It expires only if the
+ * event's *configuration* moves, and while a draw stands the pool set and the draw type
+ * are frozen anyway (`poolSetFreeze` / `drawTypeFreeze`, `../../data/draw`).
+ *
+ * One arm of that is now settled elsewhere and left here on purpose. When the arriving
+ * fixtures carry **evidence of play**, the verb freeze supersedes the refusal outright
+ * (see the render below): the freeze says the same fact in current words, and a refusal
+ * nobody can retire is worse than none. So this rule is what keeps the 409 up in the case
+ * the freeze does *not* answer — the fixtures moving without play behind them, e.g. a
+ * co-director re-cutting the draw from another device. Two different mechanisms, one for
+ * each shape of the same arriving refetch; neither makes the other redundant.
+ */
+function drawConfigFingerprint(event: TournamentEvent): NoticeFingerprint {
+  return noticeFingerprint(
+    event.format,
+    event.drawType,
+    event.pools.length,
+    event.entrants.length,
+    event.qualifiersPerPool,
+    event.rounds,
+  )
+}
+
+/**
  * An event's **draw**, on its card in the Events tab (ADR-0786): the pools it was cut
  * across, and — for the director — the three verbs that cut, re-cut and remove it.
  *
@@ -180,6 +254,13 @@ export interface DrawPanelProps {
  * Everything else (403, an expired session, a 5xx, a dead network) has designed words of
  * its own in `drawRefusalNotice` — there is no arm that fails silently.
  *
+ * A refusal shown here **expires with the state it describes** (`drawConfigFingerprint`
+ * above): the 422s are about this event's configuration, so changing that configuration
+ * withdraws them with no second click — while the 409, which is *about* a state change,
+ * is left standing. The one thing that takes a 409 down is the freeze engaging under it,
+ * which is not an expiry but a supersession: the same fact, said currently, by the notice
+ * that will still be there tomorrow (see the freeze block in the render).
+ *
  * The refused verb leaves the draw exactly as it was: the panel holds no optimistic
  * state, because there is no local edit to apply — only a new draw to read back. Both
  * mutations reconcile the tournament on settle, so the fixtures below rewrite themselves
@@ -193,9 +274,17 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   const cut = useCutDraw(tournamentId)
   const uncut = useUncutDraw(tournamentId)
   // The last refusal, in words. Cleared when a new attempt starts — a notice about the
-  // click before last is worse than none. An opened (or cancelled) dialog is NOT an
-  // attempt, so it leaves the standing notice alone.
-  const [notice, setNotice] = useState<DrawNotice | null>(null)
+  // click before last is worse than none — and **withdrawn on its own** once the
+  // configuration it was produced about moves (`drawConfigFingerprint` above): a refusal
+  // is a statement about a moment (`CONTEXT.md`, "Refusal"). Held in a plain `useState`,
+  // it outlived its own subject: "a single-elimination draw needs at least 2 entrants"
+  // survived the director changing the draw type (#1123), and "0 entrants across 2
+  // pool(s)…" survived the entrant arriving (#1049 Repro B) — both until a second
+  // Generate click. An opened (or cancelled) dialog is NOT an attempt, so it leaves the
+  // standing notice alone.
+  const [notice, setNotice] = useExpiringNotice<DrawNotice>(
+    drawConfigFingerprint(event),
+  )
   // The act awaiting its confirm, held as the CONSEQUENCE the dialog will price rather
   // than as a queued closure: the dialog needs it anyway, and a stored callback would
   // capture whatever `event` was when the button was clicked.

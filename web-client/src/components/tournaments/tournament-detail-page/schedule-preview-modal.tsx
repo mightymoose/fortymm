@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, RotateCw, TriangleAlert } from 'lucide-react'
 import { type UseQueryResult, useQuery } from '@tanstack/react-query'
+import { z } from 'zod'
 
 import { ApiError, validationFields } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -15,6 +16,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 
+import { type DrawTypeOption, drawTypeSchema } from '../data/draw-types'
+import { labelFor } from '../data/options'
 import {
   type PreviewEnqueued,
   type PreviewFixture,
@@ -48,6 +51,20 @@ export interface SchedulePreviewModalProps {
   tournamentId: string
   /** The tournament's events, for labeling the per-event override control. */
   events: PreviewEventMeta[]
+  /** The **served** draw-type catalogue (ADR 20260726) — the one place a draw
+   * type's words live. Used to name the offending draw type when the enqueue is
+   * refused with `unsupported_draw_type`, so the notice reads "Single
+   * elimination" and not the wire slug `single-elim`.
+   *
+   * Pass `[]` where the catalogue was not sent. The notice then falls back to the
+   * server's own sentence, which today reads "A single-elim draw cannot be scheduled
+   * yet…" — so **the slug can still appear**, in the server's words rather than as a
+   * value this client failed to map. That is a deliberate second-best: a sentence
+   * naming the real blocker beats generic copy naming nothing, and the two are
+   * different failures — an unmapped enum leaking out of the client is a bug, an API
+   * sentence written for a director is copy we do not own. Improving it means
+   * rewording the server's `message`, not adding a client-side scrub. */
+  drawTypes: DrawTypeOption[]
 }
 
 /** The four preview verdicts in the director's words — never the raw enum
@@ -96,6 +113,36 @@ interface PreviewEnqueueNotice {
   description: string
 }
 
+/** The `code` the enqueue `422` carries when an event's draw type is one the table
+ * scheduler cannot place (`UnsupportedDrawTypeRefusal` in `schema.d.ts`). This — not
+ * the sentence beside it — is what the client switches on: matching on prose is the
+ * bug ADR-0968 was written to kill, and the server's `message` is explicitly "fallback
+ * prose, never a contract". */
+const UNSUPPORTED_DRAW_TYPE_CODE = 'unsupported_draw_type'
+
+/** A **coded** refusal body, PARSED not cast (`.claude/rules/parse-at-boundaries.md`):
+ * `ApiError.body` is `unknown`, and an error body is untrusted input like any other.
+ *
+ * Three deliberate loosenesses, each buying a degradation path:
+ *
+ * - `code` is a plain `string`, not an enum — a code minted after this build shipped
+ *   must still *decode* so it can fall back to `message`, rather than fail the parse
+ *   and lose the server's only words.
+ * - `message` is nullish — the fallback prose is what a code we don't know degrades
+ *   to, so its absence is a case, not a malformation.
+ * - `draw_type` is `unknown` here and narrowed below: the fact only means something
+ *   for the code that carries it, so requiring it of *every* coded refusal would make
+ *   an unrelated code unparseable.
+ *
+ * Anything that isn't this shape at all (a plain-string `detail`, FastAPI's validation
+ * array, no body) simply fails the parse and takes the generic copy. */
+const codedRefusalSchema = z.object({
+  detail: z.object({
+    code: z.string().min(1),
+    draw_type: z.unknown().optional(),
+  }),
+})
+
 /** The 422 description when the server sent no sentence of its own — kept verbatim
  * from the pre-fix code. Note it does name a cause (the draw type), which is only
  * safe here because we have nothing else to say: it is exactly the guess that was
@@ -108,13 +155,21 @@ const PREVIEW_422_FALLBACK =
  * The server's own sentence for a refusal, when that sentence was written for a
  * director — otherwise `null`.
  *
- * The shape decides, not the status. FastAPI's per-field validation array is the one
- * 422 body whose `msg` is machine prose ("Input should be a valid integer"), and
- * `extractDetail` happily returns a string from it, so a status-only check would put
- * Pydantic's words on screen. `validationFields` returns non-`null` **only** for that
- * array, which is exactly the "are the server's words safe to show" test
- * (`data/save-failure.ts`, whose `invalid` arm exists because that prose reached a
- * screen once).
+ * **The shape decides, not the status.** FastAPI's per-field validation array is the one
+ * 422 body whose `msg` is machine prose ("Input should be a valid integer, got a number
+ * with a fractional part" — what a float typed into a field-size override earns against
+ * `dict[uuid.UUID, int]`), and `extractDetail` happily returns a string from it, so a
+ * status-only check would put Pydantic's words under "This schedule can't be previewed
+ * yet". `validationFields` returns non-`null` **only** for that array, which is exactly
+ * the "are the server's words safe to show" test (`data/save-failure.ts`, whose
+ * `invalid` arm exists because that prose reached a screen once).
+ *
+ * The distinction is not fussiness about wording: a validation 422 means **the request
+ * was malformed**, not that the schedule was refused, so it is not a refusal sentence at
+ * all and there is nothing here worth showing. It takes the fallback.
+ *
+ * `error.detail` covers both shapes a refusal arrives in — a plain-string `detail` and a
+ * coded refusal's `detail.message` — because `extractDetail` already reads both.
  */
 function serverSentence(error: ApiError): string | null {
   if (validationFields(error) !== null) return null
@@ -123,31 +178,74 @@ function serverSentence(error: ApiError): string | null {
 }
 
 /**
+ * The sentence under "This schedule can't be previewed yet" — the #1221 fix.
+ *
+ * The server sends the offending draw type **structurally** (`detail.draw_type`, the
+ * enum's hyphenated wire slug) beside a machine-readable `code`, so the client names
+ * it in the director's own words instead of showing generic copy that, with four
+ * events, cannot say which one is the blocker. The label comes from the **served**
+ * draw-type catalogue through `labelFor` — the same lookup the event editor's picker
+ * and `drawTypeFreeze` use — so there is exactly one place a draw type's words live.
+ *
+ * Three fallbacks, in descending order of what we know:
+ *
+ * 1. A recognised code + a slug this build knows + a catalogue row for it → name it.
+ *    This client never renders an enum value it failed to map: "…uses a “single-elim”
+ *    draw" is the leak `labelFor` exists to prevent (`drawTypeFreeze`, `data/draw.ts`).
+ *    (The server's *own* sentence in arm 2 may still spell the slug — that is its copy
+ *    to fix, not a value escaping this mapping. See the `drawTypes` prop doc.)
+ * 2. **Any other refusal → the server's own sentence**, via `serverSentence` above.
+ *    `422` is the **domain** speaking, so it speaks: the route composes that detail for
+ *    a director and passes the domain's own copy straight through
+ *    (`api/app/tournaments.py`, `_draw_refusal` — "the one error whose message is
+ *    domain-authored copy"). Only the strategy knows *which* refusal fired and which
+ *    numbers the director has to change, so a hardcoded sentence here can only be a
+ *    guess, and it was a wrong one twice over: an `rr-then-ko` event taking one
+ *    qualifier per pool (#1322), and any `DegenerateDraw`, which genuinely reaches this
+ *    route (`app/schedule_preview.py` plans the full draw and lets that refusal
+ *    propagate). Both were told their *draw type* was unsupported when the real cause
+ *    was their entrant numbers — naming the wrong thing, while the sentence naming the
+ *    right one sat unread and a two-click fix went unmade.
+ * 3. No sentence at all (no body, an empty detail, or a validation 422 whose prose is
+ *    for machines) → the fallback.
+ */
+function unpreviewableDrawTypeCopy(
+  error: ApiError,
+  drawTypes: DrawTypeOption[],
+): string {
+  const parsed = codedRefusalSchema.safeParse(error.body)
+  if (parsed.success && parsed.data.detail.code === UNSUPPORTED_DRAW_TYPE_CODE) {
+    const slug = drawTypeSchema.safeParse(parsed.data.detail.draw_type)
+    const label = slug.success ? labelFor(drawTypes, slug.data, null) : null
+    if (label !== null) {
+      return `A preview runs over a round-robin draw. This tournament has a “${label}” event, which the preview does not support yet.`
+    }
+  }
+  return serverSentence(error) ?? PREVIEW_422_FALLBACK
+}
+
+/**
  * Map an enqueue refusal to its inline notice.
  *
- * `422` is the **domain** speaking, so it speaks: the route composes that detail for
- * a director and passes the domain's own copy straight through
- * (`api/app/tournaments.py`, `_draw_refusal` — "the one error whose message is
- * domain-authored copy"). Only the strategy knows *which* refusal fired and which
- * numbers the director has to change, so a hardcoded sentence here can only be a
- * guess, and it was a wrong one: a round-robin-then-knockout event taking one
- * qualifier per pool was told its draw type is unsupported, hiding a two-click fix
- * (`web-client/CLAUDE.md`: "surface server 4xx inline, don't swallow it"). The title
- * stays **cause-neutral** for the same reason — it must not contradict a detail it
- * has not read.
+ * `422` — the schedule was refused. The coded `unsupported_draw_type` names the draw
+ * type in the catalogue's own words; every other refusal keeps the **server's** sentence
+ * (see `unpreviewableDrawTypeCopy`). The title stays **cause-neutral**, because it must
+ * not contradict a detail it has not read.
  *
- * The rest are about the transport and the lifecycle, not the domain, so their copy
- * is ours and the server's words add nothing: `409` — the tournament is no longer
- * pre-live; `429` — the single preview slot is busy (retry in a moment); `403` — not
- * the owner; status `0` — the server was never reached; anything else — the honest
- * generic.
+ * The rest are about the transport and the lifecycle, not the domain, so their copy is
+ * ours and the server's words add nothing: `409` — the tournament is no longer pre-live;
+ * `429` — the single preview slot is busy (retry in a moment); `403` — not the owner;
+ * status `0` — the server was never reached; anything else — the honest generic.
  */
-function previewEnqueueNotice(error: unknown): PreviewEnqueueNotice {
+function previewEnqueueNotice(
+  error: unknown,
+  drawTypes: DrawTypeOption[],
+): PreviewEnqueueNotice {
   if (error instanceof ApiError) {
     if (error.status === 422) {
       return {
         title: "This schedule can't be previewed yet",
-        description: serverSentence(error) ?? PREVIEW_422_FALLBACK,
+        description: unpreviewableDrawTypeCopy(error, drawTypes),
       }
     }
     if (error.status === 409) {
@@ -258,13 +356,20 @@ function useElapsedSeconds(running: boolean): number {
  * (`overrides[id] ?? fieldSize`), so an *untouched* field is never "invalid" — only
  * a value they actually typed is (`undefined` means untouched). */
 function isInvalidOverride(typed: number | undefined): boolean {
-  return typed !== undefined && (!Number.isFinite(typed) || typed < 2)
+  return (
+    typed !== undefined &&
+    // `Number.isInteger` and not just `isFinite`: the server takes
+    // `dict[uuid.UUID, int]`, so a fractional field size is a 422 from FastAPI's own
+    // validator rather than a refusal anyone wrote for a director. Caught here, where
+    // the guard can say which field and why, instead of coming back as Pydantic prose.
+    (!Number.isInteger(typed) || typed < 2)
+  )
 }
 
 /** The inline message shown in red beneath an override input that can't drive a
  * re-run — so the guard is legible ("which field, and why") instead of a silently
  * dead Re-run button (`web-client/CLAUDE.md`, `## Forms`). */
-const OVERRIDE_ERROR = 'Enter a number of at least 2'
+const OVERRIDE_ERROR = 'Enter a whole number of at least 2'
 
 /** True when *any* per-event override is invalid — gates the Re-run button. */
 function hasInvalidOverride(
@@ -276,6 +381,7 @@ function hasInvalidOverride(
 
 interface PreviewBodyProps {
   events: PreviewEventMeta[]
+  drawTypes: DrawTypeOption[]
   enqueue: ReturnType<typeof useEnqueueSchedulePreview>
   poll: UseQueryResult<PreviewJobState>
   overrides: Record<string, number>
@@ -302,6 +408,7 @@ interface PreviewBodyProps {
  */
 const PreviewBody = ({
   events,
+  drawTypes,
   enqueue,
   poll,
   overrides,
@@ -325,7 +432,7 @@ const PreviewBody = ({
   // to render — show the actionable notice with a Close/Retry, never a permanent
   // spinner.
   if (!enqueued && enqueue.isError) {
-    const notice = previewEnqueueNotice(enqueue.error)
+    const notice = previewEnqueueNotice(enqueue.error, drawTypes)
     return (
       <Alert variant="destructive" data-testid="preview-enqueue-error" className="mt-2">
         <TriangleAlert size={16} />
@@ -469,6 +576,10 @@ const PreviewBody = ({
               <Input
                 type="number"
                 min={2}
+                // A field size is a count of players, so the spinner steps in whole
+                // numbers; without it the control invites the fractional value the
+                // server has no representation for.
+                step={1}
                 aria-label={`Field size for ${eventName(s.eventId)}`}
                 // The guard is spoken, not silent: an invalid value flags the input
                 // (`aria-invalid`) and points at its own red message below
@@ -570,6 +681,7 @@ export const SchedulePreviewModal = ({
   onOpenChange,
   tournamentId,
   events,
+  drawTypes,
 }: SchedulePreviewModalProps) => {
   const enqueue = useEnqueueSchedulePreview(tournamentId)
   const cancel = useCancelSchedulePreview(tournamentId)
@@ -655,6 +767,7 @@ export const SchedulePreviewModal = ({
         {open && (
           <PreviewBody
             events={events}
+            drawTypes={drawTypes}
             enqueue={enqueue}
             poll={poll}
             overrides={overrides}

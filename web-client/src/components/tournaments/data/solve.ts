@@ -40,14 +40,21 @@ const SCHEDULE_SOLVE_TRIGGERS = [
   'rerun',
 ] as const satisfies readonly ScheduleSolveWire['trigger'][]
 
-/** The five run statuses (`ScheduleSolveStatus`). `infeasible` is a terminal
- * *outcome*, not a failure — the solver proved the day does not fit, which is the
- * whole point of a pre-live solve; `failed` means the job itself broke. */
+/** The six run statuses (`ScheduleSolveStatus`) — two in-flight, and **four
+ * terminal ones whose last three are three different facts, not three shades of
+ * failure** (ADR "a time-capped solve is its own outcome, not a failure"):
+ * `infeasible` is a terminal *outcome*, not a failure — the solver *proved* the
+ * day does not fit, which is the whole point of a pre-live solve; `timed_out`
+ * proved *nothing at all* — the CP-SAT cap ran out before any answer, so
+ * re-running the same model against the same cap cannot help; `failed` means the
+ * job itself broke. Each earns its own sentence below, and re-running is the
+ * right advice for exactly one of them. */
 const SCHEDULE_SOLVE_STATUSES = [
   'queued',
   'running',
   'succeeded',
   'infeasible',
+  'timed_out',
   'failed',
 ] as const satisfies readonly ScheduleSolveWire['status'][]
 
@@ -554,7 +561,10 @@ export function parseLatestScheduleSolve(input: unknown): ScheduleSolve | null {
  *
  * `infeasible` is deliberately its own arm and NOT folded into `failed`: it is a
  * *designed outcome* — the solver proved the day does not fit, which is the whole
- * point of pre-live solves — not an error banner.
+ * point of pre-live solves — not an error banner. `timed_out` is its own arm for
+ * the same reason and a different fact (ADR "a time-capped solve is its own
+ * outcome, not a failure"): the run proved *nothing*, so it earns neither the
+ * infeasible arm's "the day doesn't fit" nor the failed arm's "run it again".
  */
 export type SolveStripState =
   | { kind: 'none' }
@@ -586,10 +596,21 @@ export type SolveStripState =
       reasons: InfeasibilityReason[]
     }
   | {
+      kind: 'timed_out'
+      /** How long the solver ran before the cap stopped it — the size of the cap,
+       * in effect, and the one number that tells a director whether "give it
+       * longer" is even the lever. `null` if the run never recorded one. */
+      wallTimeMs: number | null
+      trigger: ScheduleSolveTrigger
+    }
+  | {
       kind: 'failed'
       /** The server's own account of why the job broke, or `null`. Shown as
        * detail under the client's headline — the one wire sentence the strip
-       * carries, because it is the actionable content (the draw-panel precedent). */
+       * carries, because it is the actionable content (the draw-panel precedent).
+       * Deliberately NOT carried onto the `timed_out` arm above: a timed-out run's
+       * `error` is the cap's own sentence, which that arm's headline already says
+       * in the client's words — and the ADR forbids branching on it. */
       error: string | null
       trigger: ScheduleSolveTrigger
     }
@@ -629,6 +650,11 @@ export function solveStripState(solve: ScheduleSolve | null): SolveStripState {
         trigger: solve.trigger,
         reasons: solve.infeasibilityReasons,
       }
+    case 'timed_out':
+      // Its own terminal arm, never folded into `failed`: the cap ran out before
+      // any answer, so this run proved nothing (ADR "a time-capped solve is its
+      // own outcome, not a failure").
+      return { kind: 'timed_out', wallTimeMs: solve.wallTimeMs, trigger: solve.trigger }
     case 'failed':
       return { kind: 'failed', error: solve.error, trigger: solve.trigger }
     default: {

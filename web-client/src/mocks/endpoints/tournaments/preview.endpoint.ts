@@ -3,20 +3,36 @@ import { type HttpResponseResolver, http } from 'msw'
 import type { components } from '@/api/schema'
 import type { server } from '../../server'
 import type { worker } from '../../browser'
-import type { ErrorBody, ValidationErrorBody } from '../error-body'
+import type {
+  CodedErrorBody,
+  ErrorBody,
+  ValidationErrorBody,
+} from '../error-body'
 
 type Backend = typeof server | typeof worker
 
 /** Resolver for the **schedule-preview enqueue** endpoint (ADR "a schedule
  * preview is a non-persistent solve over a synthetic field") — the `202`
  * `PreviewEnqueued` (token + the instant structure), or an error envelope: 403
- * (not the owner), 409 (not pre-live), 422 (the domain will not draw this — its
- * `detail` is the director-facing sentence the modal shows), 429 (rate-limited),
- * 404. The body is the optional per-event field-size overrides. */
+ * (not the owner), 409 (not pre-live), 422 (the domain will not draw this), 429
+ * (rate-limited), 404. The body is the optional per-event field-size overrides.
+ *
+ * The `422` arrives in two shapes, and the union carries both. Most `DrawError` arms
+ * send a bare `ErrorBody` whose `detail` **is** the director-facing sentence the modal
+ * shows. The unpreviewable-draw-type one is the generated
+ * `UnsupportedDrawTypeResponse` — a **coded** detail carrying the offending `draw_type`
+ * structurally (ADR "a refusal carries a code and the client owns the sentence") — so a
+ * test driving that path is typed by the wire rather than by a hand-written object. The
+ * open `CodedErrorBody` is what lets a test drive a refusal code this build predates —
+ * the degradation path the server's `message` exists for. */
 export type SchedulePreviewEnqueueResolver = HttpResponseResolver<
   { tournamentId: string },
   components['schemas']['PreviewRequest'] | null,
-  components['schemas']['PreviewEnqueued'] | ErrorBody | ValidationErrorBody
+  | components['schemas']['PreviewEnqueued']
+  | components['schemas']['UnsupportedDrawTypeResponse']
+  | CodedErrorBody
+  | ErrorBody
+  | ValidationErrorBody
 >
 
 /** POST /v1/tournaments/{id}/schedule/preview — enqueue an ephemeral preview. */

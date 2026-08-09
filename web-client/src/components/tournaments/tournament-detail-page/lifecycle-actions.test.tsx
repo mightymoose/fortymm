@@ -8,7 +8,13 @@ import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournam
 import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
-import { buildTournament } from '../data/seed.factory'
+import { buildAddress, buildEvent, buildTournament } from '../data/seed.factory'
+import type { Tournament } from '../data/types'
+import {
+  buildEmptyTournament,
+  buildRecutDrawTournament,
+  buildStaleDrawTournament,
+} from './lifecycle-actions.factory'
 import { lifecycleActionsPage } from './lifecycle-actions.page'
 
 vi.mock('sonner', async () => {
@@ -54,13 +60,16 @@ const NO_DRAW_FOR_OPEN_SINGLES =
 
 /** Click **Start tournament** on a published tournament the viewer owns, and pay for it —
  * the one edge that carries a precondition (ADR-0786). Two clicks, because the button
- * opens the confirm and the confirm's own button is what posts. */
-async function clickStart() {
-  lifecycleActionsPage.render({
-    tournament: buildTournament({ id: 't-1', status: 'published' }),
-  })
+ * opens the confirm and the confirm's own button is what posts. Hands back the render's
+ * `rerenderWith`, so a test can go on to give the component fresh server data without
+ * clicking anything else. */
+async function clickStart(
+  tournament: Tournament = buildTournament({ id: 't-1', status: 'published' }),
+) {
+  const handle = lifecycleActionsPage.render({ tournament })
   await userEvent.click(lifecycleActionsPage.getLifecycleButton(/Start tournament/))
   await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+  return handle
 }
 
 /** No toast, ever, for a refusal this component reports inline (`web-client/CLAUDE.md`,
@@ -150,25 +159,26 @@ describe('LifecycleActions', () => {
 // entrants. The refusal is a 409 whose sentence NAMES the events at fault — and the
 // whole job of this component is to put that sentence in front of the person who can act
 // on it.
+// The three shapes of the server's detail, verbatim (`_go_live_refusal`,
+// `api/app/tournaments.py`). Hard-coded here rather than imported from the mock store:
+// a test that read the copy from the code it is testing would pass whatever the copy
+// became.
+const NOTHING_TO_START =
+  'This tournament has no events, so there is nothing to start. Add an event and cut ' +
+  'its draw, then start the tournament.'
+const NO_DRAW =
+  'This tournament cannot start yet: “Open Singles” has no draw yet. A draw is cut ' +
+  'from the field as it stands at the time, and registration stays open right up to ' +
+  'the moment a tournament goes live — so cut the draw for each event named (again, ' +
+  'if somebody entered or withdrew since it was last cut), then start the tournament.'
+const STALE_DRAW =
+  'This tournament cannot start yet: “Under 1200” has a draw that no longer matches ' +
+  'its entrants. A draw is cut from the field as it stands at the time, and ' +
+  'registration stays open right up to the moment a tournament goes live — so cut ' +
+  'the draw for each event named (again, if somebody entered or withdrew since it ' +
+  'was last cut), then start the tournament.'
+
 describe('LifecycleActions · a refused Start tournament (409)', () => {
-  // The three shapes of the server's detail, verbatim (`_go_live_refusal`,
-  // `api/app/tournaments.py`). Hard-coded here rather than imported from the mock store:
-  // a test that read the copy from the code it is testing would pass whatever the copy
-  // became.
-  const NOTHING_TO_START =
-    'This tournament has no events, so there is nothing to start. Add an event and cut ' +
-    'its draw, then start the tournament.'
-  const NO_DRAW =
-    'This tournament cannot start yet: “Open Singles” has no draw yet. A draw is cut ' +
-    'from the field as it stands at the time, and registration stays open right up to ' +
-    'the moment a tournament goes live — so cut the draw for each event named (again, ' +
-    'if somebody entered or withdrew since it was last cut), then start the tournament.'
-  const STALE_DRAW =
-    'This tournament cannot start yet: “Under 1200” has a draw that no longer matches ' +
-    'its entrants. A draw is cut from the field as it stands at the time, and ' +
-    'registration stays open right up to the moment a tournament goes live — so cut ' +
-    'the draw for each event named (again, if somebody entered or withdrew since it ' +
-    'was last cut), then start the tournament.'
   const TWO_EVENTS =
     'This tournament cannot start yet: “Under 1200” has no draw yet; and “Over 40s” ' +
     'has a draw that no longer matches its entrants. A draw is cut from the field as ' +
@@ -329,6 +339,102 @@ describe('LifecycleActions · the other outcomes', () => {
     await waitFor(() =>
       expect(lifecycleActionsPage.queryNotice()).toBeNull(),
     )
+  })
+})
+
+// **A refusal expires** (`CONTEXT.md`, "Refusal"): it is a statement about a moment, and
+// it stops being true the instant the state it describes changes. Nobody clicks anything
+// in these tests after the first attempt — the tournament simply refetches, as it does on
+// every mutation's settle, and the sentence either withdraws itself or stays.
+describe('LifecycleActions · a refusal outlives its state only until the state moves', () => {
+  // #1216 / #1049 Repro A, as reported: publish with no events, click Start, add an event
+  // — and the header went on saying "there is nothing to start" above a page reading
+  // `1 EVENTS`, until the director clicked Start a second time.
+  it('withdraws "there is nothing to start" when the tournament gains an event — with no second click', async () => {
+    refuseTransition(409, NOTHING_TO_START)
+    const empty = buildEmptyTournament()
+    const { rerenderWith } = await clickStart(empty)
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'no events, so there is nothing to start',
+    )
+
+    // The director adds an event; the page refetches and re-renders with it.
+    rerenderWith({ tournament: { ...empty, events: [buildEvent()] } })
+
+    expect(lifecycleActionsPage.queryNotice()).toBeNull()
+    // The affordance is untouched — the refusal went, the button it was about did not.
+    expect(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    ).toBeInTheDocument()
+  })
+
+  // The other half of the precondition, and the half a count-based rule would miss: the
+  // draw is re-cut over the same-sized field (one player withdrew, one entered), so every
+  // count on the page is unchanged and only *who is seated* has moved.
+  it('withdraws a stale-draw refusal when the draw is re-cut', async () => {
+    refuseTransition(409, STALE_DRAW)
+    const { rerenderWith } = await clickStart(buildStaleDrawTournament())
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'has a draw that no longer matches its entrants',
+    )
+
+    rerenderWith({ tournament: buildRecutDrawTournament() })
+
+    expect(lifecycleActionsPage.queryNotice()).toBeNull()
+  })
+
+  // The other direction, and the more expensive mistake: the refusal is a **work list**
+  // ("cut the draw for each event named"), and it is what the director reads *while* going
+  // to fix it. An edit to something it does not turn on must leave it exactly where it is —
+  // a rule that cleared on any fresh data would take the list away mid-fix (ADR-0786).
+  it('keeps the refusal when something it does not turn on changes', async () => {
+    refuseTransition(409, STALE_DRAW)
+    const stale = buildStaleDrawTournament()
+    const { rerenderWith } = await clickStart(stale)
+    await lifecycleActionsPage.findNotice()
+
+    // The director renames the tournament and books a venue — neither is anything the
+    // go-live precondition reads.
+    rerenderWith({
+      tournament: {
+        ...stale,
+        name: 'Bay Area Open 2026 (rescheduled)',
+        address: buildAddress({ venue: 'Fremont Table Tennis Academy' }),
+      },
+    })
+
+    // Synchronously: the refusal was already on screen, so there is nothing to wait for,
+    // and expiry is decided in the same render that sees the new data.
+    expect(lifecycleActionsPage.queryNoticeText()).toContain(
+      'has a draw that no longer matches its entrants',
+    )
+  })
+
+  // The status is NOT part of what a refusal turns on, and this is the case that decides
+  // it: the stale-tab 409 is *about* the status having moved, and the very click that earns
+  // it reconciles the view (the mutation refetches on settle, failure path included). A
+  // fingerprint that included the status would withdraw this sentence in the same beat it
+  // arrived — the user watching the badge correct itself and never learning why their click
+  // did nothing.
+  it('keeps the stale-tab refusal through the reconcile that click causes', async () => {
+    refuseTransition(409, 'This tournament is already published.')
+    const stale = buildTournament({ id: 't-1', status: 'draft' })
+    const { rerenderWith } = lifecycleActionsPage.render({ tournament: stale })
+    await userEvent.click(lifecycleActionsPage.getLifecycleButton(/Publish/))
+    // The button only ASKS; the confirm's own button is what posts the transition (#1287).
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+    await lifecycleActionsPage.findNotice()
+
+    // The refetch lands: the page stops offering the edge it was just refused…
+    rerenderWith({ tournament: { ...stale, status: 'published' } })
+
+    // …and still says why.
+    expect(lifecycleActionsPage.queryNoticeText()).toContain(
+      'This tournament is already published.',
+    )
+    expect(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    ).toBeInTheDocument()
   })
 })
 

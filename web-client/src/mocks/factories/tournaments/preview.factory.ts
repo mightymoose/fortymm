@@ -17,6 +17,10 @@ type PreviewResult = components['schemas']['PreviewResult']
 type PreviewEventBreakdown = components['schemas']['PreviewEventBreakdown']
 type PreviewJobState = components['schemas']['PreviewJobState']
 type PoolHasNoTablesRead = components['schemas']['PoolHasNoTablesRead']
+type UnsupportedDrawTypeRefusal =
+  components['schemas']['UnsupportedDrawTypeRefusal']
+type UnsupportedDrawTypeResponse =
+  components['schemas']['UnsupportedDrawTypeResponse']
 
 /** One event's synthetic field size on the wire. */
 export function buildPreviewFieldSummary(
@@ -167,4 +171,30 @@ export function buildPreviewJobState(
   overrides: Partial<PreviewJobState> = {},
 ): PreviewJobState {
   return { status: 'queued', result: null, error: null, ...overrides }
+}
+
+/**
+ * The enqueue's **coded `422`** body — the whole envelope, as
+ * `UnsupportedDrawTypeResponse` declares it: an event's draw type is one the table
+ * scheduler cannot place.
+ *
+ * Typed by the generated schema on purpose, so a fixture that drives this refusal
+ * cannot drift from the wire (`schema.d.ts` is the source of truth). The three
+ * fields are not equals: `code` is the contract a client switches on, `draw_type`
+ * is the domain fact the refusal turns on — carried structurally, and as the
+ * enum's hyphenated **wire slug** (`single-elim`, never the Python `single_elim`)
+ * — and `message` is fallback prose for a consumer with no copy of its own.
+ */
+export function buildUnsupportedDrawTypeRefusal(
+  overrides: Partial<UnsupportedDrawTypeRefusal> = {},
+): UnsupportedDrawTypeResponse {
+  return {
+    detail: {
+      code: 'unsupported_draw_type',
+      draw_type: 'single-elim',
+      message:
+        'A single-elim draw cannot be scheduled yet. Preview a round-robin event instead.',
+      ...overrides,
+    },
+  }
 }

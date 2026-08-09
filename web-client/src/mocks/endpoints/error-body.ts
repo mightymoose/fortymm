@@ -12,7 +12,18 @@ export type CodedErrorBody = { detail: { code: string; message: string } };
 
 /** FastAPI's 422 `ValidationError` envelope (`detail` is a list of per-field
  * errors carrying `loc`/`msg`). Union it into a resolver's response type to
- * drive field-mapped 422 paths through the typed resolver. */
+ * drive field-mapped 422 paths through the typed resolver.
+ *
+ * `type` and `input` are optional here but are **always** present on the wire:
+ * Pydantic v2 echoes the offending value back in `input`. They are modelled so a
+ * test can seed a realistic body and assert that neither the machinery nor the
+ * echoed value reaches the UI — `extractDetail` reads `msg` alone, deliberately,
+ * and a fixture that omitted `input` could not prove it. */
 export type ValidationErrorBody = {
-  detail: { loc: (string | number)[]; msg: string }[];
+  detail: {
+    loc: (string | number)[];
+    msg: string;
+    type?: string;
+    input?: unknown;
+  }[];
 };

@@ -1,3 +1,5 @@
+import { StrictMode } from 'react'
+
 import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
@@ -63,6 +65,15 @@ const scoped = (container: Container) => ({
     const notice = await container.findByRole('alert')
     return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
   },
+  /** The notice as one normalised string, **synchronously** — `''` when there is none.
+   * For the tests that assert a refusal is STILL on screen after fresh server data: a
+   * refusal already shown does not need waiting for, and an `await find…` there would red
+   * as a five-second timeout rather than as "the notice is gone"
+   * (`web-client/CLAUDE.md`: an undiscriminated red proves nothing). */
+  queryNoticeText() {
+    const notice = container.queryByRole('alert')
+    return (notice?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
   /** Which designed case the refusal fell into (`LifecycleRefusal['kind']`) — so a test
    * can pin "this rendered the 403 state", not merely "some words appeared". */
   async findNoticeKind() {
@@ -70,6 +81,16 @@ const scoped = (container: Container) => ({
     return notice.getAttribute('data-kind')
   },
 })
+
+/** The component under `StrictMode`, because its refusal is held by a hook that keeps the
+ * state-stamp in a ref written from an effect (`../data/expiring-notice`): a mount →
+ * cleanup → remount must leave that ref correct, and only the double-invoke shows it
+ * (`web-client/CLAUDE.md`). */
+const mount = (props: LifecycleActionsProps) => (
+  <StrictMode>
+    <LifecycleActions {...props} />
+  </StrictMode>
+)
 
 /**
  * Test page-object for `LifecycleActions`.
@@ -83,24 +104,24 @@ const scoped = (container: Container) => ({
  * button alone opens the dialog and sends nothing, which is the whole point of it.
  */
 export const lifecycleActionsPage = {
-  /** Mount the header action. Returns the render result, plus `rerenderWith` — the only
-   * honest way to say "the tournament changed **underneath** this component", which is
-   * what a refetch landing under an open confirm does.
+  /** Mount the header action, and hand back the one thing a caller may do afterwards:
+   * `rerenderWith`, the only honest way to say "the tournament changed **underneath** this
+   * component". That is both what a refetch landing under an open confirm does, and how a
+   * refusal's expiry is exercised — nobody clicks anything for it.
    *
    * ⚠️ Calling `render` a second time does NOT replace the first tree: Testing Library
    * appends a second one and `screen` spans the whole body, so the queries would find two
    * `lifecycle-actions` roots and the assertion would be about the wrong one (or throw on
-   * the ambiguity). Prop-change claims use this. */
+   * the ambiguity). Prop-change claims use this.
+   *
+   * The raw `rerender` is deliberately NOT handed back: it would re-render the component
+   * bare, dropping the `StrictMode` wrapper the first mount was given and quietly ending
+   * the double-invoke the expiry hook is under test in. */
   render(overrides: Partial<LifecycleActionsProps> = {}) {
-    const utils = render(
-      <LifecycleActions {...buildLifecycleActionsProps(overrides)} />,
-    )
+    const { rerender } = render(mount(buildLifecycleActionsProps(overrides)))
     return {
-      ...utils,
       rerenderWith(next: Partial<LifecycleActionsProps> = {}) {
-        utils.rerender(
-          <LifecycleActions {...buildLifecycleActionsProps(next)} />,
-        )
+        rerender(mount(buildLifecycleActionsProps(next)))
       },
     }
   },

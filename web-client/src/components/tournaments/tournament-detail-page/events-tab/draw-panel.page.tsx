@@ -1,3 +1,5 @@
+import { StrictMode } from 'react'
+
 import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
@@ -80,6 +82,15 @@ const scoped = (container: Container) => ({
     const notice = await container.findByTestId(/^draw-notice-/)
     return (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
   },
+  /** The notice as one normalised string, **synchronously** — `''` when there is none.
+   * For the tests that assert a refusal is STILL on screen after fresh server data: a
+   * refusal already shown does not need waiting for, and an `await find…` there would red
+   * as a five-second timeout rather than as "the notice is gone"
+   * (`web-client/CLAUDE.md`: an undiscriminated red proves nothing). */
+  queryNoticeText() {
+    const notice = container.queryByRole('alert')
+    return (notice?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  },
 
   /** The **freeze** notice — why Re-cut and Delete are dead on a draw that is under way
    * (`drawVerbFreeze`). Shown to the director alone: a reader has no verbs to explain.
@@ -134,6 +145,16 @@ const scoped = (container: Container) => ({
   swiss: swissRoundsPage.within(container),
 })
 
+/** The component under `StrictMode`, because its refusal is held by a hook that keeps the
+ * state-stamp in a ref written from an effect (`../../data/expiring-notice`): a mount →
+ * cleanup → remount must leave that ref correct, and only the double-invoke shows it
+ * (`web-client/CLAUDE.md`). */
+const mount = (props: DrawPanelProps) => (
+  <StrictMode>
+    <DrawPanel {...props} />
+  </StrictMode>
+)
+
 /**
  * Test page-object for `DrawPanel`.
  *
@@ -147,21 +168,25 @@ const scoped = (container: Container) => ({
  * is the exception: the first cut fires on its single click.
  */
 export const drawPanelPage = {
-  /** Mount the panel. Returns the render result, plus `rerenderWith` — the only honest way
-   * to say "the event changed **underneath** this panel", which is what the refetch after a
-   * settled draw verb does. A draw that freezes while a refusal is on screen is exactly
-   * that shape.
+  /** Mount the panel, and hand back the one thing a caller may do afterwards:
+   * `rerenderWith`, the only honest way to say "the event changed **underneath** this
+   * panel". That is what the refetch after a settled draw verb does — a draw that freezes
+   * while a refusal is on screen is exactly that shape — and it is also how a refusal's
+   * expiry is exercised; nobody clicks anything for it.
    *
    * ⚠️ `rerenderWith` rebuilds the props from the factory, so anything a test does not
    * repeat reverts to the default — pass the whole set both times. And calling `render` a
    * second time does NOT replace the first tree: Testing Library appends a second one and
-   * `screen` spans the body, so the queries would find two panels. */
+   * `screen` spans the body, so the queries would find two panels.
+   *
+   * The raw `rerender` is deliberately NOT handed back: it would re-render the panel bare,
+   * dropping the `StrictMode` wrapper the first mount was given and quietly ending the
+   * double-invoke the expiry hook is under test in. */
   render(overrides: Partial<DrawPanelProps> = {}) {
-    const utils = render(<DrawPanel {...buildDrawPanelProps(overrides)} />)
+    const { rerender } = render(mount(buildDrawPanelProps(overrides)))
     return {
-      ...utils,
       rerenderWith(next: Partial<DrawPanelProps> = {}) {
-        utils.rerender(<DrawPanel {...buildDrawPanelProps(next)} />)
+        rerender(mount(buildDrawPanelProps(next)))
       },
     }
   },

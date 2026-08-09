@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  FAILURE_HEADLINE,
+  OUTCOME_HEADLINE,
   fmtFixtureCounts,
-  hasFailureDetail,
+  hasOutcomeDetail,
   solveChip,
 } from './ledger'
 
@@ -31,6 +31,18 @@ describe('solveChip', () => {
     })
   })
 
+  it('gives a timed-out run its OWN label and the warn tone — not the crash chip', () => {
+    // A run that proved nothing is not a run that broke (ADR "a time-capped
+    // solve is its own outcome, not a failure").
+    // Exact equality is the whole guard: a chip that read "Failed"/`loss` could not
+    // also satisfy this, so a separate not-the-failed-chip assertion proves nothing.
+    expect(solveChip('timed_out', null)).toEqual({
+      label: 'Timed out',
+      tone: 'warn',
+      verdict: null,
+    })
+  })
+
   it("speaks a succeeded run's verdict in the strip's own words", () => {
     expect(solveChip('succeeded', 'optimal')).toEqual({
       label: 'Solved',
@@ -49,18 +61,22 @@ describe('solveChip', () => {
   })
 })
 
-describe('hasFailureDetail', () => {
-  it('expands exactly the two terminal not-a-plan outcomes', () => {
-    expect(hasFailureDetail('failed')).toBe(true)
-    expect(hasFailureDetail('infeasible')).toBe(true)
-    expect(hasFailureDetail('succeeded')).toBe(false)
-    expect(hasFailureDetail('queued')).toBe(false)
-    expect(hasFailureDetail('running')).toBe(false)
+describe('hasOutcomeDetail', () => {
+  it('expands exactly the three terminal not-a-plan outcomes', () => {
+    expect(hasOutcomeDetail('failed')).toBe(true)
+    expect(hasOutcomeDetail('infeasible')).toBe(true)
+    // A timed-out run keeps its expansion: the cap sentence and the drift
+    // guard's fingerprint are exactly what an operator opens the row for.
+    expect(hasOutcomeDetail('timed_out')).toBe(true)
+    expect(hasOutcomeDetail('succeeded')).toBe(false)
+    expect(hasOutcomeDetail('queued')).toBe(false)
+    expect(hasOutcomeDetail('running')).toBe(false)
   })
 
-  it('has a designed headline for each expandable state', () => {
-    expect(FAILURE_HEADLINE.failed).toBe('The scheduler hit a problem')
-    expect(FAILURE_HEADLINE.infeasible).toBe("The day doesn't fit")
+  it('has a designed headline for each expandable state — three outcomes, three sentences', () => {
+    expect(OUTCOME_HEADLINE.failed).toBe('The scheduler hit a problem')
+    expect(OUTCOME_HEADLINE.infeasible).toBe("The day doesn't fit")
+    expect(OUTCOME_HEADLINE.timed_out).toBe('The scheduler ran out of time')
   })
 })
 

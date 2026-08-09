@@ -19,11 +19,18 @@ import {
   buildPlayedDrawnEvent,
   buildPool,
   buildSwissDrawnEvent,
+  buildSwissEvent,
   buildTenPoolDrawnEvent,
   buildTwoStageDrawnEvent,
   TEN_POOLS_BY_ID,
   TEN_POOLS_BY_POSITION,
 } from '../../data/seed.factory'
+import {
+  buildCrowdedPoolsEvent,
+  buildEmptyFieldEvent,
+  buildLoneBracketEvent,
+  buildRecutFixturesEvent,
+} from './draw-panel.factory'
 import { drawPanelPage as page } from './draw-panel.page'
 
 /** The seeded drawn event: round-robin, `player.1`…`player.5`, Pool A (1/4/5 — odd) and
@@ -55,6 +62,30 @@ const cutResponse = () => [
     entry_b_id: 'entry-4',
   }),
 ]
+
+/** The server's own sentences, hard-coded test-side rather than imported from the code
+ * under test: a test that read the copy from the thing it is testing would pass whatever
+ * the copy became. */
+const PLAY_GUARD =
+  "This event's draw is already under way — at least one fixture has a match " +
+  'or a recorded winner — so it can no longer be cut or removed.'
+const LONE_BRACKET =
+  'A single-elimination draw needs at least 2 entrants — a bracket of one has ' +
+  'nobody to play.'
+const EMPTY_FIELD =
+  '0 entrants across 2 pool(s) would leave a pool with fewer than 2 entrants, ' +
+  'who would have nobody to play.'
+const CROWDED_POOLS =
+  '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants, ' +
+  'who would have nobody to play.'
+
+/** The cut endpoint, refusing with `status` and the server's own `detail` — the shape
+ * every refusal below arrives in (FastAPI's `{"detail": "…"}`). */
+function refuseCut(status: number, detail: string) {
+  mockEventCutDrawEndpoint(server, () =>
+    HttpResponse.json({ detail }, { status }),
+  )
+}
 
 describe('DrawPanel', () => {
   describe('an event whose draw is cut', () => {
@@ -786,10 +817,6 @@ describe('DrawPanel', () => {
   // sentence beneath the title is the SERVER'S: it is written for the director and names
   // what they have to change. A generic string of ours would throw that away.
   describe('refusals', () => {
-    const PLAY_GUARD =
-      "This event's draw is already under way — at least one fixture has a match " +
-      'or a recorded winner — so it can no longer be cut or removed.'
-
     it('explains the 409 play-guard on a re-cut, in the server’s words', async () => {
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail: PLAY_GUARD }, { status: 409 }),
@@ -832,28 +859,14 @@ describe('DrawPanel', () => {
      * inline, no toast) is unchanged. The sample is a refusal single-elim really can
      * produce: a one-entrant bracket (`draws.py`). */
     it('shows the 422 for a bracket with nobody to play', async () => {
-      const detail =
-        'A single-elimination draw needs at least 2 entrants — a bracket of ' +
-        'one has nobody to play.'
-      mockEventCutDrawEndpoint(server, () =>
-        HttpResponse.json({ detail }, { status: 422 }),
-      )
-      page.render({
-        event: buildEvent({
-          id: 'ev-bracket',
-          name: 'Championship Singles',
-          drawType: 'single-elim',
-          entrants: buildEntrants(1),
-          // Un-pooled — a bracket has no pools (ADR-0786).
-          pools: [],
-        }),
-      })
+      refuseCut(422, LONE_BRACKET)
+      page.render({ event: buildLoneBracketEvent() })
 
       await userEvent.click(await page.findGenerateButton('Championship Singles'))
 
       const notice = await page.findNoticeText()
       expect(notice).toContain("This event can't be drawn yet")
-      expect(notice).toContain(detail)
+      expect(notice).toContain(LONE_BRACKET)
     })
 
     it('shows the 422 for an event with no pools configured', async () => {
@@ -879,25 +892,8 @@ describe('DrawPanel', () => {
     // "5 entrants across 3 pool(s)", which is exactly why the server's sentence is shown
     // rather than a generic "this event can't be drawn".
     it('shows the 422 for pools that would leave someone with nobody to play — numbers and all', async () => {
-      const detail =
-        '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants, ' +
-        'who would have nobody to play.'
-      mockEventCutDrawEndpoint(server, () =>
-        HttpResponse.json({ detail }, { status: 422 }),
-      )
-      page.render({
-        event: buildEvent({
-          id: 'ev-rr',
-          name: 'U1500 Singles',
-          drawType: 'round-robin',
-          entrants: buildEntrants(5),
-          pools: [
-            buildPool({ id: 'p-1', name: 'Pool A', position: 0 }),
-            buildPool({ id: 'p-2', name: 'Pool B', position: 1 }),
-            buildPool({ id: 'p-3', name: 'Pool C', position: 2 }),
-          ],
-        }),
-      })
+      refuseCut(422, CROWDED_POOLS)
+      page.render({ event: buildCrowdedPoolsEvent() })
 
       await userEvent.click(await page.findGenerateButton('U1500 Singles'))
 
@@ -946,5 +942,129 @@ describe('DrawPanel', () => {
 
       await waitFor(() => expect(page.queryNotice()).toBeNull())
     })
+  })
+})
+
+// **A refusal expires** (`CONTEXT.md`, "Refusal"): it is a statement about a moment, and
+// it stops being true the instant the state it describes changes. Nobody clicks anything
+// in these tests after the first attempt — the event simply arrives again, as it does on
+// every mutation's settle and on every edit the director makes elsewhere on the page —
+// and the sentence either withdraws itself or stays.
+describe('DrawPanel · a refusal outlives its state only until the state moves', () => {
+  // #1123, as reported: a refusal that names the draw type, and a director who changes
+  // the draw type. Only the type moves here — not the pools, not the field — so this
+  // reds against a fingerprint that forgot it, rather than passing on some other part's
+  // coat-tails.
+  it('withdraws the bracket refusal when the draw type changes — with no second click', async () => {
+    refuseCut(422, LONE_BRACKET)
+    const { rerenderWith } = page.render({ event: buildLoneBracketEvent() })
+    await userEvent.click(await page.findGenerateButton('Championship Singles'))
+    expect(await page.findNoticeText()).toContain('single-elimination draw needs')
+
+    // The director changes the type to round robin; the page refetches and re-renders.
+    rerenderWith({ event: buildLoneBracketEvent({ drawType: 'round-robin' }) })
+
+    expect(page.queryNotice()).toBeNull()
+    // The affordance is untouched — the refusal went, the button it was about did not.
+    expect(page.queryGenerateButton('Championship Singles')).toBeInTheDocument()
+  })
+
+  // The same rule, for the draw type swiss brought with it (#1284). A swiss cut refuses a
+  // round count below one, and R is a number the director goes and fixes — so R has to be
+  // in the fingerprint or the refusal outlives the fix. This is #1123 for the new type:
+  // it would pass against a fingerprint that omits `rounds` ONLY if the notice never
+  // expired at all, which the sibling tests already rule out.
+  it('withdraws a swiss refusal when the round count changes — with no second click', async () => {
+    const ROUNDS_FLOOR = 'rounds must be at least 1, got 0.'
+    refuseCut(422, ROUNDS_FLOOR)
+    const { rerenderWith } = page.render({
+      event: buildSwissEvent({ name: 'Swiss Open', rounds: 0 }),
+    })
+    await userEvent.click(await page.findGenerateButton('Swiss Open'))
+    expect(await page.findNoticeText()).toContain('rounds must be at least 1')
+
+    // The director sets a legal round count; the page refetches and re-renders.
+    rerenderWith({ event: buildSwissEvent({ name: 'Swiss Open', rounds: 5 }) })
+
+    expect(page.queryNotice()).toBeNull()
+    expect(page.queryGenerateButton('Swiss Open')).toBeInTheDocument()
+  })
+
+  // #1049 Repro B: "0 entrants across 2 pool(s)…" above a panel whose event now has an
+  // entrant. The pools and the type are held still, so the entrant count is the only
+  // thing that can be carrying this one.
+  it('withdraws the empty-field refusal when a player enters — with no second click', async () => {
+    refuseCut(422, EMPTY_FIELD)
+    const { rerenderWith } = page.render({ event: buildEmptyFieldEvent() })
+    await userEvent.click(await page.findGenerateButton('U1500 Singles'))
+    expect(await page.findNoticeText()).toContain('0 entrants across 2 pool(s)')
+
+    rerenderWith({ event: buildEmptyFieldEvent({ entrants: buildEntrants(1) }) })
+
+    expect(page.queryNotice()).toBeNull()
+  })
+
+  // The other direction, and the more expensive mistake: the refusal names what the
+  // director has to go and change, and they are reading it *while* going to change it. An
+  // edit to something it does not turn on must leave it exactly where it is — a rule that
+  // cleared on any fresh event would take the sentence away mid-fix (ADR-0786).
+  it('keeps a still-true refusal when something it does not turn on changes', async () => {
+    refuseCut(422, CROWDED_POOLS)
+    const { rerenderWith } = page.render({ event: buildCrowdedPoolsEvent() })
+    await userEvent.click(await page.findGenerateButton('U1500 Singles'))
+    await page.findNotice()
+
+    // The director renames the event, renames a pool and gives it tables, and raises the
+    // cap — none of which the planner reads. Still five entrants, still three pools.
+    rerenderWith({
+      event: buildCrowdedPoolsEvent({
+        name: 'U1500 Singles (Sunday)',
+        maxPlayers: 32,
+        pools: [
+          buildPool({ id: 'p-1', name: 'Pool A', tableIds: ['t-1', 't-2'] }),
+          buildPool({ id: 'p-2', name: 'Pool Blue' }),
+          buildPool({ id: 'p-3', name: 'Pool C' }),
+        ],
+      }),
+    })
+
+    // Synchronously: the refusal was already on screen, so there is nothing to wait for,
+    // and expiry is decided in the same render that sees the new data.
+    expect(page.queryNoticeText()).toContain('5 entrants across 3 pool(s)')
+  })
+
+  // **The fixtures are not in the fingerprint**, and this is the case that decides it. A
+  // 409 is *about* a state change, and the click that earns one reconciles the tournament
+  // (the draw mutations refetch on settle, failure path included) — so the fixtures move
+  // underneath a standing refusal as a matter of course. A fingerprint built on them would
+  // delete the sentence in the same beat it appeared.
+  //
+  // The fixtures move here WITHOUT freezing: a co-director re-cuts the draw from another
+  // device and the poll brings it back — new pairings, new fixture ids, nobody has played
+  // any of them. The play-guard sentence is still the answer the server gave, the verbs are
+  // still live, and nothing about that re-cut makes it untrue.
+  //
+  // (The other direction — fixtures that arrive carrying *evidence of play* — is not this
+  // rule's to decide. There the freeze supersedes the refusal outright and says the same
+  // fact in current words; see "drops a standing refusal once the freeze engages" above.)
+  it('keeps the play-guard refusal when the draw is re-cut underneath it', async () => {
+    mockEventUncutDrawEndpoint(server, () =>
+      HttpResponse.json({ detail: PLAY_GUARD }, { status: 409 }),
+    )
+    const { rerenderWith } = page.render({ event: DRAWN })
+    await userEvent.click(await page.findDeleteButton('U1200 Singles'))
+    // The verb only ASKS; the confirm's own button is what sends the delete (#1287).
+    await userEvent.click(page.confirm.getConfirmButton())
+    await page.findNotice()
+
+    // The re-cut lands: every fixture is a different row than the one it replaced, and
+    // none of them has been played.
+    rerenderWith({ event: buildRecutFixturesEvent() })
+
+    // Synchronously: the refusal was already on screen, so there is nothing to wait for.
+    expect(page.queryNoticeText()).toContain(PLAY_GUARD)
+    // Still unfrozen — so it really is the fingerprint keeping the sentence up, not the
+    // freeze having taken over the talking.
+    expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
   })
 })
