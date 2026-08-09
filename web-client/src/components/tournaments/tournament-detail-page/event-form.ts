@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import type { FieldErrors } from 'react-hook-form'
 
-import { drawOwnershipSchema } from '../data/draw-ownership'
+import { drawOwnershipSchema, everySettingAutomatic } from '../data/draw-ownership'
+import { deriveDrawStructure } from '../data/draw-structure'
 import { drawTypeSchema } from '../data/draw-types'
 import {
   entryFeeSchema,
@@ -22,6 +23,7 @@ import type {
   PredicateValue,
   TournamentEvent,
 } from '../data/types'
+import { previewFieldSize } from './event-editor/draw-structure-section/preview-field'
 
 /** A `YYYY-MM-DD` date with `HH:MM` start/end — the shape both an event and a
  * pool carry (mirrors `Slot` in `data/types`). */
@@ -212,8 +214,21 @@ export const eventSchema = z.object({
   // director cannot see, let alone fix. The issue is raised **at the field's own path**,
   // so React-Hook-Form reports it as `errors.qualifiersPerPool` and the red lands under
   // the box, exactly as a field-level rule's would.
+  //
+  // ⚠️ **And it is asked only of a count the DIRECTOR owns** (ADR 20260808). A count whose
+  // mode is `automatic` already has an answer — the derived one the Draw structure tab is
+  // showing — and `withSuppliedQualifiers` below is what puts that answer on the wire. So
+  // there is nothing missing there and nothing to refuse. Asking anyway was the shape of
+  // refusal #1320 exists to remove: "Say how many players advance from each pool." under a
+  // row rendering **text**, because an automatic setting has no box, addressed to a
+  // director whose only way to comply is to first guess that `Set myself` exists. An event
+  // with no ownership record has had nothing taken from the system, so it reads as
+  // automatic too (`everySettingAutomatic`) — and `drawOwnership: null` is exactly what a
+  // director gets the moment they pick the two-stage format on Basics.
   .superRefine((values, ctx) => {
     if (values.drawType !== 'rr-then-ko') return
+    const ownership = values.drawOwnership ?? everySettingAutomatic()
+    if (ownership.qualifiersMode !== 'manual') return
     const result = qualifiersPerPoolSchema.safeParse(values.qualifiersPerPool)
     if (result.success) return
     ctx.addIssue({
@@ -328,6 +343,61 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     // list they were looking at has to be the list that goes on the wire.
     pools: keepPools(poolsInOrder(event.pools)),
   }
+}
+
+/**
+ * The form's values **as the save sends them** — the other half of the rule the resolver
+ * stops short of (ADR 20260808, #1320).
+ *
+ * The server's `rr-then-ko` arm requires `qualifiers_per_pool` and always has: there is no
+ * absent state for it, and a `null` on that arm is a 422. So a count the director does not
+ * own still has to be a number on the wire — **automatic means "send the derived one", not
+ * "send nothing"**. This is where that number is supplied, and it is called on the way out
+ * of the editor so the invariant reads in one place: *no `rr-then-ko` save leaves this
+ * client without a count `qualifiersPerPoolSchema` accepts.* The resolver refuses a count
+ * the director broke; this supplies the one they never gave.
+ *
+ * **The number comes from `deriveDrawStructure` and is never recomputed here.** It is the
+ * same call the Draw structure tab renders from, with the same eight inputs, so the count
+ * that is saved is the count the row was showing — the whole point of the tab. A second
+ * `ceil(8 / poolCount)` written beside it would be a second derivation with no vector
+ * holding it to the Python twin (`data/draw-structure`).
+ *
+ * ⚠️ **A stored count is left alone**, and that narrowing is deliberate. When the mode is
+ * automatic the stored K is the director's remembered number and — more to the point —
+ * **the count the event's bracket was cut for**: the server freezes the configuration the
+ * draw was dealt from and compares `qualifiers_per_pool` inside it
+ * (`_enforce_draw_settings_frozen`, `api/app/tournament_events.py`). Rewriting a cut
+ * event's K to a derived one behind the director's back would 409 a save of something else
+ * entirely, naming a number they never touched — #1320's own bug, reintroduced by its fix.
+ * The pool size row is not frozen, so a derived count really does move under a cut event.
+ * Closing the gap between a displayed count and the count the API cuts from is the
+ * **server's** derivation to do (`api/app/schemas/tournament.py`, chores 4a/5c); it is not
+ * this client's to paper over with a silent write.
+ */
+export function withSuppliedQualifiers(values: EventFormValues): EventFormValues {
+  // The three count-less arms send no `qualifiers_per_pool` at all (`drawSettingsToApi`,
+  // `data/api`), so there is nothing to supply and a stale value is already dropped.
+  if (values.drawType !== 'rr-then-ko') return values
+  const ownership = values.drawOwnership ?? everySettingAutomatic()
+  // The director's own count, already judged by the resolver above. Theirs to be right or
+  // wrong about, never ours to replace.
+  if (ownership.qualifiersMode === 'manual') return values
+  // A count the server would take: the remembered one, or the one the draw was cut for.
+  if (qualifiersPerPoolSchema.safeParse(values.qualifiersPerPool).success) return values
+  const { qualifiersPerPool } = deriveDrawStructure({
+    // Exactly the arguments `DrawStructureSection` derives from, read off the same live
+    // form. The tab reads the cap through the draft and the pools through this very field.
+    previewFieldSize: previewFieldSize(values.maxPlayers),
+    poolReservationCount: values.pools.length,
+    poolCountMode: ownership.poolCountMode,
+    manualPoolCount: ownership.manualPoolCount,
+    poolSizeMode: ownership.poolSizeMode,
+    manualPoolSize: ownership.manualPoolSize,
+    qualifiersMode: ownership.qualifiersMode,
+    manualQualifiers: values.qualifiersPerPool,
+  })
+  return { ...values, qualifiersPerPool }
 }
 
 /**

@@ -133,6 +133,126 @@ describe('EventEditor', () => {
     })
 
     /**
+     * ⚠️ **THE #1320 DEFECT, end to end: a count the SYSTEM owns must not block a create.**
+     *
+     * Chore 3e moved K onto the Draw structure tab, where an automatic setting renders its
+     * derived number as **text** — there is no box until the director clicks `Set myself`.
+     * The resolver went on requiring a typed count, so a director who authored an ordinary
+     * two-stage event was refused, client-side, with "Say how many players advance from
+     * each pool." pointing at a row they could not type into. That is the very shape of
+     * refusal #1320 was filed about, reissued by its own fix.
+     *
+     * The claim here is BOTH halves, because either alone passes against a broken client:
+     *
+     * - the create is not refused (`onSave` is reached, and no red is on the row), and
+     * - the body carries the **derived** count. The API's `rr-then-ko` arm requires
+     *   `qualifiers_per_pool`, so a create that sent nothing would be a 422 one layer
+     *   later; automatic means "send the derived one".
+     *
+     * Built the way a director builds it: an empty event, the two-stage format picked on
+     * Basics, two pool reservations added on Table pools — and the qualifiers row never
+     * touched. Two pools of a 32-player field derive `ceil(8 / 2)` = **4**, which is none
+     * of the numbers a bug lands on by accident: not the pool count, not the target
+     * bracket, not a floor of one.
+     */
+    it('creates a two-stage event whose count the system owns, and sends the derived number', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: emptyEvent(buildTournament()),
+        onSave,
+      })
+
+      await userEvent.type(eventEditorPage.getNameInput(), 'Two-stage Singles')
+      await eventEditorPage.chooseDrawType('Round-robin then knockout')
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      await userEvent.click(eventEditorPage.getAddPoolButton())
+      await userEvent.click(eventEditorPage.getAddPoolButton())
+
+      // The row as the director leaves it: a derived number, badged the system's, with no
+      // box — which is what makes an imperative to type one unanswerable.
+      const row = await openQualifiersRow()
+      expect(row.getValue()).toHaveTextContent('4')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Automatic')
+      expect(row.queryInput()).toBeNull()
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      // ⚠️ ONE wait, and the red is asked about FIRST on purpose. A refused create simply
+      // never calls `onSave`, so a wait on the spy alone reds with "number of calls: 0"
+      // after ten seconds — a timeout that cannot tell "the resolver refused it" from "the
+      // harness never got there" (`.claude/rules/verify-the-artifact-under-test.md`).
+      // Reading the row's text into the assertion makes the refusal name itself: the last
+      // error `waitFor` reports is the sentence the director was shown.
+      await waitFor(() => {
+        expect(row.queryError()?.textContent ?? null).toBeNull()
+        expect(onSave).toHaveBeenCalled()
+      })
+      expect(eventToCreateBody(onSave.mock.calls[0][0]).qualifiers_per_pool).toBe(4)
+    })
+
+    // …and the same hole on the SAVE of an event that already exists, which is reached one
+    // step differently: the count is `null` on the three arms with no knockout stage, so a
+    // director changing an existing round-robin event into a two-stage one has never had a
+    // count either — and the ownership record is still `null`, because only the Draw
+    // structure tab writes one.
+    it('saves an existing event switched to rr-then-ko, with the derived count', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildEvent({
+          drawType: 'round-robin',
+          maxPlayers: 32,
+          pools: [
+            buildPool({ id: 'p-a', name: 'Pool A' }),
+            buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
+          ],
+        }),
+        onSave,
+      })
+
+      await eventEditorPage.chooseDrawType('Round-robin then knockout')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      // The red first, for the reason the create above gives: a refused save is otherwise
+      // an unnamed "the spy was never called".
+      await waitFor(() => {
+        expect(
+          eventEditorPage.queryError(/Say how many players advance/)?.textContent ?? null,
+        ).toBeNull()
+        expect(onSave).toHaveBeenCalled()
+      })
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).qualifiers_per_pool).toBe(4)
+    })
+
+    /**
+     * ⚠️ **…and a count the event ALREADY has is sent back unchanged**, even when the
+     * derived one differs. The fix supplies a number that is missing; it does not
+     * re-configure a draw.
+     *
+     * This event's bracket was cut for the top 2 out of each pool while its two pools of a
+     * 32-player field derive 4. The server freezes the configuration a cut draw was dealt
+     * from and compares `qualifiers_per_pool` inside it, so a save of the event's *name*
+     * that quietly carried 4 would come back a 409 naming a count the director never
+     * touched — #1320's own bug, reintroduced by its fix.
+     */
+    it('sends the stored count for a CUT event whose qualifiers are automatic', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          qualifiersPerPool: 2,
+          fixtures: [buildFixture()],
+        }),
+        onSave,
+      })
+
+      await userEvent.type(eventEditorPage.getNameInput(), ' II')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).qualifiers_per_pool).toBe(2)
+    })
+
+    /**
      * Refused HERE, so nothing was sent — `onSave` not called at all is the assertion that
      * separates "told the director" from "asked the server and read the answer out".
      *

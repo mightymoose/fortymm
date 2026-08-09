@@ -55,6 +55,17 @@ const scoped = (container: Container) => ({
   getPoolNameInputs() {
     return container.queryAllByLabelText('Pool name')
   },
+  /** The Table pools tab's **header** add action. Editor-scoped, like the pool name boxes
+   * above, for the tests whose claim is about the whole sheet: a pool reservation is what
+   * the Draw structure tab derives its pool count from, so adding one is how a test states
+   * a two-pool event the way a director makes one.
+   *
+   * ⚠️ The exact name, not `/Add (first )?pool/`: an event with no pools renders the empty
+   * state's `Add first pool` **as well as** this one, and a pattern matching both throws on
+   * the very click a from-nothing test starts with. */
+  getAddPoolButton() {
+    return container.getByRole('button', { name: 'Add pool' })
+  },
   /** The red messages under the pool name boxes, in card order — the Table pools
    * counterpart of `queryFieldError` on Basics and `getRuleErrors()` on Eligibility. */
   getPoolNameErrors(): (string | null)[] {
