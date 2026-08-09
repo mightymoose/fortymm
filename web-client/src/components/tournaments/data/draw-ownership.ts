@@ -142,6 +142,65 @@ export function drawOwnershipToApi(ownership: DrawOwnership | null): ApiDrawStru
   }
 }
 
+/** What the Membership row reads when the director places entrants themselves. Exported
+ * so the row and the confirm that reads it back cannot word it two ways — a director who
+ * chose `Assign at cut time` must see those three words again in the dialog that is about
+ * to take them away. */
+export const MEMBERSHIP_MANUAL_VALUE = 'Assign at cut time'
+
+/** One structural setting the director owns **right now**, read back the way the Draw
+ * structure tab shows it: the row's own name, and the value they set. */
+export interface OwnedStructureSetting {
+  /** The setting's name, spelled as the tab's row spells it. */
+  label: string
+  /** What the director set it to, in words. */
+  value: string
+}
+
+/**
+ * **Exactly the settings whose badge reads `Yours`**, in the order the tab lists them.
+ * Empty when every setting is the system's, which is the whole question a caller asks it:
+ * an event with nothing owned has nothing to lose, so a draw-type switch costs nothing and
+ * is silent (ADR 20260808 — "switching away from `rr-then-ko` can discard a director's
+ * work").
+ *
+ * **A manual mode with no number counts as nothing owned**, and that is not a shortcut. It
+ * is the rule `deriveDrawStructure` (`./draw-structure`) already applies to the badge: a
+ * director who cleared the box has not set anything, so the row derives and reports itself
+ * as automatic. Naming a setting here that the tab calls `Automatic` would price a loss the
+ * director cannot see, and skipping one the tab calls `Yours` would discard work in
+ * silence. The predicate is restated rather than called, because the derivation needs a
+ * field size and eight inputs to answer a question this one asks of six.
+ *
+ * The qualifier count's value is the **event's own K** — there is no `manual_qualifiers` on
+ * the wire, the stored count is the manual slot — which is why it arrives as a second
+ * argument rather than off the record.
+ */
+export function ownedStructureSettings(
+  ownership: DrawOwnership | null,
+  qualifiersPerPool: number | null,
+): OwnedStructureSetting[] {
+  if (ownership === null) return []
+  const owned: OwnedStructureSetting[] = []
+  if (ownership.poolCountMode === 'manual' && ownership.manualPoolCount !== null) {
+    owned.push({ label: 'Pool count', value: String(ownership.manualPoolCount) })
+  }
+  if (ownership.poolSizeMode === 'manual' && ownership.manualPoolSize !== null) {
+    owned.push({ label: 'Pool size', value: String(ownership.manualPoolSize) })
+  }
+  // Membership has no number to be missing: the mode IS the setting, so a manual mode is
+  // owned on its own. It counts for the same reason the other three do — placing entrants
+  // by hand is the director's choice, and a switch that dropped it silently would drop a
+  // decision they made.
+  if (ownership.membershipMode === 'manual') {
+    owned.push({ label: 'Membership', value: MEMBERSHIP_MANUAL_VALUE })
+  }
+  if (ownership.qualifiersMode === 'manual' && qualifiersPerPool !== null) {
+    owned.push({ label: 'Qualifiers per pool', value: String(qualifiersPerPool) })
+  }
+  return owned
+}
+
 /**
  * Read what a director typed into a manual box — **the keystroke boundary**, and the
  * reason nothing downstream has to defend against a `0`.

@@ -2,10 +2,12 @@ import { EVERY_SETTING_AUTOMATIC } from '@/mocks/factories/tournaments/tournamen
 
 import {
   MANUAL_POOL_DIMENSION_MAX,
+  MEMBERSHIP_MANUAL_VALUE,
   acceptedManualEntry,
   apiToDrawOwnership,
   drawOwnershipToApi,
   everySettingAutomatic,
+  ownedStructureSettings,
   type DrawOwnership,
 } from './draw-ownership'
 import type { SettingOwnership } from './draw-structure'
@@ -193,5 +195,108 @@ describe('acceptedManualEntry', () => {
   it('bounds against the ceiling it was given', () => {
     expect(acceptedManualEntry('600', 1000)).toBe(600)
     expect(acceptedManualEntry('600', 512)).toBeUndefined()
+  })
+})
+
+/**
+ * **What the director owns right now** — the list a draw-type change has to price before
+ * it discards it (ADR 20260808).
+ *
+ * The claim under every case is one sentence: this names exactly the settings whose badge
+ * reads `Yours`. The badge is `deriveDrawStructure`'s (`./draw-structure`), and this
+ * restates its rule rather than calling it, so the cases below are where the two are held
+ * together.
+ */
+describe('ownedStructureSettings', () => {
+  /** An event that has never seen the tab, and the three draw types that have no tab at
+   * all. Both mean the same thing: no record, so nothing is anybody's. */
+  it('finds nothing on an event with no record at all', () => {
+    expect(ownedStructureSettings(null, 2)).toEqual([])
+  })
+
+  it('finds nothing while every setting is the system’s', () => {
+    expect(ownedStructureSettings(everySettingAutomatic(), 2)).toEqual([])
+  })
+
+  /** #1320's own example, read back: a pool count of 6 and a pool size of 5. */
+  it('reads back the numbers the director set, in the tab’s row order', () => {
+    expect(
+      ownedStructureSettings(
+        {
+          ...everySettingAutomatic(),
+          poolCountMode: 'manual',
+          manualPoolCount: 6,
+          poolSizeMode: 'manual',
+          manualPoolSize: 5,
+        },
+        2,
+      ),
+    ).toEqual([
+      { label: 'Pool count', value: '6' },
+      { label: 'Pool size', value: '5' },
+    ])
+  })
+
+  /** Membership is the director's choice too, and the one setting with no number: the
+   * mode IS the setting, so a manual mode is owned on its own. */
+  it('counts membership, and names the phrase the row shows', () => {
+    expect(
+      ownedStructureSettings(
+        { ...everySettingAutomatic(), membershipMode: 'manual' },
+        2,
+      ),
+    ).toEqual([{ label: 'Membership', value: MEMBERSHIP_MANUAL_VALUE }])
+  })
+
+  /** K's value is the EVENT's count — there is no `manual_qualifiers` on the wire, the
+   * stored number is the manual slot — which is why it arrives as a second argument. */
+  it('reads the qualifier count off the event, not off the record', () => {
+    expect(
+      ownedStructureSettings(
+        { ...everySettingAutomatic(), qualifiersMode: 'manual' },
+        3,
+      ),
+    ).toEqual([{ label: 'Qualifiers per pool', value: '3' }])
+  })
+
+  /**
+   * ⚠️ **A manual mode with an empty box owns nothing**, and this is the case that keeps
+   * the list honest against the badge. `deriveDrawStructure` reads a manual mode with no
+   * number as automatic and says `Automatic` on the row — so naming it here would price a
+   * loss the director cannot see anywhere on screen.
+   */
+  it.each([
+    [
+      'a cleared pool count',
+      { poolCountMode: 'manual', manualPoolCount: null } as const,
+      2,
+    ],
+    [
+      'a cleared pool size',
+      { poolSizeMode: 'manual', manualPoolSize: null } as const,
+      2,
+    ],
+    ['a cleared qualifier count', { qualifiersMode: 'manual' } as const, null],
+  ] as const)('finds nothing for %s', (_case, patch, qualifiers) => {
+    expect(
+      ownedStructureSettings({ ...everySettingAutomatic(), ...patch }, qualifiers),
+    ).toEqual([])
+  })
+
+  /** All four at once, which is also the order the Draw structure tab lists them in. */
+  it('lists all four in row order', () => {
+    expect(
+      ownedStructureSettings(
+        {
+          poolCountMode: 'manual',
+          manualPoolCount: 4,
+          poolSizeMode: 'manual',
+          manualPoolSize: 8,
+          qualifiersMode: 'manual',
+          membershipMode: 'manual',
+        },
+        2,
+      ).map((setting) => setting.label),
+    ).toEqual(['Pool count', 'Pool size', 'Membership', 'Qualifiers per pool'])
   })
 })

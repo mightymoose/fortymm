@@ -1,5 +1,6 @@
 import {
   buildDeleteDrawConsequence,
+  buildDiscardDrawStructureConsequence,
   buildEndTournamentConsequence,
   buildPublishTournamentConsequence,
   buildRecutDrawConsequence,
@@ -194,7 +195,111 @@ describe('ConfirmIrreversibleActDialog', () => {
     )
   })
 
-  // Said the other way round, across all six: the sum type exists so that a variant
+  /**
+   * **The settings, with the values the director typed** — the whole difference between
+   * this confirm and a generic "you will lose your settings" warning. A director who set
+   * six pools of five reads those two numbers back before they spend them.
+   */
+  it('prices a DRAW TYPE CHANGE: the settings the director owns, read back with their values', () => {
+    page.render({
+      consequence: buildDiscardDrawStructureConsequence({
+        eventName: 'Under 15s',
+        settings: [
+          { label: 'Pool count', value: '6' },
+          { label: 'Pool size', value: '5' },
+        ],
+        poolReservationCount: 6,
+      }),
+    })
+
+    const dialog = page.getDialog()
+    expect(dialog).toHaveTextContent('Discard these draw structure settings?')
+    expect(dialog).toHaveTextContent('changing the draw type for Under 15s')
+    expect(dialog).toHaveTextContent(
+      'hands Pool count (6) and Pool size (5) back to automatic',
+    )
+    // Why the settings go at all, said in the format's own terms.
+    expect(dialog).toHaveTextContent(
+      'Only a round-robin-then-knockout draw has a pool stage',
+    )
+    // The confirm carries the act's own verb, not a bare "OK".
+    expect(page.getConfirmButton()).toHaveTextContent('Change the draw type')
+  })
+
+  /**
+   * ⚠️ **The pools survive, and the copy has to say so.** A pool is a venue reservation as
+   * much as a group, and a pool restricts scheduling whatever the draw type (ADR
+   * 20260807) — so the tables and windows a director booked are not the draw type's to
+   * spend. A dialog that stayed silent here would leave them guessing, and one that
+   * claimed the pools go would be lying.
+   */
+  it('promises the pool reservations stay, and counts them', () => {
+    page.render({
+      consequence: buildDiscardDrawStructureConsequence({ poolReservationCount: 6 }),
+    })
+
+    expect(page.getDialog()).toHaveTextContent(
+      'The 6 pools you booked stay exactly as they are.',
+    )
+  })
+
+  it('says a single surviving pool in the singular', () => {
+    page.render({
+      consequence: buildDiscardDrawStructureConsequence({ poolReservationCount: 1 }),
+    })
+
+    expect(page.getDialog()).toHaveTextContent(
+      'The pool you booked stays exactly as it is.',
+    )
+  })
+
+  /** An event with no pool rows at all — reachable, since the pool count can be the
+   * director's while the reservations are still to be made. The sentence goes rather than
+   * reading `The 0 pools you booked`. */
+  it('says nothing about pools when the event has none', () => {
+    page.render({
+      consequence: buildDiscardDrawStructureConsequence({ poolReservationCount: 0 }),
+    })
+
+    expect(page.getDialog()).not.toHaveTextContent('you booked')
+  })
+
+  /** One setting is one setting, in the title as well as in the list. */
+  it('says a single discarded setting in the singular', () => {
+    page.render({
+      consequence: buildDiscardDrawStructureConsequence({
+        settings: [{ label: 'Membership', value: 'Assign at cut time' }],
+      }),
+    })
+
+    expect(page.getDialog()).toHaveTextContent('Discard this draw structure setting?')
+    // ⚠️ The whole sentence, membership included: the snake DEALS entrants rather than
+    // deriving them from a field size, so a promise phrased "we work those out again from
+    // the field" would be false on the one setting with no number.
+    expect(page.getDialog()).toHaveTextContent(
+      'hands Membership (Assign at cut time) back to automatic. We work them out again.',
+    )
+  })
+
+  /** All four read as a list, the same punctuation the pool list uses. */
+  it('lists four discarded settings with commas and an “and”', () => {
+    page.render({
+      consequence: buildDiscardDrawStructureConsequence({
+        settings: [
+          { label: 'Pool count', value: '4' },
+          { label: 'Pool size', value: '8' },
+          { label: 'Membership', value: 'Assign at cut time' },
+          { label: 'Qualifiers per pool', value: '3' },
+        ],
+      }),
+    })
+
+    expect(page.getDialog()).toHaveTextContent(
+      'hands Pool count (4), Pool size (8), Membership (Assign at cut time) and Qualifiers per pool (3) back to automatic',
+    )
+  })
+
+  // Said the other way round, across all seven: the sum type exists so that a variant
   // cannot render another act's sentence, and "X is present" alone would never catch a
   // dialog that also said everything else — or a generic "This cannot be undone" that
   // said nothing in particular.
@@ -205,6 +310,7 @@ describe('ConfirmIrreversibleActDialog', () => {
     'start-tournament': 'closes registration for good',
     'end-tournament': 'archived is the last thing a tournament is',
     'remove-pool-reservations': 'Lowering the pool count for',
+    'discard-draw-structure': 'back to automatic',
   } as const
 
   it.each([
@@ -219,6 +325,10 @@ describe('ConfirmIrreversibleActDialog', () => {
     {
       variant: 'remove-pool-reservations',
       consequence: buildRemovePoolReservationsConsequence(),
+    },
+    {
+      variant: 'discard-draw-structure',
+      consequence: buildDiscardDrawStructureConsequence(),
     },
   ] as const)(
     'gives $variant a sentence no other act says',
@@ -235,9 +345,10 @@ describe('ConfirmIrreversibleActDialog', () => {
   /**
    * The button treatment, per act — decided in the same switch that writes the copy.
    *
-   * `destructive` is for the three acts that throw work away — the two draw verbs (pairings,
-   * and the schedule solved on them) and a lowered pool count (reservations, with their
-   * windows and their tables). The three lifecycle edges destroy nothing: publishing opens a door,
+   * `destructive` is for the four acts that throw work away — the two draw verbs (pairings,
+   * and the schedule solved on them), a lowered pool count (reservations, with their
+   * windows and their tables) and a changed draw type (the settings a director typed).
+   * The three lifecycle edges destroy nothing: publishing opens a door,
    * starting mints matches, ending archives. They are one-way, which is what earns them
    * the dialog — not destructive, which is what would earn them the red. It also keeps
    * them off `variant="destructive"`, which fails AA colour contrast (#1039, open) and
@@ -260,6 +371,11 @@ describe('ConfirmIrreversibleActDialog', () => {
     {
       name: 'a lowered pool count',
       consequence: buildRemovePoolReservationsConsequence(),
+      destructive: true,
+    },
+    {
+      name: 'a changed draw type',
+      consequence: buildDiscardDrawStructureConsequence(),
       destructive: true,
     },
   ])('paints the confirm for $name', ({ consequence, destructive }) => {

@@ -11,6 +11,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 
+import type { OwnedStructureSetting } from '../data/draw-ownership'
+
 /**
  * What confirming would SPEND — the dialog's whole content, as a sum type (no bag of
  * optional props): each variant carries exactly the context its copy names, so a draw
@@ -18,13 +20,15 @@ import {
  * act without the tournament it moves (ADR "a confirm prices an irreversible act, a
  * freeze explains an illegal one").
  *
- * Six acts, of three kinds. The two **draw** acts discard a standing draw and the schedule
+ * Seven acts, of four kinds. The two **draw** acts discard a standing draw and the schedule
  * solved on it. The three **lifecycle** edges are the forward-only path a tournament walks
  * — `draft → published → live → archived` — with no edge back and `archived` terminal, so
  * every one of them is one-way too. The one **pool-count** act discards reservations: a
  * lowered pool count on the Draw structure tab removes pool rows, and a removed row takes
  * its time window and its table selections with it (ADR 20260808 — "lowering a manual pool
- * count removes rows, which is destructive").
+ * count removes rows, which is destructive"). The one **draw-structure** act discards
+ * ownership: leaving `rr-then-ko` leaves the pool stage those settings shape, so the
+ * settings the director took go back to the system (the same ADR).
  *
  * The `never` default in the body switch is what keeps the union honest: a variant added
  * here is a **type error** until it has copy of its own, rather than a dialog that
@@ -70,10 +74,33 @@ export type PoolCountActConsequence = {
   poolNames: string[]
 }
 
+/** The act that belongs to the Basics tab's **draw type** — narrow for the fourth time,
+ * and for the same reason as the three above.
+ *
+ * Only a `rr-then-ko` draw has a pool stage feeding a knockout, so leaving that draw type
+ * leaves the settings behind (ADR 20260808 — "switching away from `rr-then-ko` can discard
+ * a director's work"). The dialog is opened **only** when something is actually the
+ * director's: an all-automatic event loses nothing, and a confirm that priced nothing would
+ * be the ceremony ADR 20260806 refuses. */
+export type DrawStructureActConsequence = {
+  variant: 'discard-draw-structure'
+  eventName: string
+  /** The settings the director owns, read back with the values they set. **Never empty** —
+   * see above. Carried as label/value pairs rather than as a pre-joined sentence, so the
+   * copy that reads them out lives here with the rest of the dialog's words. */
+  settings: OwnedStructureSetting[]
+  /** How many pool rows the event has. The switch does **not** touch them, and the copy
+   * says so — a pool restricts scheduling whatever the draw type (ADR 20260807), so the
+   * tables and windows a director booked survive a change of format. Zero is a real
+   * answer, and the sentence is dropped for it rather than reading `0 pools`. */
+  poolReservationCount: number
+}
+
 export type IrreversibleActConsequence =
   | DrawActConsequence
   | LifecycleActConsequence
   | PoolCountActConsequence
+  | DrawStructureActConsequence
 
 export interface ConfirmIrreversibleActDialogProps {
   open: boolean
@@ -97,6 +124,13 @@ const UNNAMED_POOL = 'an unnamed pool'
  * a drop from 512 to 1 from reading out 511 names. */
 const MAX_NAMED_POOLS = 3
 
+/** `A`, `A and B`, `A, B and C` — the one place this dialog turns a list into a phrase,
+ * so its two list-reading variants cannot punctuate differently. */
+const andList = (parts: string[]): string => {
+  if (parts.length < 2) return parts[0] ?? ''
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+}
+
 /** `Pool E`, `Pool E and Pool F`, `Pool D, Pool E and Pool F`, and past the cap
  * `Pool D, Pool E, Pool F and 8 more`. */
 const removedPoolList = (names: string[]): string => {
@@ -104,10 +138,15 @@ const removedPoolList = (names: string[]): string => {
     .slice(0, MAX_NAMED_POOLS)
     .map((name) => name.trim() || UNNAMED_POOL)
   const unshown = names.length - shown.length
-  const parts = unshown > 0 ? [...shown, `${unshown} more`] : shown
-  if (parts.length < 2) return parts[0] ?? ''
-  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+  return andList(unshown > 0 ? [...shown, `${unshown} more`] : shown)
 }
+
+/** `Pool count (6), Pool size (5) and Membership (Assign at cut time)` — every setting
+ * read back with the value the director set, because "your draw structure settings" names
+ * nothing a director can check against what they typed. **No cap**, unlike the pool list:
+ * there are four settings in all, so the longest this can run is four. */
+const ownedSettingList = (settings: OwnedStructureSetting[]): string =>
+  andList(settings.map((setting) => `${setting.label} (${setting.value})`))
 
 /**
  * The consequence-stating confirm on an act a director **cannot undo**: the two draw acts
@@ -135,13 +174,14 @@ const removedPoolList = (names: string[]): string => {
  * Focus is trapped, and Radix's own `onOpenAutoFocus` lands it on **Go back** — the safe
  * default when the other button spends something that does not come back.
  *
- * ## Why only three of the six wear the destructive treatment
+ * ## Why only four of the seven wear the destructive treatment
  *
  * The confirm's `variant` is decided by the same `switch` that writes the copy, so a new
  * variant cannot acquire a sentence without also answering for how its button looks.
  * `destructive` is reserved for the acts that **throw work away** — the two draw verbs
- * discard pairings and the schedule solved on them, and a lowered pool count discards
- * reservations with their windows and their tables. The three lifecycle edges destroy
+ * discard pairings and the schedule solved on them, a lowered pool count discards
+ * reservations with their windows and their tables, and a changed draw type discards the
+ * structural settings a director typed. The three lifecycle edges destroy
  * nothing: publishing opens a door, starting mints matches, ending archives. They are
  * consequential and one-way, which is what earns them a dialog — not destructive, which
  * is what would earn them the red.
@@ -263,6 +303,53 @@ export const ConfirmIrreversibleActDialog = ({
           ),
           confirmLabel: count === 1 ? 'Remove the pool' : `Remove ${count} pools`,
           // Red, by the rule above: this throws away work a director did on another tab.
+          confirmVariant: 'destructive' as const,
+        }
+      }
+      // Leaving `rr-then-ko` leaves the pool stage, and the settings that shape it go with
+      // it (ADR 20260808). The sentence names them with their values, because "your draw
+      // structure settings" is the generic warning a confirm is supposed to replace.
+      //
+      // It says the settings go back to **automatic**, not that their numbers are deleted,
+      // and that is the honest verb for what happens: the ownership record is dropped, and
+      // the app derives every number again. The qualifier count keeps its stored value —
+      // K is required on a two-stage event, and clearing it would refuse the next save.
+      //
+      // `We work them out again` rather than `from the field`, because membership is one of
+      // the four and the snake is not derived from a field size — it deals entrants. One
+      // sentence has to be true of all four settings the list can hold.
+      //
+      // And it says the **pools stay**, because a pool is a venue reservation as much as a
+      // group, and a pool restricts scheduling whatever the draw type (ADR 20260807). The
+      // director booked those tables and windows deliberately, so a change of format is not
+      // a reason to hand them back.
+      case 'discard-draw-structure': {
+        const count = consequence.settings.length
+        const pools = consequence.poolReservationCount
+        return {
+          title:
+            count === 1
+              ? 'Discard this draw structure setting?'
+              : 'Discard these draw structure settings?',
+          description: (
+            <>
+              Only a round-robin-then-knockout draw has a pool stage, so changing the
+              draw type for <Strong>{consequence.eventName}</Strong> hands{' '}
+              <Strong>{ownedSettingList(consequence.settings)}</Strong> back to
+              automatic. We work them out again.
+              {pools > 0 && (
+                <>
+                  {' '}
+                  {pools === 1
+                    ? 'The pool you booked stays exactly as it is.'
+                    : `The ${pools} pools you booked stay exactly as they are.`}
+                </>
+              )}
+            </>
+          ),
+          confirmLabel: 'Change the draw type',
+          // Red, by the rule in the component doc: a setting the director typed is work,
+          // and this throws it away.
           confirmVariant: 'destructive' as const,
         }
       }

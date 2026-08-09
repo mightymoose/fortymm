@@ -644,6 +644,192 @@ describe('EventEditor', () => {
   })
 
   /**
+   * **Leaving `rr-then-ko` asks first, but only when there is something to lose** (ADR
+   * 20260808 — "switching away from `rr-then-ko` can discard a director's work", priced as
+   * ADR 20260806 means the word).
+   *
+   * Only the editor can make these claims: the picker is on Basics, the settings it spends
+   * are on the Draw structure tab, and the pools it does *not* spend are on a third. A
+   * section-level test can see one of the three.
+   */
+  describe('changing the draw type away from rr-then-ko', () => {
+    /** A two-stage event whose director owns two settings — #1320's own example, six
+     * pools of five, over the fixture's two pool reservations. */
+    const ownsPoolCountAndSize = () =>
+      buildRrThenKoEvent({
+        drawOwnership: {
+          ...everySettingAutomatic(),
+          poolCountMode: 'manual',
+          manualPoolCount: 6,
+          poolSizeMode: 'manual',
+          manualPoolSize: 5,
+        },
+      })
+
+    /** The two-stage label, off the served catalogue (ADR 20260726) — the value the
+     * picker must go back to reading after a cancel. */
+    const TWO_STAGE_LABEL = 'Round-robin then knockout'
+
+    /**
+     * Nothing was the director's, so nothing is discarded and nothing is asked. The
+     * all-automatic record is what every event that has never opened the tab holds, so
+     * this is the ordinary path and it must stay silent — a confirm here would be the
+     * ceremony that trains a director to click through the one that matters.
+     */
+    it('switches silently while every setting is the system’s', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+
+      expect(eventEditorPage.confirm.queryDialog()).toBeNull()
+      expect(eventEditorPage.getDrawTypeTrigger()).toHaveTextContent('Round robin')
+      await waitFor(() =>
+        expect(eventEditorPage.querySectionTab('Draw structure')).toBeNull(),
+      )
+    })
+
+    /** …and a setting whose box the director **cleared** is the system's too: the tab
+     * badges it `Automatic`, so pricing it would name a loss they cannot see on screen. */
+    it('switches silently when a manual setting has an empty box', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          drawOwnership: {
+            ...everySettingAutomatic(),
+            poolCountMode: 'manual',
+            manualPoolCount: null,
+          },
+        }),
+      })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+
+      expect(eventEditorPage.confirm.queryDialog()).toBeNull()
+      expect(eventEditorPage.getDrawTypeTrigger()).toHaveTextContent('Round robin')
+    })
+
+    /** The confirm **names the settings**, with the numbers the director typed. A generic
+     * "you will lose your draw settings" is the warning this replaces. */
+    it('names the settings it is about to discard, before discarding them', async () => {
+      eventEditorPage.render({ event: ownsPoolCountAndSize() })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+
+      const dialog = eventEditorPage.confirm.getDialog()
+      expect(dialog).toHaveTextContent('Discard these draw structure settings?')
+      expect(dialog).toHaveTextContent(
+        'hands Pool count (6) and Pool size (5) back to automatic',
+      )
+      // The pools are not the draw type's to spend, and the copy says so — the fixture
+      // has two reservations.
+      expect(dialog).toHaveTextContent(
+        'The 2 pools you booked stay exactly as they are.',
+      )
+    })
+
+    /** Membership is the director's choice too, and it is the one setting with no number
+     * — so a switch that only asked about numbers would drop it in silence. */
+    it('asks for a hand-dealt membership on its own', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          drawOwnership: { ...everySettingAutomatic(), membershipMode: 'manual' },
+        }),
+      })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+
+      expect(eventEditorPage.confirm.getDialog()).toHaveTextContent(
+        'hands Membership (Assign at cut time) back to automatic',
+      )
+    })
+
+    /**
+     * ⚠️ **Go back leaves the draw type and every setting exactly as they were.**
+     *
+     * Both halves are asserted, and the first is the bug this chore exists to avoid: a
+     * confirm that wrote the new draw type and offered to undo it leaves the picker
+     * reading `Round robin` while the event is still two-stage. It cannot happen here
+     * because nothing was written — the picker is controlled off the draft — and the
+     * second assertion is what proves the record survived with it.
+     */
+    it('leaves the picker and the settings alone when the switch is refused', async () => {
+      eventEditorPage.render({ event: ownsPoolCountAndSize() })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      eventEditorPage.confirm.cancel()
+
+      expect(eventEditorPage.getDrawTypeTrigger()).toHaveTextContent(TWO_STAGE_LABEL)
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      const row = eventEditorPage.drawStructure.setting('Pool count')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
+      expect(row.getInput()).toHaveValue('6')
+      expect(
+        eventEditorPage.drawStructure.setting('Pool size').getInput(),
+      ).toHaveValue('5')
+    })
+
+    /**
+     * The confirm path, proved by **coming back**: switch away, switch back, and the two
+     * settings are the system's again with no box to type in. A test that stopped at "the
+     * dialog closed and the tab went" would pass against a switch that kept the record.
+     */
+    it('discards the record once the switch is confirmed', async () => {
+      eventEditorPage.render({ event: ownsPoolCountAndSize() })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      eventEditorPage.confirm.confirm()
+
+      await waitFor(() =>
+        expect(eventEditorPage.querySectionTab('Draw structure')).toBeNull(),
+      )
+      expect(eventEditorPage.getDrawTypeTrigger()).toHaveTextContent('Round robin')
+
+      await eventEditorPage.chooseDrawType(TWO_STAGE_LABEL)
+      await userEvent.click(
+        await screen.findByRole('tab', { name: 'Draw structure' }),
+      )
+      const row = eventEditorPage.drawStructure.setting('Pool count')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Automatic')
+      expect(row.queryInput()).toBeNull()
+    })
+
+    /**
+     * ⚠️ **The pools stay, and the request is where that claim is settled.** The confirm
+     * promises the reservations survive, so the body a save produces must still carry
+     * them — a pool is a venue booking as much as a group, and a pool restricts scheduling
+     * whatever the draw type (ADR 20260807).
+     */
+    it('sends the pools untouched, and no structure record, after the switch', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: ownsPoolCountAndSize(), onSave })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      eventEditorPage.confirm.confirm()
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      const body = eventToUpdateBody(onSave.mock.calls[0][0])
+      expect(body.draw_type).toBe('round-robin')
+      expect(body.pools).toHaveLength(2)
+      // The record travels on the `rr-then-ko` arm and nowhere else, so a round-robin
+      // body carrying one would be a 422.
+      expect('draw_structure' in body).toBe(false)
+    })
+
+    /** A question nobody answered does not follow the editor to the next event. The
+     * editor stays mounted between opens, so this state is the editor's to clear. */
+    it('drops an unanswered confirm when the editor opens on another event', async () => {
+      const view = eventEditorPage.render({ event: ownsPoolCountAndSize() })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      expect(eventEditorPage.confirm.queryDialog()).not.toBeNull()
+
+      view.rerenderWith({ event: buildEvent({ name: 'Open Singles' }) })
+
+      expect(eventEditorPage.confirm.queryDialog()).toBeNull()
+    })
+  })
+
+  /**
    * A rule with no value is not a rule. It used to go to the server anyway — where
    * a scalar one was ACCEPTED (201) and came back onto the event card as the chip
    * `Rating < ?`, a restriction on nobody wearing the clothes of a real one, while a

@@ -2,6 +2,7 @@ import userEvent from '@testing-library/user-event'
 
 import { render, screen, type Container } from '@/test/utilities'
 
+import { confirmIrreversibleActDialogPage } from './confirm-irreversible-act-dialog.page'
 import { EventEditor, type EventEditorProps } from './event-editor'
 import { buildEventEditorProps } from './event-editor.factory'
 import { drawStructureSectionPage } from './event-editor/draw-structure-section.page'
@@ -24,6 +25,15 @@ const scoped = (container: Container) => ({
   /** The Draw structure tab's panel, and the queries inside it. Reused from the
    * section's own page object, scoped to the editor. */
   drawStructure: drawStructureSectionPage.within(container),
+  /** The confirm the editor itself opens — today the one a **draw-type change** buys, when
+   * the director owns a structural setting the switch would discard (ADR 20260808).
+   *
+   * At SCREEN scope on purpose, exactly as the section's own `confirm` is: an `AlertDialog`
+   * portals to the body, so a container-scoped query would find nothing and pass while
+   * checking nothing. There is only ever one `alertdialog` on screen, so this and
+   * `drawStructure.confirm` reach the same node — they are named apart because the acts
+   * they price are. */
+  confirm: confirmIrreversibleActDialogPage,
   /** The sheet itself — present exactly while the editor is open. The claim
    * "a refused save does not close the editor" is a claim about this node. */
   querySheet() {
@@ -148,7 +158,17 @@ const scoped = (container: Container) => ({
  */
 export const eventEditorPage = {
   render(overrides: Partial<EventEditorProps> = {}) {
-    render(<EventEditor {...buildEventEditorProps(overrides)} />)
+    const view = render(<EventEditor {...buildEventEditorProps(overrides)} />)
+    return {
+      ...view,
+      /** Hand the **same mounted editor** a new set of props — how a director opens it on
+       * another event, and the only way to say that: a second `render` mounts a second
+       * editor, so state the first one was holding is still there, in a component the
+       * assertions can no longer tell apart from the new one. */
+      rerenderWith(next: Partial<EventEditorProps> = {}) {
+        view.rerender(<EventEditor {...buildEventEditorProps(next)} />)
+      },
+    }
   },
 
   within(container: Container = screen) {
