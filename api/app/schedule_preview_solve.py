@@ -61,6 +61,9 @@ from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import Tournament, TournamentStatus, User
 from app.schedule_preview import (
+    DegenerateConfiguration,
+    SkipReason,
+    UnpreviewableDrawType,
     build_preview_snapshot,
     placeholder_label,
     preview_pool_key,
@@ -158,12 +161,20 @@ class _PreviewEventMeta:
     drawn fixtures the preview **left out** — ``knockout_fixtures``, the un-pooled
     knockout stage of an rr-then-ko draw, ``0`` for a plain round-robin. Carried from
     the enqueue verb (which has the loaded events) to the job (which has only the pure
-    snapshot, from which "a bracket was dropped" is no longer visible)."""
+    snapshot, from which "a bracket was dropped" is no longer visible).
+
+    ``skip_reason`` is why the builder skipped the whole event — its draw type
+    (single-elim or swiss) or a configuration the draw refused, carrying that
+    refusal's own sentence — and ``None`` for an event that was previewed. Such an
+    event is in this tuple precisely *because* nothing of it is in the snapshot: it is
+    the only place the job can learn the event exists, and the note it writes from it
+    is what tells the director the event was left out rather than lost."""
 
     event_id: str
     name: str
     field_size: int
     knockout_fixtures: int
+    skip_reason: SkipReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,10 +310,15 @@ async def request_schedule_preview(
     ``count_overrides`` (event id → synthetic field size) lets a caller explore
     "what if 24 show up"; omitted, each event fills to its cap (or the uncapped
     default). Propagates :class:`~app.draws.UnsupportedDrawType` /
-    :class:`~app.draws.DegenerateDraw` from the builder untouched — a preview is
-    refused loud for any non-round-robin draw, never a partial grid. Raises
-    :class:`ScheduleQueueUnavailableError` if the enqueue cannot be placed (Redis
-    down), mirroring the real solve verb, so the return type stays non-optional.
+    :class:`~app.draws.DegenerateDraw` from the builder untouched — but neither is a
+    per-event refusal any more. An event the preview covers nothing of, whether for
+    its draw type (single-elim, swiss) or because the draw refuses its configuration,
+    is skipped: every other event is previewed and the honest-notes strip names it,
+    with the strategy's own sentence when there is one. Either error now arrives only
+    when *no* event of the tournament is previewable, so there is no partial grid to
+    hand back. Raises :class:`ScheduleQueueUnavailableError` if the enqueue cannot be
+    placed (Redis down), mirroring the real solve verb, so the return type stays
+    non-optional.
 
     Returns a :class:`PreviewEnqueued`: the ``token`` (the RQ job id) to poll/wait
     on, plus the field sizes and the drawn fixtures a caller renders a skeleton
@@ -335,6 +351,7 @@ async def request_schedule_preview(
                 name=event_names.get(summary.event_id, summary.event_id),
                 field_size=summary.field_size,
                 knockout_fixtures=summary.knockout_fixtures,
+                skip_reason=summary.skip_reason,
             )
             for summary in preview.field_summaries
         ),
@@ -354,10 +371,16 @@ async def request_schedule_preview(
     return PreviewEnqueued(
         token=job.id,
         field_summaries=[
+            # Only the events a field was actually synthesized for. A skipped event
+            # (an unpreviewable draw type, or a configuration the draw refused) has
+            # none, and this skeleton payload carries no notes channel to explain a
+            # zero — so it is left out here and named in the honest-notes strip the
+            # finished result carries instead.
             PreviewFieldSummary(
                 event_id=summary.event_id, field_size=summary.field_size
             )
             for summary in preview.field_summaries
+            if summary.skip_reason is None
         ],
         fixtures=[
             PreviewFixture(
@@ -580,14 +603,24 @@ def _resolve_reason(
     of ``app.schedule_solves._resolve_reason`` (same union, same arms) taking the
     resolution maps directly rather than a ``SolveInputs``. Exhaustive with an
     ``assert_never`` floor: adding an :data:`~app.scheduling.InfeasibilityReason`
-    arm is a type error here until handled."""
+    arm is a type error here until handled.
+
+    Every reservation a preview can blame is a real **pool**: the builder draws
+    over the event's pools and drops an rr-then-ko draw's un-pooled knockout
+    (ADR 20260727, and the honest note that says so), so no event-wide
+    reservation is ever in a preview snapshot. Hence the literal ``"pool"`` — the
+    preview's resolutions carry no reservation kind to read, because there is
+    only one for them to carry."""
     match reason:
         case PoolHasNoTables():
-            return PoolHasNoTablesRead(pool_name=pool_resolutions[reason.pool_id].name)
+            return PoolHasNoTablesRead(
+                pool_name=pool_resolutions[reason.pool_id].name, reservation="pool"
+            )
         case WindowTooShortForMatch():
             pool = pool_resolutions[reason.pool_id]
             return WindowTooShortForMatchRead(
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 best_of=best_of[reason.fixture_id],
@@ -598,6 +631,7 @@ def _resolve_reason(
             pool = pool_resolutions[reason.pool_id]
             return PoolOverCapacityRead(
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 required_min=reason.required_min,
@@ -614,6 +648,7 @@ def _resolve_reason(
             return PlayerOverSubscribedRead(
                 player_name=placeholder_label(reason.player_id),
                 pool_name=pool.name,
+                reservation="pool",
                 window_start=pool.window_start,
                 window_end=pool.window_end,
                 match_count=reason.match_count,
@@ -642,21 +677,74 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
     """The always-present honest-notes strip (ADR): first the disjoint-field
     caveat that makes a preview *optimistic* (its synthetic fields are disjoint
     across events, so it ignores multi-event contention), then a line for each event
-    whose knockout stage this preview left out, then one line per event naming the
-    synthetic count it assumed — so the estimate reads as the floor it is, never a
-    hidden simplification.
+    this preview left out **whole**, then a line for each event whose knockout stage
+    it left out, then one line per previewed event naming the synthetic count it
+    assumed — so the estimate reads as the floor it is, never a hidden
+    simplification.
+
+    The skipped-event line is what makes skipping an unpreviewable event honest
+    rather than silent. The builder no longer refuses a whole tournament because one
+    of its events is a bracket or a swiss draw, or because one of its events is
+    configured in a way the draw will not cut (either refusal took every unrelated
+    event's preview with it); it previews everything else and reports the event it
+    could not lay out. Without the line, the director would read a schedule that is
+    quietly missing an event and have nothing to tell them why.
+
+    **What the line says depends on why, and both are written from one loop** — an
+    exhaustive ``match`` over the event's :data:`~app.schedule_preview.SkipReason`, in
+    the tournament's own event order, so a third reason is a type error until it is
+    handled and no reason is grouped ahead of another in the strip:
+
+    * an unpreviewable **draw type** names the format and says the live scheduler does
+      place it — the event is fine, the preview simply runs before there is a played
+      draw to lay out;
+    * a **degenerate configuration** carries the draw strategy's own sentence
+      verbatim, because that sentence names the numbers the director has to change and
+      only the strategy knows them. Paraphrasing it into "could not be previewed"
+      would leave them with nothing to act on, which is the whole reason this case
+      earns its own arm.
 
     The knockout line is what stops the strip lying by omission about an
     **rr-then-ko** event: the preview plans that event's whole draw but schedules only
     its pool stage (ADR 20260727 — a bracket is placeable only incrementally, as the
-    pools that feed it resolve, which is #1228), so without a note the director reads a
-    schedule that silently covers part of their event. It is emitted off the count of
+    pools that feed it resolve), so without a note the director reads a
+    schedule that silently covers part of their event. The *live* solve does place
+    that bracket, incrementally (ADR "a pool restricts scheduling, it does not enable
+    it"); a preview run before anyone has registered has nothing to resolve it from,
+    which is why the note stays. It is emitted off the count of
     fixtures actually dropped, so a tournament of plain round-robins — which drops none
-    — gets the strip it always had, unchanged."""
+    — gets the strip it always had, unchanged.
+
+    A skipped event earns **no** "Assumed N entrants" line: no field was synthesized
+    for it, so claiming one would contradict the line above it."""
     notes = [
         "This estimate assumes no player is entered in more than one event; a "
         "real multi-event field would take longer."
     ]
+    for meta in inputs.events:
+        # Bound before the guard rather than read through it: the reason is what the
+        # sentence is composed from, and narrowing it here keeps the note total.
+        reason = meta.skip_reason
+        if reason is None:
+            continue
+        match reason:
+            case UnpreviewableDrawType():
+                notes.append(
+                    f"{meta.name} is not in this preview: a "
+                    f"{reason.draw_type.value} draw is decided round by round as it "
+                    "is played, so before anyone has entered there is nothing to lay "
+                    "out. The scheduler does place it once the tournament is live."
+                )
+            case DegenerateConfiguration():
+                # The strategy's message, unaltered — domain-authored copy naming the
+                # fix, the same sentence the 422 carries when this is the tournament's
+                # only event.
+                notes.append(
+                    f"{meta.name} is not in this preview: its draw cannot be cut as "
+                    f"the event stands. {reason.message}"
+                )
+            case _:
+                assert_never(reason)
     notes.extend(
         f"Only the pool stage of {meta.name} is scheduled here: its knockout "
         f"bracket ({meta.knockout_fixtures} further "
@@ -666,7 +754,9 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
         if meta.knockout_fixtures > 0
     )
     notes.extend(
-        f"Assumed {meta.field_size} entrants for {meta.name}." for meta in inputs.events
+        f"Assumed {meta.field_size} entrants for {meta.name}."
+        for meta in inputs.events
+        if meta.skip_reason is None
     )
     return notes
 

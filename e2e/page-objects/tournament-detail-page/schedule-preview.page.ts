@@ -64,6 +64,57 @@ export class SchedulePreviewPage {
     return this.page.getByTestId('preview-failed')
   }
 
+  /** The **refused enqueue** alert — what the modal shows *instead of* any structure
+   * when the POST is rejected (422 nothing previewable, 409 not pre-live, 429, 403).
+   *
+   * Asserted absent by a spec whose preview must have been accepted. It is the state
+   * a director used to be left in whenever one event of the tournament was a bracket
+   * (#1228): the whole preview refused, no grid, no verdict, nothing about the
+   * round-robin standing beside it. */
+  get enqueueError(): Locator {
+    return this.page.getByTestId('preview-enqueue-error')
+  }
+
+  /** The always-present **honest-notes** strip — the ADR's "say what this estimate
+   * assumes" footer: the disjoint-field caveat, then a line for each event the preview
+   * left out (whole, or its knockout stage), then the synthetic count assumed per
+   * previewed event.
+   *
+   * This is where a director *reads* that an event is missing on purpose, so a spec
+   * about a skipped event asserts on this text rather than on its own absence
+   * elsewhere. The lines past the first arrive with the solve result, so wait for the
+   * `verdict` before reading it. */
+  get notes(): Locator {
+    return this.page.getByTestId('preview-notes')
+  }
+
+  /** The per-event **override** row — one field-size box per event a synthetic field
+   * was minted for, plus Re-run. An event the preview covers nothing of has no box
+   * here, because the server sends no field summary for it. */
+  get overrides(): Locator {
+    return this.page.getByTestId('preview-overrides')
+  }
+
+  /** One event's field-size box, by the event's **name** — the handle a director has
+   * on it (`aria-label="Field size for <event>"`). */
+  overrideFor(eventName: string): Locator {
+    return this.overrides.getByLabel(`Field size for ${eventName}`)
+  }
+
+  /** One event's section of the synthetic grid, by event id. Its presence is "this
+   * event was previewed"; a `toHaveCount(0)` on it is "this event contributed nothing
+   * to the plan on screen". */
+  eventSection(eventId: string): Locator {
+    return this.page.getByTestId(`preview-event-${eventId}`)
+  }
+
+  /** The synthetic fixture cards of ONE event's section — the count that says how much
+   * of *that* event was laid out, as opposed to `placeholderMatches`, which counts the
+   * whole tournament's grid and so cannot tell one event's matches from another's. */
+  placeholderMatchesFor(eventId: string): Locator {
+    return this.eventSection(eventId).locator('[data-testid^="unscheduled-"]')
+  }
+
   /** The synthetic grid — reuses the real schedule grid components, so preview
    * and reality render identically. */
   get grid(): Locator {

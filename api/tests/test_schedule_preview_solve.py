@@ -430,6 +430,171 @@ async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_sche
     assert "Assumed 6 entrants for Championship." in result.notes
 
 
+#: The exact honest note an event the preview lays out NOTHING of earns, pinned so
+#: the wording a director reads cannot drift silently.
+_SKIPPED_EVENT_NOTE = (
+    "Championship is not in this preview: a single-elim draw is decided round by "
+    "round as it is played, so before anyone has entered there is nothing to lay "
+    "out. The scheduler does place it once the tournament is live."
+)
+
+
+async def test_preview_notes_say_a_bracket_event_is_not_previewed_at_all(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """A single-elim event no longer refuses its tournament's preview: it is skipped,
+    the round-robin beside it is previewed as usual, and the strip says which event
+    was left out and why.
+
+    The note is the whole point of skipping rather than refusing. Silently omitting an
+    event would leave the director reading a schedule that is missing a day's worth of
+    play with nothing to explain it — a quieter version of the failure the loud
+    refusal existed to prevent.
+
+    The round-robin's own six matches are asserted present, which is the claim the
+    note alone would not make: this is a per-event loop over a whole tournament, so
+    the old refusal took the round-robin's preview down with the bracket's.
+    """
+    owner = await make_user(db_session, "prev-skip-note")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Open Singles",
+        max_players=4,
+        pools=[_pool(["t1"])],
+    )
+    await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        max_players=8,
+        pools=[_pool(["t2"])],
+        draw_type=DrawType.single_elim,
+    )
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+    # The skeleton payload carries no notes channel to explain a zero, so it names
+    # only the event a field was actually synthesized for.
+    assert [s.field_size for s in enqueued.field_summaries] == [4]
+
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    assert isinstance(inputs, PreviewJobInputs)
+
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+
+    # The round-robin is previewed in full — C(4, 2) = 6 — and the skipped event keeps
+    # its seat in the breakdown at zero, so it is visibly left out rather than absent.
+    assert {e.name: e.matches for e in result.events} == {
+        "Open Singles": 6,
+        "Championship": 0,
+    }
+    assert result.total_matches == 6
+
+    # The strip, pinned whole: the always-on caveat, the skipped event's line, and an
+    # assumed-entrants line for the previewed event ONLY. A count claimed for an event
+    # no field was synthesized for would contradict the line above it.
+    assert result.notes == [
+        "This estimate assumes no player is entered in more than one event; a "
+        "real multi-event field would take longer.",
+        _SKIPPED_EVENT_NOTE,
+        "Assumed 4 entrants for Open Singles.",
+    ]
+
+
+#: The draw strategy's own refusal for the configuration a real director hit — one
+#: pool taking one qualifier — and the note the preview wraps it in. Pinned whole
+#: because the domain's sentence reaching the director IS the fix: it names the two
+#: things they can change, and a generic "could not be previewed" names neither.
+_ONE_QUALIFIER_REFUSAL = (
+    "Taking 1 qualifier from a single pool leaves one player in the knockout "
+    "stage, who would have nobody to play — take more qualifiers from each pool, "
+    "or configure more pools."
+)
+_DEGENERATE_EVENT_NOTE = (
+    "Championship is not in this preview: its draw cannot be cut as the event "
+    f"stands. {_ONE_QUALIFIER_REFUSAL}"
+)
+
+
+async def test_preview_notes_carry_a_degenerate_events_own_refusal(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """An event the draw refuses to cut no longer takes its tournament's preview with
+    it, and the strip says — in the domain's own words — why it is missing.
+
+    ``DegenerateDraw`` is raised per event, but the builder runs a per-event loop over
+    a whole tournament, so it blanked the preview of every healthy event beside it.
+    The round-robin's own six matches are asserted present, which the note alone would
+    not claim.
+
+    The note's discriminating part is the strategy's **verbatim** sentence. A skip
+    that reported only "Championship is not in this preview" would pass a test that
+    checked the event was left out, and would leave the director with a schedule
+    missing an event and nothing to change to get it back.
+
+    Run through a **real worker**, not by calling the job body on the in-memory
+    inputs: a skip reason is an RQ job argument, so it reaches the code that writes
+    the note as a pickle. A reason that did not survive that trip would take the
+    director's sentence with it, and an in-process call would never notice.
+    """
+    owner = await make_user(db_session, "prev-degenerate-note")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Open Singles",
+        max_players=4,
+        pools=[_pool(["t1"])],
+    )
+    await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        max_players=6,
+        pools=[_pool(["t2"])],
+        draw_type=DrawType.rr_then_ko,
+        # One pool taking one qualifier: the knockout stage would hold a single
+        # player with nobody to play, so the strategy refuses the cut.
+        qualifiers_per_pool=1,
+    )
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+    # The skeleton payload carries no notes channel to explain a zero, so it names
+    # only the event a field was actually synthesized for.
+    assert [s.field_size for s in enqueued.field_summaries] == [4]
+
+    _run_recorded_preview_job(preview_queue)
+    state = preview_job_state(enqueued.token, tournament.id)
+    assert state.status is PreviewJobStatus.done
+    result = state.result
+    assert result is not None
+
+    # The round-robin is previewed in full — C(4, 2) = 6 — and the refused event keeps
+    # its seat in the breakdown at zero, so it is visibly left out rather than absent.
+    assert {e.name: e.matches for e in result.events} == {
+        "Open Singles": 6,
+        "Championship": 0,
+    }
+    assert result.total_matches == 6
+
+    # The strip, pinned whole: the always-on caveat, the refused event's line carrying
+    # the strategy's sentence, and an assumed-entrants line for the previewed event
+    # ONLY — a count claimed for an event no field was synthesized for would
+    # contradict the line above it.
+    assert result.notes == [
+        "This estimate assumes no player is entered in more than one event; a "
+        "real multi-event field would take longer.",
+        _DEGENERATE_EVENT_NOTE,
+        "Assumed 4 entrants for Open Singles.",
+    ]
+
+
 async def test_a_round_robin_only_previews_notes_carry_no_knockout_caveat(
     db_session: AsyncSession, default_league: League, preview_queue: Queue
 ) -> None:
@@ -570,6 +735,10 @@ async def test_preview_solve_infeasible_resolves_its_reasons(
     assert reason.pool_name == "Pool A"
     assert reason.window_start == "09:00"
     assert reason.best_of == 5
+    # A preview schedules pooled fixtures only — it drops an rr-then-ko draw's
+    # un-pooled knockout — so the reservation it blames is always a real pool,
+    # and the remedy the client offers may name a pool control.
+    assert reason.reservation == "pool"
 
 
 async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
@@ -619,6 +788,7 @@ async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
     assert first.match_count == 3
     assert first.required_min == 125  # 3 * 35 + 2 * REST_MIN
     assert first.window_span_min == 120
+    assert first.reservation == "pool"
 
 
 async def test_preview_solve_past_dated_window_resolves_past_window(

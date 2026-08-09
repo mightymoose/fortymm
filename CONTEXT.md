@@ -472,6 +472,13 @@ longer be added, removed, or re-identified, because every **fixture** names the
 pool it belongs to — but a pool's venue attributes (its tables, its time window)
 and its display name stay editable mid-event, because the venue changes under a
 running tournament (a table breaks, a table frees up).
+A pool **restricts** scheduling rather than enabling it, and it restricts per
+**fixture** (ADR 20260807): a fixture that names a pool is placed on that pool's
+tables inside its window, while a fixture that names none is placed across the
+whole venue over its **event**'s window. A pool never confines a fixture that
+does not name it — a **knockout stage**'s fixtures take the event-wide
+reservation even though their event has pools, because those pools describe the
+**pool stage**.
 _Avoid_: group (a pool is not a grouping abstraction separate from the venue
 slice), division.
 
@@ -519,6 +526,78 @@ single pool every knockout match is necessarily a rematch, which is the format
 working as intended, not a failure of the rule.
 _Avoid_: seed (a **seed** is an *input* to the draw; a qualifier is what playing
 it produces), advancer, survivor, winner (that is one side of one **match**).
+
+**Structural setting**:
+One of the four numbers or choices that decide the shape of a
+round-robin-then-knockout **draw**: **pool count**, **pool size**,
+**membership**, and qualifiers per pool. Each carries an **ownership** of its
+own, and the four together live on the event editor's Draw structure tab, which
+exists for no other **draw type** (ADR 20260808).
+_Avoid_: draw config (that is the whole `draw_settings` row, of which these are
+part), format, bracket settings.
+
+**Ownership**:
+Which side chose a **structural setting**'s value. `Automatic` means the system
+derives it and recomputes it from its sources. `Yours` means the director typed
+it, and the system stores it exactly and never changes it without being asked.
+Ownership is recorded as its own mode, never read off whether a value is present,
+because a derived number and a typed number look identical (ADR 20260808). A
+director moves a setting between the two with a quiet `Set myself` or `Use
+automatic`, and turning one manual seeds it from the value it already showed.
+_Avoid_: manual/auto toggle (it is a state that is stated, not a switch that is
+flipped), override, default (a **default** is a starting value, not a claim about
+who owns it).
+
+**Pool count**:
+How many **pools** an event has, which is always the number of pool rows it has.
+There is no second number stored anywhere. When a director sets it by hand, the
+pool rows are created or removed to match, through the same write the Table pools
+tab uses. When the system derives a count larger than the rows, that is a
+**projection** of what the structure needs, and the gap is reported rather than
+filled in (ADR 20260808).
+_Avoid_: number of groups, pool total, group count.
+
+**Pool size**:
+How many entrants play in one **pool**. When the system derives it, the field is
+split as evenly as it goes and the extra entrants land in the earliest pools, so
+22 across 4 pools gives 6, 6, 5, 5. Sizes that differ by one are legal and are
+reported as **uneven**, not as an error. When a director sets it by hand and
+leaves **pool count** automatic, the size is a target: pools are filled to it in
+turn and the last pool takes what is left.
+_Avoid_: group size, pool capacity (a pool's **tables** are its capacity, which
+is a scheduling idea, not this one).
+
+**Preview field**:
+The invented number of entrants the app reasons against before registration
+closes. It is the event's player cap, or 16 when the event has no cap. Every
+**structural setting** derived on the Draw structure tab is derived against it,
+so the tab names which basis it used and says plainly when the 16 is a default
+rather than a cap. Once the **draw** is **cut**, the real registered field
+replaces it. The same invention already drives the schedule **preview**.
+_Avoid_: field size on its own (it hides that these entrants do not exist),
+expected entrants, projected field.
+
+**Disagreement**:
+A director's **pool count** and **pool size** that do not seat the **preview
+field**. Six pools of five seat thirty, and a field of forty leaves ten entrants
+with nowhere to go. The app keeps both numbers, states the shortfall, and offers
+named resolutions. It never adds a pool or enlarges one to make the arithmetic
+work. A disagreement still **saves**, because the director may be mid-thought,
+and it blocks the **cut**, because a cut would have to invent the answer
+(ADR 20260808).
+_Avoid_: error, invalid, conflict (a **conflict** is the scoring sense of the
+word, and a disagreement is legal).
+
+**Impossible competition**:
+A configuration that describes matches nobody can play: a **pool** of one
+entrant, a **knockout stage** of one entrant, or more **qualifiers** than the
+smallest pool holds. Unlike a **disagreement**, it blocks saving as well as
+cutting, and it is reported as the director types rather than at **cut** time.
+The refusal names the real cause. #1320 records a director shown the wrong one.
+The wording is the server's existing `DegenerateDraw` copy, not a second set of
+words for the same conditions.
+_Avoid_: invalid draw, bad configuration, degenerate (that is the exception's
+name in code, not a word to show a director).
 
 **Materialize**:
 Turning a **ready** **fixture** into a real **match**: the fixture's two known
@@ -588,7 +667,8 @@ event's), first place.
 **Schedule**:
 Where and when a tournament's **matches** are played: the assignment of each
 **match** to a **table** and a **wall-clock time**, within the reserved window of its
-**pool** (or, for an un-pooled draw, its event). It is **tournament-scoped, not
+**pool** — or, for a fixture with no pool, within its **event**'s own window and on
+any table in the tournament (ADR 20260807). It is **tournament-scoped, not
 per-event** — the venue's tables are shared across events, so "two matches on one
 table at once" is a cross-event fact — which is why it is its own surface rather than
 a panel inside a single event's draw. A **placement** is written two ways that touch

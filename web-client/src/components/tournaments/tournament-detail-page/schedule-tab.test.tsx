@@ -22,6 +22,7 @@ import { server } from '@/mocks/server'
 import { schedulePreviewModalPage } from './schedule-preview-modal.page'
 
 import {
+  buildBracketDrawnEvent,
   buildDrawnEvent,
   buildFixture,
   buildScheduleSolve,
@@ -156,6 +157,108 @@ describe('ScheduleTab', () => {
     // (its pool's first suggested table, `t1`) with no prediction, never a composed
     // `YYYY-MM-DDT:00`.
     expect(sent).toMatchObject({ table_id: 't1', scheduled_start: null })
+  })
+
+  // ----- an UN-POOLED match on the schedule tab (ADR 20260807, "a pool restricts
+  // scheduling, it does not enable it"). A bracket, a swiss round and a knockout
+  // stage carry no pool, so they are placed against their EVENT's own window over
+  // the WHOLE tournament's tables. The pooled behaviour underneath must not move:
+  // a pool must still restrict. -----------------------------------------------
+
+  /** A single-elim bracket (`pools: []`, every fixture `poolId: null`) whose event
+   * window is the tournament's SECOND day. The date is deliberately not the pool
+   * default (`2026-06-13`, which `buildPool` and `buildEvent` share): a bracket left
+   * on it could not tell "composed from the event window" from "composed from some
+   * pool's window". */
+  const buildUnpooledEvent = () =>
+    buildBracketDrawnEvent({
+      slot: { date: '2026-06-14', start: '10:00', end: '16:00' },
+    })
+
+  it('places an UN-POOLED match against its EVENT window’s date, on a tournament table', async () => {
+    let sent: unknown = null
+    mockFixturePlacementEndpoint(server, async ({ request }) => {
+      sent = await request.json()
+      return HttpResponse.json(
+        buildTournamentFixtureRead({
+          id: 'fx-se-r1-p1',
+          table_id: 't3',
+          scheduled_start: '2026-06-14T14:00:00',
+        }),
+      )
+    })
+
+    page.render({
+      // The tournament reserves t3…t5 out of a t1…t12 catalogue, on purpose. With the
+      // default t1-first reservation the suggestion and the catalogue's first table are
+      // the same `t1`, so the pre-selected table could not tell "offered the
+      // tournament's own tables" from "fell back to the first table that exists".
+      tournament: buildTournament({
+        tableIds: ['t3', 't4', 't5'],
+        events: [buildUnpooledEvent()],
+      }),
+      tables: buildTables(),
+    })
+
+    page.openPlacement('fx-se-r1-p1')
+    page.setPlaceTime('fx-se-r1-p1', '14:00')
+    page.savePlacement('fx-se-r1-p1')
+
+    await waitFor(() =>
+      expect(page.queryPlaceEditor('fx-se-r1-p1')).not.toBeInTheDocument(),
+    )
+    // The DATE is the event window's, and the TABLE is the tournament's first reserved
+    // one — an un-pooled match is offered the event-wide reservation, not nothing.
+    expect(sent).toMatchObject({
+      table_id: 't3',
+      scheduled_start: '2026-06-14T14:00:00',
+    })
+  })
+
+  it('marks a POOLED match’s own pool tables, and marks nothing on an un-pooled one', () => {
+    // Both kinds in ONE tournament, so the mark is proven to discriminate rather
+    // than to be on or off everywhere.
+    page.render({
+      tournament: buildTournament({
+        events: [buildScheduledEvent(), buildUnpooledEvent()],
+      }),
+      tables: buildTables(),
+    })
+
+    // Pool A reserves t1…t4, so the chosen table wears the mark — unchanged.
+    page.openPlacement('fx-a-2')
+    expect(page.getPlaceTable('fx-a-2')).toHaveTextContent('T1 · pool table')
+
+    // The bracket match names no pool. Every table in the tournament is fair game,
+    // so a mark on all of them would say nothing — and would claim a pool that does
+    // not exist.
+    page.openPlacement('fx-se-r1-p1')
+    expect(page.getPlaceTable('fx-se-r1-p1')).toHaveTextContent('T1')
+    expect(page.getPlaceTable('fx-se-r1-p1')).not.toHaveTextContent('pool table')
+  })
+
+  it('tells the director where a placement’s date comes from — for a pooled match AND an un-pooled one', () => {
+    page.render({
+      tournament: buildTournament({ events: [buildScheduledEvent()] }),
+      tables: buildTables(),
+    })
+    expect(page.getTab()).toHaveTextContent(
+      'the date comes from its pool window, or from its event window when it has no pool',
+    )
+  })
+
+  it('leaves the non-owner’s subtitle alone — it never claimed a pool', () => {
+    page.render({
+      tournament: buildTournament({
+        canEdit: false,
+        events: [buildScheduledEvent()],
+      }),
+      tables: buildTables(),
+    })
+    expect(page.getTab()).toHaveTextContent(
+      'Every match, by table, with its predicted start time.',
+    )
+    expect(page.getTab()).not.toHaveTextContent('pool window')
   })
 
   // ----- the consequence gate on the placement submit path (ADR "the schedule

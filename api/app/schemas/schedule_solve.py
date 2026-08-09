@@ -4,9 +4,10 @@
 only reasons (:data:`app.scheduling.InfeasibilityReason`) — pure and DB-blind on
 purpose. This module is the DB-aware humanizer: it carries the *resolved* form a
 client can render without any further lookup — the pool's display **name**, the
-window's ``HH:MM`` clock bounds, the event's ``best_of`` — while leaving the raw
-integer minutes (needed / span / required / capacity / available) untouched so
-the client formats hours itself.
+kind of **reservation** that name belongs to (:data:`ReservationKind`, so a
+remedy can name a control the director has), the window's ``HH:MM`` clock bounds,
+the event's ``best_of`` — while leaving the raw integer minutes (needed / span /
+required / capacity / available) untouched so the client formats hours itself.
 
 Structured, not prose (ADR "an infeasible solve explains itself with a resolved
 reason"): a discriminated union over ``kind`` — the *same* discriminator strings
@@ -23,23 +24,44 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+#: Which **kind of reservation** a reason blames (ADR 20260807 "a pool restricts
+#: scheduling, it does not enable it"). ``"pool"`` is a pool the director created
+#: and can edit — tables, window and all. ``"event"`` is the **event-wide
+#: reservation**: the synthetic one an un-pooled fixture (a single-elim or swiss
+#: field, an rr-then-ko draw's knockout stage) is placed in, which carries the
+#: event's own window and the whole tournament's tables and exists only inside a
+#: solve. The distinction is not cosmetic: a remedy must name a control that
+#: exists, and there is no "add a table to" or "shrink" verb for an event-wide
+#: reservation — its controls are the event's window and the tournament's table
+#: catalogue. The same two words the web view model uses for the same fact.
+#:
+#: Every reason that names a reservation carries this. It defaults to ``"pool"``
+#: because that is the true value for every reason recorded before the event-wide
+#: reservation existed: until then a reason could only blame a pool row, so a
+#: ledger row read back from JSONB without the field *did* blame a pool.
+ReservationKind = Literal["pool", "event"]
+
 
 class PoolHasNoTablesRead(BaseModel):
     """A pool with active fixtures but no tables at all — nowhere to place them.
-    Resolved: the pool's display ``name`` (never the namespaced solver id)."""
+    Resolved: the pool's display ``name`` (never the namespaced solver id) and
+    which kind of ``reservation`` that name belongs to."""
 
     kind: Literal["pool_has_no_tables"] = "pool_has_no_tables"
     pool_name: str
+    reservation: ReservationKind = "pool"
 
 
 class WindowTooShortForMatchRead(BaseModel):
     """A single fixture whose pool window cannot hold even one match: its
     ``best_of`` match needs ``needed_min`` minutes but the window spans only
-    ``window_span_min``. Resolved: the pool ``name`` and its ``HH:MM`` window
-    bounds; the minutes pass through as integers for the client to format."""
+    ``window_span_min``. Resolved: the pool ``name``, which kind of
+    ``reservation`` it is, and its ``HH:MM`` window bounds; the minutes pass
+    through as integers for the client to format."""
 
     kind: Literal["window_too_short_for_match"] = "window_too_short_for_match"
     pool_name: str
+    reservation: ReservationKind = "pool"
     window_start: str
     window_end: str
     best_of: Literal[1, 3, 5, 7]
@@ -50,11 +72,12 @@ class WindowTooShortForMatchRead(BaseModel):
 class PoolOverCapacityRead(BaseModel):
     """A pool whose aggregate match-time (``required_min``) exceeds the
     table-minutes its window offers (``capacity_min`` = window span ×
-    ``table_count``). Resolved: the pool ``name`` and its ``HH:MM`` bounds; the
-    minutes stay integers."""
+    ``table_count``). Resolved: the pool ``name``, which kind of ``reservation``
+    it is, and its ``HH:MM`` bounds; the minutes stay integers."""
 
     kind: Literal["pool_over_capacity"] = "pool_over_capacity"
     pool_name: str
+    reservation: ReservationKind = "pool"
     window_start: str
     window_end: str
     required_min: int
@@ -68,12 +91,15 @@ class PlayerOverSubscribedRead(BaseModel):
     minutes of *their* time, against a window spanning only ``window_span_min``.
     A pigeonhole over one person, so adding tables cannot fix it — the remedy is
     fewer matches for them in this pool, or a longer window. Resolved: the
-    human's display ``player_name`` and the pool's ``name`` + ``HH:MM`` bounds;
-    the minutes stay integers for the client to format."""
+    human's display ``player_name``, the pool's ``name`` + ``HH:MM`` bounds, and
+    which kind of ``reservation`` that name is — "a smaller pool" is not a remedy
+    an event-wide reservation has; the minutes stay integers for the client to
+    format."""
 
     kind: Literal["player_over_subscribed"] = "player_over_subscribed"
     player_name: str
     pool_name: str
+    reservation: ReservationKind = "pool"
     window_start: str
     window_end: str
     match_count: int

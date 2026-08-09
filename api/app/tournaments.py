@@ -1123,16 +1123,24 @@ def _draw_refusal(error: DrawError) -> HTTPException:
       nobody to play — and the numbers in that sentence ("5 entrants across 3 pool(s)")
       are the numbers the director has to change. Recomposing it here would be a second
       copy of a rule this route does not own, and the copy that drifts is the one a
-      director reads.
+      director reads. From the **schedule-preview** route it arrives only when the
+      tournament has no other event to preview: one event the draw refuses beside a
+      healthy one is skipped, and the honest-notes strip carries this same sentence.
     * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
       reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
       now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
-      with the **schedule-preview** route below, and ``app.schedule_preview`` still
-      raises it for ``single_elim``: the CP-SAT scheduler is round-robin-only, so a
-      pool-less bracket has no windows to solve over. A director previewing a bracket's
-      schedule must be told it is the *draw type* that cannot be previewed, not left
-      with the generic sentence, which says the event's own state is at fault and would
-      send them hunting through pools and entrants that are perfectly fine.
+      with the **schedule-preview** route below, and ``app.schedule_preview`` raises it
+      when *no* event of a tournament can be previewed and the first such event is a
+      single-elim or a swiss draw. One such event beside a round-robin no longer
+      refuses anything: the builder skips it, previews the rest, and the honest-notes
+      strip names it. A
+      director previewing a bracket-only tournament must be told it is the *draw type*
+      that cannot be previewed, not left with the generic sentence, which says the
+      event's own state is at fault and would send them hunting through pools and
+      entrants that are perfectly fine. The sentence blames the right thing now: not
+      the scheduler, which does place a bracket over its event's own window (ADR "a
+      pool restricts scheduling, it does not enable it"), but the preview, which runs
+      before anyone has entered and so has no field to lay a played-out draw over.
     * The fallback arm is a **generic** sentence, never the exception's own. A
       ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
       message nobody wrote for a human — refusing vaguely is a bug report; leaking
@@ -1155,12 +1163,15 @@ def _draw_refusal(error: DrawError) -> HTTPException:
             detail = str(error)
         case UnsupportedDrawType():
             # Reachable from the SCHEDULE-PREVIEW route only (the cut route's
-            # ``strategy_for`` is total). Named from the structural ``draw_type`` so the
+            # ``strategy_for`` is total), and only when the tournament has no
+            # previewable event at all. Named from the structural ``draw_type`` so the
             # sentence says which format cannot be previewed.
             detail = (
-                f"A {error.draw_type.value} draw cannot be scheduled yet. The "
-                "scheduler places pooled draws over their pools' time windows, and a "
-                "bracket has none to place. Preview a round-robin event instead."
+                f"A {error.draw_type.value} draw cannot be previewed, and this "
+                "tournament has no other event to preview. A draw of that kind is "
+                "decided round by round as it is played, so before anyone has "
+                "entered there is nothing to lay out. The scheduler does place it "
+                "once the tournament is live."
             )
         case _:
             detail = "This event's draw cannot be cut as the event stands."
@@ -1684,9 +1695,11 @@ async def request_schedule_preview(
         # question, refused with the status-carrying sentence the domain authored.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DrawError as error:
-        # A non-round-robin (or otherwise degenerate) draw the synthetic field
-        # cannot be planned — the same 422 the cut route produces, in words a
-        # director can read.
+        # A draw the synthetic field cannot be planned (a degenerate one), or a
+        # tournament whose every event is a draw type the preview cannot lay out —
+        # the same 422 the cut route produces, in words a director can read. A single
+        # unpreviewable event beside a previewable one is not this: it is skipped, and
+        # the honest-notes strip on the finished preview names it.
         raise _draw_refusal(error) from error
     except ScheduleQueueUnavailableError as exc:
         raise HTTPException(

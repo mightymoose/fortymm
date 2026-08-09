@@ -188,7 +188,7 @@ describe('schedulePreviewQueryOptions', () => {
     // The reason is mapped snake→camel through `./solve`'s discriminated union —
     // `pool_name` → `poolName`, the `kind` discriminant preserved.
     expect(preview.infeasibilityReasons).toEqual([
-      { kind: 'pool_has_no_tables', poolName: 'Pool A' },
+      { kind: 'pool_has_no_tables', poolName: 'Pool A', reservation: 'pool' },
     ])
   })
 
