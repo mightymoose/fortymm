@@ -42,6 +42,11 @@ strings. The wording is the cut's own, and it is already pinned verbatim by
 copy here would pin nothing those do not. What these calls *do* pin is which builder the
 derivation reaches for and **which numbers it hands it** — a swapped pair of arguments
 reds.
+
+**The unseated-entrants sentence is the exception, and is pinned verbatim at the foot
+of this file.** It is new copy with no older home (chore 5c), so calling its builder
+here and again at the cut would pin nobody's words. This file is the one place it is
+typed out.
 """
 
 from dataclasses import dataclass
@@ -62,6 +67,7 @@ from app.draw_structure import (
     pool_too_small_for_pool_size_message,
     pool_too_small_message,
     too_many_qualifiers_message,
+    unseated_entrants_message,
 )
 
 AUTOMATIC = SettingOwnership.automatic
@@ -717,3 +723,53 @@ def test_a_possible_structure_says_so() -> None:
     impossible = derive_draw_structure(_vector("field too small").options)
     assert possible.is_impossible is False
     assert impossible.is_impossible is True
+
+
+# ----- the unseated sentence, which is the cut's alone (chore 5c) --------------------
+#
+# Unlike the three impossible messages, this copy is **new** and has no other file
+# pinning it, so it is pinned verbatim here — from the vector's own disagreement, so a
+# swapped ``seats``/``field_size`` reds rather than reading plausibly.
+#
+# There is no empty-seats sentence to pin. Only the ``unseated`` direction refuses a
+# cut, so only that direction has words on this side; the empty-seats copy is the
+# client's panel's, and the client writes it (see ``unseated_entrants_message``).
+
+
+def test_the_unseated_sentence_states_the_arithmetic_and_refuses_to_choose() -> None:
+    """The ADR's own sentence: what the structure seats, what the field is, and how many
+    entrants have nowhere to go — then who has to decide.
+
+    Deliberately **not** the impossible-competition wording. Nothing here is unplayable:
+    six pools of five is a fine competition, it is simply not one for forty players, and
+    the way out is the director picking a number rather than making a number legal.
+    """
+    disagreement = derive_draw_structure(
+        _vector("both manual and disagreeing").options
+    ).disagreement
+    assert disagreement is not None
+    assert unseated_entrants_message(disagreement) == (
+        "6 pools of 5 seat 30, and this event has 40 entrants — 10 entrants have "
+        "nowhere to go. Cutting would have to change one of those numbers for you, "
+        "so change the pool count or the pool size, then cut again."
+    )
+
+
+def test_every_noun_and_verb_in_the_sentence_inflects() -> None:
+    """One pool and one entrant are both reachable — a manual ``1`` is a number a
+    director can type — and a refusal reading ``1 pools of 1 seat 1`` would be the app's
+    own carelessness quoted back at somebody it is refusing."""
+    assert unseated_entrants_message(
+        DrawStructureDisagreement(
+            pool_count=1,
+            pool_size=1,
+            seats=1,
+            field_size=2,
+            direction=DisagreementDirection.unseated,
+            count=1,
+        )
+    ) == (
+        "1 pool of 1 seats 1, and this event has 2 entrants — 1 entrant has nowhere "
+        "to go. Cutting would have to change one of those numbers for you, so change "
+        "the pool count or the pool size, then cut again."
+    )

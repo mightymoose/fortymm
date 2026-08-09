@@ -26,12 +26,14 @@ pinned by five test modules. They live here now, as
 :func:`pool_too_small_message`, :data:`ONE_PLAYER_KNOCKOUT_MESSAGE` and
 :func:`too_many_qualifiers_message`, and :mod:`app.draws` imports them — so the cut and
 the derivation refuse in the same words by construction rather than by two authors
-agreeing. **One sentence is this module's own**, because the cut has no state that
-reaches it: :func:`pool_too_small_for_pool_size_message` is the pool refusal for a pool
-size the *director* set, which the snake deal cannot produce. The import runs this way
-round because this module must stay a leaf:
-:mod:`app.draws` pulls in the ORM enums and the request schemas, and nothing that
-imports *this* should have to.
+agreeing. **Two sentences are this module's own**, because the cut had no state that
+reached them: :func:`pool_too_small_for_pool_size_message` is the pool refusal for a
+pool size the *director* set, which the snake deal cannot produce, and
+:func:`unseated_entrants_message` is the cut-time refusal for a structure that seats
+fewer players than have entered (#1320, chore 5c). The import runs this way round
+because this module
+must stay a leaf: :mod:`app.draws` pulls in the ORM enums and the request schemas, and
+nothing that imports *this* should have to.
 
 The spec is ``docs/designs/rr-then-ko-draw-structure/README.md``, section "The
 derivation".
@@ -178,6 +180,48 @@ class DrawStructureDisagreement:
     #: How many entrants have nowhere to go, or how many seats would be empty. Always
     #: positive: :attr:`direction` carries the sign.
     count: int
+
+
+def unseated_entrants_message(disagreement: DrawStructureDisagreement) -> str:
+    """The **cut's** refusal for a structure that seats fewer players than have entered
+    — the arithmetic in the order the ADR states it (``20260808-a-structural-setting-is-
+    owned-by-the-director-or-derived-by-the-system``): what the structure seats, what
+    the field is, and how many entrants have nowhere to go.
+
+    It sits beside the value object rather than up in the copy section because it takes
+    the whole :class:`DrawStructureDisagreement`: every number in the sentence is one
+    the derivation already computed, and re-deriving ``seats`` from loose arguments here
+    would be a second copy of the arithmetic the vectors pin.
+
+    **One direction only, and the asymmetry is the point — do not tidy it into
+    symmetry.** A disagreement runs both ways (:class:`DisagreementDirection`), but only
+    :attr:`~DisagreementDirection.unseated` stops a cut, so this sentence words only
+    that direction and its caller
+    (``app.event_draw_structure.entrants_with_nowhere_to_go``) hands it nothing else.
+    Empty seats are not a problem: seven pools of six against a real field of forty
+    deals ``6,6,6,6,6,6,4``, which is the legal uneven split the app already calls legal
+    one slice over — and refusing it would dead-end the director hardest of all, because
+    the reference's own resolution ``Use ceil(field / size) pools of {size}`` (labelled
+    "Everyone gets a seat.") rounds *up* and therefore lands them exactly there.
+
+    **Deliberately not the impossible-competition wording.** A pool of one is a
+    competition nobody can play, and the director fixes it by making the numbers
+    playable; this is two playable numbers that do not cover the field, and the director
+    fixes it by deciding which of the two they meant. The tail says so: the cut will not
+    choose for them.
+    """
+    pool_noun = "pool" if disagreement.pool_count == 1 else "pools"
+    seat_verb = "seats" if disagreement.pool_count == 1 else "seat"
+    field_noun = "entrant" if disagreement.field_size == 1 else "entrants"
+    unseated_noun = "entrant has" if disagreement.count == 1 else "entrants have"
+    return (
+        f"{disagreement.pool_count} {pool_noun} of {disagreement.pool_size} "
+        f"{seat_verb} {disagreement.seats}, and this event has "
+        f"{disagreement.field_size} {field_noun} — {disagreement.count} "
+        f"{unseated_noun} nowhere to go. Cutting would have "
+        "to change one of those numbers for you, so change the pool count or the "
+        "pool size, then cut again."
+    )
 
 
 @dataclass(frozen=True, slots=True)

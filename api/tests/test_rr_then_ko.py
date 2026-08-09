@@ -30,6 +30,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import match_calls
+from app.draw_structure import (
+    DisagreementDirection,
+    DrawStructureDisagreement,
+    unseated_entrants_message,
+)
 from app.match_voiding import void_match
 from app.models import (
     DrawType,
@@ -770,6 +775,158 @@ async def test_cutting_for_more_qualifiers_than_the_smallest_pool_holds_is_refus
     )
     assert await _fixtures(db_session, event_id) == [], (
         "a refused cut writes nothing at all"
+    )
+
+
+# ----- a saved structure that does not seat the field (#1320, chore 5c) -------------
+#
+# A **disagreement** is the director's two manual numbers not multiplying out to their
+# field. It is deliberately savable — they may be mid-thought, and ADR "a structural
+# setting is owned by the director or derived by the system" says the app states the
+# arithmetic and keeps both numbers rather than moving one. The CUT is what cannot
+# proceed, because it has to seat every entrant somewhere and every somewhere available
+# to it contradicts one of the two numbers.
+#
+# **Only one direction refuses.** Entrants with nowhere to go cannot be dealt. Seats to
+# spare can: three pools of five over eleven entrants deals 4, 4, 3, which is the uneven
+# split this app calls legal — and refusing it would dead-end a director who applied the
+# app's own resolution, since ``Use ceil(field / size) pools of {size}`` rounds up. The
+# asymmetry is deliberate and the tests below are what red if it is tidied away.
+#
+# **The cut judges the real registered field**, not the preview's cap-or-16. Every event
+# below is capped at 64, so all three disagree with the *preview* field; what separates
+# them is who actually entered. See
+# ``app.event_draw_structure.entrants_with_nowhere_to_go`` for the argument.
+#
+# The sentence itself is pinned verbatim in ``test_draw_structure.py`` — its one home —
+# and built here from the numbers this cut must have judged, so a guard that quoted the
+# 64-player cap would red on the numbers rather than on the words.
+
+
+async def _event_of_manual_pools(
+    client: AsyncClient,
+    db: AsyncSession,
+    *,
+    pool_count: int,
+    pool_size: int,
+    entrants: int = 12,
+) -> tuple[str, str]:
+    """An event whose director owns **both** structural numbers, with a real field.
+
+    Asserts the create itself, because "saving stays available" is half of what this
+    section is about: the guard belongs to the cut alone, and a copy of it on the write
+    would make every one of these events unsavable instead.
+    """
+    tournament_id = await _tournament(client)
+    created = await _create_event(
+        client,
+        tournament_id,
+        pools=list(POOLS[:pool_count]),
+        draw_structure={
+            "pool_count_mode": "manual",
+            "manual_pool_count": pool_count,
+            "pool_size_mode": "manual",
+            "manual_pool_size": pool_size,
+        },
+    )
+    assert created.status_code == 201, (
+        f"{pool_count} pools of {pool_size} disagrees with this event's field, and a "
+        f"disagreement saves: {created.text}"
+    )
+    event_id: str = created.json()["id"]
+    for n in range(1, entrants + 1):
+        await _enter(db, event_id, await make_user(db, f"seat{n}"), seed=n, minutes=n)
+    return tournament_id, event_id
+
+
+async def test_cutting_a_structure_that_leaves_entrants_unseated_is_refused(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """Three pools of three seat nine. Twelve entered. Three have nowhere to go.
+
+    The cut is the act that would have to answer the question the director left open:
+    the snake would deal 4, 4, 4 and call it the pools of three they asked for. So it
+    refuses in the same 422 shape as every other cut refusal, naming the arithmetic
+    rather than an impossible competition — nothing here is unplayable, and a director
+    told "a pool would have one player" would go hunting for a defect that is not there.
+    """
+    client, _ = authed_client
+    tournament_id, event_id = await _event_of_manual_pools(
+        client, db_session, pool_count=3, pool_size=3
+    )
+
+    response = await _cut(client, tournament_id, event_id)
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == unseated_entrants_message(
+        DrawStructureDisagreement(
+            pool_count=3,
+            pool_size=3,
+            seats=9,
+            field_size=12,
+            direction=DisagreementDirection.unseated,
+            count=3,
+        )
+    )
+    assert await _fixtures(db_session, event_id) == [], (
+        "a refused cut writes nothing at all"
+    )
+
+
+async def test_a_structure_with_seats_to_spare_still_cuts(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**The asymmetry, pinned.** Three pools of five seat fifteen and eleven people
+    entered — and the cut goes ahead, dealing 4, 4, 3.
+
+    Nothing has to be invented that this app does not already do openly: an uneven split
+    is legal, is previewed as legal, and is described as legal one slice over. Refusing
+    it would also close the last door on the director, because the resolution the app
+    itself offers for a disagreement (``Use ceil(field / size) pools of {size}``,
+    labelled "Everyone gets a seat.") rounds **up** and so lands them here whenever the
+    size does not divide the field. This test is what reds if the guard is ever tidied
+    into a symmetric one.
+    """
+    client, _ = authed_client
+    tournament_id, event_id = await _event_of_manual_pools(
+        client, db_session, pool_count=3, pool_size=5, entrants=11
+    )
+
+    response = await _cut(client, tournament_id, event_id)
+
+    assert response.status_code == 201, response.text
+    pooled = [f for f in await _fixtures(db_session, event_id) if f.pool_id is not None]
+    # Pools of 4, 4 and 3 play 6, 6 and 3 pairings: 15 in all, and the odd pool out is
+    # the smaller one.
+    per_pool = sorted(
+        len([f for f in pooled if f.pool_id == pool_id])
+        for pool_id in await _pool_ids(db_session, event_id)
+    )
+    assert per_pool == [3, 6, 6]
+
+
+async def test_a_structure_that_seats_the_real_field_exactly_still_cuts(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """**The regression test for which field the cut judges.**
+
+    Three pools of four seat twelve, and twelve people entered, so nothing has to be
+    invented and the director gets exactly the pools they asked for. Against the
+    *preview* field this event disagrees as loudly as the two above — its cap is 64 —
+    so this is the case that reds if anybody ever wires ``preview_field_size`` back into
+    the cut's guard. Six fixtures per pool is a pool of four playing everybody.
+    """
+    client, _ = authed_client
+    tournament_id, event_id = await _event_of_manual_pools(
+        client, db_session, pool_count=3, pool_size=4
+    )
+
+    response = await _cut(client, tournament_id, event_id)
+
+    assert response.status_code == 201, response.text
+    pooled = [f for f in await _fixtures(db_session, event_id) if f.pool_id is not None]
+    assert sorted(str(f.pool_id) for f in pooled) == sorted(
+        [str(pool_id) for pool_id in await _pool_ids(db_session, event_id)] * 6
     )
 
 

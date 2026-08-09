@@ -114,6 +114,7 @@ from app.draws import (
     PlannedFixture,
     UnsupportedDrawType,
 )
+from app.event_draw_structure import DEFAULT_UNCAPPED_FIELD as _DEFAULT_UNCAPPED_FIELD
 from app.models.tournament import DrawType, Tournament, TournamentEvent
 from app.scheduling import (
     EventId,
@@ -131,11 +132,13 @@ from app.schemas.tournament import MatchSettings, Pool, TournamentTable
 from app.tournament_draws import draw_config, event_pools, strategy_for_event
 from app.venue_time import anchor_wallclock
 
-#: The synthetic field size for an *uncapped* event (``max_players IS NULL``,
-#: ADR-0935). An uncapped event has no natural number to auto-fill to, so a
-#: preview needs a stand-in; the director may always override it. Sixteen is a
-#: plausible club-night field the ADR names as the default.
-DEFAULT_UNCAPPED_FIELD = 16
+#: The synthetic field size for an *uncapped* event, **defined in**
+#: :mod:`app.event_draw_structure` and imported here rather than the other way round:
+#: that module is a leaf the *cut* now depends on (#1320), and this one imports
+#: :mod:`app.tournament_draws`, so borrowing the constant the other way would close an
+#: import cycle. Re-exported under its original name, which every caller and every
+#: ``:data:`DEFAULT_UNCAPPED_FIELD``` reference below still uses.
+DEFAULT_UNCAPPED_FIELD = _DEFAULT_UNCAPPED_FIELD
 
 
 #: The prefix every synthetic entrant's ``PlayerId`` carries — ``placeholder-{k}``

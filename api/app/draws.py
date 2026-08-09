@@ -118,11 +118,24 @@ class UnsupportedDrawType(DrawError):
 
 
 class DegenerateDraw(DrawError):
-    """The requested cut would produce a draw that isn't a competition.
+    """The requested cut would produce a draw that isn't a competition, **or one the
+    director's own numbers do not describe**.
 
     A pool holding a single entrant has nobody to play (and a pool holding none is a
     ghost), so we refuse the cut rather than silently emit a pool of one. The director
     fixes the input — fewer pools, or more entrants — and re-cuts.
+
+    The second reason is #1320's, and it is not "unplayable": a saved draw structure
+    whose two manual numbers seat **fewer** players than have entered describes a
+    perfectly playable competition that is simply **not the one this field needs**, and
+    cutting it would mean changing a number the director typed. Only that direction is
+    refused — seats to spare deal a legal uneven split — and the argument for the
+    asymmetry lives with the guard. It is this class rather than a new one on purpose:
+    both HTTP (``app.tournaments._draw_refusal``) and MCP
+    (``app.mcp_server._map_draw_refusal_tool_error``) pass a ``DegenerateDraw``'s
+    domain-authored copy through untouched, and a new subclass would land in their
+    deliberately vague fallback arms. See
+    ``app.tournament_draws._refuse_a_structure_that_leaves_entrants_unseated``.
     """
 
 

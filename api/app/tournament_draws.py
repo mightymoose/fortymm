@@ -20,7 +20,10 @@ and leaves this module with only the three things a database is actually needed 
 - **the currency** (``draw_currency_by_event``) — whether each event's draw still
   describes the field it was cut from. The fact the ``published → live`` precondition
   is decided on (ADR-0786).
-- **the write** (``cut_draw`` / ``uncut_draw``).
+- **the write** (``cut_draw`` / ``uncut_draw``), and the one refusal the write owns
+  that the pure half cannot: a saved draw structure that seats fewer players than
+  the field the cut is about to deal
+  (``_refuse_a_structure_that_leaves_entrants_unseated``, #1320).
 
 Neither write commits. The caller owns the transaction, because a cut is only safe
 inside the tournament's row lock: the field it reads and the fixtures it derives from
@@ -34,7 +37,9 @@ from collections.abc import Collection, Mapping, Sequence
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.draw_structure import unseated_entrants_message
 from app.draws import (
+    DegenerateDraw,
     DrawConfig,
     DrawStrategy,
     Entrant,
@@ -49,6 +54,7 @@ from app.draws import (
     strategy_for,
     unseated_entrant_allowance,
 )
+from app.event_draw_structure import entrants_with_nowhere_to_go
 from app.models import (
     DrawType,
     EventFormat,
@@ -571,6 +577,45 @@ def _covers_the_field(
     )
 
 
+def _refuse_a_structure_that_leaves_entrants_unseated(
+    event: TournamentEvent, *, pool_count: int, field_size: int
+) -> None:
+    """Raise :class:`~app.draws.DegenerateDraw` when this event's **saved** draw
+    structure seats fewer players than the field the cut is about to deal (#1320).
+
+    **A disagreement is not a refusal — of the save** (ADR ``20260808-a-structural-
+    setting-is-owned-by-the-director-or-derived-by-the-system``). Six pools of five seat
+    thirty; a field of forty leaves ten entrants with nowhere to go. Both numbers were
+    typed on purpose and the director may be mid-thought, so the write keeps them
+    (``app.event_draw_structure.impossible_draw_structure`` deliberately looks at the
+    impossible problems alone). The **cut** is the act that cannot proceed: it has to
+    seat every entrant somewhere, and every somewhere available to it contradicts one of
+    the two numbers.
+
+    **Seats to spare are not refused**, and that asymmetry is load-bearing rather than
+    an oversight — see ``entrants_with_nowhere_to_go``, which is where the reasoning
+    lives and which answers ``None`` for that direction.
+
+    The arithmetic is not re-implemented here. It is the same derivation the Draw
+    structure tab runs as the director types, assembled from the event by
+    :func:`app.event_draw_structure.entrants_with_nowhere_to_go` and worded by
+    :func:`app.draw_structure.unseated_entrants_message`, so the sentence a director
+    reads when the cut refuses carries the same numbers the tab was showing them.
+
+    ``field_size`` is the **real** active field, not the preview's cap-or-16 — see
+    ``entrants_with_nowhere_to_go`` for why the cut judges the field it actually deals.
+    Answers ``None`` for every draw type without a pool stage feeding a knockout, so
+    nothing but ``rr-then-ko`` can be refused here.
+    """
+    unseated = entrants_with_nowhere_to_go(
+        draw_settings=draw_settings_of(event.draw_settings),
+        pool_count=pool_count,
+        field_size=field_size,
+    )
+    if unseated is not None:
+        raise DegenerateDraw(unseated_entrants_message(unseated))
+
+
 async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     """Cut (or re-cut) this event's draw: plan the fixtures its draw type prescribes for
     its active field, and make them the event's fixtures — **all of them, and only
@@ -619,12 +664,25 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     lands without reading the field of an event that has no business being cut. It is
     the only "this event cannot be cut" refusal left at this seam — ``strategy_for`` is
     total now that the enum holds only what runs (ADR 20260726), so it refuses nothing.
+
+    Refuses a **structure that leaves entrants unseated** with
+    :class:`~app.draws.DegenerateDraw` too (#1320, and
+    :func:`_refuse_a_structure_that_leaves_entrants_unseated` for the whole argument): a
+    director's two manual numbers may be saved while they think, but a cut would have to
+    change one of them for them. It is asked **after** the strategy has planned and
+    before the DELETE — after, because an impossible competition outranks a
+    disagreement, which is the precedence the Draw structure tab's one-panel-at-a-time
+    rule already shows a director, and planning is pure so a plan thrown away costs
+    nothing.
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
     strategy = strategy_for_event(event)
-    planned = strategy.plan_initial(
-        draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
+    config = draw_config(event)
+    entrants = order_entrants(await active_draw_entrants(db, event.id))
+    planned = strategy.plan_initial(config, entrants)
+    _refuse_a_structure_that_leaves_entrants_unseated(
+        event, pool_count=len(config.pool_ids), field_size=len(entrants)
     )
     await uncut_draw(db, [event.id])
     db.add_all(
