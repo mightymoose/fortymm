@@ -21,6 +21,10 @@ import {
   qualifiersPerPoolFreeze,
   type EditFreeze,
 } from '../data/draw'
+import {
+  ownedStructureSettings,
+  type OwnedStructureSetting,
+} from '../data/draw-ownership'
 import { poolNameIssues } from '../data/event-validation'
 import { eligibilityIssues } from '../data/predicate-validation'
 import {
@@ -36,6 +40,10 @@ import type {
   TournamentEvent,
   TournamentTable,
 } from '../data/types'
+import {
+  ConfirmIrreversibleActDialog,
+  type DrawStructureActConsequence,
+} from './confirm-irreversible-act-dialog'
 import { BasicsSection } from './event-editor/basics-section'
 import { DrawStructureSection } from './event-editor/draw-structure-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
@@ -109,6 +117,11 @@ const SECTIONS = [
  * cannot hold would invite a director to configure a draw their event will never cut. */
 const DRAW_STRUCTURE_SECTION = { value: 'draw-structure', label: 'Draw structure' }
 
+/** What an event with no name yet is called — in the sheet's own title, and in the one
+ * dialog whose sentence names the event. One name for one thing: a director reading
+ * "Untitled event" in the header must read the same two words in the confirm. */
+const UNTITLED_EVENT = 'Untitled event'
+
 /** The slide-in event editor — a side sheet with four sections (Basics,
  * Eligibility, Match settings, Table pools) over ONE React-Hook-Form draft. The form
  * is the single source of truth: the scalar Basics/Match fields write back through
@@ -153,6 +166,21 @@ export const EventEditor = ({
   /** How the last save was refused, or `null`. A classified failure — never a raw
    * server string (see `data/save-failure`). Never a reason to close. */
   const [failure, setFailure] = useState<SaveFailure | null>(null)
+  /**
+   * The **draw-type change awaiting its answer**: the whole edited event the picker asked
+   * for, and the settings that answer would discard. `null` whenever no dialog is up.
+   *
+   * The edit is held rather than applied, which is the entire cancel path: the form still
+   * holds `rr-then-ko`, and the picker is controlled off it, so Go back leaves the select
+   * reading the two-stage format without anything having to put it back. A version that
+   * wrote first and reverted on cancel would look identical for one frame and be wrong in
+   * every way that matters — the tab would flicker away, and a `Set myself` in flight would
+   * be gone.
+   */
+  const [pendingDrawType, setPendingDrawType] = useState<{
+    next: TournamentEvent
+    settings: OwnedStructureSetting[]
+  } | null>(null)
 
   const form = useForm<EventFormValues>({
     resolver: zodResolver(eventSchema),
@@ -167,6 +195,10 @@ export const EventEditor = ({
     setSection('basics')
     // A fresh event starts clean: last time's red belongs to last time's draft.
     setFailure(null)
+    // …and so does last time's unanswered question. Unlike the pool-count confirm one tab
+    // over, this state is the EDITOR's, and the editor is not unmounted between events —
+    // left standing it would price a draw-type change on an event nobody just edited.
+    setPendingDrawType(null)
   }
 
   // Re-seed the form to the new event's values (and clear any prior errors). The
@@ -218,7 +250,7 @@ export const EventEditor = ({
   const watchedPools = useWatch({ control: form.control, name: 'pools' })
   const poolIssues = poolNameIssues(watchedPools ?? [])
 
-  const applyChange = (next: TournamentEvent) => {
+  const writeChange = (next: TournamentEvent) => {
     // Don't validate until the user has tried to save once — otherwise a new
     // event (whose name starts empty) would flash "required" on the first
     // keystroke in any field. After a rejected submit, re-validate live so the
@@ -245,6 +277,41 @@ export const EventEditor = ({
     form.setValue('timezone', next.timezone, opts)
     form.setValue('slot', next.slot, opts)
     form.setValue('match', next.match, opts)
+  }
+
+  /**
+   * Every scalar edit any tab makes, and the one place a **draw-type change is priced**.
+   *
+   * Leaving `rr-then-ko` leaves the pool stage the structural settings shape, so the
+   * ownership record goes with it (ADR 20260808). Two paths, decided by whether the
+   * director owns anything at all:
+   *
+   * - **Nothing is theirs** — every mode automatic, or manual with an empty box, which the
+   *   tab already badges `Automatic`. The switch is silent, and the record is left exactly
+   *   as it is: nothing was discarded, so nothing is written. A dormant record never
+   *   reaches the wire — `drawSettingsToApi` sends `draw_structure` on the `rr-then-ko` arm
+   *   and nowhere else — and leaving it alone is what keeps a number remembered under
+   *   `Use automatic` remembered.
+   * - **Something is theirs** — the edit is held and the confirm names it. This is the
+   *   confirm ADR 20260806 describes: it prices the act, in the settings' own values, and
+   *   it is asked BEFORE anything is written.
+   *
+   * The comparison is against the **draft**, not the saved event: a director who picked
+   * `rr-then-ko` this session, took the pool count, and then changed their mind again is
+   * losing the same work as one who saved it last week.
+   */
+  const applyChange = (next: TournamentEvent) => {
+    if (draft && draft.drawType === 'rr-then-ko' && next.drawType !== 'rr-then-ko') {
+      const settings = ownedStructureSettings(
+        draft.drawOwnership,
+        draft.qualifiersPerPool,
+      )
+      if (settings.length > 0) {
+        setPendingDrawType({ next, settings })
+        return
+      }
+    }
+    writeChange(next)
   }
 
   /**
@@ -350,7 +417,16 @@ export const EventEditor = ({
     : 'basics'
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet
+      open={open}
+      onOpenChange={(next) => {
+        // A closed sheet holds no unanswered question. The editor stays mounted between
+        // opens, so a confirm left standing here would greet the next director with the
+        // price of a change the last one walked away from.
+        if (!next) setPendingDrawType(null)
+        onOpenChange(next)
+      }}
+    >
       <SheetContent
         side="right"
         className="w-full gap-0 p-0 sm:w-[820px] sm:max-w-[820px]"
@@ -363,7 +439,7 @@ export const EventEditor = ({
             {overline}
           </SheetDescription>
           <SheetTitle className="truncate text-[20px]">
-            {draft?.name || 'Untitled event'}
+            {draft?.name || UNTITLED_EVENT}
           </SheetTitle>
         </SheetHeader>
 
@@ -461,6 +537,37 @@ export const EventEditor = ({
               )}
             </Tabs>
           </div>
+        )}
+
+        {/* The price of leaving `rr-then-ko`, asked before anything is written: the form
+            still holds the two-stage draw type and the whole ownership record, so Go back
+            — or Escape — leaves the picker and all four settings exactly as they were.
+            Rendered only while an act is awaiting its answer. */}
+        {pendingDrawType && draft && (
+          <ConfirmIrreversibleActDialog
+            open
+            consequence={
+              {
+                variant: 'discard-draw-structure',
+                eventName: draft.name || UNTITLED_EVENT,
+                settings: pendingDrawType.settings,
+                // The pools the switch does NOT touch, off the same watched list the Table
+                // pools tab edits — so the sentence counts the draft's rows rather than the
+                // ones the event was loaded with.
+                poolReservationCount: (watchedPools ?? []).length,
+              } satisfies DrawStructureActConsequence
+            }
+            onConfirm={() => {
+              // The switch, and the reset the confirm bought — in one write, so the form
+              // can never hold a draw type with no pool stage beside a record of who owns
+              // it. `null` is what every other pool-stage-less draw type carries
+              // (`EMPTY_FORM_VALUES`), and it is what `drawSettingsToApi` would drop
+              // anyway; the point is that coming back to `rr-then-ko` starts clean.
+              writeChange({ ...pendingDrawType.next, drawOwnership: null })
+              setPendingDrawType(null)
+            }}
+            onCancel={() => setPendingDrawType(null)}
+          />
         )}
 
         {/* The refusal, where the work is. An `Alert` rather than a toast on

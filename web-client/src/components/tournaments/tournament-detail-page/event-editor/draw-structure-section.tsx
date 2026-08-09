@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import type { EditFreeze } from '../../data/draw'
 import {
   MANUAL_POOL_DIMENSION_MAX,
+  MEMBERSHIP_MANUAL_VALUE,
   everySettingAutomatic,
   type DrawOwnership,
 } from '../../data/draw-ownership'
@@ -505,7 +506,10 @@ export const DrawStructureSection = ({
             <SettingRow
               name="Membership"
               hint="Who lands in each pool. Entrants do not exist until you cut the draw."
-              value={membershipManual ? 'Assign at cut time' : 'Snake automatically'}
+              // The manual phrase is a shared constant (`MEMBERSHIP_MANUAL_VALUE`): the
+              // confirm that discards this setting reads the same three words back, and
+              // two copies of one phrase is one of them going stale.
+              value={membershipManual ? MEMBERSHIP_MANUAL_VALUE : 'Snake automatically'}
               kind="phrase"
               ownership={membershipManual ? 'manual' : 'automatic'}
               source={

@@ -76,6 +76,27 @@ export function buildRemovePoolReservationsConsequence(
   }
 }
 
+/** The **draw type change** consequence — `Men's Singles` leaving `rr-then-ko`, with two
+ * of its four structural settings the director's own (ADR 20260808). Two settings rather
+ * than one, because the plural is the ordinary case; and two pool reservations, because
+ * the sentence that says they stay is the whole reason the count is on the consequence. */
+export function buildDiscardDrawStructureConsequence(
+  overrides: Partial<
+    Extract<IrreversibleActConsequence, { variant: 'discard-draw-structure' }>
+  > = {},
+): IrreversibleActConsequence {
+  return {
+    variant: 'discard-draw-structure',
+    eventName: "Men's Singles",
+    settings: [
+      { label: 'Pool count', value: '6' },
+      { label: 'Pool size', value: '5' },
+    ],
+    poolReservationCount: 2,
+    ...overrides,
+  }
+}
+
 /** Props for `ConfirmIrreversibleActDialog` — an open **re-cut** confirm on
  * `Men's Singles`. A test that wants the delete act passes a `consequence` of its own. */
 export function buildConfirmIrreversibleActDialogProps(
