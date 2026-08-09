@@ -279,9 +279,16 @@ const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
  * arrives — the double-click family (#436).
  */
 export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
-  // The last refusal, in words. Cleared when a new attempt starts — a notice
-  // about the click before last is worse than none. (The `LifecycleActions`
-  // pattern, which is the page's other inline-refusal surface.)
+  // The last refusal, in words. Cleared when a new attempt starts — a notice about the
+  // click before last is worse than none.
+  //
+  // ⚠️ This is the page's third inline-refusal surface, and it is the one still on the
+  // OLD mechanism: the other two (`LifecycleActions`, `DrawPanel`) now hold their notice
+  // in `useScopedNotice`, which also retires it once the director fixes what it named.
+  // This one cannot, so "Nothing to schedule yet — cut at least one event's draw" outlives
+  // the draw being cut. The tab unmounts on the way to fixing it, which hides most of the
+  // damage; the polling case is the gap. Tracked in #1310 — do not copy this as the
+  // pattern.
   const [notice, setNotice] = useState<RunSchedulerNotice | null>(null)
   // The strip's OWN in-flight latch: set synchronously on click, so the second
   // click of a double-click cannot land in a render gap (#436 family). It spans

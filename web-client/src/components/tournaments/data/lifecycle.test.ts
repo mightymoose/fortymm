@@ -6,15 +6,18 @@ import {
   entryControlState,
   lifecycleEdgeFor,
   lifecycleRefusalNotice,
+  lifecycleRefusalScope,
   LIFECYCLE_EDGE,
   REGISTRATION_WINDOW,
 } from './lifecycle'
 import {
+  buildDrawnEvent,
   buildEntrant,
   buildEntrants,
   buildEvent,
   buildFullEvent,
   buildIneligibleEvent,
+  buildScheduleSolve,
   buildTournament,
   UNROUNDED_RATING,
 } from './seed.factory'
@@ -315,6 +318,185 @@ describe('lifecycleEdgeFor', () => {
 // The words a refused transition is reported in — the header shows them inline and
 // carries no toast, so this function is the *only* thing standing between a failed click
 // and silence.
+describe('lifecycleRefusalScope', () => {
+  // The three moves that resolve a start refusal. Each is something the director does
+  // *because* the refusal told them to, so each must retire the sentence that asked.
+  it('moves when an event is added — the fix for "this tournament has no events"', () => {
+    const before = buildTournament({ events: [] })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(
+      lifecycleRefusalScope(buildTournament({ events: [buildEvent()] })),
+    )
+  })
+
+  it('moves when an event acquires a draw — the fix for "has no draw yet"', () => {
+    const undrawn = buildTournament({ events: [buildEvent({ id: 'ev-1' })] })
+    const drawn = buildTournament({ events: [buildDrawnEvent({ id: 'ev-1' })] })
+
+    expect(lifecycleRefusalScope(undrawn)).not.toBe(lifecycleRefusalScope(drawn))
+  })
+
+  it('moves when somebody enters — the fix for a draw that no longer seats its entrants', () => {
+    // The scope reads entrant *ids*, not the count — so a test moves the list.
+    const before = buildTournament({
+      events: [buildEvent({ id: 'ev-1', entrants: buildEntrants(4) })],
+    })
+    const after = buildTournament({
+      events: [buildEvent({ id: 'ev-1', entrants: buildEntrants(5) })],
+    })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
+  })
+
+  /**
+   * The refusal's **third** shape — "has a draw that no longer matches its entrants" —
+   * and the one the counts could not see.
+   *
+   * Registration stays open right up to go-live, so the way a draw goes stale is that
+   * somebody enters and somebody withdraws. The field is the same SIZE throughout, and
+   * re-cutting over it produces the same NUMBER of fixtures — so a scope built from
+   * `entered` and `fixtures.length` is byte-identical before the swap, after the swap and
+   * after the re-cut. The refusal telling the director to re-cut would have survived their
+   * re-cutting, which is the bug in its most confusing form: the fix appears not to work.
+   */
+  it('moves when a stale draw is re-cut over a field of the same size', () => {
+    const before = buildDrawnEvent({ id: 'ev-1', entrants: buildEntrants(4) })
+    // A cut is wholesale: the server deletes every fixture for the event and plans a
+    // fresh set, so a re-cut mints new ids. Same field, same number of fixtures — only
+    // the identities move, which is the whole point.
+    const after = {
+      ...before,
+      fixtures: before.fixtures.map((fixture, i) => ({
+        ...fixture,
+        id: `recut-fx-${i}`,
+      })),
+    }
+
+    expect(before.entered).toBe(after.entered)
+    expect(before.fixtures).toHaveLength(after.fixtures.length)
+    expect(
+      lifecycleRefusalScope(buildTournament({ events: [before] })),
+    ).not.toBe(lifecycleRefusalScope(buildTournament({ events: [after] })))
+  })
+
+  /**
+   * The live-play case, and the reason the draw half is read as fixture **ids** rather
+   * than as the entry ids seated in them.
+   *
+   * A knockout side is `null` until the fixture feeding it is decided, so every completed
+   * match during live play fills one in. Reading the seated sides made the scope move on
+   * each of those — and the header polls every ~15s while a tournament is live, so a
+   * director reading an End-tournament refusal lost it the moment a bracket slot
+   * resolved. Nothing about that resolution is something a lifecycle refusal asserts.
+   */
+  it('does NOT move when a knockout slot resolves during play', () => {
+    const before = buildDrawnEvent({ id: 'ev-1', entrants: buildEntrants(4) })
+    const [first, ...rest] = before.fixtures
+    // The feeding match finished: this fixture's sides are known now. Same fixture, same
+    // id, same field.
+    const after = {
+      ...before,
+      fixtures: [{ ...first, entryAId: 'entry-1', entryBId: 'entry-2' }, ...rest],
+    }
+
+    expect(lifecycleRefusalScope(buildTournament({ events: [before] }))).toBe(
+      lifecycleRefusalScope(buildTournament({ events: [after] })),
+    )
+  })
+
+  /** The other half of the same case: the swap itself, which is what makes the draw
+   * stale. One player out, one player in, and the count never moves. */
+  it('moves when one entrant is swapped for another', () => {
+    const before = buildEvent({ id: 'ev-1', entrants: buildEntrants(4) })
+    const after = {
+      ...before,
+      entrants: [
+        ...before.entrants.slice(0, 3),
+        buildEntrant({ id: 'entry-late', username: 'late.arrival' }),
+      ],
+    }
+
+    expect(before.entered).toBe(after.entered)
+    expect(
+      lifecycleRefusalScope(buildTournament({ events: [before] })),
+    ).not.toBe(lifecycleRefusalScope(buildTournament({ events: [after] })))
+  })
+
+  /**
+   * The status is the one field that must NOT be in the scope, and the reason is the
+   * **stale-tab** 409.
+   *
+   * The director published from their phone; this page still shows a draft; they click
+   * Publish and are told "This tournament is already published." That sentence exists to
+   * explain the reconciliation that lands a moment later, when the badge and button
+   * correct themselves under the notice. If the status were in the scope, the refusal
+   * would be retired at the exact instant the page did the confusing thing it was there
+   * to explain.
+   */
+  /**
+   * Found by the QA pass (Quinn), and it is the one entry in this scope that is not about
+   * whether the refusal is still *true*.
+   *
+   * The go-live 409 **quotes the events at fault** — "“Bracket Cup” has no draw yet". Rename
+   * that event and the refusal is still perfectly correct and completely unreadable: it
+   * tells the director to cut the draw for an event that is not on the page under that
+   * name, while the card below it, its Edit button and its Generate button all read the new
+   * one. That is the same header-contradicts-the-page failure as #1216, landing on the name
+   * instead of the count.
+   */
+  it('moves when a named event is renamed — the 409 quotes those names', () => {
+    const before = buildTournament({
+      events: [buildEvent({ id: 'ev-1', name: 'Bracket Cup' })],
+    })
+    const after = buildTournament({
+      events: [buildEvent({ id: 'ev-1', name: 'Cup Of Renaming' })],
+    })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
+  })
+
+  /** The *tournament's* own name is still out — no lifecycle refusal quotes it. The test
+   * is "is it in the sentence", not "is it a name". */
+  it('does NOT move when the tournament itself is renamed', () => {
+    const base = buildTournament()
+
+    expect(lifecycleRefusalScope({ ...base, name: 'Renamed Open 2026' })).toBe(
+      lifecycleRefusalScope(base),
+    )
+  })
+
+  it('does NOT move when the status does — the stale-tab refusal explains that very change', () => {
+    expect(lifecycleRefusalScope(buildTournament({ status: 'draft' }))).toBe(
+      lifecycleRefusalScope(buildTournament({ status: 'published' })),
+    )
+  })
+
+  /**
+   * The half that makes the scope a *design* rather than a `JSON.stringify`.
+   *
+   * This page polls (~3s on the Schedule tab), and a refused start hands the director a
+   * work list they read *while* going to fix it. A scope that moved on anything at all
+   * would blink that list off the screen mid-read — so everything no lifecycle refusal
+   * asserts over has to leave it unchanged. `latestScheduleSolve` is the sharp case: it
+   * rewrites itself on every solve tick.
+   */
+  it('does NOT move for state no lifecycle refusal is about', () => {
+    const base = buildTournament()
+    const scope = lifecycleRefusalScope(base)
+
+    expect(lifecycleRefusalScope({ ...base, latestScheduleSolve: buildScheduleSolve() })).toBe(scope)
+    expect(lifecycleRefusalScope({ ...base, name: 'Renamed Open 2026' })).toBe(scope)
+    expect(lifecycleRefusalScope({ ...base, address: null })).toBe(scope)
+    expect(lifecycleRefusalScope({ ...base, description: 'Reworded.' })).toBe(scope)
+  })
+
+  it('is stable across a refetch that changed nothing', () => {
+    expect(lifecycleRefusalScope(buildTournament())).toBe(
+      lifecycleRefusalScope(buildTournament()),
+    )
+  })
+})
+
 describe('lifecycleRefusalNotice', () => {
   const START = LIFECYCLE_EDGE.published!
   const PUBLISH = LIFECYCLE_EDGE.draft!

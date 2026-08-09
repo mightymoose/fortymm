@@ -7,11 +7,13 @@ import { useTransitionTournament } from '../data/api'
 import {
   lifecycleEdgeFor,
   lifecycleRefusalNotice,
+  lifecycleRefusalScope,
   type LifecycleEdge,
   type LifecycleRefusal,
   type LifecycleTone,
 } from '../data/lifecycle'
 import type { Tournament } from '../data/types'
+import { useScopedNotice } from '../data/use-scoped-notice'
 import {
   ConfirmIrreversibleActDialog,
   type LifecycleActConsequence,
@@ -144,11 +146,20 @@ const consequenceFor = (
  */
 export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   const transition = useTransitionTournament(tournament.id)
-  // The last refusal, in words. Cleared when a new attempt starts — a notice about the
-  // click before last is worse than none. An opened (or cancelled) dialog is NOT an
-  // attempt, so it leaves the standing 409 work list alone: the director reads it *while*
-  // going to fix it.
-  const [refusal, setRefusal] = useState<LifecycleRefusal | null>(null)
+  // The last refusal, in words — held only while the state it describes still stands
+  // (`useScopedNotice`). Cleared when a new attempt starts, and again the moment the
+  // director *fixes* what it named: a 409 reading "This tournament has no events" must not
+  // survive the event being added, or the header sits there contradicting the 1 EVENTS on
+  // the page below it (#1049, #1216).
+  //
+  // Everything short of that leaves it alone — that is what the narrow scope buys
+  // (`lifecycleRefusalScope`). A poll tick does not clear it, and neither does an opened or
+  // cancelled dialog, because neither is an attempt and neither changes the facts the
+  // refusal is about: the 409 is a work list, and the director reads it *while* going to
+  // fix it.
+  const [refusal, setRefusal] = useScopedNotice<LifecycleRefusal>(
+    lifecycleRefusalScope(tournament),
+  )
   /**
    * The **edge** awaiting its confirm — captured at the click, and the thing the confirm
    * posts. Typed as the edge rather than as the consequence, and narrowed to

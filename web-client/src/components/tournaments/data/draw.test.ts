@@ -2,10 +2,12 @@ import { ApiError } from '@/api/client'
 
 import {
   drawRefusalNotice,
+  drawRefusalScope,
   drawState,
   drawTypeFreeze,
   drawVerbFreeze,
   poolSetFreeze,
+  undrawnLead,
   unpooledShape,
   type DrawState,
   type FixtureSide,
@@ -433,6 +435,140 @@ describe('drawState', () => {
     expect(vsLines(state.unpooled)).toEqual([
       { round: 1, lines: ['player.1 vs player.2'] },
     ])
+  })
+})
+
+describe('drawRefusalScope', () => {
+  // #1123 exactly: the refusal says "change the event's draw type to one that can", so
+  // changing it is what must retire the sentence.
+  it('moves when the draw type changes', () => {
+    expect(drawRefusalScope(buildEvent({ drawType: 'single-elim' }))).not.toBe(
+      drawRefusalScope(buildEvent({ drawType: 'round-robin' })),
+    )
+  })
+
+  it('moves when a pool is added — the fix for "needs at least one pool"', () => {
+    expect(drawRefusalScope(buildEvent({ pools: [] }))).not.toBe(
+      drawRefusalScope(buildEvent({ pools: [buildPool({ id: 'p-a' })] })),
+    )
+  })
+
+  it('moves when somebody enters — the fix for "N entrants across M pools"', () => {
+    // The scope reads entrant *ids*, not the count — so a test moves the list.
+    expect(drawRefusalScope(buildEvent({ entrants: [] }))).not.toBe(
+      drawRefusalScope(buildEvent({ entrants: buildEntrants(1) })),
+    )
+  })
+
+  /**
+   * The three settings a 422 names but a counts-and-pools scope never read. Each of these
+   * is #1123 wearing a different sentence: the server tells the director to change a
+   * value, they change it, and a scope blind to that value leaves the refusal on screen
+   * as though the fix had not worked.
+   *
+   * The sentences, from `api/app/draws.py` and `api/app/tournament_draws.py`:
+   * - "take fewer qualifiers from each pool, or add entrants" (`rr-then-ko`)
+   * - "play fewer rounds, or add entrants" (`swiss`)
+   * - "a doubles event cannot be given a draw — draws are singles-only"
+   */
+  it('moves when the qualifier count changes — "take fewer qualifiers from each pool"', () => {
+    const before = buildEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 4 })
+
+    expect(drawRefusalScope(before)).not.toBe(
+      drawRefusalScope({ ...before, qualifiersPerPool: 2 }),
+    )
+  })
+
+  it('moves when the swiss round count changes — "play fewer rounds"', () => {
+    const before = buildEvent({ drawType: 'swiss', rounds: 7 })
+
+    expect(drawRefusalScope(before)).not.toBe(
+      drawRefusalScope({ ...before, rounds: 4 }),
+    )
+  })
+
+  it('moves when the format changes — "draws are singles-only"', () => {
+    const before = buildEvent({ format: 'doubles' })
+
+    expect(drawRefusalScope(before)).not.toBe(
+      drawRefusalScope({ ...before, format: 'singles' }),
+    )
+  })
+
+  /** The settings belong to the draw type that has them. A round-robin event carries a
+   * `null` qualifier count and a `null` round count, and neither is a fact about it — so
+   * neither can move its scope. (`drawConfig` is the switch that enforces this.) */
+  it('ignores settings that belong to a different draw type', () => {
+    const rr = buildEvent({ drawType: 'round-robin' })
+
+    expect(drawRefusalScope({ ...rr, qualifiersPerPool: 2 })).toBe(
+      drawRefusalScope({ ...rr, qualifiersPerPool: 8 }),
+    )
+    expect(drawRefusalScope({ ...rr, rounds: 3 })).toBe(
+      drawRefusalScope({ ...rr, rounds: 9 }),
+    )
+  })
+
+  it('moves when a draw is cut, which is what the 409 arm is about', () => {
+    expect(drawRefusalScope(buildEvent({ id: 'ev-1' }))).not.toBe(
+      drawRefusalScope(buildDrawnEvent({ id: 'ev-1' })),
+    )
+  })
+
+  /** The discriminating half — see `lifecycleRefusalScope`'s twin. A refusal names
+   * numbers a director has to go and change; it must not vanish because the page polled
+   * or because somebody renamed a pool. */
+  it('does NOT move for state no draw refusal is about', () => {
+    const base = buildEvent({ pools: [buildPool({ id: 'p-a', name: 'Pool A' })] })
+    const scope = drawRefusalScope(base)
+
+    expect(drawRefusalScope({ ...base, name: 'Renamed Singles' })).toBe(scope)
+    expect(drawRefusalScope({ ...base, entryFee: 45 })).toBe(scope)
+    expect(
+      drawRefusalScope({
+        ...base,
+        pools: [buildPool({ id: 'p-a', name: 'Pool One' })],
+      }),
+    ).toBe(scope)
+  })
+
+  it('is stable across a refetch that changed nothing', () => {
+    expect(drawRefusalScope(buildEvent())).toBe(drawRefusalScope(buildEvent()))
+  })
+})
+
+describe('undrawnLead', () => {
+  // #1220: the sentence was round-robin's, hard-coded, and rendered on every event —
+  // so a bracket was told to deal its entrants into pools it cannot have.
+  it('does not promise pools to a draw type that has none', () => {
+    expect(undrawnLead('single-elim')).not.toContain('pool')
+    expect(undrawnLead('swiss')).not.toContain('pool')
+  })
+
+  it('names a bracket for single-elim and rounds for swiss', () => {
+    expect(undrawnLead('single-elim')).toContain('bracket')
+    expect(undrawnLead('swiss')).toContain('rounds')
+    // Swiss eliminates nobody — the bracket's vocabulary would be a lie here.
+    expect(undrawnLead('swiss')).not.toContain('bracket')
+  })
+
+  it('names pools for the two draw types that deal into them', () => {
+    expect(undrawnLead('round-robin')).toContain('pools')
+    expect(undrawnLead('rr-then-ko')).toContain('pools')
+  })
+
+  // `rr-then-ko` is the one with two stages, and describing only the first would
+  // undersell the draw the director is about to cut.
+  it('names both stages of an rr-then-ko draw', () => {
+    expect(undrawnLead('rr-then-ko')).toContain('pools')
+    expect(undrawnLead('rr-then-ko')).toContain('bracket')
+  })
+
+  it('gives every draw type a sentence, and a distinct one', () => {
+    const leads = DRAW_TYPES.map(undrawnLead)
+
+    expect(leads.every((lead) => lead.length > 0)).toBe(true)
+    expect(new Set(leads).size).toBe(DRAW_TYPES.length)
   })
 })
 
