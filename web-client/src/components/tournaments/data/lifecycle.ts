@@ -10,6 +10,7 @@ import { Radio, Rocket, Square, type LucideIcon } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { formatRating } from '@/lib/rating'
 
+import { drawSeating } from './draw'
 import { ENTRY_REFUSAL_NOTICE } from './entry-refusal'
 import { myEntrant, predicateSentence } from './helpers'
 import { fallbackNotice, type Notice } from './notice'
@@ -161,6 +162,63 @@ export type LifecycleRefusalKind =
  * point) — see `./notice`. */
 export interface LifecycleRefusal extends Notice {
   kind: LifecycleRefusalKind
+}
+
+/**
+ * The facts a lifecycle refusal is **about**, as one string — what `useScopedNotice`
+ * pins the header's notice to, so a refusal clears itself once the director fixes the
+ * thing it named instead of sitting there contradicting the page (#1049, #1216).
+ *
+ * It is deliberately **narrow**, and this list is the place to think before adding to it.
+ * Only `start` has a precondition (ADR-0786), and the precondition is exactly: there is at
+ * least one event, and every event's draw still **seats exactly its entrants**. So the
+ * scope is, per event, its identity, its **name**, and its seating (`drawSeating`).
+ *
+ * The **name** is here for a different reason from the rest, and it is the one entry that
+ * is not about whether the refusal is still *true*. This 409's sentence **quotes the
+ * events at fault** ("“Open Singles” has no draw yet"), so a rename leaves the header
+ * telling the director to go and cut the draw for an event no longer on the page under
+ * that name — the refusal still correct and still unreadable. A sentence that names
+ * something is a sentence about that name.
+ *
+ * The seating is read as identities rather than counts, and that is load-bearing: the
+ * third shape of the refusal is "*has a draw that no longer matches its entrants*", which
+ * arises when somebody enters and somebody withdraws. That leaves `entered` and
+ * `fixtures.length` both unchanged, and re-cutting to fix it leaves them unchanged again —
+ * so a scope built from the counts could not see the director doing the very thing the
+ * sentence asked them to do.
+ *
+ * What is **left out** matters as much. The *tournament's* name, its venue, its description
+ * and `latestScheduleSolve` are all absent, because no lifecycle refusal quotes or asserts
+ * anything about them and this page polls (~3s on the Schedule tab): a scope that moved on
+ * a solve tick would blink the director's work list off the screen mid-read. (An event's
+ * name is in, and the tournament's is out, for exactly the same test — one is quoted in the
+ * sentence and the other is not.)
+ *
+ * ## The status is left out too, and that one is not an oversight
+ *
+ * It looks like the obvious first field, and it is the one field that must NOT be here.
+ * The other 409 this surface reports is the **stale tab**: the director published from
+ * their phone, this page still shows a draft, they click Publish, and the server answers
+ * "This tournament is already published." That refusal exists precisely to explain the
+ * reconciliation that lands a moment later — the mutation refetches on settle, and the
+ * badge and button correct themselves from Draft/Publish to Published/Start *under the
+ * notice*.
+ *
+ * So the status changing is not evidence that the refusal is stale. It is the refusal
+ * coming true. A scope carrying `status` would retire the sentence at the exact instant
+ * the page did the confusing thing the sentence was there to explain, leaving the director
+ * watching the button change with no account of why their click did nothing. (This is not
+ * hypothetical: it is what `tournament-lifecycle.spec.ts`'s "the stale view corrects
+ * itself" caught.)
+ *
+ * Nothing is lost by omitting it. Every refusal with a precondition is about the events,
+ * which are here; and a status that moves forward legitimately takes its events with it.
+ */
+export function lifecycleRefusalScope(tournament: Tournament): string {
+  return tournament.events
+    .map((ev) => `${ev.id}:${ev.name}:${drawSeating(ev)}`)
+    .join('|')
 }
 
 /**

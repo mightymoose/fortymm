@@ -7,15 +7,18 @@ import { Button } from '@/components/ui/button'
 import { useCutDraw, useUncutDraw } from '../../data/api'
 import {
   drawRefusalNotice,
+  drawRefusalScope,
   drawState,
   drawVerbFreeze,
+  undrawnLead,
   type DrawNotice,
   type DrawRound,
   type EditFreeze,
   type SwissByes,
   type UnpooledShape,
 } from '../../data/draw'
-import type { TournamentEvent } from '../../data/types'
+import type { DrawType, TournamentEvent } from '../../data/types'
+import { useScopedNotice } from '../../data/use-scoped-notice'
 import {
   ConfirmIrreversibleActDialog,
   type DrawActConsequence,
@@ -192,10 +195,18 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   const freezeNoticeId = useId()
   const cut = useCutDraw(tournamentId)
   const uncut = useUncutDraw(tournamentId)
-  // The last refusal, in words. Cleared when a new attempt starts — a notice about the
-  // click before last is worse than none. An opened (or cancelled) dialog is NOT an
-  // attempt, so it leaves the standing notice alone.
-  const [notice, setNotice] = useState<DrawNotice | null>(null)
+  // The last refusal, in words — held only while the state it describes still stands
+  // (`useScopedNotice`). Cleared when a new attempt starts, and again the moment the
+  // director *fixes* what it named: "A single-elim draw cannot be cut yet. Change the
+  // event's draw type to one that can" must not survive the draw type being changed to one
+  // that can (#1123), and "0 entrants across 2 pools" must not survive somebody entering
+  // (#1049). The panel does not remount on either — the card is keyed by event id — so
+  // without the scope the sentence sat there until the next Generate.
+  //
+  // An opened (or cancelled) dialog is NOT an attempt and changes none of those facts, so
+  // it leaves the standing notice alone; neither does a poll tick
+  // (`drawRefusalScope` is narrow for exactly that reason).
+  const [notice, setNotice] = useScopedNotice<DrawNotice>(drawRefusalScope(event))
   // The act awaiting its confirm, held as the CONSEQUENCE the dialog will price rather
   // than as a queued closure: the dialog needs it anyway, and a stored callback would
   // capture whatever `event` was when the button was clicked.
@@ -382,7 +393,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
         </Alert>
       )}
 
-      <DrawBody state={state} canEdit={canEdit} />
+      <DrawBody state={state} drawType={event.drawType} canEdit={canEdit} />
 
       {/* The results (ADR-0788, ADR-0785): pool **standings** for a round-robin, a
           **finishes** placement list for a single-elimination bracket — `ResultsPanel`
@@ -412,9 +423,13 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
 
 const DrawBody = ({
   state,
+  drawType,
   canEdit,
 }: {
   state: ReturnType<typeof drawState>
+  /** Read by the `undrawn` arm alone, to say what a cut would actually produce. The
+   * event's own, not a shape inferred from fixtures — an un-cut event has none. */
+  drawType: DrawType
   canEdit: boolean
 }) => {
   switch (state.kind) {
@@ -424,6 +439,12 @@ const DrawBody = ({
       // copy): the director is told what the button beside them does; a player is told,
       // plainly, that the fixtures are not up yet — not invited to press a button that
       // is not there.
+      //
+      // The director's half is the DRAW TYPE's answer (`undrawnLead`), not one sentence
+      // for all four: a bracket event was being told to deal its entrants "into its
+      // pools" (#1220). The reader's half needs no such split — "the fixtures will
+      // appear here" is true of every draw type, and naming the format would only tell a
+      // player something they cannot act on.
       return (
         <LeadReason
           className="mt-1.5"
@@ -431,7 +452,7 @@ const DrawBody = ({
           lead="No draw yet."
           reason={
             canEdit
-              ? 'Generate the draw to deal this event’s entrants into its pools and plan their fixtures.'
+              ? undrawnLead(drawType)
               : 'The fixtures will appear here once the director cuts the draw.'
           }
         />

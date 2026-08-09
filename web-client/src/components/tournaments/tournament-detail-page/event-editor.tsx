@@ -31,6 +31,7 @@ import type {
   TournamentTable,
 } from '../data/types'
 import { BasicsSection } from './event-editor/basics-section'
+import { DrawStructureSection } from './event-editor/draw-structure-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
 import { MatchSection } from './event-editor/match-section'
 import { PoolsSection } from './event-editor/pools-section'
@@ -86,12 +87,21 @@ export interface EventEditorProps {
   saving?: boolean
 }
 
+/** The four tabs every event has, whatever its format. */
 const SECTIONS = [
   { value: 'basics', label: 'Basics' },
   { value: 'eligibility', label: 'Eligibility' },
   { value: 'match', label: 'Match settings' },
   { value: 'pools', label: 'Table pools' },
 ]
+
+/** The fifth tab, and the only **conditional** one: a draw structure is the shape of a
+ * pool stage feeding a knockout, and only `rr-then-ko` has both (ADR 20260808 — "the
+ * Draw structure tab is conditional"). A round-robin has no bracket to aim at, a
+ * single-elimination has no pools to split, and swiss has neither, so for those three
+ * the tab is *absent* rather than empty: a tab that opened onto settings the format
+ * cannot hold would invite a director to configure a draw their event will never cut. */
+const DRAW_STRUCTURE_SECTION = { value: 'draw-structure', label: 'Draw structure' }
 
 /** The slide-in event editor — a side sheet with four sections (Basics,
  * Eligibility, Match settings, Table pools) over ONE React-Hook-Form draft. The form
@@ -280,6 +290,26 @@ export const EventEditor = ({
   const poolsFreeze = event ? poolSetFreeze(event) : OPEN
   const drawTypeLock = event ? drawTypeFreeze(event, drawTypes) : OPEN
 
+  // ⚠️ Keyed off the **draft's** draw type, not the saved event's. The Basics picker
+  // writes the draft, so the tab appears the moment a director picks the two-stage
+  // format and disappears the moment they pick something else — before anything is
+  // saved, which is when they are deciding.
+  const hasDrawStructure = draft?.drawType === 'rr-then-ko'
+  const sections = hasDrawStructure
+    ? [...SECTIONS, DRAW_STRUCTURE_SECTION]
+    : SECTIONS
+  // …and that disappearance is why the active tab is DERIVED rather than read straight
+  // out of state. A `Tabs` whose `value` matches no trigger renders no panel at all —
+  // a blank sheet with nothing selected. Today nothing reaches that: the draw-type
+  // picker is on Basics, so a director necessarily leaves this tab before they can
+  // remove it. It is three lines of insurance against the next thing that sets the
+  // section (chore 3e moves a field onto this tab, and a refused save jumps to the tab
+  // holding it). Adjusted at render, never in an effect — the render already knows
+  // (https://react.dev/learn/you-might-not-need-an-effect).
+  const activeSection = sections.some((s) => s.value === section)
+    ? section
+    : 'basics'
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -310,14 +340,28 @@ export const EventEditor = ({
             data-testid="event-editor-body"
             className="flex-1 overflow-y-auto px-6 py-5"
           >
-            <Tabs value={section} onValueChange={setSection}>
-              <TabsList className="mb-6 w-full">
-                {SECTIONS.map((s) => (
-                  <TabsTrigger key={s.value} value={s.value} className="flex-1">
-                    {s.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
+            <Tabs value={activeSection} onValueChange={setSection}>
+              {/* The scroll wrapper is the FIFTH tab's doing. Every trigger is
+                  `whitespace-nowrap`, so the list cannot shrink below its own min-content
+                  width — and "Basics · Eligibility · Match settings · Table pools · Draw
+                  structure" is wider than a 375px phone. Left to overflow it would widen
+                  the sheet's scroll container instead, which is the sideways-hiding bug
+                  this editor has already shipped twice (`expectNoHorizontalScroll`, the
+                  phone spec). Scrolling the LIST keeps every tab reachable and keeps the
+                  overflow out of the body. */}
+              <div className="mb-6 overflow-x-auto">
+                <TabsList className="w-full min-w-max">
+                  {sections.map((s) => (
+                    <TabsTrigger
+                      key={s.value}
+                      value={s.value}
+                      className="flex-1"
+                    >
+                      {s.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </div>
               <TabsContent value="basics">
                 <BasicsSection
                   event={draft}
@@ -351,6 +395,18 @@ export const EventEditor = ({
                   nameIssues={isSubmitted ? poolIssues : undefined}
                 />
               </TabsContent>
+              {/* Rendered only alongside its trigger, so the panel and the tab appear
+                  and vanish together — Radix keeps no content for a tab that is not on
+                  the list. Fed the DRAFT, so the structure recomputes as the director
+                  edits the player limit on Basics or adds a pool on Table pools. */}
+              {hasDrawStructure && (
+                <TabsContent value="draw-structure">
+                  <DrawStructureSection
+                    event={draft}
+                    onGoToBasics={() => setSection('basics')}
+                  />
+                </TabsContent>
+              )}
             </Tabs>
           </div>
         )}

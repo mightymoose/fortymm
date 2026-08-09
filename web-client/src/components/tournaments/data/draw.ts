@@ -599,6 +599,151 @@ export function drawVerbFreeze(event: TournamentEvent): EditFreeze {
 export type DrawNotice = Notice
 
 /**
+ * The facts a draw refusal is **about**, as one string — what `useScopedNotice` pins the
+ * panel's notice to, so a refusal clears itself once the director fixes what it named
+ * (#1049, #1123).
+ *
+ * Every refusal behind the 422 is a statement about the event **as it stands**, and the
+ * scope has to carry each thing one of those sentences tells the director to change:
+ *
+ * - the **format**, for "a doubles event cannot be given a draw — draws are singles-only";
+ * - the **draw type and its settings** (`drawConfig`), for "a single-elim draw cannot be
+ *   cut yet", "take fewer qualifiers from each pool", "play fewer rounds";
+ * - the **pools**, for "a round-robin draw needs at least one pool";
+ * - the **seating** (`drawSeating`), for "5 entrants across 3 pool(s) would leave a pool
+ *   with fewer than 2", and for the 409's evidence of play.
+ *
+ * That list is the whole design, and getting it short is how the mechanism fails: a
+ * refusal naming something the scope does not read survives the director doing exactly
+ * what it asked, which is #1123 again wearing a different sentence. The settings half goes
+ * through `drawConfig` rather than being listed here so that a fifth draw type cannot
+ * acquire a setting without acquiring a compile error.
+ *
+ * Narrow, still. The event's name, slot, entry fee, predicates and match settings are all
+ * absent: no draw refusal asserts anything about them, and this page polls, so a wider
+ * scope would drop the sentence a director is mid-way through acting on. Pool **ids**
+ * rather than pool contents, because a renamed pool refuses exactly as it did before.
+ */
+export function drawRefusalScope(event: TournamentEvent): string {
+  return [
+    event.format,
+    drawConfig(event),
+    drawSeating(event),
+    event.pools.map((pool) => pool.id).join(','),
+  ].join('|')
+}
+
+/**
+ * The draw type **and the settings that type actually has** — the configuration half of
+ * `drawRefusalScope`.
+ *
+ * A `switch` with a `never` default, so a fifth draw type is a compile error here until
+ * somebody says which settings its refusals turn on. That is the entire reason this is a
+ * function and not two more fields inlined above: the cut refuses an `rr-then-ko` event
+ * whose K exceeds its smallest pool ("take fewer qualifiers from each pool") and a `swiss`
+ * event whose R exceeds a rematch-free field ("play fewer rounds"), and a scope blind to
+ * those two numbers would leave both sentences on screen after the director lowered them.
+ *
+ * It mirrors `drawSettingsToApi` (`./api`) deliberately rather than importing it: that one
+ * builds a request body and lives in the mutation layer, and pulling `./api` in here would
+ * drag react-query, the router and the toaster into a module that is pure derivation.
+ */
+function drawConfig(
+  event: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool' | 'rounds'>,
+): string {
+  switch (event.drawType) {
+    case 'rr-then-ko':
+      return `rr-then-ko:${event.qualifiersPerPool}`
+    case 'swiss':
+      return `swiss:${event.rounds}`
+    case 'round-robin':
+    case 'single-elim':
+      // No setting of their own: the refusals these two produce are about the pools and
+      // the field, both of which the scope reads separately.
+      return event.drawType
+    default: {
+      const exhaustive: never = event.drawType
+      return exhaustive
+    }
+  }
+}
+
+/**
+ * **Who is entered, and who the draw currently seats against whom** — the one fact both
+ * the draw panel's refusals and go-live's precondition turn on.
+ *
+ * The counts alone are not enough, and the case that proves it is the exact one the
+ * stale-draw refusal exists for: registration stays open right up to go-live, so
+ * "somebody entered, somebody withdrew" leaves `entered` **unchanged** while the standing
+ * draw now seats a player who has left. Re-cutting over that field fixes it and leaves
+ * the fixture count unchanged too — so a scope built from the two counts is byte-identical
+ * before and after the fix, and the refusal telling the director to re-cut would survive
+ * their re-cutting. Reading the *identities* is what makes the fix visible.
+ *
+ * The draw half is read as fixture **ids**, not as the entry ids seated in them, and that
+ * is a correction rather than a shortcut. A cut is wholesale — the server deletes every
+ * fixture for the event and plans a fresh set (`cut_draw`, `api/app/tournament_draws.py`)
+ * — so a re-cut mints new ids and the scope moves, which is the case this function exists
+ * for. Reading the seated sides instead *also* moved it for a reason nobody asked about:
+ * a knockout side is `null` until the fixture feeding it is decided (`TBD_LABEL`), so
+ * every completed match during live play rewrote the string and blinked the director's
+ * standing notice off the screen mid-read.
+ *
+ * Everything else on a fixture is pointedly absent for the same reason: `scheduledStart`,
+ * `pinnedAt`, `matchStatus`, `callNotifiedCount` and `completedAt` all move on a poll
+ * tick, on a call, and on every score, and none of them is something a draw refusal or a
+ * go-live refusal says anything about.
+ */
+export function drawSeating(event: TournamentEvent): string {
+  return [
+    event.entrants.map((entrant) => entrant.id).join(','),
+    event.fixtures.map((fixture) => fixture.id).join(','),
+  ].join(';')
+}
+
+/**
+ * What cutting this event's draw would actually **do**, in the director's words — the
+ * second half of the "No draw yet." empty state on an un-cut event.
+ *
+ * Exhaustive over `DrawType` with a `never` default, so a fifth draw type is a compile
+ * error here until somebody says what its cut produces. It has to be its own table:
+ * the sentence was a single hard-coded round-robin one ("deal this event's entrants into
+ * its pools"), which rendered on **every** event regardless of type, and told the director
+ * of a single-elimination event to deal entrants into pools a bracket does not have
+ * (#1220). The copy was written for #786's round-robin and was simply unreachable on a
+ * bracket until single-elimination became cuttable through the UI.
+ *
+ * Deliberately **not** derived from `unpooledShape`: that function answers a different
+ * question — which view already-cut, pool-less *fixtures* get — and an un-cut event has no
+ * fixtures to ask about. Routing this off it would be the same class of mistake as the
+ * `pool_id IS NULL` check it replaced: a predicate borrowed from one question to answer
+ * another it only coincidentally agrees with. (They already disagree: round-robin answers
+ * `'orphaned'` there, which says nothing about what a cut deals into.)
+ */
+export function undrawnLead(drawType: DrawType): string {
+  switch (drawType) {
+    case 'round-robin':
+      return 'Generate the draw to deal this event’s entrants into its pools and plan their fixtures.'
+    case 'rr-then-ko':
+      // Both stages, in the order they are played: the pool stage is what the cut deals
+      // now, and the bracket is what the qualifiers reach — naming only the first would
+      // describe half the draw this event is about to get.
+      return 'Generate the draw to deal this event’s entrants into its pools, then bracket the qualifiers from each one.'
+    case 'single-elim':
+      return 'Generate the draw to seed this event’s entrants into a bracket and plan their fixtures.'
+    case 'swiss':
+      // "Pair into rounds", never "seed into a bracket": swiss eliminates nobody, so a
+      // bracket's vocabulary would be a lie in the empty state before it was one in the
+      // draw (`unpooledShape` makes the same distinction for the cut draw).
+      return 'Generate the draw to pair this event’s entrants into rounds and plan their fixtures.'
+    default: {
+      const exhaustive: never = drawType
+      return exhaustive
+    }
+  }
+}
+
+/**
  * Turn a failed draw verb into inline copy.
  *
  * `verb` completes "Couldn't <verb>" for the failures that have no designed state of

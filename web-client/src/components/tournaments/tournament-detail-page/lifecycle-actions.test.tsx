@@ -8,7 +8,11 @@ import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournam
 import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
-import { buildTournament } from '../data/seed.factory'
+import {
+  buildEvent,
+  buildScheduleSolve,
+  buildTournament,
+} from '../data/seed.factory'
 import { lifecycleActionsPage } from './lifecycle-actions.page'
 
 vi.mock('sonner', async () => {
@@ -646,6 +650,133 @@ describe('LifecycleActions · the refusal notice and the dialog', () => {
     expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
     expect(await lifecycleActionsPage.findNoticeText()).toContain(
       '“Open Singles” has no draw yet',
+    )
+  })
+})
+
+/**
+ * A refusal is a statement about a **moment** (#1049 repro A, #1216).
+ *
+ * The header's notice used to be cleared only by the *next* attempt, so a director who
+ * read "This tournament has no events, so there is nothing to start" and then went and
+ * added one was left with the header contradicting the page below it — the refusal above,
+ * **1 EVENTS** beneath. Only a reload, or another Start click, cleared it.
+ *
+ * The pair below is the whole design, and the second half is what makes it a design: it
+ * must clear when the director fixes what it named, and it must NOT clear for anything
+ * else. This page polls, and the 409's sentence is a work list the director reads *while*
+ * going to fix it — a notice that blinked out on a solve tick would be worse than the
+ * stale one it replaced.
+ */
+describe('LifecycleActions · a refusal does not outlive the state it describes', () => {
+  const NOTHING_TO_START =
+    'This tournament has no events, so there is nothing to start. Add an event and cut ' +
+    'its draw, then start the tournament.'
+
+  /** A published tournament with **nothing to start** — the state the 409 is about. */
+  const EMPTY = buildTournament({ id: 't-1', status: 'published', events: [] })
+
+  /** Get the no-events refusal onto the screen, and hand back the render handle so the
+   * test can move the world underneath it. */
+  async function refusedStart() {
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json({ detail: NOTHING_TO_START }, { status: 409 }),
+    )
+    const utils = lifecycleActionsPage.render({ tournament: EMPTY })
+    await userEvent.click(
+      lifecycleActionsPage.getLifecycleButton(/Start tournament/),
+    )
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+    // The refusal is up before anything is asserted about it going away.
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'no events, so there is nothing to start',
+    )
+    return utils
+  }
+
+  it('clears the "no events" refusal once an event is added', async () => {
+    const { rerenderWith } = await refusedStart()
+
+    rerenderWith({ tournament: { ...EMPTY, events: [buildEvent()] } })
+
+    expect(lifecycleActionsPage.queryNoticeElement()).toBeNull()
+  })
+
+  /**
+   * The discriminating half. A blunt "clear whenever the tournament object changed"
+   * passes the test above just as happily as the narrow scope does — and then throws the
+   * director's work list away on the next poll. Here the tournament genuinely changes, in
+   * a way no lifecycle refusal has ever asserted anything about, and the sentence must
+   * survive it.
+   */
+  it('keeps the refusal through a change it says nothing about', async () => {
+    const { rerenderWith } = await refusedStart()
+
+    rerenderWith({
+      tournament: {
+        ...EMPTY,
+        latestScheduleSolve: buildScheduleSolve(),
+        name: 'Bay Area Open 2026 (renamed)',
+        description: 'Reworded while the director read the refusal.',
+      },
+    })
+
+    expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'no events, so there is nothing to start',
+    )
+  })
+
+  /** A refetch that changed nothing at all is the commonest render of the three, and the
+   * one an object-identity check would fail: TanStack Query hands back a new object every
+   * poll even when the data is equal. */
+  it('keeps the refusal through a refetch that changed nothing', async () => {
+    const { rerenderWith } = await refusedStart()
+
+    rerenderWith({ tournament: { ...EMPTY } })
+
+    expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
+  })
+
+  /**
+   * The **stale tab**, and the case that says the status must stay out of the scope.
+   *
+   * The director published from their phone; this page still shows a draft. They click
+   * Publish, and the server answers "This tournament is already published." The mutation
+   * reconciles on settle, so the badge and button correct themselves from Draft/Publish
+   * to Published/Start — *under* the notice.
+   *
+   * The status changing is not evidence the refusal went stale. It is the refusal coming
+   * true, and the notice is the only account the director gets of why their click did
+   * nothing. Retiring it here would remove the explanation at the exact moment the page
+   * does the thing that needs explaining. (`tournament-lifecycle.spec.ts` asserts the same
+   * behaviour end-to-end; this is the fast twin, so a regression reds in vitest too.)
+   */
+  it('keeps a stale-tab refusal while the view corrects itself around it', async () => {
+    const STALE = buildTournament({ id: 't-1', status: 'draft' })
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: 'This tournament is already published.' },
+        { status: 409 },
+      ),
+    )
+    const { rerenderWith } = lifecycleActionsPage.render({ tournament: STALE })
+    await userEvent.click(lifecycleActionsPage.getLifecycleButton(/Publish/))
+    await userEvent.click(lifecycleActionsPage.confirm.getConfirmButton())
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'already published',
+    )
+
+    // The reconciling refetch lands: this page now agrees with the server.
+    rerenderWith({ tournament: { ...STALE, status: 'published' } })
+
+    // The button has moved on to the next edge — and the explanation is still there.
+    expect(
+      lifecycleActionsPage.queryLifecycleButton(/Start tournament/),
+    ).toBeInTheDocument()
+    expect(lifecycleActionsPage.queryNoticeElement()).not.toBeNull()
+    expect(await lifecycleActionsPage.findNoticeText()).toContain(
+      'already published',
     )
   })
 })
