@@ -1,7 +1,13 @@
 import { Overline } from '@/components/overline'
 import { Button } from '@/components/ui/button'
 
+import {
+  MANUAL_POOL_DIMENSION_MAX,
+  everySettingAutomatic,
+  type DrawOwnership,
+} from '../../data/draw-ownership'
 import { deriveDrawStructure } from '../../data/draw-structure'
+import { QUALIFIERS_PER_POOL_MAX } from '../../data/event-validation'
 import type { TournamentEvent } from '../../data/types'
 import { drawIssueFor } from './draw-structure-section/draw-issue'
 import { DrawIssuePanel } from './draw-structure-section/draw-issue-panel'
@@ -17,12 +23,25 @@ export interface DrawStructureSectionProps {
    * The event as the editor's **live draft** has it, so the tab recomputes as the
    * director edits the player limit or adds a pool on the tabs next door.
    *
-   * ⚠️ Only two fields are read — `maxPlayers` and `pools.length` — and the second is
-   * read as a *count* deliberately. The editor's draft carries the form's `pools`, which
-   * are `PoolEntry` diffs rather than the read model's `Pool` rows (ADR 20260801); the
-   * length is the same either way, and nothing else here may touch a pool's insides.
+   * ⚠️ `pools` is read as a *count* deliberately. The editor's draft carries the form's
+   * `pools`, which are `PoolEntry` diffs rather than the read model's `Pool` rows (ADR
+   * 20260801); the length is the same either way, and nothing here may touch a pool's
+   * insides.
    */
   event: TournamentEvent
+  /** When false (a non-creator), the tab is a **view**: every value is text, and there
+   * is no action, no box and no way to Basics. Not a disabled form (ADR-0015). */
+  canEdit: boolean
+  /**
+   * Write the edited event back to the editor's form — the same `onChange` the Basics
+   * and Match settings tabs take, so a setting taken here is form state and not a
+   * second draft this tab keeps to itself.
+   *
+   * The two fields it ever changes are `drawOwnership` and — when the director takes the
+   * qualifier count — `qualifiersPerPool`, whose value is the qualifiers row's number
+   * (the wire has no `manual_qualifiers`: the stored K *is* the manual slot).
+   */
+  onChange: (event: TournamentEvent) => void
   /**
    * Take the director to the Basics tab, where the player limit that sizes this preview
    * lives.
@@ -36,31 +55,34 @@ export interface DrawStructureSectionProps {
 
 /**
  * The event editor's **Draw structure** tab (#1320) — the four structural settings of a
- * round-robin-then-knockout draw, read out as the system currently derives them.
+ * round-robin-then-knockout draw, each one the director's or the system's.
  *
  * ## Why the tab exists
  *
- * A director controls one and a half of these four settings today, and nothing on any
- * tab states the other two (ADR 20260808). #1320 records a real director who set one
- * pool and one qualifier per pool, sent one player to the bracket, and was refused with
- * a message that named the wrong cause. This tab states every number and says where it
- * came from, so the shape of the draw is readable before it is cut.
+ * A director controlled one and a half of these four settings, and nothing on any tab
+ * stated the other two (ADR 20260808). #1320 records a real director who set one pool and
+ * one qualifier per pool, sent one player to the bracket, and was refused with a message
+ * that named the wrong cause. This tab states every number, says where it came from, and
+ * lets a director take any of them for themselves — or give it back.
  *
- * ## What this chore renders, and what it does not
+ * ## Taking a setting changes the owner, not the number
  *
- * **Every setting is `Automatic`, and every value is text.** Nothing stores an ownership
- * mode yet, so the derivation is fed all-automatic and the rows read out what today's
- * behaviour already does. The `Set myself` / `Use automatic` action and the numeric
- * input arrive with the ownership modes (chore 3c) — and they are *absent* until then,
- * never a disabled box, which is the unexplained dead end ADR-0015 forbids.
+ * `Set myself` seeds the box from what the row was already showing: the derived pool
+ * count, the **largest** derived pool, the derived qualifier count. So the first click
+ * moves nothing, and a director who wants to nudge a number by one does not first have to
+ * work out what it currently is (ADR 20260808).
  *
- * The right column carries the live preview (`DrawPreview`) — **the tab's one verdict**,
- * and the only summary of the draw anywhere on it. The uneven / disagreement /
- * impossible *notices*, which explain those states and offer fixes, land under the
- * settings in this left column as one `DrawIssuePanel`. **Only the uneven one is built**:
- * `Can’t save` is chore 4c and `Needs your call` is chore 5a, and both come with `Apply`
- * fixes. The Pool size row carries its own uneven copy either way (`{min}–{max} players ·
- * uneven`), because that is row copy and not a panel.
+ * `Use automatic` is the exact opposite of destructive: it sets the mode and **keeps the
+ * number**, so a director who looks at what the system would say and comes back gets
+ * their own number returned rather than an empty box.
+ *
+ * ## The badge follows the EFFECTIVE owner, the box follows the stored mode
+ *
+ * A director can own a setting and have cleared its box. The derivation reads that as
+ * automatic — a manual mode with no number derives — and reports the ownership it
+ * actually used, so the `Yours` badge and the source sentence can never disagree with
+ * each other. The box and the action read the stored mode instead, so the row the
+ * director took stays theirs and can still be handed back.
  *
  * ## The arithmetic is not here
  *
@@ -71,6 +93,8 @@ export interface DrawStructureSectionProps {
  */
 export const DrawStructureSection = ({
   event,
+  canEdit,
+  onChange,
   onGoToBasics,
 }: DrawStructureSectionProps) => {
   const fieldSize = previewFieldSize(event.maxPlayers)
@@ -78,26 +102,47 @@ export const DrawStructureSection = ({
   // Called twice they could eventually be called with different arguments, and two
   // sentences about the same number is exactly the confusion #1320 removes.
   const previewBasis = previewBasisLabel(event.maxPlayers)
+  // An `rr-then-ko` event that has never seen this tab stores no record, and the
+  // all-automatic one is what that means (ADR 20260808 — "an event that sets nothing
+  // behaves exactly as it does today"). A FRESH record, never a shared constant: it is
+  // what every write below is built from, and a shared object would be one object every
+  // event's toggle rewrote.
+  const ownership = event.drawOwnership ?? everySettingAutomatic()
+
   const structure = deriveDrawStructure({
     previewFieldSize: fieldSize,
     // One pool reservation is one pool — today's behaviour, and the automatic source of
     // the pool count (ADR 20260808).
     poolReservationCount: event.pools.length,
-    // All four settings are the system's this chore: nothing writes an ownership mode
-    // yet, so there is no manual number for any of them to hold.
-    poolCountMode: 'automatic',
-    manualPoolCount: null,
-    poolSizeMode: 'automatic',
-    manualPoolSize: null,
-    qualifiersMode: 'automatic',
-    manualQualifiers: null,
+    poolCountMode: ownership.poolCountMode,
+    manualPoolCount: ownership.manualPoolCount,
+    poolSizeMode: ownership.poolSizeMode,
+    manualPoolSize: ownership.manualPoolSize,
+    qualifiersMode: ownership.qualifiersMode,
+    // **The event's own K is the manual slot.** There is no `manual_qualifiers` on the
+    // wire: every `rr-then-ko` event already carries a qualifier count, and the mode is
+    // what says whether anybody should read it. Passed unconditionally, exactly as the
+    // API's comment describes, so the derivation's own `qualifiersMode` check decides.
+    manualQualifiers: event.qualifiersPerPool,
   })
+
+  /** Write a changed ownership record — always a **replacement**, never a mutation. The
+   * `as const` on the wire-side twin gives readonly modifiers TypeScript does not check
+   * on assignment, so a record edited in place would be one record every event shared. */
+  const own = (next: Partial<DrawOwnership>, qualifiersPerPool = event.qualifiersPerPool) =>
+    onChange({
+      ...event,
+      qualifiersPerPool,
+      drawOwnership: { ...ownership, ...next },
+    })
 
   // Read off the derived sizes rather than divided out again — the pools are routinely
   // unequal (22 across 4 is `6, 6, 5, 5`) and the uneven case is a first-class state.
   const smallestPool = Math.min(...structure.poolSizes)
   const largestPool = Math.max(...structure.poolSizes)
   const uneven = smallestPool !== largestPool
+
+  const membershipManual = ownership.membershipMode === 'manual'
 
   // The ONE notice the tab shows, chosen in the reference's order — impossible, then
   // disagreement, then uneven. The derivation reports all three independently and more
@@ -159,14 +204,19 @@ export const DrawStructureSection = ({
             >
               {previewBasis}
             </p>
-            <Button
-              variant="link"
-              size="sm"
-              className="mt-1 h-auto p-0 text-[12px]"
-              onClick={onGoToBasics}
-            >
-              Change in Basics
-            </Button>
+            {/* HIDDEN from a reader, not disabled (ADR-0015): "Change in Basics" is an
+                imperative addressed to somebody who can change it, and the cap is not
+                theirs to change. */}
+            {canEdit && (
+              <Button
+                variant="link"
+                size="sm"
+                className="mt-1 h-auto p-0 text-[12px]"
+                onClick={onGoToBasics}
+              >
+                Change in Basics
+              </Button>
+            )}
           </div>
 
           {/* ONE list with dividers, not one card per row. The divider is the list's, so
@@ -181,6 +231,35 @@ export const DrawStructureSection = ({
               unit={structure.poolCount === 1 ? 'pool' : 'pools'}
               ownership={structure.sources.poolCount.ownership}
               source={structure.sources.poolCount.sentence}
+              entry={
+                canEdit && ownership.poolCountMode === 'manual'
+                  ? {
+                      value: ownership.manualPoolCount,
+                      max: MANUAL_POOL_DIMENSION_MAX,
+                      onChange: (value) => own({ manualPoolCount: value }),
+                    }
+                  : undefined
+              }
+              action={
+                canEdit
+                  ? ownership.poolCountMode === 'manual'
+                    ? {
+                        label: 'Use automatic',
+                        // The mode only: the number stays, remembered for the next time
+                        // they take the setting back.
+                        onClick: () => own({ poolCountMode: 'automatic' }),
+                      }
+                    : {
+                        label: 'Set myself',
+                        // Seeded from the count the row was already showing.
+                        onClick: () =>
+                          own({
+                            poolCountMode: 'manual',
+                            manualPoolCount: structure.poolCount,
+                          }),
+                      }
+                  : undefined
+              }
             />
             {/* The uneven split is this row's own copy, not the 2d notice: `{min}–{max}`
                 with the unit saying so out loud. An en dash, and a middle dot before
@@ -193,18 +272,75 @@ export const DrawStructureSection = ({
               unit={uneven ? 'players · uneven' : 'players per pool'}
               ownership={structure.sources.poolSize.ownership}
               source={structure.sources.poolSize.sentence}
+              entry={
+                canEdit && ownership.poolSizeMode === 'manual'
+                  ? {
+                      value: ownership.manualPoolSize,
+                      max: MANUAL_POOL_DIMENSION_MAX,
+                      onChange: (value) => own({ manualPoolSize: value }),
+                    }
+                  : undefined
+              }
+              action={
+                canEdit
+                  ? ownership.poolSizeMode === 'manual'
+                    ? {
+                        label: 'Use automatic',
+                        onClick: () => own({ poolSizeMode: 'automatic' }),
+                      }
+                    : {
+                        label: 'Set myself',
+                        // **The LARGEST derived pool**, which is the target the split was
+                        // aiming at: 22 across 4 is `6, 6, 5, 5`, and a director taking
+                        // that setting is taking pools of six with a short one, not pools
+                        // of five with a long one. Seeding the smallest would shrink the
+                        // draw on the first click, which is the silent reshaping #1320
+                        // exists to remove.
+                        onClick: () =>
+                          own({
+                            poolSizeMode: 'manual',
+                            manualPoolSize: largestPool,
+                          }),
+                      }
+                  : undefined
+              }
             />
             {/* Membership has no number, so `deriveDrawStructure` says nothing about it
                 (its `DrawStructureSources` omits it by design). The row reads its mode
-                off the event — and nothing stores one yet, so it is the snake, which is
-                what `_snake()` in `api/app/draws.py` already does on every cut. */}
+                straight off the event — and the automatic answer is not a shrug, it is
+                `_snake()` in `api/app/draws.py`, which already deals every cut. */}
             <SettingRow
               name="Membership"
               hint="Who lands in each pool. Entrants do not exist until you cut the draw."
-              value="Snake automatically"
+              value={membershipManual ? 'Assign at cut time' : 'Snake automatically'}
               kind="phrase"
-              ownership="automatic"
-              source="Seeds spread 1, 2, 3, 3, 2, 1."
+              ownership={membershipManual ? 'manual' : 'automatic'}
+              source={
+                membershipManual
+                  ? 'You’ll place entrants once registration closes.'
+                  : 'Seeds spread 1, 2, 3, 3, 2, 1.'
+              }
+              // What placing entrants by hand COSTS, said on the row that costs it: the
+              // snake keeps two players who met in a pool apart in the first knockout
+              // round, and a hand-dealt pool cannot promise that.
+              note={
+                membershipManual
+                  ? 'Repeat protection turns off when you assign pools by hand.'
+                  : undefined
+              }
+              action={
+                canEdit
+                  ? membershipManual
+                    ? {
+                        label: 'Use snake',
+                        onClick: () => own({ membershipMode: 'snake' }),
+                      }
+                    : {
+                        label: 'Assign myself',
+                        onClick: () => own({ membershipMode: 'manual' }),
+                      }
+                  : undefined
+              }
             />
             {/* ⚠️ Still on Basics as well, this slice. Chore 3e moves it here for good;
                 until then the director sees the stored K on Basics and the DERIVED one
@@ -217,6 +353,42 @@ export const DrawStructureSection = ({
               unit="through from each pool"
               ownership={structure.sources.qualifiers.ownership}
               source={structure.sources.qualifiers.sentence}
+              entry={
+                canEdit && ownership.qualifiersMode === 'manual'
+                  ? {
+                      // The event's own K — the manual slot for this setting, and the
+                      // number the Basics box shows too until chore 3e moves it here.
+                      value: event.qualifiersPerPool,
+                      max: QUALIFIERS_PER_POOL_MAX,
+                      onChange: (value) => own({}, value),
+                    }
+                  : undefined
+              }
+              action={
+                canEdit
+                  ? ownership.qualifiersMode === 'manual'
+                    ? {
+                        label: 'Use automatic',
+                        // ⚠️ The mode, and ONLY the mode. Clearing K here would be a
+                        // destructive `Use automatic` *and* an unsaveable event: the
+                        // count is required on every `rr-then-ko` event, so the resolver
+                        // would refuse the save and send the director to Basics.
+                        onClick: () => own({ qualifiersMode: 'automatic' }),
+                      }
+                    : {
+                        label: 'Set myself',
+                        // Seeded from the derived count, which for a stored K the system
+                        // was ignoring is a real change to the event's number — and the
+                        // right one: it is what the row, the preview and the pool cards
+                        // have all been showing.
+                        onClick: () =>
+                          own(
+                            { qualifiersMode: 'manual' },
+                            structure.qualifiersPerPool,
+                          ),
+                      }
+                  : undefined
+              }
             />
           </div>
 
@@ -239,10 +411,11 @@ export const DrawStructureSection = ({
             fieldSize={fieldSize}
             // ⚠️ The event's real pool ROWS, not `max(rows, derived)` as the reference
             // shows (ADR 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-
-            // count-is-a-projection). Nothing sets a manual pool count this chore, so
-            // the two are equal today; taking the max would hide the gap the moment
-            // chore 3c lets a director type one.
+            // count-is-a-projection). A director who takes the pool count and types 8
+            // over four reservations must read `8 pools` in the equation and `4` in the
+            // fact, and see the gap.
             poolReservationCount={event.pools.length}
+            membershipMode={ownership.membershipMode}
             previewBasis={previewBasis}
           />
         </div>

@@ -33,13 +33,19 @@ export function buildDrawStructureEvent(
   })
 }
 
-/** Props for `DrawStructureSection` — the "Nothing set" event above, and a spy-able
- * way back to Basics. */
+/** Props for `DrawStructureSection` — the "Nothing set" event above, editable by the
+ * director looking at it, and spy-able ways to write a setting back and to get to Basics.
+ *
+ * `canEdit: true` is the default because it is the state the tab is *for*; the guard test
+ * asks for the other one explicitly, which is what makes "a reader sees no control" a
+ * claim a test states rather than a default it inherits. */
 export function buildDrawStructureSectionProps(
   overrides: Partial<DrawStructureSectionProps> = {},
 ): DrawStructureSectionProps {
   return {
     event: buildDrawStructureEvent(),
+    canEdit: true,
+    onChange: () => {},
     onGoToBasics: () => {},
     ...overrides,
   }

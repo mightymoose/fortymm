@@ -5,6 +5,7 @@
 
 import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.factory'
 
+import { everySettingAutomatic } from './draw-ownership'
 import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
 import { keepPools } from './pool-entries'
@@ -188,6 +189,21 @@ export function buildEvent(
     // the qualifier count is: `Partial<…>` admits an explicit `undefined` while the field is
     // required-and-nullable (`number | null`).
     rounds: overrides.rounds ?? null,
+    // **Every structural setting derived**, which is what an event that has never seen the
+    // Draw structure tab holds (ADR 20260808) — and only an `rr-then-ko` event holds one
+    // at all, the other three arms having no pool stage to own. DERIVED from the draw type
+    // rather than stated, so a fixture cannot describe a shape the API never sends.
+    //
+    // Stated AFTER the spread for the reason the two fields above are: the field is
+    // required-and-nullable while `Partial<…>` admits an explicit `undefined`. A FRESH
+    // record per event (`everySettingAutomatic()`), never a shared constant — the toggle
+    // writes through this field, and one object shared by every fixture would be one
+    // object every test rewrote.
+    drawOwnership:
+      overrides.drawOwnership ??
+      ((overrides.drawType ?? 'round-robin') === 'rr-then-ko'
+        ? everySettingAutomatic()
+        : null),
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
   // the server guarantees it, and so does the fixture. The null check is the whole

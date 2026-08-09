@@ -6,6 +6,7 @@
 // here, but nothing crosses back at runtime.
 import type { MatchStatus } from '@/api/matches'
 
+import type { DrawOwnership } from './draw-ownership'
 import type { DrawType, DrawTypeOption } from './draw-types'
 import type { PredicateOp } from './options'
 import type { ScheduleSolve } from './solve'
@@ -19,6 +20,11 @@ export type EventFormat = 'singles' | 'doubles' | 'teams'
  * here so the domain modules that read every tournament type from `./types` keep doing
  * so — there is no second declaration to drift. */
 export type { DrawType, DrawTypeOption }
+
+/** The stored ownership record is declared **once**, next to its Zod schema and the two
+ * wire mappers (`./draw-ownership`), for the reason the draw-type vocabulary is.
+ * Re-exported here so a reader of `TournamentEvent.drawOwnership` has the type to hand. */
+export type { DrawOwnership }
 
 export type MatchLength = 1 | 3 | 5 | 7
 
@@ -623,6 +629,19 @@ export interface TournamentEvent {
    * what sizes the draw (`R × ⌊n/2⌋` fixtures, all cut up front), which is why it is
    * carried on the read model at all. */
   rounds: number | null
+  /** **Who owns each of this draw's four structural settings** — the wire's
+   * `draw_structure` (ADR 20260808), parsed at the boundary by `./draw-ownership`.
+   *
+   * ⚠️ `null` is not "unset": it is what the three draw types with no pool stage store,
+   * and only an `rr-then-ko` event carries a record at all. An `rr-then-ko` event that has
+   * never seen the Draw structure tab carries the all-automatic one
+   * (`everySettingAutomatic`), which is today's behaviour written down.
+   *
+   * It holds the **modes and the two manual pool numbers** — not the qualifier count,
+   * whose value is this event's own `qualifiersPerPool` above with `qualifiersMode` saying
+   * whether anybody should read it. What each mode *means* for the numbers on screen is
+   * `deriveDrawStructure` (`./draw-structure`), which takes this as its input. */
+  drawOwnership: DrawOwnership | null
   /** The entrant cap, or `null` for an uncapped event. `null` means "no cap",
    * never zero (ADR-0935): a blank player-limit field submits `null`, and every
    * reader must handle the no-cap branch rather than dividing by it. */

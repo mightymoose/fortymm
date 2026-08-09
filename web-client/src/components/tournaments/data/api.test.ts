@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import type { components } from '@/api/schema'
 import {
+  EVERY_SETTING_AUTOMATIC,
   buildTournamentDetailRead,
   buildTournamentEntrantRead,
   buildTournamentEntrantReads,
   buildTournamentEventRead,
   buildTournamentFixtureRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
+import { everySettingAutomatic } from './draw-ownership'
 import {
   apiToEntrant,
   apiToEntryState,
@@ -820,6 +822,10 @@ const event: TournamentEvent = {
   // round count either (the swiss ADR). Same rule as the qualifier count above: the write
   // bodies must OMIT the key, not send this `null`.
   rounds: null,
+  // …and it has no pool stage to own the structure of, so it carries no ownership record
+  // either (ADR 20260808). `null` again, and the write bodies must OMIT `draw_structure`
+  // for the same `extra="forbid"` reason.
+  drawOwnership: null,
   maxPlayers: 48,
   entryFee: 30,
   timezone: 'America/Chicago',
@@ -1144,6 +1150,139 @@ describe('eventToUpdateBody', () => {
       })
 
       expect(apiToEvent(stored).qualifiersPerPool).toBe(2)
+    })
+  })
+
+  /**
+   * The **ownership record** on the wire (ADR 20260808) — `draw_structure`, the modes and
+   * the two manual pool numbers.
+   *
+   * The same claim as the qualifier count's, and it fails the same silent way: a director
+   * who took the pool count and typed 6, whose modes a mapper dropped, gets an event that
+   * looks saved and cuts four pools. The record travels on the `rr-then-ko` arm and **only**
+   * that arm, because the other three are `extra="forbid"`.
+   */
+  describe('the ownership record on the wire (ADR 20260808)', () => {
+    const twoStage: TournamentEvent = {
+      ...event,
+      drawType: 'rr-then-ko',
+      qualifiersPerPool: 2,
+      drawOwnership: {
+        ...everySettingAutomatic(),
+        poolCountMode: 'manual',
+        manualPoolCount: 6,
+        poolSizeMode: 'manual',
+        manualPoolSize: 5,
+        membershipMode: 'manual',
+      },
+    }
+
+    it('SENDS what the director owns, on both verbs', () => {
+      const expected = {
+        pool_count_mode: 'manual',
+        manual_pool_count: 6,
+        pool_size_mode: 'manual',
+        manual_pool_size: 5,
+        qualifiers_mode: 'automatic',
+        membership_mode: 'manual',
+      }
+
+      expect(eventToCreateBody(asEditedEvent(twoStage)).draw_structure).toEqual(
+        expected,
+      )
+      expect(eventToUpdateBody(asEditedEvent(twoStage)).draw_structure).toEqual(
+        expected,
+      )
+    })
+
+    // An event that has never seen the tab has no record, and the editor still sends one:
+    // it puts back what it rendered, which is every setting the system's. (The same
+    // structure the server's own `default_factory` would have written — so this is the
+    // honest form of the request, not a different one.)
+    it('sends the all-automatic record for an event that has never had one', () => {
+      const body = eventToUpdateBody(asEditedEvent({ ...twoStage, drawOwnership: null }))
+
+      expect(body.draw_structure).toEqual({
+        pool_count_mode: 'automatic',
+        manual_pool_count: null,
+        pool_size_mode: 'automatic',
+        manual_pool_size: null,
+        qualifiers_mode: 'automatic',
+        membership_mode: 'snake',
+      })
+    })
+
+    // The three structure-less arms declare no `draw_structure` field at all, so the key
+    // is a **422** there — not a `null` politely ignored. `toBeNull()` would pass against
+    // the payload that gets refused.
+    it.each(['round-robin', 'single-elim'] as const)(
+      'OMITS the key entirely for %s — where sending it is a 422, not a no-op',
+      (drawType) => {
+        const create = eventToCreateBody(asEditedEvent({ ...event, drawType }))
+        const update = eventToUpdateBody(asEditedEvent({ ...event, drawType }))
+
+        expect('draw_structure' in create).toBe(false)
+        expect('draw_structure' in update).toBe(false)
+      },
+    )
+
+    // The near half of the round trip: what the server stored comes back in this client's
+    // vocabulary, and reaches the tab.
+    it('reads a stored record back off the wire', () => {
+      const read = apiToEvent(
+        buildTournamentEventRead({
+          draw_type: 'rr-then-ko',
+          qualifiers_per_pool: 2,
+          draw_structure: {
+            ...EVERY_SETTING_AUTOMATIC,
+            pool_count_mode: 'manual',
+            manual_pool_count: 6,
+          },
+        }),
+      )
+
+      expect(read.drawOwnership).toEqual({
+        ...everySettingAutomatic(),
+        poolCountMode: 'manual',
+        manualPoolCount: 6,
+      })
+    })
+
+    it('reads a structure-less draw type back as null, never as a record', () => {
+      const read = apiToEvent(buildTournamentEventRead({ draw_type: 'round-robin' }))
+
+      expect(read.drawOwnership).toBeNull()
+    })
+
+    // PARSED, not cast (`.claude/rules/parse-at-boundaries.md`). A manual `0` is a number
+    // the server's `ge=1` could never have stored, and it is the exact value a cleared box
+    // would author on the way back out — a 422 three components from here. It fails
+    // INSIDE the mapper, where the payload is.
+    it('throws on a manual number the server could never have stored', () => {
+      expect(() =>
+        apiToEvent(
+          buildTournamentEventRead({
+            draw_type: 'rr-then-ko',
+            qualifiers_per_pool: 2,
+            draw_structure: {
+              ...EVERY_SETTING_AUTOMATIC,
+              pool_count_mode: 'manual',
+              manual_pool_count: 0,
+            },
+          }),
+        ),
+      ).toThrow()
+    })
+
+    it('round-trips a taken setting: type 6 pools, send 6, read 6 back', () => {
+      const sent = eventToUpdateBody(asEditedEvent(twoStage))
+      const stored = buildTournamentEventRead({
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 2,
+        draw_structure: sent.draw_structure,
+      })
+
+      expect(apiToEvent(stored).drawOwnership).toEqual(twoStage.drawOwnership)
     })
   })
 

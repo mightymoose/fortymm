@@ -4,8 +4,16 @@ import { Overline } from '@/components/overline'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
+import type { PoolMembershipMode } from '../../../data/draw-ownership'
 import { poolLetter, type DrawStructure } from '../../../data/draw-structure'
 import { PoolCard } from './draw-preview/pool-card'
+
+/** The `Membership` fact, in the reference's words — two of them, because the fact is a
+ * summary and the setting row one column over is where the sentence is. */
+const MEMBERSHIP_FACT: Record<PoolMembershipMode, string> = {
+  snake: 'Snake',
+  manual: 'By hand at cut',
+}
 
 /** How many pool cards the preview draws. The reference stops at eight, and so does
  * this: the equation directly above already states the pool count, so a twelve-pool draw
@@ -53,6 +61,11 @@ export interface DrawPreviewProps {
    * and `4` in this fact, and see the gap.
    */
   poolReservationCount: number
+  /** How entrants will reach their pools — the event's stored mode (ADR 20260808). The
+   * mode itself rather than a label, because the fact's two words are the preview's own
+   * copy (`MEMBERSHIP_FACT`) and shorter than the setting row's: the row says
+   * `Snake automatically`, the fact says `Snake`. */
+  membershipMode: PoolMembershipMode
   /** Where the preview field came from, in words — `32-player cap`, or the honest
    * sentence for an event with no cap. Built by `previewBasisLabel` **at the caller**, so
    * the heading block and this fact are one call and cannot come apart. */
@@ -82,13 +95,15 @@ export interface DrawPreviewProps {
  *
  * The reference ends with a `Preview cut-time assignment →` link. That screen is #1324,
  * so the link is absent rather than stubbed — a dead link is the unexplained dead end
- * ADR-0015 forbids. Membership reads `Snake` because nothing stores the manual mode yet
- * (chore 3c).
+ * ADR-0015 forbids. The reference also carries a `Repeat protection is off` block under
+ * the facts when membership is manual; the Membership setting row states that cost
+ * already, and the block is a later chore.
  */
 export const DrawPreview = ({
   structure,
   fieldSize,
   poolReservationCount,
+  membershipMode,
   previewBasis,
 }: DrawPreviewProps) => {
   const overlineId = useId()
@@ -128,7 +143,7 @@ export const DrawPreview = ({
       value: String(poolReservationCount),
       mono: true,
     },
-    { term: 'Membership', value: 'Snake', mono: false },
+    { term: 'Membership', value: MEMBERSHIP_FACT[membershipMode], mono: false },
     { term: 'Preview basis', value: previewBasis, mono: false },
   ]
 

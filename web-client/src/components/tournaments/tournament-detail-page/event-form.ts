@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { FieldErrors } from 'react-hook-form'
 
+import { drawOwnershipSchema } from '../data/draw-ownership'
 import { drawTypeSchema } from '../data/draw-types'
 import {
   entryFeeSchema,
@@ -156,6 +157,12 @@ export const eventSchema = z.object({
   // three draw types whose round count nobody chooses, and it is the *blank box* for the
   // one whose director does.
   rounds: z.number().nullable(),
+  // **Who owns each structural setting**, and the two manual pool numbers (ADR 20260808).
+  // The schema is the domain's own (`data/draw-ownership`), imported rather than restated
+  // for the reason every other field rule here is: it already carries the server's
+  // `ge=1, le=512` on the manual numbers, and a second copy would be a second thing to
+  // drift. `null` is the honest value for the three draw types with no pool stage.
+  drawOwnership: drawOwnershipSchema.nullable(),
   maxPlayers: maxPlayersSchema,
   entryFee: entryFeeSchema,
   // The IANA timezone anchoring the wall-clock windows (ADR 20260719). `NOT NULL`
@@ -256,6 +263,9 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   // count either (the swiss ADR). `null` is the only value the server's `single-elim` arm
   // admits.
   rounds: null,
+  // …and a bracket has no pool stage, so no structural settings to own either (ADR
+  // 20260808). `null` is the only value the server's `single-elim` arm admits.
+  drawOwnership: null,
   // A new event starts **uncapped**, not at an invented number: `null` is a valid,
   // saveable answer (ADR-0935), so an organizer who never touches the box gets an
   // event with no cap — rather than a form that silently refuses to submit.
@@ -289,6 +299,10 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     // …and the round count the same way, the near half of the round trip the read shape's
     // `rounds` exists for.
     rounds: event.rounds,
+    // The ownership record the SERVER sent back, straight onto the tab — the near half of
+    // the round trip `draw_structure` exists for, and what makes a setting a director took
+    // last week still read `Yours` when they reopen the event.
+    drawOwnership: event.drawOwnership,
     maxPlayers: event.maxPlayers,
     entryFee: event.entryFee,
     timezone: event.timezone,
@@ -345,6 +359,13 @@ export function firstInvalidSection(
   )
     return 'basics'
   if (errors.predicates) return 'eligibility'
+  // The manual pool numbers, on the tab that sets them. **Insurance, not a path a director
+  // can walk today**: the boxes parse each keystroke (`acceptedManualEntry`,
+  // `data/draw-ownership`) and never accept a value `drawOwnershipSchema` would reject, so
+  // this arm exists for the day something else writes the record. Without it a refusal
+  // here would land the director on Basics with no red anywhere, which is the dead end
+  // this function exists to prevent.
+  if (errors.drawOwnership) return 'draw-structure'
   // A pool with a cleared name (`poolNameSchema`). RHF reports it per row
   // (`errors.pools[2].name`) *and* sets the array key, so the truthiness of `pools` is
   // the whole question here — which row it is, the card itself says, in red, under the

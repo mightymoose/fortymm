@@ -19,6 +19,7 @@ import { z } from 'zod'
 import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
+import { apiToDrawOwnership, drawOwnershipToApi } from './draw-ownership'
 import { parseDrawTypeCatalogue } from './draw-types'
 import { entryRefusalNotice } from './entry-refusal'
 import { hasVenue } from './helpers'
@@ -149,6 +150,13 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     // is what the three round-count-less draw types store, not missing data, and inventing
     // a `ceil(log2 n)` here would author a body the server 422s on the way back out.
     rounds: e.rounds,
+    // PARSED, not cast (`./draw-ownership`, `.claude/rules/parse-at-boundaries.md`): these
+    // modes decide what the Draw structure tab renders AND what the next save puts back on
+    // the wire, so a mode this client does not know, or a manual number the server's
+    // `ge=1, le=512` could never have stored, must fail here rather than surface as an
+    // empty box the director then saves. `null` — every draw type but `rr-then-ko` — parses
+    // straight through to `null`.
+    drawOwnership: apiToDrawOwnership(e.draw_structure),
     maxPlayers: e.max_players,
     entryFee: e.entry_fee,
     timezone: e.timezone,
@@ -470,11 +478,26 @@ function poolEntriesToApi(
  * **compile error here** until somebody says which settings it puts on the wire.
  */
 function drawSettingsToApi(
-  ev: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool' | 'rounds'>,
+  ev: Pick<
+    TournamentEvent,
+    'drawType' | 'qualifiersPerPool' | 'rounds' | 'drawOwnership'
+  >,
 ) {
   switch (ev.drawType) {
     case 'rr-then-ko':
-      return { draw_type: ev.drawType, qualifiers_per_pool: ev.qualifiersPerPool }
+      return {
+        draw_type: ev.drawType,
+        qualifiers_per_pool: ev.qualifiersPerPool,
+        // **The ownership record travels with the pair**, on this arm and only this arm
+        // (ADR 20260808): it is part of the draw configuration, so the server refuses one
+        // sent without a `draw_type` beside it and 422s one sent alongside any other type.
+        //
+        // It is sent on EVERY save, never omitted as "unchanged": the editor puts back
+        // what it rendered. An event that has never had a record renders — and therefore
+        // sends — the all-automatic one (`drawOwnershipToApi`), which is the same
+        // structure the server's own default would have written.
+        draw_structure: drawOwnershipToApi(ev.drawOwnership),
+      }
     case 'swiss':
       return { draw_type: ev.drawType, rounds: ev.rounds }
     case 'round-robin':

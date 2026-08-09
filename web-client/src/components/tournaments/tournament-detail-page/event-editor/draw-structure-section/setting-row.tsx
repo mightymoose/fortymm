@@ -1,8 +1,11 @@
 import { useId } from 'react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
+import { acceptedManualEntry } from '../../../data/draw-ownership'
 import type { SettingOwnership } from '../../../data/draw-structure'
 
 /** The word on the badge, and the only place ownership is put into words.
@@ -13,6 +16,28 @@ import type { SettingOwnership } from '../../../data/draw-structure'
 const OWNERSHIP_LABEL: Record<SettingOwnership, string> = {
   automatic: 'Automatic',
   manual: 'Yours',
+}
+
+/** The manual box, when the director owns the setting. */
+export interface SettingRowEntry {
+  /** The number in the box, or `null` for a box the director has cleared. `null` is a
+   * real state — the derivation reads a manual setting with no number as automatic — and
+   * it is emphatically not a `0`, which the API refuses. */
+  value: number | null
+  /** The largest number this box may hold: the server's own ceiling for this setting
+   * (512 for a pool dimension, 1,000 for a qualifier count). */
+  max: number
+  /** Store what the director typed. Called only with a value the bounds admit, or `null`
+   * for a cleared box — a keystroke that would author neither is ignored, so nothing
+   * downstream has to defend against a `0`. */
+  onChange: (value: number | null) => void
+}
+
+/** The row's one quiet text action — `Set myself` / `Use automatic`, or Membership's
+ * `Assign myself` / `Use snake`. */
+export interface SettingRowAction {
+  label: string
+  onClick: () => void
 }
 
 export interface SettingRowProps {
@@ -26,6 +51,9 @@ export interface SettingRowProps {
    * The value the director reads. Already formatted by the caller, because only the
    * caller knows what the number means: `4`, or `6–10` when the pools are uneven, or a
    * whole phrase for Membership.
+   *
+   * Shown as text whenever there is no `entry` — a setting the system owns, or one being
+   * read by somebody who cannot edit it.
    */
   value: string
   /**
@@ -45,11 +73,29 @@ export interface SettingRowProps {
    * by `deriveDrawStructure` for the three numeric settings, so the copy cannot fork
    * away from the arithmetic it describes. */
   source: string
+  /**
+   * The direct-entry box, when the director owns this setting **and** may edit it.
+   * Absent means the value is read out as text — there is no disabled box anywhere, which
+   * is the unexplained dead end ADR-0015 forbids.
+   */
+  entry?: SettingRowEntry
+  /**
+   * The one way to change who owns this setting. Absent for a reader.
+   *
+   * A quiet text button, never a segmented control: four `Automatic / Manual` switches
+   * stacked down a column read as a settings panel rather than as a draw, which ADR
+   * 20260808 considered and rejected.
+   */
+  action?: SettingRowAction
+  /** One more line under the source, for a consequence the setting carries — today only
+   * Membership's `Repeat protection turns off when you assign pools by hand.` */
+  note?: string
 }
 
 /**
  * One row of the Draw structure tab's setting list: what the setting is called, what it
- * means, what it currently says, **who owns it**, and where that value came from.
+ * means, what it currently says, **who owns it**, where that value came from, and the one
+ * action that hands it over or gives it back.
  *
  * The four settings share one pattern because they are one kind of thing — a structural
  * setting, owned by the director or derived by the system (ADR 20260808). Written out
@@ -60,9 +106,13 @@ export interface SettingRowProps {
  * parent's (`divide-y`), so a row contributes no border of its own and the list reads as
  * one draw rather than as four unrelated panels.
  *
- * This chore renders the value as text only. The `Set myself` / `Use automatic` action
- * and the numeric input are chore 3c — and they are *absent*, not disabled: a dead box
- * is the unexplained dead end ADR-0015 forbids.
+ * ## The box has no spinner
+ *
+ * `<input type="text" inputMode="numeric">`, deliberately, and there are **no plus or
+ * minus buttons anywhere** — the reference is explicit about both. A `type="number"`
+ * would bring a spinner, a scroll-wheel that silently changes a saved number, and a
+ * control a screen reader calls a `spinbutton`; a director setting six pools types `6`
+ * and a director correcting it selects the number and replaces it outright.
  */
 export const SettingRow = ({
   name,
@@ -72,6 +122,9 @@ export const SettingRow = ({
   unit,
   ownership,
   source,
+  entry,
+  action,
+  note,
 }: SettingRowProps) => {
   const nameId = useId()
   return (
@@ -80,7 +133,7 @@ export const SettingRow = ({
     <section
       aria-labelledby={nameId}
       data-testid="draw-setting-row"
-      className="grid grid-cols-1 gap-x-6 gap-y-2 py-4 sm:grid-cols-[minmax(0,160px)_minmax(0,1fr)]"
+      className="grid grid-cols-1 gap-x-6 gap-y-2 py-4 sm:grid-cols-[minmax(0,160px)_minmax(0,1fr)_auto]"
     >
       <div className="min-w-0">
         <h4
@@ -100,17 +153,42 @@ export const SettingRow = ({
 
       <div className="min-w-0">
         <p className="flex flex-wrap items-baseline gap-x-2">
-          <span
-            data-testid="draw-setting-value"
-            className={cn(
-              'text-[color:var(--fg-1)]',
-              kind === 'number'
-                ? 'font-mono text-[22px] leading-none font-semibold'
-                : 'text-[15px] font-semibold',
-            )}
-          >
-            {value}
-          </span>
+          {entry ? (
+            // Labelled by the row's own heading — the visible words directly to its left,
+            // so the accessible name IS what a sighted director reads. A box whose only
+            // label were the unit after it would announce as "pools", which is four
+            // indistinguishable boxes to a screen reader.
+            <Input
+              type="text"
+              inputMode="numeric"
+              data-testid="draw-setting-input"
+              aria-labelledby={nameId}
+              className="w-[84px] shrink-0 py-1.5 text-center font-mono text-[20px] leading-none font-semibold"
+              // `''` for a cleared box, never a `0`: the two are different answers, and
+              // one of them is a 422.
+              value={entry.value === null ? '' : String(entry.value)}
+              onChange={(e) => {
+                const accepted = acceptedManualEntry(e.target.value, entry.max)
+                // `undefined` is "not a value this box may hold" — the keystroke is
+                // dropped and the box keeps the number the director last chose. It is
+                // NOT clamped to the bound: the system never silently changes a
+                // director's number (ADR 20260808).
+                if (accepted !== undefined) entry.onChange(accepted)
+              }}
+            />
+          ) : (
+            <span
+              data-testid="draw-setting-value"
+              className={cn(
+                'text-[color:var(--fg-1)]',
+                kind === 'number'
+                  ? 'font-mono text-[22px] leading-none font-semibold'
+                  : 'text-[15px] font-semibold',
+              )}
+            >
+              {value}
+            </span>
+          )}
           {unit && (
             <span
               data-testid="draw-setting-unit"
@@ -135,7 +213,34 @@ export const SettingRow = ({
             {source}
           </span>
         </p>
+        {note && (
+          <p
+            data-testid="draw-setting-note"
+            className="mt-1.5 text-[12px] leading-snug text-[color:var(--warn)]"
+          >
+            {note}
+          </p>
+        )}
       </div>
+
+      {action && (
+        <div className="sm:pt-0.5 sm:text-right">
+          <Button
+            variant="link"
+            size="sm"
+            data-testid="draw-setting-action"
+            className="h-auto p-0 text-[13px]"
+            // Three rows offer `Set myself`, so the visible words alone name no setting —
+            // and a list of buttons is how a screen-reader user meets them, where the
+            // row's own region label is nowhere in earshot. The visible words come FIRST,
+            // so what a director says out loud to a voice-control tool still matches.
+            aria-label={`${action.label} ${name}`}
+            onClick={action.onClick}
+          >
+            {action.label}
+          </Button>
+        </div>
+      )}
     </section>
   )
 }

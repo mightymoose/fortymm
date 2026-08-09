@@ -229,6 +229,11 @@ export const EventEditor = ({
     // resolver judges `(drawType, rounds)` as one pair too, so a draw type set without its
     // round count would be validated against a stale R.
     form.setValue('rounds', next.rounds, opts)
+    // …and the ownership record with them (ADR 20260808), for the third time the same
+    // reason: it is part of the draw configuration the server parses as one union arm, and
+    // it is what the Draw structure tab writes through. A tab that kept its own state
+    // instead would be a second draft the save never read.
+    form.setValue('drawOwnership', next.drawOwnership, opts)
     form.setValue('maxPlayers', next.maxPlayers, opts)
     form.setValue('entryFee', next.entryFee, opts)
     form.setValue('timezone', next.timezone, opts)
@@ -403,6 +408,8 @@ export const EventEditor = ({
                 <TabsContent value="draw-structure">
                   <DrawStructureSection
                     event={draft}
+                    canEdit={canEdit}
+                    onChange={applyChange}
                     onGoToBasics={() => setSection('basics')}
                   />
                 </TabsContent>
