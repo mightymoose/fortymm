@@ -172,7 +172,14 @@ export interface LifecycleRefusal extends Notice {
  * It is deliberately **narrow**, and this list is the place to think before adding to it.
  * Only `start` has a precondition (ADR-0786), and the precondition is exactly: there is at
  * least one event, and every event's draw still **seats exactly its entrants**. So the
- * scope is the status, plus per event its identity and its seating (`drawSeating`).
+ * scope is, per event, its identity, its **name**, and its seating (`drawSeating`).
+ *
+ * The **name** is here for a different reason from the rest, and it is the one entry that
+ * is not about whether the refusal is still *true*. This 409's sentence **quotes the
+ * events at fault** ("“Open Singles” has no draw yet"), so a rename leaves the header
+ * telling the director to go and cut the draw for an event no longer on the page under
+ * that name — the refusal still correct and still unreadable. A sentence that names
+ * something is a sentence about that name.
  *
  * The seating is read as identities rather than counts, and that is load-bearing: the
  * third shape of the refusal is "*has a draw that no longer matches its entrants*", which
@@ -181,10 +188,12 @@ export interface LifecycleRefusal extends Notice {
  * so a scope built from the counts could not see the director doing the very thing the
  * sentence asked them to do.
  *
- * What is **left out** matters as much. The tournament's name, venue, description and
- * `latestScheduleSolve` are all absent, because no lifecycle refusal asserts anything about
- * them and this page polls (~3s on the Schedule tab): a scope that moved on a solve tick
- * would blink the director's work list off the screen mid-read.
+ * What is **left out** matters as much. The *tournament's* name, its venue, its description
+ * and `latestScheduleSolve` are all absent, because no lifecycle refusal quotes or asserts
+ * anything about them and this page polls (~3s on the Schedule tab): a scope that moved on
+ * a solve tick would blink the director's work list off the screen mid-read. (An event's
+ * name is in, and the tournament's is out, for exactly the same test — one is quoted in the
+ * sentence and the other is not.)
  *
  * ## The status is left out too, and that one is not an oversight
  *
@@ -207,7 +216,9 @@ export interface LifecycleRefusal extends Notice {
  * which are here; and a status that moves forward legitimately takes its events with it.
  */
 export function lifecycleRefusalScope(tournament: Tournament): string {
-  return tournament.events.map((ev) => `${ev.id}:${drawSeating(ev)}`).join('|')
+  return tournament.events
+    .map((ev) => `${ev.id}:${ev.name}:${drawSeating(ev)}`)
+    .join('|')
 }
 
 /**

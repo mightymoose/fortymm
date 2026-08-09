@@ -433,6 +433,38 @@ describe('lifecycleRefusalScope', () => {
    * would be retired at the exact instant the page did the confusing thing it was there
    * to explain.
    */
+  /**
+   * Found by the QA pass (Quinn), and it is the one entry in this scope that is not about
+   * whether the refusal is still *true*.
+   *
+   * The go-live 409 **quotes the events at fault** — "“Bracket Cup” has no draw yet". Rename
+   * that event and the refusal is still perfectly correct and completely unreadable: it
+   * tells the director to cut the draw for an event that is not on the page under that
+   * name, while the card below it, its Edit button and its Generate button all read the new
+   * one. That is the same header-contradicts-the-page failure as #1216, landing on the name
+   * instead of the count.
+   */
+  it('moves when a named event is renamed — the 409 quotes those names', () => {
+    const before = buildTournament({
+      events: [buildEvent({ id: 'ev-1', name: 'Bracket Cup' })],
+    })
+    const after = buildTournament({
+      events: [buildEvent({ id: 'ev-1', name: 'Cup Of Renaming' })],
+    })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
+  })
+
+  /** The *tournament's* own name is still out — no lifecycle refusal quotes it. The test
+   * is "is it in the sentence", not "is it a name". */
+  it('does NOT move when the tournament itself is renamed', () => {
+    const base = buildTournament()
+
+    expect(lifecycleRefusalScope({ ...base, name: 'Renamed Open 2026' })).toBe(
+      lifecycleRefusalScope(base),
+    )
+  })
+
   it('does NOT move when the status does — the stale-tab refusal explains that very change', () => {
     expect(lifecycleRefusalScope(buildTournament({ status: 'draft' }))).toBe(
       lifecycleRefusalScope(buildTournament({ status: 'published' })),
