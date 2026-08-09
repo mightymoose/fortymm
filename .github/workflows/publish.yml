@@ -248,7 +248,7 @@ jobs:
       # publishes should be packaged by a helm version we have actually run this
       # path against. `mise.toml` tracks `helm = "latest"`, so there is no repo
       # pin to mirror -- this is the version the packaging was rehearsed on.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: ${{ env.HELM_VERSION }}
 
@@ -350,7 +350,7 @@ jobs:
       # Same pin as the `chart` job. It matters more here: helm decides how
       # subchart dependencies are laid out inside the package, and the readback
       # below asserts against that layout.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: ${{ env.HELM_VERSION }}
 
