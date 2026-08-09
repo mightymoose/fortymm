@@ -3,6 +3,8 @@ import { Button } from '@/components/ui/button'
 
 import { deriveDrawStructure } from '../../data/draw-structure'
 import type { TournamentEvent } from '../../data/types'
+import { drawIssueFor } from './draw-structure-section/draw-issue'
+import { DrawIssuePanel } from './draw-structure-section/draw-issue-panel'
 import { DrawPreview } from './draw-structure-section/draw-preview'
 import {
   previewBasisLabel,
@@ -54,10 +56,11 @@ export interface DrawStructureSectionProps {
  *
  * The right column carries the live preview (`DrawPreview`) — **the tab's one verdict**,
  * and the only summary of the draw anywhere on it. The uneven / disagreement /
- * impossible *notices*, which explain those states and offer fixes, are chores 2d, 5a
- * and 4c and land in this left column. What this tab already carries of them is the Pool
- * size row's own copy: an uneven split reads `{min}–{max} players · uneven`, because that
- * is row copy and not a panel.
+ * impossible *notices*, which explain those states and offer fixes, land under the
+ * settings in this left column as one `DrawIssuePanel`. **Only the uneven one is built**:
+ * `Can’t save` is chore 4c and `Needs your call` is chore 5a, and both come with `Apply`
+ * fixes. The Pool size row carries its own uneven copy either way (`{min}–{max} players ·
+ * uneven`), because that is row copy and not a panel.
  *
  * ## The arithmetic is not here
  *
@@ -95,6 +98,13 @@ export const DrawStructureSection = ({
   const smallestPool = Math.min(...structure.poolSizes)
   const largestPool = Math.max(...structure.poolSizes)
   const uneven = smallestPool !== largestPool
+
+  // The ONE notice the tab shows, chosen in the reference's order — impossible, then
+  // disagreement, then uneven. The derivation reports all three independently and more
+  // than one can hold at once (8 players across 6 reservations is an uneven split whose
+  // last four pools have one player each), so the choice is `drawIssueFor`'s and this tab
+  // never re-derives it.
+  const issue = drawIssueFor(structure)
 
   return (
     <div className="flex flex-col gap-6" data-testid="draw-structure-section">
@@ -205,6 +215,15 @@ export const DrawStructureSection = ({
               source={structure.sources.qualifiers.sentence}
             />
           </div>
+
+          {/* Under the settings, in the left column: the notice is about the numbers
+              directly above it. The preview in the right column states what the draw IS;
+              this states the one thing worth saying about it. */}
+          {issue !== null && (
+            <div className="mt-5">
+              <DrawIssuePanel issue={issue} />
+            </div>
+          )}
         </div>
 
         {/* The live preview's column. The preview is sticky inside it, so the draw stays

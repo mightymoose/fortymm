@@ -220,4 +220,62 @@ describe('DrawStructureSection', () => {
       )
     })
   })
+
+  /**
+   * Wiring and precedence. The panel's copy and its role are pinned by
+   * `draw-issue-panel.test.tsx`; what the tab owns is which notice appears, and where.
+   */
+  describe('the one notice', () => {
+    it('says nothing about a draw that divides — 32 across 4', () => {
+      drawStructureSectionPage.render()
+
+      expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+    })
+
+    // The reference's "Uneven field" state: 22 across 4 is 6, 6, 5, 5.
+    it('reads out an uneven split, under the settings that produced it', () => {
+      drawStructureSectionPage.render({
+        event: buildDrawStructureEvent({ maxPlayers: 22 }),
+      })
+
+      const panel = drawStructureSectionPage.issuePanel.getPanel()
+      expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
+        '2 pools of 6 · 2 pools of 5',
+      )
+      // The left column, beside the preview and not inside it.
+      expect(drawStructureSectionPage.getPreviewSlot()).not.toContainElement(
+        panel,
+      )
+    })
+
+    /**
+     * ⚠️ The case the precedence exists for, and the reference's "Field too small" state:
+     * 8 players over 6 pool reservations splits `2, 2, 1, 1, 1, 1`. That is an uneven
+     * tally AND four pools nobody can play in, both reported at once — and
+     * `Legal, but uneven` is not the thing to say about a pool of one.
+     *
+     * The Pool size row proves the tally really is there. Without it this test would
+     * also pass on a draw that is not uneven at all, and prove nothing about the order.
+     */
+    it('drops the uneven notice when a pool cannot be played — 8 across 6', () => {
+      drawStructureSectionPage.render({
+        event: buildDrawStructureEvent({
+          maxPlayers: 8,
+          pools: Array.from({ length: 6 }, (_, i) =>
+            buildPool({ id: `p-${i}`, name: `Pool ${i}`, position: i }),
+          ),
+        }),
+      })
+
+      const row = drawStructureSectionPage.setting('Pool size')
+      expect(row.getValue()).toHaveTextContent('1–2')
+      expect(row.queryUnit()).toHaveTextContent('players · uneven')
+
+      expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+      // …and the director is not left guessing: the preview says so.
+      expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+        'This draw can’t work yet',
+      )
+    })
+  })
 })
