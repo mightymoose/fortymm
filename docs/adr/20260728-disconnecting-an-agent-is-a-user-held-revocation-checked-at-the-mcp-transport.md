@@ -84,9 +84,14 @@ the MCP transport — not an unlinking.**
      path and fell into the provisioning path, spending a token from the per-IP
      limit before being refused. Claude.ai's connector egress IP is shared
      between players, so one disconnected player's polling agent could exhaust
-     it and block strangers' first-ever bind. (Decision #5 now spends that
-     bucket only on a write, which independently fixes this; leaving the
-     binding alone keeps the request on the hot path in the first place.)
+     it and block strangers' first-ever bind. (That bucket is a
+     Consequence of
+     `20260722-mcp-accounts-auto-provision-and-match-by-verified-auth0-email`,
+     not a decision here. It is now spent only immediately before a write —
+     `resolve_or_provision_user` takes a `may_write` gate — so a refusal costs
+     nothing and the limit prices writes rather than requests. That fixes the
+     shared-bucket problem independently; leaving the binding alone keeps the
+     request on the write-free hot path in the first place.)
    - **A misleading way back.** After a re-allow the page reported `ready` and
      walked the player through setup steps they did not need — the next token
      re-bound the same identity by verified email regardless.

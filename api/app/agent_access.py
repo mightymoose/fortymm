@@ -98,10 +98,12 @@ def _connected_on(
 
     ``revoked`` answers ``None`` — the same as every other non-connected state.
     A "Connected 20 July" line under a panel that says agent access is switched
-    off would be reporting a connection that no longer exists: disconnect clears
-    ``auth0_sub``, and even if it hadn't, the transport refuses the caller. The
-    date of a connection that has been withdrawn is not something this page has
-    anywhere honest to put.
+    off would be reporting a connection that no longer exists. A revoked account
+    normally still HOLDS its ``auth0_sub`` and its link time — disconnect leaves
+    both in place — so the binding is exactly what must not be reported here:
+    the transport refuses the caller regardless of it. The date of a connection
+    that has been withdrawn is not something this page has anywhere honest to
+    put.
     """
     match state:
         case AgentAccessState.CONNECTED:

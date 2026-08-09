@@ -1217,30 +1217,33 @@ export const handlers = [
   // button just claimed. (A hard reload re-evaluates this module and returns to
   // the seed, which is what you want when walking the state by hand.)
   //
-  // The recording is module state, but it cannot leak between vitest cases:
-  // with the committed seed (`ready`) this assignment is a no-op, and every
-  // test that presses the button overrides both handlers for its own case.
+  // Re-allow lands on `connected`, not `ready`, for an account that HAD a
+  // binding — mirroring the server, where disconnect leaves `auth0_sub` in
+  // place so switching access back on restores the connection rather than
+  // asking for it again. `connected_on` stands in for "has a binding" here, so
+  // an account that never connected still lands on `ready`.
+  //
+  // The recording is module state shared by every later GET in the same module
+  // instance, so a test that reaches this default without overriding it can
+  // poison the ones after it. Today every test overrides both handlers for its
+  // own case; if you add one that does not, override the endpoint rather than
+  // relying on the default.
   http.post('*/v1/settings/agent-access/allow', async () => {
     await delay(300)
-    agentAccessNow = { ...agentAccessNow, state: 'ready' }
+    agentAccessNow = {
+      ...agentAccessNow,
+      state: agentAccessNow.connected_on === null ? 'ready' : 'connected',
+    }
     return HttpResponse.json(agentAccessNow)
   }),
   // The other half of that round trip: switching agent access off. Recorded the
   // same way, so seeding `MOCK_AGENT_ACCESS` with `state: 'connected'` lets the
-  // dev world walk connected → disconnect → revoked → allow → ready without a
-  // backend. `connected_on` goes with it: nothing is linked any more, and a
-  // "connected on 12 May" left lying in the payload would resurface the moment
-  // the account reconnects.
-  //
-  // Unlike the `allow` handler above, this assignment is NOT a no-op against the
-  // committed `ready` seed — it writes `revoked`, and `agentAccessNow` is module
-  // state shared by every later GET in the same module instance. A test that
-  // reaches this default without overriding it therefore poisons the ones after
-  // it. Today every test overrides both, so this is latent; override the
-  // endpoint rather than relying on the default if you add one that does not.
+  // dev world walk connected → disconnect → revoked → allow → connected without
+  // a backend. `connected_on` deliberately SURVIVES: the binding does too, and
+  // the date the page shows after a re-allow is the original link time.
   http.post('*/v1/settings/agent-access/disconnect', async () => {
     await delay(300)
-    agentAccessNow = { ...agentAccessNow, state: 'revoked', connected_on: null }
+    agentAccessNow = { ...agentAccessNow, state: 'revoked' }
     return HttpResponse.json(agentAccessNow)
   }),
   // ----- /v1/stream (realtime hints) -------------------------------------

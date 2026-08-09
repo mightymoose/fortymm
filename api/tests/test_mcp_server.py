@@ -524,7 +524,9 @@ async def test_revoked_user_is_rejected_even_if_the_sub_can_re_bind_by_email(
     did. Revocation, not unlinking, is what actually holds."""
     user = await make_user(db_session, "mcp-revoked-rebind-owner")
     user.email = "revoked-rebind@example.com"
-    user.auth0_sub = None  # as a disconnect leaves it
+    # Not what a disconnect leaves any more (it keeps the binding); this is the
+    # account revoked before it ever bound, which is the case that re-binds.
+    user.auth0_sub = None
     user.agent_access_revoked_at = datetime.now(UTC)
     await db_session.commit()
     await _grant_mcp_access(db_session, user)

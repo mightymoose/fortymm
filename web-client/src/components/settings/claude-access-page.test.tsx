@@ -16,6 +16,31 @@ describe('ClaudeAccessPage', () => {
     expect(claudeAccessPagePage.queryLede()).toBeInTheDocument()
   })
 
+  it('still offers Disconnect when the deployment has no connector', async () => {
+    // End-to-end over the real payload → `resolveStatus` → DOM path, which is
+    // the only level that can catch this: a missing connector once resolved to
+    // `unavailable` AHEAD of the state, and the compact row carries no action —
+    // so a live agent connection rendered with no off switch anywhere on the
+    // page, under "we couldn't load your account and connector details".
+    //
+    // Asserting this on the view instead would prove nothing: the view is handed
+    // an already-resolved status, so it never runs the precedence being pinned.
+    claudeAccessPagePage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildAgentAccess({
+          state: 'connected',
+          email: 'rita@club.tt',
+          connector: null,
+        }),
+      ),
+    )
+    claudeAccessPagePage.render()
+
+    await claudeAccessPagePage.findStatus()
+
+    expect(claudeAccessPagePage.queryDisconnectButton()).toBeInTheDocument()
+  })
+
   it('tells a ready player which email to connect with', async () => {
     claudeAccessPagePage.mockEndpoint(() =>
       HttpResponse.json(

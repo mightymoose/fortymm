@@ -506,10 +506,12 @@ async def merge_user(
 
     # ``agent_access_revoked_at`` — the player's own "I switched agent access off"
     # — is NOT a fact about the binding, and deliberately does not ride the block
-    # above. Disconnect *clears* ``auth0_sub`` as it stamps this column
-    # (``app.agent_access.disconnect_agent_access``), so a revoked account has no
-    # binding to move: gating the carry on a moved binding would make it dead code
-    # in exactly the case it exists for. It is a per-user, sticky fact, so the
+    # above. Disconnect stamps this column and LEAVES ``auth0_sub``
+    # bound (``app.agent_access.disconnect_agent_access``), so a revoked account
+    # normally still has a binding — but the carry must not be gated on that
+    # binding having moved, because the survivor may already hold one of its own,
+    # in which case the block above adopts nothing while the revocation still has
+    # to travel. It is a per-user, sticky fact, so the
     # merge takes the UNION of the two accounts' revocations — set on the survivor
     # if either party had it set.
     #

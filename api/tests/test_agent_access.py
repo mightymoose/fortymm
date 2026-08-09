@@ -457,7 +457,7 @@ async def test_it_requires_a_session(
 # --------------------------------------------------------------------------
 
 
-async def test_disconnect_revokes_and_unbinds(
+async def test_disconnect_revokes_and_keeps_the_binding(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """The stamp is the enforcement and the clear is the honesty — both happen.
