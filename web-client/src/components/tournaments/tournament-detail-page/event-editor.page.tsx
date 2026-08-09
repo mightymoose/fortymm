@@ -4,11 +4,26 @@ import { render, screen, type Container } from '@/test/utilities'
 
 import { EventEditor, type EventEditorProps } from './event-editor'
 import { buildEventEditorProps } from './event-editor.factory'
+import { drawStructureSectionPage } from './event-editor/draw-structure-section.page'
 
 const scoped = (container: Container) => ({
   getSectionTab(label: string) {
     return container.getByRole('tab', { name: label })
   },
+  /** …and its `query` twin, for the claim that a tab is **not on the list at all** —
+   * the Draw structure tab exists only for `rr-then-ko` (ADR 20260808). */
+  querySectionTab(label: string) {
+    return container.queryByRole('tab', { name: label })
+  },
+  /** Every tab's label, in the order the list renders them. */
+  getSectionTabLabels(): string[] {
+    return container
+      .queryAllByRole('tab')
+      .map((tab: HTMLElement) => (tab.textContent ?? '').trim())
+  },
+  /** The Draw structure tab's panel, and the queries inside it. Reused from the
+   * section's own page object, scoped to the editor. */
+  drawStructure: drawStructureSectionPage.within(container),
   /** The sheet itself — present exactly while the editor is open. The claim
    * "a refused save does not close the editor" is a claim about this node. */
   querySheet() {

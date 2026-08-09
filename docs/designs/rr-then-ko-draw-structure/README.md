@@ -9,6 +9,11 @@ The copy and the math below come from the reference's own bundle
 (`/assets/page-CZ2t-Xlt.js`), not from reading the rendered page. Treat the strings as
 exact.
 
+**The apostrophes are exact too.** Every one in the reference's copy is a right single
+quote, `U+2019`, with one exception: `today's behaviour` uses a straight `U+0027`. Do
+not normalise either way. A test that pins this copy fails on the wrong glyph, which is
+the point.
+
 Read `../rr-then-ko-current-state/README.md` first. It records the editor this work
 replaces.
 
@@ -42,7 +47,7 @@ The left column carries a heading block and then four setting rows. The rows sha
 list and use dividers, not cards.
 
 - Overline: `Draw structure`
-- Heading: `Set what matters. We'll work out the rest.`
+- Heading: `Set what matters. We’ll work out the rest.`
 - Body: `Pools play all-play-all. The top finishers move into a knockout bracket.`
 - Preview basis block: label `Preview field`, the field size, and a link
   `Change in Basics`
@@ -96,7 +101,7 @@ This row has no numeric input. It shows one of two values.
 
 - Hint: `Who lands in each pool. Entrants do not exist until you cut the draw.`
 - Automatic value: `Snake automatically`, source `Seeds spread 1, 2, 3, 3, 2, 1.`
-- Manual value: `Assign at cut time`, source `You'll place entrants once registration closes.`
+- Manual value: `Assign at cut time`, source `You’ll place entrants once registration closes.`
 - Action: `Assign myself` or `Use snake`
 - When manual, the row also shows: `Repeat protection turns off when you assign pools by hand.`
 
@@ -198,13 +203,13 @@ Only one panel shows at a time. The order above decides which.
 
 ### Impossible
 
-Role `alert`. Topline `Can't save` with a red dot.
+Role `alert`. Topline `Can’t save` with a red dot.
 
 | Case | Title | Body |
 | --- | --- | --- |
 | Pool | `Pool {letter} would have one player` (or `no players`) | `They would have nobody to play. Use fewer pools or raise the player limit.` |
 | Bracket | `The knockout would have one player` | `One player has nobody to play. Take more qualifiers or run more pools.` |
-| Qualifier | `You can't take {q} qualifiers from a pool of {min}` | `Take {min} or fewer, or make the smallest pool bigger.` |
+| Qualifier | `You can’t take {q} qualifiers from a pool of {min}` | `Take {min} or fewer, or make the smallest pool bigger.` |
 
 Fixes offered:
 
@@ -220,8 +225,8 @@ Each fix is a row with a label, a detail line and an `Apply` button.
 Role `status`. Topline `Needs your call` with a yellow dot.
 
 - Title: `{count} pools of {size} seat {seats}. Your field is {field}.`
-- Body when the field is bigger: `{n} entrants have nowhere to go. We won't change your numbers behind your back.`
-- Body when the field is smaller: `{n} seats would be empty. We won't change your numbers behind your back.`
+- Body when the field is bigger: `{n} entrants have nowhere to go. We won’t change your numbers behind your back.`
+- Body when the field is smaller: `{n} seats would be empty. We won’t change your numbers behind your back.`
 
 Three fixes:
 
@@ -245,7 +250,7 @@ Overline `The draw as it stands`. The heading and the badge follow the state:
 
 | State | Heading | Badge |
 | --- | --- | --- |
-| Impossible | `This draw can't work yet` | `Impossible` |
+| Impossible | `This draw can’t work yet` | `Impossible` |
 | Disagreement | `Your numbers disagree` | `Your call` |
 | Otherwise | `Ready to save` | `Sound` |
 
@@ -304,7 +309,7 @@ Choosing by hand shows a warning that stays on screen:
 
 ```
 Repeat protection turns off.
-A first-round knockout match may repeat a pool match. We'll flag it, not block it.
+A first-round knockout match may repeat a pool match. We’ll flag it, not block it.
 ```
 
 The assignment area holds two panes.
