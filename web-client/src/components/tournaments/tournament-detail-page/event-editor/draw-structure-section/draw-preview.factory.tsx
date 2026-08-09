@@ -47,6 +47,10 @@ export function buildDrawPreviewPropsFor(
     structure: deriveDrawStructure(options),
     fieldSize: options.previewFieldSize,
     poolReservationCount: options.poolReservationCount,
+    // The snake, which is the "Nothing set" state and what every cut already deals. The
+    // hand-dealt mode is a prop a test overrides — it is not one of the eight derivation
+    // inputs, because membership has no number to derive.
+    membershipMode: 'snake',
     // The default builder treats the field as a cap the director set, which is the
     // reference's state. The uncapped sentence is a prop a test overrides.
     previewBasis: previewBasisLabel(options.previewFieldSize),

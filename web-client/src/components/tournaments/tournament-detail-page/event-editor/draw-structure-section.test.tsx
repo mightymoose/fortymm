@@ -1,8 +1,21 @@
 import userEvent from '@testing-library/user-event'
 
+import { everySettingAutomatic } from '../../data/draw-ownership'
 import { buildPool } from '../../data/seed.factory'
+import type { DrawOwnership, TournamentEvent } from '../../data/types'
 import { buildDrawStructureEvent } from './draw-structure-section.factory'
 import { drawStructureSectionPage } from './draw-structure-section.page'
+
+/** The "Nothing set" event with some of its settings already taken — the state a
+ * director comes back to, and the one the round trip has to reproduce. */
+const eventOwning = (
+  taken: Partial<DrawOwnership>,
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+) =>
+  buildDrawStructureEvent({
+    drawOwnership: { ...everySettingAutomatic(), ...taken },
+    ...overrides,
+  })
 
 describe('DrawStructureSection', () => {
   it('says what the tab is for, in the reference’s words', () => {
@@ -91,6 +104,302 @@ describe('DrawStructureSection', () => {
           drawStructureSectionPage.setting(name).getOwnershipBadge(),
         ).toHaveTextContent('Automatic')
       }
+    })
+  })
+
+  /**
+   * **Taking a setting changes the owner, not the number** (ADR 20260808). The first
+   * click seeds the box from what the row was already showing, so a director who wants to
+   * nudge a number by one does not first have to work out what it currently is.
+   *
+   * Asserted on `onChange`, because that is the whole of the tab's write: the form is the
+   * draft, and a tab holding state of its own would be a second one the save never read.
+   */
+  describe('taking a setting for yourself', () => {
+    const takeSetting = async (name: string, event = buildDrawStructureEvent()) => {
+      const onChange = vi.fn()
+      drawStructureSectionPage.render({ event, onChange })
+
+      await userEvent.click(drawStructureSectionPage.setting(name).getAction())
+
+      return onChange
+    }
+
+    it('seeds the pool count from the count the row was showing', async () => {
+      // 4 pool reservations, so the row reads 4 — and taking it types 4.
+      const onChange = await takeSetting('Pool count')
+
+      expect(onChange.mock.lastCall?.[0].drawOwnership).toEqual({
+        ...everySettingAutomatic(),
+        poolCountMode: 'manual',
+        manualPoolCount: 4,
+      })
+    })
+
+    /**
+     * ⚠️ Deliberately an **uneven** field, and this is the case the seeding rule exists
+     * for: 22 across 4 splits `6, 6, 5, 5`, so the largest pool is 6 and the smallest is
+     * 5. On the even default fixture (32 across 4, every pool 8) the two are the same
+     * number and a wrong rule would sail through.
+     *
+     * The largest is the target the split was aiming at. Seeding the smallest would
+     * shrink the draw on the first click — the silent reshaping #1320 exists to remove.
+     */
+    it('seeds the pool size from the LARGEST derived pool, not the smallest', async () => {
+      const onChange = await takeSetting(
+        'Pool size',
+        buildDrawStructureEvent({ maxPlayers: 22 }),
+      )
+
+      expect(onChange.mock.lastCall?.[0].drawOwnership).toEqual({
+        ...everySettingAutomatic(),
+        poolSizeMode: 'manual',
+        manualPoolSize: 6,
+      })
+    })
+
+    /**
+     * The qualifier count has no manual slot of its own on the wire: **the event's K is
+     * the slot**, and the mode says whether anybody should read it. So taking this
+     * setting writes the event's own number — and writes the DERIVED one, which is what
+     * the row, the preview and every pool card have been showing.
+     *
+     * Three pool reservations derive `ceil(8 / 3)` = 3, while the event stores 2. The two
+     * numbers are different on purpose: a fixture where they agreed could not tell "the
+     * derived count was written" from "nothing was written at all".
+     */
+    it('seeds the qualifier count onto the event’s own K', async () => {
+      const onChange = await takeSetting(
+        'Qualifiers per pool',
+        buildDrawStructureEvent({
+          qualifiersPerPool: 2,
+          pools: [
+            buildPool({ id: 'p-a', name: 'Pool A', position: 0 }),
+            buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
+            buildPool({ id: 'p-c', name: 'Pool C', position: 2 }),
+          ],
+        }),
+      )
+
+      const saved = onChange.mock.lastCall?.[0]
+      expect(saved.qualifiersPerPool).toBe(3)
+      expect(saved.drawOwnership.qualifiersMode).toBe('manual')
+    })
+
+    it('hands membership over without touching a number', async () => {
+      const onChange = await takeSetting('Membership')
+
+      expect(onChange.mock.lastCall?.[0].drawOwnership).toEqual({
+        ...everySettingAutomatic(),
+        membershipMode: 'manual',
+      })
+    })
+
+    it('changes nothing else about the event', async () => {
+      const event = buildDrawStructureEvent()
+      const onChange = await takeSetting('Pool count', event)
+
+      expect(onChange.mock.lastCall?.[0]).toEqual({
+        ...event,
+        drawOwnership: {
+          ...everySettingAutomatic(),
+          poolCountMode: 'manual',
+          manualPoolCount: 4,
+        },
+      })
+    })
+  })
+
+  /**
+   * **Giving a setting back is not destructive.** `Use automatic` sets the mode and keeps
+   * the number, so a director who looks at what the system would say and comes back gets
+   * their own number returned rather than an empty box (ADR 20260808, and the API's own
+   * comment on `DrawStructure`).
+   */
+  describe('giving a setting back', () => {
+    it('keeps the director’s pool count, remembered, for the next time', async () => {
+      const onChange = vi.fn()
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: 6 }),
+        onChange,
+      })
+
+      await userEvent.click(drawStructureSectionPage.setting('Pool count').getAction())
+
+      expect(onChange.mock.lastCall?.[0].drawOwnership).toEqual({
+        ...everySettingAutomatic(),
+        poolCountMode: 'automatic',
+        manualPoolCount: 6,
+      })
+    })
+
+    /**
+     * ⚠️ The qualifier count is the one that could be destroyed, because its value is the
+     * event's own **required** K. Clearing it here would be both a destructive
+     * `Use automatic` and an unsaveable event — the resolver refuses a two-stage event
+     * with no count, and would send the director off to fix a number they never touched.
+     */
+    it('leaves the event’s K alone when qualifiers go back to automatic', async () => {
+      const onChange = vi.fn()
+      drawStructureSectionPage.render({
+        event: eventOwning({ qualifiersMode: 'manual' }, { qualifiersPerPool: 3 }),
+        onChange,
+      })
+
+      await userEvent.click(
+        drawStructureSectionPage.setting('Qualifiers per pool').getAction(),
+      )
+
+      const saved = onChange.mock.lastCall?.[0]
+      expect(saved.qualifiersPerPool).toBe(3)
+      expect(saved.drawOwnership.qualifiersMode).toBe('automatic')
+    })
+  })
+
+  /** What the tab looks like once a director owns a setting: a box instead of a figure,
+   * `Yours` instead of `Automatic`, and a source sentence saying who set it. */
+  describe('a setting the director owns', () => {
+    it('reads the director’s number out of a box, and says it is theirs', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: 6 }),
+      })
+
+      const row = drawStructureSectionPage.setting('Pool count')
+      expect(row.getInput()).toHaveValue('6')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
+      expect(row.getSource()).toHaveTextContent(
+        'You set this. Each pool also gets a reservation.',
+      )
+      expect(row.getAction()).toHaveTextContent('Use automatic')
+    })
+
+    it('offers a box on the size row too, and derives the count from it', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolSizeMode: 'manual', manualPoolSize: 5 }),
+      })
+
+      const row = drawStructureSectionPage.setting('Pool size')
+      expect(row.getInput()).toHaveValue('5')
+      expect(row.getSource()).toHaveTextContent(
+        'You set the target. We derived the pool count.',
+      )
+      // 32 players in pools of 5 needs 7 pools, and the count row says so.
+      expect(drawStructureSectionPage.setting('Pool count').getValue()).toHaveTextContent(
+        '7',
+      )
+    })
+
+    it('puts the event’s own K in the qualifiers box', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ qualifiersMode: 'manual' }, { qualifiersPerPool: 3 }),
+      })
+
+      const row = drawStructureSectionPage.setting('Qualifiers per pool')
+      expect(row.getInput()).toHaveValue('3')
+      expect(row.getSource()).toHaveTextContent('You set this.')
+    })
+
+    /**
+     * ⚠️ The subtle state, and the reason the badge and the box read two different
+     * things: a director can own a setting and have cleared its box. The derivation reads
+     * that as automatic and reports the ownership it actually used, so the badge and the
+     * source sentence can never disagree — while the box and the action follow the stored
+     * mode, so the row stays theirs and can still be handed back.
+     */
+    it('reports the EFFECTIVE owner when the box is empty, and still offers it back', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: null }),
+      })
+
+      const row = drawStructureSectionPage.setting('Pool count')
+      expect(row.getInput()).toHaveValue('')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Automatic')
+      expect(row.getSource()).toHaveTextContent(
+        "4 pool reservations · today's behaviour",
+      )
+      expect(row.getAction()).toHaveTextContent('Use automatic')
+    })
+  })
+
+  /** Membership is the one setting with no number, so it is the one row that changes its
+   * words rather than its figure. */
+  describe('membership', () => {
+    it('says the snake deals, and offers to hand it over', () => {
+      drawStructureSectionPage.render()
+
+      const row = drawStructureSectionPage.setting('Membership')
+      expect(row.getValue()).toHaveTextContent('Snake automatically')
+      expect(row.getSource()).toHaveTextContent('Seeds spread 1, 2, 3, 3, 2, 1.')
+      expect(row.getAction()).toHaveTextContent('Assign myself')
+      expect(row.queryNote()).toBeNull()
+      // No number to own, so no box either.
+      expect(row.queryInput()).toBeNull()
+    })
+
+    it('says the director will place the field, and what that costs', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ membershipMode: 'manual' }),
+      })
+
+      const row = drawStructureSectionPage.setting('Membership')
+      expect(row.getValue()).toHaveTextContent('Assign at cut time')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
+      expect(row.getSource()).toHaveTextContent(
+        'You’ll place entrants once registration closes.',
+      )
+      expect(row.queryNote()).toHaveTextContent(
+        'Repeat protection turns off when you assign pools by hand.',
+      )
+      expect(row.getAction()).toHaveTextContent('Use snake')
+    })
+
+    // The preview's fact follows the row, in the preview's own shorter words.
+    it.each([
+      ['snake', 'Snake'],
+      ['manual', 'By hand at cut'],
+    ] as const)('reports %s membership in the preview as "%s"', (mode, fact) => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ membershipMode: mode }),
+      })
+
+      expect(
+        drawStructureSectionPage.preview.getFact('Membership'),
+      ).toHaveTextContent(fact)
+    })
+  })
+
+  /**
+   * A non-creator gets a **view** (ADR-0015): every value as text, and not one control —
+   * no box, no action, and no imperative sending them to a tab where the cap is not
+   * theirs to change either. Swept by `@/test/read-only`, which is the one sweep, never a
+   * selector re-typed here.
+   */
+  describe('a reader', () => {
+    it('sees no interactive control anywhere on the tab', () => {
+      drawStructureSectionPage.render({
+        // Two settings already taken, so a live tab would render two boxes and four
+        // actions here. A guard against an empty tab is a guard against nothing.
+        event: eventOwning({
+          poolCountMode: 'manual',
+          manualPoolCount: 6,
+          membershipMode: 'manual',
+        }),
+        canEdit: false,
+      })
+
+      expect(drawStructureSectionPage.getFormElements()).toHaveLength(0)
+      expect(drawStructureSectionPage.queryChangeInBasicsButton()).toBeNull()
+    })
+
+    it('still reads out every number and who owns it', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: 6 }),
+        canEdit: false,
+      })
+
+      const row = drawStructureSectionPage.setting('Pool count')
+      expect(row.getValue()).toHaveTextContent('6')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
     })
   })
 
@@ -246,6 +555,46 @@ describe('DrawStructureSection', () => {
       expect(drawStructureSectionPage.getPreviewSlot()).not.toContainElement(
         panel,
       )
+    })
+
+    /**
+     * ⚠️ **The reference's "Numbers disagree" state, reachable for the first time in this
+     * chore** — a disagreement needs pool count AND pool size both manual, which nothing
+     * could set until now. 40 players over 6 pools of 5 seats 30.
+     *
+     * The panel for it is chore 5a, so the tab shows **nothing** rather than a
+     * half-written notice — and the director is not left guessing, because the preview
+     * beside it says so in the reference's words. This test is the guard on that split:
+     * it reds the day a panel appears here without its `Apply` fixes, and it reds the day
+     * the preview stops saying it.
+     */
+    it('leaves the disagreement to the preview — 6 pools of 5, 40 players', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning(
+          {
+            poolCountMode: 'manual',
+            manualPoolCount: 6,
+            poolSizeMode: 'manual',
+            manualPoolSize: 5,
+          },
+          { maxPlayers: 40 },
+        ),
+      })
+
+      expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+        'Your numbers disagree',
+      )
+      expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
+      // Both of the director's numbers stand, unedited — the app states the arithmetic
+      // rather than moving one of them (ADR 20260808).
+      expect(drawStructureSectionPage.preview.getEquation()).toHaveTextContent(
+        '40 players ÷ 6 pools = 5 per pool',
+      )
+      // …and the gap the reference's `max(reservations, derived)` would have hidden: the
+      // draw needs six pools and the event has four rows.
+      expect(
+        drawStructureSectionPage.preview.getFact('Pool reservations'),
+      ).toHaveTextContent('4')
     })
 
     /**

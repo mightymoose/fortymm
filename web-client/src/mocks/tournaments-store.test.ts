@@ -37,6 +37,7 @@ import type { components } from '@/api/schema'
 type TournamentStatus = components['schemas']['TournamentStatus']
 type TournamentTable = components['schemas']['TournamentTable']
 type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
+type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 
 const TOURNAMENT = 'bay-area-open-2026' // seeded `published`, owned
 const DRAFT_TOURNAMENT = 'summer-slam-2026' // seeded `draft`, owned, one drawn event
@@ -640,6 +641,85 @@ describe('the rest of the event surface still holds', () => {
 
     expect(twoStage.event.draw_structure).toEqual(EVERY_SETTING_AUTOMATIC)
     expect(bracketOnly.event.draw_structure).toBeNull()
+  })
+
+  /**
+   * **The ownership record is patched as part of the draw configuration** (ADR 20260808),
+   * exactly as the qualifier count and the round count are — and with one rule of its own
+   * the other two do not need.
+   *
+   * A mock more permissive, or more forgetful, than the server is a trap: a director's
+   * settings that survived in `npm run dev` and vanished in production would look like a
+   * client bug for as long as it took to find the mock.
+   */
+  describe('patching the ownership record', () => {
+    const takingTheCount = {
+      ...EVERY_SETTING_AUTOMATIC,
+      pool_count_mode: 'manual',
+      manual_pool_count: 6,
+    } as const
+
+    const asTwoStage = (draw_structure?: TournamentEventUpdate['draw_structure']) =>
+      updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+        draw_type: 'rr-then-ko',
+        qualifiers_per_pool: 2,
+        ...(draw_structure === undefined ? {} : { draw_structure }),
+      })
+
+    it('stores what the editor sent', () => {
+      const patched = asTwoStage(takingTheCount)
+      if (!patched.ok) throw new Error('update failed')
+
+      expect(patched.event.draw_structure).toEqual(takingTheCount)
+    })
+
+    /**
+     * ⚠️ The rule the other two settings do not have (`carrying_unstated_settings_of`,
+     * `api/app/schemas/tournament.py`). The modes are the only part of a draw
+     * configuration a caller may leave out and still send a valid one — `qualifiers_per_pool`
+     * and `rounds` are required by the arms that have them — so reading an absent key as
+     * "every mode automatic" would silently discard a director's settings on any save
+     * that did not mention them.
+     */
+    it('keeps the stored record when a patch says nothing about it', () => {
+      expect(asTwoStage(takingTheCount).ok).toBe(true)
+
+      const patched = asTwoStage()
+      if (!patched.ok) throw new Error('update failed')
+
+      expect(patched.event.draw_structure).toEqual(takingTheCount)
+    })
+
+    it('starts an event that never had one at every setting automatic', () => {
+      const patched = asTwoStage()
+      if (!patched.ok) throw new Error('update failed')
+
+      expect(patched.event.draw_structure).toEqual(EVERY_SETTING_AUTOMATIC)
+    })
+
+    // A draw type with no pool stage has no structure to own, and the settings table has
+    // no row that could hold one. The record goes with the configuration it belonged to.
+    it('drops the record when the event is re-typed to a structure-less draw', () => {
+      expect(asTwoStage(takingTheCount).ok).toBe(true)
+
+      const patched = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+        draw_type: 'single-elim',
+      })
+      if (!patched.ok) throw new Error('update failed')
+
+      expect(patched.event.draw_structure).toBeNull()
+    })
+
+    // A patch that names no draw type is not touching the configuration at all — the
+    // rename case, which is most of them.
+    it('leaves the record alone when the patch is about something else', () => {
+      expect(asTwoStage(takingTheCount).ok).toBe(true)
+
+      const patched = updateEvent(TOURNAMENT, EMPTY_SINGLES, { name: 'Renamed' })
+      if (!patched.ok) throw new Error('update failed')
+
+      expect(patched.event.draw_structure).toEqual(takingTheCount)
+    })
   })
 
   // An explicit null clears the cap; `??` would have kept the old value. This is

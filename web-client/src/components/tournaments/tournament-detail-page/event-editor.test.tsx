@@ -7,6 +7,7 @@ import { screen, waitFor } from '@/test/utilities'
 
 import { emptyEvent } from '../data/helpers'
 import { eventToCreateBody, eventToUpdateBody } from '../data/api'
+import { everySettingAutomatic } from '../data/draw-ownership'
 import {
   buildEvent,
   buildFixture,
@@ -256,6 +257,94 @@ describe('EventEditor', () => {
         'true',
       )
       expect(eventEditorPage.getPlayerLimitInput()).toBeInTheDocument()
+    })
+  })
+
+  /**
+   * **The ownership record, end to end** (ADR 20260808) — the toggle, the box, the form
+   * and the body that leaves the client.
+   *
+   * The section's own tests prove what a click asks for; these prove the two things only
+   * the *editor* can. That a setting taken on the tab is **form state**, so it survives a
+   * walk to another tab and reaches the object handed to `onSave` — a tab that kept a
+   * draft of its own would look identical on screen and save nothing. And that a record
+   * the server already stored comes back onto the tab, which is the other half of the
+   * round trip.
+   */
+  describe('the draw structure a director owns, end to end', () => {
+    it('SENDS what the director took and typed — it reaches the request body', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      // Two pool reservations, so the tab derives 2 pools and taking the count seeds 2.
+      eventEditorPage.render({ event: buildRrThenKoEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      const row = eventEditorPage.drawStructure.setting('Pool count')
+      await userEvent.click(row.getAction())
+
+      // The first click changed the owner, not the number.
+      expect(eventEditorPage.drawStructure.setting('Pool count').getInput()).toHaveValue(
+        '2',
+      )
+
+      await userEvent.clear(eventEditorPage.drawStructure.setting('Pool count').getInput())
+      await userEvent.type(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+        '6',
+      )
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      // ⚠️ THE CLAIM IS ABOUT THE REQUEST. `onSave` receives the event the page maps with
+      // `eventToUpdateBody`, so mapping it here is what the client would really send.
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).draw_structure).toEqual(
+        expect.objectContaining({
+          pool_count_mode: 'manual',
+          manual_pool_count: 6,
+        }),
+      )
+    })
+
+    // The other half: what the server stored is what the director sees when they come
+    // back. A tab that always started all-automatic would look right on the first visit
+    // and silently discard every setting on the second.
+    it('shows a setting the director took last time as still theirs', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          drawOwnership: {
+            ...everySettingAutomatic(),
+            poolCountMode: 'manual',
+            manualPoolCount: 6,
+          },
+        }),
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+
+      const row = eventEditorPage.drawStructure.setting('Pool count')
+      expect(row.getInput()).toHaveValue('6')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
+    })
+
+    // A save that never opened the tab still sends the record — the editor puts back
+    // what it rendered, and an omitted key would be a mock/server disagreement waiting
+    // to happen the day something reads it as "reset the director's modes".
+    it('sends the all-automatic record for an event that has never had one', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({ drawOwnership: null }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).draw_structure).toEqual(
+        expect.objectContaining({
+          pool_count_mode: 'automatic',
+          manual_pool_count: null,
+          membership_mode: 'snake',
+        }),
+      )
     })
   })
 

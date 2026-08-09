@@ -367,8 +367,16 @@ export const swissRoundsSchema = z
     error: `A Swiss event plays at most ${SWISS_ROUNDS_MAX} rounds.`,
   })
 
-/** The editor's four tabs, of which three can hold something invalid (Match settings
+/** The editor's five tabs, of which four can hold something invalid (Match settings
  * comes off closed pickers). A sum type rather than a `string`, so "which tab do I
  * open?" is answered from a closed set the editor's `TabsContent` values are checked
- * against. */
-export type EventSection = 'basics' | 'eligibility' | 'pools'
+ * against.
+ *
+ * `draw-structure` is the conditional fifth (ADR 20260808) — present only on an
+ * `rr-then-ko` event, and safe to name even when it is absent: the editor falls back to
+ * Basics for a section no trigger matches. */
+export type EventSection =
+  | 'basics'
+  | 'eligibility'
+  | 'pools'
+  | 'draw-structure'

@@ -56,6 +56,16 @@ describe('DrawPreview', () => {
       expect(drawPreviewPage.getFact('Membership')).toHaveTextContent('Snake')
     })
 
+    // …and says so in its own, shorter words when the director takes it: the setting row
+    // one column over reads `Assign at cut time`, this fact reads `By hand at cut`.
+    it('says when the director will place the field themselves', () => {
+      drawPreviewPage.render({ membershipMode: 'manual' })
+
+      expect(drawPreviewPage.getFact('Membership')).toHaveTextContent(
+        'By hand at cut',
+      )
+    })
+
     it('says where the field it derived against came from', () => {
       drawPreviewPage.render()
 

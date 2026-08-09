@@ -485,6 +485,11 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // swiss ADR). A new event that pre-filled a number here would be one whose create body
     // the API 422s the moment the director never touched the draw type.
     rounds: null,
+    // …and no structural settings to own: a bracket has no pool stage, so `null` is the
+    // only value the server's `single-elim` arm admits for `draw_structure` too (ADR
+    // 20260808). A director who picks the two-stage format on Basics gets the
+    // all-automatic record from the Draw structure tab itself.
+    drawOwnership: null,
     maxPlayers: 32,
     entryFee: 30,
     // Anchor the wall-clock windows in the director's own timezone (ADR 20260719):

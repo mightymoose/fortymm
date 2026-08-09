@@ -2364,6 +2364,21 @@ export function updateEvent(
       patch.draw_type === undefined || patch.draw_type === null
         ? event.rounds
         : (patch.rounds ?? null),
+    // …and the **ownership record** moves with the same unit again (ADR 20260808), with
+    // one addition the other two do not have: an omitted `draw_structure` on a patch that
+    // *does* name `rr-then-ko` is CARRIED FORWARD, not reset. That is the server's
+    // `carrying_unstated_settings_of` — the modes are the only part of a draw
+    // configuration a caller may leave out and still send a valid one, so reading an
+    // absent key as "every mode automatic" would silently discard a director's settings
+    // on any save that did not mention them. A patch naming any other draw type has no
+    // structure to own, and says so with `null`.
+    draw_structure:
+      patch.draw_type === undefined || patch.draw_type === null
+        ? event.draw_structure
+        : patch.draw_type === 'rr-then-ko'
+          ? (patch.draw_structure ??
+            event.draw_structure ?? { ...EVERY_SETTING_AUTOMATIC })
+          : null,
     // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
     // the stored cap untouched. `??` would conflate the two, silently keeping a
     // cap the editor meant to remove.

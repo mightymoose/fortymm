@@ -1,3 +1,4 @@
+import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, within, type Container } from '@/test/utilities'
 
 import {
@@ -28,6 +29,15 @@ const scoped = (container: Container) => ({
   /** The way back to the tab that sets the player limit. */
   getChangeInBasicsButton() {
     return container.getByRole('button', { name: 'Change in Basics' })
+  },
+  queryChangeInBasicsButton() {
+    return container.queryByRole('button', { name: 'Change in Basics' })
+  },
+  /** Every interactive control on the tab — the one sweep (`@/test/read-only`),
+   * composed rather than re-typed. A reader's tab has none: the boxes, the four
+   * actions and the way back to Basics are all *absent*, never disabled (ADR-0015). */
+  getFormElements() {
+    return interactiveElementsIn(container.getByTestId('draw-structure-section'))
   },
   /** Every setting's name, **in the order the rows render** — the claim that the four
    * settings read top to bottom as Pool count, Pool size, Membership, Qualifiers per

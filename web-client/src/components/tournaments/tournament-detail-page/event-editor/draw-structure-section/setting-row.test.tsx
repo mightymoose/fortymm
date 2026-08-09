@@ -1,3 +1,10 @@
+import { useState } from 'react'
+import userEvent from '@testing-library/user-event'
+
+import { render } from '@/test/utilities'
+
+import { SettingRow } from './setting-row'
+import { buildSettingRowProps } from './setting-row.factory'
 import { settingRowPage } from './setting-row.page'
 
 describe('SettingRow', () => {
@@ -58,13 +65,157 @@ describe('SettingRow', () => {
     expect(settingRowPage.queryUnit()).toBeNull()
   })
 
-  // This chore is read-only: the `Set myself` action and the numeric input are 3c, and
-  // they are absent rather than disabled.
-  it('renders no control — the value is text', () => {
+  // A row with neither an `entry` nor an `action` is what a READER sees, and it renders
+  // no control at all — not a disabled one, which is the unexplained dead end ADR-0015
+  // forbids. Swept by `@/test/read-only`, never by a selector re-typed here.
+  it('renders no control at all without an entry or an action', () => {
+    settingRowPage.render({ entry: undefined, action: undefined })
+
+    expect(settingRowPage.getFormElements()).toHaveLength(0)
+  })
+
+  describe('the quiet text action', () => {
+    it('offers the caller’s words, and calls back when pressed', async () => {
+      const onClick = vi.fn()
+      settingRowPage.render({ action: { label: 'Set myself', onClick } })
+
+      expect(settingRowPage.getAction()).toHaveTextContent('Set myself')
+      await userEvent.click(settingRowPage.getAction())
+
+      expect(onClick).toHaveBeenCalledTimes(1)
+    })
+
+    // Three rows offer `Set myself`, so the visible words alone name no setting. The
+    // button carries the row's name for a reader browsing by button.
+    it('names the setting it acts on, for a screen reader', () => {
+      settingRowPage.render({
+        name: 'Qualifiers per pool',
+        action: { label: 'Set myself', onClick: () => {} },
+      })
+
+      expect(settingRowPage.getAction()).toHaveAccessibleName(
+        'Set myself Qualifiers per pool',
+      )
+    })
+  })
+
+  /**
+   * The manual box. `<input type="text" inputMode="numeric">` and **no spinner** — the
+   * reference is explicit that there are no plus or minus buttons anywhere, and a
+   * `type="number"` would bring a scroll-wheel that silently changes a saved number.
+   */
+  describe('the direct-entry box', () => {
+    const entry = (overrides: Partial<{ value: number | null }> = {}) => ({
+      value: 6,
+      max: 512,
+      onChange: vi.fn(),
+      ...overrides,
+    })
+
+    it('shows the director’s number, in a numeric text box', () => {
+      settingRowPage.render({ entry: entry() })
+
+      const box = settingRowPage.getInput()
+      expect(box).toHaveValue('6')
+      expect(box).toHaveAttribute('type', 'text')
+      expect(box).toHaveAttribute('inputMode', 'numeric')
+      // No spinner, and nothing to press: the row's only button is its action.
+      expect(box).not.toHaveAttribute('type', 'number')
+    })
+
+    // The visible words to its left are its label, so the accessible name is what a
+    // sighted director reads. A box labelled only by the unit after it would announce as
+    // "pools", which is indistinguishable across three rows.
+    it('is named by the setting it holds', () => {
+      settingRowPage.render({ name: 'Pool size', entry: entry() })
+
+      expect(settingRowPage.getInput()).toHaveAccessibleName('Pool size')
+    })
+
+    // One number, one place. A row showing the derived text AND the box would be showing
+    // the same setting twice, and the two would drift the moment one was typed into.
+    it('replaces the read-out value rather than sitting beside it', () => {
+      settingRowPage.render({ entry: entry() })
+
+      expect(settingRowPage.queryValue()).toBeNull()
+      expect(settingRowPage.queryUnit()).toHaveTextContent('pools')
+    })
+
+    it('hands back a number the bounds admit', async () => {
+      const onChange = vi.fn()
+      settingRowPage.render({ entry: { value: null, max: 512, onChange } })
+
+      await userEvent.type(settingRowPage.getInput(), '8')
+
+      expect(onChange).toHaveBeenCalledWith(8)
+    })
+
+    // ⚠️ `Number('')` is `0`, and a `0` is a 422 — the exact silent authorship the
+    // player-limit box shipped once already (ADR-0935).
+    it('hands back null for a cleared box, never a zero', async () => {
+      const onChange = vi.fn()
+      settingRowPage.render({ entry: { value: 6, max: 512, onChange } })
+
+      await userEvent.clear(settingRowPage.getInput())
+
+      expect(onChange).toHaveBeenCalledWith(null)
+      expect(onChange).not.toHaveBeenCalledWith(0)
+    })
+
+    // Dropped, not clamped: the system never silently changes a director's number (ADR
+    // 20260808), so the box keeps the one they last chose and nothing is written.
+    it('drops a keystroke that would author a number the server refuses', async () => {
+      const onChange = vi.fn()
+      settingRowPage.render({ entry: { value: 51, max: 512, onChange } })
+
+      // 51 → 513, one past the server's ceiling.
+      await userEvent.type(settingRowPage.getInput(), '3')
+
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    /**
+     * ⚠️ Rendered against **real state**, unlike every other case here. A box whose
+     * `value` prop never moves is restored by React after each keystroke, so "select all
+     * and type 4" would read `64` however well the row behaved — the harness, not the
+     * component, would be what the test measured. With the value round-tripping, `64` is
+     * the genuine failure: the selection was not replaced.
+     */
+    it('lets the director select the value and replace it outright', async () => {
+      const Editing = () => {
+        const [value, setValue] = useState<number | null>(6)
+        return (
+          <SettingRow
+            {...buildSettingRowProps({ entry: { value, max: 512, onChange: setValue } })}
+          />
+        )
+      }
+      render(<Editing />)
+
+      // Select all, then type — the correction a spinner-less box has to support.
+      // `keyboard`, not `type`: `type` clicks the box first, which would collapse the
+      // very selection this is about.
+      await userEvent.tripleClick(settingRowPage.getInput())
+      await userEvent.keyboard('4')
+
+      expect(settingRowPage.getInput()).toHaveValue('4')
+    })
+  })
+
+  // Membership's, and only when it is hand-dealt: what placing entrants yourself costs.
+  it('carries a note under the source when the caller gives one', () => {
+    settingRowPage.render({
+      note: 'Repeat protection turns off when you assign pools by hand.',
+    })
+
+    expect(settingRowPage.queryNote()).toHaveTextContent(
+      'Repeat protection turns off when you assign pools by hand.',
+    )
+  })
+
+  it('has no note otherwise', () => {
     settingRowPage.render()
 
-    expect(settingRowPage.getRow().querySelectorAll('input, button')).toHaveLength(
-      0,
-    )
+    expect(settingRowPage.queryNote()).toBeNull()
   })
 })
