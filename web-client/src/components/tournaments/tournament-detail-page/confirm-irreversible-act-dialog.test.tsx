@@ -3,6 +3,7 @@ import {
   buildEndTournamentConsequence,
   buildPublishTournamentConsequence,
   buildRecutDrawConsequence,
+  buildRemovePoolReservationsConsequence,
   buildStartTournamentConsequence,
 } from './confirm-irreversible-act-dialog.factory'
 import { confirmIrreversibleActDialogPage as page } from './confirm-irreversible-act-dialog.page'
@@ -115,7 +116,85 @@ describe('ConfirmIrreversibleActDialog', () => {
     expect(page.getConfirmButton()).toHaveTextContent('End the tournament')
   })
 
-  // Said the other way round, across all five: the sum type exists so that a variant
+  /**
+   * The **pool-count** act (ADR 20260808): an event's pool count is its pool rows, so
+   * lowering it removes rows — and a row is a reservation with a window and a set of
+   * tables somebody chose.
+   *
+   * The names are the point. "2 pools" would leave a director counting cards on the other
+   * tab to find out which two they are about to lose.
+   */
+  it('prices a LOWERED POOL COUNT: the named pools, with the windows and tables they hold', () => {
+    page.render({
+      consequence: buildRemovePoolReservationsConsequence({
+        eventName: 'Under 15s',
+        poolNames: ['Pool E', 'Pool F'],
+      }),
+    })
+
+    const dialog = page.getDialog()
+    expect(dialog).toHaveTextContent('Remove 2 pool reservations?')
+    expect(dialog).toHaveTextContent('Lowering the pool count for Under 15s')
+    expect(dialog).toHaveTextContent('removes Pool E and Pool F')
+    expect(dialog).toHaveTextContent(
+      'Each one takes its time window and its reserved tables with it.',
+    )
+    expect(page.getConfirmButton()).toHaveTextContent('Remove 2 pools')
+  })
+
+  /** One pool is one reservation — the count, the noun and the button's object all move
+   * together, so the dialog never reads "Remove 1 pool reservations?". */
+  it('says a single removed pool in the singular, all the way to the button', () => {
+    page.render({
+      consequence: buildRemovePoolReservationsConsequence({ poolNames: ['Pool D'] }),
+    })
+
+    expect(page.getDialog()).toHaveTextContent('Remove 1 pool reservation?')
+    expect(page.getDialog()).toHaveTextContent('removes Pool D.')
+    expect(page.getConfirmButton()).toHaveTextContent('Remove the pool')
+  })
+
+  /** Three names read as a list. */
+  it('lists three removed pools with a comma and an “and”', () => {
+    page.render({
+      consequence: buildRemovePoolReservationsConsequence({
+        poolNames: ['Pool D', 'Pool E', 'Pool F'],
+      }),
+    })
+
+    expect(page.getDialog()).toHaveTextContent('removes Pool D, Pool E and Pool F.')
+  })
+
+  /** The box admits 512, so "name every pool that goes" is a sentence that can run to
+   * hundreds of names. Past the cap it names three and counts the rest. */
+  it('caps the list rather than reading out every one of a long removal', () => {
+    page.render({
+      consequence: buildRemovePoolReservationsConsequence({
+        poolNames: ['Pool C', 'Pool D', 'Pool E', 'Pool F', 'Pool G', 'Pool H'],
+      }),
+    })
+
+    const dialog = page.getDialog()
+    expect(dialog).toHaveTextContent('Remove 6 pool reservations?')
+    expect(dialog).toHaveTextContent('removes Pool C, Pool D, Pool E and 3 more.')
+    expect(dialog).not.toHaveTextContent('Pool H')
+  })
+
+  /** A pool's name is the one thing on its card a director can *clear*, and the confirm
+   * comes before the save that refuses it. "removes  and Pool F" names nothing. */
+  it('calls a pool with an emptied name box what it is', () => {
+    page.render({
+      consequence: buildRemovePoolReservationsConsequence({
+        poolNames: ['   ', 'Pool F'],
+      }),
+    })
+
+    expect(page.getDialog()).toHaveTextContent(
+      'removes an unnamed pool and Pool F.',
+    )
+  })
+
+  // Said the other way round, across all six: the sum type exists so that a variant
   // cannot render another act's sentence, and "X is present" alone would never catch a
   // dialog that also said everything else — or a generic "This cannot be undone" that
   // said nothing in particular.
@@ -125,6 +204,7 @@ describe('ConfirmIrreversibleActDialog', () => {
     'publish-tournament': 'puts it in front of everybody',
     'start-tournament': 'closes registration for good',
     'end-tournament': 'archived is the last thing a tournament is',
+    'remove-pool-reservations': 'Lowering the pool count for',
   } as const
 
   it.each([
@@ -136,6 +216,10 @@ describe('ConfirmIrreversibleActDialog', () => {
     },
     { variant: 'start-tournament', consequence: buildStartTournamentConsequence() },
     { variant: 'end-tournament', consequence: buildEndTournamentConsequence() },
+    {
+      variant: 'remove-pool-reservations',
+      consequence: buildRemovePoolReservationsConsequence(),
+    },
   ] as const)(
     'gives $variant a sentence no other act says',
     ({ variant, consequence }) => {
@@ -151,8 +235,9 @@ describe('ConfirmIrreversibleActDialog', () => {
   /**
    * The button treatment, per act — decided in the same switch that writes the copy.
    *
-   * `destructive` is for the two verbs that throw work away (pairings, and the schedule
-   * solved on them). The three lifecycle edges destroy nothing: publishing opens a door,
+   * `destructive` is for the three acts that throw work away — the two draw verbs (pairings,
+   * and the schedule solved on them) and a lowered pool count (reservations, with their
+   * windows and their tables). The three lifecycle edges destroy nothing: publishing opens a door,
    * starting mints matches, ending archives. They are one-way, which is what earns them
    * the dialog — not destructive, which is what would earn them the red. It also keeps
    * them off `variant="destructive"`, which fails AA colour contrast (#1039, open) and
@@ -172,6 +257,11 @@ describe('ConfirmIrreversibleActDialog', () => {
       destructive: false,
     },
     { name: 'an end', consequence: buildEndTournamentConsequence(), destructive: false },
+    {
+      name: 'a lowered pool count',
+      consequence: buildRemovePoolReservationsConsequence(),
+      destructive: true,
+    },
   ])('paints the confirm for $name', ({ consequence, destructive }) => {
     page.render({ consequence })
 

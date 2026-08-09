@@ -439,6 +439,211 @@ describe('EventEditor', () => {
   })
 
   /**
+   * **The Draw structure tab's pool count and the Table pools tab's cards are ONE list**
+   * (ADR 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-count-is-a-
+   * projection). An event's pool count is the number of pool rows it has; nothing stores a
+   * second number, so the two tabs cannot report different ones.
+   *
+   * This is the claim only the *editor* can make. The section's own tests prove what a
+   * keystroke asks for — these prove the ask lands in the same form field the other tab
+   * reads and the save sends, which is the whole of "the two tabs cannot drift".
+   */
+  describe('the pool count and the pool cards are one list', () => {
+    /** The box takes the whole value at once, as a director replacing a number does. */
+    const typePoolCount = (value: string) =>
+      fireEvent.change(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+        { target: { value } },
+      )
+
+    /** …and this is the director saying they are done with it. A **lowered** count is
+     * priced here rather than on the keystroke — see the multi-digit spec below. */
+    const finishTypingPoolCount = () =>
+      fireEvent.blur(eventEditorPage.drawStructure.setting('Pool count').getInput())
+
+    it('gives Table pools the number of cards the director typed on Draw structure', async () => {
+      // Two pool reservations, so the tab derives 2 and taking the count seeds 2.
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.setting('Pool count').getAction(),
+      )
+      typePoolCount('5')
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      // Named by continuing the sequence, and each new card is a real, editable pool —
+      // not a number the other tab is keeping to itself.
+      expect(
+        eventEditorPage
+          .getPoolNameInputs()
+          .map((input: HTMLElement) => (input as HTMLInputElement).value),
+      ).toEqual(['Pool A', 'Pool B', 'Pool C', 'Pool D', 'Pool E'])
+    })
+
+    /** …and the reverse, which is the half a stored count could never honour: a card added
+     * on Table pools raises the automatic count, its source sentence and the preview's
+     * fact, because all three read the one list. */
+    it('raises the automatic pool count when a card is added on Table pools', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      await userEvent.click(screen.getByRole('button', { name: 'Add pool' }))
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+
+      const row = eventEditorPage.drawStructure.setting('Pool count')
+      expect(row.getValue()).toHaveTextContent('3')
+      expect(row.getSource()).toHaveTextContent(
+        "3 pool reservations · today's behaviour",
+      )
+      expect(
+        eventEditorPage.drawStructure.preview.getFact('Pool reservations'),
+      ).toHaveTextContent('3')
+    })
+
+    /** ⚠️ THE CLAIM IS ABOUT THE REQUEST. A lowered count is a removal under an id-keyed
+     * diff: the surviving pool goes on citing the id the server minted, and the pool no
+     * entry cites is the one that goes (ADR 20260801). */
+    it('sends the shortened pool list once the removal is confirmed', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildRrThenKoEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.setting('Pool count').getAction(),
+      )
+      typePoolCount('1')
+      finishTypingPoolCount()
+      expect(eventEditorPage.drawStructure.confirm.getDialog()).toHaveTextContent(
+        'removes Pool B',
+      )
+      eventEditorPage.drawStructure.confirm.confirm()
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      const body = eventToUpdateBody(onSave.mock.calls[0][0])
+      expect(body.pools).toEqual([expect.objectContaining({ id: 'p-a', name: 'Pool A' })])
+      expect(body.draw_structure).toEqual(
+        expect.objectContaining({ manual_pool_count: 1 }),
+      )
+    })
+
+    /** Go back leaves the other tab exactly as it was. Asserted on the CARDS rather than
+     * on a callback: a confirm that only failed to fire a spy would still be a confirm
+     * that had already removed the pool. */
+    it('leaves both tabs alone when the removal is refused', async () => {
+      eventEditorPage.render({ event: buildRrThenKoEvent() })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.setting('Pool count').getAction(),
+      )
+      typePoolCount('1')
+      finishTypingPoolCount()
+      eventEditorPage.drawStructure.confirm.cancel()
+
+      expect(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+      ).toHaveValue('2')
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(eventEditorPage.getPoolNameInputs()).toHaveLength(2)
+    })
+
+    /**
+     * ⚠️ **A count whose leading digit is below the row count must still be typeable.**
+     * Against two pools, `12` produces the value `1` first — and a confirm priced on that
+     * keystroke opens a modal dialog, moves focus out of the box, and eats the `2`. In a
+     * box whose ceiling is 512 that would make most three-digit counts unreachable.
+     *
+     * Typed with `userEvent`, one character at a time, deliberately: this claim is about
+     * what happens *between* keystrokes, and a whole-value `fireEvent.change` cannot see
+     * it — that spelling passes whether the confirm is priced on the keystroke or on the
+     * commit.
+     */
+    it('lets a director type a count whose first digit is a removal', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildRrThenKoEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.setting('Pool count').getAction(),
+      )
+      await userEvent.clear(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+      )
+      await userEvent.type(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+        '12',
+      )
+
+      expect(eventEditorPage.drawStructure.confirm.queryDialog()).toBeNull()
+      expect(
+        eventEditorPage.drawStructure.setting('Pool count').getInput(),
+      ).toHaveValue('12')
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(eventEditorPage.getPoolNameInputs()).toHaveLength(12)
+    })
+
+    /**
+     * The removal, with the pool cards **already mounted**.
+     *
+     * The order is the point: every other spec here either raises the count or never
+     * leaves the Draw structure tab, so the pool cards were registered *after* the write.
+     * `setValue` on a field-array name republishes the array, but it is not
+     * `useFieldArray.remove()` — a dropped index that stayed registered would go on
+     * reaching the save.
+     */
+    it('removes a mounted pool card, and the removal reaches the request', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildRrThenKoEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(eventEditorPage.getPoolNameInputs()).toHaveLength(2)
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+      await userEvent.click(
+        eventEditorPage.drawStructure.setting('Pool count').getAction(),
+      )
+      typePoolCount('1')
+      finishTypingPoolCount()
+      eventEditorPage.drawStructure.confirm.confirm()
+
+      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
+      expect(eventEditorPage.getPoolNameInputs()).toHaveLength(1)
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).pools).toHaveLength(1)
+    })
+
+    /** The pool set is frozen once a draw is cut — every fixture names the pool it was
+     * dealt into — so the row that now creates and removes pool rows is frozen with it,
+     * by the same `poolSetFreeze` the Table pools tab already used. */
+    it('freezes the pool count row on an event whose draw is cut', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          drawOwnership: {
+            ...everySettingAutomatic(),
+            poolCountMode: 'manual',
+            manualPoolCount: 2,
+          },
+          fixtures: [buildFixture({ poolId: 'p-a' })],
+        }),
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Draw structure'))
+
+      const row = eventEditorPage.drawStructure.setting('Pool count')
+      expect(row.getInput()).toBeDisabled()
+      expect(row.getAction()).toBeDisabled()
+      expect(row.queryFreezeReason()).toHaveTextContent(
+        'Every fixture names the pool it was dealt into',
+      )
+    })
+  })
+
+  /**
    * A rule with no value is not a rule. It used to go to the server anyway — where
    * a scalar one was ACCEPTED (201) and came back onto the event card as the chip
    * `Rating < ?`, a restriction on nobody wearing the clothes of a real one, while a

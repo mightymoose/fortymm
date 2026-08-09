@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import type { EditFreeze } from '../../data/draw'
 import { findPoolConflicts } from '../../data/helpers'
 import { addedPool, poolEntryKey } from '../../data/pool-entries'
+import { poolNameAt } from '../../data/pool-reconciliation'
 import type { PoolEntry, TournamentTable } from '../../data/types'
 import { EmptyState } from '../../empty-state'
 import type { EventFormValues } from '../event-form'
@@ -142,10 +143,16 @@ export const PoolsSection = ({
   //
   // It joins at the END, which is where `append` puts it and where the server will
   // therefore position it: the array order is the pool order, and nothing else is.
+  //
+  // The name comes from `poolNameAt` — the ONE place a default pool name is minted, shared
+  // with the Draw structure tab's pool-count reconciliation (`data/pool-reconciliation`),
+  // because "continuing the letter sequence" is a promise about one sequence. This used to
+  // spell the letter `String.fromCharCode(65 + n)` here, which prints `Pool [` for the 27th
+  // pool — reachable now that a director can type a pool count of up to 512.
   const addPool = () =>
     append(
       addedPool({
-        name: `Pool ${String.fromCharCode(65 + fields.length)}`,
+        name: poolNameAt(fields.length),
         slot: { ...eventSlot },
         tableIds: [],
       }),

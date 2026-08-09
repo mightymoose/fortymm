@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import { Overline } from '@/components/overline'
 import { Button } from '@/components/ui/button'
 
@@ -9,7 +11,12 @@ import {
 } from '../../data/draw-ownership'
 import { deriveDrawStructure } from '../../data/draw-structure'
 import { QUALIFIERS_PER_POOL_MAX } from '../../data/event-validation'
-import type { TournamentEvent } from '../../data/types'
+import { reconcilePoolsToCount } from '../../data/pool-reconciliation'
+import type { PoolEntry, TournamentEvent } from '../../data/types'
+import {
+  ConfirmIrreversibleActDialog,
+  type PoolCountActConsequence,
+} from '../confirm-irreversible-act-dialog'
 import { drawIssueFor } from './draw-structure-section/draw-issue'
 import { DrawIssuePanel } from './draw-structure-section/draw-issue-panel'
 import { DrawPreview } from './draw-structure-section/draw-preview'
@@ -31,14 +38,36 @@ export interface DrawStructureFieldErrors {
 export interface DrawStructureSectionProps {
   /**
    * The event as the editor's **live draft** has it, so the tab recomputes as the
-   * director edits the player limit or adds a pool on the tabs next door.
+   * director edits the player limit or the qualifier count on the tabs next door.
    *
-   * ⚠️ `pools` is read as a *count* deliberately. The editor's draft carries the form's
-   * `pools`, which are `PoolEntry` diffs rather than the read model's `Pool` rows (ADR
-   * 20260801); the length is the same either way, and nothing here may touch a pool's
-   * insides.
+   * ⚠️ **Its `pools` are not read here** — the `pools` prop below is, and it is the honest
+   * shape. The draft's copy is the read model's `Pool[]` by type and the form's
+   * `PoolEntry[]` at runtime (ADR 20260801), which was fine while this tab only ever
+   * counted them and is not fine now that it writes them. `event.slot` *is* read: it is
+   * the window a first pool inherits.
    */
   event: TournamentEvent
+  /**
+   * The event's pool rows as the **form** holds them — the `PoolEntry` diff the Table
+   * pools tab edits and the save puts on the wire.
+   *
+   * **An event's pool count IS the number of these** (ADR
+   * 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-count-is-a-projection).
+   * There is no second stored number, so the automatic pool count is `pools.length`, the
+   * preview's `Pool reservations` fact is `pools.length`, and a director who types a pool
+   * count is asking for that many rows.
+   */
+  pools: PoolEntry[]
+  /**
+   * Write the reconciled pool list back to the editor's form — the **same** `pools` field
+   * the Table pools tab drives through its `useFieldArray`, which is what makes the two
+   * tabs incapable of drifting: they are one list, read and written from two places.
+   *
+   * Called only alongside `onChange`, in the same handler, so the number and the rows
+   * change together or neither does (the ADR's point 2). There is no second endpoint and
+   * no second way to mint a pool.
+   */
+  onPoolsChange: (pools: PoolEntry[]) => void
   /** When false (a non-creator), the tab is a **view**: every value is text, and there
    * is no action, no box and no way to Basics. Not a disabled form (ADR-0015). */
   canEdit: boolean
@@ -77,6 +106,21 @@ export interface DrawStructureSectionProps {
    * **Required, not optional.** A freeze a call site can forget is a freeze that silently
    * does not happen, and this one guards a 409. */
   qualifiersFreeze: EditFreeze
+  /** Whether the event's **set of pools** may still change (`poolSetFreeze`, `data/draw`)
+   * — the *same* freeze the Table pools tab is given, not a second rule about the same
+   * fact. It has to reach this tab because the Pool count row now creates and removes pool
+   * rows: a cut event's fixtures each name the pool they were dealt into, so the server
+   * refuses the write with a 409 (`_enforce_pool_set_frozen`) and this row declines to
+   * build it.
+   *
+   * **The whole row freezes**, box and action alike, exactly as the qualifiers row does.
+   * `Use automatic` alone would be a 200 — the server excludes ownership modes from its
+   * freeze — but it is a one-way door: the automatic count is the row count, `Set myself`
+   * is the only way back, and it is frozen. Ownership of a number that cannot move is not
+   * a choice worth offering.
+   *
+   * **Required, not optional**, for the reason its sibling above is. */
+  poolSetFreeze: EditFreeze
 }
 
 /**
@@ -110,6 +154,32 @@ export interface DrawStructureSectionProps {
  * each other. The box and the action read the stored mode instead, so the row the
  * director took stays theirs and can still be handed back.
  *
+ * ## A typed pool count IS a number of pool rows
+ *
+ * Nothing stores a pool count of its own (ADR 20260808-an-events-pool-count-is-its-pool-
+ * rows-and-a-derived-count-is-a-projection). So a director who types `6` into the Pool
+ * count box gets six pool rows, reconciled through the list the Table pools tab already
+ * edits and the save already sends — one write, one save, and no way for the two tabs to
+ * disagree about how many pools the event has.
+ *
+ * Raising the count **appends** rows that continue the letter sequence and inherit the
+ * last pool's window, with no tables, and it writes on the keystroke like every other box
+ * here — it spends nothing. Lowering it **removes** rows from the end, which discards
+ * reservations, so it is *held* until the director finishes typing and then priced by a
+ * confirm that names them (ADR 20260806). Held rather than priced per keystroke because
+ * `12` begins with `1`: see `typedPoolCount`.
+ *
+ * Two things deliberately do *not* reconcile:
+ *
+ * - **Clearing the box.** A manual mode with no number is automatic, so an emptied box
+ *   hands the count back to the row count rather than asking for none.
+ * - **`Set myself`.** It seeds the box from the *derived* count, which is a projection —
+ *   and a projection in excess of the rows is reported, never materialised (the ADR's
+ *   point 3). Creating four reservations off a field the app invented is precisely what
+ *   that rule forbids. The gap is chore 5b's disagreement panel to report, and its
+ *   `Use {n} pools of {size}` resolution appends through `reconcilePoolsToCount` — the
+ *   same seam this row types through.
+ *
  * ## The arithmetic is not here
  *
  * Every number and every source sentence comes from `deriveDrawStructure`
@@ -119,11 +189,14 @@ export interface DrawStructureSectionProps {
  */
 export const DrawStructureSection = ({
   event,
+  pools,
   canEdit,
   onChange,
+  onPoolsChange,
   onGoToBasics,
   errors = {},
   qualifiersFreeze,
+  poolSetFreeze,
 }: DrawStructureSectionProps) => {
   const fieldSize = previewFieldSize(event.maxPlayers)
   // ONE call, two readers — the heading block and the preview's `Preview basis` fact.
@@ -140,8 +213,11 @@ export const DrawStructureSection = ({
   const structure = deriveDrawStructure({
     previewFieldSize: fieldSize,
     // One pool reservation is one pool — today's behaviour, and the automatic source of
-    // the pool count (ADR 20260808).
-    poolReservationCount: event.pools.length,
+    // the pool count (ADR 20260808). Read off the FORM's pool list, which is what the
+    // reconciliation below writes, so the source sentence
+    // (`{n} pool reservations · today's behaviour`) states a number that is true of the
+    // draft the director is looking at.
+    poolReservationCount: pools.length,
     poolCountMode: ownership.poolCountMode,
     manualPoolCount: ownership.manualPoolCount,
     poolSizeMode: ownership.poolSizeMode,
@@ -163,6 +239,78 @@ export const DrawStructureSection = ({
       qualifiersPerPool,
       drawOwnership: { ...ownership, ...next },
     })
+
+  /**
+   * A pool count the director has typed but **not finished typing** — one below the rows
+   * the event has, so it is not written yet. `null` the rest of the time.
+   *
+   * ⚠️ **This is why the confirm is not opened on the keystroke**, and the reason is
+   * arithmetic rather than taste. Against six pools, typing `12` produces the value `1`
+   * first: priced per keystroke, that `1` opens a modal dialog, focus leaves the box, and
+   * the `2` never lands. Every count with a smaller leading digit than the event has pools
+   * would be unreachable in a box whose ceiling is 512.
+   *
+   * So a lowered count is *held* — the box shows what was typed, nothing is written — and
+   * priced when the director says they are done (`commitPoolCount`, off blur or Enter). A
+   * *raised* count needs none of this: it spends nothing, so it writes on the keystroke
+   * like every other box on the tab.
+   */
+  const [typedPoolCount, setTypedPoolCount] = useState<number | null>(null)
+
+  /**
+   * The removal awaiting its answer: the count that produced it and the rows it would
+   * drop. `null` whenever no dialog is on screen.
+   */
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    count: number
+    removed: PoolEntry[]
+  } | null>(null)
+
+  /** Write a pool count — **the number and the rows, in one act** (ADR 20260808). Not an
+   * effect on the stored count: a saved event may legitimately hold a manual count its row
+   * count does not match (that is what `Set myself` leaves behind, and the ADR permits
+   * saving it), and an effect would silently reshape it the moment the tab was opened. */
+  const writePoolCount = (count: number) => {
+    own({ manualPoolCount: count })
+    onPoolsChange(reconcilePoolsToCount(pools, count, event.slot).pools)
+    setTypedPoolCount(null)
+    setPendingRemoval(null)
+  }
+
+  /** What the Pool count box does with a keystroke the bounds admitted. */
+  const takePoolCount = (value: number | null) => {
+    // A cleared box is **not** a count of none. The derivation reads a manual mode with no
+    // number as automatic, so the count goes back to being the row count — and no row is
+    // touched. Reconciling to `0` here would delete every pool of the event because
+    // somebody selected the number to retype it.
+    if (value === null) {
+      setTypedPoolCount(null)
+      own({ manualPoolCount: null })
+      return
+    }
+    // Below the rows the event has: destructive, so it is held rather than written, and
+    // the next keystroke may well raise it back above them.
+    if (value < pools.length) {
+      setTypedPoolCount(value)
+      return
+    }
+    writePoolCount(value)
+  }
+
+  /** The director is done typing (they left the box, or pressed Enter). A held count is
+   * priced now: the confirm names the reservations that would go before any of them does
+   * (ADR 20260806). */
+  const commitPoolCount = () => {
+    // Nothing held, or a dialog already asking about it — the confirm's own focus move
+    // blurs the box a second time, and one question is enough.
+    if (typedPoolCount === null || pendingRemoval !== null) return
+    const { removed } = reconcilePoolsToCount(pools, typedPoolCount, event.slot)
+    if (removed.length > 0) {
+      setPendingRemoval({ count: typedPoolCount, removed })
+      return
+    }
+    writePoolCount(typedPoolCount)
+  }
 
   // Read off the derived sizes rather than divided out again — the pools are routinely
   // unequal (22 across 4 is `6, 6, 5, 5`) and the uneven case is a first-class state.
@@ -259,12 +407,21 @@ export const DrawStructureSection = ({
               unit={structure.poolCount === 1 ? 'pool' : 'pools'}
               ownership={structure.sources.poolCount.ownership}
               source={structure.sources.poolCount.sentence}
+              // The pool SET freeze, not a rule of this row's own: a cut event's fixtures
+              // each name the pool they were dealt into, so creating or removing a pool row
+              // is a 409 (`poolSetFreeze`, `data/draw`) — and this row now does exactly
+              // that. Box and action both, for the reason on the prop.
+              freeze={poolSetFreeze}
               entry={
                 canEdit && ownership.poolCountMode === 'manual'
                   ? {
-                      value: ownership.manualPoolCount,
+                      // The held number while one is being typed, else the stored one.
+                      // Going back drops the held value, and the box is the stored number
+                      // again.
+                      value: typedPoolCount ?? ownership.manualPoolCount,
                       max: MANUAL_POOL_DIMENSION_MAX,
-                      onChange: (value) => own({ manualPoolCount: value }),
+                      onChange: takePoolCount,
+                      onCommit: commitPoolCount,
                     }
                   : undefined
               }
@@ -274,12 +431,20 @@ export const DrawStructureSection = ({
                     ? {
                         label: 'Use automatic',
                         // The mode only: the number stays, remembered for the next time
-                        // they take the setting back.
+                        // they take the setting back — and **no row is touched**. The
+                        // automatic count is the row count, so handing the setting back
+                        // changes who owns the number, not how many pools the event has.
                         onClick: () => own({ poolCountMode: 'automatic' }),
                       }
                     : {
                         label: 'Set myself',
-                        // Seeded from the count the row was already showing.
+                        // Seeded from the count the row was already showing — and, again,
+                        // **no row is created**. That count is a projection while pool size
+                        // is manual, and a projection in excess of the rows is reported,
+                        // never materialised (ADR 20260808, point 3). Chore 5b's
+                        // disagreement panel is what reports it, and its
+                        // `Use {n} pools of {size}` is what appends the rows, through the
+                        // same `reconcilePoolsToCount` this row types through.
                         onClick: () =>
                           own({
                             poolCountMode: 'manual',
@@ -447,13 +612,38 @@ export const DrawStructureSection = ({
             // shows (ADR 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-
             // count-is-a-projection). A director who takes the pool count and types 8
             // over four reservations must read `8 pools` in the equation and `4` in the
-            // fact, and see the gap.
-            poolReservationCount={event.pools.length}
+            // fact, and see the gap. The same list the derivation counts, so the fact and
+            // the row's source sentence can never name two different numbers.
+            poolReservationCount={pools.length}
             membershipMode={ownership.membershipMode}
             previewBasis={previewBasis}
           />
         </div>
       </div>
+
+      {/* The price of a lowered pool count, asked before anything is written: the rows are
+          still in the form, the ownership record still holds the old number, and Go back —
+          or Escape — leaves both exactly as they are. Rendered only while an act is
+          awaiting its answer, so the dialog cannot be on screen with nothing behind it. */}
+      {pendingRemoval && (
+        <ConfirmIrreversibleActDialog
+          open
+          consequence={
+            {
+              variant: 'remove-pool-reservations',
+              eventName: event.name,
+              poolNames: pendingRemoval.removed.map((pool) => pool.name),
+            } satisfies PoolCountActConsequence
+          }
+          onConfirm={() => writePoolCount(pendingRemoval.count)}
+          onCancel={() => {
+            // BOTH: the held number goes with the dialog, so the box reads the stored
+            // count again rather than a number the event does not have.
+            setTypedPoolCount(null)
+            setPendingRemoval(null)
+          }}
+        />
+      )}
     </div>
   )
 }

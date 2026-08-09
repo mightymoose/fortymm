@@ -18,10 +18,13 @@ import {
  * act without the tournament it moves (ADR "a confirm prices an irreversible act, a
  * freeze explains an illegal one").
  *
- * Five acts, of two kinds. The two **draw** acts discard a standing draw and the schedule
+ * Six acts, of three kinds. The two **draw** acts discard a standing draw and the schedule
  * solved on it. The three **lifecycle** edges are the forward-only path a tournament walks
  * — `draft → published → live → archived` — with no edge back and `archived` terminal, so
- * every one of them is one-way too.
+ * every one of them is one-way too. The one **pool-count** act discards reservations: a
+ * lowered pool count on the Draw structure tab removes pool rows, and a removed row takes
+ * its time window and its table selections with it (ADR 20260808 — "lowering a manual pool
+ * count removes rows, which is destructive").
  *
  * The `never` default in the body switch is what keeps the union honest: a variant added
  * here is a **type error** until it has copy of its own, rather than a dialog that
@@ -51,9 +54,26 @@ export type LifecycleActConsequence =
   | { variant: 'start-tournament'; tournamentName: string }
   | { variant: 'end-tournament'; tournamentName: string }
 
+/** The act that belongs to the Draw structure tab's **pool count** — narrow for the third
+ * time, and for the same reason: the tab can price exactly this one, so its state must be
+ * unable to hold a draw verb or a lifecycle edge it has no way to perform.
+ *
+ * It carries the pool **names**, not a count, because the copy names them: a director
+ * about to lose `Pool E` and `Pool F` needs to know which two reservations go, and a bare
+ * "2 pools" would make them count the cards on the other tab to find out. */
+export type PoolCountActConsequence = {
+  variant: 'remove-pool-reservations'
+  eventName: string
+  /** The pools that would go, in the order the Table pools tab lists them. Never empty:
+   * a reconciliation that removes nothing is not an act worth pricing, and the tab does
+   * not open the dialog for one. */
+  poolNames: string[]
+}
+
 export type IrreversibleActConsequence =
   | DrawActConsequence
   | LifecycleActConsequence
+  | PoolCountActConsequence
 
 export interface ConfirmIrreversibleActDialogProps {
   open: boolean
@@ -65,6 +85,29 @@ export interface ConfirmIrreversibleActDialogProps {
 const Strong = ({ children }: { children: React.ReactNode }) => (
   <span className="font-semibold text-[color:var(--fg-1)]">{children}</span>
 )
+
+/** What a pool with an emptied name box is called in this sentence. Reachable: the name is
+ * the one thing on a pool card a director can *clear*, and the save is refused for it
+ * later (`poolNameIssues`) — but the confirm comes first, and "removes  and Pool F" names
+ * nothing. */
+const UNNAMED_POOL = 'an unnamed pool'
+
+/** How many pools the sentence names before it starts counting them. Three is enough for
+ * the ordinary case (a director nudging six pools down to four) and the cap is what keeps
+ * a drop from 512 to 1 from reading out 511 names. */
+const MAX_NAMED_POOLS = 3
+
+/** `Pool E`, `Pool E and Pool F`, `Pool D, Pool E and Pool F`, and past the cap
+ * `Pool D, Pool E, Pool F and 8 more`. */
+const removedPoolList = (names: string[]): string => {
+  const shown = names
+    .slice(0, MAX_NAMED_POOLS)
+    .map((name) => name.trim() || UNNAMED_POOL)
+  const unshown = names.length - shown.length
+  const parts = unshown > 0 ? [...shown, `${unshown} more`] : shown
+  if (parts.length < 2) return parts[0] ?? ''
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+}
 
 /**
  * The consequence-stating confirm on an act a director **cannot undo**: the two draw acts
@@ -92,12 +135,13 @@ const Strong = ({ children }: { children: React.ReactNode }) => (
  * Focus is trapped, and Radix's own `onOpenAutoFocus` lands it on **Go back** — the safe
  * default when the other button spends something that does not come back.
  *
- * ## Why only two of the five wear the destructive treatment
+ * ## Why only three of the six wear the destructive treatment
  *
  * The confirm's `variant` is decided by the same `switch` that writes the copy, so a new
  * variant cannot acquire a sentence without also answering for how its button looks.
  * `destructive` is reserved for the acts that **throw work away** — the two draw verbs
- * discard pairings and the schedule solved on them. The three lifecycle edges destroy
+ * discard pairings and the schedule solved on them, and a lowered pool count discards
+ * reservations with their windows and their tables. The three lifecycle edges destroy
  * nothing: publishing opens a door, starting mints matches, ending archives. They are
  * consequential and one-way, which is what earns them a dialog — not destructive, which
  * is what would earn them the red.
@@ -197,6 +241,31 @@ export const ConfirmIrreversibleActDialog = ({
           confirmLabel: 'End the tournament',
           confirmVariant: 'default' as const,
         }
+      // The pool count is the pool ROWS (ADR 20260808), so lowering it removes rows — and
+      // a row is a reservation, with a window and a set of tables somebody chose. The
+      // sentence names which pools go, because that is the part the director cannot work
+      // out from the number they just typed.
+      //
+      // It deliberately does NOT say "there is no undoing this": the removal lands in the
+      // editor's draft, and closing the sheet without saving really does put the pools
+      // back. What does not come back is the work — raising the count again mints blank
+      // rows with no tables — so the copy prices the work and claims nothing more.
+      case 'remove-pool-reservations': {
+        const count = consequence.poolNames.length
+        return {
+          title: `Remove ${count} pool ${count === 1 ? 'reservation' : 'reservations'}?`,
+          description: (
+            <>
+              Lowering the pool count for <Strong>{consequence.eventName}</Strong>{' '}
+              removes <Strong>{removedPoolList(consequence.poolNames)}</Strong>.
+              Each one takes its time window and its reserved tables with it.
+            </>
+          ),
+          confirmLabel: count === 1 ? 'Remove the pool' : `Remove ${count} pools`,
+          // Red, by the rule above: this throws away work a director did on another tab.
+          confirmVariant: 'destructive' as const,
+        }
+      }
       default: {
         // A variant without copy of its own is a TYPE error here, not a dialog that
         // prices the wrong act.

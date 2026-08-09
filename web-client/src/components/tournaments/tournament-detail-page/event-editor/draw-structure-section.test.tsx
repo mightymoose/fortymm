@@ -1,8 +1,10 @@
 import userEvent from '@testing-library/user-event'
 
+import { fireEvent } from '@/test/utilities'
+
 import { everySettingAutomatic } from '../../data/draw-ownership'
 import { buildPool } from '../../data/seed.factory'
-import type { DrawOwnership, TournamentEvent } from '../../data/types'
+import type { DrawOwnership, PoolEntry, TournamentEvent } from '../../data/types'
 import { buildDrawStructureEvent } from './draw-structure-section.factory'
 import { drawStructureSectionPage } from './draw-structure-section.page'
 
@@ -422,7 +424,10 @@ describe('DrawStructureSection', () => {
       expect(onChange).not.toHaveBeenCalled()
     })
 
-    it.each(['Pool count', 'Pool size', 'Membership'])(
+    // Pool count is NOT in this list, and it is not an omission: it freezes on a cut event
+    // too, for a different reason and by a different freeze (the pool SET freeze — its row
+    // now creates and removes pool rows). See `the pool set is frozen` below.
+    it.each(['Pool size', 'Membership'])(
       'leaves %s alone — the server does not freeze its ownership',
       (name) => {
         drawStructureSectionPage.render({
@@ -435,6 +440,451 @@ describe('DrawStructureSection', () => {
         expect(row.queryFreezeReason()).toBeNull()
       },
     )
+  })
+
+  /**
+   * **A pool count the director types IS a number of pool rows** (ADR
+   * 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-count-is-a-projection).
+   * Nothing stores a second number, so typing `6` asks for six rows — created or removed
+   * through the very list the Table pools tab edits and the save already sends.
+   *
+   * Asserted on the two writes together, because the ADR's demand is that they are one
+   * act: the number and the rows change in one save, or neither does.
+   */
+  describe('typing a pool count', () => {
+    /** The "Nothing set" event — **4 pool reservations** — with the count already taken,
+     * so the row renders a box. */
+    const owningFourPools = () =>
+      eventOwning({ poolCountMode: 'manual', manualPoolCount: 4 })
+
+    const renderOwningCount = (
+      overrides: Parameters<typeof drawStructureSectionPage.render>[0] = {},
+    ) => {
+      const onChange = vi.fn()
+      const onPoolsChange = vi.fn()
+      drawStructureSectionPage.render({
+        event: owningFourPools(),
+        onChange,
+        onPoolsChange,
+        ...overrides,
+      })
+      return { onChange, onPoolsChange }
+    }
+
+    /** The box takes the whole value at once — a director correcting a count selects the
+     * number and replaces it, and `acceptedManualEntry` reads what the box then holds.
+     *
+     * ⚠️ `fireEvent` rather than `userEvent.type` **at this level only**: these props are
+     * spies, so nothing feeds a new `value` back into the controlled box, and typing would
+     * append to the number already in it. The multi-digit claim is asserted where real
+     * form state closes that loop — `event-editor.test.tsx`. */
+    const typeCount = (value: string) =>
+      fireEvent.change(drawStructureSectionPage.setting('Pool count').getInput(), {
+        target: { value },
+      })
+
+    /** The director says they are done — they left the box. A *lowered* count is priced
+     * here rather than on the keystroke, because `12` begins with `1`. */
+    const finishTyping = () =>
+      fireEvent.blur(drawStructureSectionPage.setting('Pool count').getInput())
+
+    describe('raising it', () => {
+      it('appends rows until the event has the count that was typed', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+
+        typeCount('6')
+
+        // ONE act: the stored number and the rows, written together.
+        expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(6)
+        expect(onPoolsChange.mock.lastCall?.[0]).toHaveLength(6)
+      })
+
+      it('continues the letter sequence rather than restarting it', () => {
+        const { onPoolsChange } = renderOwningCount()
+
+        typeCount('6')
+
+        expect(
+          onPoolsChange.mock.lastCall?.[0].map((pool: PoolEntry) => pool.name),
+        ).toEqual(['Pool A', 'Pool B', 'Pool C', 'Pool D', 'Pool E', 'Pool F'])
+      })
+
+      /** The director is not left completing a blank card: a new row runs when the last
+       * one does. The factory's pools run 09:00–12:30 while the *event* runs 09:00–18:00,
+       * so "the last pool's window" and "the event's window" are distinguishable here. */
+      it('takes the last existing pool’s date and window, and reserves no tables', () => {
+        const { onPoolsChange } = renderOwningCount()
+
+        typeCount('5')
+
+        const appended = onPoolsChange.mock.lastCall?.[0].at(-1)
+        expect(appended.slot).toEqual({
+          date: '2026-06-13',
+          start: '09:00',
+          end: '12:30',
+        })
+        // #1072 already reports an empty pool. A table selection the director never made
+        // would be a reservation invented for them (ADR 20260808).
+        expect(appended.tableIds).toEqual([])
+      })
+
+      /** ⚠️ `PoolWrite` is `extra="forbid"` and has no `id`, so a client-minted one is a
+       * 422 naming the entry. The `added` arm is what makes that unsayable. */
+      it('mints the new rows with no id, and leaves the stored ones citing theirs', () => {
+        const { onPoolsChange } = renderOwningCount()
+
+        typeCount('6')
+
+        const written: PoolEntry[] = onPoolsChange.mock.lastCall?.[0]
+        expect(written.slice(0, 4).map((pool) => pool.kind)).toEqual([
+          'kept',
+          'kept',
+          'kept',
+          'kept',
+        ])
+        expect(written.slice(4).map((pool) => pool.kind)).toEqual([
+          'added',
+          'added',
+        ])
+        expect(written.slice(4).every((pool) => !('id' in pool))).toBe(true)
+      })
+
+      /** Constructive: nothing is discarded, so nothing is priced (ADR 20260806 — the
+       * first cut is exempt for the same reason). */
+      it('asks no confirm', () => {
+        renderOwningCount()
+
+        typeCount('6')
+
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+      })
+    })
+
+    describe('lowering it', () => {
+      /**
+       * **Nothing is written on the keystroke.** Asserted with no query for the dialog in
+       * it, deliberately: a test that reached for the dialog first would red with "unable
+       * to find an alertdialog" the moment the confirm was removed, which cannot tell
+       * "the write is gated" from "the dialog moved". This one reds on the write.
+       */
+      it('writes neither the count nor the rows until the removal is confirmed', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+
+        typeCount('2')
+        finishTyping()
+
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+
+      /**
+       * ⚠️ **A lowered count is not priced until the director has finished typing it**,
+       * and this is the assertion that says why. Against four pools, `12` produces the
+       * value `1` first; a confirm on that keystroke traps focus in a modal dialog and the
+       * `2` never lands. The box shows what was typed and holds it.
+       */
+      it('holds a lower keystroke without pricing it, so a longer number can still be typed', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+
+        typeCount('1')
+
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+        expect(drawStructureSectionPage.setting('Pool count').getInput()).toHaveValue('1')
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+
+      /** …and the next digit takes it back above the row count, which writes at once —
+       * nothing is discarded, so nothing is priced. */
+      it('writes the moment the number typed is no longer a removal', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+
+        typeCount('1')
+        typeCount('12')
+
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+        expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(12)
+        expect(onPoolsChange.mock.lastCall?.[0]).toHaveLength(12)
+      })
+
+      /** Destructive: two reservations go, with their windows and their tables. The
+       * director is told **which** before it happens. */
+      it('names the pools that would go', () => {
+        renderOwningCount()
+
+        typeCount('2')
+        finishTyping()
+
+        const dialog = drawStructureSectionPage.confirm.getDialog()
+        expect(dialog).toHaveTextContent('Remove 2 pool reservations?')
+        expect(dialog).toHaveTextContent('removes Pool C and Pool D')
+      })
+
+      it('names the event, so a director running several knows which one', () => {
+        renderOwningCount()
+
+        typeCount('3')
+        finishTyping()
+
+        expect(drawStructureSectionPage.confirm.getDialog()).toHaveTextContent(
+          'Lowering the pool count for Two-stage Singles',
+        )
+      })
+
+      /** Enter is the other way to say "done", for a director who never leaves the
+       * keyboard. */
+      it('prices it on Enter as well as on leaving the box', () => {
+        renderOwningCount()
+
+        typeCount('2')
+        fireEvent.keyDown(
+          drawStructureSectionPage.setting('Pool count').getInput(),
+          { key: 'Enter' },
+        )
+
+        expect(drawStructureSectionPage.confirm.getDialog()).toHaveTextContent(
+          'Remove 2 pool reservations?',
+        )
+      })
+
+      it('drops the rows from the END on the confirm, and stores the count with them', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+
+        typeCount('2')
+        finishTyping()
+        drawStructureSectionPage.confirm.confirm()
+
+        expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(2)
+        expect(
+          onPoolsChange.mock.lastCall?.[0].map((pool: PoolEntry) => pool.name),
+        ).toEqual(['Pool A', 'Pool B'])
+      })
+
+      /**
+       * **Go back changes nothing at all** — and the box says so.
+       *
+       * Asserting only that the callbacks did not fire would pass while the box went on
+       * showing the `2` the director typed, which is a row claiming a pool count the event
+       * does not have. The box reads the held number while the dialog is up and the stored
+       * one the moment it is dropped.
+       */
+      it('restores the stored count on Go back, and touches no pool row', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+        const row = drawStructureSectionPage.setting('Pool count')
+
+        typeCount('2')
+        finishTyping()
+        expect(row.getInput()).toHaveValue('2')
+
+        drawStructureSectionPage.confirm.cancel()
+
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+        expect(row.getInput()).toHaveValue('4')
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+
+      /** Escape is the cancel, through the dialog's own channel. */
+      it('reads Escape as Go back', () => {
+        const { onPoolsChange } = renderOwningCount()
+
+        typeCount('2')
+        finishTyping()
+        drawStructureSectionPage.confirm.pressEscape()
+
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+
+      /** Leaving the box with nothing held asks nothing. A director who tabs through the
+       * tab without typing must not meet a dialog. */
+      it('asks nothing when the director leaves a box they never edited', () => {
+        const { onChange, onPoolsChange } = renderOwningCount()
+
+        finishTyping()
+
+        expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+        expect(onChange).not.toHaveBeenCalled()
+        expect(onPoolsChange).not.toHaveBeenCalled()
+      })
+    })
+
+    /** A cleared box is **not** a count of none. The derivation reads a manual mode with
+     * no number as automatic, so the count goes back to being the row count — and the rows
+     * stay exactly where they are. Reconciling to `0` here would delete every pool of the
+     * event because somebody selected the number to retype it. */
+    it('clears to automatic without removing a single pool', () => {
+      const { onChange, onPoolsChange } = renderOwningCount()
+
+      typeCount('')
+
+      expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBeNull()
+      expect(onPoolsChange).not.toHaveBeenCalled()
+      expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+    })
+
+    /** Typing the count the event's rows already have removes nothing, so it is priced by
+     * nothing. Reachable, and worth pinning, from the one state where the stored count and
+     * the row count legitimately differ: `Set myself` seeded 6 against 4 reservations, and
+     * the director types the 4 they actually have. */
+    it('asks no confirm when the typed count is the row count already', () => {
+      const { onChange, onPoolsChange } = renderOwningCount({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: 6 }),
+      })
+
+      typeCount('4')
+
+      expect(drawStructureSectionPage.confirm.queryDialog()).toBeNull()
+      expect(onChange.mock.lastCall?.[0].drawOwnership.manualPoolCount).toBe(4)
+      expect(
+        onPoolsChange.mock.lastCall?.[0].map((pool: PoolEntry) => pool.name),
+      ).toEqual(['Pool A', 'Pool B', 'Pool C', 'Pool D'])
+    })
+
+    /**
+     * **`Set myself` creates no row**, and that is the ADR's point 3 rather than an
+     * oversight: the count it seeds from is a *projection* against a field the app
+     * invented, and a projection in excess of the rows is reported, never materialised.
+     * Here 32 players in pools of 5 projects 7 pools over 4 reservations.
+     *
+     * Chore 5b's disagreement panel is what reports the gap, and its
+     * `Use {n} pools of {size}` is what appends the rows — through the same
+     * `reconcilePoolsToCount` the box types through.
+     */
+    it('creates no pool row when the director merely takes the setting', async () => {
+      const onPoolsChange = vi.fn()
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolSizeMode: 'manual', manualPoolSize: 5 }),
+        onPoolsChange,
+      })
+
+      await userEvent.click(drawStructureSectionPage.setting('Pool count').getAction())
+
+      expect(onPoolsChange).not.toHaveBeenCalled()
+    })
+
+    /** …and neither does handing it back. The automatic count IS the row count, so
+     * `Use automatic` changes who owns the number and not how many pools exist. */
+    it('creates and removes nothing when the director hands the setting back', async () => {
+      const { onPoolsChange } = renderOwningCount()
+
+      await userEvent.click(drawStructureSectionPage.setting('Pool count').getAction())
+
+      expect(onPoolsChange).not.toHaveBeenCalled()
+    })
+  })
+
+  /**
+   * **The pool SET freeze reaches this tab too** (ADR 20260808's consequence, and the
+   * server's `_enforce_pool_set_frozen`): once a draw is cut every fixture names the pool
+   * it was dealt into, so a row this tab creates or removes is a 409. It is the *same*
+   * freeze the Table pools tab is given — no second rule about the same fact.
+   */
+  describe('the pool set is frozen', () => {
+    const FROZEN = {
+      kind: 'frozen',
+      reason:
+        'Every fixture names the pool it was dealt into, so a pool can’t be added or ' +
+        'removed while the draw stands.',
+    } as const
+
+    it('disables the pool count box and its action, and states why', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: 4 }),
+        poolSetFreeze: FROZEN,
+      })
+
+      const row = drawStructureSectionPage.setting('Pool count')
+      expect(row.getInput()).toBeDisabled()
+      expect(row.getAction()).toBeDisabled()
+      expect(row.queryFreezeReason()).toHaveTextContent(FROZEN.reason)
+    })
+
+    /** A disabled control is not focusable and carries no tooltip, so the only channel
+     * left is the description it points at (#1223, the bug in the frozen draw-type
+     * select). */
+    it('points both dead controls at the reason', () => {
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: 4 }),
+        poolSetFreeze: FROZEN,
+      })
+
+      const row = drawStructureSectionPage.setting('Pool count')
+      expect(row.describedNodeOf(row.getInput())).toHaveTextContent(FROZEN.reason)
+      expect(row.describedNodeOf(row.getAction())).toHaveTextContent(FROZEN.reason)
+    })
+
+    /** ⚠️ `Use automatic` alone would be a 200 — the server excludes ownership modes from
+     * its freeze — so this half is the CLIENT's choice, exactly as the qualifiers row's is.
+     * It is a one-way door: the automatic count is the row count, and `Set myself`, the
+     * only way back, is frozen. */
+    it('refuses the mode flip on that row too', async () => {
+      const onChange = vi.fn()
+      drawStructureSectionPage.render({
+        event: eventOwning({ poolCountMode: 'manual', manualPoolCount: 4 }),
+        poolSetFreeze: FROZEN,
+        onChange,
+      })
+
+      await userEvent.click(drawStructureSectionPage.setting('Pool count').getAction())
+
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    /**
+     * ⚠️ **The commonest cut event, and the one the tests above cannot reach.** An event
+     * whose director never opened this tab stores no ownership record at all, so the pool
+     * count is automatic: the row renders a *value* and a `Set myself`, and there is no box
+     * to disable. That click seeds a manual count — the first step toward creating or
+     * removing a row — so it is frozen too, and says why.
+     */
+    it('freezes Set myself on a cut event whose pool count is still automatic', () => {
+      drawStructureSectionPage.render({
+        event: buildDrawStructureEvent({ drawOwnership: null }),
+        poolSetFreeze: FROZEN,
+      })
+
+      const row = drawStructureSectionPage.setting('Pool count')
+      expect(row.queryInput()).toBeNull()
+      expect(row.getAction()).toHaveTextContent('Set myself')
+      expect(row.getAction()).toBeDisabled()
+      expect(row.describedNodeOf(row.getAction())).toHaveTextContent(FROZEN.reason)
+    })
+
+    it.each(['Pool size', 'Membership', 'Qualifiers per pool'])(
+      'leaves %s alone — a frozen pool set says nothing about it',
+      (name) => {
+        drawStructureSectionPage.render({
+          event: eventOwning({ poolSizeMode: 'manual', manualPoolSize: 8 }),
+          poolSetFreeze: FROZEN,
+        })
+
+        const row = drawStructureSectionPage.setting(name)
+        expect(row.getAction()).toBeEnabled()
+        expect(row.queryFreezeReason()).toBeNull()
+      },
+    )
+  })
+
+  /** The row's automatic source sentence and the preview's `Pool reservations` fact are
+   * two readings of ONE list, so they can never name two different numbers. */
+  it('counts the same pool list in the source sentence and in the preview', () => {
+    drawStructureSectionPage.render({
+      event: buildDrawStructureEvent({
+        pools: [
+          buildPool({ id: 'p-a', name: 'Pool A', position: 0 }),
+          buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
+          buildPool({ id: 'p-c', name: 'Pool C', position: 2 }),
+        ],
+      }),
+    })
+
+    expect(
+      drawStructureSectionPage.setting('Pool count').getSource(),
+    ).toHaveTextContent("3 pool reservations · today's behaviour")
+    expect(
+      drawStructureSectionPage.preview.getFact('Pool reservations'),
+    ).toHaveTextContent('3')
   })
 
   /**

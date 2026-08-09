@@ -1,6 +1,7 @@
 import { interactiveElementsIn } from '@/test/read-only'
 import { render, screen, within, type Container } from '@/test/utilities'
 
+import { confirmIrreversibleActDialogPage } from '../confirm-irreversible-act-dialog.page'
 import {
   DrawStructureSection,
   type DrawStructureSectionProps,
@@ -68,6 +69,11 @@ const scoped = (container: Container) => ({
    * region too, so at tab scope a role query matches two elements and throws. The role is
    * asserted in the panel's own test, where it is the only candidate. */
   issuePanel: drawIssuePanelPage.within(container),
+  /** The confirm a **lowered pool count** opens — the dialog's own accessors
+   * (`confirmIrreversibleActDialogPage`), at SCREEN scope on purpose: an `AlertDialog`
+   * portals to the body, so it is not a descendant of the tab and a container-scoped
+   * query would never find it. */
+  confirm: confirmIrreversibleActDialogPage,
 })
 
 /** Test page-object for `DrawStructureSection`, the event editor's fifth tab. */
