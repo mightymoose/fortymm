@@ -1716,13 +1716,13 @@ export interface paths {
          * Allow Agent Access
          * @description Let agents connect to this account again, and report the page's new state.
          *
-         *     This clears the player's own revocation and nothing else. Disconnect leaves
-         *     the ``auth0_sub`` binding in place, so for an account that had one this
-         *     *restores* the connection the player switched off — the agent's existing
-         *     token starts working on its next request and the page reads ``connected``
-         *     again, with the original link date. An account with no binding (revoked
-         *     before it ever connected) reads ``ready``, and the next agent to sign in
-         *     with its verified email binds itself as it would have the first time.
+         *     This clears the player's own revocation and nothing else — it does not
+         *     reconnect anything. Disconnect cleared the binding, so the page returns to
+         *     ``ready``: the setup panel comes back with the connector URL and client id,
+         *     which is the only place they render and therefore the only way a player who
+         *     removed the connector on the Claude side can read them again. The next agent
+         *     to sign in with this account's verified email binds itself, as it did the
+         *     first time.
          *
          *     It exists because revocation is deliberately sticky: with no explicit way
          *     back, a disconnected player who followed the connector setup steps again

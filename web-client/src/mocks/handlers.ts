@@ -1217,11 +1217,9 @@ export const handlers = [
   // button just claimed. (A hard reload re-evaluates this module and returns to
   // the seed, which is what you want when walking the state by hand.)
   //
-  // Re-allow lands on `connected`, not `ready`, for an account that HAD a
-  // binding — mirroring the server, where disconnect leaves `auth0_sub` in
-  // place so switching access back on restores the connection rather than
-  // asking for it again. `connected_on` stands in for "has a binding" here, so
-  // an account that never connected still lands on `ready`.
+  // Re-allow lands on `ready`, mirroring the server: disconnect cleared the
+  // binding, so the setup panel — the only surface carrying the connector URL
+  // and client id — is reachable again.
   //
   // The recording is module state shared by every later GET in the same module
   // instance, so a test that reaches this default without overriding it can
@@ -1230,20 +1228,18 @@ export const handlers = [
   // relying on the default.
   http.post('*/v1/settings/agent-access/allow', async () => {
     await delay(300)
-    agentAccessNow = {
-      ...agentAccessNow,
-      state: agentAccessNow.connected_on === null ? 'ready' : 'connected',
-    }
+    agentAccessNow = { ...agentAccessNow, state: 'ready' }
     return HttpResponse.json(agentAccessNow)
   }),
   // The other half of that round trip: switching agent access off. Recorded the
   // same way, so seeding `MOCK_AGENT_ACCESS` with `state: 'connected'` lets the
-  // dev world walk connected → disconnect → revoked → allow → connected without
-  // a backend. `connected_on` deliberately SURVIVES: the binding does too, and
-  // the date the page shows after a re-allow is the original link time.
+  // dev world walk connected → disconnect → revoked → allow → ready without a
+  // backend. `connected_on` goes with it: nothing is linked any more, and a
+  // "connected on 12 May" left lying in the payload would resurface the moment
+  // the account reconnects.
   http.post('*/v1/settings/agent-access/disconnect', async () => {
     await delay(300)
-    agentAccessNow = { ...agentAccessNow, state: 'revoked' }
+    agentAccessNow = { ...agentAccessNow, state: 'revoked', connected_on: null }
     return HttpResponse.json(agentAccessNow)
   }),
   // ----- /v1/stream (realtime hints) -------------------------------------

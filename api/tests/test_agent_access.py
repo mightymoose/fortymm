@@ -188,11 +188,11 @@ def test_no_email_beats_no_permission(linked_sub: str | None) -> None:
 
 
 def test_revoked_beats_connected() -> None:
-    """The second real ordering, and the ordinary case rather than an odd one:
-    disconnect leaves ``auth0_sub`` bound, so a revoked account normally still
-    carries one. ``connected`` would be a false claim — the transport refuses a
-    revoked user after resolving the token, so nothing that identity does works.
-    This rung is also what lets disconnect keep the binding at all."""
+    """The second real ordering. A revoked account can still carry a bound
+    ``auth0_sub`` — an account revoked before this feature cleared the binding,
+    or one re-bound by a path that isn't disconnect — and ``connected`` would be
+    a false claim: the transport refuses a revoked user after resolving the
+    token, so nothing that identity does works."""
     assert (
         resolve_agent_access_state(
             email="player@example.com",
@@ -457,7 +457,7 @@ async def test_it_requires_a_session(
 # --------------------------------------------------------------------------
 
 
-async def test_disconnect_revokes_and_keeps_the_binding(
+async def test_disconnect_revokes_and_unbinds(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """The stamp is the enforcement and the clear is the honesty — both happen.
@@ -481,11 +481,9 @@ async def test_disconnect_revokes_and_keeps_the_binding(
     assert response.json()["state"] == "revoked"
     await db_session.refresh(user)
     assert user.agent_access_revoked_at is not None
-    # The binding SURVIVES: the stamp is what holds, and keeping the ``sub``
-    # bound is what keeps the agent's next request on the write-free
-    # ``resolve_linked_user`` path — where it is refused without spending a
-    # token from the shared per-IP provisioning limit.
-    assert user.auth0_sub == "auth0|connected"
+    # The binding is cleared, which is what lets a re-allow land back on
+    # ``ready`` — the one state that renders the connector URL and client id.
+    assert user.auth0_sub is None
 
 
 async def test_disconnect_is_idempotent(
@@ -594,15 +592,13 @@ async def test_allow_is_idempotent(
 async def test_the_round_trip(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """connect (implicit) → disconnect → re-allow, as the ADR describes it,
-    through the page's own endpoints.
+    """connect (implicit) → disconnect → re-allow → connectable again, as the
+    ADR describes it, through the page's own endpoints.
 
-    Re-allow lands back on ``connected``, not ``ready``: disconnect leaves the
-    ``auth0_sub`` binding in place, so switching access back on RESTORES the
-    connection rather than asking the player to make it again — which is what
-    the dialog's "switch Claude access back on" promises. The agent's existing
-    token starts working on its next request, so ``ready`` (with its setup
-    steps) would be telling the player to redo work already done."""
+    Re-allow lands on ``ready``, not ``connected``: disconnect cleared the
+    binding, so the setup panel — the only surface carrying the connector URL
+    and client id — is reachable again. An agent re-binds by verified email on
+    its next token, so nothing here has to be redone by hand."""
     await _sign_in_as(
         api_client,
         db_session,
@@ -621,7 +617,7 @@ async def test_the_round_trip(
     await api_client.post(DISCONNECT_URL)
     assert await state() == "revoked"
     await api_client.post(ALLOW_URL)
-    assert await state() == "connected"
+    assert await state() == "ready"
 
 
 async def test_a_gated_account_can_still_disconnect(
@@ -643,7 +639,7 @@ async def test_a_gated_account_can_still_disconnect(
     assert body["state"] == "gated"
     await db_session.refresh(user)
     assert user.agent_access_revoked_at is not None
-    assert user.auth0_sub == "auth0|gated"
+    assert user.auth0_sub is None
 
 
 # --------------------------------------------------------------------------

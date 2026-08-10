@@ -68,36 +68,30 @@ the MCP transport — not an unlinking.**
    a caller whose user is revoked. Revocation is therefore effective against
    already-issued, still-valid JWTs — the property decision #3 promised.
 
-3. **Revocation blocks the auto-bind, and the binding is left in place.**
+3. **Revocation blocks the auto-bind, so unlinking is safe to do alongside it.**
    `resolve_or_provision_user` must not match-and-bind onto a revoked account.
-   Disconnect stamps `agent_access_revoked_at` and stops there — it does *not*
-   clear `auth0_sub`.
+   Disconnect clears `auth0_sub` *and* stamps `agent_access_revoked_at`; the
+   stamp is what actually holds, and the clear is what keeps the way back open.
 
-   An earlier draft cleared the binding too, called "cosmetic: it makes the
-   page's state honest". That was wrong on its own terms. `resolve_agent_access_state`
-   ranks `revoked` above `connected`, so while the stamp is set the page reads
-   `revoked` whether or not a `sub` is bound — the clear made nothing more
-   honest, and it cost two things:
+   **The clear is not cosmetic, and it is not for honesty.** An earlier draft of
+   this ADR said it "makes the page's state honest", which is false on its own
+   terms: `resolve_agent_access_state` ranks `revoked` above `connected`, so
+   while the stamp is set the page reads `revoked` whether or not a `sub` is
+   bound. A later revision took that as licence to stop clearing — and QA found
+   what that costs. **The connector URL and client id render in exactly one
+   state, `ready`** (the setup panel), and `ready` requires no bound `sub`. Keep
+   the binding and an account that has ever connected can never reach `ready`
+   again: the page loops `revoked` ↔ `connected`, and a player who removed the
+   connector on the Claude side has no way to read the two values back. Clearing
+   the binding is the only thing keeping that path open.
 
-   - **A shared rate-limit bucket.** With no linked `sub`, every request from
-     the agent's still-valid token missed the write-free `resolve_linked_user`
-     path and fell into the provisioning path, spending a token from the per-IP
-     limit before being refused. Claude.ai's connector egress IP is shared
-     between players, so one disconnected player's polling agent could exhaust
-     it and block strangers' first-ever bind. (That bucket is a
-     Consequence of
-     `20260722-mcp-accounts-auto-provision-and-match-by-verified-auth0-email`,
-     not a decision here. It is now spent only immediately before a write —
-     `resolve_or_provision_user` takes a `may_write` gate — so a refusal costs
-     nothing and the limit prices writes rather than requests. That fixes the
-     shared-bucket problem independently; leaving the binding alone keeps the
-     request on the write-free hot path in the first place.)
-   - **A misleading way back.** After a re-allow the page reported `ready` and
-     walked the player through setup steps they did not need — the next token
-     re-bound the same identity by verified email regardless.
-
-   Leaving it bound makes re-allow mean what the dialog says: "switch Claude
-   access back on" restores the connection rather than asking for it again.
+   The cost of clearing is that the next request from the agent's still-valid
+   token lands on the write path rather than the linked-`sub` hot path. That
+   used to spend a token from the shared per-IP provisioning limit on every
+   refusal — Claude.ai's connector egress IP is common to many players, so one
+   disconnected player's polling agent could exhaust it and block strangers'
+   first-ever bind. Decision #6 removes that cost independently, which is what
+   makes clearing affordable.
 
 4. **Reconnecting is an explicit user act.** Revocation is sticky — there is no
    timer and no implicit clear, or the disconnect would be a lie again. The
@@ -110,6 +104,17 @@ the MCP transport — not an unlinking.**
    identity, so disconnecting stops *every* agent signed in with that email —
    Claude, Claude Code, anything else. The UI must say so on the destructive
    action rather than implying a Claude-only scope.
+
+6. **The per-IP provisioning limit is spent on a write, not on arrival.**
+   `_provision_ip_rate_limit.check()` *consumes* a token, so taking it before
+   `resolve_or_provision_user` charged every trip down the write path —
+   including the ones that resolve to nothing: no verified email, a revoked
+   account, an email another identity already holds. `resolve_or_provision_user`
+   takes a `may_write` gate instead, awaited immediately before the bind or the
+   INSERT and never on a read-only refusal. The limiter therefore prices writes,
+   which is what its ceiling was chosen for. (The bucket itself is a Consequence
+   of `20260722-mcp-accounts-auto-provision-and-match-by-verified-auth0-email`,
+   not a decision of this ADR; this decision only changes *when* it is spent.)
 
 ## Consequences
 
