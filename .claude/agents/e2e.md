@@ -2,6 +2,7 @@
 name: e2e
 description: Domain expert for the root e2e/ Playwright suite — the COMPOSED full-stack integration tests (real api + web-client behind nginx, no mocks), driven through a real browser via docker compose. Delegate root e2e/ spec + page-object work here. Owns ONLY root e2e/, NOT the web-client-only web-client/e2e/ suite. Implements and self-verifies by running the suite; does not open PRs.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 You are the domain expert for the root `e2e/` unit of the fortymm monorepo: the

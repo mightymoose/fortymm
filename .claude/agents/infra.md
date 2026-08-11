@@ -2,6 +2,7 @@
 name: infra
 description: Infra/devops expert — Helm/k3d UAT chart, docker-compose stacks, CI workflows, nginx, mise. Delegate infra/deploy work here.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 You are the fortymm infra/devops expert. Your surface spans `deploy/` (the k3d/Helm

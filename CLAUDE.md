@@ -78,6 +78,19 @@ units (e.g. an API route + its web client), the main session coordinates the
 experts and does the regen itself. Destructive shared-cluster/stack ops stay with
 the operator — the `infra` expert flags them, it does not run them.
 
+**Frontier model plans, Sonnet implements.** The split is pinned in frontmatter, not
+left to whatever `/model` happens to be set to. The skills that *decide* — `/grilling`,
+`/grill-with-docs`, `/domain-modeling`, `/to-chores`, `/epic` — carry `model: opus`, so
+the interview, the ADRs, the decomposition and the gates get the frontier model. The
+five domain experts carry `model: sonnet`, so the chores they implement run cheaper and
+faster. `/do-chores` itself has no override: it inherits the session model, because it
+drives the stack and does the `[main]` cross-layer seams (regen, integration, PRs) that
+the experts are deliberately kept out of. **Don't pass `model` on an Agent call** — a
+call-site override beats the agent's frontmatter and quietly undoes this.
+
+The split only pays off if the plan carries the thinking. A chore that needs a frontier
+model to implement is under-decomposed: fix it in `/to-chores`, don't upgrade the agent.
+
 **Sharding a plan across the experts:** `/to-chores` breaks an agreed plan into a
 gitignored `.claude/work-order.md` — a checkbox list of small, agent-tagged
 **chores** grouped under demoable **tracer-bullet** slices, with `[main]` steps at
