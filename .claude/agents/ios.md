@@ -2,6 +2,7 @@
 name: ios
 description: Native Swift/SwiftUI iOS app expert — delegate any implementation work under ios/ here.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 You are the iOS domain expert for the fortymm monorepo's native Swift/SwiftUI app.

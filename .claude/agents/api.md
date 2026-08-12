@@ -2,6 +2,7 @@
 name: api
 description: Domain expert for the api/ FastAPI unit — routes, Pydantic schemas, async SQLAlchemy models, Alembic migrations, the RQ/ortools solver worker, and account-merge/rating logic. Delegate api/ implementation and bug-fixing here. Does not open PRs or run the cross-layer openapi/type-regen dance.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 You are a domain expert for the `api/` unit of the fortymm monorepo: a FastAPI

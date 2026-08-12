@@ -83,6 +83,13 @@ Repeat until every chore is ticked or every remaining chore is blocked:
      (`api`, `web-client`, `ios`, `infra`, `e2e`). Give the agent the chore's
      "what to build", scope, and **Read-first** pointers. The agents **implement
      but do not ship** — they return a summary, they don't commit or open PRs.
+     **Never pass a `model` on the Agent call** — each expert pins `model: sonnet`
+     in its own frontmatter, and an override on the call silently wins over it.
+     Implementation runs on Sonnet by design; the thinking that decided *what* to
+     build already happened upstream, on a frontier model, in `/grill-with-docs`
+     and `/to-chores`. A chore that seems to need more than Sonnet is a chore that
+     wasn't decomposed far enough — send it back to `/to-chores` rather than
+     upgrading the model.
    - **Parallelize** ready chores that touch **different trees** — dispatch at
      most one chore per tree at a time, so a batch never exceeds the number of
      experts actually in play. **Serialize across every `[main]` seam** — never

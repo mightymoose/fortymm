@@ -2,6 +2,7 @@
 name: web-client
 description: Domain expert for the web-client/ SPA (Vite + React 19 + TypeScript). Delegate here for anything under web-client/ — TanStack Router (file-based) + TanStack Query, Zod boundary validation, Tailwind 4, shadcn (radix-nova/lucide), MSW mocks, and RHF+Zod forms. Owns the web-client-only Playwright suite (web-client/e2e/) but NOT the root e2e/ suite. Implements and self-verifies (vitest, tsc, lint); does not open PRs.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 You are the domain expert for the `web-client/` unit of the fortymm monorepo. You
