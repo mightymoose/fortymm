@@ -22,3 +22,6 @@ deploy/observability/charts/
 # Xcode-resolved SwiftPM pins (tooling-only, regenerated on build)
 ios/Fortymm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 .qa-artifacts/
+
+# Stray QA/debug screenshots dropped at the repo root (they belong in .qa-review/).
+/*.png

@@ -13,6 +13,7 @@ lookup itself is reused from there (``resolve_linked_user``), never
 reimplemented.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -54,6 +55,8 @@ async def resolve_or_provision_user(
     sub: str,
     email: str | None,
     email_verified: bool,
+    *,
+    may_write: Callable[[], Awaitable[bool]] | None = None,
 ) -> User | None:
     """Turn a verified Auth0 token into the fortymm ``User`` it acts as.
 
@@ -62,8 +65,9 @@ async def resolve_or_provision_user(
     2. **Verified email present** (``email`` truthy and ``email_verified`` is
        ``True``):
        - an existing live account holds that email (case-insensitive) → bind
-         ``auth0_sub`` to it and return it (**match**) — unless it already holds
-         a *different* ``auth0_sub``, in which case return ``None`` (see below);
+         ``auth0_sub`` to it and return it (**match**) — unless that account has
+         *revoked* agent access, or it already holds a *different* ``auth0_sub``,
+         in which case return ``None`` (see below);
        - no account holds it → create a registered account (coolname username,
          email set, ``confirmed_at`` stamped, ``auth0_sub`` bound, default role +
          default league) and return it (**provision**).
@@ -72,6 +76,20 @@ async def resolve_or_provision_user(
 
     Writes on the first token for a new identity (a bind, or an INSERT); every
     later token resolves via step 1 with no write.
+
+    ``may_write`` is an optional gate the caller supplies, awaited **immediately
+    before** the bind or the INSERT and never on a path that only reads. The MCP
+    verifier passes its per-IP provisioning rate limit, whose ``check`` consumes
+    a token — so this ordering is what makes the limit price *writes* rather
+    than requests. A refusal above (no verified email, a revoked account, an
+    email already claimed by another identity) returns without ever calling it,
+    and therefore costs the caller's bucket nothing. Returning ``False`` refuses
+    the write and resolves to ``None`` (→ the verifier 401s).
+
+    Both binding paths stamp ``agent_access_linked_at`` with the moment the
+    identity bound, so the agent-access settings surface can say "Connected
+    <date>". Step 1 deliberately does not touch it: it is the *first* link time,
+    and the steady-state path stays write-free.
     """
     # (1) Already linked — the common steady-state path, and a no-op write-wise.
     existing = await resolve_linked_user(db, sub)
@@ -88,8 +106,29 @@ async def resolve_or_provision_user(
     email = email.lower()
     matched = await _resolve_live_user_by_email(db, email)
     if matched is not None:
+        if matched.agent_access_revoked_at is not None:
+            # The player switched agent access off. Matching must not bind here,
+            # or a disconnected account would silently re-acquire an
+            # ``auth0_sub`` on the agent's very next request and the database
+            # would claim "linked" about an account the player turned off (ADR
+            # ``20260728-disconnecting-an-agent-is-a-user-held-revocation-
+            # checked-at-the-mcp-transport``, decision #3). Refusing *here*
+            # rather than falling through is deliberate: provisioning a second
+            # account on the same email would split the player's identity in
+            # two, which is worse than the bind we are refusing. Only an
+            # explicit re-allow (clearing the stamp) lets the email match again.
+            return None
         if matched.auth0_sub is None:
+            # About to write to an existing account on behalf of an as-yet
+            # unauthorized caller — the first point on this path where the gate
+            # is owed anything.
+            if may_write is not None and not await may_write():
+                return None
             matched.auth0_sub = sub
+            # Stamp *when* the identity bound, for "Connected <date>". This is a
+            # bind-site-only write: the linked-sub path above returns without
+            # touching it, so it keeps reading as the original link time.
+            matched.agent_access_linked_at = datetime.now(UTC)
             try:
                 await db.commit()
             except IntegrityError:
@@ -113,7 +152,10 @@ async def resolve_or_provision_user(
         # the two accounts are merged by magic-link confirm).
         return None
 
-    # No account holds the email → provision a fresh registered account.
+    # No account holds the email → provision a fresh registered account. This is
+    # the account-creation case the caller's gate exists for.
+    if may_write is not None and not await may_write():
+        return None
     return await _provision_user(db, sub, email)
 
 
@@ -122,9 +164,9 @@ async def _provision_user(db: AsyncSession, sub: str, email: str) -> User | None
 
     Born exactly like a normal account (coolname username, ``confirmed_at``
     stamped, default league + default role, in that same order) plus the bound
-    ``auth0_sub``. A verified Auth0 email is trusted as equivalent to fortymm's
-    own magic-link inbox-proof, so the account is ``confirmed_at``-stamped rather
-    than half-real (ADR).
+    ``auth0_sub`` and its ``agent_access_linked_at`` stamp. A verified Auth0
+    email is trusted as equivalent to fortymm's own magic-link inbox-proof, so
+    the account is ``confirmed_at``-stamped rather than half-real (ADR).
 
     **Concurrency — match, don't duplicate.** A near-simultaneous second request
     for the same identity can win the INSERT first; the unique constraints on
@@ -132,11 +174,15 @@ async def _provision_user(db: AsyncSession, sub: str, email: str) -> User | None
     catch it, roll back, and re-resolve (by ``sub``, then by email) so the loser
     returns the winning row instead of raising.
     """
+    now = datetime.now(UTC)
     user = User(
         username=await generate_username(db),
         email=email,
-        confirmed_at=datetime.now(UTC),
+        confirmed_at=now,
         auth0_sub=sub,
+        # The account and its Auth0 link are born together, so the link time is
+        # the same instant as the confirmation.
+        agent_access_linked_at=now,
     )
     db.add(user)
     try:

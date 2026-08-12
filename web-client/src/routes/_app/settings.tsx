@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import {
+  Link,
   createFileRoute,
   useBlocker,
   useNavigate,
@@ -1014,6 +1015,37 @@ function NotificationsSection() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  04 — Claude access (signpost to /settings/claude)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A static signpost through to `/settings/claude`.
+ *
+ * Deliberately fetch-free: the connection status lives on the page it links to,
+ * and a live badge here would cost every settings visit an extra request to say
+ * something the player is about to read anyway.
+ */
+function ClaudeAccessSection() {
+  return (
+    <SectionCard
+      id="sec-claude"
+      num="04"
+      eyebrow="AI assistant"
+      title="Claude access"
+      subtitle="Let Claude log matches, check your rating and set up draws — as you, in your account."
+    >
+      <div className="fmm-help" style={{ marginBottom: 16 }}>
+        You sign in on FortyMM, in your browser, and you can disconnect at any
+        time.
+      </div>
+      <Link to="/settings/claude" className="fmm-btn fmm-btn--primary">
+        Set up Claude access
+      </Link>
+    </SectionCard>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1105,6 +1137,7 @@ function SettingsPage() {
                 onDirtyChange={setEmailDirty}
               />
               <NotificationsSection />
+              <ClaudeAccessSection />
             </div>
 
             <ComingSoon>

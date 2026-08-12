@@ -34,6 +34,7 @@ import { Route as AppNotificationsIndexRouteImport } from './routes/_app/notific
 import { Route as AppNotificationsSettingsRouteImport } from './routes/_app/notifications.settings'
 import { Route as AppPlayersIndexRouteImport } from './routes/_app/players/index'
 import { Route as AppPlayersUserIdRouteImport } from './routes/_app/players/$userId'
+import { Route as AppSettingsClaudeRouteImport } from './routes/_app/settings_.claude'
 import { Route as AppTournamentsIndexRouteImport } from './routes/_app/tournaments/index'
 import { Route as AppTournamentsTournamentIdRouteImport } from './routes/_app/tournaments.$tournamentId'
 import { Route as AppMatchesMatchIdIndexRouteImport } from './routes/_app/matches.$matchId.index'
@@ -167,6 +168,11 @@ const AppPlayersUserIdRoute = AppPlayersUserIdRouteImport.update({
   path: '/players/$userId',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppSettingsClaudeRoute = AppSettingsClaudeRouteImport.update({
+  id: '/settings_/claude',
+  path: '/settings/claude',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppTournamentsIndexRoute = AppTournamentsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -228,6 +234,7 @@ export interface FileRoutesByFullPath {
   '/matches/new': typeof AppMatchesNewRoute
   '/notifications/settings': typeof AppNotificationsSettingsRoute
   '/players/$userId': typeof AppPlayersUserIdRoute
+  '/settings/claude': typeof AppSettingsClaudeRoute
   '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
   '/admin/': typeof AppAdminIndexRoute
   '/matches/': typeof AppMatchesIndexRoute
@@ -258,6 +265,7 @@ export interface FileRoutesByTo {
   '/matches/new': typeof AppMatchesNewRoute
   '/notifications/settings': typeof AppNotificationsSettingsRoute
   '/players/$userId': typeof AppPlayersUserIdRoute
+  '/settings/claude': typeof AppSettingsClaudeRoute
   '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
   '/admin': typeof AppAdminIndexRoute
   '/matches': typeof AppMatchesIndexRoute
@@ -293,6 +301,7 @@ export interface FileRoutesById {
   '/_app/matches/new': typeof AppMatchesNewRoute
   '/_app/notifications/settings': typeof AppNotificationsSettingsRoute
   '/_app/players/$userId': typeof AppPlayersUserIdRoute
+  '/_app/settings_/claude': typeof AppSettingsClaudeRoute
   '/_app/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
   '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/matches/': typeof AppMatchesIndexRoute
@@ -328,6 +337,7 @@ export interface FileRouteTypes {
     | '/matches/new'
     | '/notifications/settings'
     | '/players/$userId'
+    | '/settings/claude'
     | '/tournaments/$tournamentId'
     | '/admin/'
     | '/matches/'
@@ -358,6 +368,7 @@ export interface FileRouteTypes {
     | '/matches/new'
     | '/notifications/settings'
     | '/players/$userId'
+    | '/settings/claude'
     | '/tournaments/$tournamentId'
     | '/admin'
     | '/matches'
@@ -392,6 +403,7 @@ export interface FileRouteTypes {
     | '/_app/matches/new'
     | '/_app/notifications/settings'
     | '/_app/players/$userId'
+    | '/_app/settings_/claude'
     | '/_app/tournaments/$tournamentId'
     | '/_app/admin/'
     | '/_app/matches/'
@@ -593,6 +605,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPlayersUserIdRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/_app/settings_/claude': {
+      id: '/_app/settings_/claude'
+      path: '/settings/claude'
+      fullPath: '/settings/claude'
+      preLoaderRoute: typeof AppSettingsClaudeRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/_app/tournaments/': {
       id: '/_app/tournaments/'
       path: '/'
@@ -702,6 +721,7 @@ interface AppRouteRouteChildren {
   AppTournamentsRoute: typeof AppTournamentsRouteWithChildren
   AppMatchesNewRoute: typeof AppMatchesNewRoute
   AppPlayersUserIdRoute: typeof AppPlayersUserIdRoute
+  AppSettingsClaudeRoute: typeof AppSettingsClaudeRoute
   AppMatchesIndexRoute: typeof AppMatchesIndexRoute
   AppPlayersIndexRoute: typeof AppPlayersIndexRoute
   AppPlayersUserIdMatchesRoute: typeof AppPlayersUserIdMatchesRoute
@@ -719,6 +739,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppTournamentsRoute: AppTournamentsRouteWithChildren,
   AppMatchesNewRoute: AppMatchesNewRoute,
   AppPlayersUserIdRoute: AppPlayersUserIdRoute,
+  AppSettingsClaudeRoute: AppSettingsClaudeRoute,
   AppMatchesIndexRoute: AppMatchesIndexRoute,
   AppPlayersIndexRoute: AppPlayersIndexRoute,
   AppPlayersUserIdMatchesRoute: AppPlayersUserIdMatchesRoute,

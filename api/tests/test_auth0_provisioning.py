@@ -9,9 +9,12 @@ framing — that lives in the MCP verifier, chore 1c):
 - match, unlinked → binds ``sub`` and returns the user;
 - match is case-insensitive;
 - match conflict (different ``auth0_sub``) → ``None``, no hijack;
+- match onto a *revoked* account → ``None``, no bind and no duplicate account;
 - provision (first-seen verified email) → confirmed account with the default role;
 - ``email_verified`` false / ``email`` missing → ``None``, no write;
-- a concurrent-insert ``IntegrityError`` re-resolves to the winning row.
+- a concurrent-insert ``IntegrityError`` re-resolves to the winning row;
+- both binding paths stamp ``agent_access_linked_at``, and the steady-state
+  linked-``sub`` path leaves the stamp (and the row) untouched.
 
 ``default_role`` and ``default_league`` are autouse fixtures in ``conftest``, so
 provision has both the role to grant and the league to join.
@@ -43,8 +46,14 @@ async def _make_user(
     *,
     email: str | None = None,
     auth0_sub: str | None = None,
+    agent_access_revoked_at: datetime | None = None,
 ) -> User:
-    user = User(username=username, email=email, auth0_sub=auth0_sub)
+    user = User(
+        username=username,
+        email=email,
+        auth0_sub=auth0_sub,
+        agent_access_revoked_at=agent_access_revoked_at,
+    )
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -126,6 +135,174 @@ async def test_match_conflict_returns_none_and_does_not_hijack(
     await db_session.refresh(user)
     # The pre-existing link is left intact — no takeover.
     assert user.auth0_sub == existing_sub
+
+
+# ----- revocation blocks the auto-bind (ADR 20260728, decision #3) ----------
+#
+# Clearing ``auth0_sub`` alone is self-undoing: the agent's JWT stays valid, so
+# the very next request falls through to the verified-email match and re-binds
+# the same ``sub``. The transport already refuses a revoked caller, so what these
+# tests protect is *database honesty* — a disconnected account must not silently
+# read as "linked" again — and the identity's integrity: refusing must not turn
+# into provisioning a second account on the same email.
+
+REVOKED_AT = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
+
+
+async def test_match_refuses_a_revoked_account_and_leaves_it_unlinked(
+    db_session: AsyncSession,
+) -> None:
+    user = await _make_user(
+        db_session,
+        "revoked-matcher",
+        email="revoked@example.com",
+        agent_access_revoked_at=REVOKED_AT,
+    )
+
+    resolved = await resolve_or_provision_user(
+        db_session, _sub(), "revoked@example.com", True
+    )
+
+    assert resolved is None
+    await db_session.refresh(user)
+    # The whole point: no silent re-link. ``auth0_sub`` stays NULL, and the
+    # "Connected <date>" stamp is not written either.
+    assert user.auth0_sub is None
+    assert user.agent_access_linked_at is None
+    # And the revocation itself is untouched — it is sticky.
+    assert user.agent_access_revoked_at == REVOKED_AT
+
+
+async def test_match_refusal_is_case_insensitive_too(
+    db_session: AsyncSession,
+) -> None:
+    """The refusal must key off the same canonicalised email the match does, or
+    a differently-cased token email would slip past it and provision instead."""
+    user = await _make_user(
+        db_session,
+        "revoked-caser",
+        email="revoked.case@example.com",
+        agent_access_revoked_at=REVOKED_AT,
+    )
+    before = await _user_count(db_session)
+
+    resolved = await resolve_or_provision_user(
+        db_session, _sub(), "Revoked.Case@EXAMPLE.com", True
+    )
+
+    assert resolved is None
+    assert await _user_count(db_session) == before
+    await db_session.refresh(user)
+    assert user.auth0_sub is None
+
+
+async def test_revoked_match_does_not_provision_a_duplicate_account(
+    db_session: AsyncSession,
+) -> None:
+    """Refusing must *stop*, not fall through to the provision branch.
+
+    A second account born on the same email would split the player's identity in
+    two — strictly worse than the re-bind we are refusing — so this is asserted
+    explicitly rather than left implied by the ``None`` return.
+
+    Honest about what discriminates: the ``resolved is None`` assertion is what
+    reds against a fall-through-to-provision implementation, because the unique
+    ``users.email`` index already blocks the literal duplicate row (the provision
+    would ``IntegrityError``, roll back and re-resolve to the revoked account —
+    non-``None``). The row/sub counts pin the invariant against an implementation
+    that provisions under a *differently canonicalised* email, where the unique
+    index would not bite.
+    """
+    sub = _sub()
+    user = await _make_user(
+        db_session,
+        "revoked-no-dupe",
+        email="nodupe@example.com",
+        agent_access_revoked_at=REVOKED_AT,
+    )
+    before = await _user_count(db_session)
+
+    resolved = await resolve_or_provision_user(
+        db_session, sub, "nodupe@example.com", True
+    )
+
+    assert resolved is None
+    assert await _user_count(db_session) == before
+    # Exactly one account still holds the email, and it is the revoked one.
+    holders = (
+        (
+            await db_session.execute(
+                select(User).where(User.email == "nodupe@example.com")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [holder.id for holder in holders] == [user.id]
+    # No row anywhere picked up the refused ``sub``.
+    bound = (
+        await db_session.execute(
+            select(func.count()).select_from(User).where(User.auth0_sub == sub)
+        )
+    ).scalar_one()
+    assert bound == 0
+
+
+async def test_revoked_account_still_resolves_on_the_linked_sub_hot_path(
+    db_session: AsyncSession,
+) -> None:
+    """Deliberate: step 1 (``resolve_linked_user``) is *identity*, not permission.
+
+    A revoked account that still carries an ``auth0_sub`` (disconnect clears it,
+    but a merge or an operator-set row can leave one) resolves here exactly as
+    before — and the MCP transport then refuses it on
+    ``agent_access_revoked_at``. Filtering it out here instead would make the
+    same caller indistinguishable from an unknown ``sub``, which sends the
+    request down the *write* path (match/provision) rather than to a clean 401.
+    Access is unchanged either way; this keeps the refusal in one place.
+    """
+    sub = _sub()
+    user = await _make_user(
+        db_session,
+        "revoked-linked",
+        email="revoked-linked@example.com",
+        auth0_sub=sub,
+        agent_access_revoked_at=REVOKED_AT,
+    )
+
+    resolved = await resolve_or_provision_user(
+        db_session, sub, "revoked-linked@example.com", True
+    )
+
+    assert resolved is not None
+    assert resolved.id == user.id
+    assert resolved.agent_access_revoked_at == REVOKED_AT
+
+
+async def test_match_binds_again_once_the_revocation_is_cleared(
+    db_session: AsyncSession,
+) -> None:
+    """Re-allow is the explicit act that restores the implicit connect. Without
+    this the refusal could be implemented as a permanent email ban and every
+    other test here would still pass.
+    """
+    sub = _sub()
+    user = await _make_user(
+        db_session,
+        "re-allowed",
+        email="reallowed@example.com",
+        agent_access_revoked_at=REVOKED_AT,
+    )
+    user.agent_access_revoked_at = None
+    await db_session.commit()
+
+    resolved = await resolve_or_provision_user(
+        db_session, sub, "reallowed@example.com", True
+    )
+
+    assert resolved is not None
+    assert resolved.id == user.id
+    assert resolved.auth0_sub == sub
 
 
 async def test_provision_creates_confirmed_user_with_default_role(
@@ -282,3 +459,73 @@ async def test_match_branch_reresolves_on_concurrent_sub_bind(
     # The email-matched row's bind was rolled back — it never took the ``sub``.
     await db_session.refresh(matched_user)
     assert matched_user.auth0_sub is None
+
+
+# ----- agent_access_linked_at: when the identity bound ----------------------
+#
+# The settings surface wants "Connected <date>", so both binding paths stamp the
+# moment they bind — and the steady-state resolve path must NOT, or every MCP
+# request would both rewrite history and turn a read into a write.
+
+
+async def test_match_unlinked_stamps_the_link_time(db_session: AsyncSession) -> None:
+    before = datetime.now(UTC)
+    user = await _make_user(db_session, "stamper", email="stamper@example.com")
+    assert user.agent_access_linked_at is None
+
+    resolved = await resolve_or_provision_user(
+        db_session, _sub(), "stamper@example.com", True
+    )
+
+    assert resolved is not None
+    linked_at = resolved.agent_access_linked_at
+    assert linked_at is not None
+    # A ``DateTime(timezone=True)`` column must yield an aware datetime.
+    assert linked_at.tzinfo is not None
+    assert before <= linked_at <= datetime.now(UTC)
+
+
+async def test_provision_stamps_the_link_time(db_session: AsyncSession) -> None:
+    before = datetime.now(UTC)
+
+    resolved = await resolve_or_provision_user(
+        db_session, _sub(), "fresh-stamp@example.com", True
+    )
+
+    assert resolved is not None
+    linked_at = resolved.agent_access_linked_at
+    assert linked_at is not None
+    assert linked_at.tzinfo is not None
+    assert before <= linked_at <= datetime.now(UTC)
+
+
+async def test_linked_sub_leaves_the_original_stamp_untouched(
+    db_session: AsyncSession,
+) -> None:
+    """The hot path every steady-state MCP request takes must stay a no-op —
+    it neither re-stamps the link time nor writes the row at all.
+
+    ``updated_at`` carries ``onupdate=func.now()``, so it only moves on a real
+    UPDATE: an unchanged ``updated_at`` is the evidence that nothing was written.
+    """
+    sub = _sub()
+    original = datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC)
+    user = await _make_user(db_session, "steady", email="steady@example.com")
+    user.auth0_sub = sub
+    user.agent_access_linked_at = original
+    await db_session.commit()
+    await db_session.refresh(user)
+    updated_at_before = user.updated_at
+
+    resolved = await resolve_or_provision_user(
+        db_session, sub, "steady@example.com", True
+    )
+
+    assert resolved is not None
+    assert resolved.id == user.id
+    # Nothing pending either — the path issued no write at all.
+    assert user not in db_session.dirty
+    # ``refresh`` autoflushes, so a pending re-stamp would still be caught here.
+    await db_session.refresh(user)
+    assert user.agent_access_linked_at == original
+    assert user.updated_at == updated_at_before

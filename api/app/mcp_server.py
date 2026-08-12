@@ -338,8 +338,13 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
     fails verification we return ``None`` (→ 401). On a verified token we read its
     ``sub`` (and namespaced email claims) and resolve it to a non-tombstoned
     ``User`` (:func:`app.auth0_provisioning.resolve_or_provision_user`); a ``sub``
-    that resolves to no live user, or a user lacking ``mcp.access``, is also
-    ``None`` (→ 401).
+    that resolves to no live user, a user who has revoked their own agent access
+    (``users.agent_access_revoked_at``), or a user lacking ``mcp.access``, is also
+    ``None`` (→ 401). The revocation check sits here rather than in the tools so
+    it covers every tool at once and a new tool cannot forget it, and it runs
+    after resolution so an already-issued, still-valid JWT stops working the
+    moment the player disconnects. See ADR
+    ``20260728-disconnecting-an-agent-is-a-user-held-revocation-checked-at-the-mcp-transport``.
 
     Resolution goes through :func:`app.auth0_provisioning.resolve_or_provision_user`,
     which first tries the explicitly linked user and, failing that, *matches* the
@@ -371,10 +376,23 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
                 # freshly-minted verified-email identities from one source can't
                 # spray accounts; over the ceiling we refuse (→401) without
                 # touching the write path.
+                #
+                # Passed as a GATE rather than checked here, because ``check``
+                # *consumes* a token and most trips down this path never write:
+                # a token with no verified email, or one whose account is revoked
+                # or whose email another identity already holds, is refused after
+                # a read. Charging those was a live problem — the bucket is keyed
+                # on client IP and Claude.ai's connector egress IP is shared, so
+                # refused requests from one player could exhaust 20/hour and
+                # block strangers' first-ever bind. ``resolve_or_provision_user``
+                # awaits this immediately before the bind or the INSERT, so the
+                # limit now prices writes, which is what its ceiling was chosen
+                # for.
                 # ``bucket_key`` already namespaces the ZSET, so the key is just
                 # the client IP (not re-prefixed).
-                if not await _provision_ip_rate_limit.check(_provision_client_ip()):
-                    return None
+                async def may_write() -> bool:
+                    return await _provision_ip_rate_limit.check(_provision_client_ip())
+
                 # The namespaced email claims the Auth0 Action ships (see
                 # ``app.auth0_provisioning``). Only a non-empty ``str`` email
                 # counts, and ``email_verified`` must be the literal boolean
@@ -383,9 +401,18 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
                 raw_email = access.claims.get(AUTH0_EMAIL_CLAIM)
                 email = raw_email if isinstance(raw_email, str) and raw_email else None
                 email_verified = access.claims.get(AUTH0_EMAIL_VERIFIED_CLAIM) is True
-                user = await resolve_or_provision_user(db, sub, email, email_verified)
+                user = await resolve_or_provision_user(
+                    db, sub, email, email_verified, may_write=may_write
+                )
                 if user is None:
                     return None
+            # The player's own revocation, checked *after* resolution so it holds
+            # against a token that is still perfectly valid and a ``sub`` that
+            # (re-)bound to this account: a revoked user is refused whatever the
+            # token says. Independent of, and checked alongside, the operator's
+            # RBAC grant below — both fail closed, neither re-grants the other.
+            if user.agent_access_revoked_at is not None:
+                return None
             if not await user_has_permission(db, user.id, MCP_ACCESS_PERMISSION):
                 return None
             user_id = str(user.id)

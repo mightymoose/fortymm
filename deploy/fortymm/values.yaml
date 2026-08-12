@@ -98,6 +98,17 @@ config:
   # default for a hostname the chart cannot know.
   MCP_PUBLIC_BASE_URL: ""
   MCP_PUBLIC_RESOURCE_URL: ""
+  # The Auth0 Application (client) id a player pastes into Claude's "Add custom
+  # connector" dialog, shown to them on /settings/claude. It is a PUBLIC
+  # identifier for a public/PKCE client, not a secret — the setup copy tells
+  # players to leave the secret field empty — so it belongs here beside the
+  # other non-secret Auth0 identifiers rather than in the env Secret.
+  #
+  # `Settings.mcp_connector` resolves ALL-OR-NOTHING: leave this empty and the
+  # settings page reports "we couldn't load your account and connector details"
+  # for every `ready` player, however correct MCP_PUBLIC_RESOURCE_URL is. Set
+  # the two together or not at all.
+  MCP_OAUTH_CLIENT_ID: ""
   # --- Venue geocoding ---
   # Which provider resolves a venue address, as a closed enum: `google` or
   # `fake`. `fake` is the default because a chart cannot assume a Google

@@ -95,6 +95,27 @@ services:
       # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
       # ("The geocoder is selected by explicit config, not inferred from key presence").
       GEOCODER: fake
+      # Connector details the /settings/claude page shows a player to paste into
+      # Claude's "Add custom connector" dialog. Settings.mcp_connector resolves
+      # them ALL-OR-NOTHING, so with either one unset QA renders the "we couldn't
+      # load your account and connector details" row and the page can't be QA'd
+      # at all. Both are non-secret public identifiers (the OAuth client is a
+      # public/PKCE client — the setup copy tells players to leave the secret
+      # empty), so they are committed here just like AUTH0_DOMAIN /
+      # AUTH0_AUDIENCE are in deploy/uat/values.yaml.
+      #
+      # The URL is this stack's OWN public MCP endpoint — QA is reached at
+      # http://127.0.0.1:${QA_PORT}, and nginx/uat.conf routes /api/mcp to the
+      # FastMCP mount — NOT uat.fortymm.com, which .env would otherwise supply
+      # (compose `environment:` wins over `env_file:`, same as APP_BASE_URL
+      # above). The trailing slash is normalised by Settings.mcp_connector, so
+      # the no-slash form here is deliberate and matches deploy/uat/values.yaml.
+      MCP_PUBLIC_RESOURCE_URL: http://127.0.0.1:${QA_PORT:-8085}/api/mcp
+      # Placeholder, obviously non-production: Auth0 stays UNCONFIGURED on QA
+      # (AUTH0_DOMAIN / AUTH0_AUDIENCE empty), so _build_mcp_auth fails closed
+      # and MCP requests here still 401. This makes the settings PAGE show its
+      # real populated state; it does not make a QA connector work.
+      MCP_OAUTH_CLIENT_ID: qa-placeholder-client-id
     depends_on:
       postgres:
         condition: service_healthy

@@ -39,6 +39,7 @@ import {
   pageAdminScheduleSolves,
 } from './factories/tournaments/tournament.factory'
 import { buildDashboardTournament } from './factories/dashboard/tournament.factory'
+import { buildAgentAccess } from './factories/settings/agent-access.factory'
 import { mockUuid } from './mock-uuid'
 import { PARKED_STREAM_BODY, SSE_CONTENT_TYPE } from './realtime-stream'
 import { notificationHandlers } from './notifications-store'
@@ -100,6 +101,28 @@ export const mockSession = sessionResponse({
   },
 })
 export const mockHealthy = healthCheck()
+
+/**
+ * The dev world's Claude access state, as it starts. Swap `state` (and/or null
+ * out `connector`) to walk `/settings/claude` through its six status rows
+ * without a backend.
+ */
+export const MOCK_AGENT_ACCESS = buildAgentAccess({
+  state: 'ready',
+  username: mockSession.data.user.username,
+  email: 'rita.kovac@example.com',
+  connected_on: null,
+})
+
+/**
+ * …and as it stands now, because one of those rows has a **write** behind it.
+ * The `revoked` row's only affordance is "Allow Claude to connect", and a dev
+ * world that answered the POST but kept serving `revoked` on the next read
+ * would make the one control that matters look broken. Seed
+ * `MOCK_AGENT_ACCESS` with `state: 'revoked'` and the button walks the whole
+ * round trip.
+ */
+let agentAccessNow = MOCK_AGENT_ACCESS
 
 /** The dev world's cross-tournament solve ledger (see the handler below). */
 const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
@@ -1177,6 +1200,47 @@ export const handlers = [
   http.delete('*/v1/session', async () => {
     await delay(150)
     return new HttpResponse(null, { status: 204 })
+  }),
+  // ----- /v1/settings/agent-access (the Claude access page's BFF) ---------
+  // The dev world is `ready`: an email on file, permission granted, nothing
+  // connected. To walk the page's other states under `npm run dev`, change
+  // `MOCK_AGENT_ACCESS` above — `connector: null` gives the "couldn't load"
+  // row, and the other four `state` values give their own status rows.
+  // Tests override this per-case with `mockAgentAccessEndpoint`.
+  http.get('*/v1/settings/agent-access', async () => {
+    await delay(200)
+    return HttpResponse.json(agentAccessNow)
+  }),
+  // Clearing the player's own revocation. Returns the page's whole new state,
+  // as the real endpoint does, so the client needs no follow-up read — and
+  // records it, so a later GET *in the same page session* agrees with what the
+  // button just claimed. (A hard reload re-evaluates this module and returns to
+  // the seed, which is what you want when walking the state by hand.)
+  //
+  // Re-allow lands on `ready`, mirroring the server: disconnect cleared the
+  // binding, so the setup panel — the only surface carrying the connector URL
+  // and client id — is reachable again.
+  //
+  // The recording is module state shared by every later GET in the same module
+  // instance, so a test that reaches this default without overriding it can
+  // poison the ones after it. Today every test overrides both handlers for its
+  // own case; if you add one that does not, override the endpoint rather than
+  // relying on the default.
+  http.post('*/v1/settings/agent-access/allow', async () => {
+    await delay(300)
+    agentAccessNow = { ...agentAccessNow, state: 'ready' }
+    return HttpResponse.json(agentAccessNow)
+  }),
+  // The other half of that round trip: switching agent access off. Recorded the
+  // same way, so seeding `MOCK_AGENT_ACCESS` with `state: 'connected'` lets the
+  // dev world walk connected → disconnect → revoked → allow → ready without a
+  // backend. `connected_on` goes with it: nothing is linked any more, and a
+  // "connected on 12 May" left lying in the payload would resurface the moment
+  // the account reconnects.
+  http.post('*/v1/settings/agent-access/disconnect', async () => {
+    await delay(300)
+    agentAccessNow = { ...agentAccessNow, state: 'revoked', connected_on: null }
+    return HttpResponse.json(agentAccessNow)
   }),
   // ----- /v1/stream (realtime hints) -------------------------------------
   // A PARKED stream: the reconnect directive and then silence, held open for

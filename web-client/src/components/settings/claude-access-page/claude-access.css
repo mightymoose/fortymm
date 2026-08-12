@@ -1,0 +1,815 @@
+/* =========================================================================
+   Claude access — /settings/claude
+
+   Scoped to `.fmm-claude`, which renders inside AppShell's `.fortymm-theme`.
+   Colour, type and the `.ball-dot` motif are inherited from there byte-for-byte
+   — only the radii/motion tokens the theme root doesn't carry are (re)declared
+   here, the same way `.match-details` does it.
+
+   No sidebar and no tab bar live in this file on purpose: the app shell owns
+   navigation, and a second one would be a bug, not a port of the design.
+   ========================================================================= */
+.fmm-claude {
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  --dur-fast: 120ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+
+  /* An email or a connector URL is a single unbreakable token as far as the
+     line breaker is concerned, and both can be long. Break them anywhere rather
+     than let one push the document sideways on a phone. */
+  overflow-wrap: anywhere;
+}
+
+.fmm-claude *,
+.fmm-claude *::before,
+.fmm-claude *::after {
+  box-sizing: border-box;
+}
+
+.fmm-claude__inner {
+  width: 100%;
+  max-width: 820px;
+  padding: 36px 32px 72px;
+}
+
+/* Every focusable thing on the page gets the same ring. */
+.fmm-claude a:focus-visible,
+.fmm-claude button:focus-visible,
+.fmm-claude summary:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ---------- Header ---------- */
+.fmm-claude__header {
+  margin-bottom: 26px;
+}
+
+.fmm-claude__overline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.fmm-claude__title {
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 9vw, 3.5rem);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1;
+  margin: 0 0 14px;
+  color: var(--fg-1);
+}
+
+.fmm-claude__lede {
+  margin: 0;
+  max-width: 560px;
+  font-size: 15px;
+  color: var(--fg-3);
+}
+
+.fmm-claude__loading {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+
+/* ---------- Status row ---------- */
+.fmm-claude__status {
+  margin-bottom: 28px;
+}
+
+.fmm-claude__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+
+.fmm-claude__row-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.fmm-claude__row-copy {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--fg-2);
+}
+
+/* ---------- Pills ----------
+   Label + glyph, always. The tint reinforces the state; it never carries it. */
+.fmm-claude__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid transparent;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+.fmm-claude__pill--warn {
+  color: var(--warn);
+  border-color: rgba(255, 196, 61, 0.35);
+  background: rgba(255, 196, 61, 0.1);
+}
+
+.fmm-claude__pill--ready {
+  color: var(--ball-500);
+  border-color: rgba(255, 122, 26, 0.4);
+  background: var(--bg-accent-soft);
+}
+
+.fmm-claude__pill--live {
+  color: var(--serve-500);
+  border-color: rgba(0, 226, 154, 0.4);
+  background: var(--bg-live-soft);
+}
+
+/* Switched off BY THE PLAYER — deliberately neutral rather than the warn amber
+   the three "you can't do this yet" rows wear. Nothing has gone wrong here; the
+   account is exactly as the player left it. The glyph carries the state. */
+.fmm-claude__pill--off {
+  color: var(--fg-3);
+  border-color: var(--border-default);
+  background: var(--bg-panel);
+}
+
+.fmm-claude__mono {
+  font-family: var(--font-mono);
+  color: var(--fg-1);
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Row action ----------
+   A real link, never a styled span, and never below the 44px touch floor. */
+.fmm-claude__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--fg-1);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.fmm-claude__action:hover {
+  background: var(--bg-hover);
+  border-color: var(--ball-500);
+}
+
+/* The one action here that is a <button> rather than a link — it POSTs. */
+button.fmm-claude__action {
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+/* Filled, because it is the only way out of the revoked state: an outlined
+   button beside a plain sentence reads as optional, and this one isn't. */
+.fmm-claude__action--primary {
+  background: var(--ball-500);
+  border-color: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.fmm-claude__action--primary:hover:not(:disabled) {
+  background: var(--ball-400);
+  border-color: var(--ball-400);
+}
+
+/* Destructive: the loss red on the border and the label, over a transparent
+   fill. Not a filled red button — this is one of two choices on the card and in
+   the dialog, and a solid block of red would read as the recommended one. */
+.fmm-claude__action--danger {
+  border-color: var(--loss);
+  color: var(--loss);
+  background: transparent;
+}
+
+.fmm-claude__action--danger:hover:not(:disabled) {
+  background: rgba(255, 77, 109, 0.12);
+  border-color: var(--loss);
+}
+
+.fmm-claude__action:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+/* ---------- Re-allow control ----------
+   Button plus the live region under it, as one column so the note sits beneath
+   the button rather than beside the row's copy. */
+.fmm-claude__allow {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+}
+
+/* The live region under an in-flight action — used by both the allow button and
+   the disconnect dialog. Deliberately a BARE selector, never nested under
+   `.fmm-claude`: the dialog portals to <body>, so a nested rule would drop the
+   `:empty` case there and leave the idle dialog reserving a blank row. */
+.fmm-claude__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+/* Idle, the region is present-but-empty so a screen reader is already watching
+   it; it must not reserve a row of whitespace while it waits. */
+.fmm-claude__note:empty {
+  display: none;
+}
+
+.fmm-claude__note--failed {
+  color: var(--loss);
+}
+
+/* ---------- Connected card ---------- */
+.fmm-claude__card {
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid rgba(0, 226, 154, 0.4);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.fmm-claude__card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.fmm-claude__card-copy {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-2);
+}
+
+/* Disconnect sits at the trailing edge of the head — state, then what it means,
+   then the one thing to do about it. The 900px block drops it to its own
+   full-width line with the other row actions. */
+.fmm-claude__card-head > .fmm-claude__action {
+  margin-left: auto;
+}
+
+.fmm-claude__fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 20px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.fmm-claude__field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  align-self: center;
+}
+
+.fmm-claude__field-value {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--fg-1);
+}
+
+/* ---------- Disconnect confirmation ----------
+   The dialog is PORTALLED to <body>, so it renders outside `.fmm-claude` and
+   picks up none of that block's descendant rules — the theme tokens still
+   resolve (they live on `body.dark.fortymm-theme`), but the box-sizing reset and
+   the focus ring above do not. Both are restated here, scoped to the dialog. */
+.fmm-claude__confirm,
+.fmm-claude__confirm *,
+.fmm-claude__confirm *::before,
+.fmm-claude__confirm *::after {
+  box-sizing: border-box;
+}
+
+.fmm-claude__confirm {
+  font-family: var(--font-ui);
+  overflow-wrap: anywhere;
+}
+
+.fmm-claude__confirm button:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+  border-radius: var(--r-sm, 6px);
+}
+
+/* Same bullets as the grant summary — a player reading "what you're granting"
+   and then "what disconnecting does" is reading one list twice, so it looks like
+   one list. `.fmm-claude__grant-item` is reused on the <li>s themselves. */
+.fmm-claude__confirm-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+/* The dialog's note is the shared `.fmm-claude__note`; only its spacing differs,
+   because here it sits below the list rather than under a button. */
+.fmm-claude__confirm .fmm-claude__note {
+  margin: 14px 0 0;
+}
+
+/* ---------- Permissions summary ---------- */
+.fmm-claude__grant {
+  margin-bottom: 28px;
+}
+
+.fmm-claude__grant-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.fmm-claude__grant-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+
+/* The dot is a bullet — nudge it onto the first line's optical centre. */
+.fmm-claude__grant-item > .ball-dot {
+  margin-top: 6px;
+}
+
+.fmm-claude__grant-item strong {
+  color: var(--fg-1);
+  font-weight: 700;
+}
+
+/* ---------- Setup panel ----------
+   The centre of gravity of the page: the only block with the accent border and
+   a shadow, because it is the only block a player has to *act* on. */
+.fmm-claude__setup {
+  margin-bottom: 28px;
+  padding: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--ball-500);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.fmm-claude__setup-title {
+  margin: 0 0 18px;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--fg-1);
+}
+
+/* An <ol>, so the order is in the document rather than only in the chips. */
+.fmm-claude__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 22px;
+}
+
+.fmm-claude__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.fmm-claude__step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  background: var(--bg-accent-soft);
+  border: 1px solid rgba(255, 122, 26, 0.4);
+  color: var(--ball-500);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fmm-claude__step-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.fmm-claude__step-copy {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+
+.fmm-claude__step-copy strong {
+  color: var(--fg-1);
+  font-weight: 700;
+}
+
+.fmm-claude__code {
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-1);
+}
+
+/* ---------- Copy fields ---------- */
+.fmm-claude__copy {
+  padding: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
+.fmm-claude__copy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  min-height: 16px;
+}
+
+.fmm-claude__copy-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* The transient marker. It sits in the field's own header, so which value is on
+   the clipboard is answered by *where* it is, not only by what it says. */
+.fmm-claude__copied {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--serve-500);
+}
+
+/* One row that WRAPS: the value takes what it needs, the button sits beside it
+   on a wide viewport and drops beneath it on a narrow one (see the 900px
+   block). */
+.fmm-claude__copy-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+
+/* `user-select: all` makes the whole value a single click's selection — the
+   fallback the failure line points at, and faster than a drag even when the
+   clipboard works. `anywhere` because a URL and a client id are each one
+   unbreakable token to the line breaker. */
+.fmm-claude__copy-value {
+  flex: 1 1 240px;
+  min-width: 0;
+  user-select: all;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-1);
+  overflow-wrap: anywhere;
+}
+
+.fmm-claude__copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  /* Never below the 44px touch floor. */
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.fmm-claude__copy-button--primary {
+  background: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.fmm-claude__copy-button--primary:hover {
+  background: var(--ball-400);
+}
+
+.fmm-claude__copy-button--secondary {
+  background: transparent;
+  border-color: var(--border-default);
+  color: var(--fg-1);
+}
+
+.fmm-claude__copy-button--secondary:hover {
+  background: var(--bg-hover);
+  border-color: var(--ball-500);
+}
+
+.fmm-claude__copy-error {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--loss);
+}
+
+/* ---------- Inline notice ---------- */
+.fmm-claude__notice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 122, 26, 0.45);
+  border-radius: var(--r-md);
+  background: var(--bg-accent-soft);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ball-500);
+}
+
+/* ---------- "Where it goes in Claude" diagram ----------
+   Dashed throughout: it is a drawing of another application's dialog, and
+   nothing in it is clickable. */
+.fmm-claude__diagram {
+  margin: 0;
+}
+
+.fmm-claude__diagram-caption {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.fmm-claude__dialog {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border-default);
+  border-radius: var(--r-md);
+  background: var(--bg-app);
+}
+
+.fmm-claude__dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.fmm-claude__dialog-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-pill);
+  border: 1px solid rgba(255, 122, 26, 0.4);
+  color: var(--ball-500);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* The secret's row keeps the gutter so its box lines up with the numbered ones. */
+.fmm-claude__dialog-num--none {
+  border-color: transparent;
+}
+
+.fmm-claude__dialog-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.fmm-claude__dialog-field--blank {
+  margin: 0 0 0 26px;
+  border-style: dashed;
+  color: var(--fg-muted);
+}
+
+.fmm-claude__dialog-disclosure {
+  margin: 0 0 0 26px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.fmm-claude__dialog-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: var(--r-md);
+  background: var(--ball-500);
+  color: var(--ink-950);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ---------- The email to sign in with ---------- */
+.fmm-claude__email-block {
+  padding: 12px;
+  border: 1px solid rgba(255, 122, 26, 0.35);
+  border-radius: var(--r-md);
+  background: var(--bg-accent-soft);
+}
+
+.fmm-claude__email {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--fg-1);
+  /* Selectable in one click, like the connector values above it. */
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.fmm-claude__email-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+/* ---------- Accordions ---------- */
+.fmm-claude__detail {
+  display: grid;
+  gap: 10px;
+}
+
+.fmm-claude__detail > .fmm-claude__overline {
+  margin-bottom: 0;
+}
+
+.fmm-claude__accordion {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+}
+
+.fmm-claude__accordion-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* The design's 52px, and comfortably past the 44px touch floor. */
+  min-height: 52px;
+  padding: 0 16px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+/* Safari renders a disclosure triangle unless this is suppressed; we draw our
+   own chevron. */
+.fmm-claude__accordion-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fmm-claude__accordion-chevron {
+  flex-shrink: 0;
+  color: var(--fg-3);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.fmm-claude__accordion[open] .fmm-claude__accordion-chevron {
+  transform: rotate(180deg);
+}
+
+.fmm-claude__accordion-list {
+  list-style: none;
+  margin: 0;
+  padding: 14px 16px 16px;
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.fmm-claude__accordion-item {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+.fmm-claude__accordion-term {
+  color: var(--fg-1);
+  font-weight: 700;
+}
+
+/* ---------- Narrow viewports ---------- */
+@media (max-width: 900px) {
+  .fmm-claude__inner {
+    padding: 24px 16px 56px;
+  }
+  .fmm-claude__title {
+    font-size: clamp(2rem, 11vw, 2.75rem);
+  }
+  .fmm-claude__header {
+    margin-bottom: 20px;
+  }
+  /* The action drops to its own full-width line rather than squeezing the copy
+     into a two-word column. The re-allow control is a wrapper around one, so it
+     takes the same rule. */
+  .fmm-claude__action,
+  .fmm-claude__allow {
+    flex: 1 1 100%;
+  }
+  .fmm-claude__fields {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .fmm-claude__field-value + .fmm-claude__field-label {
+    margin-top: 10px;
+  }
+  .fmm-claude__setup {
+    padding: 16px;
+  }
+  /* Once the value has pushed the button onto its own line, a content-width
+     button floating at the start of an empty row reads as an orphan — and is a
+     smaller target on the device with the least pointing precision. Fill it. */
+  .fmm-claude__copy-button {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fmm-claude__accordion-chevron,
+  .fmm-claude__action,
+  .fmm-claude__copy-button {
+    transition: none;
+  }
+}
