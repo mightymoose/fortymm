@@ -25,10 +25,12 @@ import uuid
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import ColumnElement, Float, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import Tournament, TournamentEvent, User
 from app.schedule_solves import latest_solve
 from app.schemas.tournament import TournamentDetailRead
+from app.tournament_event_stages import stage_read
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -268,6 +270,13 @@ async def list_tournament_details(
             # global two-row catalogue on every tournament it returns. The picker is a
             # detail-BFF concern.
             draw_type_catalogue=None,
+            # No per-event stages either, for the same reason: the list's cards render
+            # no stage UI, so it does not pay the detail read's ``selectinload``
+            # (``TournamentEvent.stages`` is deliberately lazy — see the model —
+            # precisely so a page that never reads it never pays for it).
+            # ``serialize_detail`` maps every event id through ``.get(..., [])``, so
+            # an empty dict here answers every event with ``[]``.
+            stages_by_event={},
             # The near-me distance, or ``None`` when the list was not location-filtered
             # (``distance_by_id`` is empty then, so every card carries a null distance).
             distance_miles=distance_by_id.get(tournament.id),
@@ -290,20 +299,23 @@ async def tournament_detail(
     not-found itself, since the HTTP route and the MCP tool 404/refuse
     differently) and hands it in with its creator's ``created_by_username``; this
     reader runs the shared batched composition both surfaces used to run inline —
-    SEVEN statements, no N+1 whatever the number of events, entrants, fixtures or
-    solves:
+    EIGHT statements, no N+1 whatever the number of events, entrants, fixtures,
+    stages or solves:
 
     1. the tournament's events, in creation order;
     2. those events' active entrants (one batch);
     3. those events' fixtures — their draws (one batch, ADR-0786);
     4. the games of every **completed** match on the page — the standings' raw
        material (one batch; **no statement at all** until something is played, so an
-       unplayed tournament costs six here, a played one seven);
+       unplayed tournament costs seven here, a played one eight);
     5. the caller's rating on the tournament's one league (ADR-0783);
     6. the newest row of the solve ledger (the Schedule tab's solve strip);
     7. the selectable draw formats (the event form's picker, ADR "a draw type is a
        seeded row, and the enum holds only what runs") — global reference data, so
-       it is one flat read with nothing to key or batch.
+       it is one flat read with nothing to key or batch;
+    8. those events' stages — one batched ``selectinload`` fetch, riding
+       ``TournamentEventStage.draw_type_option``'s ``lazy="joined"`` along on the
+       same statement (ADR 20260815 decisions 1/3), never a statement per event.
 
     Then the shared ``serialize_detail`` projects it from ``current_user_id``'s
     perspective (``can_edit``, per-event ``entry_state``, ladder ``rating``). The
@@ -317,6 +329,17 @@ async def tournament_detail(
                 select(TournamentEvent)
                 .where(TournamentEvent.tournament_id == tournament.id)
                 .order_by(TournamentEvent.created_at)
+                # The one caller that eager-loads stages at all (ADR 20260815):
+                # ``TournamentEvent.stages`` is deliberately lazy on the relationship
+                # itself (see the model), so every OTHER reader of an event costs
+                # nothing extra and this one opts in explicitly, here, where the
+                # page actually renders them. ``selectinload`` batches over the
+                # whole event set in ONE extra statement — not one per event — and
+                # rides ``TournamentEventStage.draw_type_option`` (``lazy="joined"``)
+                # along on that same statement, so this line alone is the entire
+                # cost: one more than before, however many events or stages there
+                # are (``EXPECTED_TOURNAMENT_DETAIL_STATEMENTS`` below).
+                .options(selectinload(TournamentEvent.stages))
             )
         )
         .scalars()
@@ -329,6 +352,11 @@ async def tournament_detail(
     rating = await entrant_rating(db, tournament.league_id, current_user_id)
     latest_schedule_solve = await latest_solve(db, tournament.id)
     catalogue = await draw_type_catalogue(db)
+    # Projected here, off the relationship the query above just eager-loaded — no
+    # query of its own (``stage_read`` issues none; see its docstring). Already in
+    # ``position`` order: the relationship carries ``order_by="TournamentEventStage
+    # .position"`` (the model), and ``selectinload`` preserves it.
+    stages_by_event = {e.id: [stage_read(s) for s in e.stages] for e in events}
     return serialize_detail(
         tournament,
         created_by_username=created_by_username,
@@ -340,4 +368,5 @@ async def tournament_detail(
         rating=rating,
         latest_schedule_solve=latest_schedule_solve,
         draw_type_catalogue=catalogue,
+        stages_by_event=stages_by_event,
     )

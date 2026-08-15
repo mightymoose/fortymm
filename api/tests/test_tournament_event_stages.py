@@ -1,18 +1,24 @@
-"""Tests for stage minting and re-minting (ADR 20260815 decisions 1, 3, 4).
+"""Tests for stage minting and re-minting (ADR 20260815 decisions 1, 3, 4), and for the
+tournament-detail read that serves them.
 
 Covers ``app.tournament_event_stages`` (the template, the mint, the re-mint) and its
-two call sites in ``app.tournament_events`` — ``create_event`` and ``update_event``.
-Nothing here touches a route, a response schema, or any read path: nothing reads a
-stage yet in this chore (see ``docs/adr/20260815-...``, decision 3, and the chore's own
-scope guard).
+two call sites in ``app.tournament_events`` — ``create_event`` and ``update_event`` —
+plus the tournament-detail read path (``GET /v1/tournaments/{id}``) that is the first
+reader of ``TournamentEvent.stages`` in the codebase, and the tournament LIST's
+deliberate omission of them: every other read still passes ``stages=[]`` (the
+tournament LIST, and the single-event create/update responses are out of this
+chore's scope; see ``app.tournament_serialization``).
 """
 
 import uuid
+from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
+import pytest_asyncio
+from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +38,8 @@ from app.schemas.tournament import Address, TournamentEventCreate, TournamentEve
 from app.tournament_errors import DrawTypeFrozenError
 from app.tournament_event_stages import mint_stages, stage_template
 from app.tournament_events import create_event, update_event
-from tests._helpers import make_user, venue_tables
+from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
+from tests._helpers import grant_permissions, make_user, start_session, venue_tables
 
 
 def _address() -> Address:
@@ -458,3 +465,132 @@ async def test_stages_freeze_blocks_remint_when_the_draw_type_change_itself_is_r
     after = await _stages(db_session, event.id)
     after_snapshot = [(s.id, s.position, s.draw_type_id) for s in after]
     assert after_snapshot == before_snapshot
+
+
+# ----- read: the tournament-detail payload serves each event's stages --------------
+
+
+@pytest_asyncio.fixture
+async def authed_client(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> AsyncIterator[tuple[AsyncClient, User]]:
+    """The shared ``api_client`` with a real session whose user holds
+    ``tournament.view`` + ``tournament.create`` — the same genuine RBAC rows
+    ``test_tournaments`` grants, not a dependency override."""
+    user = await start_session(api_client, db_session)
+    await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_CREATE))
+    yield api_client, user
+
+
+def _tournament_payload() -> dict[str, Any]:
+    return {
+        "name": "Stagey Cup",
+        "address": {
+            "venue": "Berkeley TT Club",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+        },
+        "table_catalogue": [{"label": "Table 1", "court": "A"}],
+    }
+
+
+async def _tournament_with_event(
+    client: AsyncClient, **event_overrides: Any
+) -> tuple[str, str]:
+    """Create a tournament and one event through the real HTTP routes; return both
+    ids as strings, matching how the detail read's JSON bodies carry them."""
+    tournament = await client.post("/v1/tournaments", json=_tournament_payload())
+    assert tournament.status_code == 201, tournament.text
+    tournament_id = tournament.json()["id"]
+    event = await client.post(
+        f"/v1/tournaments/{tournament_id}/events", json=_event_body(**event_overrides)
+    )
+    assert event.status_code == 201, event.text
+    return tournament_id, event.json()["id"]
+
+
+async def _event_of(
+    client: AsyncClient, tournament_id: str, event_id: str
+) -> dict[str, Any]:
+    """The one event's read model, off the tournament-DETAIL payload — ``stages``
+    is not its own endpoint (root ``CLAUDE.md``, BFF one-endpoint-per-page); it rides
+    on this same read."""
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200, response.text
+    (event,) = [e for e in response.json()["events"] if e["id"] == event_id]
+    return event
+
+
+async def test_the_tournament_detail_serves_a_single_elim_events_one_stage(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """A single-stage draw type's event carries exactly one stage on the
+    tournament-detail payload: position 0, its own draw type — not ``rr_then_ko``,
+    which no stage may ever carry (ADR 20260815 decision 4)."""
+    client, _ = authed_client
+    tournament_id, event_id = await _tournament_with_event(
+        client, draw_type="single-elim"
+    )
+
+    event = await _event_of(client, tournament_id, event_id)
+
+    assert [(s["position"], s["draw_type"]) for s in event["stages"]] == [
+        (0, "single-elim")
+    ]
+    assert uuid.UUID(event["stages"][0]["id"])
+
+
+async def test_the_tournament_detail_serves_an_rr_then_ko_events_two_stages_in_order(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The one composite template reads back as two stages, in ``position`` order:
+    the pool stage (``round-robin``) at 0, the knockout stage (``single-elim``) at 1
+    (ADR 20260815 decisions 3/7) — never the reverse, and never collapsed to one row
+    or to ``rr-then-ko`` itself.
+
+    Order is asserted as a list, not a set — see
+    ``test_the_detail_payload_carries_the_seeded_draw_types_in_display_order`` in
+    ``tests/test_tournaments.py`` for why a sequence, not membership, is the claim
+    worth pinning here."""
+    client, _ = authed_client
+    tournament_id, event_id = await _tournament_with_event(
+        client, **_pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+    )
+
+    event = await _event_of(client, tournament_id, event_id)
+
+    assert [(s["position"], s["draw_type"]) for s in event["stages"]] == [
+        (0, "round-robin"),
+        (1, "single-elim"),
+    ]
+    # Two distinct stage rows, not one row read twice.
+    assert len({s["id"] for s in event["stages"]}) == 2
+
+
+async def test_the_tournaments_list_does_not_carry_per_event_stages(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """``[]``, not the event's real (non-empty) stages: the list's cards render no
+    per-stage UI, so it does not pay the detail read's batched ``selectinload``
+    (same shape as ``test_the_tournaments_list_does_not_carry_the_draw_type_catalogue``
+    in ``tests/test_tournaments.py`` — a null/empty sentinel there, an empty list
+    here, because ``stages`` can never be legitimately empty on a detail read)."""
+    client, _ = authed_client
+    tournament_id, event_id = await _tournament_with_event(
+        client, draw_type="single-elim"
+    )
+
+    rows = (await client.get("/v1/tournaments")).json()
+    listed_tournament = next(row for row in rows if row["id"] == tournament_id)
+    (listed_event,) = [e for e in listed_tournament["events"] if e["id"] == event_id]
+
+    assert listed_event["stages"] == []
+    # And the detail read of the very same event does carry it, so this is a decision
+    # about the LIST and not a feature that quietly stopped working.
+    detail_event = await _event_of(client, tournament_id, event_id)
+    assert detail_event["stages"] == [
+        {"id": ANY, "position": 0, "draw_type": "single-elim"}
+    ]

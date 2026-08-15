@@ -4526,16 +4526,20 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
 # ADR 20260801), plus ONE batched load of every one of those pools' table reservations
 # (``TournamentEventPool.tables``, ``lazy="selectin"`` — chained onto the pools' own
-# batched load, so it is one statement per page and not one per pool). Ten, whatever the
-# number of
+# batched load, so it is one statement per page and not one per pool), plus ONE batched
+# load of every event's STAGES (``selectinload(TournamentEvent.stages)`` at the
+# ``tournament_detail`` read site — ADR 20260815 — riding
+# ``TournamentEventStage.draw_type_option``'s own ``lazy="joined"`` along on that same
+# statement). Eleven, whatever the number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
-# whatever the size of the venue, and whatever the length of the day's solve ledger.
+# whatever the size of the venue, whatever the number of stages, and whatever the
+# length of the day's solve ledger.
 #
-# Two of the nine are deliberate flat reads that grow with nothing: the draw-type
+# Two of the ten are deliberate flat reads that grow with nothing: the draw-type
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 10
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 11
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4552,7 +4556,7 @@ async def test_detail_statement_count_does_not_grow_with_events(
     This is the trap the feature invites: resolving the rating (or counting capacity)
     inside the per-event loop is invisible in every assertion about the *response*, and
     turns a 12-event tournament's detail page into a dozen extra round-trips. A
-    per-event rating would measure 6 statements at one event and 9 at four, so the
+    per-event rating would measure 7 statements at one event and 10 at four, so the
     four-event case fails the pin even if the one-event case slipped past.
 
     Counted on a fresh session against the handler, exactly as the list endpoint's twin
@@ -4942,7 +4946,7 @@ async def test_detail_statement_count_does_not_grow_with_drawn_events(
     fixtures — or a loader that skipped the empty ones — costs them nothing and leaves
     them green, while the real page pays a query per drawn event. Hence the deliberate
     cut draw on every event here, and the two ``event_count`` cases: a per-event fetch
-    measures 7 statements at one event and 10 at four, so it fails the pin at four
+    measures 8 statements at one event and 11 at four, so it fails the pin at four
     even if it slipped past at one.
     """
     client, user = authed_client

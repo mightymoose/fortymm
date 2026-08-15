@@ -40,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DrawType, TournamentEvent, TournamentEventStage
+from app.schemas.tournament import EventStageRead
 
 
 def stage_template(draw_type: DrawType) -> tuple[DrawType, ...]:
@@ -134,3 +135,19 @@ async def remint_stages_in_place(
     elif len(template) < len(existing):
         for stale in existing[len(template) :]:
             await db.delete(stale)
+
+
+def stage_read(stage: TournamentEventStage) -> EventStageRead:
+    """One stored stage row as the shape the tournament-detail read serves
+    (:class:`~app.schemas.tournament.EventStageRead`) — the read-boundary twin of
+    ``app.tournament_pools.pool_read``.
+
+    ``stage.draw_type`` is a property that reads through the eager
+    ``draw_type_option`` join, never a lazy load on its own — see the model. The
+    caller is responsible for having loaded that collection eagerly (the detail read
+    site's ``selectinload(TournamentEvent.stages)``); this function issues no query
+    of its own.
+    """
+    return EventStageRead(
+        id=stage.id, position=stage.position, draw_type=stage.draw_type
+    )
