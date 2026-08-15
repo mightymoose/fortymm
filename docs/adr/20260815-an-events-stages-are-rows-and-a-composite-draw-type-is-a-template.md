@@ -61,10 +61,12 @@ on `id`, so `tournament_event_draw_settings.draw_type_key` migrates to
 **3. The system mints stages from a template in code. A director never authors
 them.** The template maps each event-level draw type to a stage sequence:
 `round_robin → [round_robin]`, `single_elim → [single_elim]`,
-`swiss → [swiss]`, `rr_then_ko → [round_robin, single_elim]`. Stages are
-minted when the draw settings are configured, replaced on a draw-type change
-while no draw exists, and frozen once a draw exists. This is the same freeze
-rule pools have. A new draw shape adds a template entry, not a new derivation
+`swiss → [swiss]`, `rr_then_ko → [round_robin, single_elim]`. Stages are minted when the draw
+settings are configured. On a draw-type change while no draw exists, the
+template is re-applied in place: stage 1 keeps its identity and its draw type
+is updated, and later stages are added or removed. A director's pools hang off
+stage 1, so they survive a type change, as they do today. Stages freeze once a
+draw exists. This is the same freeze rule pools have. A new draw shape adds a template entry, not a new derivation
 rule.
 
 **4. Compositeness lives in the strategy layer, not in a column.** There is no
