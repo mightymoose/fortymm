@@ -674,6 +674,10 @@ async def update_event(
     if updates.pools is not None:
         apply_event_pools(tournament, event, updates.pools)
     if draw_settings is not None:
+        # Captured BEFORE ``store_draw_settings`` overwrites it: the re-mint gate below
+        # needs to know whether the TYPE actually moved, and the setter is the only
+        # place ``event.draw_settings.draw_type`` changes.
+        old_draw_type = event.draw_settings.draw_type
         # The one place an event's draw configuration moves after create (the freeze
         # above has already refused this on a cut draw). Assigned through
         # ``store_draw_settings``, not through the row's columns, so serializing the arm
@@ -686,14 +690,21 @@ async def update_event(
         # async context.
         store_draw_settings(event.draw_settings, draw_settings)
         # Re-apply the stage template IN PLACE (ADR 20260815 decision 3) — but only when
-        # this event still has no draw. ``_enforce_draw_settings_frozen`` above already
-        # refused any REAL configuration change once a draw exists; the gate here is for
-        # the one case that guard waves through even under a standing draw — a PATCH
-        # that resends the event's current draw settings unchanged. Without this second
-        # check that no-op would still reach here and rewrite stage rows a draw has
-        # already been cut across, which is exactly what "stages freeze once a draw
-        # exists" (decision 3) forbids.
-        if not await event_has_draw(db, event.id):
+        # the draw TYPE itself moved. The stage template ``stage_template`` mints
+        # depends only on ``draw_type`` (never on the settings beside it, e.g.
+        # ``qualifiers_per_pool``), so a settings-only edit on an unchanged type has
+        # nothing for a re-mint to do. This also covers the one case
+        # ``_enforce_draw_settings_frozen`` waves through even under a standing draw — a
+        # PATCH that resends the event's current draw settings unchanged — because that
+        # case never moves the type either.
+        #
+        # No ``event_has_draw`` COUNT needed to prove safety here, unlike the old gate:
+        # whenever ``draw_settings.draw_type is not old_draw_type``, the freeze above
+        # has ALREADY refused this same request had a draw existed (it compares the
+        # incoming arm against the stored one and raises on any real move under a cut
+        # draw) — so reaching this line with a moved type means the event has no draw,
+        # without asking the database again.
+        if draw_settings.draw_type is not old_draw_type:
             await remint_stages_in_place(db, event, draw_settings.draw_type)
     if event.timezone != old_timezone:
         # The zone truly moved (a PATCH re-sending the same zone falls through as a

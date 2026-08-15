@@ -1796,19 +1796,9 @@ class TournamentEventRead(BaseModel):
     # the event's draw type, and every event holds at least one from the moment it
     # is created. Total, not optional: unlike ``results``/``latest_schedule_solve``,
     # there is no state an event can be in where it has none, so this field carries
-    # no "not applicable yet" case for a client to handle.
-    #
-    # It IS a "not projected on this page" case, same shape as
-    # ``draw_type_catalogue``/``latest_schedule_solve``: the tournament LIST returns
-    # every event of every tournament and its cards render no per-stage UI, so that
-    # surface (and the single-event create/update reads, out of this chore's scope)
-    # pass ``[]`` rather than pay a batched load nothing on that page reads. Reading
-    # it as "this event truly has zero stages" on those responses would be wrong;
-    # read it as "not on this page" instead. Only the tournament-detail read
-    # (``GET /v1/tournaments/{id}``) populates it for real, via an explicit
-    # ``selectinload`` at that one read site — ``TournamentEventStage`` is
-    # deliberately NOT an eager (``lazy="selectin"``) relationship like ``pools``
-    # above, so this array does not cost every event read a statement of its own.
+    # no "not applicable yet" case for a client to handle, and no "not on this page"
+    # one either — ``TournamentEvent.stages`` is ``lazy="selectin"``, like ``pools``
+    # above, so every read of an event carries its real stages.
     stages: list[EventStageRead]
     created_at: datetime
     updated_at: datetime

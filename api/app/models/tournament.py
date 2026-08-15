@@ -392,14 +392,16 @@ class TournamentEvent(Base):
     # construction time (``stages=mint_stages(...)``), in the same transaction as the
     # event itself.
     #
-    # Deliberately **no** ``lazy="selectin"``, unlike ``pools`` above, and no eager
-    # option at all — the default (lazy) strategy. Nothing reads an event's stages yet,
-    # so there is no reader that would otherwise need to remember a loader, and an eager
-    # collection here would add a statement to every event read
-    # (``EXPECTED_TOURNAMENT_*_STATEMENTS`` in ``tests/test_tournaments.py``) for a read
-    # path this chore does not touch. ``app.tournament_event_stages`` reaches these rows
-    # through explicit queries, never through this attribute, on the one path
-    # (draw-type change) that touches them after create.
+    # ``lazy="selectin"``, matching ``pools`` above and for the same reason: async
+    # SQLAlchemy raises rather than emitting a lazy load, so every reader of an event's
+    # stages — the tournament-detail/list serializers today, and whatever reads them
+    # next — would otherwise have to remember its own loader option. ``selectin`` and
+    # not ``joined`` because this is a one-to-many, batching over the whole result set
+    # in ONE extra statement however many events a page holds (the same reasoning
+    # ``pools`` gives). ``app.tournament_event_stages`` still reaches these rows
+    # through explicit queries of its own on the mint/re-mint path — it never reads
+    # this attribute — but every OTHER reader (the serializer chief among them) now
+    # gets a populated collection for free.
     #
     # ``passive_deletes=True`` is what keeps ``await db.delete(event)``
     # (``app.tournament_events.delete_event``) from needing to load this collection to
@@ -409,6 +411,7 @@ class TournamentEvent(Base):
         back_populates="event",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        lazy="selectin",
         order_by="TournamentEventStage.position",
     )
 

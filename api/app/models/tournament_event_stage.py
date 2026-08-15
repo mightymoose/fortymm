@@ -7,11 +7,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.draw_type import DRAW_TYPE_IDS
+from app.models.draw_type import DRAW_TYPE_IDS, DRAW_TYPES_BY_ID
 from app.models.tournament import DrawType
 
 if TYPE_CHECKING:
-    from app.models.draw_type import DrawTypeOption
     from app.models.tournament import TournamentEvent
 
 
@@ -75,20 +74,12 @@ class TournamentEventStage(Base):
     # RESTRICT, exactly as ``tournament_event_draw_settings.draw_type_id`` is: a draw
     # type a stage is running cannot be deleted out from under it. FKs
     # ``draw_types.id``, not its ``key`` (ADR 20260815) — code still resolves the slug
-    # through the ``draw_type_option`` join below, via the ``draw_type`` property,
-    # never off this column directly.
+    # through :data:`~app.models.draw_type.DRAW_TYPES_BY_ID`, a plain dict lookup, via
+    # the ``draw_type`` property, never off this column directly.
     draw_type_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("draw_types.id", ondelete="RESTRICT"),
         nullable=False,
-    )
-    # Eager and joined, for the same reason ``TournamentEventDrawSettings
-    # .draw_type_option`` is: async SQLAlchemy raises rather than emitting a lazy load,
-    # so a reader that reaches ``stage.draw_type`` needs this to have ridden along with
-    # whatever query loaded the stage. ``innerjoin=True`` because the FK is NOT NULL.
-    draw_type_option: Mapped["DrawTypeOption"] = relationship(
-        lazy="joined",
-        innerjoin=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -100,23 +91,22 @@ class TournamentEventStage(Base):
         nullable=False,
     )
 
-    # No ``lazy="selectin"`` here, unlike ``TournamentEventPool`` — deliberately.
-    # Nothing reads an event's stages yet (this chore mints and re-mints only), and an
-    # eager collection would move the ``EXPECTED_TOURNAMENT_*_STATEMENTS`` pins in
-    # ``tests/test_tournaments.py`` for a read path this chore does not touch. The mint
-    # and re-mint in ``app.tournament_event_stages`` reach these rows through explicit
-    # queries, never through ``TournamentEvent.stages``, so the default (lazy) strategy
-    # is never actually exercised by app code today.
+    # The eager-loading rationale for the collection this is the other side of lives on
+    # ``TournamentEvent.stages`` (``lazy="selectin"``), not here — the mint and re-mint
+    # in ``app.tournament_event_stages`` still reach these rows through explicit
+    # queries, never through that relationship, so nothing here needs its own strategy.
     event: Mapped["TournamentEvent"] = relationship(back_populates="stages")
 
     @property
     def draw_type(self) -> DrawType:
         """The stage's own draw type, parsed back into the closed set the code
-        dispatches on. Read through the ``draw_type_option`` join, never off
-        ``draw_type_id`` directly — same shape as
-        ``TournamentEventDrawSettings.draw_type``, same reason.
+        dispatches on. A plain dict lookup on
+        :data:`~app.models.draw_type.DRAW_TYPES_BY_ID`, keyed by ``draw_type_id`` —
+        never a join or a relationship walk, and no loaded relationship or lazy load
+        needed — same shape as ``TournamentEventDrawSettings.draw_type``, same reason
+        (ADR 20260815 retired the join this used to make).
         """
-        return DrawType(self.draw_type_option.key)
+        return DRAW_TYPES_BY_ID[self.draw_type_id]
 
     @draw_type.setter
     def draw_type(self, draw_type: DrawType) -> None:

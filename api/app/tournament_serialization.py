@@ -637,7 +637,6 @@ def serialize_event(
     fixtures: list[TournamentFixtureRead],
     rating: float | None,
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
-    stages: list[EventStageRead],
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
     # needs the entrant's username, and only the *active* entries), so the fields
@@ -702,14 +701,13 @@ def serialize_event(
             # this costs the page no statement of its own — the same arrangement the
             # venue catalogue has.
             "pools": [pool_read(pool) for pool in e.pools],
-            # ``stages`` is passed in, exactly for the reason ``fixtures`` is — and more
-            # strongly than an N+1 warning here: ``TournamentEvent.stages`` is
-            # deliberately NOT eager (unlike ``pools`` above), so ``e.stages`` would
-            # raise on async SQLAlchemy's lazy-load guard on every event this
-            # serializer reaches through a query that never eager-loaded it (the
-            # tournament LIST, and the single-event create/update reads). This
-            # function must never touch ``e.stages`` itself.
-            "stages": stages,
+            # Read straight off the relationship, exactly as ``pools`` above is:
+            # ``TournamentEvent.stages`` is ``lazy="selectin"`` now, so every event this
+            # serializer reaches already carries its stages, however it was loaded — no
+            # separate batch, no sentinel for "not on this page" (ADR 20260815).
+            # ``model_validate`` directly rather than a helper: unlike ``pool_read``,
+            # nothing composes a stage row from more than itself.
+            "stages": [EventStageRead.model_validate(s) for s in e.stages],
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,
@@ -752,7 +750,6 @@ def serialize_detail(
     rating: float | None,
     latest_schedule_solve: ScheduleSolve | None,
     draw_type_catalogue: list[DrawTypeRead] | None,
-    stages_by_event: dict[uuid.UUID, list[EventStageRead]],
     distance_miles: float | None = None,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
@@ -795,15 +792,6 @@ def serialize_detail(
                     fixtures=fixtures_by_event[e.id],
                     rating=rating,
                     game_counts=game_counts,
-                    # ``{}`` at the two call sites that don't key one per event
-                    # (the tournament LIST) collapses to ``[]`` via ``.get`` below —
-                    # every event gets an answer, never a ``KeyError``, mirroring
-                    # ``entrants_by_event``/``fixtures_by_event`` above except that a
-                    # caller that skips the batched load altogether (rather than
-                    # loading it as empty for every id) is a legitimate, cheaper
-                    # shape here: unlike entrants/fixtures, "not projected" is a real
-                    # state this field has (see ``EventStageRead`` on the schema).
-                    stages=stages_by_event.get(e.id, []),
                 )
                 for e in events
             ],
@@ -827,13 +815,16 @@ async def shape_created_event_read(
     WITHOUT a query (fixtures are only ever written by the cut, ADR-0786), so the only
     read is the caller's one ladder ``rating`` on ``league_id`` — the tournament's
     league, passed in by the verb rather than re-queried here. Its ``entry_state`` is
-    still the CALLER's, computed exactly as on the read paths."""
+    still the CALLER's, computed exactly as on the read paths.
+
+    Its stages ride along for free: ``create_event`` mints them in the same
+    transaction and the caller's ``db.refresh(event)`` repopulates the eager
+    (``lazy="selectin"``) collection before this is ever called, so
+    ``serialize_event`` reads real rows off ``event.stages`` with no query of its own
+    here."""
     rating = await entrant_rating(db, league_id, viewer_id)
-    # No stages batch here — the create adapters are out of this chore's scope
-    # (see ``EventStageRead`` on the schema: "not projected" is a real, distinct
-    # state this field has, unlike ``fixtures``/``entrants``).
     return serialize_event(
-        event, entrants=[], fixtures=[], rating=rating, game_counts={}, stages=[]
+        event, entrants=[], fixtures=[], rating=rating, game_counts={}
     )
 
 
@@ -861,13 +852,13 @@ async def shape_event_read(
     fixtures = event_fixtures[event.id]
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(db, league_id, viewer_id)
-    # No stages batch here either — the update adapter is out of this chore's scope,
-    # same reasoning as ``shape_created_event_read`` above.
+    # Its stages ride along for free, same as ``shape_created_event_read`` above:
+    # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
+    # collection, so ``serialize_event`` reads real rows off ``event.stages``.
     return serialize_event(
         event,
         entrants=entrants,
         fixtures=fixtures,
         rating=rating,
         game_counts=game_counts,
-        stages=[],
     )

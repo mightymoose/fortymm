@@ -5,13 +5,13 @@ return the *same* full aggregate — every tournament with all of its events, th
 entrants and their draws — and differ only in **which tournaments** they select:
 the HTTP list is VISIBILITY-scoped (``visible_to``), the MCP tool is OWNER-scoped
 (``created_by_user_id == caller``). So the query shape lives here, once, taking a
-WHERE predicate, and both surfaces call it — a second copy of this five-statement
+WHERE predicate, and both surfaces call it — a second copy of this nine-statement
 batched read would be the N+1 waiting to happen that the statement-count
 tripwires in ``tests/test_tournaments.py`` exist to catch.
 
 The single-tournament DETAIL read (:func:`tournament_detail`) lives here for the
 same reason: the HTTP ``GET /v1/tournaments/{id}`` route and the MCP
-``get_tournament`` tool composed the identical seven-statement batched read inline,
+``get_tournament`` tool composed the identical eight-statement batched read inline,
 a hairline apart, and a second copy is the drift this module exists to prevent.
 
 Both sit a layer above ``tournament_queries`` (pure data access) because they also
@@ -25,12 +25,10 @@ import uuid
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import ColumnElement, Float, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models import Tournament, TournamentEvent, User
 from app.schedule_solves import latest_solve
 from app.schemas.tournament import TournamentDetailRead
-from app.tournament_event_stages import stage_read
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -154,15 +152,18 @@ async def list_tournament_details(
     """Every tournament matching ``where``, newest first, as the full
     ``TournamentDetailRead`` aggregate the list cards render.
 
-    FIVE queries, no N+1, whatever the number of tournaments or events: the
-    tournaments+usernames join (scoped by ``where``), then all their events, then
-    all those events' active entrants in one batch, then all those events'
-    fixtures in one batch (ADR-0786), then the caller's rating on every distinct
-    league those tournaments run on (which every event's ``entry_state`` is judged
-    against, ADR-0783). A per-event entry count, a per-event draw, or a
-    per-tournament rating would be the N+1 this shape exists to avoid, and a
-    statement-count tripwire in ``tests/test_tournaments.py`` fails if one comes
-    back.
+    NINE queries, no N+1, whatever the number of tournaments or events: the
+    tournaments+usernames join (scoped by ``where``), the events, all those events'
+    active entrants in one batch, all those events' fixtures in one batch
+    (ADR-0786), the caller's rating on every distinct league those tournaments run
+    on (which every event's ``entry_state`` is judged against, ADR-0783), plus the
+    venue tables / pools / pool-table-reservations / stages that ride eagerly on
+    ``Tournament``/``TournamentEvent``/``TournamentEventPool`` themselves
+    (``lazy="selectin"`` each — see ``EXPECTED_TOURNAMENT_LIST_STATEMENTS`` in
+    ``tests/test_tournaments.py`` for the full, currently-measured breakdown). A
+    per-event entry count, a per-event draw, or a per-tournament rating would be the
+    N+1 this shape exists to avoid, and a statement-count tripwire in
+    ``tests/test_tournaments.py`` fails if one comes back.
 
     ``where`` scopes the FIRST query, so the events and entrants queries are keyed
     off the surviving ids and cannot leak a hidden tournament's contents either.
@@ -180,7 +181,7 @@ async def list_tournament_details(
     only tournaments within ``radius_miles`` of ``(lat, lng)`` survive, and each
     carries its computed ``distance_miles``. Both the predicate and the computed
     column ride on that one existing query, so the statement count is unchanged and
-    the tripwire still reads five. When ``near_me`` is ``None`` (the unfiltered list,
+    the tripwire still reads nine. When ``near_me`` is ``None`` (the unfiltered list,
     and the MCP owner-scoped list, which never passes it) the query, the row set and
     every ``distance_miles`` are exactly as before — the latter all null.
     """
@@ -270,13 +271,6 @@ async def list_tournament_details(
             # global two-row catalogue on every tournament it returns. The picker is a
             # detail-BFF concern.
             draw_type_catalogue=None,
-            # No per-event stages either, for the same reason: the list's cards render
-            # no stage UI, so it does not pay the detail read's ``selectinload``
-            # (``TournamentEvent.stages`` is deliberately lazy — see the model —
-            # precisely so a page that never reads it never pays for it).
-            # ``serialize_detail`` maps every event id through ``.get(..., [])``, so
-            # an empty dict here answers every event with ``[]``.
-            stages_by_event={},
             # The near-me distance, or ``None`` when the list was not location-filtered
             # (``distance_by_id`` is empty then, so every card carries a null distance).
             distance_miles=distance_by_id.get(tournament.id),
@@ -313,9 +307,9 @@ async def tournament_detail(
     7. the selectable draw formats (the event form's picker, ADR "a draw type is a
        seeded row, and the enum holds only what runs") — global reference data, so
        it is one flat read with nothing to key or batch;
-    8. those events' stages — one batched ``selectinload`` fetch, riding
-       ``TournamentEventStage.draw_type_option``'s ``lazy="joined"`` along on the
-       same statement (ADR 20260815 decisions 1/3), never a statement per event.
+    8. those events' stages — ``TournamentEvent.stages`` is ``lazy="selectin"``
+       (ADR 20260815 decisions 1/3), so this batches automatically off the events
+       query above, never a statement per event.
 
     Then the shared ``serialize_detail`` projects it from ``current_user_id``'s
     perspective (``can_edit``, per-event ``entry_state``, ladder ``rating``). The
@@ -329,17 +323,6 @@ async def tournament_detail(
                 select(TournamentEvent)
                 .where(TournamentEvent.tournament_id == tournament.id)
                 .order_by(TournamentEvent.created_at)
-                # The one caller that eager-loads stages at all (ADR 20260815):
-                # ``TournamentEvent.stages`` is deliberately lazy on the relationship
-                # itself (see the model), so every OTHER reader of an event costs
-                # nothing extra and this one opts in explicitly, here, where the
-                # page actually renders them. ``selectinload`` batches over the
-                # whole event set in ONE extra statement — not one per event — and
-                # rides ``TournamentEventStage.draw_type_option`` (``lazy="joined"``)
-                # along on that same statement, so this line alone is the entire
-                # cost: one more than before, however many events or stages there
-                # are (``EXPECTED_TOURNAMENT_DETAIL_STATEMENTS`` below).
-                .options(selectinload(TournamentEvent.stages))
             )
         )
         .scalars()
@@ -352,11 +335,6 @@ async def tournament_detail(
     rating = await entrant_rating(db, tournament.league_id, current_user_id)
     latest_schedule_solve = await latest_solve(db, tournament.id)
     catalogue = await draw_type_catalogue(db)
-    # Projected here, off the relationship the query above just eager-loaded — no
-    # query of its own (``stage_read`` issues none; see its docstring). Already in
-    # ``position`` order: the relationship carries ``order_by="TournamentEventStage
-    # .position"`` (the model), and ``selectinload`` preserves it.
-    stages_by_event = {e.id: [stage_read(s) for s in e.stages] for e in events}
     return serialize_detail(
         tournament,
         created_by_username=created_by_username,
@@ -368,5 +346,4 @@ async def tournament_detail(
         rating=rating,
         latest_schedule_solve=latest_schedule_solve,
         draw_type_catalogue=catalogue,
-        stages_by_event=stages_by_event,
     )

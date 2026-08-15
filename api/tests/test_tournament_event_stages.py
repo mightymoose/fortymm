@@ -1,13 +1,13 @@
 """Tests for stage minting and re-minting (ADR 20260815 decisions 1, 3, 4), and for the
-tournament-detail read that serves them.
+tournament-detail and tournament-list reads that serve them.
 
 Covers ``app.tournament_event_stages`` (the template, the mint, the re-mint) and its
 two call sites in ``app.tournament_events`` — ``create_event`` and ``update_event`` —
-plus the tournament-detail read path (``GET /v1/tournaments/{id}``) that is the first
-reader of ``TournamentEvent.stages`` in the codebase, and the tournament LIST's
-deliberate omission of them: every other read still passes ``stages=[]`` (the
-tournament LIST, and the single-event create/update responses are out of this
-chore's scope; see ``app.tournament_serialization``).
+plus every read path that serves ``TournamentEvent.stages``
+(``lazy="selectin"``): the tournament-detail read (``GET /v1/tournaments/{id}``) and
+the tournament LIST alike now carry an event's real stages; only the single-event
+create/update responses are out of this chore's scope (see
+``app.tournament_serialization``).
 """
 
 import uuid
@@ -28,18 +28,26 @@ from app.models import (
     League,
     Tournament,
     TournamentEvent,
-    TournamentEventDrawSettings,
     TournamentEventStage,
     TournamentFixture,
     User,
 )
-from app.models.draw_type import DRAW_TYPE_IDS
 from app.schemas.tournament import Address, TournamentEventCreate, TournamentEventUpdate
 from app.tournament_errors import DrawTypeFrozenError
-from app.tournament_event_stages import mint_stages, stage_template
+from app.tournament_event_stages import (
+    mint_stages,
+    remint_stages_in_place,
+    stage_template,
+)
 from app.tournament_events import create_event, update_event
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
-from tests._helpers import grant_permissions, make_user, start_session, venue_tables
+from tests._helpers import (
+    event_draw_settings,
+    grant_permissions,
+    make_user,
+    start_session,
+    venue_tables,
+)
 
 
 def _address() -> Address:
@@ -123,19 +131,20 @@ async def _stages(db: AsyncSession, event_id: uuid.UUID) -> list[TournamentEvent
 
 def _positions(
     stages: list[TournamentEventStage],
-) -> list[tuple[int, uuid.UUID]]:
-    """``(position, draw_type_id)`` per stage — what every assertion in this file
+) -> list[tuple[int, DrawType]]:
+    """``(position, draw_type)`` per stage — what every assertion in this file
     compares.
 
-    ``draw_type_id``, never the ``draw_type`` property: that property reads through
-    the eager ``draw_type_option`` relationship, which is not automatically re-pointed
-    by a re-mint's plain FK-column write on an object still tracked in the session's
-    identity map from an earlier query in the same test (the same caveat
-    ``TournamentEventDrawSettings.draw_type``'s setter documents for its own column).
-    ``draw_type_id`` is a plain column — no relationship hydration involved — and it
-    is exactly what a re-mint writes, so comparing it against ``DRAW_TYPE_IDS`` is a
-    direct, sound proof of persisted state without fighting the ORM's identity map."""
-    return [(stage.position, stage.draw_type_id) for stage in stages]
+    Straight off the ``draw_type`` property, safely now: ADR 20260815 retired the
+    ``draw_type_option`` join that property used to read through (a relationship that
+    was not automatically re-pointed by a re-mint's plain FK-column write on an object
+    still tracked in the session's identity map from an earlier query in the same
+    test). The property is a plain dict lookup on ``draw_type_id``
+    (``DRAW_TYPES_BY_ID``) now — no relationship hydration involved, and no stale-join
+    hazard to route around — so comparing it directly is exactly as sound as comparing
+    ``draw_type_id`` against ``DRAW_TYPE_IDS`` was, and reads as the domain type
+    instead of its storage id."""
+    return [(stage.position, stage.draw_type) for stage in stages]
 
 
 async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
@@ -173,14 +182,14 @@ def test_mint_stages_positions_from_zero() -> None:
     order — the shape ``app.tournament_events.create_event`` passes straight into
     ``TournamentEvent(..., stages=...)``.
 
-    Compared on ``draw_type_id`` (against ``DRAW_TYPE_IDS``), not the ``draw_type``
-    property: these rows are unattached to any session, so ``draw_type_option`` — the
-    joined relationship the property reads through — was never loaded, and reading it
-    on a fresh in-memory object would be an ``AttributeError``."""
+    Compared on the ``draw_type`` property directly — safe even though these rows are
+    unattached to any session, since ADR 20260815 retired the joined relationship that
+    property used to read through. It is a plain dict lookup on ``draw_type_id`` now
+    (``DRAW_TYPES_BY_ID``), so it needs no loaded relationship and no session at all."""
     minted = mint_stages(DrawType.rr_then_ko)
-    assert [(stage.position, stage.draw_type_id) for stage in minted] == [
-        (0, DRAW_TYPE_IDS[DrawType.round_robin]),
-        (1, DRAW_TYPE_IDS[DrawType.single_elim]),
+    assert [(stage.position, stage.draw_type) for stage in minted] == [
+        (0, DrawType.round_robin),
+        (1, DrawType.single_elim),
     ]
 
 
@@ -212,7 +221,7 @@ async def test_create_event_mints_one_stage_for_a_single_stage_draw_type(
     )
 
     stages = await _stages(db_session, event.id)
-    assert _positions(stages) == [(0, DRAW_TYPE_IDS[DrawType.single_elim])]
+    assert _positions(stages) == [(0, DrawType.single_elim)]
 
 
 async def test_create_event_mints_two_stages_for_rr_then_ko(
@@ -236,8 +245,8 @@ async def test_create_event_mints_two_stages_for_rr_then_ko(
 
     stages = await _stages(db_session, event.id)
     assert _positions(stages) == [
-        (0, DRAW_TYPE_IDS[DrawType.round_robin]),
-        (1, DRAW_TYPE_IDS[DrawType.single_elim]),
+        (0, DrawType.round_robin),
+        (1, DrawType.single_elim),
     ]
 
 
@@ -261,7 +270,7 @@ async def test_update_event_remint_grows_one_stage_to_two_preserving_stage_zero(
         payload=_event_payload(draw_type="single-elim"),
     )
     before = await _stages(db_session, event.id)
-    assert _positions(before) == [(0, DRAW_TYPE_IDS[DrawType.single_elim])]
+    assert _positions(before) == [(0, DrawType.single_elim)]
     stage_zero_id = before[0].id
 
     await update_event(
@@ -290,8 +299,8 @@ async def test_update_event_remint_grows_one_stage_to_two_preserving_stage_zero(
 
     after = await _stages(db_session, event.id)
     assert _positions(after) == [
-        (0, DRAW_TYPE_IDS[DrawType.round_robin]),
-        (1, DRAW_TYPE_IDS[DrawType.single_elim]),
+        (0, DrawType.round_robin),
+        (1, DrawType.single_elim),
     ]
     # Stage 0's ROW IDENTITY survived the change — only its draw type moved.
     assert after[0].id == stage_zero_id
@@ -318,8 +327,8 @@ async def test_update_event_remint_shrinks_two_stages_to_one_preserving_stage_ze
     )
     before = await _stages(db_session, event.id)
     assert _positions(before) == [
-        (0, DRAW_TYPE_IDS[DrawType.round_robin]),
-        (1, DRAW_TYPE_IDS[DrawType.single_elim]),
+        (0, DrawType.round_robin),
+        (1, DrawType.single_elim),
     ]
     stage_zero_id = before[0].id
     stage_one_id = before[1].id
@@ -333,7 +342,7 @@ async def test_update_event_remint_shrinks_two_stages_to_one_preserving_stage_ze
     )
 
     after = await _stages(db_session, event.id)
-    assert _positions(after) == [(0, DRAW_TYPE_IDS[DrawType.single_elim])]
+    assert _positions(after) == [(0, DrawType.single_elim)]
     assert after[0].id == stage_zero_id
     # Position 1's row is gone, not merely un-listed.
     assert (
@@ -341,6 +350,62 @@ async def test_update_event_remint_shrinks_two_stages_to_one_preserving_stage_ze
             select(TournamentEventStage).where(TournamentEventStage.id == stage_one_id)
         )
     ).scalar_one_or_none() is None
+
+
+async def test_remint_retypes_every_retained_position_not_just_stage_zero(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The bug the two-loop rewrite fixed: the old three-branch form wrote position
+    0's ``draw_type`` unconditionally (``existing[0].draw_type = template[0]``) but
+    touched later positions only from inside the grow/shrink branches — so a re-mint
+    onto a template of the SAME length left every position past 0 holding its stale
+    ``draw_type``, silently.
+
+    No draw-type change through ``update_event`` can exercise this today:
+    ``rr-then-ko`` is the only template longer than one stage, so the only way to
+    hold the length at 2 across a re-mint is to re-mint rr-then-ko onto itself — which
+    is exactly the identical-type resend the freeze gate in ``app.tournament_events
+    .update_event`` now refuses to even call ``remint_stages_in_place`` for (see
+    ``test_stages_freeze_once_a_draw_exists_even_on_a_no_op_patch``). So this calls
+    ``remint_stages_in_place`` directly — the layer that actually owns the loop being
+    pinned — with position 1 corrupted straight through the ORM first (the same
+    direct-to-database seam ``test_update_event_remint_mints_fresh_when_no_stage_rows_
+    exist`` uses), so the re-mint has real, provable work to do at a position other
+    than 0.
+    """
+    owner = await make_user(db_session, "stages-remint-retype-all")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament.id,
+        actor=owner,
+        payload=TournamentEventCreate.model_validate(
+            _pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+        ),
+    )
+    before = await _stages(db_session, event.id)
+    assert _positions(before) == [
+        (0, DrawType.round_robin),
+        (1, DrawType.single_elim),
+    ]
+    # Corrupt position 1 directly, bypassing the mint entirely — a stale value no
+    # ordinary mint or re-mint would ever write, so an unchanged read-back after the
+    # re-mint below could only mean the loop skipped it.
+    before[1].draw_type = DrawType.swiss
+    await db_session.commit()
+
+    await remint_stages_in_place(db_session, event, DrawType.rr_then_ko)
+    await db_session.commit()
+
+    after = await _stages(db_session, event.id)
+    assert _positions(after) == [
+        (0, DrawType.round_robin),
+        (1, DrawType.single_elim),
+    ]
+    # Both rows kept their identity — a re-mint onto an unchanged-length template
+    # writes in place, it never drops and re-adds.
+    assert [stage.id for stage in after] == [stage.id for stage in before]
 
 
 async def test_update_event_remint_mints_fresh_when_no_stage_rows_exist(
@@ -357,7 +422,7 @@ async def test_update_event_remint_mints_fresh_when_no_stage_rows_exist(
         tournament_id=tournament.id,
         name="ORM-Seeded Event",
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
+        draw_settings=event_draw_settings(DrawType.single_elim),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
@@ -382,7 +447,7 @@ async def test_update_event_remint_mints_fresh_when_no_stage_rows_exist(
     )
 
     stages = await _stages(db_session, event.id)
-    assert _positions(stages) == [(0, DRAW_TYPE_IDS[DrawType.swiss])]
+    assert _positions(stages) == [(0, DrawType.swiss)]
 
 
 # ----- freeze: stages never move once a draw exists ---------------------------------
@@ -406,8 +471,9 @@ async def test_stages_freeze_once_a_draw_exists_even_on_a_no_op_patch(
     would look identical whether or not the gate exists, which would make a
     before/after row comparison pass for the wrong reason. Mocking the seam
     ``update_event`` calls through is what actually discriminates: removing the
-    ``if not await event_has_draw(...)`` gate at ``app.tournament_events.update_event``
-    makes this red, which a row-state assertion here would not."""
+    ``if draw_settings.draw_type is not old_draw_type`` gate at
+    ``app.tournament_events.update_event`` makes this red, which a row-state
+    assertion here would not."""
     owner = await make_user(db_session, "stages-freeze-noop")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event, _ = await create_event(
@@ -570,14 +636,16 @@ async def test_the_tournament_detail_serves_an_rr_then_ko_events_two_stages_in_o
     assert len({s["id"] for s in event["stages"]}) == 2
 
 
-async def test_the_tournaments_list_does_not_carry_per_event_stages(
+async def test_the_tournaments_list_carries_per_event_stages_too(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """``[]``, not the event's real (non-empty) stages: the list's cards render no
-    per-stage UI, so it does not pay the detail read's batched ``selectinload``
-    (same shape as ``test_the_tournaments_list_does_not_carry_the_draw_type_catalogue``
-    in ``tests/test_tournaments.py`` — a null/empty sentinel there, an empty list
-    here, because ``stages`` can never be legitimately empty on a detail read)."""
+    """The tournament LIST is no longer a special case: ``TournamentEvent.stages`` is
+    ``lazy="selectin"`` now (matching ``pools``), so every event the LIST returns
+    carries its real stages, the same shape the tournament-DETAIL read serves for the
+    very same event — unlike ``draw_type_catalogue``/``latest_schedule_solve``, which
+    stay genuinely list-BFF-scoped sentinels (``tests/test_tournaments.py``'s
+    ``test_the_tournaments_list_does_not_carry_the_draw_type_catalogue``); ``stages``
+    was never one, it was only unbatched (ADR 20260815)."""
     client, _ = authed_client
     tournament_id, event_id = await _tournament_with_event(
         client, draw_type="single-elim"
@@ -587,10 +655,9 @@ async def test_the_tournaments_list_does_not_carry_per_event_stages(
     listed_tournament = next(row for row in rows if row["id"] == tournament_id)
     (listed_event,) = [e for e in listed_tournament["events"] if e["id"] == event_id]
 
-    assert listed_event["stages"] == []
-    # And the detail read of the very same event does carry it, so this is a decision
-    # about the LIST and not a feature that quietly stopped working.
+    expected = [{"id": ANY, "position": 0, "draw_type": "single-elim"}]
+    assert listed_event["stages"] == expected
+    # And the detail read of the very same event agrees, so the two surfaces cannot
+    # drift on how many stages an event has.
     detail_event = await _event_of(client, tournament_id, event_id)
-    assert detail_event["stages"] == [
-        {"id": ANY, "position": 0, "draw_type": "single-elim"}
-    ]
+    assert detail_event["stages"] == expected

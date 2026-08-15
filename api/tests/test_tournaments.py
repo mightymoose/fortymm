@@ -1899,13 +1899,16 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # of the caller's rating on every league those tournaments run on (which each event's
 # ``entry_state`` is judged against, ADR-0783), ONE batched load of every event's
 # pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
-# ADR 20260801, batched across the whole page exactly as the tables are), and ONE
+# ADR 20260801, batched across the whole page exactly as the tables are), ONE
 # batched load of every one of THOSE pools' table reservations
 # (``TournamentEventPool.tables``, ``lazy="selectin"`` — the reservations are rows too
 # now, and selectin chains onto the pools' own batched load rather than costing a query
-# per pool). Eight, whatever the number of tournaments, tables, events, pools and
-# reservations.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 8
+# per pool), and ONE batched load of every event's stages
+# (``TournamentEvent.stages``, ``lazy="selectin"`` too now, ADR 20260815 — the list is
+# no longer a special case that skips them, it just never asked for a separate batch).
+# Nine, whatever the number of tournaments, tables, events, pools, reservations and
+# stages.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 9
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -1920,10 +1923,11 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
     ``count(*)`` per event is an N+1 (ADR-0015, ADR-0016).
 
     The two ``event_count`` cases are what makes this discriminating: a per-event
-    loop emits one statement per event, so it would measure 5 at one event and 8 at
-    four — failing the pin at four even if it slipped past at one. Each event
-    carries a different number of entrants, so a batched loader that silently
-    dropped the grouping would show up as wrong data, not just a low count.
+    loop emits one statement per event, so it would measure 9 at one event (matching
+    the pin) and 12 at four — failing the pin at four even though the one-event case
+    coincidentally matches it. Each event carries a different number of entrants, so
+    a batched loader that silently dropped the grouping would show up as wrong data,
+    not just a low count.
 
     It pins the caller's RATING lookup too, which is the newest way to reintroduce the
     N+1 this test exists to prevent: every event's ``entry_state`` is judged against
@@ -4946,8 +4950,8 @@ async def test_detail_statement_count_does_not_grow_with_drawn_events(
     fixtures — or a loader that skipped the empty ones — costs them nothing and leaves
     them green, while the real page pays a query per drawn event. Hence the deliberate
     cut draw on every event here, and the two ``event_count`` cases: a per-event fetch
-    measures 8 statements at one event and 11 at four, so it fails the pin at four
-    even if it slipped past at one.
+    measures 11 statements at one event and 14 at four (against a pin of 11), so it
+    fails the pin at four even though the one-event case coincidentally matches it.
     """
     client, user = authed_client
     user_id = user.id  # read outside the counted block
