@@ -101,6 +101,37 @@ export class TournamentDetailPage {
     return this.page.locator('html')
   }
 
+  // ----- the header's three text boxes (#1044) ------------------------------
+  //
+  // The tournament's name reaches the header in TWO places at once — the display
+  // `h1` and the last breadcrumb crumb — and each has its own width rule (the `h1`
+  // wraps on `break-words`, the crumb truncates at `max-w-[360px]`). They are named
+  // separately, alongside the subtitle, so a regression says WHICH box came back
+  // rather than only that the page got wider. The venue spec established the
+  // pattern; this is the same claim about the boxes above the venue line.
+
+  /** The big display title. The page renders exactly one `h1` (`PageHeading`), so
+   * the level alone identifies it — and it is located WITHOUT a name filter on
+   * purpose: an accessible-name match against a 255-character title would be a
+   * second thing that could fail, and the claim here is about the box's geometry,
+   * not its text. */
+  get title(): Locator {
+    return this.page.getByRole('heading', { level: 1 })
+  }
+
+  /** The breadcrumb's LAST crumb — the one holding the tournament's own name, and
+   * the only one that carries `max-w-[360px] truncate`. That cap is wider than a
+   * 375px phone's content box, so this crumb is a candidate culprit for a sideways
+   * scroll and has to be measurable on its own. */
+  get breadcrumbCurrent(): Locator {
+    return this.page.getByLabel('Breadcrumb').locator('span').last()
+  }
+
+  // There is deliberately no locator for `PageHeading`'s subtitle: the tournament
+  // detail page passes no `subtitle` prop, so that `max-w-[760px]` paragraph never
+  // renders here. A locator for it would resolve to nothing and quietly pass every
+  // measurement asked of it.
+
   // ----- the lifecycle header (ADR-0017) -----------------------------------
 
   /** The status pill in the detail hero. Its text IS the status, in the words the

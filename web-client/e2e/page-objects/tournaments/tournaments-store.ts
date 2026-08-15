@@ -22,6 +22,7 @@ import {
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
   planDraw,
+  UNBREAKABLE_TOURNAMENT_NAME,
   UNBREAKABLE_VENUE_NAME,
   type DrawPlan,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
@@ -520,6 +521,24 @@ function addressOverride(
   return { address: { ...address, venue: UNBREAKABLE_VENUE_NAME } }
 }
 
+/** The tournament's `name`, as a spread — the factory's "Bay Area Open 2026" by
+ * default, and `UNBREAKABLE_TOURNAMENT_NAME` under `longName`.
+ *
+ * A spread rather than a ternary at each call site because `seed` returns from two
+ * places, and an override wired into only one of them would be silently dead for
+ * any spec that combined `longName` with `drawable`.
+ *
+ * The name lands in THREE boxes at once — the `h1`, the last breadcrumb crumb and
+ * the confirm dialog's copy — which is why the spec that uses it names each box it
+ * measures rather than only the document.
+ */
+function nameOverride(
+  options: TournamentsStoreOptions,
+): Partial<Pick<TournamentDetailRead, 'name'>> {
+  if (!(options.longName ?? false)) return {}
+  return { name: UNBREAKABLE_TOURNAMENT_NAME }
+}
+
 /** All three roster states (`listed` / `empty` / `entry-closed`) on one page, on
  * purpose: it is the real shape of an Events tab, and it lets one axe scan cover
  * every state the roster can be in.
@@ -535,6 +554,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
   // picker follows the *payload* rather than a list of its own.
   const draw_type_catalogue = options.drawTypeCatalogue ?? DRAW_TYPE_CATALOGUE
   const address = addressOverride(options)
+  const name = nameOverride(options)
   // `bracket` IMPLIES `drawable`: the bracket events extend the round-robin seed, and a
   // `{ bracket: true }` that quietly seeded the default tournament instead would be a
   // spec asserting against events that are not there — a silent no-op, not a red.
@@ -545,6 +565,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
       can_edit: options.canEdit ?? true,
       draw_type_catalogue,
       ...address,
+      ...name,
       events: drawableEvents(options),
     })
   }
@@ -554,6 +575,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
     can_edit: options.canEdit ?? true,
     draw_type_catalogue,
     ...address,
+    ...name,
     events: [
       buildTournamentEventRead({
         id: 'ev-open-singles',
@@ -716,6 +738,20 @@ export interface TournamentsStoreOptions {
    *
    * Ignored when `venueless` is set. */
   longVenue?: boolean
+  /** Serve the tournament with a **255-character name and no break opportunity in
+   * it** (`UNBREAKABLE_TOURNAMENT_NAME`) — the hostile title the mobile header has
+   * to survive (#1044).
+   *
+   * Opt-in and off by default, like `crowded`, `gated`, `unrated`, `venueless` and
+   * `longVenue`: the tournament's name is copy that existing specs read back (the
+   * breadcrumb, the confirm dialogs, the page title), so a changed default would
+   * red them.
+   *
+   * It has to be an e2e option rather than a vitest fixture alone, because the
+   * claim is about **layout**. jsdom performs none, so `scrollWidth` and
+   * `clientWidth` are `0` there and a wrap assertion passes whether the title
+   * wraps, truncates, or collapses to one glyph per line. */
+  longName?: boolean
   /** Events ME is already entered in when the page loads — by event name. The
    * only way to reach "an entered player on a *live* tournament", since entering
    * one through the UI is (rightly) refused. */
