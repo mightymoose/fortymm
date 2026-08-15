@@ -1,5 +1,5 @@
 ---
-description: Take a specific Ready for Implementation ticket, or the top Ready for Implementation ticket when none is specified, and coordinate fresh-context Implementation, Review, and Testing stages through Done.
+description: Take a specific Ready For Implementation ticket, or the top Ready For Implementation ticket when none is specified, and coordinate fresh-context Implementation, Review, and Testing stages through Done.
 model: opus
 ---
 
@@ -7,15 +7,15 @@ model: opus
 
 Coordinate exactly one ticket through:
 
-`Ready for Implementation → In Review → In Testing → Done`
+`Ready For Implementation → In Review → In Testing → Done`
 
 This is an orchestrator. It does not replace stage commands and must not collapse Implementation, Review, and Testing into one self-reviewing context.
 
 ## Select the Ticket
 
-If `$ARGUMENTS` contains a ticket number, use that issue, verify it is in **Ready for Implementation**, and coordinate it only.
+If `$ARGUMENTS` contains a ticket number, use that issue, verify it is in **Ready For Implementation**, and coordinate it only.
 
-If `$ARGUMENTS` is empty, select the **topmost ticket according to the Project's current ordering** in **Ready for Implementation**.
+If `$ARGUMENTS` is empty, select the **topmost ticket according to the Project's current ordering** in **Ready For Implementation**.
 
 If no eligible ticket exists, report that there is nothing to implement and stop.
 
@@ -74,7 +74,7 @@ Never reinterpret a stage escalation as permission to improvise. Surface it and 
 ## Hard Rules
 
 - Coordinate exactly one ticket.
-- With no argument, select the **topmost ticket in Ready for Implementation**.
+- With no argument, select the **topmost ticket in Ready For Implementation**.
 - With a ticket number, use that eligible ticket only.
 - Pass the explicit selected ticket number to every stage.
 - Use fresh contexts/subagents between stages whenever possible.

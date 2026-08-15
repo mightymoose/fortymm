@@ -1,11 +1,11 @@
 ---
-description: Plan a specific Ready for Planning ticket, or the top Ready for Planning ticket when none is specified. Move executable work to the bottom of Ready for Implementation or decompose larger work into linked child tickets at the top of To Do.
+description: Plan a specific Ready For Planning ticket, or the top Ready For Planning ticket when none is specified. Move executable work to the bottom of Ready For Implementation or decompose larger work into linked child tickets at the top of To Do.
 model: opus
 ---
 
 # Plan Ticket
 
-Plan exactly one GitHub ticket from the project's **Ready for Planning** column.
+Plan exactly one GitHub ticket from the project's **Ready For Planning** column.
 
 The ticket has already completed Discovery. Treat its issue body as the approved specification for what must be accomplished.
 
@@ -18,13 +18,13 @@ Planning does not implement code.
 If `$ARGUMENTS` contains a ticket number:
 
 1. Use that GitHub issue.
-2. Verify that it is currently in **Ready for Planning**.
+2. Verify that it is currently in **Ready For Planning**.
 3. Work on that ticket only.
 
 If `$ARGUMENTS` is empty:
 
 1. Inspect the GitHub Project.
-2. Find the **Ready for Planning** column.
+2. Find the **Ready For Planning** column.
 3. Select the **topmost ticket according to the Project's current ordering**.
 4. Work on that ticket only.
 
@@ -51,6 +51,14 @@ Before making a planning decision:
    - documentation
 6. Identify the implementation boundaries implied by the ticket.
 7. Challenge important assumptions against the actual codebase.
+
+## Check the Call Site
+
+When the plan names an optional prop, argument, config key, or feature flag as a risk, a stop condition, or a thing to preserve, **find the call sites and confirm it is actually passed**. Grep for the caller, not only for the declaration.
+
+A declared-but-never-passed parameter is dead weight. A plan that hangs a stop condition on one is measuring something the product never renders, and Implementation inherits a criterion it cannot fail.
+
+#1044's plan made a component's optional `subtitle` prop half of its stop condition. The detail page never passes it.
 
 Do not redo Discovery.
 
@@ -92,8 +100,8 @@ If the ticket is executable as-is:
    - significant technical considerations or risks;
    - verification expectations.
 2. Do not rewrite or replace the Discovery specification.
-3. Move the ticket from **Ready for Planning** to **Ready for Implementation**.
-4. Place the ticket at the **bottom of the Ready for Implementation column**.
+3. Move the ticket from **Ready For Planning** to **Ready For Implementation**.
+4. Place the ticket at the **bottom of the Ready For Implementation column**.
 5. Stop.
 
 Do not begin implementation.
@@ -178,7 +186,7 @@ After creating the children:
 4. Record sequencing or dependencies between children.
 5. Record any architectural decisions or shared constraints the children must respect.
 6. Mark or otherwise treat the parent as a container/tracking ticket using the project's available metadata.
-7. Do not move the parent to **Ready for Implementation**.
+7. Do not move the parent to **Ready For Implementation**.
 8. Do not move the parent to **In Progress** merely to mirror its children.
 9. Stop.
 
@@ -228,7 +236,7 @@ Every child starts at the **top of To Do**.
 
 Every child must independently pass through:
 
-`To Do → Discovery → Ready for Planning`
+`To Do → Discovery → Ready For Planning`
 
 before it can reach implementation.
 
@@ -291,7 +299,7 @@ Do not send tickets backward merely because implementation is technically diffic
 Before completing Planning, verify:
 
 - [ ] Exactly one ticket was selected.
-- [ ] With no argument, it was the top ticket in **Ready for Planning**.
+- [ ] With no argument, it was the top ticket in **Ready For Planning**.
 - [ ] With a ticket number, that specific eligible ticket was used.
 - [ ] The complete discovered specification was read.
 - [ ] Relevant parent and linked tickets were inspected.
@@ -304,8 +312,8 @@ Before completing Planning, verify:
 If executable as-is:
 
 - [ ] A concise planning note was added.
-- [ ] The ticket was moved to **Ready for Implementation**.
-- [ ] The ticket was placed at the **bottom of Ready for Implementation**.
+- [ ] The ticket was moved to **Ready For Implementation**.
+- [ ] The ticket was placed at the **bottom of Ready For Implementation**.
 - [ ] No unnecessary child tickets were created.
 
 If decomposed:
@@ -331,8 +339,8 @@ Do not automatically begin Implementation on an executable ticket.
 ## Hard Rules
 
 - Process exactly one ticket per invocation.
-- With no argument, select the **topmost ticket in Ready for Planning**.
-- With a ticket number, use that ticket and require it to be in **Ready for Planning**.
+- With no argument, select the **topmost ticket in Ready For Planning**.
+- With a ticket number, use that ticket and require it to be in **Ready For Planning**.
 - Planning owns sizing and decomposition.
 - Discovery owns requirements clarification and Acceptance Criteria.
 - Implementation owns writing the code.
@@ -344,6 +352,6 @@ Do not automatically begin Implementation on an executable ticket.
 - Every child must go through Discovery before implementation.
 - Every created child must be linked to its parent.
 - The parent must link to its created children.
-- An executable ticket moves to the **bottom of Ready for Implementation**.
-- A decomposed parent does not move to Ready for Implementation or In Progress merely because its children do.
+- An executable ticket moves to the **bottom of Ready For Implementation**.
+- A decomposed parent does not move to Ready For Implementation or In Progress merely because its children do.
 - Treat the discovered GitHub issue body as the authoritative contract for the work.
