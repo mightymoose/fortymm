@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from app.models.tournament_entry import TournamentEntry
     from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
     from app.models.tournament_event_pool import TournamentEventPool
+    from app.models.tournament_event_stage import TournamentEventStage
     from app.models.tournament_fixture import TournamentFixture
     from app.models.tournament_table import VenueTable
 
@@ -382,6 +383,33 @@ class TournamentEvent(Base):
         passive_deletes=True,
         lazy="selectin",
         order_by="TournamentEventPool.position",
+    )
+
+    # The event's stages, as rows the system mints from a template keyed on the
+    # event's draw type (ADR 20260815 decision 1/3) — a director never authors these,
+    # and ``app.tournament_event_stages`` is the only writer. Every event holds at
+    # least one: the create path mints the whole template as this collection at
+    # construction time (``stages=mint_stages(...)``), in the same transaction as the
+    # event itself.
+    #
+    # Deliberately **no** ``lazy="selectin"``, unlike ``pools`` above, and no eager
+    # option at all — the default (lazy) strategy. Nothing reads an event's stages yet,
+    # so there is no reader that would otherwise need to remember a loader, and an eager
+    # collection here would add a statement to every event read
+    # (``EXPECTED_TOURNAMENT_*_STATEMENTS`` in ``tests/test_tournaments.py``) for a read
+    # path this chore does not touch. ``app.tournament_event_stages`` reaches these rows
+    # through explicit queries, never through this attribute, on the one path
+    # (draw-type change) that touches them after create.
+    #
+    # ``passive_deletes=True`` is what keeps ``await db.delete(event)``
+    # (``app.tournament_events.delete_event``) from needing to load this collection to
+    # cascade the delete in Python — the database's own ``ON DELETE CASCADE`` does it,
+    # exactly as it already does for ``entries``/``fixtures`` above.
+    stages: Mapped[list["TournamentEventStage"]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TournamentEventStage.position",
     )
 
     # The event's draw: every fixture the cut produced (ADR-0786). Empty until the

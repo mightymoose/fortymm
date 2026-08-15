@@ -531,6 +531,81 @@ def upgrade() -> None:
         ["draw_settings_id"],
     )
 
+    # An event's stages, as rows the system mints from its draw type (ADR 20260815
+    # "an event's stages are rows and a composite draw type is a template"). Created
+    # immediately after ``tournament_events`` because it FKs it, and before
+    # ``tournament_event_pools`` only for readability — the two tables do not
+    # reference each other in this migration; a later revision is what re-parents a
+    # pool's composite FK onto a stage (see the ADR's "Sequencing with #1338"
+    # consequence). Added here in place per the pre-deploy convention — revision ids
+    # and the ``down_revision`` chain stay frozen.
+    #
+    # A director never authors these rows; ``app.tournament_event_stages`` mints and
+    # re-mints them from a template keyed on the event's draw type. ``id`` is a
+    # server-minted uuid, same default as every other row in this migration.
+    op.create_table(
+        "tournament_event_stages",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        # CASCADE: deleting an event takes its stages with it, exactly as it takes its
+        # pools, entries and fixtures.
+        sa.Column(
+            "event_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("tournament_events.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        # Where this stage sits in the event's draw, 0-based: position 0 (the ADR's
+        # "stage 1") feeds position 1. Minted by the template, never client-supplied,
+        # and never re-ordered once minted — a re-mint only appends past or truncates
+        # from the template's old length (ADR 20260815 decision 3), so unlike the
+        # pool/table position columns this one needs no DEFERRABLE trick.
+        sa.Column("position", sa.Integer(), nullable=False),
+        # RESTRICT, exactly as ``tournament_event_draw_settings.draw_type_id`` is: a
+        # draw type a stage is running cannot be deleted out from under it.
+        sa.Column(
+            "draw_type_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("draw_types.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        # Redundant against the primary key, and here for exactly one purpose (ADR
+        # 20260815 decision 1): "``UNIQUE (event_id, id)`` exists purely as a
+        # composite-FK target, as on pools" — something attached to a stage, later,
+        # foreign-keys this pair rather than a bare ``id``, so it can say "my stage is
+        # my own event's stage".
+        sa.UniqueConstraint(
+            "event_id", "id", name="uq_tournament_event_stages_event_id_id"
+        ),
+        # Two stages of one event never share a place in its order.
+        sa.UniqueConstraint(
+            "event_id",
+            "position",
+            name="uq_tournament_event_stages_event_id_position",
+        ),
+    )
+    # No separate ``ix_`` index here, matching ``tournament_event_pools`` immediately
+    # below rather than ``tournament_events``/``tournament_tables`` above: the
+    # ``event_id`` FK is ``ON DELETE CASCADE``, not ``RESTRICT``, so its
+    # referential-integrity check never runs a query the ``uq_..._event_id_id``
+    # constraint's own (``event_id``-leading) index does not already serve.
+
     # An event's pools, as rows (ADR 20260801 "a pool belongs to its event, not to the
     # event's draw settings"). Created after ``tournament_events`` because it FKs it, and
     # before ``tournament_fixtures`` (0012), which carries the composite foreign key onto
@@ -734,6 +809,11 @@ def downgrade() -> None:
     # Dropped before the events it references (and before the fixtures of 0012 reference
     # it — that migration is torn down first by the chain).
     op.drop_table("tournament_event_pools")
+
+    # Dropped before the events it references, mirroring ``tournament_event_pools``
+    # immediately above — the two do not reference each other, so their relative order
+    # here does not matter.
+    op.drop_table("tournament_event_stages")
 
     op.drop_index(
         "ix_tournament_events_draw_settings_id",

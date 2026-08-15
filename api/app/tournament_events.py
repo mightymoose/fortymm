@@ -59,6 +59,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     PoolSetFrozenError,
 )
+from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_pools import apply_event_pools, stored_pools
 
 
@@ -148,6 +149,13 @@ async def create_event(
         # carries no ``position``, into rows that do, from each pool's index in the list
         # this payload sent.
         pools=stored_pools(tournament, payload.pools),
+        # The event's stages, also ROWS (ADR 20260815) and also created with the event
+        # in this same transaction — every event holds its minted stages from the
+        # moment it exists, never as a follow-up write. ``mint_stages`` reads the
+        # template straight off the requested draw type; there is no separate "which
+        # stages" input on the create payload, by design (decision 3: a director never
+        # authors these).
+        stages=mint_stages(payload.draw_settings.draw_type),
     )
     db.add(event)
     await db.commit()
@@ -677,6 +685,16 @@ async def update_event(
         # (``lazy="joined"``), so this is a plain attribute write, not a lazy load in
         # async context.
         store_draw_settings(event.draw_settings, draw_settings)
+        # Re-apply the stage template IN PLACE (ADR 20260815 decision 3) — but only when
+        # this event still has no draw. ``_enforce_draw_settings_frozen`` above already
+        # refused any REAL configuration change once a draw exists; the gate here is for
+        # the one case that guard waves through even under a standing draw — a PATCH
+        # that resends the event's current draw settings unchanged. Without this second
+        # check that no-op would still reach here and rewrite stage rows a draw has
+        # already been cut across, which is exactly what "stages freeze once a draw
+        # exists" (decision 3) forbids.
+        if not await event_has_draw(db, event.id):
+            await remint_stages_in_place(db, event, draw_settings.draw_type)
     if event.timezone != old_timezone:
         # The zone truly moved (a PATCH re-sending the same zone falls through as a
         # no-op): recompose every placement so its local reading is unchanged and only
