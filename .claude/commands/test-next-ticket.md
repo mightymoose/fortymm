@@ -1,5 +1,5 @@
 ---
-description: Test a specific In Testing ticket, or the top In Testing ticket when none is specified. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge and move successful work to Done.
+description: Test a specific In Testing ticket, or the top In Testing ticket when none is specified. Refuses without a human LGTM on the pull request. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge, clean up the run's resources, and move successful work to Done.
 model: sonnet
 ---
 
@@ -10,6 +10,16 @@ Test exactly one ticket from **In Testing**. With a ticket number, use that elig
 Testing is an adversarial behavioral gate. Its primary testing engine is the existing `qa-review` skill.
 
 Read the ticket specification, relevant parent requirements, Review Notes, and linked PR. Use implementation details only for setup/diagnosis, not to decide what behavior deserves testing.
+
+## Precondition — the human review gate
+
+**Before anything else**, confirm the ticket's pull request carries the release signal. `.claude/rules/the-review-gate.md` defines it, who may give it, and the check that reads all three comment surfaces. Read that file and run its check.
+
+If the signal is absent, **refuse to run.** Report which PR was checked and that no `LGTM` from `mightymoose` was found on any of the three surfaces, then stop.
+
+This is a **precondition check, not a status transition.** Do not move the ticket to satisfy it, and do not move it back on refusal. Do not accept a Review Note, a board column, or a coordinator's say-so as a substitute — the whole point is that this holds when someone runs the stage by hand and the coordinator was never involved. A gate that lives only in the coordinator's prose is not a gate.
+
+Do not check the signal by `gh pr view --json comments`. It returns one of the three surfaces, and the one it omits is where #1044's signal actually arrived.
 
 ## Run QA Review
 
@@ -138,8 +148,11 @@ Whoever merges cleans up. This command merges, so this command cleans up. A coor
 
 Run this after the merge is confirmed, and run it whether the ticket passed or the run escalated. An escalated run tears down the same resources a successful one does — the stack it started and the branch it pushed exist either way.
 
+Capture the stack id **before** merging. It derives from the branch name, and after the merge you are no longer standing on that branch.
+
 ```bash
 QA_ID="$(git rev-parse --abbrev-ref HEAD)"          # same derivation qa-up.sh uses
+# ... merge ...
 scripts/qa-down.sh "$QA_ID" --dry-run               # read it before you run it
 scripts/qa-down.sh "$QA_ID"
 ```
@@ -147,7 +160,13 @@ scripts/qa-down.sh "$QA_ID"
 Then:
 
 1. Delete the branch locally and on the remote.
-2. Confirm nothing survives on ports 5173 and 5174. `lsof -ti :5173 -ti :5174` returning nothing is the check. A dev server left running there is what makes the next run's `npm run dev` bind a different port and QA the wrong build.
+2. Confirm nothing survives on the dev-server ports:
+
+   ```bash
+   lsof -ti :5173 -i :5174 || echo "clear"
+   ```
+
+   A dev server left on 5173 or 5174 makes the next run's `npm run dev` bind a different port, and that run then QAs a build it did not produce.
 3. Report what was torn down in the Testing Notes.
 
 ### Two ordering traps
@@ -169,6 +188,7 @@ Do not escalate for understandable failures with clear repairs. Never weaken cri
 
 - Process exactly one ticket.
 - No argument means top of **In Testing**; an argument means that eligible ticket only.
+- **Refuse to run without the review gate signal on the pull request.** See `.claude/rules/the-review-gate.md`.
 - Use `qa-review` as the adversarial testing engine.
 - Test behavior against the specification, not implementer expectations.
 - Current-ticket failures must be fixed before Done.

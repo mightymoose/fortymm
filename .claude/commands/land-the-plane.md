@@ -204,6 +204,8 @@ scripts/qa-down.sh "$QA_ID" --dry-run               # read it before you run it
 scripts/qa-down.sh "$QA_ID"
 ```
 
+Pass the **same id Step 5 gave `qa-up.sh`**. In stacked mode the walk has moved on by now, so `HEAD` may name a different slice's branch than the one that brought the stack up — and `qa-down.sh` would then tear down a stack that does not exist and leave the real one running. `docker compose ls | grep fortymm-qa-` confirms which is actually up.
+
 `docker compose down -v` is not a substitute. It leaves the locally-built images and the buildx cache, which is how `Docker.raw` reached 230 GB and wedged the daemon.
 
 **In stacked mode this runs once, at the end of the whole walk — not per slice.** Every slice drives the same stack, so a per-slice teardown just pays for a cold rebuild on the next slice.

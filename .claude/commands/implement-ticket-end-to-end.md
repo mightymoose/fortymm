@@ -1,5 +1,5 @@
 ---
-description: Take a specific Ready For Implementation ticket, or the top Ready For Implementation ticket when none is specified, and coordinate fresh-context Implementation, Review, and Testing stages through Done.
+description: Take a specific Ready For Implementation ticket, or the top Ready For Implementation ticket when none is specified, and coordinate fresh-context Implementation, Review, and Testing stages through Done. Holds a human review gate on the pull request between Review and Testing, and resumes a ticket already mid-arc.
 model: opus
 ---
 
@@ -7,7 +7,9 @@ model: opus
 
 Coordinate exactly one ticket through:
 
-`Ready For Implementation → In Review → In Testing → Done`
+`Ready For Implementation → In Review → [human gate] → In Testing → Done`
+
+Re-invoked on a ticket already mid-arc, it detects where the ticket got to and continues from there.
 
 This is an orchestrator. It does not replace stage commands and must not collapse Implementation, Review, and Testing into one self-reviewing context.
 
@@ -50,7 +52,46 @@ Invoke `implement-next-ticket` for the selected ticket in a fresh context. Succe
 
 ## Stage 2 — Review
 
-Invoke `review-next-ticket` for the same ticket in a new fresh context. Success means adversarial review completed, clear findings repaired/re-reviewed, Review Notes appended, and ticket **In Testing**. If it escalates, stop.
+Invoke `review-next-ticket` for the same ticket in a new fresh context. Success means adversarial review completed, clear findings repaired/re-reviewed, Review Notes appended, a non-draft pull request open with CI green, and a decision comment posted on it. **The ticket stays In Review** — Review no longer moves it, because the stage does not end until a human has decided. If it escalates, stop.
+
+## The Human Gate
+
+Between Review and Testing a human decides. `.claude/rules/the-review-gate.md` is the single definition of the signal — who may give it, what counts, the three comment surfaces, and the check itself. Read it; do not restate it here.
+
+The coordinator holds the gate. It does not review, and it does not repair. Every repair round runs in a fresh `review-next-ticket` context.
+
+### The watch
+
+After Review stops, watch the pull request for **15 minutes**. Poll over REST, never the project board — a board poll is GraphQL, and #1044's run exhausted all 5000 points and blocked a status write.
+
+Three outcomes:
+
+1. **The signal arrives.** Move the ticket to **In Testing** and invoke `test-next-ticket`.
+2. **Any other comment from `mightymoose` arrives.** Re-invoke `review-next-ticket` in **targeted mode**, naming exactly those comments. When it stops, **the 15-minute watch restarts.** There is no limit on rounds; each one is a fresh context.
+3. **The budget expires with no comment.** Stop and report. Do not wait longer, do not proceed to Testing, and do not assume silence is consent. An agent must not park on a human for hours.
+
+The expiry report names: the ticket, the PR URL, Review's findings, and **the exact command to resume**. Without that last part every gate is a cliff, and the ticket strands mid-arc with no record of where it got to.
+
+## Resuming a Ticket Already Mid-Arc
+
+Re-invoked on a ticket that is already partway through, this command **detects where it is and continues**. It does not start over.
+
+Read six signals: the board column, whether the branch exists, whether a PR exists, whether that PR is a draft, whether CI is green, whether the gate signal is present, and whether the PR is merged.
+
+**Those six disagree.** #1044 produced a ticket sitting In Review with a merged PR. So the precedence is fixed, highest first:
+
+| # | Condition | Resume at |
+| --- | --- | --- |
+| 1 | The PR is **merged** | Nothing to run. Set the ticket **Done**, then reap. |
+| 2 | Gate signal present, CI green | Set **In Testing**, invoke `test-next-ticket`. |
+| 3 | A non-draft PR is open with a decision comment on it | Re-enter **the watch**. |
+| 4 | A PR is open, draft or with no decision comment | Re-invoke `review-next-ticket`. |
+| 5 | A branch exists, no PR | Re-invoke `review-next-ticket`, which opens the PR. |
+| 6 | None of the above | Start at **Stage 1**. |
+
+**Git and PR state outrank the board column, always.** The column is written *after* a stage finishes, so it is the stalest of the six — a run that died mid-stage leaves it describing a stage that already completed. Use it only to break a tie the rows above cannot, and when it contradicts the PR, correct the column rather than the plan.
+
+Report which row matched and why before acting on it.
 
 ## Stage 3 — Testing
 
@@ -110,6 +151,10 @@ Never reinterpret a stage escalation as permission to improvise. Surface it and 
 - Never continue past a stage escalation.
 - Do not duplicate stage prompts inside the coordinator.
 - Preserve every stage's structured retrospective notes.
+- Never move a ticket from **In Review** to **In Testing** without the gate signal.
+- Hold the gate for a bounded 15 minutes, restarting the watch after every targeted round.
+- Never repair code in the coordinator. Every repair round is a fresh `review-next-ticket`.
+- On resume, read the six signals and follow the fixed precedence. Git and PR state outrank the board column.
 - Reap worktrees at the **start** of the run and again as its **final act**, from the main checkout.
 - Run the full cleanup on an escalation, not only on success.
 - Do not clean up after a merge a stage performed. Whoever merges cleans up.
