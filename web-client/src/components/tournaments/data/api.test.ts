@@ -7,6 +7,7 @@ import {
   buildTournamentEntrantReads,
   buildTournamentEventRead,
   buildTournamentFixtureRead,
+  mintStageReads,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   apiToEntrant,
@@ -950,6 +951,10 @@ describe('eventToCreateBody', () => {
       // …and the round count the same way, for the same reason: omitted on the way out for
       // a round-robin event, an explicit `null` on the way back.
       rounds: null,
+      // `stages` is server-minted and absent from the create body entirely; supply what
+      // the round-trip's own draw type (`round-robin`) mints so the read shape is
+      // satisfied.
+      stages: mintStageReads('round-robin'),
       id: event.id,
       tournament_id: 't-1',
       // The registrations are server-owned and absent from the create body;
