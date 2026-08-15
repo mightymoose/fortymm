@@ -117,6 +117,35 @@ def pool_order(event: TournamentEvent) -> dict[PoolId, int]:
     return {PoolId(pool.id): index for index, pool in enumerate(_ordered_pools(event))}
 
 
+async def stage_order(db: AsyncSession, event_id: uuid.UUID) -> dict[uuid.UUID, int]:
+    """This event's stage ids mapped to their ``position`` — :func:`pool_order`'s
+    sibling for stages, and the id-keyed inverse of :func:`_stage_ids_by_position`
+    (the cut's position-keyed lookup). What :func:`fixture_state` resolves a fixture's
+    ``stage_id`` through to fill its ``stage_positions`` argument, which fills
+    :attr:`~app.draws.FixtureState.stage_position` (ADR 20260815 decision 6). Named
+    for the sibling pair rather than after its own return type, so the loader
+    (``stage_order``) and the parameter it feeds (``stage_positions``) read as two
+    different things — the same split :func:`pool_order` and ``pool_positions`` keep.
+
+    Read through an explicit query, never through ``TournamentEvent.stages`` — that
+    relationship is deliberately not eager (see its docstring), so a lazy load off it
+    in this async context would raise. The same discipline
+    :func:`_stage_ids_by_position` already follows, for the same reason.
+
+    Computed once per event rather than per fixture, exactly as :func:`pool_order` is:
+    a fixture carries its stage's *id*, not its position, so somebody has to do the
+    join, and the materialization seam should not pay it once per fixture.
+    """
+    rows = (
+        await db.execute(
+            select(TournamentEventStage.id, TournamentEventStage.position).where(
+                TournamentEventStage.event_id == event_id
+            )
+        )
+    ).all()
+    return {stage_id: position for stage_id, position in rows}
+
+
 def _ordered_pools(event: TournamentEvent) -> list[Pool]:
     """This event's pools, projected, in the director's order — ascending ``position``.
 
@@ -139,6 +168,7 @@ def fixture_state(
     game_counts: Mapping[uuid.UUID, tuple[int, int]] | None = None,
     voided_match_ids: frozenset[uuid.UUID] = frozenset(),
     pool_positions: Mapping[PoolId, int] | None = None,
+    stage_positions: Mapping[uuid.UUID, int] | None = None,
 ) -> FixtureState:
     """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
     into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
@@ -190,6 +220,20 @@ def fixture_state(
     (:func:`app.tournament_materialization.materialize_event`) loads fixtures and
     nothing else. Reading the games here would mean a query per fixture inside the
     projection; the batched load belongs at the seam, alongside the fixture load.
+
+    ``stage_positions`` maps this event's stage ids to their places in the event's
+    stage order (:func:`stage_order`, the id-keyed sibling
+    ``_stage_ids_by_position`` reads at the cut), and is what fills
+    :attr:`~app.draws.FixtureState.stage_position` — the discriminator
+    :class:`~app.draws.RrThenKoStrategy` reads to split one event's fixtures between
+    its two stages, in place of re-deriving the split from ``pool_id is None`` (ADR
+    20260815 decision 6). It rides in from the caller for the same reason
+    ``pool_positions`` does: it is one fact about the *event*, resolved once rather
+    than reconstructed per fixture. Passing nothing means "the stage order was not
+    resolved", which projects ``stage_position=None`` — harmless for the three draw
+    types that never read it, and refused loudly by
+    :class:`~app.draws.RrThenKoStrategy` (:class:`~app.draws.MissingStageAssignment`)
+    for the one that does.
     """
     games = (
         game_counts.get(fixture.match_id)
@@ -205,6 +249,11 @@ def fixture_state(
         pool_position=(
             pool_positions.get(pool_id)
             if pool_positions is not None and pool_id is not None
+            else None
+        ),
+        stage_position=(
+            stage_positions.get(fixture.stage_id)
+            if stage_positions is not None
             else None
         ),
         entry_a_id=(

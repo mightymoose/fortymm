@@ -29,6 +29,7 @@ from app.draws import (
     order_entrants,
     reads_entrants,
     reads_fixture_games,
+    reads_stage_position,
     ready_fixtures,
 )
 from app.models import (
@@ -47,6 +48,7 @@ from app.tournament_draws import (
     active_draw_entrants,
     fixture_state,
     pool_order,
+    stage_order,
     strategy_for_event,
 )
 from app.tournament_queries import game_counts_by_match, stage_ids_for_events
@@ -154,6 +156,17 @@ async def materialize_event(
     # fills ``FixtureState.pool_position``, and so what makes an ``advance()`` plan's
     # ready list run pool 1, 2, … 10 rather than the ids' 1, 10, 2 (ADR 20260801).
     pools = pool_order(event)
+    # The event's STAGE order, resolved the same way and gated the same way as the
+    # game counts and the field above: it fills ``FixtureState.stage_position``, which
+    # is what lets ``RrThenKoStrategy`` split its event's fixtures between its two
+    # stages without re-deriving the split from ``pool_id is None`` (ADR 20260815
+    # decision 6). Only it declares ``reads_stage_position`` — the other three draw
+    # types are one stage each and would pay a round trip for a field they discard.
+    stages = (
+        await stage_order(db, event.id)
+        if reads_stage_position(event.draw_settings.draw_type)
+        else {}
+    )
     # The **field**, beside the fixtures, for the one draw type that cannot recover it
     # from them: a swiss bye is the absence of a fixture row, so pairing the next round
     # from the seated set alone would drop the byed entrant out of the event. Read
@@ -169,7 +182,10 @@ async def materialize_event(
         else ()
     )
     plan = strategy.advance(
-        [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures],
+        [
+            fixture_state(f, game_counts, voided_match_ids, pools, stages)
+            for f in fixtures
+        ],
         entrants,
     )
     # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
@@ -189,7 +205,10 @@ async def materialize_event(
     # plan's and needs no second side-fill pass beyond the loop above.
     ready = set(
         ready_fixtures(
-            [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures]
+            [
+                fixture_state(f, game_counts, voided_match_ids, pools, stages)
+                for f in fixtures
+            ]
         )
     )
     ready_fixture_rows = [f for f in fixtures if f.id in ready]

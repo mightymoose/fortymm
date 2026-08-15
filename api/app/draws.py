@@ -195,6 +195,30 @@ class MissingBracketSlot(RuntimeError):
     """
 
 
+class MissingStageAssignment(RuntimeError):
+    """A fixture reached :meth:`RrThenKoStrategy.advance` with no
+    :attr:`FixtureState.stage_position` resolved — the caller projected it without the
+    event's stage order, so this draw's pool fixtures and its knockout fixtures cannot
+    be told apart.
+
+    :class:`MissingFixtureGames`' and :class:`MissingBracketSlot`'s sibling, and
+    deliberately not a :class:`DrawError` for the same reason: nothing a director can
+    type reaches it. Every real fixture's ``stage_id`` is ``NOT NULL`` (ADR 20260815
+    decision 5) and every event's stages are minted in the same transaction as the
+    event itself (decision 3), so a caller that resolved its fixtures through the
+    ordinary seam (:func:`~app.tournament_draws.fixture_state`) always has this. Its
+    absence means a caller skipped that plumbing — a wiring bug, and the only useful
+    response is a loud 500, not a 422 nobody could act on.
+
+    It exists because the alternative failure is silent and wrong in the exact shape
+    :class:`MissingFixtureGames` warns about: a fixture with no stage resolved matches
+    **neither** ``stage_position == 0`` nor ``== 1``, so it drops out of both the pool
+    stage and the knockout stage of :meth:`RrThenKoStrategy.advance` — no qualifiers
+    are ever seated, no bracket fixture is ever ready, and nothing raises. The whole
+    suite would stay green, because nothing else reads the field.
+    """
+
+
 class Side(enum.Enum):
     """Which of a fixture's two sides — ``entry_a_id`` or ``entry_b_id``."""
 
@@ -365,6 +389,27 @@ class FixtureState:
     #: — which is exactly the order :func:`ready_fixtures` had before positions
     #: existed.
     pool_position: int | None = None
+    #: Where this fixture's **stage** sits in its event's stage order — 0-based,
+    #: mirroring :attr:`pool_position` but for
+    #: :attr:`~app.models.tournament_event_stage.TournamentEventStage.position` rather
+    #: than a pool's. Every persisted fixture has a real stage — ``stage_id`` is
+    #: ``NOT NULL`` (ADR 20260815 decision 5) — so this is the discriminator
+    #: :class:`RrThenKoStrategy` reads to split one event's fixtures between its two
+    #: stages, rather than re-deriving the split from ``pool_id is None``. That
+    #: derivation happens to be correct for rr-then-ko today (only its second stage is
+    #: un-pooled), but it is an accident of this one draw type's shape rather than a
+    #: fact the strategy is entitled to lean on — a swiss round is *also*
+    #: ``pool_id IS NULL`` (ADR 20260815's own Context: this ambiguity already shipped
+    #: a bug on the read side), and nothing in this module stops a future composite
+    #: from pairing two un-pooled stages.
+    #:
+    #: ``None`` is "no stage was resolved" — a caller (a test built straight from
+    #: literals) that never passed the event's stage order through to
+    #: :func:`~app.tournament_draws.fixture_state`, or one of the three draw types
+    #: whose strategy never reads it at all. Only :class:`RrThenKoStrategy` asks, and
+    #: it asks loudly rather than silently seating nothing: see
+    #: :class:`MissingStageAssignment`.
+    stage_position: int | None = None
     #: Set when the fixture's match completed — the fixture is then **decided**.
     winner_entry_id: EntryId | None = None
     #: Set once the fixture **materialized** into a real match. ``None`` before that.
@@ -806,11 +851,62 @@ class SingleElimStrategy:
         )
 
 
+#: Where rr-then-ko's two stages sit in the template
+#: :func:`app.tournament_event_stages.stage_template` mints for it
+#: (``DrawType.rr_then_ko`` → ``(round_robin, single_elim)``, ADR 20260815 decision 3).
+#: This module cannot import that function — it would pull SQLAlchemy into a module
+#: with none (the module docstring's whole point) — so the two positions are restated
+#: here as the literals the template is keyed by. :class:`RrThenKoStrategy` is the one
+#: reader of :attr:`FixtureState.stage_position`, and these are what it reads it
+#: against, in place of the ``pool_id is None`` heuristic that used to stand in for
+#: "the knockout stage".
+_RR_THEN_KO_POOL_STAGE = 0
+_RR_THEN_KO_KNOCKOUT_STAGE = 1
+
+
+def _stage_split(
+    fixtures: Sequence[FixtureState],
+) -> tuple[list[FixtureState], list[FixtureState]]:
+    """Partition an rr-then-ko draw's fixtures into ``(pool stage, knockout stage)``,
+    by each fixture's own :attr:`~FixtureState.stage_position` (ADR 20260815 decision
+    6) — never by ``pool_id is None``, which happens to agree for this one draw type
+    today but is not a fact :class:`RrThenKoStrategy` is entitled to lean on (see
+    :attr:`FixtureState.stage_position`'s docstring for why).
+
+    Raises :class:`MissingStageAssignment` when any fixture carries no
+    ``stage_position`` at all, rather than silently sorting it into neither half — see
+    that class for why a quiet drop is the one failure this module refuses to allow.
+    """
+    unresolved = [fixture for fixture in fixtures if fixture.stage_position is None]
+    if unresolved:
+        raise MissingStageAssignment(
+            f"{len(unresolved)} fixture(s) reached RrThenKoStrategy.advance() with no "
+            "stage_position resolved — the caller (app.tournament_draws.fixture_state) "
+            "projected them without the event's stage order, so this draw's pool "
+            "fixtures and its knockout fixtures cannot be told apart. Every real "
+            "fixture's stage_id is NOT NULL and every event's stages are minted at "
+            "creation, so this is a wiring bug, not a director-facing refusal."
+        )
+    pooled = [f for f in fixtures if f.stage_position == _RR_THEN_KO_POOL_STAGE]
+    knockout = [f for f in fixtures if f.stage_position == _RR_THEN_KO_KNOCKOUT_STAGE]
+    return pooled, knockout
+
+
 @dataclass(frozen=True, slots=True)
 class RrThenKoStrategy:
     """Round-robin pools, then a knockout bracket seeded from the pool finishers — the
     top :attr:`qualifiers_per_pool` out of each pool advance (ADR "rr-then-ko cuts both
     stages upfront and seeds qualifiers rematch-free").
+
+    **Each stage runs the strategy its own draw type names, and this composite's only
+    remaining job is the template plus the inter-stage seam** (ADR 20260815 decision
+    6). The pool stage *is* :class:`RoundRobinStrategy`'s own cut and its own
+    readiness (:func:`ready_fixtures` is shared, not re-implemented); the knockout
+    stage *is* :class:`SingleElimStrategy`'s own forward seating once it is under way.
+    What is left for this class to own is cutting both in one stroke (below) and the
+    one thing neither of those strategies can express on its own: seating a finished
+    pool's qualifiers into the bracket the moment that pool decides
+    (:func:`_stage_split`, :meth:`_qualifier_fills`).
 
     **Both stages are cut in one stroke.** ``plan_initial`` emits every pool's
     round-robin *and* the full bracket, all of the latter's sides TBD. That is not a
@@ -920,10 +1016,10 @@ class RrThenKoStrategy:
         give themselves: the pools seat their whole field, and the bracket is seeded
         from *results*, never from the field directly.
         """
-        knockout = [fixture for fixture in fixtures if fixture.pool_id is None]
+        pooled, knockout = _stage_split(fixtures)
         return AdvancePlan(
             side_fills=(
-                *self._qualifier_fills(fixtures, knockout),
+                *self._qualifier_fills(fixtures, pooled, knockout),
                 # The knockout stage, once it is under way, advances exactly as a
                 # single-elim bracket does — so it is advanced *by* single-elim, over
                 # the un-pooled fixtures alone. Passing the pool fixtures too would let
@@ -935,19 +1031,45 @@ class RrThenKoStrategy:
         )
 
     def _qualifier_fills(
-        self, fixtures: Sequence[FixtureState], knockout: Sequence[FixtureState]
+        self,
+        fixtures: Sequence[FixtureState],
+        pooled: Sequence[FixtureState],
+        knockout: Sequence[FixtureState],
     ) -> list[SideFill]:
-        """The qualifiers of every finished pool, seated into their bracket slots."""
-        pooled = [fixture for fixture in fixtures if fixture.pool_id is not None]
+        """The qualifiers of every finished pool, seated into their bracket slots.
+
+        ``pooled`` and ``knockout`` are :func:`_stage_split`'s own halves of
+        ``fixtures``, computed once by :meth:`advance` and handed down rather than
+        re-split here — the guard :func:`_stage_split` raises has already run by the
+        time this is called.
+        """
         _refuse_gameless_pool_results(pooled, fixtures)
-        # The event's pool order is not recoverable from the fixtures (a fixture holds a
-        # pool *ref*, not an index), so the pools are indexed by their sorted ids — a
-        # deterministic labelling, stable across every re-run, which is all the seed
-        # assignment needs. Which pool is index 0 is genuinely arbitrary: within a
-        # finishing place pools are not ranked against each other, and relabelling them
-        # is a bijection, so the rematch-free guarantee holds under any labelling.
+        # The pools, in the DIRECTOR's own order (ADR 20260815 decision 7's rider):
+        # each pool's own ``pool_position`` (ADR 20260801), never ``sorted(pool_ids)``.
+        # The two used to be conflated — a pool's uuid has no relationship to its
+        # position, so "pool index 0" silently named a different physical pool from
+        # the one the director's own pool listing and the snake both call the first
+        # pool. Which pool is index 0 is still free to *choose* (within a finishing
+        # place pools are not ranked against each other, and relabelling them is a
+        # bijection, so the rematch-free guarantee holds under any labelling) — this
+        # only pins *which* choice, so "pool A" means the same pool everywhere. A pool
+        # whose position was not resolved (a caller that skipped that plumbing) sorts
+        # after every resolved one, by id — the same fallback :func:`ready_fixtures`
+        # uses, so an under-wired caller degrades to the old order rather than crashes.
+        pool_position_by_id: dict[PoolId, int | None] = {}
+        for fixture in pooled:
+            if (
+                fixture.pool_id is not None
+                and fixture.pool_id not in pool_position_by_id
+            ):
+                pool_position_by_id[fixture.pool_id] = fixture.pool_position
         pool_ids = sorted(
-            {fixture.pool_id for fixture in pooled if fixture.pool_id is not None}
+            pool_position_by_id,
+            key=lambda pool_id: (
+                pool_position_by_id[pool_id] is None,
+                pool_position_by_id[pool_id] or 0,
+                str(pool_id),
+            ),
         )
         if not pool_ids:
             return []
@@ -1822,6 +1944,40 @@ def reads_entrants(draw_type: DrawType) -> bool:
             return False
         case DrawType.swiss:
             return True
+
+
+def reads_stage_position(draw_type: DrawType) -> bool:
+    """Whether this draw type's ``advance()`` reads :attr:`FixtureState.stage_position`
+    — i.e. whether a caller advancing it has to resolve the event's stage order first.
+
+    :func:`reads_fixture_games`' and :func:`reads_entrants`' sibling, for the same seam
+    and the same reason: the advance runs inside the score-accept transaction on every
+    result, so a load nothing reads is a round trip per submission the other three draw
+    types must not pay.
+
+    Only ``rr_then_ko`` declares **true**. It is the one draw type with two stages, and
+    :class:`RrThenKoStrategy` reads ``stage_position`` to split its event's fixtures
+    between them (ADR 20260815 decision 6) — a fact only it needs, and only because it
+    is the one composite. The other three are one stage each: a fixture's stage never
+    needs distinguishing from any other fixture of the same event, so the field would be
+    resolved and discarded.
+
+    An exhaustive ``match`` with **no catch-all**, exactly like its siblings: a new
+    :class:`DrawType` has to declare its own answer, and until it does this fails to
+    type-check. The failure a default of ``False`` would cause is the silent one
+    :class:`MissingStageAssignment` exists to catch instead — a strategy that started
+    reading the field without the gate declaring it would seat nothing and raise
+    nothing.
+    """
+    match draw_type:
+        case DrawType.round_robin:
+            return False
+        case DrawType.single_elim:
+            return False
+        case DrawType.rr_then_ko:
+            return True
+        case DrawType.swiss:
+            return False
 
 
 def unseated_entrant_allowance(draw_type: DrawType, field_size: int) -> int:
