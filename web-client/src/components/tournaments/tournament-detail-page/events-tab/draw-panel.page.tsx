@@ -108,8 +108,9 @@ const scoped = (container: Container) => ({
   },
 
   /** The un-pooled group **as swiss rounds**. The other half of the same claim: a swiss draw
-   * is un-pooled exactly as a bracket is, so the two hooks are what tell "routed on the draw
-   * type" from "routed on the null pool id" (`unpooledShape`, `../../data/draw`). */
+   * is un-pooled exactly as a bracket is, so the two hooks are what tell "routed on the
+   * fixtures' own STAGE" from "routed on the null pool id" (`shapeForStage`,
+   * `../../data/draw`). */
   querySwissRounds() {
     return container.queryByTestId('draw-swiss-rounds')
   },

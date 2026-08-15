@@ -21,6 +21,7 @@ import {
   buildTournamentEntrantRead,
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
+  mintStageReads,
   planDraw,
   UNBREAKABLE_VENUE_NAME,
   type DrawPlan,
@@ -1038,7 +1039,24 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
     // substitution here would deal a swiss of the wrong length with nothing reporting it.
     // `null` is the honest value for the three draw types that choose no round count.
     event.rounds,
+    // **The event's own stage ids** (ADR 20260815), in `position` order — never
+    // `planDraw`'s `['s-1', 's-2']` default, which is for a caller with no event to read
+    // ids off of. A fixture this cuts must name a stage `event.stages` actually holds.
+    eventStageIds(event),
   )
+}
+
+/** An event's stage ids, in `position` order, as the two-slot tuple `planDraw` takes
+ * (ADR 20260815) — the same shape `mocks/tournaments-store.ts`'s own helper builds, for
+ * the same reason: a single-stage event's slot-1 fallback is simply its own (only) stage
+ * id, harmless because every arm but `rr-then-ko`'s ignores the second slot entirely. */
+function eventStageIds(event: TournamentEventRead): readonly [string, string] {
+  const ordered = [...event.stages].sort((a, b) => a.position - b.position)
+  const first = ordered[0]
+  if (!first) {
+    throw new Error(`planEventDraw: event ${event.id} has no stages to cut against.`)
+  }
+  return [first.id, ordered[1]?.id ?? first.id]
 }
 
 /** The server's sentence for a pools payload that would change WHICH pools a cut event
@@ -2173,6 +2191,12 @@ export class TournamentsStore {
         ? fields.pools.map((pool, index) => this.upsertPool(pool, index))
         : e.pools,
       entrants: e.entrants,
+      // **Re-minted on a draw-type change, in place** (ADR 20260815 decision 3) — the
+      // same rule `mocks/tournaments-store.ts`'s `updateEvent` follows, and reachable
+      // for the same reason: `frozenDetail` above already 409s a draw-type change while
+      // a draw stands, so this can only run against an undrawn event.
+      stages:
+        fields.draw_type == null ? e.stages : mintStageReads(fields.draw_type),
     }))
     return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))
   }

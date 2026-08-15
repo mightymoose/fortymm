@@ -59,6 +59,28 @@ export const drawTypeSchema = z.enum(DRAW_TYPES)
  * modules that read every tournament type from there. */
 export type DrawType = z.infer<typeof drawTypeSchema>
 
+/** The draw types a **stage** can run — `DRAW_TYPES` minus `rr-then-ko`, which names a
+ * template (a sequence of stages), never a runnable stage's own type (ADR 20260815
+ * decision 4). Every `EventStageRead.draw_type` the server sends is one of these three,
+ * so the exhaustive switches over it (`shapeForStage`, `./draw`) have no `rr-then-ko`
+ * arm to reach — the same discipline `DRAW_TYPES` applies to the event-level vocabulary,
+ * one level down. */
+export const STAGE_DRAW_TYPES = [
+  'round-robin',
+  'single-elim',
+  'swiss',
+] as const satisfies readonly DrawType[]
+
+/** The runtime parser for one stage's `draw_type` — what `parseStages` (`./stages`)
+ * validates `EventStageRead.draw_type` with, so a payload that somehow named
+ * `rr-then-ko` as a STAGE's own type (a template, not a runnable stage) fails at the
+ * boundary rather than reaching a switch with no arm for it. */
+export const stageDrawTypeSchema = z.enum(STAGE_DRAW_TYPES)
+
+/** A stage's own draw type — always one of the three single-stage kinds. Re-exported
+ * from `./types` for the domain modules that read every tournament type from there. */
+export type StageDrawType = z.infer<typeof stageDrawTypeSchema>
+
 /** One selectable draw format, **as the server sent it** — a `draw_types` row
  * (`DrawTypeRead`) reduced to what a picker needs (ADR 20260726). `value` is the slug
  * an event stores and sends as its `draw_type`; `label` is the server's own `name`, the

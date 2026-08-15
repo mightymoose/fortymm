@@ -6,7 +6,7 @@
 // here, but nothing crosses back at runtime.
 import type { MatchStatus } from '@/api/matches'
 
-import type { DrawType, DrawTypeOption } from './draw-types'
+import type { DrawType, DrawTypeOption, StageDrawType } from './draw-types'
 import type { PredicateOp } from './options'
 import type { ScheduleSolve } from './solve'
 
@@ -18,7 +18,7 @@ export type EventFormat = 'singles' | 'doubles' | 'teams'
  * catalogue parser (`./draw-types`), the way `./solve` declares its enums. Re-exported
  * here so the domain modules that read every tournament type from `./types` keep doing
  * so — there is no second declaration to drift. */
-export type { DrawType, DrawTypeOption }
+export type { DrawType, DrawTypeOption, StageDrawType }
 
 export type MatchLength = 1 | 3 | 5 | 7
 
@@ -178,6 +178,28 @@ export type PoolEntry =
 export type EditedEvent = Omit<TournamentEvent, 'pools'> & { pools: PoolEntry[] }
 
 /**
+ * One stage of an event's draw (ADR 20260815 decision 1): a row the event owns, never
+ * authored by a director. The system mints an event's stages from a template keyed on
+ * its (possibly composite) `drawType` the moment its draw settings are configured:
+ * `round-robin → [round-robin]`, `single-elim → [single-elim]`, `swiss → [swiss]`,
+ * `rr-then-ko → [round-robin, single-elim]` — so every event holds at least one stage
+ * from the moment it exists, and stages freeze the same instant a draw does (the pools
+ * freeze, decision 3).
+ *
+ * `drawType` is the stage's OWN draw type — the strategy it runs — and it is one of the
+ * three **single-stage** kinds, never `rr-then-ko`: that member names a template, a
+ * sequence of stages, not a runnable stage's own type (decision 4). This is what lets
+ * `shapeForStage` (`./draw`) be a three-arm exhaustive switch with nothing to guess at.
+ */
+export interface Stage {
+  id: string
+  /** 0-based order among this event's stages — `round-robin` before `single-elim` for
+   * an `rr-then-ko` event's two. */
+  position: number
+  drawType: StageDrawType
+}
+
+/**
  * One planned pairing of an event's **draw** (ADR-0786): a round and a position —
  * plus a pool, when the draw is pooled — whose sides may still be unknown.
  *
@@ -200,9 +222,18 @@ export type EditedEvent = Omit<TournamentEvent, 'pools'> & { pools: PoolEntry[] 
  *   no match yet. It moves in lockstep with `matchId` (both `null` before go-live, both
  *   set after), and it is the match's *current* status read live, never a copy frozen at
  *   go-live.
- * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim), or
- *   this is the knockout stage of a combined draw type (#787, not an enum member today).
- *   When set, it names a `Pool` in this same event's `pools`.
+ * - `stageId` — the **stage** (ADR 20260815 decision 5) this fixture belongs to —
+ *   `NOT NULL`, and never inferred: it names an entry in this same event's `stages`.
+ *   Read that stage's own `drawType` to answer "is this fixture's un-pooled block a
+ *   bracket or a set of swiss rounds?" (`shapeForStage`, `./draw`) — a client no longer
+ *   guesses that from `poolId` plus the event's overall `drawType`, which is exactly
+ *   the inference that once rendered a swiss draw's rounds as a knockout bracket,
+ *   because both are un-pooled and indistinguishable by `poolId` alone.
+ * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim,
+ *   swiss), or this is the knockout stage of an `rr-then-ko` draw. Which one is no
+ *   longer this field's business to say — read `stageId` against `stages` for that.
+ *   When set, it names a `Pool` of **this fixture's own stage**, in this same event's
+ *   `pools`.
  * - `tableId` — the fixture's **placement** table (ADR-0790): `null` means **unassigned
  *   to a table**. When set, it names a `TournamentTable` in the tournament's table
  *   catalogue — a string ref, the same pattern as `poolId`.
@@ -224,6 +255,9 @@ export type EditedEvent = Omit<TournamentEvent, 'pools'> & { pools: PoolEntry[] 
  */
 export interface Fixture {
   id: string
+  /** The stage (`Stage`, ADR 20260815) this fixture belongs to — never `null`, an
+   * entry in this same event's `stages`. */
+  stageId: string
   poolId: string | null
   round: number
   position: number
@@ -648,6 +682,11 @@ export interface TournamentEvent {
   predicates: Predicate[]
   match: MatchSettings
   pools: Pool[]
+  /** This event's **stages** (ADR 20260815) — one row per single-stage kind the event's
+   * `drawType` template names, in `position` order. System-minted, never authored by a
+   * director, and present from the moment the event exists (so an *undrawn* event still
+   * has these). Frozen the instant a draw exists, the same moment the pools freeze. */
+  stages: Stage[]
   /** This event's **draw** — every fixture the cut produced, in pool → round → position
    * order, as the server sends them (ADR-0786).
    *

@@ -24,6 +24,7 @@ import { entryRefusalNotice } from './entry-refusal'
 import { hasVenue } from './helpers'
 import { parseFixtures } from './fixtures'
 import { parseResults } from './results'
+import { parseStages } from './stages'
 import {
   parseLatestScheduleSolve,
   parseScheduleSolve,
@@ -159,6 +160,12 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     predicates: e.predicates.map(apiToPredicate),
     match: { rated: e.match_settings.rated, lengthGames: e.match_settings.length_games },
     pools: e.pools.map(apiToPool),
+    // PARSED, not cast (`./stages`, `.claude/rules/parse-at-boundaries.md`) — the same
+    // boundary the fixtures cross, and for the same reason: a fixture's `stageId` is
+    // joined against this array to answer "is this fixture's un-pooled block a bracket
+    // or a set of swiss rounds?" (`shapeForStage`, `./draw`), so a stage whose
+    // `draw_type` this build cannot resolve to a single-stage kind must fail HERE.
+    stages: parseStages(e.stages),
     // PARSED, not cast (`./fixtures`, `.claude/rules/parse-at-boundaries.md`). Every
     // other field above is mapped on the compiler's word that the payload matches
     // `schema.d.ts`; the draw is checked at RUNTIME, because it is the one structure on
