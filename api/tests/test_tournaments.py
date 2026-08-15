@@ -3469,7 +3469,11 @@ async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
 
 def _draw_type_reads(statements: list[str]) -> list[str]:
     """The statements that read the events' draw types — the third one, by the only
-    column that is unique to it (the join onto ``draw_types``, ADR 20260815)."""
+    column that is unique to it: ``draw_type_id`` is the column this statement
+    selects directly (``draw_currency_by_event`` maps the id to a ``DrawType`` in
+    Python via ``app.models.draw_type.DRAW_TYPES_BY_ID``, not by joining onto
+    ``draw_types`` — ADR 20260815 retired that join), and no other statement in
+    this loader's batch names the column at all."""
     return [statement for statement in statements if "draw_type_id" in statement]
 
 
@@ -7631,21 +7635,15 @@ async def test_a_refused_draw_type_patch_writes_none_of_the_rest_of_the_payload_
     )
 
     assert response.status_code == 409, response.text
-    stored = (
+    stored_name = (
         await db_session.execute(
-            select(TournamentEvent.name, DrawTypeOption.key)
-            .join(
-                TournamentEventDrawSettings,
-                TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
+            select(TournamentEvent.name).where(
+                TournamentEvent.id == uuid.UUID(event["id"])
             )
-            .join(
-                DrawTypeOption,
-                DrawTypeOption.id == TournamentEventDrawSettings.draw_type_id,
-            )
-            .where(TournamentEvent.id == uuid.UUID(event["id"]))
         )
-    ).one()
-    assert stored == (event["name"], DrawType.round_robin.value)
+    ).scalar_one()
+    assert stored_name == event["name"]
+    assert await _draw_type_of(db_session, event["id"]) is DrawType.round_robin
 
 
 async def test_an_undrawn_event_still_changes_its_draw_type(

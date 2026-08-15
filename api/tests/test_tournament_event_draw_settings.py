@@ -25,10 +25,12 @@ Four claims, and they are separate ones:
 
 The draw type has exactly one home — ``tournament_event_draw_settings.draw_type_id``,
 a FK onto ``draw_types.id`` (ADR 20260815, "draw_types gains a surrogate id primary
-key") — so these tests read it from there and nowhere else, joining onto
-``draw_types.key`` for the slug where a raw-SQL assertion wants one. There is no
-``draw_type`` column on ``tournament_events`` to cross-check it against, which is
-the point.
+key") — so these tests read it from there and nowhere else: through the ORM's
+``draw_type`` property where an assertion wants the enum, joining onto
+``draw_types.key`` where a raw-SQL assertion wants the slug, or binding the id
+straight from :data:`app.models.draw_type.DRAW_TYPE_IDS` where it doesn't need the
+slug at all. There is no ``draw_type`` column on ``tournament_events`` to cross-check
+it against, which is the point.
 """
 
 import uuid
@@ -51,6 +53,7 @@ from app.models import (
     TournamentEventDrawSettings,
     User,
 )
+from app.models.draw_type import DRAW_TYPE_IDS
 from app.schemas.tournament import (
     DrawSettingsWrite,
     DrawSettingsWriteArm,
@@ -375,25 +378,33 @@ async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
     """The FK to ``draw_types.id`` is the enforcement, and this is the test that
     makes it one.
 
-    The refused id names no row at all — the same claim ``double-elim`` used to
-    make about ``draw_types.key`` before ADR 20260815 moved the FK onto the
-    surrogate id, since a draw type the product does not run has no ``DrawType``
-    member and therefore no seeded row either way (ADR "a draw type is a seeded
-    row, and the enum holds only what runs"). Written with raw SQL on purpose —
-    the ORM path goes through ``for_draw_type``, which can only produce a seeded
-    id (:data:`app.models.draw_type.DRAW_TYPE_IDS`), so only a hand-written
-    INSERT can ask the database the question.
+    The domain subject comes first: ``double-elim`` is a draw type the product does
+    not run, so it has no ``DrawType`` member and therefore no seeded row (ADR "a
+    draw type is a seeded row, and the enum holds only what runs") — asserted
+    directly, by asking the database for it and getting nothing back, rather than
+    assumed. The refused insert below then names an id that could, for all this test
+    otherwise knows, belong to exactly that missing row.
 
-    A seeded row is inserted first (resolved by its ``key``, the spelling the
-    rest of this file binds on), so a green result cannot be explained by the
-    table or the statement being wrong.
+    Written with raw SQL on purpose — the ORM path goes through ``for_draw_type``,
+    which can only produce a seeded id (:data:`app.models.draw_type.DRAW_TYPE_IDS`),
+    so only a hand-written INSERT can ask the database the question.
+
+    A seeded row is inserted first too (its id bound straight from
+    :data:`app.models.draw_type.DRAW_TYPE_IDS` rather than resolved by a ``key``
+    subselect), so a green result cannot be explained by the table or the statement
+    being wrong.
     """
+    unseeded = await db_session.execute(
+        sa.text("SELECT id FROM draw_types WHERE key = 'double-elim'")
+    )
+    assert unseeded.first() is None
+
     seeded = await db_session.execute(
         sa.text(
             "INSERT INTO tournament_event_draw_settings (draw_type_id)"
-            " VALUES ((SELECT id FROM draw_types WHERE key = 'round-robin'))"
-            " RETURNING id"
-        )
+            " VALUES (:draw_type_id) RETURNING id"
+        ),
+        {"draw_type_id": DRAW_TYPE_IDS[DrawType.round_robin]},
     )
     assert seeded.scalar_one() is not None
 
@@ -401,18 +412,21 @@ async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
         await db_session.execute(
             sa.text(
                 "INSERT INTO tournament_event_draw_settings (draw_type_id)"
-                " VALUES ('00000000-0000-0000-0000-000000000000')"
-            )
+                " VALUES (:draw_type_id)"
+            ),
+            {"draw_type_id": uuid.uuid4()},
         )
     assert "draw_type_id" in str(refusal.value)
     await db_session.rollback()
 
 
-# The slug the qualifier count belongs to, taken **from the enum** — since #1227
-# ``rr-then-ko`` is a real ``DrawType`` member with a seeded lookup row (the autouse
-# ``draw_types`` fixture stands one up per enum member), so these tests no longer
-# have to insert a test-local parent row to reach the constraint's active half.
-RR_THEN_KO = DrawType.rr_then_ko.value
+# The draw type the qualifier count belongs to, taken **from the enum** — since
+# #1227 ``rr-then-ko`` is a real ``DrawType`` member with a seeded lookup row (the
+# autouse ``draw_types`` fixture stands one up per enum member), so these tests no
+# longer have to insert a test-local parent row to reach the constraint's active
+# half. Bound as the seeded id directly (:data:`app.models.draw_type.DRAW_TYPE_IDS`)
+# rather than resolved by ``key``, so the raw-SQL inserts below need no subselect.
+RR_THEN_KO_ID = DRAW_TYPE_IDS[DrawType.rr_then_ko]
 
 
 def test_every_draw_type_has_an_arm_in_the_write_union() -> None:
@@ -494,10 +508,10 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
                 sa.text(
                     "INSERT INTO tournament_event_draw_settings"
                     " (draw_type_id, settings)"
-                    " VALUES ((SELECT id FROM draw_types WHERE key = :key),"
+                    " VALUES (:draw_type_id,"
                     f" {value}) RETURNING settings"
                 ),
-                {"key": RR_THEN_KO},
+                {"draw_type_id": RR_THEN_KO_ID},
             )
             assert stored.scalar_one() is not None, value
 
@@ -518,10 +532,10 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
                     sa.text(
                         "INSERT INTO tournament_event_draw_settings"
                         " (draw_type_id, settings)"
-                        " VALUES ((SELECT id FROM draw_types WHERE key = :key),"
+                        " VALUES (:draw_type_id,"
                         f" {value})"
                     ),
-                    {"key": RR_THEN_KO},
+                    {"draw_type_id": RR_THEN_KO_ID},
                 )
         assert "ck_tournament_event_draw_settings_settings_object" in str(
             refusal.value
@@ -536,9 +550,9 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
                 sa.text(
                     "INSERT INTO tournament_event_draw_settings"
                     " (draw_type_id, settings)"
-                    " VALUES ((SELECT id FROM draw_types WHERE key = :key), NULL)"
+                    " VALUES (:draw_type_id, NULL)"
                 ),
-                {"key": RR_THEN_KO},
+                {"draw_type_id": RR_THEN_KO_ID},
             )
     assert "not-null" in str(null_refusal.value).lower(), (
         "a SQL NULL must be refused by the column's NOT NULL, not by the object CHECK "
@@ -588,7 +602,7 @@ async def test_every_arm_round_trips_through_the_settings_column(
                 )
             )
         ).scalar_one()
-        assert stored.draw_type_option.key == arm.draw_type.value
+        assert stored.draw_type is arm.draw_type
         assert draw_settings_of(stored) == arm
 
     await db_session.rollback()
@@ -638,10 +652,10 @@ async def test_the_qualifier_floor_is_the_unions_now_that_the_column_is_gone(
     stored = await db_session.execute(
         sa.text(
             "INSERT INTO tournament_event_draw_settings (draw_type_id, settings)"
-            " VALUES ((SELECT id FROM draw_types WHERE key = :key),"
+            " VALUES (:draw_type_id,"
             " '{\"qualifiers_per_pool\": 0}'::jsonb) RETURNING settings"
         ),
-        {"key": RR_THEN_KO},
+        {"draw_type_id": RR_THEN_KO_ID},
     )
     assert stored.scalar_one() == {"qualifiers_per_pool": 0}
 

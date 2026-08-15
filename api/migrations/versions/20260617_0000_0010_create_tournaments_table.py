@@ -66,9 +66,22 @@ event_format_enum = postgresql.ENUM(
 # dispatches, which is also exactly the members of ``app.models.DrawType``.
 # Migrations must stay self-contained (no app imports), so this list is a
 # deliberate hand-copy of the enum; a test asserts the two agree.
-# (key, name, description, display_order)
+#
+# Each entry carries its OWN fixed id — NOT ``gen_random_uuid()``, even though the
+# column's own default (below) is — for the same reason ``app.models.draw_type
+# .DRAW_TYPE_IDS`` does on the app side: writing a settings row's ``draw_type_id``
+# from a ``DrawType`` member is a plain, synchronous property assignment reached
+# from dozens of call sites with no database session in scope (most of them test
+# fixtures that build a whole ``TournamentEvent`` in one expression), so the app
+# side needs the id for each draw type without a lookup. That map is hand-copied
+# from this list for the mirror-image reason (migrations cannot import app code);
+# ``tests/test_draw_type_seed_migration.py`` pins the two in agreement. See that
+# map's own docstring for why this is not the same shape as migration 0005's
+# ``GLICKO2_STRATEGY_ID`` / ``MANUAL_STRATEGY_ID``, which have no app-side copy.
+# (id, key, name, description, display_order)
 DRAW_TYPE_SEED = [
     (
+        uuid.UUID("22222222-2222-2222-2222-222222220001"),
         "round-robin",
         "Round robin",
         "Everyone in a pool plays everyone else in that pool. Every entrant is "
@@ -78,6 +91,7 @@ DRAW_TYPE_SEED = [
         1,
     ),
     (
+        uuid.UUID("22222222-2222-2222-2222-222222220002"),
         "single-elim",
         "Single elimination",
         "A knockout bracket: lose once and you are out. It crowns a champion in "
@@ -87,6 +101,7 @@ DRAW_TYPE_SEED = [
         2,
     ),
     (
+        uuid.UUID("22222222-2222-2222-2222-222222220003"),
         "rr-then-ko",
         # The director-facing copy is pinned by the ADR "rr-then-ko cuts both
         # stages upfront and seeds qualifiers rematch-free" — it is seed data, so
@@ -97,6 +112,7 @@ DRAW_TYPE_SEED = [
         3,
     ),
     (
+        uuid.UUID("22222222-2222-2222-2222-222222220004"),
         "swiss",
         # The director-facing copy is pinned by the ADR "swiss pre-cuts every
         # round and pairs each one on advance" — it is seed data, so changing
@@ -110,25 +126,6 @@ DRAW_TYPE_SEED = [
         4,
     ),
 ]
-
-
-# Fixed ids, one per seeded slug — NOT ``gen_random_uuid()`` for these rows
-# specifically, even though the column's default (below) is. ``app.models.tournament
-# .DrawType`` binds on ``key``, but writing a settings row's ``draw_type_id`` from a
-# ``DrawType`` member is a plain, synchronous property assignment reached from dozens
-# of call sites with no database session in scope (most of them test fixtures that
-# build a whole ``TournamentEvent`` in one expression) — so the app side needs the id
-# for each draw type without a lookup. ``app.models.draw_type.DRAW_TYPE_IDS`` is the
-# same mapping, hand-copied for the reason ``DRAW_TYPE_SEED`` above already is
-# (migrations cannot import app code); ``tests/test_draw_type_seed_migration.py``
-# pins the two in agreement. Same shape as migration 0005's
-# ``GLICKO2_STRATEGY_ID`` / ``MANUAL_STRATEGY_ID`` for ``rating_strategies``.
-DRAW_TYPE_IDS = {
-    "round-robin": uuid.UUID("22222222-2222-2222-2222-222222220001"),
-    "single-elim": uuid.UUID("22222222-2222-2222-2222-222222220002"),
-    "rr-then-ko": uuid.UUID("22222222-2222-2222-2222-222222220003"),
-    "swiss": uuid.UUID("22222222-2222-2222-2222-222222220004"),
-}
 
 
 def upgrade() -> None:
@@ -175,13 +172,13 @@ def upgrade() -> None:
         draw_types,
         [
             {
-                "id": DRAW_TYPE_IDS[key],
+                "id": id_,
                 "key": key,
                 "name": name,
                 "description": description,
                 "display_order": display_order,
             }
-            for key, name, description, display_order in DRAW_TYPE_SEED
+            for id_, key, name, description, display_order in DRAW_TYPE_SEED
         ],
     )
 

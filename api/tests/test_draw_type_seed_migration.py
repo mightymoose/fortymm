@@ -211,12 +211,11 @@ async def test_migration_seeds_the_ids_the_app_writes_settings_rows_with(
 
     The app never queries for a draw type's id — the settings row's ``draw_type``
     setter writes it straight from that fixed map, with no session in scope (see
-    the map's own docstring for why). This is the one guard that a migration
-    editor who changes an id in one of the two places and not the other would
-    trip: every settings-row write in a REAL deployment would FK-violate against
-    a seeded id the map no longer names, and nothing built on ``create_all``
-    (the rest of the suite) can catch that, because ``tests/conftest.py`` seeds
-    its own rows FROM the same map rather than from this migration.
+    the map's own docstring for why). ``tests/conftest.py``'s autouse fixture now
+    seeds its rows from this migration's own ids rather than from the app map, so
+    a drift between the two also FK-violates every settings-row write across the
+    ``create_all`` suite — but only on a migrated (Alembic-built) database does a
+    real deployment feel it, which is what this test is actually checking.
     """
     seeded = {row.key: row.id for row in seeded_draw_types}
     expected = {draw_type.value: id_ for draw_type, id_ in DRAW_TYPE_IDS.items()}
@@ -318,23 +317,60 @@ async def test_migration_no_longer_creates_the_qualifiers_per_pool_column(
     )
 
 
+async def _draw_type_id_fk(url: str) -> sa.Row[tuple[str, str, str]] | None:
+    """The foreign key on the migrated database's
+    ``tournament_event_draw_settings.draw_type_id`` column — the table and column
+    it targets, and its delete rule — or ``None`` if there is no such FK at all.
+
+    A column can exist with the right name and type and still not be the FK
+    the ADR describes: nothing about ``_draw_settings_column`` above proves a
+    constraint is attached to it. Read from ``information_schema`` rather than
+    through the model/``DrawTypeOption``, for the same reason every other
+    assertion in this file is: the subject is what **Alembic** built, not what
+    ``create_all`` would build from the same model regardless.
+    """
+    engine = create_async_engine(url)
+    try:
+        async with engine.connect() as conn:
+            return (
+                await conn.execute(
+                    sa.text(
+                        "SELECT ccu.table_name, ccu.column_name, rc.delete_rule"
+                        " FROM information_schema.table_constraints tc"
+                        " JOIN information_schema.key_column_usage kcu"
+                        "   ON tc.constraint_name = kcu.constraint_name"
+                        "  AND tc.table_schema = kcu.table_schema"
+                        " JOIN information_schema.constraint_column_usage ccu"
+                        "   ON tc.constraint_name = ccu.constraint_name"
+                        "  AND tc.table_schema = ccu.table_schema"
+                        " JOIN information_schema.referential_constraints rc"
+                        "   ON tc.constraint_name = rc.constraint_name"
+                        "  AND tc.table_schema = rc.constraint_schema"
+                        " WHERE tc.table_name = 'tournament_event_draw_settings'"
+                        "   AND tc.constraint_type = 'FOREIGN KEY'"
+                        "   AND kcu.column_name = 'draw_type_id'"
+                    )
+                )
+            ).one_or_none()
+    finally:
+        await engine.dispose()
+
+
 async def test_migration_moves_the_draw_type_fk_from_key_to_id(
     migrated_database_url: str,
 ) -> None:
-    """``draw_type_key`` is **gone** and ``draw_type_id`` — a NOT NULL uuid — is what
-    replaced it (ADR 20260815, "draw_types gains a surrogate id primary key").
+    """``draw_type_id`` — a NOT NULL uuid, FK'd to ``draw_types.id`` ``ON DELETE
+    RESTRICT`` — is what replaced ``draw_type_key`` (ADR 20260815, "draw_types
+    gains a surrogate id primary key").
 
-    The same shape as the ``qualifiers_per_pool`` test above: a rename that only
-    touched the model would leave a migrated database with the OLD column, and
-    every other test in this repo (``create_all``-built) would stay green over it.
+    The column alone is the same shape as the ``qualifiers_per_pool`` test above,
+    but api/CLAUDE.md asks more of a migration test that touches a foreign key:
+    the constraint itself, not merely the column it sits on, has to be inspected
+    on a database Alembic actually built — a ``create_all`` schema gets its FK
+    from the model regardless of what this migration's DDL says, so only this
+    test can catch a migration that renamed the column but wrote the wrong
+    target or delete rule (or none at all).
     """
-    old_column = await _draw_settings_column(migrated_database_url, "draw_type_key")
-    assert old_column is None, (
-        "migrated database still has tournament_event_draw_settings.draw_type_key"
-        " — ADR 20260815 renamed it to draw_type_id, so the old column is a"
-        " second, stale home for the FK"
-    )
-
     new_column = await _draw_settings_column(migrated_database_url, "draw_type_id")
     assert new_column is not None, (
         "migrated database has no tournament_event_draw_settings.draw_type_id"
@@ -343,6 +379,15 @@ async def test_migration_moves_the_draw_type_fk_from_key_to_id(
     )
     assert new_column.data_type == "uuid", new_column
     assert new_column.is_nullable == "NO", new_column
+
+    fk = await _draw_type_id_fk(migrated_database_url)
+    assert fk is not None, (
+        "migrated database has no foreign key at all on"
+        " tournament_event_draw_settings.draw_type_id"
+    )
+    assert fk.table_name == "draw_types", fk
+    assert fk.column_name == "id", fk
+    assert fk.delete_rule == "RESTRICT", fk
 
 
 # Every ``settings`` value the CHECK has an opinion about, and the opinion. Written

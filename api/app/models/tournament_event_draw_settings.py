@@ -15,11 +15,10 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.draw_type import DRAW_TYPE_IDS
+from app.models.draw_type import DRAW_TYPE_IDS, DRAW_TYPES_BY_ID
 from app.models.tournament import DrawType
 
 if TYPE_CHECKING:
-    from app.models.draw_type import DrawTypeOption
     from app.models.tournament import TournamentEvent
 
 
@@ -55,8 +54,9 @@ class TournamentEventDrawSettings(Base):
     that has a seeded row — i.e. one ``app.draws.strategy_for`` can actually
     dispatch — and a seeded row cannot be deleted out from under an event that
     uses it. Code still resolves the draw type by its ``key`` slug, never by
-    ``id`` — see the ``draw_type`` property below, which reads it off the
-    ``draw_type_option`` relationship (a join), not off this column directly.
+    ``id`` — see the ``draw_type`` property below, which maps the id back to the
+    slug through ``app.models.draw_type.DRAW_TYPES_BY_ID``, a plain dict lookup,
+    not a join.
 
     Two columns of configuration today: the draw type, and the ``settings`` object
     beside it — the serialized form of the draw type's own settings arm (ADR "a draw
@@ -92,28 +92,13 @@ class TournamentEventDrawSettings(Base):
     # The surrogate id, not the slug (ADR 20260815): the FK target is
     # ``draw_types.id``. ``RESTRICT`` because a draw type an event is configured
     # with must not be deletable — the reference table is the enforcement, not
-    # decoration. ``draw_type_option`` (below) is the relationship this FK backs;
-    # code reads the slug through it rather than through this column.
+    # decoration. The ``draw_type`` property below reads this column back through
+    # ``app.models.draw_type.DRAW_TYPES_BY_ID``, a plain dict lookup — no
+    # relationship, no join, and so no loader state to depend on.
     draw_type_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("draw_types.id", ondelete="RESTRICT"),
         nullable=False,
-    )
-    # Eager and joined, for the same reason ``TournamentEvent.draw_settings`` is:
-    # async SQLAlchemy raises rather than emitting a lazy load, so a reader that
-    # reaches ``event.draw_settings.draw_type`` (dozens of call sites, none of
-    # which remembers a loader option) would blow up unless this relationship
-    # eager-loads by default. ``innerjoin=True`` because the FK is NOT NULL — an
-    # outer join would be asking about an absence the schema has ruled out. It
-    # nests under ``TournamentEvent.draw_settings``'s own ``lazy="joined"``
-    # without any call site doing anything: SQLAlchemy applies a relationship's
-    # declared default strategy at every depth a query reaches it, not only at
-    # the top level. ``tests/test_tournament_event_draw_settings.py``'s
-    # ``test_reading_draw_settings_off_a_freshly_loaded_event_needs_no_loader``
-    # is what would red if either eager declaration were removed.
-    draw_type_option: Mapped["DrawTypeOption"] = relationship(
-        lazy="joined",
-        innerjoin=True,
     )
     # The draw type's settings, as one NOT NULL JSON object (ADR "a draw type's
     # settings are one NOT NULL JSON object"). ``{}`` for a draw type that takes no
@@ -225,16 +210,17 @@ class TournamentEventDrawSettings(Base):
         """The configured draw type, parsed back into the closed set the code
         dispatches on.
 
-        Read through the ``draw_type_option`` relationship — a join onto
-        ``draw_types.key`` — never off ``draw_type_id`` directly (ADR 20260815):
-        the column is a surrogate id with no ``DrawType`` member of its own, and
-        the slug is the only spelling the enum binds on. The relationship is
-        eager (``lazy="joined"``), so this never emits a lazy load. Raises
-        ``ValueError`` on a slug with no ``DrawType`` member — which the FK plus
-        the seed-vs-enum migration test make unreachable, and which is the loud
-        failure we want if they ever stop agreeing.
+        A plain dict lookup on :data:`~app.models.draw_type.DRAW_TYPES_BY_ID`,
+        keyed by ``draw_type_id`` — never a join or a relationship walk (ADR
+        20260815 retired the join this used to make). Total on a transient,
+        pending or freshly flushed row alike, and needs no loaded relationship
+        and no lazy load, because it reads a plain column that is always
+        present once the row exists. Raises ``KeyError`` on an id with no
+        ``DrawType`` member — which the FK plus the seed-vs-enum migration test
+        make unreachable, and which is the loud failure we want if they ever
+        stop agreeing.
         """
-        return DrawType(self.draw_type_option.key)
+        return DRAW_TYPES_BY_ID[self.draw_type_id]
 
     @draw_type.setter
     def draw_type(self, draw_type: DrawType) -> None:
@@ -246,16 +232,8 @@ class TournamentEventDrawSettings(Base):
         gave enum→id conversion a second home to drift in and made the "ONE
         place" claim above false.
 
-        Writes the column directly, from the fixed :data:`DRAW_TYPE_IDS` map —
-        not by assigning a ``DrawTypeOption`` onto :attr:`draw_type_option` —
-        because this setter has no session to load one with (see
-        :data:`DRAW_TYPE_IDS`'s docstring). That means this assignment does
-        **not** re-point ``draw_type_option`` on an already-loaded in-memory
-        row: a caller that reads ``self.draw_type`` again before the row is
-        reloaded from the database (a fresh query, or ``Session.refresh``) would
-        see the OLD relationship target. Nothing in this codebase does that today
-        — every read of ``draw_type`` reaches it through an object the ORM just
-        loaded or refreshed — but it is the reason this is a column write and not
-        a relationship write.
+        Writes the column directly, from the fixed :data:`DRAW_TYPE_IDS` map
+        (see that map's docstring for why this assignment has no session to do
+        a lookup with).
         """
         self.draw_type_id = DRAW_TYPE_IDS[draw_type]

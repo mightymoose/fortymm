@@ -51,7 +51,6 @@ from app.draws import (
 )
 from app.models import (
     DrawType,
-    DrawTypeOption,
     EventFormat,
     TournamentEntry,
     TournamentEntryStatus,
@@ -59,6 +58,7 @@ from app.models import (
     TournamentEventDrawSettings,
     TournamentFixture,
 )
+from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import Pool
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_pools import pool_read
@@ -502,29 +502,27 @@ async def draw_currency_by_event(
         )
 
     # The third statement: the draw type of each CUT event, which decides how many of
-    # its entrants its fixtures may legitimately leave unseated. Read as the FK slug and
-    # parsed here — ``DrawType(slug)`` is the same parse the settings row's own
-    # ``draw_type`` property does, and the FK plus the seed-vs-enum migration test are
-    # what make an unparseable slug unreachable. A second join onto ``draw_types``
-    # (ADR 20260815) is what gets from the settings row's ``draw_type_id`` back to the
-    # slug — this is a targeted column-only ``select``, not a whole-entity ORM load, so
-    # the settings row's own eager ``draw_type_option`` relationship never applies here;
-    # the join has to be spelled out.
+    # its entrants its fixtures may legitimately leave unseated. Read as the FK id and
+    # mapped here via ``app.models.draw_type.DRAW_TYPES_BY_ID`` — the same map the
+    # settings row's own ``draw_type`` property reads, and the FK plus the seed-vs-enum
+    # migration test are what make an unmappable id unreachable. A plain dict lookup,
+    # not a join onto ``draw_types`` (ADR 20260815 retired that join) — this is a
+    # targeted column-only ``select``, not a whole-entity ORM load, so no eager
+    # relationship on the settings row could apply here regardless.
     draw_types: dict[uuid.UUID, DrawType] = {}
     if cut:
         draw_types = {
-            event_id: DrawType(slug)
-            for event_id, slug in (
+            event_id: DRAW_TYPES_BY_ID[draw_type_id]
+            for event_id, draw_type_id in (
                 await db.execute(
-                    select(TournamentEvent.id, DrawTypeOption.key)
+                    select(
+                        TournamentEvent.id,
+                        TournamentEventDrawSettings.draw_type_id,
+                    )
                     .join(
                         TournamentEventDrawSettings,
                         TournamentEvent.draw_settings_id
                         == TournamentEventDrawSettings.id,
-                    )
-                    .join(
-                        DrawTypeOption,
-                        TournamentEventDrawSettings.draw_type_id == DrawTypeOption.id,
                     )
                     # ``in_`` over the cut ids, so this scales with the events that
                     # reach the allowance and not with the batch or the table.
