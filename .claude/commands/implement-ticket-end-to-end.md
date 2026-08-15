@@ -62,7 +62,7 @@ The coordinator holds the gate. It does not review, and it does not repair. Ever
 
 ### The watch
 
-After Review stops, watch the pull request for **15 minutes**. Poll over REST, never the project board — a board poll is GraphQL, and #1044's run exhausted all 5000 points and blocked a status write.
+After Review stops, watch the pull request for **15 minutes**. Poll over REST, never the project board — a board poll is GraphQL, and a single run has exhausted all 5000 points and blocked a status write.
 
 **Anchor the watch to the decision comment Review just posted.** `review-next-ticket` reports that comment's timestamp; only comments strictly newer than it count. An unanchored watch re-reads its own round and either loops on the same "fix line 40" forever or releases on the previous round's `LGTM`. The rule file has the mechanics.
 
@@ -80,7 +80,7 @@ Re-invoked on a ticket that is already partway through, this command **detects w
 
 Read all of: the board column, whether the branch exists, whether a PR exists, whether that PR is a draft, whether CI is green, whether the gate signal is present, and whether the PR is merged.
 
-**They disagree.** #1044 produced a ticket sitting In Review with a merged PR. So the precedence is fixed, highest first:
+**They disagree.** A ticket sitting In Review with a merged PR is a real state that has occurred. So the precedence is fixed, highest first:
 
 | # | Condition | Resume at |
 | --- | --- | --- |

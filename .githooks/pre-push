@@ -85,7 +85,7 @@ is_relevant() {
 # *push* happens to carry. Those differ after a rebase: the remote still points
 # at the pre-rebase tip, so diffing against it drags every commit main gained in
 # between into the range. A branch that touched four `web-client/` files and
-# nothing else fired the whole OpenAPI check that way (#1044).
+# nothing else fired the whole OpenAPI check that way.
 
 relevant=0
 while read -r _local_ref local_sha _remote_ref remote_sha; do
@@ -146,7 +146,7 @@ echo "pre-push: this push touches api/ or ios/openapi/ — checking generated Op
 # A hook does not inherit the interactive shell's mise activation. A GUI git
 # client, an agent session, or any shell whose profile never ran `mise activate`
 # has no `python` and no `node` on PATH, and the hook dies with
-# `python: command not found` (#1044). Route every mise-managed tool through
+# `python: command not found`. Route every mise-managed tool through
 # `mise exec --`. Swift is not mise-managed and stays on the plain PATH.
 #
 # The probe is not paranoia. A fresh worktree's `mise.toml` is UNTRUSTED, and

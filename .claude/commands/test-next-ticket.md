@@ -19,7 +19,7 @@ If the signal is absent, **refuse to run.** Report which PR was checked and that
 
 This is a **precondition check, not a status transition.** Do not move the ticket to satisfy it, and do not move it back on refusal. Do not accept a Review Note, a board column, or a coordinator's say-so as a substitute — the whole point is that this holds when someone runs the stage by hand and the coordinator was never involved. A gate that lives only in the coordinator's prose is not a gate.
 
-Do not check the signal by `gh pr view --json comments`. It returns one of the three surfaces, and the one it omits is where #1044's signal actually arrived.
+Do not check the signal by `gh pr view --json comments`. It returns one of the three surfaces, and the one it omits is where a review posted through the GitHub UI actually lands.
 
 ## Run QA Review
 

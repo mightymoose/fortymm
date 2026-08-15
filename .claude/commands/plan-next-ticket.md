@@ -58,7 +58,7 @@ When the plan names an optional prop, argument, config key, or feature flag as a
 
 A declared-but-never-passed parameter is dead weight. A plan that hangs a stop condition on one is measuring something the product never renders, and Implementation inherits a criterion it cannot fail.
 
-#1044's plan made a component's optional `subtitle` prop half of its stop condition. The detail page never passes it.
+This has shipped: a plan made a component's optional `subtitle` prop half of its stop condition, and the page it measured never passes that prop.
 
 Do not redo Discovery.
 

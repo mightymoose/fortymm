@@ -16,8 +16,8 @@ has to be a comment.
 **A comment authored by `mightymoose` whose whole body normalizes to `lgtm`.**
 
 Normalize by trimming leading and trailing whitespace, lowercasing, and stripping trailing
-punctuation. `Lgtm`, `LGTM`, and `lgtm.` all release the gate. #1044's real signal was the
-four characters `Lgtm`.
+punctuation. `Lgtm`, `LGTM`, and `lgtm.` all release the gate. A real signal has arrived as
+the four characters `Lgtm`.
 
 Nothing else releases it:
 
@@ -40,13 +40,14 @@ A comment can arrive on any of three surfaces, and they are **different endpoint
 | Review body | `repos/{owner}/{repo}/pulls/{pr}/reviews` |
 | Inline review comment | `repos/{owner}/{repo}/pulls/{pr}/comments` |
 
-**Read all three.** `gh pr view --json comments` returns only the first, and #1044's signal
-arrived as a review body — so a watch built on it reports "no signal" on a gate that was
-released hours ago, and parks until its budget expires. Verified on PR #1358: the issue-comments
-surface holds two comments and neither is the signal; the review body holds `Lgtm`.
+**Read all three.** `gh pr view --json comments` returns only the first, and a human reviewing
+in the GitHub UI lands on the second by default — so a watch built on it reports "no signal" on
+a gate that was released hours ago, and parks until its budget expires. This has happened: the
+issue-comments surface held two comments, neither of them the signal, while the review body
+held `Lgtm`.
 
 Poll over **REST**, not GraphQL. A 15-minute watch that polls the project board burns the
-GraphQL budget — #1044's run exhausted all 5000 points and blocked a status write. The three
+GraphQL budget — a single run has exhausted all 5000 points and blocked a status write. The three
 endpoints above and `gh pr view` are REST. `gh project item-*` is GraphQL only.
 
 ## Two windows over the same signal
@@ -89,7 +90,7 @@ trap 'rm -f "$BODIES"' EXIT
 
 # `(.created_at // .submitted_at)`: the reviews endpoint carries `submitted_at` and has no
 # `created_at` at all. A plain `.created_at` yields null for every review body — silently
-# discarding the one surface #1044's signal actually used.
+# discarding the surface a UI review actually posts to.
 for ep in "issues/$PR_NUMBER/comments" "pulls/$PR_NUMBER/reviews" "pulls/$PR_NUMBER/comments"; do
   gh api "repos/$REPO/$ep" --paginate --jq \
     ".[] | select(.user.login==\"$REVIEWER\")
