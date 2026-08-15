@@ -31,7 +31,7 @@ import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
@@ -56,12 +56,26 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStage,
     TournamentFixture,
 )
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import Pool
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_pools import pool_read
+
+
+def _stage_ids(event_ids: Collection[uuid.UUID]) -> Select[tuple[uuid.UUID]]:
+    """Every stage id belonging to any of ``event_ids`` — the subquery every
+    ``TournamentFixture`` read below is filtered through now that a fixture names its
+    stage, not its event (ADR 20260815 decision 5 drops
+    ``tournament_fixtures.event_id`` outright). Mechanical, not a restructure: every
+    caller still asks its question **about an event**; this is only how that question
+    reaches a table keyed on stage now.
+    """
+    return select(TournamentEventStage.id).where(
+        TournamentEventStage.event_id.in_(event_ids)
+    )
 
 
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
@@ -305,7 +319,7 @@ async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
         await db.execute(
             select(func.count())
             .select_from(TournamentFixture)
-            .where(TournamentFixture.event_id == event_id)
+            .where(TournamentFixture.stage_id.in_(_stage_ids([event_id])))
         )
     ).scalar_one()
     return fixtures > 0
@@ -361,7 +375,7 @@ async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
             select(func.count())
             .select_from(TournamentFixture)
             .where(
-                TournamentFixture.event_id == event_id,
+                TournamentFixture.stage_id.in_(_stage_ids([event_id])),
                 or_(
                     TournamentFixture.winner_entry_id.is_not(None),
                     TournamentFixture.match_id.is_not(None),
@@ -486,13 +500,22 @@ async def draw_currency_by_event(
     for event_id, entry_id in entries:
         active[event_id].add(entry_id)
 
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5), so this
+    # joins ``tournament_event_stages`` for it rather than reading
+    # ``TournamentFixture.event_id`` — the one column that dropped, in the one query
+    # here that needs the event id back rather than merely filtering by it.
     fixtures = (
         await db.execute(
             select(
-                TournamentFixture.event_id,
+                TournamentEventStage.event_id,
                 TournamentFixture.entry_a_id,
                 TournamentFixture.entry_b_id,
-            ).where(TournamentFixture.event_id.in_(seated.keys()))
+            )
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .where(TournamentEventStage.event_id.in_(seated.keys()))
         )
     ).all()
     for event_id, entry_a_id, entry_b_id in fixtures:
@@ -632,10 +655,27 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )
     await uncut_draw(db, [event.id])
+    stage_ids = await _stage_ids_by_position(db, event.id)
+    # A planned fixture's STAGE (ADR 20260815 decision 5) — the write seam this chore
+    # adds, the strategy layer above knows nothing about it. Pooled fixtures always
+    # belong to the event's stage 0: a director's pools never hang off any other stage
+    # (decision 3), so every pooled draw type (round-robin, and rr-then-ko's pool
+    # stage) resolves there. An un-pooled fixture belongs to the position-1 (knockout)
+    # stage only for rr-then-ko — the one draw type with a second stage — and to
+    # stage 0 for every single-stage draw type (single-elim, swiss) otherwise.
+    unpooled_stage_position = (
+        1
+        if draw_settings_of(event.draw_settings).draw_type is DrawType.rr_then_ko
+        else 0
+    )
     db.add_all(
         [
             TournamentFixture(
-                event_id=event.id,
+                stage_id=(
+                    stage_ids[0]
+                    if fixture.pool_id is not None
+                    else stage_ids[unpooled_stage_position]
+                ),
                 pool_id=fixture.pool_id,
                 round=fixture.round,
                 position=fixture.position,
@@ -645,6 +685,28 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
             for fixture in planned
         ]
     )
+
+
+async def _stage_ids_by_position(
+    db: AsyncSession, event_id: uuid.UUID
+) -> dict[int, uuid.UUID]:
+    """This event's stage ids keyed by ``position`` — what :func:`cut_draw` resolves a
+    planned fixture's ``stage_id`` against (ADR 20260815 decision 5's write seam).
+
+    Read through an explicit query, never through ``TournamentEvent.stages`` — that
+    relationship is deliberately not eager (see its docstring), so a lazy load off it
+    in this async context would raise. Same discipline
+    ``app.tournament_event_stages.remint_stages_in_place`` and
+    ``app.tournament_pools.apply_event_pools`` both follow, for the same reason.
+    """
+    rows = (
+        await db.execute(
+            select(TournamentEventStage.position, TournamentEventStage.id).where(
+                TournamentEventStage.event_id == event_id
+            )
+        )
+    ).all()
+    return {position: stage_id for position, stage_id in rows}
 
 
 async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None:
@@ -657,6 +719,11 @@ async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None
     ``TournamentEvent`` rows purely to hand them back one attribute apiece — and then
     issue a DELETE per event where one suffices. Unordered, because a DELETE ... IN has
     no order to respect.
+
+    The fixtures are addressed by ``stage_id`` now, not ``event_id`` (ADR 20260815
+    decision 5), so the ``event_id.in_(...)`` filter this docstring's title still
+    describes is a ``stage_id.in_(subquery)`` against :func:`_stage_ids` underneath —
+    mechanical, not a change of what this deletes.
 
     A bulk DELETE rather than ``event.fixtures.clear()`` on the ``delete-orphan``
     relationship: the collection would have to be loaded first (a SELECT of every
@@ -675,5 +742,7 @@ async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None
     if not event_ids:
         return
     await db.execute(
-        delete(TournamentFixture).where(TournamentFixture.event_id.in_(event_ids))
+        delete(TournamentFixture).where(
+            TournamentFixture.stage_id.in_(_stage_ids(event_ids))
+        )
     )

@@ -26,6 +26,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -38,6 +39,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     TournamentNotFoundError,
 )
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_pools,
     make_user,
@@ -97,6 +99,7 @@ async def _make_event(
     draw_type: DrawType = DrawType.round_robin,
     pools: list[dict[str, object]] | None = None,
 ) -> TournamentEvent:
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -108,9 +111,10 @@ async def _make_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=event_pools(
-            [POOL_A, POOL_B] if pools is None else pools, tournament=tournament
-        ),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [POOL_A, POOL_B] if pools is None else pools, event=event, tournament=tournament
     )
     db.add(event)
     await db.commit()
@@ -144,7 +148,13 @@ async def _fixture_rows(
     return list(
         (
             await db.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event_id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == event_id
+                        )
+                    )
+                )
             )
         )
         .scalars()

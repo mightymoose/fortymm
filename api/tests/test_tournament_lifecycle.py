@@ -32,6 +32,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -52,6 +53,7 @@ from app.tournament_errors import (
     TournamentNotFoundError,
     TournamentNotReadyToGoLiveError,
 )
+from app.tournament_event_stages import mint_stages
 from app.tournament_lifecycle import (
     create_tournament,
     delete_tournament,
@@ -526,6 +528,7 @@ async def test_delete_of_a_tournament_whose_fixture_is_placed_still_removes_it(
     await db_session.commit()
     await db_session.refresh(tournament)
     tournament_id = tournament.id
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament_id,
         name="Open Singles",
@@ -536,13 +539,13 @@ async def test_delete_of_a_tournament_whose_fixture_is_placed_still_removes_it(
         timezone="America/Chicago",
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=[],
+        stages=stages,
     )
     db_session.add(event)
     await db_session.commit()
     db_session.add(
         TournamentFixture(
-            event_id=event.id,
+            stage_id=stages[0].id,
             round=1,
             position=1,
             table_id=str(tournament.tables[0].id),
@@ -645,6 +648,7 @@ async def _make_tournament_at(
     db.add(tournament)
     await db.flush()
     if with_event:
+        stages = mint_stages(DrawType.round_robin)
         event = TournamentEvent(
             tournament_id=tournament.id,
             name="Open Singles",
@@ -657,16 +661,18 @@ async def _make_tournament_at(
             timezone="America/Chicago",
             slot={"date": _DATE, "start": "09:00", "end": "17:00"},
             match_settings={"rated": False, "length_games": 3},
-            pools=event_pools(
-                [
-                    {
-                        "name": "Pool A",
-                        "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
-                        "table_ids": ["t1", "t2"],
-                    }
-                ],
-                tournament=tournament,
-            ),
+            stages=stages,
+        )
+        stages[0].pools = event_pools(
+            [
+                {
+                    "name": "Pool A",
+                    "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": ["t1", "t2"],
+                }
+            ],
+            event=event,
+            tournament=tournament,
         )
         db.add(event)
         await db.flush()
@@ -787,7 +793,13 @@ async def test_transition_published_to_live_materializes_matches_and_queues_a_so
     fixtures = list(
         (
             await db_session.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event_id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == event_id
+                        )
+                    )
+                )
             )
         )
         .scalars()

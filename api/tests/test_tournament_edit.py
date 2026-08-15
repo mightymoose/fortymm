@@ -50,6 +50,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     TournamentNotFoundError,
 )
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     CountingGeocoder,
     assert_tournament_address_is_sql_null,
@@ -144,6 +145,7 @@ async def _make_tournament(
 async def _draw_an_event(db: AsyncSession, tournament: Tournament) -> None:
     """Give the tournament one event with one cut fixture, so
     ``tournament_has_drawn_event`` answers True."""
+    stages = mint_stages(DrawType.single_elim)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -155,11 +157,11 @@ async def _draw_an_event(db: AsyncSession, tournament: Tournament) -> None:
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[],
+        stages=stages,
     )
     db.add(event)
     await db.flush()
-    db.add(TournamentFixture(event_id=event.id, pool_id=None, round=1, position=1))
+    db.add(TournamentFixture(stage_id=stages[0].id, pool_id=None, round=1, position=1))
     await db.commit()
 
 

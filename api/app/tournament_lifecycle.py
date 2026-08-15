@@ -36,6 +36,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -233,13 +234,18 @@ async def delete_tournament(
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     settings_ids = await draw_settings_ids_for_tournament(db, tournament.id)
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage.
     await db.execute(
         update(TournamentFixture)
         .where(
-            TournamentFixture.event_id.in_(
-                select(TournamentEvent.id).where(
-                    TournamentEvent.tournament_id == tournament.id
+            TournamentFixture.stage_id.in_(
+                select(TournamentEventStage.id)
+                .join(
+                    TournamentEvent,
+                    TournamentEvent.id == TournamentEventStage.event_id,
                 )
+                .where(TournamentEvent.tournament_id == tournament.id)
             )
         )
         .values(table_id=None)

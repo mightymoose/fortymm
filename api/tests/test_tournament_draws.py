@@ -38,6 +38,7 @@ from app.models import (
 )
 from app.models.tournament import DrawType, EventFormat
 from app.tournament_draws import draw_config, fixture_state, pool_order
+from app.tournament_event_stages import mint_stages
 from app.tournament_queries import (
     completed_match_ids,
     fixtures_by_event,
@@ -58,7 +59,16 @@ POOL_A: dict[str, object] = {
 
 async def _make_event(
     db: AsyncSession, *, owner: User, league: League
-) -> TournamentEvent:
+) -> tuple[TournamentEvent, uuid.UUID, uuid.UUID]:
+    """Returns the event, its (only) pool's id and its (only) stage's id.
+
+    The ids are handed back explicitly rather than read off ``event.pools`` /
+    ``event.stages`` afterward: both are VIEWONLY / not-eager now (ADR 20260815 — a
+    pool's real parent is its stage, and ``TournamentEvent.stages`` is deliberately not
+    eager), so a fresh attribute access on either in this async context would either
+    raise (a lazy load) or require a second query. Capturing the ids from the very
+    objects this function already built and flushed costs nothing extra.
+    """
     tournament = Tournament(
         name="Bay Area Open 2026",
         description="Two-day open.",
@@ -79,6 +89,7 @@ async def _make_event(
     )
     db.add(tournament)
     await db.flush()
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -90,11 +101,13 @@ async def _make_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=event_pools([POOL_A], tournament=tournament),
+        stages=stages,
     )
+    pools = event_pools([POOL_A], event=event, tournament=tournament)
+    stages[0].pools = pools
     db.add(event)
     await db.flush()
-    return event
+    return event, pools[0].id, stages[0].id
 
 
 async def _entry(db: AsyncSession, event: TournamentEvent, username: str) -> uuid.UUID:
@@ -148,16 +161,17 @@ async def _match(
 
 async def _fixture(
     db: AsyncSession,
-    event: TournamentEvent,
     *,
+    stage_id: uuid.UUID,
+    pool_id: uuid.UUID,
     position: int,
     entry_a_id: uuid.UUID,
     entry_b_id: uuid.UUID,
     match_id: uuid.UUID | None,
 ) -> TournamentFixture:
     fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stage_id,
+        pool_id=pool_id,
         round=1,
         position=position,
         entry_a_id=entry_a_id,
@@ -191,14 +205,17 @@ async def test_a_completed_match_projects_the_games_each_side_won(
     winner's count into the first slot can survive.
     """
     owner = await make_user(db_session, "proj-owner")
-    event = await _make_event(db_session, owner=owner, league=default_league)
+    event, pool_id, stage_id = await _make_event(
+        db_session, owner=owner, league=default_league
+    )
     a = await _entry(db_session, event, "proj-a")
     b = await _entry(db_session, event, "proj-b")
     c = await _entry(db_session, event, "proj-c")
     d = await _entry(db_session, event, "proj-d")
     a_won = await _fixture(
         db_session,
-        event,
+        stage_id=stage_id,
+        pool_id=pool_id,
         position=1,
         entry_a_id=a,
         entry_b_id=b,
@@ -212,7 +229,8 @@ async def test_a_completed_match_projects_the_games_each_side_won(
     )
     b_won = await _fixture(
         db_session,
-        event,
+        stage_id=stage_id,
+        pool_id=pool_id,
         position=2,
         entry_a_id=c,
         entry_b_id=d,
@@ -243,11 +261,19 @@ async def test_a_fixture_with_no_match_projects_no_games(
     """An unplayed fixture's games are **absent**, not ``0–0``. A 0 is a real count (a
     walkover reads 0 for the loser), so the two must stay tellable apart."""
     owner = await make_user(db_session, "proj-nomatch-owner")
-    event = await _make_event(db_session, owner=owner, league=default_league)
+    event, pool_id, stage_id = await _make_event(
+        db_session, owner=owner, league=default_league
+    )
     a = await _entry(db_session, event, "proj-nomatch-a")
     b = await _entry(db_session, event, "proj-nomatch-b")
     unplayed = await _fixture(
-        db_session, event, position=1, entry_a_id=a, entry_b_id=b, match_id=None
+        db_session,
+        stage_id=stage_id,
+        pool_id=pool_id,
+        position=1,
+        entry_a_id=a,
+        entry_b_id=b,
+        match_id=None,
     )
     await db_session.commit()
 
@@ -269,12 +295,15 @@ async def test_a_match_that_has_not_completed_projects_no_games(
     This is the case a hand-built count map cannot exercise — the games exist, and it is
     ``completed_match_ids``' status filter that keeps them out."""
     owner = await make_user(db_session, "proj-live-owner")
-    event = await _make_event(db_session, owner=owner, league=default_league)
+    event, pool_id, stage_id = await _make_event(
+        db_session, owner=owner, league=default_league
+    )
     a = await _entry(db_session, event, "proj-live-a")
     b = await _entry(db_session, event, "proj-live-b")
     in_play = await _fixture(
         db_session,
-        event,
+        stage_id=stage_id,
+        pool_id=pool_id,
         position=1,
         entry_a_id=a,
         entry_b_id=b,
@@ -307,7 +336,14 @@ POOL_COUNT = 10
 
 def _pools() -> list[TournamentEventPool]:
     """Ten pool rows in the director's order — each carrying the ``position`` of its
-    index, which is what the write boundary stamps, and a minted id."""
+    index, which is what the write boundary stamps, and a minted id.
+
+    ``event_pools`` requires an ``event`` now (a pool's real parent is its stage,
+    ADR 20260815), but every pool below has empty ``table_ids``, so it is never
+    actually read (``_reservations`` only touches it to build a reservation row) — a
+    throwaway, never-persisted :class:`TournamentEvent` satisfies the signature with
+    nothing behind it to be wrong.
+    """
     return event_pools(
         [
             {
@@ -316,7 +352,8 @@ def _pools() -> list[TournamentEventPool]:
                 "table_ids": [],
             }
             for index in range(POOL_COUNT)
-        ]
+        ],
+        event=TournamentEvent(),
     )
 
 
@@ -360,7 +397,7 @@ def test_fixture_state_projects_its_pools_place_in_the_event_order() -> None:
     event = TournamentEvent(pools=stored)
     fixture = TournamentFixture(
         id=uuid.uuid4(),
-        event_id=uuid.uuid4(),
+        stage_id=uuid.uuid4(),
         pool_id=stored[9].id,
         round=1,
         position=1,
@@ -379,11 +416,11 @@ def test_fixture_state_projects_no_pool_position_when_there_is_no_pool() -> None
     stored = _pools()
     event = TournamentEvent(pools=stored)
     un_pooled = TournamentFixture(
-        id=uuid.uuid4(), event_id=uuid.uuid4(), pool_id=None, round=1, position=1
+        id=uuid.uuid4(), stage_id=uuid.uuid4(), pool_id=None, round=1, position=1
     )
     pooled = TournamentFixture(
         id=uuid.uuid4(),
-        event_id=uuid.uuid4(),
+        stage_id=uuid.uuid4(),
         pool_id=stored[0].id,
         round=1,
         position=1,

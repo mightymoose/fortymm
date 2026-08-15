@@ -50,6 +50,7 @@ from app.models import (
     User,
 )
 from app.schedule_preview_solve import RUN_SCHEDULE_PREVIEW_JOB
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     make_client,
     start_session,
@@ -135,6 +136,7 @@ async def _make_tournament(
     await db.flush()
 
     if with_event:
+        stages = mint_stages(draw_type)
         event = TournamentEvent(
             tournament_id=tournament.id,
             name="Open Singles",
@@ -145,20 +147,22 @@ async def _make_tournament(
             slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
             match_settings={"rated": False, "length_games": 3},
             timezone="America/Los_Angeles",
-            pools=with_table_aliases(
-                tournament,
-                [
-                    {
-                        "name": "Pool A",
-                        "slot": {
-                            "date": "2030-01-01",
-                            "start": "09:00",
-                            "end": "17:00",
-                        },
-                        "table_ids": ["t1", "t2"],
-                    }
-                ],
-            ),
+            stages=stages,
+        )
+        stages[0].pools = with_table_aliases(
+            event,
+            tournament,
+            [
+                {
+                    "name": "Pool A",
+                    "slot": {
+                        "date": "2030-01-01",
+                        "start": "09:00",
+                        "end": "17:00",
+                    },
+                    "table_ids": ["t1", "t2"],
+                }
+            ],
         )
         db.add(event)
         await db.flush()
@@ -177,7 +181,7 @@ async def _make_tournament(
                 slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
                 match_settings={"rated": False, "length_games": 3},
                 timezone="America/Los_Angeles",
-                pools=[],
+                stages=mint_stages(DrawType.single_elim),
             )
         )
         await db.flush()

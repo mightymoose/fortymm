@@ -57,6 +57,7 @@ from app.tournament_errors import (
     PlacementTableNotFoundError,
     TournamentNotFoundError,
 )
+from app.tournament_event_stages import mint_stages
 from app.tournament_placement import place_fixture
 from tests._helpers import (
     make_user,
@@ -109,6 +110,7 @@ async def _seed_placeable_fixture(
     db.add(tournament)
     await db.commit()
     await db.refresh(tournament)
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -120,19 +122,27 @@ async def _seed_placeable_fixture(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=with_table_aliases(
-            tournament,
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-                    "table_ids": ["t1"],
-                }
-            ],
-        ),
+        stages=stages,
     )
+    pools = with_table_aliases(
+        event,
+        tournament,
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                "table_ids": ["t1"],
+            }
+        ],
+    )
+    stages[0].pools = pools
     db.add(event)
     await db.commit()
+    # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.pools``) along with it;
+    # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
+    # on the now-expired child objects.
+    stage0_id, pool0_id = stages[0].id, pools[0].id
     await db.refresh(event)
     entry_a = TournamentEntry(
         event_id=event.id,
@@ -147,8 +157,8 @@ async def _seed_placeable_fixture(
     db.add_all([entry_a, entry_b])
     await db.commit()
     fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stage0_id,
+        pool_id=pool0_id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,

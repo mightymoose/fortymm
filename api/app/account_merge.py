@@ -41,6 +41,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     User,
     UserLeagueRating,
@@ -804,12 +805,18 @@ async def _resolve_entry_collisions(
     # whose draw was just destroyed from one that never had a draw. Only a
     # destroyed draw owes a solve (uncut_event_draw's ``had_draw`` read, in
     # bulk): a collided event with no cut has no scheduling inputs to change.
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage.
     drawn_unplayed_event_ids = set(
         (
             await db.execute(
-                select(TournamentFixture.event_id)
+                select(TournamentEventStage.event_id)
                 .distinct()
-                .where(TournamentFixture.event_id.in_(unplayed_event_ids))
+                .join(
+                    TournamentFixture,
+                    TournamentFixture.stage_id == TournamentEventStage.id,
+                )
+                .where(TournamentEventStage.event_id.in_(unplayed_event_ids))
             )
         )
         .scalars()

@@ -1,11 +1,12 @@
 """Persistence tests for ``tournament_fixtures``.
 
-The load-bearing claim is the ``UNIQUE (event_id, pool_id, round, position)``
-constraint — the identity a re-cut reconciles on (ADR-0786). The tests below are
+The load-bearing claim is the ``UNIQUE (stage_id, pool_id, round, position)``
+constraint — the identity a re-cut reconciles on (ADR-0786, keyed on ``stage_id``
+rather than ``event_id`` since ADR 20260815 decision 5). The tests below are
 written to fail if that constraint is missing *or* if it is scoped wrongly: a
-duplicate ``(event, pool, round, position)`` must be refused by the database, while
-the same ``(round, position)`` in a **different pool** (or a different event) must be
-accepted, because pooled draws number their fixtures per-pool.
+duplicate ``(stage, pool, round, position)`` must be refused by the database, while
+the same ``(round, position)`` in a **different pool** (or a different event/stage)
+must be accepted, because pooled draws number their fixtures per-pool.
 
 The constraint is **NULLS NOT DISTINCT**, and that is load-bearing rather than
 decorative: an un-pooled draw (single-elim — the whole of #785) has ``pool_id IS NULL``
@@ -43,17 +44,20 @@ from app.models import (
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventPool,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
 )
+from app.tournament_event_stages import mint_stages
 from tests._helpers import event_pools, make_user
 
-FIXTURE_IDENTITY_CONSTRAINT = "uq_tournament_fixtures_event_id_pool_id_round_position"
-#: The composite foreign key that says a fixture's pool is its own event's pool
-#: (ADR 20260801). Asserted by name, so a test that reds proves the constraint refused
-#: this row — not that some other write in the transaction happened to fail.
-FIXTURE_POOL_CONSTRAINT = "fk_tournament_fixtures_event_id_pool_id"
+FIXTURE_IDENTITY_CONSTRAINT = "uq_tournament_fixtures_stage_id_pool_id_round_position"
+#: The composite foreign key that says a fixture's pool is its own stage's pool
+#: (ADR 20260801, re-parented onto the stage by ADR 20260815). Asserted by name, so a
+#: test that reds proves the constraint refused this row — not that some other write
+#: in the transaction happened to fail.
+FIXTURE_POOL_CONSTRAINT = "fk_tournament_fixtures_stage_id_pool_id"
 
 
 async def _make_event(db_session: AsyncSession) -> TournamentEvent:
@@ -85,6 +89,7 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
     db_session.add(tournament)
     await db_session.flush()
 
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -95,20 +100,26 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
-        # Two pools, whose ids the seed mints up front (``event_pools``) because a
-        # fixture below has to name one before the rows are flushed — and because a pool
-        # id is a server-minted uuid now (ADR 20260801), not a string a literal can
-        # spell. ``_pool_a`` / ``_pool_b`` read them back off the event.
-        pools=event_pools(
-            [
-                {"name": "Pool A", "slot": {}, "table_ids": []},
-                {"name": "Pool B", "slot": {}, "table_ids": []},
-            ]
-        ),
+        stages=stages,
+    )
+    # Two pools, whose ids the seed mints up front (``event_pools``) because a fixture
+    # below has to name one before the rows are flushed — and because a pool id is a
+    # server-minted uuid now (ADR 20260801), not a string a literal can spell. A pool's
+    # real parent is its stage now (ADR 20260815), so they hang off ``stages[0]``, not
+    # the event directly; ``_pool_a`` / ``_pool_b`` read them back off the event's
+    # (VIEWONLY) ``pools`` association.
+    stages[0].pools = event_pools(
+        [
+            {"name": "Pool A", "slot": {}, "table_ids": []},
+            {"name": "Pool B", "slot": {}, "table_ids": []},
+        ],
+        event=event,
     )
     db_session.add(event)
     await db_session.commit()
-    await db_session.refresh(event)
+    # Both ``pools`` (VIEWONLY) and ``stages`` (not eager) are populated on refresh, not
+    # by construction (ADR 20260815) — every fixture this file seeds needs both ids.
+    await db_session.refresh(event, attribute_names=["pools", "stages"])
     return event
 
 
@@ -121,6 +132,13 @@ def _pool_a(event: TournamentEvent) -> uuid.UUID:
 def _pool_b(event: TournamentEvent) -> uuid.UUID:
     """The id of the event's second pool."""
     return event.pools[1].id
+
+
+def _stage_a(event: TournamentEvent) -> uuid.UUID:
+    """The id of the event's (only, for round-robin) stage — position 0, the one a
+    director's pools hang off (ADR 20260815 decision 3), and what every fixture this
+    file seeds directly is named by now (ADR 20260815 decision 5)."""
+    return event.stages[0].id
 
 
 async def _make_entry(db_session: AsyncSession, event: TournamentEvent) -> User:
@@ -141,13 +159,19 @@ async def test_a_fixture_persists_with_both_sides_tbd(
     """A cut draw may contain fixtures whose sides are not known yet — that is what a
     ``NULL`` side is *for*, and it is the only thing it means."""
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id=None, round=2, position=1)
+        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=2, position=1)
     )
     await db_session.commit()
 
     stored = (
         await db_session.execute(
-            select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+            select(TournamentFixture).where(
+                TournamentFixture.stage_id.in_(
+                    select(TournamentEventStage.id).where(
+                        TournamentEventStage.event_id == event.id
+                    )
+                )
+            )
         )
     ).scalar_one()
     assert stored.entry_a_id is None
@@ -179,7 +203,7 @@ async def test_a_fixture_holds_its_two_entries(
 
     db_session.add(
         TournamentFixture(
-            event_id=event.id,
+            stage_id=_stage_a(event),
             pool_id=_pool_a(event),
             round=1,
             position=1,
@@ -191,7 +215,13 @@ async def test_a_fixture_holds_its_two_entries(
 
     stored = (
         await db_session.execute(
-            select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+            select(TournamentFixture).where(
+                TournamentFixture.stage_id.in_(
+                    select(TournamentEventStage.id).where(
+                        TournamentEventStage.event_id == event.id
+                    )
+                )
+            )
         )
     ).scalar_one()
     assert {stored.entry_a_id, stored.entry_b_id} == {entry_a.id, entry_b.id}
@@ -205,14 +235,14 @@ async def test_duplicate_round_and_position_in_the_same_pool_is_rejected(
     not a read-then-write check — is what refuses it."""
     db_session.add(
         TournamentFixture(
-            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
         )
     )
     await db_session.commit()
 
     db_session.add(
         TournamentFixture(
-            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
         )
     )
     with pytest.raises(IntegrityError) as excinfo:
@@ -230,12 +260,12 @@ async def test_duplicate_round_and_position_in_an_un_pooled_draw_is_rejected(
     let this duplicate through and leave the entire single-elim draw type unguarded.
     Fails against a default (NULLS DISTINCT) constraint."""
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id=None, round=1, position=1)
+        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=1, position=1)
     )
     await db_session.commit()
 
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id=None, round=1, position=1)
+        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=1, position=1)
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
@@ -252,10 +282,12 @@ async def test_an_un_pooled_round_and_position_in_a_different_event_is_accepted(
     other_event = await _make_event(db_session)
 
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id=None, round=1, position=1)
+        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=1, position=1)
     )
     db_session.add(
-        TournamentFixture(event_id=other_event.id, pool_id=None, round=1, position=1)
+        TournamentFixture(
+            stage_id=_stage_a(other_event), pool_id=None, round=1, position=1
+        )
     )
     await db_session.commit()
 
@@ -274,12 +306,12 @@ async def test_the_same_round_and_position_in_a_different_pool_is_accepted(
     this legitimate row, so this test is what pins the constraint's *scope*."""
     db_session.add(
         TournamentFixture(
-            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
         )
     )
     db_session.add(
         TournamentFixture(
-            event_id=event.id, pool_id=_pool_b(event), round=1, position=1
+            stage_id=_stage_a(event), pool_id=_pool_b(event), round=1, position=1
         )
     )
     await db_session.commit()
@@ -287,7 +319,13 @@ async def test_the_same_round_and_position_in_a_different_pool_is_accepted(
     stored = (
         (
             await db_session.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == event.id
+                        )
+                    )
+                )
             )
         )
         .scalars()
@@ -306,12 +344,12 @@ async def test_the_same_round_and_position_in_a_different_event_is_accepted(
 
     db_session.add(
         TournamentFixture(
-            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
         )
     )
     db_session.add(
         TournamentFixture(
-            event_id=other_event.id,
+            stage_id=_stage_a(other_event),
             pool_id=_pool_a(other_event),
             round=1,
             position=1,
@@ -346,7 +384,7 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
     db_session.add(
         TournamentEventPool(
             id=elsewhere,
-            event_id=other_event.id,
+            stage_id=_stage_a(other_event),
             name="Pool Elsewhere",
             position=2,
             slot_date=date(2026, 8, 1),
@@ -356,7 +394,7 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
     )
     db_session.add(
         TournamentFixture(
-            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
         )
     )
     await db_session.commit()
@@ -368,7 +406,7 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
     db_session.add(
         TournamentFixture(
             # The other event's pool, under THIS event's id.
-            event_id=event.id,
+            stage_id=_stage_a(event),
             pool_id=elsewhere,
             round=1,
             position=2,
@@ -394,7 +432,9 @@ async def test_a_fixture_naming_a_pool_that_does_not_exist_is_refused(
     at — the dangling ref ADR-0786 could only protect procedurally, with
     ``_enforce_pool_set_frozen``. It is a foreign-key violation now."""
     db_session.add(
-        TournamentFixture(event_id=event.id, pool_id=uuid.uuid4(), round=1, position=1)
+        TournamentFixture(
+            stage_id=_stage_a(event), pool_id=uuid.uuid4(), round=1, position=1
+        )
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
@@ -416,7 +456,7 @@ async def test_deleting_the_event_takes_its_pools_with_it(
     """
     db_session.add(
         TournamentFixture(
-            event_id=event.id, pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
         )
     )
     await db_session.commit()
@@ -429,7 +469,11 @@ async def test_deleting_the_event_takes_its_pools_with_it(
         (
             await db_session.execute(
                 select(TournamentEventPool).where(
-                    TournamentEventPool.event_id == event_id
+                    TournamentEventPool.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == event_id
+                        )
+                    )
                 )
             )
         )
@@ -452,7 +496,7 @@ async def test_deleting_the_event_takes_its_fixtures_with_it(
     ).scalar_one()
     db_session.add(
         TournamentFixture(
-            event_id=event.id,
+            stage_id=_stage_a(event),
             pool_id=_pool_a(event),
             round=1,
             position=1,
@@ -508,7 +552,7 @@ async def test_the_events_fixtures_relationship_is_ordered_pool_round_position(
     ]:
         db_session.add(
             TournamentFixture(
-                event_id=event.id,
+                stage_id=_stage_a(event),
                 pool_id=pool_id,
                 round=round_number,
                 position=position,

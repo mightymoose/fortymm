@@ -151,8 +151,20 @@ async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     """Give ``event`` a fixture, which is all ``event_has_draw`` looks at — the same
     minimal cut simulation ``test_tournament_events._add_cut_event`` uses, without a
     real pool to point the fixture at (single-elim/swiss fixtures carry no pool
-    either)."""
-    db.add(TournamentFixture(event_id=event.id, pool_id=None, round=1, position=1))
+    either).
+
+    Named by its stage 0, resolved by an explicit query (``TournamentEvent.stages`` is
+    deliberately not eager) — the single-stage draw types this file drives never need
+    position 1."""
+    stage_id = (
+        await db.execute(
+            select(TournamentEventStage.id).where(
+                TournamentEventStage.event_id == event.id,
+                TournamentEventStage.position == 0,
+            )
+        )
+    ).scalar_one()
+    db.add(TournamentFixture(stage_id=stage_id, pool_id=None, round=1, position=1))
     await db.commit()
 
 

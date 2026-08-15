@@ -30,7 +30,10 @@ that side as well. :func:`_reservations` is where the array becomes rows, and it
 one place a reservation's ``tournament_id`` is written, which is why both write verbs
 now take the parent tournament: the denormalized column is what the composite foreign
 keys underneath compare, and a reservation composed without it is not a row Postgres
-will accept.
+will accept. Each row's ``event_id`` is populated the same way, but through the
+reservation's ``event`` relationship rather than a literal (:func:`_reservations` takes
+``event`` too, now) — the event's own id does not exist yet on the create path, so the
+unit of work has to fill it in after the event's own INSERT returns.
 
 **The id.** A pool's id is a uuid the **database** mints (ADR 20260801's ``id uuid
 PRIMARY KEY``), so nothing here assigns one on the create path and the create shape has
@@ -45,18 +48,37 @@ reassigned and rows cannot — re-sending a pool the event already has must UPDA
 row, or the write would try to insert a duplicate primary key and, worse, would delete
 and recreate the row every fixture in the event points at.
 
-It imports the models, the schemas and the domain-error leaf, and nothing else — no
-session, no router, no FastAPI — so it stays callable from a REPL and cycle-free."""
+**The stage.** A pool's real parent is its stage now, not its event directly (ADR
+20260815, "Sequencing with #1338": a pool re-parents onto the stage that owns it —
+always the event's stage 0, decision 3). ``TournamentEvent.pools`` stays a *readable*
+association (a VIEWONLY relationship through stage 0 — see that model), but writing
+means resolving the actual stage row and assigning ``stage.pools``. On the create path
+the stage is a fresh, unflushed object the caller already built
+(``app.tournament_events.create_event`` passes it straight through); on the edit path
+:func:`apply_event_pools` resolves it itself, with an explicit query, the same way
+``app.tournament_event_stages.remint_stages_in_place`` does — never through
+``TournamentEvent.stages`` (not eager; an async lazy load there would raise). That
+query is why :func:`apply_event_pools` takes a session now, which is the one exception
+to the claim below.
+
+It otherwise imports the models, the schemas and the domain-error leaf, and nothing
+else — no router, no FastAPI — so :func:`stored_pools` still stays callable from a REPL
+and cycle-free; :func:`apply_event_pools` needs a session only for the stage lookup."""
 
 import uuid
 from collections.abc import Sequence
 from datetime import date, time
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventPool,
     TournamentEventPoolTable,
+    TournamentEventStage,
 )
 from app.schemas.tournament import Pool, PoolUpsert, PoolWrite, Slot
 from app.tournament_errors import PoolNotInEventError
@@ -117,12 +139,18 @@ def pool_read(pool: TournamentEventPool) -> Pool:
 
 
 def _reservations(
+    event: TournamentEvent,
     tournament: Tournament,
     submitted: Sequence[str],
     stored: Sequence[TournamentEventPoolTable] = (),
 ) -> list[TournamentEventPoolTable]:
     """The reservation rows one pool's submitted ``table_ids`` resolve to, keyed on the
     table id against whatever ``stored`` rows the pool already has.
+
+    ``event`` is threaded through purely so each fresh row can be given ``event=event``
+    — the reservation's ``event_id`` is populated by the unit of work through that
+    relationship, not as a literal, because on the create path the event does not have
+    an id yet (see the module docstring's "The reservations").
 
     Keyed rather than replaced wholesale for a mechanical reason as well as a tidy one:
     a reservation's identity IS ``(event, pool, table)``, so re-sending a table the pool
@@ -155,7 +183,10 @@ def _reservations(
         row = kept.get(table_id)
         if row is None:
             row = TournamentEventPoolTable(
-                tournament_id=tournament.id, table_id=table_id, position=len(rows)
+                tournament_id=tournament.id,
+                table_id=table_id,
+                position=len(rows),
+                event=event,
             )
         else:
             row.position = len(rows)
@@ -164,7 +195,7 @@ def _reservations(
 
 
 def stored_pools(
-    tournament: Tournament, submitted: Sequence[PoolWrite]
+    event: TournamentEvent, tournament: Tournament, submitted: Sequence[PoolWrite]
 ) -> list[TournamentEventPool]:
     """Fresh :class:`TournamentEventPool` rows for an event that has none yet — the
     create verb's whole job.
@@ -173,9 +204,13 @@ def stored_pools(
     place a position is assigned on the create path, and what makes the stored positions
     ``range(len(submitted))`` by construction rather than by a caller's care.
 
-    ``tournament`` is here for the reservations, not for the pools: it supplies both the
-    catalogue each ``table_ids`` entry is resolved against and the ``tournament_id``
-    every reservation row carries (:func:`_reservations`).
+    ``event`` is the fresh, unflushed event these pools belong to (used only for its
+    reservations' ``event`` relationship — see :func:`_reservations`); the caller is
+    responsible for attaching the returned rows to the right stage
+    (``app.tournament_events.create_event`` assigns them to the event's stage 0).
+    ``tournament`` is here for the reservations too: it supplies both the catalogue each
+    ``table_ids`` entry is resolved against and the ``tournament_id`` every reservation
+    row carries (:func:`_reservations`).
 
     No ``id`` is set: that is the database's (``gen_random_uuid()``), exactly as a venue
     table's is (:func:`app.tournament_tables.stored_tables`), and the point of the ADR
@@ -183,12 +218,13 @@ def stored_pools(
     no field for one.
     """
     return [
-        _new_pool(tournament, pool, position) for position, pool in enumerate(submitted)
+        _new_pool(event, tournament, pool, position)
+        for position, pool in enumerate(submitted)
     ]
 
 
 def _new_pool(
-    tournament: Tournament, submitted: PoolWrite, position: int
+    event: TournamentEvent, tournament: Tournament, submitted: PoolWrite, position: int
 ) -> TournamentEventPool:
     """One brand-new pool row, at ``position``, from the pool a client sent — with no
     ``id``, which the database mints."""
@@ -199,20 +235,32 @@ def _new_pool(
         slot_date=slot_date,
         slot_start=slot_start,
         slot_end=slot_end,
-        tables=_reservations(tournament, submitted.table_ids),
+        tables=_reservations(event, tournament, submitted.table_ids),
     )
 
 
-def apply_event_pools(
-    tournament: Tournament, event: TournamentEvent, submitted: Sequence[PoolUpsert]
+async def apply_event_pools(
+    db: AsyncSession,
+    tournament: Tournament,
+    event: TournamentEvent,
+    submitted: Sequence[PoolUpsert],
 ) -> None:
-    """Make ``event``'s pools equal ``submitted``, as an **id-keyed diff**.
+    """Make ``event``'s stage-0 pools equal ``submitted``, as an **id-keyed diff**.
 
     ``tournament`` is the event's own parent, and it is here for the reservations: it
     supplies the catalogue each pool's ``table_ids`` are resolved against and the
     ``tournament_id`` their rows carry (:func:`_reservations`).
 
-    Each entry either cites the ``id`` of a pool the event already has — which keeps
+    Resolves the event's stage 0 with an explicit query — **never** through
+    ``TournamentEvent.stages`` (deliberately not eager; an async lazy load there would
+    raise), the same discipline
+    ``app.tournament_event_stages.remint_stages_in_place`` follows for the same reason.
+    ``scalar_one()``, not ``scalar_one_or_none()``: every event holds at least one stage
+    from the moment it exists (ADR 20260815 decision 1), so a miss here means the event
+    was seeded straight through the ORM bypassing ``create_event`` — a test-fixture bug,
+    not a state this function is asked to tolerate.
+
+    Each entry either cites the ``id`` of a pool the stage already has — which keeps
     that row, re-named, re-timed, re-tabled and re-positioned as this payload says — or
     omits one, which adds a row the database mints an id for. A stored pool no entry
     cites is **removed**, by leaving it out of the reassigned collection, which
@@ -245,7 +293,22 @@ def apply_event_pools(
     reason both tables carry a DEFERRABLE ``UNIQUE (…, position)``: a reorder moves a
     row onto a position its neighbour has not vacated yet.
     """
-    stored = {pool.id: pool for pool in event.pools}
+    # ``.options(selectinload(...))`` here, rather than a default eager strategy on the
+    # relationship itself: ``TournamentEventStage.pools`` is deliberately NOT eager
+    # (see that relationship's docstring — an event-wide default would double-load
+    # against ``TournamentEvent.pools``'s own selectin), so this one direct reader asks
+    # for exactly the load it needs.
+    stage = (
+        await db.execute(
+            select(TournamentEventStage)
+            .options(selectinload(TournamentEventStage.pools))
+            .where(
+                TournamentEventStage.event_id == event.id,
+                TournamentEventStage.position == 0,
+            )
+        )
+    ).scalar_one()
+    stored = {pool.id: pool for pool in stage.pools}
     # Judged first, over the whole payload, for the reason the catalogue's twin is: a
     # pool list naming a pool this event does not have is not a pool list, and every
     # subsequent question (what is kept, and therefore what is removed) would be
@@ -254,13 +317,14 @@ def apply_event_pools(
     for index, entry in enumerate(submitted):
         if entry.id is not None and entry.id not in stored:
             raise PoolNotInEventError(index=index, pool_id=str(entry.id))
-    event.pools = [
-        _pool_for(tournament, stored, entry, position)
+    stage.pools = [
+        _pool_for(event, tournament, stored, entry, position)
         for position, entry in enumerate(submitted)
     ]
 
 
 def _pool_for(
+    event: TournamentEvent,
     tournament: Tournament,
     stored: dict[uuid.UUID, TournamentEventPool],
     entry: PoolUpsert,
@@ -278,7 +342,7 @@ def _pool_for(
     a second opinion about what an unknown id means.
     """
     if entry.id is None:
-        return _new_pool(tournament, entry, position)
+        return _new_pool(event, tournament, entry, position)
     row = stored[entry.id]
     row.name = entry.name
     row.position = position
@@ -288,5 +352,5 @@ def _pool_for(
     # one this payload leaves out becomes an orphan the relationship's ``delete-orphan``
     # deletes. Assigning fresh rows for the whole list instead would delete and
     # re-insert the same primary keys in one flush.
-    row.tables = _reservations(tournament, entry.table_ids, row.tables)
+    row.tables = _reservations(event, tournament, entry.table_ids, row.tables)
     return row

@@ -50,6 +50,7 @@ from app.models import (
     User,
 )
 from app.realtime import EventKind, RealtimeBroker
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_pools,
     make_user,
@@ -123,6 +124,7 @@ async def _stage(
     await db.flush()
     table_ids = tuple(str(table.id) for table in tournament.tables)
 
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -133,17 +135,20 @@ async def _stage(
         timezone=VENUE_TZ_NAME,
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": ["t1", "t2"],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
     )
+    pools = event_pools(
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                "table_ids": ["t1", "t2"],
+            }
+        ],
+        event=event,
+        tournament=tournament,
+    )
+    stages[0].pools = pools
     db.add(event)
     await db.flush()
 
@@ -160,16 +165,16 @@ async def _stage(
     await db.flush()
 
     called_fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stages[0].id,
+        pool_id=pools[0].id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,
         entry_b_id=entry_b.id,
     )
     later_fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stages[0].id,
+        pool_id=pools[0].id,
         round=1,
         position=2,
         entry_a_id=entry_c.id,

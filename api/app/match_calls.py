@@ -107,7 +107,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, exists, or_, select, update
+from sqlalchemy import ColumnElement, Select, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import db as db_module
@@ -121,6 +121,7 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -205,6 +206,19 @@ def _due_for_call(fixture: TournamentFixture, now: datetime) -> bool:
     )
 
 
+def _tournament_stage_ids(tournament_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
+    """Every stage id belonging to any event of ``tournament_id`` — what a
+    ``TournamentFixture`` read scoped to one tournament is filtered through now that a
+    fixture names its stage, not its event (ADR 20260815 decision 5 drops
+    ``tournament_fixtures.event_id`` outright; the event, and the tournament, are
+    reachable through the stage)."""
+    return (
+        select(TournamentEventStage.id)
+        .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
+        .where(TournamentEvent.tournament_id == tournament_id)
+    )
+
+
 def _due_fixture_clauses(
     tournament_id: uuid.UUID, now: datetime
 ) -> tuple[ColumnElement[bool], ...]:
@@ -216,11 +230,7 @@ def _due_fixture_clauses(
     :func:`_due_for_call` re-check under the row lock remains the
     authoritative exactly-once guard."""
     return (
-        TournamentFixture.event_id.in_(
-            select(TournamentEvent.id).where(
-                TournamentEvent.tournament_id == tournament_id
-            )
-        ),
+        TournamentFixture.stage_id.in_(_tournament_stage_ids(tournament_id)),
         or_(
             TournamentFixture.pinned_at.is_(None),
             TournamentFixture.call_notified_count == 0,
@@ -326,11 +336,7 @@ async def _held_resources(
             )
             .join(Match, Match.id == TournamentFixture.match_id)
             .where(
-                TournamentFixture.event_id.in_(
-                    select(TournamentEvent.id).where(
-                        TournamentEvent.tournament_id == tournament_id
-                    )
-                ),
+                TournamentFixture.stage_id.in_(_tournament_stage_ids(tournament_id)),
                 Match.status == MatchStatus.in_progress,
             )
         )

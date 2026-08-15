@@ -359,28 +359,43 @@ class TournamentEvent(Base):
         order_by="TournamentEntry.created_at",
     )
 
-    # The event's pools, as rows (ADR 20260801), in the director's own order — which is
-    # what ``TournamentEventPool.position`` carries, and what the snake seeds against.
+    # The event's pools, in the director's own order — which is what
+    # ``TournamentEventPool.position`` carries, and what the snake seeds against.
     #
-    # ``lazy="selectin"``, and declared here rather than as an option at each call site,
-    # for the reason ``Tournament.tables`` and ``draw_settings`` are eager: async
-    # SQLAlchemy raises instead of emitting a lazy load, so each of the ~8 readers of an
-    # event's pools (``event_pools`` and everything through it — the serializer, the
-    # draw config, the solver's input load, the preview, the call copy, the dashboard)
-    # would have to remember one. ``selectin`` and not ``joined`` because this is a
-    # one-to-many: a joined load would multiply the event rows, which the tournament
-    # list's LIMIT/OFFSET could not survive. It batches over the whole result set, so a
-    # page of events costs ONE extra statement however many events it holds.
+    # VIEWONLY, reachable through the event's stages, not the real parent-child
+    # relationship any more: ADR 20260815's "Sequencing with #1338" consequence
+    # re-parents a pool onto its stage (always stage 0 — decision 3), because
+    # ``tournament_fixtures.event_id`` is dropped in the same ADR and a pool must share
+    # a column with the fixtures whose composite FK targets it. Writes go through
+    # ``app.tournament_pools``, which resolves the event's first stage and assigns
+    # ``stage.pools`` (the real relationship, declared on
+    # :class:`~app.models.tournament_event_stage.TournamentEventStage`) — never this
+    # one, which SQLAlchemy refuses to flush from.
     #
-    # ``delete-orphan`` is what the pools *write* leans on — a pool dropped from the
-    # submitted list is removed by taking it out of this collection — and
-    # ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` is the delete path for
-    # everything that does not load the collection first (the tournament delete's single
-    # cascading statement, a raw DELETE, psql).
+    # Kept here, readable, for exactly the reason it is worth a comment: roughly 50
+    # existing call sites — the serializer, ``draw_config``, the solver's input load,
+    # the preview, the call copy, the dashboard, and most of the test suite — read
+    # ``event.pools`` and none of them need to learn the parent moved.
+    #
+    # ``secondary="tournament_event_stages"`` is an unusual use of that argument (the
+    # "secondary" table is a full mapped entity here, not a bare association table),
+    # and ``viewonly=True`` is what makes it safe: SQLAlchemy never attempts to
+    # INSERT/DELETE through this relationship, so it only ever uses the table for the
+    # join. The ``primaryjoin`` pins that join to stage 0 specifically, so this stays
+    # exactly the list a reader expects even on an rr-then-ko event, which has a second
+    # stage with no pools of its own.
+    #
+    # ``lazy="selectin"``, matching what this relationship carried before the move, for
+    # the same reason: a joined load would multiply the event rows, which the
+    # tournament list's LIMIT/OFFSET could not survive.
     pools: Mapped[list["TournamentEventPool"]] = relationship(
-        back_populates="event",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
+        secondary="tournament_event_stages",
+        primaryjoin=(
+            "and_(TournamentEvent.id == TournamentEventStage.event_id, "
+            "TournamentEventStage.position == 0)"
+        ),
+        secondaryjoin="TournamentEventStage.id == TournamentEventPool.stage_id",
+        viewonly=True,
         lazy="selectin",
         order_by="TournamentEventPool.position",
     )
@@ -415,13 +430,24 @@ class TournamentEvent(Base):
         order_by="TournamentEventStage.position",
     )
 
-    # The event's draw: every fixture the cut produced (ADR-0786). Empty until the
-    # draw is cut; a re-cut replaces the set wholesale, which is what
-    # ``delete-orphan`` buys.
+    # The event's draw: every fixture the cut produced (ADR-0786), read through its
+    # stages — VIEWONLY, and no longer the real parent-child relationship, since a
+    # fixture names its stage rather than its event now (ADR 20260815 decision 5,
+    # "a fixture names its stage"; ``tournament_fixtures.event_id`` is dropped
+    # outright). ``TournamentEventStage.fixtures`` is the real relationship
+    # ``cut_draw`` / ``uncut_draw`` write through (by bulk statement, not the ORM
+    # collection — see that relationship's docstring); this one spans BOTH of an
+    # rr-then-ko event's stages, unlike ``pools`` above, because both the pool stage
+    # and the knockout stage hold fixtures.
+    #
+    # Kept here, readable, for the one test that walks it directly
+    # (``test_the_events_fixtures_relationship_is_ordered_pool_round_position``) — every
+    # production read of a draw goes through the batched ``fixtures_by_event`` loader
+    # instead, never through this relationship.
     #
     # Ordered pool → round → position — the same total order the read path's
     # ``fixtures_by_event`` loader applies, and the one the fixtures' own
-    # ``UNIQUE (event_id, pool_id, round, position)`` makes a total order at all. The
+    # ``UNIQUE (stage_id, pool_id, round, position)`` makes a total order at all. The
     # ``pool_id`` used to be missing from this list, which left the relationship
     # ordering a *pooled* draw by round and position alone: pool A's round 1 and pool
     # B's round 1 would interleave, so the same draw would come back in two different
@@ -443,9 +469,10 @@ class TournamentEvent(Base):
     # between ``p-1-`` and ``p-2-``). Nothing in the app reads this relationship's order
     # today — every draw a client sees comes through the loader.
     fixtures: Mapped[list["TournamentFixture"]] = relationship(
-        back_populates="event",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
+        secondary="tournament_event_stages",
+        primaryjoin="TournamentEvent.id == TournamentEventStage.event_id",
+        secondaryjoin="TournamentEventStage.id == TournamentFixture.stage_id",
+        viewonly=True,
         order_by=(
             "TournamentFixture.pool_id.asc().nulls_last(), "
             "TournamentFixture.round, TournamentFixture.position"

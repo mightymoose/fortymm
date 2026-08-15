@@ -203,6 +203,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -472,14 +473,20 @@ async def tournament_has_drawn_event(
     a green ledger row that answers a question nobody asked. One EXISTS, not a
     count: the route needs the fact, not the number.
     """
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage.
     return (
         await db.execute(
             select(
                 exists(
                     select(TournamentFixture.id)
                     .join(
+                        TournamentEventStage,
+                        TournamentEventStage.id == TournamentFixture.stage_id,
+                    )
+                    .join(
                         TournamentEvent,
-                        TournamentEvent.id == TournamentFixture.event_id,
+                        TournamentEvent.id == TournamentEventStage.event_id,
                     )
                     .where(TournamentEvent.tournament_id == tournament_id)
                 )
@@ -759,9 +766,17 @@ async def _load_solver_inputs(
 
     fixture_rows: Sequence[TournamentFixture] = []
     if events:
+        # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the
+        # event is reachable through the stage.
         fixtures_stmt = (
             select(TournamentFixture)
-            .where(TournamentFixture.event_id.in_([e.id for e in events]))
+            .where(
+                TournamentFixture.stage_id.in_(
+                    select(TournamentEventStage.id).where(
+                        TournamentEventStage.event_id.in_([e.id for e in events])
+                    )
+                )
+            )
             .order_by(TournamentFixture.id)
         )
         if lock:

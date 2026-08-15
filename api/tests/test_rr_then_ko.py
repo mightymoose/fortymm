@@ -39,6 +39,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventPool,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -123,7 +124,11 @@ async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.U
     return (
         await db_session.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.event_id == uuid.UUID(event_id),
+                TournamentEventPool.stage_id.in_(
+                    select(TournamentEventStage.id).where(
+                        TournamentEventStage.event_id == uuid.UUID(event_id)
+                    )
+                ),
                 TournamentEventPool.name == name,
             )
         )
@@ -136,7 +141,13 @@ async def _pool_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
         (
             await db_session.execute(
                 select(TournamentEventPool.id)
-                .where(TournamentEventPool.event_id == uuid.UUID(event_id))
+                .where(
+                    TournamentEventPool.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == uuid.UUID(event_id)
+                        )
+                    )
+                )
                 .order_by(TournamentEventPool.position)
             )
         )
@@ -184,7 +195,13 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == uuid.UUID(event_id))
+                .where(
+                    TournamentFixture.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == uuid.UUID(event_id)
+                        )
+                    )
+                )
                 .order_by(
                     TournamentFixture.pool_id.asc().nulls_last(),
                     TournamentFixture.round,

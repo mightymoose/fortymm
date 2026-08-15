@@ -37,6 +37,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStage,
     TournamentFixture,
     User,
     UserLeagueRating,
@@ -46,6 +47,7 @@ from app.models import (
 from app.roles import grant_default_role
 from app.sessions import SESSION_TOKEN_CONTEXT
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_pools,
     start_session,
@@ -431,7 +433,7 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
             slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
             match_settings={"rated": True, "length_games": 5},
             predicates=[],
-            pools=[],
+            stages=mint_stages(DrawType.single_elim),
         )
     )
     db_session.add(tournament)
@@ -492,7 +494,7 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[],
+        stages=mint_stages(DrawType.single_elim),
     )
     db.add(event)
     await db.commit()
@@ -982,6 +984,7 @@ async def _make_rr_event(
     # (ADR 20260801).
     await db.flush()
     slot = {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         # By id rather than by ``tournament.events.append``: the tournament is flushed
         # above (its pool reservations need its id), and appending to a *persistent*
@@ -996,14 +999,19 @@ async def _make_rr_event(
         slot=slot,
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=event_pools(
-            [{"name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
-            tournament=tournament,
-        ),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [{"name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.commit()
-    await db.refresh(event)
+    # ``pools`` explicitly: ``_cut`` below hands this event straight to ``cut_draw``,
+    # which reads ``event.pools`` synchronously — a plain refresh leaves that VIEWONLY
+    # association unloaded (ADR 20260815), and the read would be an async lazy load.
+    await db.refresh(event, attribute_names=["pools"])
     return event
 
 
@@ -1026,7 +1034,13 @@ async def _fixtures_for(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == event.id)
+                .where(
+                    TournamentFixture.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == event.id
+                        )
+                    )
+                )
                 .execution_options(populate_existing=True)
             )
         )

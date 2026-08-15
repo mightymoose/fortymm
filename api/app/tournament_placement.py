@@ -41,6 +41,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     User,
 )
@@ -76,10 +77,16 @@ async def _load_fixture_for_placement(
     ``completed``/``voided`` is history and can no longer be moved. Never an
     ``HTTPException``.
     """
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage.
     row = (
         await db.execute(
             select(TournamentFixture, Match.status, TournamentEvent.timezone)
-            .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(
                 TournamentFixture.id == fixture_id,

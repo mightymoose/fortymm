@@ -30,6 +30,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventPool,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -239,11 +240,12 @@ def _pool_position() -> ScalarSelect[int | None]:
 
     A fixture holds its pool's **id**, not its index, so "where does this fixture's pool
     sit in the director's order?" is a join: find the ``tournament_event_pools`` row
-    this fixture's ``(event_id, pool_id)`` names — the same pair the composite foreign
-    key matches on (ADR 20260801) — and read its ``position``
-    (:data:`app.schemas.tournament.PoolPosition` — 0-based, stamped by the server from
-    the order the pools were sent in). Scalar by construction, since ``(event_id, id)``
-    is unique, rather than by a ``LIMIT`` papering over duplicates.
+    this fixture's ``(stage_id, pool_id)`` names — the same pair the composite foreign
+    key matches on (ADR 20260801, re-parented onto the stage by ADR 20260815) — and
+    read its ``position`` (:data:`app.schemas.tournament.PoolPosition` — 0-based,
+    stamped by the server from the order the pools were sent in). Scalar by
+    construction, since ``(stage_id, id)`` is unique, rather than by a ``LIMIT``
+    papering over duplicates.
 
     It is ``NULL`` in exactly one case now, and that case wants to sort at the end of
     the pooled group: an **un-pooled** fixture (``pool_id IS NULL`` — single-elim,
@@ -252,15 +254,15 @@ def _pool_position() -> ScalarSelect[int | None]:
     has closed; the id stays on as a secondary sort key below because the *order* still
     has to be total when this is NULL for every row of an un-pooled draw.
 
-    Correlated on ``TournamentFixture`` alone. The ``event_id`` comes off the fixture
-    rather than off the joined ``TournamentEvent`` — the same column either way, and
-    taking it from the fixture keeps the subquery independent of which of the two tables
-    the enclosing statement happens to have in scope.
+    Correlated on ``TournamentFixture`` alone. ``stage_id`` comes off the fixture
+    directly now — simpler than before this ADR, which correlated on ``event_id``
+    because that was the fixture's own column too; the fixture's identity key moved
+    from ``event_id`` to ``stage_id`` (decision 5), and so does this join.
     """
     return (
         select(TournamentEventPool.position)
         .where(
-            TournamentEventPool.event_id == TournamentFixture.event_id,
+            TournamentEventPool.stage_id == TournamentFixture.stage_id,
             TournamentEventPool.id == TournamentFixture.pool_id,
         )
         .correlate(TournamentFixture)
@@ -346,13 +348,21 @@ async def fixtures_by_event(
         await db.execute(
             select(
                 TournamentFixture,
+                TournamentEventStage.event_id,
                 TournamentEvent.timezone,
                 Match.status,
                 Match.completed_at,
             )
-            .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
+            # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5), so
+            # this joins ``tournament_event_stages`` for it — the event is reachable
+            # through the stage — rather than reading ``TournamentFixture.event_id``.
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
-            .where(TournamentFixture.event_id.in_(fixtures.keys()))
+            .where(TournamentEventStage.event_id.in_(fixtures.keys()))
             .order_by(
                 _pool_position().asc().nulls_last(),
                 TournamentFixture.pool_id.asc().nulls_last(),
@@ -361,8 +371,8 @@ async def fixtures_by_event(
             )
         )
     ).all()
-    for fixture, event_timezone, match_status, match_completed_at in rows:
-        fixtures[fixture.event_id].append(
+    for fixture, event_id, event_timezone, match_status, match_completed_at in rows:
+        fixtures[event_id].append(
             TournamentFixtureRead(
                 id=fixture.id,
                 pool_id=fixture.pool_id,

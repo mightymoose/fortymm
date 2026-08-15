@@ -36,6 +36,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -189,7 +190,13 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == uuid.UUID(event_id))
+                .where(
+                    TournamentFixture.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == uuid.UUID(event_id)
+                        )
+                    )
+                )
                 .order_by(TournamentFixture.round, TournamentFixture.position)
             )
         )
@@ -1177,7 +1184,7 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
                 fixture_state(
                     TournamentFixture(
                         id=uuid.uuid4(),
-                        event_id=uuid.uuid4(),
+                        stage_id=uuid.uuid4(),
                         pool_id=None,
                         round=1,
                         position=1,

@@ -44,12 +44,14 @@ from app.models import (
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventPool,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
     VenueTable,
 )
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     event_pools,
@@ -109,6 +111,7 @@ async def _make_tournament(
     )
     db.add(tournament)
     await db.flush()
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -119,16 +122,18 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": [str(row.id) for row in catalogue],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                "table_ids": [str(row.id) for row in catalogue],
+            }
+        ],
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.flush()
@@ -143,6 +148,10 @@ async def _enter_and_cut(
     for user in users:
         db.add(TournamentEntry(event_id=event.id, user_id=user.id))
     await db.flush()
+    # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
+    # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` below
+    # reads ``event.pools`` synchronously, so this needs an explicit refresh first.
+    await db.refresh(event, attribute_names=["pools"])
     await cut_draw(db, event)
     await db.commit()
 
@@ -160,7 +169,13 @@ async def _fixtures_of(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == event_id)
+                .where(
+                    TournamentFixture.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == event_id
+                        )
+                    )
+                )
                 .order_by(TournamentFixture.id)
             )
         )
@@ -516,7 +531,11 @@ async def _pool_id(db: AsyncSession, event_id: uuid.UUID) -> str:
         (
             await db.execute(
                 select(TournamentEventPool.id).where(
-                    TournamentEventPool.event_id == event_id
+                    TournamentEventPool.stage_id.in_(
+                        select(TournamentEventStage.id).where(
+                            TournamentEventStage.event_id == event_id
+                        )
+                    )
                 )
             )
         ).scalar_one()
@@ -846,6 +865,7 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
     # two tables, and a reservation is a row keyed on the catalogue it names.
     tournament = await db_session.get(Tournament, tournament_id)
     assert tournament is not None
+    second_stages = mint_stages(DrawType.round_robin)
     second_event = TournamentEvent(
         tournament_id=tournament_id,
         name="Second Singles",
@@ -856,16 +876,18 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool B",
-                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": ["t1", "t2"],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=second_stages,
+    )
+    second_stages[0].pools = event_pools(
+        [
+            {
+                "name": "Pool B",
+                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                "table_ids": ["t1", "t2"],
+            }
+        ],
+        event=second_event,
+        tournament=tournament,
     )
     db_session.add(second_event)
     await db_session.flush()

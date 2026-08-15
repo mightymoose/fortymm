@@ -40,6 +40,7 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
@@ -263,7 +264,15 @@ async def _fixtures_with_match_statuses(
         await db.execute(
             select(TournamentFixture, Match.status)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
-            .where(TournamentFixture.event_id == event_id)
+            # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the
+            # event is reachable through the stage.
+            .where(
+                TournamentFixture.stage_id.in_(
+                    select(TournamentEventStage.id).where(
+                        TournamentEventStage.event_id == event_id
+                    )
+                )
+            )
             # Ordered for **stability**, not for presentation: an unordered ``SELECT``
             # has no guarantee even between two runs against unchanged data, and the
             # rows go on to be projected into the outcomes a draw type ranks its field
