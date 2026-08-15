@@ -140,7 +140,7 @@ Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on *
 
 **CI publishes both Helm charts to GHCR**, alongside the api and web images, so a deploy needs `helm` and no checkout. See `deploy/CLAUDE.md` for the registry paths, the version scheme, the pull command, and why the stack chart carries its own image digests.
 
-**Always reap a QA stack once its branch merges** (`land-the-plane` Step 6). `docker compose down -v` is *not* enough — it leaves the stack's locally-built images and buildx cache behind. Skipping this grew `Docker.raw` to 230 GB and wedged the daemon; with ~78 worktrees each able to spawn a `fortymm-qa-<id>` stack, it compounds fast. Use `scripts/qa-down.sh` (`--all` for every QA stack, `--dry-run` to preview, opt-in `--prune-cache` for the global build cache). **Never** blanket-`prune`: `fortymm-uat_postgres-data` is unattached and would be silently destroyed along with the k3d `tailscale-state` Secrets.
+**Always reap a QA stack once its branch merges** (`land-the-plane` Step 7, "Collect the garbage", which runs it once at the end of a stack walk — and `test-next-ticket` after its own merge, since whoever merges cleans up). `docker compose down -v` is *not* enough — it leaves the stack's locally-built images and buildx cache behind. Skipping this grew `Docker.raw` to 230 GB and wedged the daemon; with ~78 worktrees each able to spawn a `fortymm-qa-<id>` stack, it compounds fast. Use `scripts/qa-down.sh` (`--all` for every QA stack, `--dry-run` to preview, opt-in `--prune-cache` for the global build cache). **Never** blanket-`prune`: `fortymm-uat_postgres-data` is unattached and would be silently destroyed along with the k3d `tailscale-state` Secrets.
 
 ## Cloud sessions
 
@@ -183,6 +183,6 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **Verify the artifact under test is the one you changed** — see `.claude/rules/verify-the-artifact-under-test.md`.
 
-**Collect the garbage you create** — `land-the-plane` Step 7 runs `scripts/reap-worktrees.sh` (see its header for why).
+**Collect the garbage you create** — `land-the-plane` Step 7 runs `scripts/reap-worktrees.sh` and `scripts/qa-down.sh` (see their headers for why). Whoever merges cleans up: `test-next-ticket` after its own merge, `land-the-plane` after its stack walk. `implement-ticket-end-to-end` reaps the worktree, first and last, because it is the only thing standing outside one.
 
 Layer-specific architecture and conventions live in `api/CLAUDE.md` and `web-client/CLAUDE.md` (loaded automatically when working in those directories).

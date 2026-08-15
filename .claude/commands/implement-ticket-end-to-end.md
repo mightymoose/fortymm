@@ -21,6 +21,19 @@ If no eligible ticket exists, report that there is nothing to implement and stop
 
 Record the selected ticket number and pass that same explicit number to every downstream stage.
 
+## Reap Before You Start
+
+Before Stage 1, from the main checkout:
+
+```bash
+scripts/reap-worktrees.sh                 # dry run: read what would go
+scripts/reap-worktrees.sh --force --docker
+```
+
+This is the only step in the whole arc that ever collects a worktree left behind by a **failed** run. A failed run merges nothing, so no merge-triggered cleanup ever fires for it, and its worktree sits there until something sweeps it. That sprawl is what makes a later run resume into a stale checkout on an already-squash-merged branch.
+
+The script is dry-run by default and only ever reaps a worktree whose PR has **merged** and which holds nothing that is not already in `main`. Do not weaken either property, and do not pass `--include-review` — anything it lists as REVIEW is the user's call.
+
 ## Independence Requirement
 
 Run each stage in a **fresh context/subagent** whenever Claude Code provides a mechanism to do so:
@@ -42,6 +55,21 @@ Invoke `review-next-ticket` for the same ticket in a new fresh context. Success 
 ## Stage 3 — Testing
 
 Invoke `test-next-ticket` for the same ticket in another fresh context. Testing may temporarily route repairs back through Review. Allow `In Testing → repair → In Review → In Testing`, but Testing owns that loop. Final success means Testing passed, notes appended, unrelated discoveries are at the top of **To Do**, PR merged, and ticket **Done**. If it escalates, stop.
+
+## Reap Last, From Outside
+
+The coordinator's final act, after Testing has merged and moved the ticket to **Done**:
+
+1. **Move to the main checkout first.** `cd` out of the run's worktree.
+2. Then run `scripts/reap-worktrees.sh --force --docker`.
+
+The order is the whole point. `reap-worktrees.sh` never removes the worktree the caller is standing in — it skips it as "current" and still reports success. A reap that runs before the move is a no-op that looks like a win, and the directory it was supposed to remove is the one the run was using.
+
+**This runs on an escalation too.** An escalated run tears down the same resources a successful one does. The only thing an escalation changes is that no merge happened, so there is no branch or QA stack for *this* command to collect — those belong to whoever merged.
+
+The coordinator does **not** clean up after a merge it delegated. `test-next-ticket` merged, so `test-next-ticket` tore down the QA stack and the branch. Doing it twice here would race a teardown that already ran.
+
+`docker system prune -a` and `docker volume prune` are forbidden anywhere in this arc. They destroy `fortymm-uat_postgres-data` and the k3d `tailscale-state` Secrets silently.
 
 ## Coordinator Responsibilities
 
@@ -82,3 +110,7 @@ Never reinterpret a stage escalation as permission to improvise. Surface it and 
 - Never continue past a stage escalation.
 - Do not duplicate stage prompts inside the coordinator.
 - Preserve every stage's structured retrospective notes.
+- Reap worktrees at the **start** of the run and again as its **final act**, from the main checkout.
+- Run the full cleanup on an escalation, not only on success.
+- Do not clean up after a merge a stage performed. Whoever merges cleans up.
+- Never run `docker system prune -a` or `docker volume prune`.

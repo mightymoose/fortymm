@@ -127,9 +127,37 @@ then:
 3. Verify the merge succeeded.
 4. Move the ticket to **Done**.
 5. Close the issue if that is the repository's normal convention.
-6. Stop.
+6. Clean up, per the section below.
+7. Stop.
 
 Never bypass branch protection or required checks.
+
+## Clean Up After the Merge
+
+Whoever merges cleans up. This command merges, so this command cleans up. A coordinator that delegated the merge does not.
+
+Run this after the merge is confirmed, and run it whether the ticket passed or the run escalated. An escalated run tears down the same resources a successful one does — the stack it started and the branch it pushed exist either way.
+
+```bash
+QA_ID="$(git rev-parse --abbrev-ref HEAD)"          # same derivation qa-up.sh uses
+scripts/qa-down.sh "$QA_ID" --dry-run               # read it before you run it
+scripts/qa-down.sh "$QA_ID"
+```
+
+Then:
+
+1. Delete the branch locally and on the remote.
+2. Confirm nothing survives on ports 5173 and 5174. `lsof -ti :5173 -ti :5174` returning nothing is the check. A dev server left running there is what makes the next run's `npm run dev` bind a different port and QA the wrong build.
+3. Report what was torn down in the Testing Notes.
+
+### Two ordering traps
+
+- **`gh pr merge --delete-branch` errors from inside a worktree.** Delete the branch as its own step, from the main checkout, after the merge.
+- **`scripts/reap-worktrees.sh` never removes the worktree the caller is standing in.** It skips it as "current" and still reports success. This command does not reap worktrees — the coordinator does, as its final act, from outside.
+
+### Never widen the blast radius
+
+`docker system prune -a` and `docker volume prune` are forbidden. `fortymm-uat_postgres-data` is unattached, and the k3d cluster holds `tailscale-state` Secrets. Both would be silently destroyed. `scripts/qa-down.sh` already refuses a blanket prune on purpose; do not work around it. Cleanup is scoped to the resources this run created.
 
 ## Escalation Contract
 
@@ -149,3 +177,5 @@ Do not escalate for understandable failures with clear repairs. Never weaken cri
 - Always leave structured Testing Notes with explicit `N/A` where appropriate.
 - Record QA setup/tooling friction even when successfully resolved.
 - Merge only after `qa-review` and the ticket's Acceptance Criteria pass.
+- Whoever merges cleans up. Tear down this run's QA stack and branch after merging, and do it on an escalation too.
+- Never run `docker system prune -a` or `docker volume prune`.

@@ -196,6 +196,25 @@ The script only ever removes a worktree whose PR is **merged** and which holds n
 
 You are standing in the worktree that was just merged, so the script will skip it as "current" — that one is the user's to remove after they've moved on. Report the counts; don't push past a REVIEW entry on the user's behalf.
 
+Then tear down the QA stack this run brought up in Step 5:
+
+```bash
+QA_ID="$(git rev-parse --abbrev-ref HEAD)"          # same derivation qa-up.sh uses
+scripts/qa-down.sh "$QA_ID" --dry-run               # read it before you run it
+scripts/qa-down.sh "$QA_ID"
+```
+
+`docker compose down -v` is not a substitute. It leaves the locally-built images and the buildx cache, which is how `Docker.raw` reached 230 GB and wedged the daemon.
+
+**In stacked mode this runs once, at the end of the whole walk — not per slice.** Every slice drives the same stack, so a per-slice teardown just pays for a cold rebuild on the next slice.
+
+**Never** `docker system prune -a` or `docker volume prune`. `fortymm-uat_postgres-data` is unattached and the k3d cluster holds `tailscale-state` Secrets; a blanket prune destroys both silently. `qa-down.sh` refuses one on purpose — do not work around it.
+
+Two ordering traps worth stating, because both have cost a cycle:
+
+- **`gh pr merge --delete-branch` errors from inside a worktree.** Delete the branch as its own step.
+- **`reap-worktrees.sh` never removes the worktree the caller is standing in.** It skips it as "current" and still reports success, so a reap that runs before you move out is a no-op that looks like a success.
+
 ## Reporting
 
 End with a single-line summary listing: commit + push status, the PR URL, CI outcome, QA-review verdict, and merge status. Keep it terse — the user can read the diff.
