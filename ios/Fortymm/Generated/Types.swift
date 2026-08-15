@@ -4291,7 +4291,8 @@ internal enum Components {
             }
         }
         /// One line of the panel's "Your matches" path — every fixture in this event the
-        /// caller is a side of, in draw order.
+        /// caller is a side of, ordered by scheduled time ascending (untimed fixtures last,
+        /// in draw order among themselves — #1297).
         ///
         /// ``detail`` is the row's right-hand text, composed server-side because what belongs
         /// there changes with ``state`` (a result, "In progress", or a time and table). The
