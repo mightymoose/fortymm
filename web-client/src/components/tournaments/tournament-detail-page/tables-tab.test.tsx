@@ -2,6 +2,7 @@ import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 
 import { server } from '@/mocks/server'
+import { SUMMER_SLAM_ID } from '@/mocks/factories/tournaments/tournament-ids'
 import {
   findTournament,
   placeFixture,
@@ -235,7 +236,7 @@ describe('TablesTab', () => {
 /** The seeded, owned `draft` tournament — a catalogue of `t1`… tables and one drawn
  * event whose fixtures start UNPLACED. Its size is read from the store rather than
  * written down here: what these tests assert is the DELTA an edit makes. */
-const SLAM = 'summer-slam-2026'
+const SLAM = SUMMER_SLAM_ID
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 

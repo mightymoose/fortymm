@@ -38,6 +38,14 @@ import {
   stepScheduleSolve,
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
+import {
+  BAY_AREA_OPEN_ID,
+  CLUB_CHAMPS_ID,
+  GARAGE_INVITATIONAL_ID,
+  GOLDEN_STATE_CLASSIC_ID,
+  LEAGUE_OFFICE_DRAFT_ID,
+  SUMMER_SLAM_ID,
+} from '@/mocks/factories/tournaments/tournament-ids'
 import { conjoinWithAnd, hasVenue } from '@/components/tournaments/data/helpers'
 import type { TournamentsNearMe } from '@/components/tournaments/data/api'
 
@@ -270,7 +278,7 @@ const SLAM_POOLS: Pool[] = [
 /** The tournament both two-stage events run at: **live**, mid-weekend, with one event
  * finished and one still playing. It is also the seed's only `live` row, so `npm run dev`
  * gets a started tournament for free. */
-const GOLDEN_STATE_ID = 'golden-state-classic-2026'
+const GOLDEN_STATE_ID = GOLDEN_STATE_CLASSIC_ID
 
 const CUP_EVENT_ID = 'ev-challenge-cup'
 const SHIELD_EVENT_ID = 'ev-shield'
@@ -536,7 +544,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
 function seed(): StoredTournament[] {
   return [
     {
-      id: 'bay-area-open-2026',
+      id: BAY_AREA_OPEN_ID,
       name: 'Bay Area Open 2026',
       description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
       status: 'published',
@@ -567,7 +575,7 @@ function seed(): StoredTournament[] {
       events: [
         {
           id: 'ev-open-singles',
-          tournament_id: 'bay-area-open-2026',
+          tournament_id: BAY_AREA_OPEN_ID,
           name: 'Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
@@ -615,7 +623,7 @@ function seed(): StoredTournament[] {
           // back, with a strategy, since #1227). `pools: []` replaces it, and it is
           // permanent: "A round-robin draw needs at least one pool." Do not give it pools.
           id: 'ev-u1500',
-          tournament_id: 'bay-area-open-2026',
+          tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1500 Singles',
           format: 'singles',
           draw_type: 'round-robin',
@@ -640,7 +648,7 @@ function seed(): StoredTournament[] {
           // says why instead (ADR-0015; #783). Seeded so `npm run dev` can show the
           // state without anyone having to click Enter sixteen times.
           id: 'ev-champ-singles',
-          tournament_id: 'bay-area-open-2026',
+          tournament_id: BAY_AREA_OPEN_ID,
           name: 'Championship Singles',
           format: 'singles',
           draw_type: 'single-elim',
@@ -676,7 +684,7 @@ function seed(): StoredTournament[] {
           // sitting out, and a bye is visible for what it is: the ABSENCE of a fixture,
           // not a fixture with an empty side.
           id: 'ev-u1200',
-          tournament_id: 'bay-area-open-2026',
+          tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1200 Singles',
           format: 'singles',
           draw_type: 'round-robin',
@@ -741,7 +749,7 @@ function seed(): StoredTournament[] {
           // cannot express a pairing — ADR-0016), so the API 400s here and the
           // UI offers no Enter control. Seeded so that case is visible in dev.
           id: 'ev-mixed-doubles',
-          tournament_id: 'bay-area-open-2026',
+          tournament_id: BAY_AREA_OPEN_ID,
           name: 'Mixed Doubles',
           format: 'doubles',
           draw_type: 'single-elim',
@@ -763,7 +771,7 @@ function seed(): StoredTournament[] {
       ],
     },
     {
-      id: 'summer-slam-2026',
+      id: SUMMER_SLAM_ID,
       name: 'Summer Slam 2026',
       description: null,
       status: 'draft',
@@ -801,7 +809,7 @@ function seed(): StoredTournament[] {
           // tournament and Start works; publish the Bay Area Open — four of whose five
           // events have no draw — and Start is refused, by name. The seed holds both.
           id: 'ev-slam-open',
-          tournament_id: 'summer-slam-2026',
+          tournament_id: SUMMER_SLAM_ID,
           name: 'Slam Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
@@ -828,7 +836,7 @@ function seed(): StoredTournament[] {
       ],
     },
     {
-      id: 'club-champs-2026',
+      id: CLUB_CHAMPS_ID,
       name: 'Club Championship',
       description: 'Run by the league office — view only.',
       // `published`, not `live`: registration is open only while a tournament is
@@ -864,7 +872,7 @@ function seed(): StoredTournament[] {
           // entering is gated on the `tournament.enter` permission, not on
           // ownership, so Enter still shows.
           id: 'ev-cc-open',
-          tournament_id: 'club-champs-2026',
+          tournament_id: CLUB_CHAMPS_ID,
           name: "Women's Championship Singles",
           format: 'singles',
           draw_type: 'single-elim',
@@ -944,7 +952,7 @@ function seed(): StoredTournament[] {
       //
       // Owned by the dev user, so the Details tab opens editable and the six empty
       // venue boxes are reachable.
-      id: 'garage-invitational-2026',
+      id: GARAGE_INVITATIONAL_ID,
       name: 'Garage Invitational',
       description: 'Address shared with entrants after registration.',
       status: 'published',
@@ -962,7 +970,7 @@ function seed(): StoredTournament[] {
       events: [
         {
           id: 'ev-garage-open',
-          tournament_id: 'garage-invitational-2026',
+          tournament_id: GARAGE_INVITATIONAL_ID,
           name: 'Garage Singles',
           format: 'singles',
           draw_type: 'round-robin',
@@ -1202,7 +1210,7 @@ function seed(): StoredTournament[] {
       // Its observable behaviour is the API's: absent from the list, and a 404 —
       // not a 403 — from the detail route, because a draft you cannot see must be
       // indistinguishable from one that does not exist.
-      id: 'league-office-draft-2027',
+      id: LEAGUE_OFFICE_DRAFT_ID,
       league_id: DEFAULT_LEAGUE_ID,
       name: 'League Office Draft 2027',
       description: 'Not announced yet — and not the dev user’s to see.',
@@ -1445,7 +1453,17 @@ export function findTournament(id: string): TournamentDetailRead | undefined {
 
 let createCounter = 0
 
-function slugId(name: string): string {
+/** A brand-new tournament's id — the mock's `gen_random_uuid()`.
+ *
+ * UUID-shaped (`mockUuid`, #1229) because the wire says so (`Tournament.id` is
+ * `format: uuid`) and because the `$tournamentId` route Zod-validates the segment as
+ * one BEFORE any fetch (ADR-1001): a slug id here would make the tournament this very
+ * call just created 404 on its own detail page the moment `NewTournamentModal`
+ * navigates to it. Keyed on a slug of the name PLUS a counter, not the name alone, so
+ * two tournaments created with the same name (nothing stops a director from doing
+ * that) still get distinct ids — the counter deliberately does NOT reset with the
+ * store, for the same reason `mintTable`'s doesn't. */
+function mintTournamentId(name: string): string {
   const base =
     name
       .toLowerCase()
@@ -1453,7 +1471,7 @@ function slugId(name: string): string {
       .replace(/^-+|-+$/g, '')
       .slice(0, 40) || 'tournament'
   createCounter += 1
-  return `${base}-${createCounter}`
+  return mockUuid(`tournament:${base}-${createCounter}`)
 }
 
 /** Create a bare tournament owned by the dev user (so it's editable). Returns
@@ -1659,7 +1677,7 @@ function applyTableCatalogue(
 
 export function createTournament(body: TournamentCreate): TournamentRead {
   const now = new Date().toISOString()
-  const id = slugId(body.name)
+  const id = mintTournamentId(body.name)
   const created: StoredTournament = {
     id,
     name: body.name,
