@@ -23,9 +23,12 @@ Four claims, and they are separate ones:
   database's remaining opinion is only that the value is an object; which settings
   belong to which draw type is the discriminated union's rule, at the request boundary.
 
-The draw type has exactly one home — ``tournament_event_draw_settings.draw_type_key``
-— so these tests read it from there and nowhere else. There is no ``draw_type``
-column on ``tournament_events`` to cross-check it against, which is the point.
+The draw type has exactly one home — ``tournament_event_draw_settings.draw_type_id``,
+a FK onto ``draw_types.id`` (ADR 20260815, "draw_types gains a surrogate id primary
+key") — so these tests read it from there and nowhere else, joining onto
+``draw_types.key`` for the slug where a raw-SQL assertion wants one. There is no
+``draw_type`` column on ``tournament_events`` to cross-check it against, which is
+the point.
 """
 
 import uuid
@@ -43,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     DrawType,
+    DrawTypeOption,
     TournamentEvent,
     TournamentEventDrawSettings,
     User,
@@ -166,10 +170,15 @@ async def test_creating_an_event_creates_one_settings_row_with_its_draw_type(
         await db_session.execute(
             select(
                 TournamentEvent.name,
-                TournamentEventDrawSettings.draw_type_key,
-            ).join(
+                DrawTypeOption.key,
+            )
+            .join(
                 TournamentEventDrawSettings,
                 TournamentEventDrawSettings.id == TournamentEvent.draw_settings_id,
+            )
+            .join(
+                DrawTypeOption,
+                DrawTypeOption.id == TournamentEventDrawSettings.draw_type_id,
             )
         )
     ).all()
@@ -177,7 +186,7 @@ async def test_creating_an_event_creates_one_settings_row_with_its_draw_type(
     assert len(joined) == 1, f"expected one event joined to one settings row: {joined}"
     (row,) = joined
     assert row.name == "Open Singles"
-    assert row.draw_type_key == "round-robin"
+    assert row.key == "round-robin"
 
     # Exactly one settings row was written — not one per request, not none.
     total = (
@@ -363,24 +372,27 @@ async def test_deleting_a_tournament_takes_its_events_settings_rows_with_it(
 async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
     db_session: AsyncSession,
 ) -> None:
-    """The FK to ``draw_types.key`` is the enforcement, and this is the test that
+    """The FK to ``draw_types.id`` is the enforcement, and this is the test that
     makes it one.
 
-    ``double-elim`` is a draw type the product does not run: it has no ``DrawType``
-    member and therefore no seeded row (ADR "a draw type is a seeded row, and the
-    enum holds only what runs"). It took this test's place from ``swiss``, which
-    shipped — the list of unseeded slugs shrinks by exactly the format that lands,
-    which is the mechanism working. Written with raw SQL on purpose — the ORM path
-    goes through ``for_draw_type``, which cannot produce an unseeded slug, so only
-    a hand-written INSERT can ask the database the question.
+    The refused id names no row at all — the same claim ``double-elim`` used to
+    make about ``draw_types.key`` before ADR 20260815 moved the FK onto the
+    surrogate id, since a draw type the product does not run has no ``DrawType``
+    member and therefore no seeded row either way (ADR "a draw type is a seeded
+    row, and the enum holds only what runs"). Written with raw SQL on purpose —
+    the ORM path goes through ``for_draw_type``, which can only produce a seeded
+    id (:data:`app.models.draw_type.DRAW_TYPE_IDS`), so only a hand-written
+    INSERT can ask the database the question.
 
-    A seeded slug is inserted first, so a green result cannot be explained by the
+    A seeded row is inserted first (resolved by its ``key``, the spelling the
+    rest of this file binds on), so a green result cannot be explained by the
     table or the statement being wrong.
     """
     seeded = await db_session.execute(
         sa.text(
-            "INSERT INTO tournament_event_draw_settings (draw_type_key)"
-            " VALUES ('round-robin') RETURNING id"
+            "INSERT INTO tournament_event_draw_settings (draw_type_id)"
+            " VALUES ((SELECT id FROM draw_types WHERE key = 'round-robin'))"
+            " RETURNING id"
         )
     )
     assert seeded.scalar_one() is not None
@@ -388,11 +400,11 @@ async def test_a_settings_row_naming_an_unseeded_draw_type_is_refused(
     with pytest.raises(IntegrityError) as refusal:
         await db_session.execute(
             sa.text(
-                "INSERT INTO tournament_event_draw_settings (draw_type_key)"
-                " VALUES ('double-elim')"
+                "INSERT INTO tournament_event_draw_settings (draw_type_id)"
+                " VALUES ('00000000-0000-0000-0000-000000000000')"
             )
         )
-    assert "draw_type_key" in str(refusal.value)
+    assert "draw_type_id" in str(refusal.value)
     await db_session.rollback()
 
 
@@ -481,8 +493,9 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
             stored = await db_session.execute(
                 sa.text(
                     "INSERT INTO tournament_event_draw_settings"
-                    " (draw_type_key, settings)"
-                    f" VALUES (:key, {value}) RETURNING settings"
+                    " (draw_type_id, settings)"
+                    " VALUES ((SELECT id FROM draw_types WHERE key = :key),"
+                    f" {value}) RETURNING settings"
                 ),
                 {"key": RR_THEN_KO},
             )
@@ -504,8 +517,9 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
                 await db_session.execute(
                     sa.text(
                         "INSERT INTO tournament_event_draw_settings"
-                        " (draw_type_key, settings)"
-                        f" VALUES (:key, {value})"
+                        " (draw_type_id, settings)"
+                        " VALUES ((SELECT id FROM draw_types WHERE key = :key),"
+                        f" {value})"
                     ),
                     {"key": RR_THEN_KO},
                 )
@@ -521,8 +535,8 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
             await db_session.execute(
                 sa.text(
                     "INSERT INTO tournament_event_draw_settings"
-                    " (draw_type_key, settings)"
-                    " VALUES (:key, NULL)"
+                    " (draw_type_id, settings)"
+                    " VALUES ((SELECT id FROM draw_types WHERE key = :key), NULL)"
                 ),
                 {"key": RR_THEN_KO},
             )
@@ -574,7 +588,7 @@ async def test_every_arm_round_trips_through_the_settings_column(
                 )
             )
         ).scalar_one()
-        assert stored.draw_type_key == arm.draw_type.value
+        assert stored.draw_type_option.key == arm.draw_type.value
         assert draw_settings_of(stored) == arm
 
     await db_session.rollback()
@@ -623,8 +637,9 @@ async def test_the_qualifier_floor_is_the_unions_now_that_the_column_is_gone(
     # is still there would be wrong about where this rule lives.
     stored = await db_session.execute(
         sa.text(
-            "INSERT INTO tournament_event_draw_settings (draw_type_key, settings)"
-            " VALUES (:key, '{\"qualifiers_per_pool\": 0}'::jsonb) RETURNING settings"
+            "INSERT INTO tournament_event_draw_settings (draw_type_id, settings)"
+            " VALUES ((SELECT id FROM draw_types WHERE key = :key),"
+            " '{\"qualifiers_per_pool\": 0}'::jsonb) RETURNING settings"
         ),
         {"key": RR_THEN_KO},
     )

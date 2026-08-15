@@ -31,6 +31,7 @@ from app.models import (
     Role,
 )
 from app.models import NotificationChannel as NotificationChannelModel
+from app.models.draw_type import DRAW_TYPE_IDS
 from app.notifications.taxonomy import (
     CHANNEL_AVAILABLE,
     NotificationCategory,
@@ -348,13 +349,21 @@ async def draw_types(db_session: AsyncSession) -> list[DrawTypeOption]:
     drift — a row exists exactly when a draw type has a strategy — with the
     display copy read out of migration 0010 itself, so the rows a test sees are
     the rows a migrated database has. Autouse because the FK on the event's
-    ``draw_type_key`` requires the parent rows to exist whenever a test builds a
+    ``draw_type_id`` requires the parent rows to exist whenever a test builds a
     tournament event, which is most of the suite. Migration 0010 inserts these in
     real deployments; tests build via ``Base.metadata.create_all`` so we re-seed
     here.
+
+    ``id`` is set explicitly from :data:`app.models.draw_type.DRAW_TYPE_IDS`,
+    not left to the column's ``gen_random_uuid()`` default — the model's
+    ``draw_type`` setter writes a settings row's ``draw_type_id`` from that same
+    fixed map (see its docstring for why), so a row seeded with a random id would
+    make every settings-row write in the suite FK-violate against a row that
+    does not, by the map, exist.
     """
     rows = [
         DrawTypeOption(
+            id=DRAW_TYPE_IDS[draw_type],
             key=draw_type.value,
             name=DRAW_TYPE_SEED[draw_type].name,
             description=DRAW_TYPE_SEED[draw_type].description,

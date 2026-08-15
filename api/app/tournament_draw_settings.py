@@ -78,7 +78,7 @@ def store_draw_settings(
     """Write ``settings`` onto ``row`` — the ONE write boundary onto that column.
 
     The inverse of :func:`draw_settings_of`, and the reason both are in one module: the
-    arm's discriminator becomes the ``draw_type_key`` slug and the rest of it becomes
+    arm's discriminator becomes the ``draw_type_id`` FK and the rest of it becomes
     the JSON object, in a single call, so the pair cannot be written half-way. Delegates
     to ``configure``, which is the model's own "these two columns are one fact" door.
     """

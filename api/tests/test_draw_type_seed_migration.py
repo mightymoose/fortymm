@@ -40,6 +40,7 @@ none rather than inventing one.
 import os
 import subprocess
 import sys
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -50,6 +51,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models import DrawType
+from app.models.draw_type import DRAW_TYPE_IDS
 
 # ``tests/`` lives directly under the api package root, next to alembic.ini and
 # migrations/. Deriving both from __file__ is what pins the migrations under
@@ -153,7 +155,7 @@ async def migrated_database_url(postgres_url: str) -> AsyncIterator[str]:
 @pytest_asyncio.fixture(scope="session")
 async def seeded_draw_types(
     migrated_database_url: str,
-) -> list[sa.Row[tuple[str, str, str, int]]]:
+) -> list[sa.Row[tuple[uuid.UUID, str, str, str, int]]]:
     """The ``draw_types`` rows a migrated database ends up with.
 
     Read with raw SQL rather than through ``DrawTypeOption``: the subject is what
@@ -166,7 +168,8 @@ async def seeded_draw_types(
             rows = (
                 await conn.execute(
                     sa.text(
-                        "SELECT key, name, description, display_order FROM draw_types"
+                        "SELECT id, key, name, description, display_order"
+                        " FROM draw_types"
                     )
                 )
             ).all()
@@ -176,7 +179,7 @@ async def seeded_draw_types(
 
 
 async def test_migration_seeds_exactly_the_draw_types_the_code_dispatches(
-    seeded_draw_types: list[sa.Row[tuple[str, str, str, int]]],
+    seeded_draw_types: list[sa.Row[tuple[uuid.UUID, str, str, str, int]]],
 ) -> None:
     """The central claim: seeded rows == ``DrawType`` members, both ways.
 
@@ -199,8 +202,33 @@ async def test_migration_seeds_exactly_the_draw_types_the_code_dispatches(
     )
 
 
+async def test_migration_seeds_the_ids_the_app_writes_settings_rows_with(
+    seeded_draw_types: list[sa.Row[tuple[uuid.UUID, str, str, str, int]]],
+) -> None:
+    """``draw_types.id`` on a migrated database matches
+    ``app.models.draw_type.DRAW_TYPE_IDS`` (ADR 20260815, "draw_types gains a
+    surrogate id primary key").
+
+    The app never queries for a draw type's id — the settings row's ``draw_type``
+    setter writes it straight from that fixed map, with no session in scope (see
+    the map's own docstring for why). This is the one guard that a migration
+    editor who changes an id in one of the two places and not the other would
+    trip: every settings-row write in a REAL deployment would FK-violate against
+    a seeded id the map no longer names, and nothing built on ``create_all``
+    (the rest of the suite) can catch that, because ``tests/conftest.py`` seeds
+    its own rows FROM the same map rather than from this migration.
+    """
+    seeded = {row.key: row.id for row in seeded_draw_types}
+    expected = {draw_type.value: id_ for draw_type, id_ in DRAW_TYPE_IDS.items()}
+
+    assert seeded == expected, (
+        "migration 0010's draw_types seed ids have drifted from "
+        f"app.models.draw_type.DRAW_TYPE_IDS: seeded={seeded}, expected={expected}"
+    )
+
+
 async def test_every_seeded_draw_type_carries_picker_copy(
-    seeded_draw_types: list[sa.Row[tuple[str, str, str, int]]],
+    seeded_draw_types: list[sa.Row[tuple[uuid.UUID, str, str, str, int]]],
 ) -> None:
     """``name`` and ``description`` are rendered to directors as the picker's
     label and help text, so a blank one is a blank option on screen."""
@@ -290,6 +318,33 @@ async def test_migration_no_longer_creates_the_qualifiers_per_pool_column(
     )
 
 
+async def test_migration_moves_the_draw_type_fk_from_key_to_id(
+    migrated_database_url: str,
+) -> None:
+    """``draw_type_key`` is **gone** and ``draw_type_id`` — a NOT NULL uuid — is what
+    replaced it (ADR 20260815, "draw_types gains a surrogate id primary key").
+
+    The same shape as the ``qualifiers_per_pool`` test above: a rename that only
+    touched the model would leave a migrated database with the OLD column, and
+    every other test in this repo (``create_all``-built) would stay green over it.
+    """
+    old_column = await _draw_settings_column(migrated_database_url, "draw_type_key")
+    assert old_column is None, (
+        "migrated database still has tournament_event_draw_settings.draw_type_key"
+        " — ADR 20260815 renamed it to draw_type_id, so the old column is a"
+        " second, stale home for the FK"
+    )
+
+    new_column = await _draw_settings_column(migrated_database_url, "draw_type_id")
+    assert new_column is not None, (
+        "migrated database has no tournament_event_draw_settings.draw_type_id"
+        " column — the model has it and create_all builds it, so the whole"
+        " suite is green without the migration"
+    )
+    assert new_column.data_type == "uuid", new_column
+    assert new_column.is_nullable == "NO", new_column
+
+
 # Every ``settings`` value the CHECK has an opinion about, and the opinion. Written
 # as data so the test below reports the WHOLE outcome table on a failure rather than
 # dying at the first disagreement — a constraint that was never created and one that
@@ -361,10 +416,16 @@ async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
             transaction = await conn.begin()
             try:
                 for value, _ in SETTINGS_VALUE_CASES:
+                    # The slug resolves to its id via a sub-select rather than a bound
+                    # uuid literal, so this case list keeps naming the draw type by its
+                    # ``key`` — the spelling the rest of this file, and the code, both
+                    # bind on (ADR 20260815 moved the FK's COLUMN to ``draw_type_id``,
+                    # not what the test asks by).
                     statement = sa.text(
                         "INSERT INTO tournament_event_draw_settings"
-                        " (draw_type_key, settings)"
-                        f" VALUES (:slug, {value})"
+                        " (draw_type_id, settings)"
+                        " VALUES ((SELECT id FROM draw_types WHERE key = :slug),"
+                        f" {value})"
                     )
                     try:
                         # A SAVEPOINT per case: a refused INSERT poisons the
@@ -399,7 +460,7 @@ async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
 
 
 async def test_seeded_draw_types_have_distinct_display_orders(
-    seeded_draw_types: list[sa.Row[tuple[str, str, str, int]]],
+    seeded_draw_types: list[sa.Row[tuple[uuid.UUID, str, str, str, int]]],
 ) -> None:
     """Duplicate ``display_order`` values leave the picker's order up to the
     database, which is a real defect and an intermittent one."""

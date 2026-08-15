@@ -51,6 +51,7 @@ from app.draws import (
 )
 from app.models import (
     DrawType,
+    DrawTypeOption,
     EventFormat,
     TournamentEntry,
     TournamentEntryStatus,
@@ -504,20 +505,26 @@ async def draw_currency_by_event(
     # its entrants its fixtures may legitimately leave unseated. Read as the FK slug and
     # parsed here — ``DrawType(slug)`` is the same parse the settings row's own
     # ``draw_type`` property does, and the FK plus the seed-vs-enum migration test are
-    # what make an unparseable slug unreachable.
+    # what make an unparseable slug unreachable. A second join onto ``draw_types``
+    # (ADR 20260815) is what gets from the settings row's ``draw_type_id`` back to the
+    # slug — this is a targeted column-only ``select``, not a whole-entity ORM load, so
+    # the settings row's own eager ``draw_type_option`` relationship never applies here;
+    # the join has to be spelled out.
     draw_types: dict[uuid.UUID, DrawType] = {}
     if cut:
         draw_types = {
             event_id: DrawType(slug)
             for event_id, slug in (
                 await db.execute(
-                    select(
-                        TournamentEvent.id, TournamentEventDrawSettings.draw_type_key
-                    )
+                    select(TournamentEvent.id, DrawTypeOption.key)
                     .join(
                         TournamentEventDrawSettings,
                         TournamentEvent.draw_settings_id
                         == TournamentEventDrawSettings.id,
+                    )
+                    .join(
+                        DrawTypeOption,
+                        TournamentEventDrawSettings.draw_type_id == DrawTypeOption.id,
                     )
                     # ``in_`` over the cut ids, so this scales with the events that
                     # reach the allowance and not with the batch or the table.

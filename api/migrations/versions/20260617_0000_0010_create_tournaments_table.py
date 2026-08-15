@@ -15,6 +15,7 @@ place — rather than as a chained ALTER at the head of the chain — is what ke
 that ordering true; a later revision would land *after* the tables that point at
 it. Revision ids and the ``down_revision`` chain stay frozen.
 """
+import uuid
 from typing import Sequence, Union
 
 from alembic import op
@@ -52,10 +53,14 @@ event_format_enum = postgresql.ENUM(
 
 # There is deliberately NO ``draw_type`` Postgres enum type here, and no
 # ``tournament_events.draw_type`` column. A draw type is persisted as the
-# ``draw_types.key`` slug on an event's ``tournament_event_draw_settings`` row
-# (ADR "an event's draw configuration is a row, not a column"), so the seeded
+# ``draw_types.id`` FK on an event's ``tournament_event_draw_settings`` row
+# (ADR "an event's draw configuration is a row, not a column"; superseded in part
+# by ADR 20260815 "draw_types gains a surrogate id primary key"), so the seeded
 # lookup table below is the only place a draw type can be named — which is what
-# makes the FK, rather than a hand-maintained enum type, the enforcement.
+# makes the FK, rather than a hand-maintained enum type, the enforcement. Code
+# still resolves a draw type by its ``key`` slug — the enum binds on ``key``, not
+# on ``id`` — so the slug stays a UNIQUE NOT NULL column even though it is no
+# longer the primary key.
 # Seeded lookup rows: the draw types that RUN. A row means "this draw type has
 # an implementation" — the set is exactly what ``app.draws.strategy_for``
 # dispatches, which is also exactly the members of ``app.models.DrawType``.
@@ -107,18 +112,46 @@ DRAW_TYPE_SEED = [
 ]
 
 
+# Fixed ids, one per seeded slug — NOT ``gen_random_uuid()`` for these rows
+# specifically, even though the column's default (below) is. ``app.models.tournament
+# .DrawType`` binds on ``key``, but writing a settings row's ``draw_type_id`` from a
+# ``DrawType`` member is a plain, synchronous property assignment reached from dozens
+# of call sites with no database session in scope (most of them test fixtures that
+# build a whole ``TournamentEvent`` in one expression) — so the app side needs the id
+# for each draw type without a lookup. ``app.models.draw_type.DRAW_TYPE_IDS`` is the
+# same mapping, hand-copied for the reason ``DRAW_TYPE_SEED`` above already is
+# (migrations cannot import app code); ``tests/test_draw_type_seed_migration.py``
+# pins the two in agreement. Same shape as migration 0005's
+# ``GLICKO2_STRATEGY_ID`` / ``MANUAL_STRATEGY_ID`` for ``rating_strategies``.
+DRAW_TYPE_IDS = {
+    "round-robin": uuid.UUID("22222222-2222-2222-2222-222222220001"),
+    "single-elim": uuid.UUID("22222222-2222-2222-2222-222222220002"),
+    "rr-then-ko": uuid.UUID("22222222-2222-2222-2222-222222220003"),
+    "swiss": uuid.UUID("22222222-2222-2222-2222-222222220004"),
+}
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     tournament_status_enum.create(bind, checkfirst=True)
     event_format_enum.create(bind, checkfirst=True)
 
-    # The slug is the primary key — no surrogate id, unlike notification_types.
-    # It is the FK target for the event's draw settings, so changing a slug is a
-    # migration. No ``is_active`` column on purpose: an unimplemented draw type
-    # has no row, which is what makes that FK the enforcement (see the ADR).
+    # A surrogate ``id`` primary key (ADR 20260815 "draw_types gains a surrogate id
+    # primary key"), superseding the slug-as-PK stance of the ADR this migration
+    # originally implemented. ``key`` stays UNIQUE and NOT NULL: it is still the only
+    # spelling ``app.models.tournament.DrawType`` binds on, and renaming it is still a
+    # migration, but the FK target for the event's draw settings is ``id`` now. No
+    # ``is_active`` column on purpose: an unimplemented draw type has no row, which is
+    # what makes that FK the enforcement (see the ADR).
     draw_types = op.create_table(
         "draw_types",
-        sa.Column("key", sa.String(length=32), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column("key", sa.String(length=32), nullable=False),
         sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column(
@@ -136,11 +169,13 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        sa.UniqueConstraint("key", name="uq_draw_types_key"),
     )
     op.bulk_insert(
         draw_types,
         [
             {
+                "id": DRAW_TYPE_IDS[key],
                 "key": key,
                 "name": name,
                 "description": description,
@@ -165,12 +200,15 @@ def upgrade() -> None:
             server_default=sa.text("gen_random_uuid()"),
         ),
         # RESTRICT: a draw type an event is configured with cannot be deleted out
-        # from under it, and a settings row cannot name a slug with no seeded row
-        # — i.e. no draw type the product cannot actually run.
+        # from under it, and a settings row cannot name an id with no seeded row —
+        # i.e. no draw type the product cannot actually run. FKs ``draw_types.id``
+        # rather than its ``key`` (ADR 20260815) — the app still resolves the draw
+        # type BY key, through the join this FK makes possible, or through
+        # ``app.models.draw_type.DRAW_TYPE_IDS`` on the write side.
         sa.Column(
-            "draw_type_key",
-            sa.String(length=32),
-            sa.ForeignKey("draw_types.key", ondelete="RESTRICT"),
+            "draw_type_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("draw_types.id", ondelete="RESTRICT"),
             nullable=False,
         ),
         # The draw type's settings, as ONE NOT NULL JSON object (ADR "a draw
