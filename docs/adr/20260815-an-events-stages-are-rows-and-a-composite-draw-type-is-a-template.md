@@ -103,6 +103,10 @@ work that #1338 starts. A stage row is the anchor that work will attach to.
 
 ## Consequences
 
+**Migrations may be rewritten in place.** As of this ADR no environment holds
+data worth preserving, so the implementation is free to edit existing Alembic
+revisions rather than append new ones, and no backfill is owed anywhere.
+
 **The twenty derivation sites become reads.** The web client's
 `unpooledShape(drawType)` switch and its warning comment go away: the stage's
 draw type says whether an un-pooled block is a bracket or swiss rounds.
