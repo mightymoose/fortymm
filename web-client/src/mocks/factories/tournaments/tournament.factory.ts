@@ -1337,6 +1337,33 @@ export const UNBREAKABLE_VENUE_NAME =
     .slice(0, 680)
 
 /**
+ * A tournament name of **255 characters with not one break opportunity in it** —
+ * no space, no hyphen, no slash. The hostile title the detail page's header has to
+ * survive (#1044).
+ *
+ * 255, not the venue's 680, and the difference is deliberate: `tournament.name` is
+ * a `String(255)` column (`api/app/models/tournament.py`), so this is a row the
+ * server can hold **today**. The venue fixture's 680 rests on a story this string
+ * has no claim to — address components are bounded on the way IN only, so longer
+ * legacy rows still come back over the wire. A fixture is worth more when it is a
+ * state the product can actually produce.
+ *
+ * It is one unbroken word, so its min-content width is its whole rendered width.
+ * That is the point: the `h1` carries `break-words`, and only a name with no break
+ * opportunity of its own puts that class under any load at all. A name with spaces
+ * in it wraps whether the class is there or not, so a test built on one would pass
+ * against a header that had lost the class entirely.
+ *
+ * Exported from the factory rather than re-typed per suite, for the same reason
+ * `UNBREAKABLE_VENUE_NAME` is: both layers need the same string, and only one of
+ * them (`e2e/`, a real browser) can measure what it does.
+ */
+export const UNBREAKABLE_TOURNAMENT_NAME =
+  'QuinnOpenInternationalTableTennisChampionshipInvitational'
+    .repeat(5)
+    .slice(0, 255)
+
+/**
  * The published "Bay Area Open 2026" with a four-table catalogue and a single
  * Open Singles event, owned (editable) by the current user. The list and detail
  * endpoints both return this `TournamentDetailRead` shape.
