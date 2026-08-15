@@ -8,6 +8,12 @@ concurrent worktrees, as the duplicate 0008s in this directory attest)
 Accepted — design for slices B/C of epic #780 (#785, #786, #788, #789), decided
 before implementation.
 
+Amended for one consumer by `20260815-the-dashboards-your-matches-path-sorts-
+by-time-not-draw-order.md` (#1297): the dashboard's "Your matches" path list
+sorts by scheduled time rather than by this ADR's pool → round → position
+order. `fixtures_by_event`'s own ordering, and every other reader of it, is
+unchanged.
+
 ## Context
 
 `DrawType` (single-elim / double-elim / round-robin / rr-then-ko / swiss) has

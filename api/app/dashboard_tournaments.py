@@ -30,7 +30,7 @@ import logging
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import assert_never
 
 from pydantic import ValidationError
@@ -61,6 +61,7 @@ from app.schemas.dashboard import (
 )
 from app.schemas.tournament import (
     Address,
+    FixtureTimeRead,
     MatchSettings,
     StandingsResultsRead,
     StandingsThenFinishesResultsRead,
@@ -79,6 +80,11 @@ from app.tournament_queries import (
 from app.tournament_serialization import event_results
 
 log = logging.getLogger(__name__)
+
+# Sort key for a fixture with no effective time (:func:`_effective_fixture_time`) in
+# :func:`_sorted_by_effective_time` — larger than any real instant, so untimed
+# fixtures always sort after every timed one.
+_UNTIMED_SORTS_LAST = datetime.max.replace(tzinfo=UTC)
 
 
 async def build_tournament_panels(
@@ -106,14 +112,19 @@ async def build_tournament_panels(
     fixtures = await fixtures_by_event(db, event_ids)
     game_counts = await game_counts_by_match(db, completed_match_ids(fixtures))
 
-    # The caller's own fixtures, in draw order, per event — the path list, and the
-    # pool the focus match is chosen out of.
+    # The caller's own fixtures, per event — the path list, and the pool the focus
+    # match is chosen out of. Sorted chronologically (#1297): a player reading the
+    # path top-to-bottom must meet their matches in the order they are actually
+    # played, not in draw order (pool -> round -> position, ADR-0786), which can
+    # and does run out of time order once fixtures are called onto real tables.
     my_fixtures = {
-        event_id: [
-            fixture
-            for fixture in fixtures[event_id]
-            if _my_side(fixture, my_entry_id_by_event[event_id]) is not None
-        ]
+        event_id: _sorted_by_effective_time(
+            [
+                fixture
+                for fixture in fixtures[event_id]
+                if _my_side(fixture, my_entry_id_by_event[event_id]) is not None
+            ]
+        )
         for event_id in event_ids
     }
     focus = {event_id: _focus_fixture(rows) for event_id, rows in my_fixtures.items()}
@@ -247,8 +258,11 @@ def _focus_fixture(
     point of the panel — a player mid-match must never have to scroll past a result to
     find the game they are standing at a table for.
 
-    Among the not-yet-played, the earliest in draw order wins (the list arrives in
-    pool → round → position order, ADR-0786); among the finished, the latest. ``None``
+    Among the not-yet-played, the earliest by effective time (``pinned_at or
+    scheduled_start``) wins, untimed fixtures falling back to draw order (pool ->
+    round -> position, ADR-0786) among themselves — the same chronological ordering
+    the path list itself now uses (#1297), so the focus match is always the top row
+    of "Your matches". Among the finished, the latest by that same ordering. ``None``
     for an event whose draw has not been cut, which has no fixtures at all."""
     live = [f for f in my_fixtures if f.match_status is MatchStatus.in_progress]
     if live:
@@ -684,18 +698,47 @@ def _table_label(
     return table.label if table is not None else None
 
 
-def _time_label(fixture: TournamentFixtureRead) -> str | None:
-    """The fixture's start as one display string in the venue's timezone (e.g.
-    ``"4:30 PM CDT"``), already rendered server-side — clients do no timezone math (ADR
-    "tournament times are timezone-aware instants").
+def _effective_fixture_time(fixture: TournamentFixtureRead) -> FixtureTimeRead | None:
+    """The one time a fixture is judged by, everywhere the panel needs a single
+    instant rather than the two raw columns: display (:func:`_time_label`) and the
+    path list's chronological sort (:func:`_sorted_by_effective_time`).
 
     The **pinned** time wins over the predicted one when there is one: a pinned
     placement is a promise the players were notified of, and a panel that showed the
-    solver's newer estimate instead would contradict the call they were sent."""
-    time = fixture.pinned_at or fixture.scheduled_start
+    solver's newer estimate instead would contradict the call they were sent. ``None``
+    when the fixture carries neither — unplaced, or placed with no time yet."""
+    return fixture.pinned_at or fixture.scheduled_start
+
+
+def _time_label(fixture: TournamentFixtureRead) -> str | None:
+    """The fixture's start as one display string in the venue's timezone (e.g.
+    ``"4:30 PM CDT"``), already rendered server-side — clients do no timezone math (ADR
+    "tournament times are timezone-aware instants")."""
+    time = _effective_fixture_time(fixture)
     if time is None:
         return None
     return f"{time.local_label} {time.tz_abbrev}"
+
+
+def _sorted_by_effective_time(
+    fixtures: list[TournamentFixtureRead],
+) -> list[TournamentFixtureRead]:
+    """The caller's path list, ordered by :func:`_effective_fixture_time` ascending
+    (#1297) rather than the draw order it arrives in.
+
+    A player reading "Your matches" top-to-bottom must meet their matches in the
+    order they are actually played — a fixture called for 9:00 AM has to outrank one
+    called for noon regardless of which round or pool it belongs to. Fixtures with no
+    time at all (not yet placed) sort LAST, after every timed one, via a
+    ``datetime.max`` sentinel key, and keep their relative draw order (pool -> round
+    -> position, ADR-0786) among themselves — :func:`sorted` is stable, so that
+    fallback needs no extra code, only an equal sort key for every untimed fixture."""
+
+    def key(fixture: TournamentFixtureRead) -> datetime:
+        time = _effective_fixture_time(fixture)
+        return time.instant if time is not None else _UNTIMED_SORTS_LAST
+
+    return sorted(fixtures, key=key)
 
 
 def _subtitle(tournament: Tournament) -> str:

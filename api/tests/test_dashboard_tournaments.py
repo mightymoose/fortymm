@@ -25,6 +25,7 @@ from app.models import (
     MatchStatus,
     Tournament,
     TournamentEntryStatus,
+    TournamentFixture,
     TournamentStatus,
     User,
 )
@@ -1004,3 +1005,162 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
     )
     assert ko_event["stage_label"] == "In play"
     assert [row["label"] for row in ko_event["fixtures"]] == ["M1", "M2"]
+
+
+async def test_the_path_list_sorts_by_scheduled_time_not_draw_order(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """#1297: "Your matches" reads top-to-bottom in the order the caller actually
+    plays it, not in draw order (pool -> round -> position, ADR-0786).
+
+    A three-entrant round-robin pool seats the caller (seed 1) into two of the
+    draw's three rounds. Placed IN draw order they would already read correctly, so
+    the fixtures are placed OUT of it on purpose — the later round scheduled for the
+    earlier time, exactly the shape the issue reports (a noon ``M1`` ahead of a
+    9 AM ``M2``) — and the panel must still list the 9 AM one first."""
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "sched-opp-2") as (_client_2, user_2),
+        opponent_session(db_session, "sched-opp-3") as (_client_3, user_3),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(
+            client,
+            _rr_payload(
+                POOL_A,
+                match_settings={"rated": False, "length_games": 3},
+                predicates=[],
+            ),
+        )
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        owner_entry, entry_2, entry_3 = [
+            await _enter(
+                db_session,
+                event["id"],
+                user,
+                seed=seed,
+                created_at=base + timedelta(minutes=seed),
+            )
+            for seed, user in ((1, owner), (2, user_2), (3, user_3))
+        ]
+        username_by_entry = {
+            owner_entry.id: owner.username,
+            entry_2.id: user_2.username,
+            entry_3.id: user_3.username,
+        }
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+
+        rows = await _fixture_rows(db_session, event["id"])
+        my_fixtures = sorted(
+            (f for f in rows if owner_entry.id in (f.entry_a_id, f.entry_b_id)),
+            key=lambda f: f.round,
+        )
+        assert len(my_fixtures) == 2, "seed 1 sits out exactly one of the 3 rounds"
+        draw_first, draw_second = my_fixtures
+
+        # Out of draw order: the fixture draw-ordered SECOND gets the EARLIER time.
+        draw_first.scheduled_start = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+        draw_second.scheduled_start = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        await db_session.commit()
+
+        def opponent_of(fixture: TournamentFixture) -> str:
+            other_id = (
+                fixture.entry_b_id
+                if fixture.entry_a_id == owner_entry.id
+                else fixture.entry_a_id
+            )
+            assert other_id is not None
+            return username_by_entry[other_id]
+
+        (panel,) = await _panels(client)
+
+    (event_out,) = panel["events"]
+    assert [row["opponent_username"] for row in event_out["fixtures"]] == [
+        opponent_of(draw_second),
+        opponent_of(draw_first),
+    ], (
+        "the 9 AM fixture (draw-ordered second) must lead the path list ahead of "
+        "the noon fixture (draw-ordered first) — time order, not draw order"
+    )
+
+
+async def test_untimed_fixtures_sort_last_and_keep_draw_order_among_themselves(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A fixture with no time at all is not "soonest" by default — it sorts AFTER
+    every timed fixture, and untimed fixtures keep their relative draw order among
+    themselves (#1297).
+
+    A four-entrant round-robin pool seats the caller into all three rounds. Only
+    the middle one is given a time; the other two stay unplaced and must still come
+    out in draw order (round 1 before round 3), both trailing the one timed match."""
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "sched-opp-4b") as (_client_2, user_2),
+        opponent_session(db_session, "sched-opp-4c") as (_client_3, user_3),
+        opponent_session(db_session, "sched-opp-4d") as (_client_4, user_4),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(
+            client,
+            _rr_payload(
+                POOL_A,
+                match_settings={"rated": False, "length_games": 3},
+                predicates=[],
+            ),
+        )
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        owner_entry, entry_2, entry_3, entry_4 = [
+            await _enter(
+                db_session,
+                event["id"],
+                user,
+                seed=seed,
+                created_at=base + timedelta(minutes=seed),
+            )
+            for seed, user in ((1, owner), (2, user_2), (3, user_3), (4, user_4))
+        ]
+        username_by_entry = {
+            owner_entry.id: owner.username,
+            entry_2.id: user_2.username,
+            entry_3.id: user_3.username,
+            entry_4.id: user_4.username,
+        }
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+
+        rows = await _fixture_rows(db_session, event["id"])
+        my_fixtures = sorted(
+            (f for f in rows if owner_entry.id in (f.entry_a_id, f.entry_b_id)),
+            key=lambda f: f.round,
+        )
+        assert len(my_fixtures) == 3, "a 4-entrant pool plays every round"
+        round_1, round_2, round_3 = my_fixtures
+
+        # Only the middle round gets a time; rounds 1 and 3 stay unplaced.
+        round_2.scheduled_start = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        await db_session.commit()
+
+        def opponent_of(fixture: TournamentFixture) -> str:
+            other_id = (
+                fixture.entry_b_id
+                if fixture.entry_a_id == owner_entry.id
+                else fixture.entry_a_id
+            )
+            assert other_id is not None
+            return username_by_entry[other_id]
+
+        (panel,) = await _panels(client)
+
+    (event_out,) = panel["events"]
+    assert [row["opponent_username"] for row in event_out["fixtures"]] == [
+        opponent_of(round_2),
+        opponent_of(round_1),
+        opponent_of(round_3),
+    ], (
+        "the timed fixture leads; the two untimed ones trail it in draw order "
+        "(round 1 before round 3), not swapped or interleaved"
+    )
