@@ -13,7 +13,7 @@ it stays cycle-free, mirroring ``app/match_serialization.py``.
 
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,7 @@ from app.draws import (
     swiss_pairable_rows,
 )
 from app.models import (
+    DrawType,
     MatchStatus,
     ScheduleSolve,
     Tournament,
@@ -230,6 +231,7 @@ def event_results(
     entrants: Sequence[TournamentEntrantRead],
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
+    stage_draw_types: Mapping[uuid.UUID, DrawType],
 ) -> EventResultsRead | None:
     """The event's results, projected from its fixtures' completed matches, or ``None``
     when there are none to compute — a **discriminated union tagged by shape**
@@ -244,6 +246,17 @@ def event_results(
     ADR-0786), so a field derived from fixtures alone would drop them from the table
     they belong at the top of. The pooled shapes are deliberately left fixture-derived,
     unchanged.
+
+    ``stage_draw_types`` maps this event's own stage ids to each stage's OWN draw type
+    (ADR 20260815) — the map ``RrThenKoResults``' arm reads to tell the pool stage's
+    fixtures from the knockout stage's, in place of the ``pool_id IS NULL`` proxy this
+    used to read. **Required, with no default**: the two callers that do not serve a
+    ``stages`` array on the wire (the single-event create/update reads) still load it
+    for this computation — see ``app.tournament_serialization.shape_event_read`` — so a
+    default here would be the one call site that quietly forgets to, and it would be the
+    one an rr-then-ko event's edit page silently mis-projects. ``round_robin`` and
+    ``single_elim`` never read the map (their fixtures are all one stage), so an empty
+    one costs them nothing; ``swiss`` never has a knockout half to split out either.
 
     ``None`` in exactly one case, meaning "no results here" rather than an empty table:
     an event whose draw has not been cut (no fixtures to stand). There used to be a
@@ -267,7 +280,7 @@ def event_results(
     match strategy:
         case RoundRobinResults():
             return _serialize_standings(
-                strategy.tabulate(_pool_inputs(fixtures, game_counts))
+                strategy.tabulate(_pool_inputs(fixtures, game_counts, stage_draw_types))
             )
         case SingleElimResults():
             return _serialize_finishes(
@@ -275,15 +288,22 @@ def event_results(
             )
         case RrThenKoResults():
             # The one arm whose ``tabulate`` takes TWO stage inputs, because a two-stage
-            # event has two stages to project. ``pool_id IS NULL`` is the stage
-            # discriminator (ADR-0786), and it is applied to the bracket half only:
-            # ``_pool_inputs`` already drops the un-pooled fixtures itself, so the pool
-            # half needs no filter and asking twice would let the two disagree.
+            # event has two stages to project. Each fixture's OWN stage (``stage_id``,
+            # ADR 20260815) — read here through ``stage_draw_types`` rather than through
+            # ``pool_id IS NULL`` — is the discriminator, and it is applied to the
+            # bracket half only: ``_pool_inputs`` already selects the pool-stage
+            # fixtures itself, so the pool half needs no filter here and asking twice
+            # would let the two disagree.
             return _serialize_standings_then_finishes(
                 strategy.tabulate(
-                    _pool_inputs(fixtures, game_counts),
+                    _pool_inputs(fixtures, game_counts, stage_draw_types),
                     _bracket_fixtures(
-                        [f for f in fixtures if f.pool_id is None], game_counts
+                        [
+                            f
+                            for f in fixtures
+                            if stage_draw_types.get(f.stage_id) is DrawType.single_elim
+                        ],
+                        game_counts,
                     ),
                 )
             )
@@ -300,14 +320,22 @@ def event_results(
 def _pool_inputs(
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
+    stage_draw_types: Mapping[uuid.UUID, DrawType],
 ) -> list[PoolInput]:
     by_pool: dict[uuid.UUID, list[TournamentFixtureRead]] = defaultdict(list)
     for f in fixtures:
-        # A round-robin fixture is always pooled; a NULL pool would be a different draw
-        # type's fixture and has no pool table to stand in. Skip it rather than key a
-        # pool on ``None``.
-        if f.pool_id is not None:
-            by_pool[f.pool_id].append(f)
+        # The pool stage's fixtures — this fixture's OWN stage runs round-robin
+        # (ADR 20260815), read through ``stage_draw_types`` rather than inferred from
+        # ``pool_id`` plus the event's overall draw type. ``pool_id`` stays on as a
+        # within-stage invariant narrowing, not the stage discriminator: a round-robin
+        # stage's fixtures are always pooled, so this can never actually skip a fixture
+        # ``stage_draw_types`` already selected — it only tells the type checker
+        # ``f.pool_id`` is not ``None`` before it is used as a dict key below.
+        if stage_draw_types.get(f.stage_id) is not DrawType.round_robin:
+            continue
+        if f.pool_id is None:
+            continue
+        by_pool[f.pool_id].append(f)
     pool_inputs: list[PoolInput] = []
     for pool_id, pool_fixtures in by_pool.items():
         entrants = {
@@ -630,6 +658,16 @@ def _serialize_standings_then_finishes(
     )
 
 
+def _stage_draw_types(
+    stages: Sequence[EventStageRead],
+) -> dict[uuid.UUID, DrawType]:
+    """Stage id → that stage's own draw type — the map :func:`event_results` reads
+    to tell a two-stage event's pool-stage fixtures from its knockout-stage ones
+    (ADR 20260815), built off whatever ``stages`` a caller has in hand rather than
+    fetched again here."""
+    return {stage.id: stage.draw_type for stage in stages}
+
+
 def serialize_event(
     e: TournamentEvent,
     *,
@@ -662,6 +700,12 @@ def serialize_event(
     # with the event (``lazy="joined"``): both wire fields below come off this one arm,
     # so the type and the count cannot be read from two different places and disagree.
     draw_settings = draw_settings_of(e.draw_settings)
+    # The eager (``lazy="selectin"``) stages collection, validated once: served on
+    # the wire below AND the source of the stage → draw-type map ``event_results``
+    # splits a two-stage event's fixtures with (ADR 20260815) — one origin, so the
+    # served stages and the results' stage-split cannot disagree.
+    stage_reads = [EventStageRead.model_validate(s) for s in e.stages]
+    stage_draw_types = _stage_draw_types(stage_reads)
     return TournamentEventRead.model_validate(
         {
             "id": e.id,
@@ -706,8 +750,10 @@ def serialize_event(
             # serializer reaches already carries its stages, however it was loaded — no
             # separate batch, no sentinel for "not on this page" (ADR 20260815).
             # ``model_validate`` directly rather than a helper: unlike ``pool_read``,
-            # nothing composes a stage row from more than itself.
-            "stages": [EventStageRead.model_validate(s) for s in e.stages],
+            # nothing composes a stage row from more than itself. The same eager
+            # collection feeds ``_stage_draw_types`` for the results projection below,
+            # so the served stages and the stage-split of the results cannot disagree.
+            "stages": stage_reads,
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,
@@ -732,6 +778,7 @@ def serialize_event(
                     entrants=entrants,
                     fixtures=fixtures,
                     game_counts=game_counts,
+                    stage_draw_types=stage_draw_types,
                 )
             ),
         }
@@ -854,7 +901,9 @@ async def shape_event_read(
     rating = await entrant_rating(db, league_id, viewer_id)
     # Its stages ride along for free, same as ``shape_created_event_read`` above:
     # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
-    # collection, so ``serialize_event`` reads real rows off ``event.stages``.
+    # collection, so ``serialize_event`` reads real rows off ``event.stages`` — and
+    # ``event_results``' stage-split reads the same rows, so an edited two-stage
+    # event's pool/knockout split is always the live one (ADR 20260815).
     return serialize_event(
         event,
         entrants=entrants,

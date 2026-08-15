@@ -1161,6 +1161,7 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
             [
                 TournamentFixtureRead(
                     id=uuid.uuid4(),
+                    stage_id=uuid.uuid4(),
                     pool_id=None,
                     round=1,
                     position=1,
@@ -1249,6 +1250,9 @@ def _row(
     )
     return TournamentFixtureRead(
         id=uuid.UUID(int=2000 + round_number * 10 + position),
+        # A swiss event has exactly one stage; every row this helper builds belongs to
+        # it, so a fixed literal stands in for the real stage id.
+        stage_id=uuid.UUID(int=1),
         pool_id=None,
         round=round_number,
         position=position,

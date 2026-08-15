@@ -375,6 +375,7 @@ async def fixtures_by_event(
         fixtures[event_id].append(
             TournamentFixtureRead(
                 id=fixture.id,
+                stage_id=fixture.stage_id,
                 pool_id=fixture.pool_id,
                 round=fixture.round,
                 position=fixture.position,

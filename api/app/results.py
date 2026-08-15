@@ -337,9 +337,12 @@ def results_for(
 
     The narrowing is not uniform, and cannot be: :meth:`RrThenKoResults.tabulate` takes
     **two** stage inputs where its siblings take one, because a two-stage event has two
-    stages to project (the pooled fixtures and the ``pool_id IS NULL`` ones). That is
-    what the ``match`` at the call site is for — each arm builds the input its own shape
-    needs, rather than a single call signature pretending every draw type has one stage.
+    stages to project — its pool-stage fixtures and its knockout-stage ones, told apart
+    by each fixture's own ``stage_id`` (ADR 20260815) at the call site
+    (``app.tournament_serialization.event_results``), not by this module, which never
+    sees a fixture row at all. That is what the ``match`` at the call site is for — each
+    arm builds the input its own shape needs, rather than a single call signature
+    pretending every draw type has one stage.
     """
     match draw_type:
         case DrawType.round_robin:

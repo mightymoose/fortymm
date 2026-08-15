@@ -738,8 +738,12 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # (``TournamentEventPool.tables``, ``lazy="selectin"`` — chained onto the pools' own
 # batched load, so it is one statement per panel build and not one per pool),
 # then ONE batched load of every event's active entrants, ONE of every event's fixtures,
-# ONE of the completed matches' game counts, ONE of the handful of focus matches, and
-# that load's own eager options (the match's league, results, sides, settings, side
+# ONE of the completed matches' game counts, ONE batched eager load of every event's
+# STAGES (``TournamentEvent.stages``, ``lazy="selectin"`` — what
+# ``_round_label``/``event_results`` read a fixture's ``stage_id`` against, in place of
+# inferring a fixture's stage from the event's overall draw type plus
+# ``pool_id IS NULL``, ADR 20260815), ONE of the handful of focus matches, and that
+# load's own eager options (the match's league, results, sides, settings, side
 # players and those players' users — one batched ``selectin`` each). Fifteen, whatever
 # the number of events.
 EXPECTED_DASHBOARD_PANEL_STATEMENTS = 15

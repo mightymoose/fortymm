@@ -4826,6 +4826,7 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
 
     assert set(fixture) == {
         "id",
+        "stage_id",
         "pool_id",
         "round",
         "position",
