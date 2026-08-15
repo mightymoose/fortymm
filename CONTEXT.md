@@ -504,13 +504,18 @@ confirmed.
 _Avoid_: are you sure, warning, double-check.
 
 **Stage**:
-One phase of a **draw** that must finish before the next can be played. Most
-draw types have exactly one; a round-robin-then-knockout draw has two — a
-**pool stage**, whose **fixtures** each name a **pool**, and a **knockout
-stage**, whose fixtures name none. Whether a fixture has a pool *is* the
-discriminator; there is no stage of its own recorded anywhere. Both stages are
-**cut together** in one stroke, so the knockout bracket exists — with its sides
-still unknown — from the moment the draw does.
+One phase of a **draw** that must finish before the next can be played. A
+stage is a first-class thing the event owns, and every **fixture** belongs to
+exactly one stage (ADR 20260815). Each stage is run by one single-stage draw
+type: a round robin, a single elimination, or a **swiss**. Most events have
+exactly one stage; a round-robin-then-knockout event has two — a **pool
+stage** run as a round robin, feeding a **knockout stage** run as a single
+elimination. The system derives an event's stages from its draw type; a
+director never authors them, and they freeze when a draw exists. Both of a
+two-stage draw's stages are **cut together** in one stroke, so the knockout
+bracket exists — with its sides still unknown — from the moment the draw
+does. This is the sport's own word: ITTF regulations play a "group stage",
+then a "knock-out stage".
 _Avoid_: round (a **round** is one layer *within* a stage), phase, leg, group
 stage (a **pool** is not a group).
 
