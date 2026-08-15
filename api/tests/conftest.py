@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -286,20 +287,28 @@ async def rating_strategies(db_session: AsyncSession) -> dict[str, RatingStrateg
 
 
 class DrawTypeSeedCopy(NamedTuple):
-    """One ``draw_types`` row's display copy, from migration 0010's own seed.
+    """One ``draw_types`` row's seed data, from migration 0010's own seed.
 
-    Named rather than positional: the fixture below used to index a bare 3-tuple
-    (``[0]``/``[1]``/``[2]``), which api/CLAUDE.md warns against — a reordered
-    seed would have silently swapped a label for its help text.
+    Named rather than positional: the fixture below used to index a bare tuple,
+    which api/CLAUDE.md warns against — a reordered seed would have silently
+    swapped a label for its help text, or worse, an id for a display order.
+
+    ``id`` is read out of the migration too, now that each seed entry carries its
+    own id: the autouse fixture below sources it from here, not from
+    ``app.models.draw_type.DRAW_TYPE_IDS``, so any drift between that app-side
+    map and this migration's own ids FK-violates every settings-row write in the
+    ``create_all`` suite immediately, rather than being caught only by the
+    Postgres-backed migration test.
     """
 
+    id: uuid.UUID
     name: str
     description: str
     display_order: int
 
 
 def _migration_draw_type_seed() -> dict[DrawType, DrawTypeSeedCopy]:
-    """Read the draw-type display copy out of migration 0010, by path.
+    """Read the draw-type seed data out of migration 0010, by path.
 
     Loaded from the migration rather than hand-copied beside it. The copy was
     duplicated here verbatim and nothing pinned the two together — the migration
@@ -331,8 +340,8 @@ def _migration_draw_type_seed() -> dict[DrawType, DrawTypeSeedCopy]:
 
     known = {draw_type.value: draw_type for draw_type in DrawType}
     return {
-        known[key]: DrawTypeSeedCopy(name, description, display_order)
-        for key, name, description, display_order in module.DRAW_TYPE_SEED
+        known[key]: DrawTypeSeedCopy(id_, name, description, display_order)
+        for id_, key, name, description, display_order in module.DRAW_TYPE_SEED
         if key in known
     }
 
@@ -346,15 +355,25 @@ async def draw_types(db_session: AsyncSession) -> list[DrawTypeOption]:
 
     Seeded FROM the enum so the rows and the code-level closed set cannot
     drift — a row exists exactly when a draw type has a strategy — with the
-    display copy read out of migration 0010 itself, so the rows a test sees are
-    the rows a migrated database has. Autouse because the FK on the event's
-    ``draw_type_key`` requires the parent rows to exist whenever a test builds a
-    tournament event, which is most of the suite. Migration 0010 inserts these in
-    real deployments; tests build via ``Base.metadata.create_all`` so we re-seed
-    here.
+    seed data (copy AND id) read out of migration 0010 itself, so the rows a
+    test sees are the rows a migrated database has. Autouse because the FK on
+    the event's ``draw_type_id`` requires the parent rows to exist whenever a
+    test builds a tournament event, which is most of the suite. Migration 0010
+    inserts these in real deployments; tests build via
+    ``Base.metadata.create_all`` so we re-seed here.
+
+    ``id`` is set explicitly from :data:`DRAW_TYPE_SEED` — sourced from the
+    migration, not from ``app.models.draw_type.DRAW_TYPE_IDS`` — not left to the
+    column's ``gen_random_uuid()`` default. The model's ``draw_type`` setter
+    writes a settings row's ``draw_type_id`` from that app-side fixed map (see
+    its docstring for why), so if the two maps ever disagree, every
+    settings-row write in the whole ``create_all`` suite FK-violates against a
+    row seeded with the migration's id rather than the app's — the drift guard
+    is the entire suite, not one dedicated test.
     """
     rows = [
         DrawTypeOption(
+            id=DRAW_TYPE_SEED[draw_type].id,
             key=draw_type.value,
             name=DRAW_TYPE_SEED[draw_type].name,
             description=DRAW_TYPE_SEED[draw_type].description,

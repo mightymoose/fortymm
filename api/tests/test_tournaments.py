@@ -37,6 +37,7 @@ from app.draws import DrawError
 from app.geocoding import FakeGeocoder, compose_address
 from app.leagues import seed_user_league_rating
 from app.models import (
+    DrawTypeOption,
     League,
     LeagueVisibility,
     Match,
@@ -3468,8 +3469,12 @@ async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
 
 def _draw_type_reads(statements: list[str]) -> list[str]:
     """The statements that read the events' draw types — the third one, by the only
-    column that is unique to it."""
-    return [statement for statement in statements if "draw_type_key" in statement]
+    column that is unique to it: ``draw_type_id`` is the column this statement
+    selects directly (``draw_currency_by_event`` maps the id to a ``DrawType`` in
+    Python via ``app.models.draw_type.DRAW_TYPES_BY_ID``, not by joining onto
+    ``draw_types`` — ADR 20260815 retired that join), and no other statement in
+    this loader's batch names the column at all."""
+    return [statement for statement in statements if "draw_type_id" in statement]
 
 
 async def test_currency_asks_for_draw_types_only_where_a_draw_was_cut(
@@ -7557,10 +7562,15 @@ async def _draw_type_of(db_session: AsyncSession, event_id: str) -> DrawType:
     an ORM instance the test session may be holding stale."""
     key = (
         await db_session.execute(
-            select(TournamentEventDrawSettings.draw_type_key)
+            select(DrawTypeOption.key)
+            .select_from(TournamentEvent)
             .join(
-                TournamentEvent,
+                TournamentEventDrawSettings,
                 TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
+            )
+            .join(
+                DrawTypeOption,
+                DrawTypeOption.id == TournamentEventDrawSettings.draw_type_id,
             )
             .where(TournamentEvent.id == uuid.UUID(event_id))
         )
@@ -7625,17 +7635,15 @@ async def test_a_refused_draw_type_patch_writes_none_of_the_rest_of_the_payload_
     )
 
     assert response.status_code == 409, response.text
-    stored = (
+    stored_name = (
         await db_session.execute(
-            select(TournamentEvent.name, TournamentEventDrawSettings.draw_type_key)
-            .join(
-                TournamentEventDrawSettings,
-                TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
+            select(TournamentEvent.name).where(
+                TournamentEvent.id == uuid.UUID(event["id"])
             )
-            .where(TournamentEvent.id == uuid.UUID(event["id"]))
         )
-    ).one()
-    assert stored == (event["name"], DrawType.round_robin.value)
+    ).scalar_one()
+    assert stored_name == event["name"]
+    assert await _draw_type_of(db_session, event["id"]) is DrawType.round_robin
 
 
 async def test_an_undrawn_event_still_changes_its_draw_type(

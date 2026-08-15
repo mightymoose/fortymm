@@ -203,7 +203,7 @@ class DrawSettingsWriteBase(BaseModel):
         the discriminator.
 
         ``draw_type`` is excluded because it is not a setting — it is the column beside
-        this one (``draw_type_key``, the FK onto ``draw_types``), and storing it twice
+        this one (``draw_type_id``, the FK onto ``draw_types``), and storing it twice
         would let the two disagree. The read side puts it back
         (``app.tournament_draw_settings.draw_settings_of``), which is what makes the
         round trip total.
@@ -395,7 +395,7 @@ def draw_settings_from_storage(
     settings are one NOT NULL JSON object").
 
     The discriminator is not in the blob (``stored_settings`` leaves it out, because the
-    row carries it in ``draw_type_key`` beside it), so it is put back here. It is put
+    row carries it in ``draw_type_id`` beside it), so it is put back here. It is put
     back as the **enum member**, never as the slug, because that is the shape
     :func:`_draw_settings_write` has always validated and the one place slug→enum
     happens is ``TournamentEventDrawSettings.draw_type``.
@@ -410,8 +410,8 @@ def draw_settings_from_storage(
     # ``draw_type`` goes LAST so the column wins. Splatting the blob last instead would
     # let a stored ``draw_type`` key override the discriminator this function was handed
     # — ``draw_type`` is a declared field on every arm, so ``extra="forbid"`` does not
-    # catch it — and a row whose ``draw_type_key`` says ``round-robin`` would parse as
-    # whatever arm its own JSON named. Nothing writes such a blob today
+    # catch it — and a row whose ``draw_type_id`` FK resolves to ``round-robin`` would
+    # parse as whatever arm its own JSON named. Nothing writes such a blob today
     # (``stored_settings()`` excludes the key), but "the union is the only enforcement"
     # is exactly the claim this change rests on, so it must hold against a writer that
     # did not go through it.

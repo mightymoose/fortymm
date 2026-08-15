@@ -133,7 +133,7 @@ async def create_event(
         # Written from the parsed union arm, never from the two loose payload fields:
         # the boundary has already refused a qualifier count that does not belong to
         # the draw type beside it (ADR 20260727), and ``draw_settings_row`` serializes
-        # that arm onto the row's ``draw_type_key`` + ``settings`` pair in the one place
+        # that arm onto the row's ``draw_type_id`` + ``settings`` pair in the one place
         # that knows how (ADR "a draw type's settings are one NOT NULL JSON object").
         draw_settings=draw_settings_row(payload.draw_settings),
         max_players=payload.max_players,
@@ -626,7 +626,7 @@ async def update_event(
     old_timezone = event.timezone
     changes = updates.model_dump(exclude_unset=True)
     # Neither half of the draw configuration is a column on the event — the draw type is
-    # the ``draw_type_key`` slug on the settings row the event points at, and the
+    # the ``draw_type_id`` FK on the settings row the event points at, and the
     # qualifier count is a key inside that row's ``settings`` JSON object — so both are
     # routed OUT of
     # the generic setattr loop rather than through it. This is not decoration:
@@ -669,7 +669,7 @@ async def update_event(
         # The one place an event's draw configuration moves after create (the freeze
         # above has already refused this on a cut draw). Assigned through
         # ``store_draw_settings``, not through the row's columns, so serializing the arm
-        # onto ``draw_type_key`` + ``settings`` stays in the single place that owns it —
+        # onto ``draw_type_id`` + ``settings`` stays in the single place that owns it —
         # the same door ``draw_settings_row`` goes through at create. That matters most
         # on THIS path: a draw type patched from ``rr-then-ko`` back to ``round-robin``
         # has to drop the qualifier count with it, and writing the pair together is what

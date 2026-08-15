@@ -60,9 +60,11 @@ class DrawType(enum.Enum):
     #
     # Member names use underscores; the *values* keep the hyphenated wire strings
     # from the front-end prototype. They are no longer a Postgres enum: a draw type
-    # is persisted as the ``draw_types.key`` slug on an event's settings row, so
-    # these values are that table's primary keys (a migration test asserts the two
-    # agree) as well as the JSON the clients send.
+    # is persisted as a FK to ``draw_types.id`` on an event's settings row, and
+    # these values are that table's ``key`` column — UNIQUE, not the primary key,
+    # since ADR 20260815 gave the table a surrogate id (a migration test asserts
+    # the seeded ``key`` set and this enum agree) — as well as the JSON the
+    # clients send.
     single_elim = "single-elim"
     round_robin = "round-robin"
     rr_then_ko = "rr-then-ko"

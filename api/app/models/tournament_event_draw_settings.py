@@ -8,7 +8,6 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    String,
     func,
     text,
 )
@@ -16,6 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.draw_type import DRAW_TYPE_IDS, DRAW_TYPES_BY_ID
 from app.models.tournament import DrawType
 
 if TYPE_CHECKING:
@@ -47,10 +47,16 @@ class TournamentEventDrawSettings(Base):
     impossible. A ``NOT NULL`` FK on the parent keeps it mandatory in the
     database instead.
 
-    ``draw_type_key`` is a ``NOT NULL`` FK to ``draw_types.key`` with
-    ``ON DELETE RESTRICT``, so a settings row can only ever name a draw type that
-    has a seeded row — i.e. one ``app.draws.strategy_for`` can actually dispatch —
-    and a seeded row cannot be deleted out from under an event that uses it.
+    ``draw_type_id`` is a ``NOT NULL`` FK to ``draw_types.id`` with
+    ``ON DELETE RESTRICT`` (ADR 20260815 "draw_types gains a surrogate id primary
+    key" — supersedes the slug-as-PK stance of the ADR that originally named this
+    column ``draw_type_key``), so a settings row can only ever name a draw type
+    that has a seeded row — i.e. one ``app.draws.strategy_for`` can actually
+    dispatch — and a seeded row cannot be deleted out from under an event that
+    uses it. Code still resolves the draw type by its ``key`` slug, never by
+    ``id`` — see the ``draw_type`` property below, which maps the id back to the
+    slug through ``app.models.draw_type.DRAW_TYPES_BY_ID``, a plain dict lookup,
+    not a join.
 
     Two columns of configuration today: the draw type, and the ``settings`` object
     beside it — the serialized form of the draw type's own settings arm (ADR "a draw
@@ -83,13 +89,15 @@ class TournamentEventDrawSettings(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    # The slug, not the enum: the FK target is ``draw_types.key``, so this column
-    # is the varchar that table's primary key is. ``RESTRICT`` because a draw type
-    # an event is configured with must not be deletable — the reference table is
-    # the enforcement, not decoration.
-    draw_type_key: Mapped[str] = mapped_column(
-        String(32),
-        ForeignKey("draw_types.key", ondelete="RESTRICT"),
+    # The surrogate id, not the slug (ADR 20260815): the FK target is
+    # ``draw_types.id``. ``RESTRICT`` because a draw type an event is configured
+    # with must not be deletable — the reference table is the enforcement, not
+    # decoration. The ``draw_type`` property below reads this column back through
+    # ``app.models.draw_type.DRAW_TYPES_BY_ID``, a plain dict lookup — no
+    # relationship, no join, and so no loader state to depend on.
+    draw_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("draw_types.id", ondelete="RESTRICT"),
         nullable=False,
     )
     # The draw type's settings, as one NOT NULL JSON object (ADR "a draw type's
@@ -202,21 +210,30 @@ class TournamentEventDrawSettings(Base):
         """The configured draw type, parsed back into the closed set the code
         dispatches on.
 
-        The column is the FK slug; readers want the enum. Raises ``ValueError`` on
-        a slug with no ``DrawType`` member — which the FK plus the seed-vs-enum
-        migration test make unreachable, and which is the loud failure we want if
-        they ever stop agreeing.
+        A plain dict lookup on :data:`~app.models.draw_type.DRAW_TYPES_BY_ID`,
+        keyed by ``draw_type_id`` — never a join or a relationship walk (ADR
+        20260815 retired the join this used to make). Total on a transient,
+        pending or freshly flushed row alike, and needs no loaded relationship
+        and no lazy load, because it reads a plain column that is always
+        present once the row exists. Raises ``KeyError`` on an id with no
+        ``DrawType`` member — which the FK plus the seed-vs-enum migration test
+        make unreachable, and which is the loud failure we want if they ever
+        stop agreeing.
         """
-        return DrawType(self.draw_type_key)
+        return DRAW_TYPES_BY_ID[self.draw_type_id]
 
     @draw_type.setter
     def draw_type(self, draw_type: DrawType) -> None:
-        """The ONE place a :class:`DrawType` member becomes the persisted slug.
+        """The ONE place a :class:`DrawType` member becomes the persisted FK.
 
         Every writer goes through here, via :meth:`configure` above. Without a
         setter the edit path had to reach past the property and write
-        ``draw_settings.draw_type_key = draw_type.value`` itself, which gave
-        enum→slug conversion a second home to drift in and made the "ONE place"
-        claim above false.
+        ``draw_settings.draw_type_id = DRAW_TYPE_IDS[draw_type]`` itself, which
+        gave enum→id conversion a second home to drift in and made the "ONE
+        place" claim above false.
+
+        Writes the column directly, from the fixed :data:`DRAW_TYPE_IDS` map
+        (see that map's docstring for why this assignment has no session to do
+        a lookup with).
         """
-        self.draw_type_key = draw_type.value
+        self.draw_type_id = DRAW_TYPE_IDS[draw_type]
