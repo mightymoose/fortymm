@@ -1,6 +1,10 @@
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
 import { simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
+import {
+  BAY_AREA_OPEN_ID,
+  SUMMER_SLAM_ID,
+} from '@/mocks/factories/tournaments/tournament-ids'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type DrawTypeRead = components['schemas']['DrawTypeRead']
@@ -288,8 +292,8 @@ export function pageAdminScheduleSolves(
  */
 export function buildAdminSolveLedgerSeed(): AdminScheduleSolveRead[] {
   const tournaments = [
-    { id: 'bay-area-open-2026', name: 'Bay Area Open 2026' },
-    { id: 'summer-slam-2026', name: 'Summer Slam 2026' },
+    { id: BAY_AREA_OPEN_ID, name: 'Bay Area Open 2026' },
+    { id: SUMMER_SLAM_ID, name: 'Summer Slam 2026' },
   ] as const
   // Newest first: minute 59 down to 26.
   const runs = Array.from({ length: 34 }, (_, i) => {

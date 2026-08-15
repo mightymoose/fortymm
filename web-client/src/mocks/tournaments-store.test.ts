@@ -3,12 +3,20 @@
 // withdrawing frees the player to enter again.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 import {
   buildFixtureTimeRead,
   DRAW_TYPE_CATALOGUE,
   planDraw,
 } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  BAY_AREA_OPEN_ID,
+  CLUB_CHAMPS_ID,
+  GOLDEN_STATE_CLASSIC_ID,
+  LEAGUE_OFFICE_DRAFT_ID,
+  SUMMER_SLAM_ID,
+} from '@/mocks/factories/tournaments/tournament-ids'
 import {
   createEvent,
   createTournament,
@@ -37,8 +45,8 @@ type TournamentStatus = components['schemas']['TournamentStatus']
 type TournamentTable = components['schemas']['TournamentTable']
 type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 
-const TOURNAMENT = 'bay-area-open-2026' // seeded `published`, owned
-const DRAFT_TOURNAMENT = 'summer-slam-2026' // seeded `draft`, owned, one drawn event
+const TOURNAMENT = BAY_AREA_OPEN_ID // seeded `published`, owned
+const DRAFT_TOURNAMENT = SUMMER_SLAM_ID // seeded `draft`, owned, one drawn event
 const EMPTY_SINGLES = 'ev-u1500' // seeded with no entrants
 const FULLISH_SINGLES = 'ev-open-singles' // seeded with 52 other players, cap 64
 const FULL_SINGLES = 'ev-champ-singles' // seeded 16 of 16 — no room (#783)
@@ -205,6 +213,35 @@ describe('the seeded read shape', () => {
   })
 })
 
+// #1229 (duplicates #1211, #1323): the `$tournamentId` route Zod-validates the segment
+// as a `z.string().uuid()` BEFORE any fetch (`tournaments.$tournamentId.tsx`, ADR-1001),
+// so a mock tournament whose id is a slug 404s its own detail page under `npm run dev`
+// before MSW ever sees the request. This pins the CLASS of bug, not just the six ids
+// fixed here — a future seed row (or `createTournament` mint) that reverts to a
+// hand-written slug reds this immediately, rather than waiting for someone to click
+// through `npm run dev` and notice.
+describe('every tournament id is uuid-shaped (#1229)', () => {
+  const uuid = z.string().uuid()
+
+  it('every id `listTournaments` (i.e. the dev seed) hands out', () => {
+    for (const tournament of listTournaments()) {
+      expect(uuid.safeParse(tournament.id).success).toBe(true)
+    }
+  })
+
+  it('the id `createTournament` mints', () => {
+    const created = createTournament({
+      name: 'Newly Minted',
+      description: null,
+      start_date: null,
+      end_date: null,
+      address: null,
+      table_catalogue: [],
+    })
+    expect(uuid.safeParse(created.id).success).toBe(true)
+  })
+})
+
 // #783: the two refusals the EVENT itself makes. A mock that 201'd them would be
 // more permissive than the server, and a UI that kept offering Enter on a full
 // event would look perfect in `npm run dev`.
@@ -350,14 +387,14 @@ describe('enterEvent', () => {
   it('is allowed on a tournament the entrant does not own — entry is not creator-gated', () => {
     // Published (so the window is open) but owned by the league office: what is
     // being proved here is that ownership has nothing to do with entering.
-    const notMine = findTournament('club-champs-2026')!
+    const notMine = findTournament(CLUB_CHAMPS_ID)!
     expect(notMine.can_edit).toBe(false)
     expect(notMine.status).toBe('published')
 
-    const result = enterEvent('club-champs-2026', 'ev-cc-open')
+    const result = enterEvent(CLUB_CHAMPS_ID, 'ev-cc-open')
 
     expect(result.ok).toBe(true)
-    const found = findTournament('club-champs-2026')!.events.find(
+    const found = findTournament(CLUB_CHAMPS_ID)!.events.find(
       (e) => e.id === 'ev-cc-open',
     )!
     expect(found.entered).toBe(29)
@@ -709,9 +746,9 @@ describe('the rest of the event surface still holds', () => {
 // looser one: a mock that permitted an illegal edge would let a broken UI look
 // fine in dev and in vitest, which is the entire point of mirroring it.
 describe('transitionTournament', () => {
-  const DRAFT = 'summer-slam-2026' // seeded `draft`, owned
-  const PUBLISHED = 'bay-area-open-2026' // seeded `published`, owned
-  const NOT_MINE = 'club-champs-2026' // seeded `published`, can_edit: false
+  const DRAFT = SUMMER_SLAM_ID // seeded `draft`, owned
+  const PUBLISHED = BAY_AREA_OPEN_ID // seeded `published`, owned
+  const NOT_MINE = CLUB_CHAMPS_ID // seeded `published`, can_edit: false
   /** `DRAFT`'s only event: round-robin, 8 entrants, a draw already cut across its two
    * pools — i.e. the one seeded event whose draw is CURRENT, which is what makes that
    * tournament the only one in the seed that can go live at all. */
@@ -1017,9 +1054,9 @@ describe('transitionTournament', () => {
 // are the tests that make the predicate real. Without them (and without that seeded
 // row) the filter is dead code that could be deleted and stay green.
 describe('draft visibility', () => {
-  const FOREIGN_DRAFT = 'league-office-draft-2027' // seeded `draft`, u-office
-  const FOREIGN_PUBLISHED = 'club-champs-2026' // seeded `published`, u-office
-  const OWN_DRAFT = 'summer-slam-2026' // seeded `draft`, the dev user's
+  const FOREIGN_DRAFT = LEAGUE_OFFICE_DRAFT_ID // seeded `draft`, u-office
+  const FOREIGN_PUBLISHED = CLUB_CHAMPS_ID // seeded `published`, u-office
+  const OWN_DRAFT = SUMMER_SLAM_ID // seeded `draft`, the dev user's
 
   const listedIds = () => listTournaments().map((t) => t.id)
 
@@ -1080,7 +1117,7 @@ describe('draft visibility', () => {
 describe('cutting and un-cutting a draw', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const FOREIGN = 'club-champs-2026' // `u-office`'s, published: readable, not writable
+  const FOREIGN = CLUB_CHAMPS_ID // `u-office`'s, published: readable, not writable
   const FOREIGN_EVENT = 'ev-cc-open'
   /** Round-robin, two pools, nine entrants — the seed's one cuttable (and pre-cut)
    * event, because round-robin is the only draw type with a generator today. */
@@ -2344,7 +2381,7 @@ describe('the venue on a create/update', () => {
 describe('the seeded two-stage (rr-then-ko) events', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const GOLDEN_STATE = 'golden-state-classic-2026'
+  const GOLDEN_STATE = GOLDEN_STATE_CLASSIC_ID
   const FINISHED = 'ev-challenge-cup' // pools decided, bracket decided, champion crowned
   const MID_FLIGHT = 'ev-shield' // pools decided, the final still to be played
 

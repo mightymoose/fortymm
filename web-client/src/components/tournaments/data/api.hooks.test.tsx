@@ -35,6 +35,10 @@ import {
   buildTournamentFixtureRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import type { CodedErrorBody } from '@/mocks/endpoints/error-body'
+import {
+  BAY_AREA_OPEN_ID,
+  SUMMER_SLAM_ID,
+} from '@/mocks/factories/tournaments/tournament-ids'
 import { server } from '@/mocks/server'
 import {
   cutDraw,
@@ -469,7 +473,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
  */
 describe('an added pool, through the mock’s id-keyed diff', () => {
   // The seed's owned, published tournament and its two-pool event.
-  const TOURNAMENT = 'bay-area-open-2026'
+  const TOURNAMENT = BAY_AREA_OPEN_ID
   const EVENT = 'ev-open-singles'
 
   beforeEach(() => resetTournamentsStore())
@@ -681,7 +685,7 @@ describe('useTransitionTournament', () => {
 describe('the lifecycle, against the stateful mock store', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const DRAFT = 'summer-slam-2026' // seeded `draft`, owned by the dev user
+  const DRAFT = SUMMER_SLAM_ID // seeded `draft`, owned by the dev user
 
   it('walks draft → published → live → archived, and the detail reads back each move', async () => {
     const { wrapper } = setupClient()
@@ -1177,7 +1181,7 @@ describe('useWithdrawEntry', () => {
 describe('entering and withdrawing, against the stateful mock store', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const TOURNAMENT = 'bay-area-open-2026'
+  const TOURNAMENT = BAY_AREA_OPEN_ID
   const EVENT = 'ev-u1500' // seeded with nobody in it
 
   it('adds the entrant and increments the count; withdrawing reverses both', async () => {
@@ -1639,7 +1643,7 @@ describe('useRequestScheduleSolve', () => {
 describe('cutting and un-cutting, against the stateful mock store', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const TOURNAMENT = 'bay-area-open-2026'
+  const TOURNAMENT = BAY_AREA_OPEN_ID
   /** The seed's ONE cuttable event: round-robin (the only draw type with a generator),
    * two pools, nine entrants — and seeded already drawn. */
   const DRAWN = 'ev-u1200'

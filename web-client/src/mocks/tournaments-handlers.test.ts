@@ -21,6 +21,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { components } from '@/api/schema'
+import {
+  BAY_AREA_OPEN_ID,
+  CLUB_CHAMPS_ID,
+  GARAGE_INVITATIONAL_ID,
+  GOLDEN_STATE_CLASSIC_ID,
+  SUMMER_SLAM_ID,
+} from '@/mocks/factories/tournaments/tournament-ids'
 import { DRAW_SETTINGS_REFUSALS } from './handlers'
 import { resetTournamentsStore } from './tournaments-store'
 
@@ -31,15 +38,15 @@ type TournamentEventRead = components['schemas']['TournamentEventRead']
 // rounds to 0 and the radii read like a map.
 const BERKELEY = { lat: 37.8715, lng: -122.273 }
 
-const BAY_AREA = 'bay-area-open-2026' // Berkeley
-const SUMMER_SLAM = 'summer-slam-2026' // Palo Alto, ~30.5 mi
-const CLUB_CHAMPS = 'club-champs-2026' // San Jose, ~42.5 mi
+const BAY_AREA = BAY_AREA_OPEN_ID // Berkeley
+const SUMMER_SLAM = SUMMER_SLAM_ID // Palo Alto, ~30.5 mi
+const CLUB_CHAMPS = CLUB_CHAMPS_ID // San Jose, ~42.5 mi
 /** The seed's venue-less tournament (`address: null`) — visible in the plain list,
  * and never in a near-me one. */
-const GARAGE = 'garage-invitational-2026'
+const GARAGE = GARAGE_INVITATIONAL_ID
 /** The seed's two-stage tournament (ADR 20260727) — Los Angeles, ~345 mi, i.e. outside
  * every radius these tests search and inside the deliberately absurd one below. */
-const GOLDEN_STATE = 'golden-state-classic-2026'
+const GOLDEN_STATE = GOLDEN_STATE_CLASSIC_ID
 
 async function listTournaments(query = ''): Promise<{
   status: number
