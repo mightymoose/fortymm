@@ -122,7 +122,17 @@ export class TournamentDetailPage {
   /** The breadcrumb's LAST crumb — the one holding the tournament's own name, and
    * the only one that carries `max-w-[360px] truncate`. That cap is wider than a
    * 375px phone's content box, so this crumb is a candidate culprit for a sideways
-   * scroll and has to be measurable on its own. */
+   * scroll and has to be measurable on its own.
+   *
+   * ⚠️ **Positional, and it depends on DOM order.** The last crumb carries no
+   * `aria-current` and no test id, so there is no semantic handle for it without
+   * editing `page-heading.tsx` (a #1044 Non-Goal). The same nav also holds the 8px
+   * `aria-hidden` accent dot and one `/` separator per gap, and `.last()` lands on
+   * the crumb only because the `c.onClick && !last` guard forces the final entry
+   * down the `<span>` branch. Wrap a crumb label in a nested span, or append
+   * anything to the nav, and this silently resolves to a different box while every
+   * geometry assertion still passes — measured: `expectOnScreen` on the accent dot
+   * is green. **Callers must pin it to the expected text before measuring it.** */
   get breadcrumbCurrent(): Locator {
     return this.page.getByLabel('Breadcrumb').locator('span').last()
   }

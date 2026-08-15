@@ -65,7 +65,7 @@
  * This spec pins the phone, which is where the defect was reported and where the
  * fix lives. It does not bless the width.
  */
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 import { UNBREAKABLE_TOURNAMENT_NAME } from '../../src/mocks/factories/tournaments/tournament.factory'
 import {
@@ -74,6 +74,31 @@ import {
 } from '../page-objects/tournaments/tournament-detail.page'
 import { expectNoHorizontalScroll, expectOnScreen } from '../support/viewport'
 import type { TournamentsStoreOptions } from '../page-objects/tournaments/tournaments-store'
+
+/**
+ * `TournamentDetailPage.navigateTo`, plus a wait for the **webfonts to settle**.
+ *
+ * Every measurement in this file is the box around some text, and `src/index.css`
+ * fetches Bebas Neue and Space Grotesk from `fonts.googleapis.com` with
+ * `display=swap`. The store's `page.route` only covers the API, so those font
+ * requests go to the real network and the first paint uses a fallback face with
+ * different metrics — `navigateTo` waits for an event card, which says nothing
+ * about type.
+ *
+ * The size of that difference, measured here at 375x667: the title is **36px** tall
+ * in Bebas and **72px** in the fallback, against this file's `< 80` bound. Eight
+ * pixels of headroom on a webfont fetched over the public internet is not a bound,
+ * it is a race — and when it trips, the message blames wrapping for a font.
+ *
+ * `document.fonts.ready` settles on failure as well as on success, so this cannot
+ * hang a run with no network; it makes the measurement deterministic rather than
+ * making it depend on Google.
+ */
+async function navigate(page: Page, options: TournamentsStoreOptions) {
+  const { pom } = await TournamentDetailPage.navigateTo(page, options)
+  await page.evaluate(() => document.fonts.ready)
+  return pom
+}
 
 /** The repo's established phone viewport — `app-shell.spec.ts`,
  * `dashboard-tournament-panel.spec.ts`, `dashboard-recent-results.spec.ts`,
@@ -129,10 +154,14 @@ test.describe('the tournament detail header on a phone', () => {
   test(`"${WIDEST_LABEL}" is the widest lifecycle label`, async ({ page }) => {
     const widths: Record<string, number> = {}
     for (const { status, label } of LABEL_FOR) {
-      const { pom } = await TournamentDetailPage.navigateTo(page, { status })
-      const box = await pom.lifecycleButton(label).boundingBox()
-      expect(box, `the "${label}" button should have a bounding box`).not.toBeNull()
-      widths[label] = box ? box.width : 0
+      const pom = await navigate(page, { status })
+      // `evaluate` rather than `boundingBox()`, so a missing button reds here with
+      // a locator error instead of yielding a `null` that a fallback would have to
+      // turn into a fabricated `0` — and a `0` on a NON-widest label is a number
+      // this test's `toBeGreaterThan` would happily pass.
+      widths[label] = await pom
+        .lifecycleButton(label)
+        .evaluate((el) => el.getBoundingClientRect().width)
     }
 
     const measured = Object.entries(widths)
@@ -155,7 +184,7 @@ test.describe('the tournament detail header on a phone', () => {
    * proxy for it somewhere in the tree.
    */
   test('does not scroll the page sideways', async ({ page }) => {
-    const { pom } = await TournamentDetailPage.navigateTo(page, WIDEST)
+    const pom = await navigate(page, WIDEST)
 
     await expectNoHorizontalScroll(pom.documentElement, 'the tournament detail page')
   })
@@ -170,7 +199,7 @@ test.describe('the tournament detail header on a phone', () => {
    * is (see its docstring, and #783 round three).
    */
   test('keeps the lifecycle button wholly on screen', async ({ page }) => {
-    const { pom } = await TournamentDetailPage.navigateTo(page, WIDEST)
+    const pom = await navigate(page, WIDEST)
 
     await expectOnScreen(
       page,
@@ -195,7 +224,7 @@ test.describe('the tournament detail header on a phone', () => {
   test('does not collapse the title to a single column of letters', async ({
     page,
   }) => {
-    const { pom } = await TournamentDetailPage.navigateTo(page, WIDEST)
+    const pom = await navigate(page, WIDEST)
 
     const title = await pom.title.evaluate((el) => {
       const box = el.getBoundingClientRect()
@@ -234,7 +263,7 @@ test.describe('the tournament detail header on a phone', () => {
   test('the overflow measurement can see an overflow when there is one', async ({
     page,
   }) => {
-    const { pom } = await TournamentDetailPage.navigateTo(page, WIDEST)
+    const pom = await navigate(page, WIDEST)
 
     await page.evaluate(() => {
       const probe = document.createElement('div')
@@ -269,10 +298,7 @@ test.describe('the tournament detail header on a phone', () => {
  */
 test.describe('a tournament name with no break opportunity in it', () => {
   test('wraps, and does not scroll the page sideways', async ({ page }) => {
-    const { pom } = await TournamentDetailPage.navigateTo(page, {
-      ...WIDEST,
-      longName: true,
-    })
+    const pom = await navigate(page, { ...WIDEST, longName: true })
 
     // The whole name is on the page — this is a wrapping fix, not a hiding one.
     // The `h1` renders the title plus a trailing accent-dot `<span>`, so
@@ -299,6 +325,13 @@ test.describe('a tournament name with no break opportunity in it', () => {
     // The claim that actually matters is the coordinate one: the crumb's `max-w-[360px]`
     // is wider than this phone's 279px content box, so it survives only by shrinking
     // below its own cap. It measures 127px — so it is not what widens the page.
+    //
+    // Pinned to the name FIRST, because `breadcrumbCurrent` is a positional locator
+    // (`span`, `.last()`) and the same nav also holds the 8px `aria-hidden` accent
+    // dot and the `/` separators. `expectOnScreen` on the dot passes — measured —
+    // so without this line any change to the nav's DOM order would turn the
+    // assertion below vacuously green rather than red.
+    await expect(pom.breadcrumbCurrent).toContainText(UNBREAKABLE_TOURNAMENT_NAME)
     await expectOnScreen(page, pom.breadcrumbCurrent, "the breadcrumb's last crumb")
 
     // WRAPPED, not truncated and not clamped — the part `expectNoHorizontalScroll`
@@ -318,20 +351,26 @@ test.describe('a tournament name with no break opportunity in it', () => {
     // Nothing MEANINGFUL hidden inside that box: a `line-clamp` drops whole lines,
     // so anything it hid would be at least one line tall.
     //
-    // The bound is 12px rather than the venue spec's 1px, and the reason is in the
-    // markup: this `h1` carries `leading-[0.92]`, a line box *smaller* than the
-    // glyphs in it, so ascenders and descenders spill a few pixels past the
-    // element's content box by design. Measured green here at 471 vs 468 — 3px,
-    // which is that spill and not a clamp.
+    // The bound is 12px rather than the venue spec's 1px, and the reason is the
+    // display face's own metrics: Bebas Neue's ascenders and descenders spill a few
+    // pixels past a line box this tight, so `scrollHeight` sits a little above
+    // `clientHeight` on a title that is wrapping perfectly. Measured green here at
+    // 471 vs 468 — 3px — and that spill is CONSTANT rather than per-line: measured
+    // 3px on the one-line default name and 3px again on this 13-line one.
     //
-    // 12 is chosen to sit in the gap between the two: comfortably above the spill,
-    // and comfortably below ONE line box (36px × 0.92 ≈ 33px), so a `line-clamp` —
-    // which drops whole lines — still reds. A 1px bound would red on the correct
-    // layout; a 36px one would let a clamp hiding exactly one line through.
+    // Note the line box is 36px, not the `leading-[0.92]` this `h1` asks for.
+    // `src/index.css` declares an unlayered `.dark.fortymm-theme h1 { line-height: 1 }`,
+    // and unlayered CSS outranks Tailwind's layered utilities — the same override
+    // #1044 records for the font-size. So one line here is 36px.
+    //
+    // 12 is chosen to sit in the gap: comfortably above the 3px spill, and
+    // comfortably below ONE 36px line box, so a `line-clamp` — which drops whole
+    // lines — still reds. A 1px bound would red on the correct layout; a 36px one
+    // would let a clamp hiding exactly one line through.
     const MAX_SPILL_PX = 12
     expect(
       title.scrollHeight - title.clientHeight,
-      `${title.scrollHeight - title.clientHeight}px of the title is clipped out of view — that is a hidden line, not the leading-[0.92] spill`,
+      `${title.scrollHeight - title.clientHeight}px of the title is clipped out of view — that is a hidden line, not the display face's ~3px spill`,
     ).toBeLessThan(MAX_SPILL_PX)
   })
 })
