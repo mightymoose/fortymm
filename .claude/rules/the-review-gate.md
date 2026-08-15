@@ -49,49 +49,92 @@ Poll over **REST**, not GraphQL. A 15-minute watch that polls the project board 
 GraphQL budget — #1044's run exhausted all 5000 points and blocked a status write. The three
 endpoints above and `gh pr view` are REST. `gh project item-*` is GraphQL only.
 
+## Two windows over the same signal
+
+The two consumers ask different questions, and conflating them breaks the gate in both
+directions.
+
+| Consumer | Window | Question |
+| --- | --- | --- |
+| `test-next-ticket` precondition | **Ever** | Has this pull request ever carried the signal? |
+| `implement-ticket-end-to-end` watch | **Since the anchor** | Has a *new* decision arrived since the round I just posted? |
+
+The precondition is deliberately "ever". A ticket that was released, went to Testing, failed,
+and came back through a repair round must still satisfy it — the human already released this
+work, and re-asking on every repair is not what the gate is for.
+
+The watch is deliberately "since". **The anchor is the decision comment the round just posted.**
+`review-next-ticket` reports that comment's timestamp; the coordinator carries it into the
+watch; each targeted round replaces it with its own fresh decision comment.
+
+Without an anchor the watch reads every comment ever posted, and two failures follow, both of
+which contradict the rules above:
+
+- **The targeted loop never ends.** "Fix line 40" sends the work back for a targeted round; the
+  watch restarts, re-reads the same comment, and sends it back again. Forever.
+- **A stale `LGTM` releases a later round.** The signal from round one is still on the pull
+  request, so round two's watch releases immediately, with no human having looked at round
+  two. That is the bypass "nothing else releases the gate" exists to prevent.
+
 ## The check
 
 ```bash
 PR_NUMBER=<the pull request number>
 REPO=mightymoose/fortymm
 REVIEWER=mightymoose
+SINCE=            # empty for the "ever" window; the anchor timestamp for the watch
 
-{ gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-    --jq ".[] | select(.user.login==\"$REVIEWER\") | .body | @json"
-  gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
-    --jq ".[] | select(.user.login==\"$REVIEWER\") | .body | @json"
-  gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --paginate \
-    --jq ".[] | select(.user.login==\"$REVIEWER\") | .body | @json"
-} > /tmp/gate-bodies.jsonl
+BODIES="$(mktemp)"
+trap 'rm -f "$BODIES"' EXIT
 
-python3 - /tmp/gate-bodies.jsonl <<'PY'
-import json, sys
+# `(.created_at // .submitted_at)`: the reviews endpoint carries `submitted_at` and has no
+# `created_at` at all. A plain `.created_at` yields null for every review body — silently
+# discarding the one surface #1044's signal actually used.
+for ep in "issues/$PR_NUMBER/comments" "pulls/$PR_NUMBER/reviews" "pulls/$PR_NUMBER/comments"; do
+  gh api "repos/$REPO/$ep" --paginate --jq \
+    ".[] | select(.user.login==\"$REVIEWER\")
+         | {at: (.created_at // .submitted_at), body: .body} | @json" >> "$BODIES"
+done
+
+SINCE="$SINCE" python3 - "$BODIES" <<'PY'
+import json, os, sys
+since = os.environ.get("SINCE") or ""
 released = False
 for line in open(sys.argv[1]):
     line = line.strip()
     if not line:
         continue
-    body = json.loads(line) or ""
-    if body.strip().lower().rstrip(".!?,;: ") == "lgtm":
+    rec = json.loads(line)
+    if since and (rec["at"] or "") <= since:
+        continue
+    if (rec["body"] or "").strip().lower().rstrip(".!?,;: ") == "lgtm":
         released = True
 print("RELEASED" if released else "WAITING")
 PY
 ```
 
+`mktemp`, never a fixed path. This repo runs many agent sessions at once, and two coordinators
+watching two pull requests would otherwise clobber the same file — and one could read the
+other's comments and release the wrong gate.
+
 Redirect to a file rather than piping the three calls straight into `python3`. A zsh pipeline
 reports its **last** element's status, so a failed `gh api` inside one reads as success and the
 gate silently answers `WAITING` forever. See `.claude/rules/verify-the-artifact-under-test.md`.
 
+GitHub timestamps are ISO-8601 UTC with a fixed width, so a string comparison orders them
+correctly. Use `>`, strictly after, so the anchor comment can never match itself.
+
 ## What each side does with it
 
 - **`implement-ticket-end-to-end`** watches for the signal for a bounded 15 minutes after
-  Review stops. On release it moves the ticket to **In Testing** and invokes `test-next-ticket`.
-  On any other comment from `mightymoose` it re-invokes `review-next-ticket` in targeted mode.
-  On expiry it stops and reports.
-- **`test-next-ticket`** re-runs this same check as a **precondition** and refuses to run
-  without it. That refusal is the gate's only enforcement outside the coordinator, and it is
-  what makes the gate hold when someone runs the stage by hand. A rule that lives only in the
-  coordinator's prose is not a gate.
+  Review stops, over the **since-the-anchor** window. On release it moves the ticket to
+  **In Testing** and invokes `test-next-ticket`. On any other comment from `mightymoose` newer
+  than the anchor it re-invokes `review-next-ticket` in targeted mode. On expiry it stops and
+  reports.
+- **`test-next-ticket`** re-runs this same check as a **precondition**, over the **ever**
+  window, and refuses to run without it. That refusal is the gate's only enforcement outside
+  the coordinator, and it is what makes the gate hold when someone runs the stage by hand. A
+  rule that lives only in the coordinator's prose is not a gate.
 
 It is a precondition check, not a status transition. `test-next-ticket` does not move the
 ticket to satisfy it.

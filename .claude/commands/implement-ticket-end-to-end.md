@@ -64,10 +64,12 @@ The coordinator holds the gate. It does not review, and it does not repair. Ever
 
 After Review stops, watch the pull request for **15 minutes**. Poll over REST, never the project board — a board poll is GraphQL, and #1044's run exhausted all 5000 points and blocked a status write.
 
+**Anchor the watch to the decision comment Review just posted.** `review-next-ticket` reports that comment's timestamp; only comments strictly newer than it count. An unanchored watch re-reads its own round and either loops on the same "fix line 40" forever or releases on the previous round's `LGTM`. The rule file has the mechanics.
+
 Three outcomes:
 
 1. **The signal arrives.** Move the ticket to **In Testing** and invoke `test-next-ticket`.
-2. **Any other comment from `mightymoose` arrives.** Re-invoke `review-next-ticket` in **targeted mode**, naming exactly those comments. When it stops, **the 15-minute watch restarts.** There is no limit on rounds; each one is a fresh context.
+2. **Any other comment from `mightymoose` arrives**, newer than the anchor. Re-invoke `review-next-ticket` in **targeted mode**, naming exactly those comments. When it stops, **the 15-minute watch restarts, re-anchored to that round's new decision comment.** There is no limit on rounds; each one is a fresh context.
 3. **The budget expires with no comment.** Stop and report. Do not wait longer, do not proceed to Testing, and do not assume silence is consent. An agent must not park on a human for hours.
 
 The expiry report names: the ticket, the PR URL, Review's findings, and **the exact command to resume**. Without that last part every gate is a cliff, and the ticket strands mid-arc with no record of where it got to.
@@ -88,6 +90,8 @@ Read six signals: the board column, whether the branch exists, whether a PR exis
 | 4 | A PR is open, draft or with no decision comment | Re-invoke `review-next-ticket`. |
 | 5 | A branch exists, no PR | Re-invoke `review-next-ticket`, which opens the PR. |
 | 6 | None of the above | Start at **Stage 1**. |
+
+**Rows 2 and 3 need an anchor, and a resumed run has no memory of one.** Recover it: the anchor is the **newest decision comment on the pull request**. Every round posts one, so the newest marks the start of the round still awaiting a decision. If no decision comment can be identified, fall back to row 4 and let a fresh `review-next-ticket` post one — that is cheaper and safer than releasing on a signal that answered an earlier round. Report which anchor was used.
 
 **Git and PR state outrank the board column, always.** The column is written *after* a stage finishes, so it is the stalest of the six — a run that died mid-stage leaves it describing a stage that already completed. Use it only to break a tie the rows above cannot, and when it contradicts the PR, correct the column rather than the plan.
 

@@ -113,6 +113,8 @@ One comment, on the PR, addressed to the human who must decide. It states:
 
 Do not repeat the Review Notes. They are already on the ticket, and a reviewer who wants them will follow the link. This comment is the ask, not the record.
 
+**Report the comment's timestamp in the final report.** It is the coordinator's watch anchor — the point after which a comment counts as a new decision. Without it the watch re-reads its own round's comments and either loops forever or releases on a previous round's `LGTM`.
+
 ### Running standalone
 
 Run outside `implement-ticket-end-to-end`, this command leaves the ticket **In Review** with no watcher. That is correct, not a failure — but nothing will notice the `LGTM` when it arrives. Say so in the final report, name the PR URL, and give the command that resumes the arc.
