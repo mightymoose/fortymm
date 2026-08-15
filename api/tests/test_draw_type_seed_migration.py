@@ -519,3 +519,149 @@ async def test_seeded_draw_types_have_distinct_display_orders(
         f"(key -> display_order: "
         f"{ {row.key: row.display_order for row in seeded_draw_types} })"
     )
+
+
+# ----- tournament_event_stages (ADR 20260815 decisions 1/3) -------------------------
+
+
+async def _stage_column(
+    url: str, column_name: str
+) -> sa.Row[tuple[str, str, str | None]] | None:
+    """One column of ``tournament_event_stages`` as the **migrated** database
+    describes it, or ``None`` when the migration did not create it — mirroring
+    ``_draw_settings_column`` above for the stages table."""
+    engine = create_async_engine(url)
+    try:
+        async with engine.connect() as conn:
+            return (
+                await conn.execute(
+                    sa.text(
+                        "SELECT data_type, is_nullable, column_default"
+                        " FROM information_schema.columns"
+                        " WHERE table_name = 'tournament_event_stages'"
+                        "   AND column_name = :column_name"
+                    ),
+                    {"column_name": column_name},
+                )
+            ).one_or_none()
+    finally:
+        await engine.dispose()
+
+
+async def _stage_fk(url: str, column_name: str) -> sa.Row[tuple[str, str, str]] | None:
+    """The foreign key on the migrated database's ``tournament_event_stages
+    .<column_name>`` column — the table and column it targets, and its delete rule —
+    mirroring ``_draw_type_id_fk`` above for the stages table's own two FKs."""
+    engine = create_async_engine(url)
+    try:
+        async with engine.connect() as conn:
+            return (
+                await conn.execute(
+                    sa.text(
+                        "SELECT ccu.table_name, ccu.column_name, rc.delete_rule"
+                        " FROM information_schema.table_constraints tc"
+                        " JOIN information_schema.key_column_usage kcu"
+                        "   ON tc.constraint_name = kcu.constraint_name"
+                        "  AND tc.table_schema = kcu.table_schema"
+                        " JOIN information_schema.constraint_column_usage ccu"
+                        "   ON tc.constraint_name = ccu.constraint_name"
+                        "  AND tc.table_schema = ccu.table_schema"
+                        " JOIN information_schema.referential_constraints rc"
+                        "   ON tc.constraint_name = rc.constraint_name"
+                        "  AND tc.table_schema = rc.constraint_schema"
+                        " WHERE tc.table_name = 'tournament_event_stages'"
+                        "   AND tc.constraint_type = 'FOREIGN KEY'"
+                        "   AND kcu.column_name = :column_name"
+                    ),
+                    {"column_name": column_name},
+                )
+            ).one_or_none()
+    finally:
+        await engine.dispose()
+
+
+async def _stage_unique_constraint_columns(url: str, constraint_name: str) -> set[str]:
+    """The column set of a named UNIQUE constraint on ``tournament_event_stages``, or
+    the empty set when no constraint with that name exists — how the two
+    composite-uniqueness claims (``uq_..._event_id_id`` / ``uq_..._event_id_position``,
+    ADR 20260815 decision 1) are checked on a database Alembic actually built."""
+    engine = create_async_engine(url)
+    try:
+        async with engine.connect() as conn:
+            rows = (
+                (
+                    await conn.execute(
+                        sa.text(
+                            "SELECT kcu.column_name"
+                            " FROM information_schema.table_constraints tc"
+                            " JOIN information_schema.key_column_usage kcu"
+                            "   ON tc.constraint_name = kcu.constraint_name"
+                            "  AND tc.table_schema = kcu.table_schema"
+                            " WHERE tc.table_name = 'tournament_event_stages'"
+                            "   AND tc.constraint_type = 'UNIQUE'"
+                            "   AND tc.constraint_name = :constraint_name"
+                        ),
+                        {"constraint_name": constraint_name},
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return set(rows)
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_creates_the_tournament_event_stages_table(
+    migrated_database_url: str,
+) -> None:
+    """``tournament_event_stages`` exists on a database Alembic actually built, with
+    the columns, both foreign keys and both composite-uniqueness constraints the
+    model declares (ADR 20260815 decisions 1/3) — mirroring
+    ``test_migration_creates_the_settings_column``'s reasoning: ``create_all`` builds
+    this table from the model regardless of what migration 0010's ``op.create_table``
+    call says, since the edit-in-place convention means the two descriptions can
+    silently drift apart the next time this migration is touched. Only a database
+    Alembic actually migrated can catch a dropped or mis-shaped ``create_table``.
+    """
+    event_id = await _stage_column(migrated_database_url, "event_id")
+    assert event_id is not None, (
+        "migrated database has no tournament_event_stages.event_id column — the"
+        " model has it and create_all builds it, so the whole suite is green"
+        " without the migration"
+    )
+    assert event_id.data_type == "uuid", event_id
+    assert event_id.is_nullable == "NO", event_id
+
+    position = await _stage_column(migrated_database_url, "position")
+    assert position is not None, position
+    assert position.data_type == "integer", position
+    assert position.is_nullable == "NO", position
+
+    draw_type_id = await _stage_column(migrated_database_url, "draw_type_id")
+    assert draw_type_id is not None, draw_type_id
+    assert draw_type_id.data_type == "uuid", draw_type_id
+    assert draw_type_id.is_nullable == "NO", draw_type_id
+
+    event_fk = await _stage_fk(migrated_database_url, "event_id")
+    assert event_fk is not None, (
+        "migrated database has no foreign key on tournament_event_stages.event_id"
+    )
+    assert event_fk.table_name == "tournament_events", event_fk
+    assert event_fk.column_name == "id", event_fk
+    assert event_fk.delete_rule == "CASCADE", event_fk
+
+    draw_type_fk = await _stage_fk(migrated_database_url, "draw_type_id")
+    assert draw_type_fk is not None, (
+        "migrated database has no foreign key on tournament_event_stages.draw_type_id"
+    )
+    assert draw_type_fk.table_name == "draw_types", draw_type_fk
+    assert draw_type_fk.column_name == "id", draw_type_fk
+    assert draw_type_fk.delete_rule == "RESTRICT", draw_type_fk
+
+    assert await _stage_unique_constraint_columns(
+        migrated_database_url, "uq_tournament_event_stages_event_id_id"
+    ) == {"event_id", "id"}
+    assert await _stage_unique_constraint_columns(
+        migrated_database_url, "uq_tournament_event_stages_event_id_position"
+    ) == {"event_id", "position"}

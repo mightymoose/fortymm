@@ -5,13 +5,13 @@ return the *same* full aggregate — every tournament with all of its events, th
 entrants and their draws — and differ only in **which tournaments** they select:
 the HTTP list is VISIBILITY-scoped (``visible_to``), the MCP tool is OWNER-scoped
 (``created_by_user_id == caller``). So the query shape lives here, once, taking a
-WHERE predicate, and both surfaces call it — a second copy of this five-statement
+WHERE predicate, and both surfaces call it — a second copy of this nine-statement
 batched read would be the N+1 waiting to happen that the statement-count
 tripwires in ``tests/test_tournaments.py`` exist to catch.
 
 The single-tournament DETAIL read (:func:`tournament_detail`) lives here for the
 same reason: the HTTP ``GET /v1/tournaments/{id}`` route and the MCP
-``get_tournament`` tool composed the identical seven-statement batched read inline,
+``get_tournament`` tool composed the identical eight-statement batched read inline,
 a hairline apart, and a second copy is the drift this module exists to prevent.
 
 Both sit a layer above ``tournament_queries`` (pure data access) because they also
@@ -152,15 +152,18 @@ async def list_tournament_details(
     """Every tournament matching ``where``, newest first, as the full
     ``TournamentDetailRead`` aggregate the list cards render.
 
-    FIVE queries, no N+1, whatever the number of tournaments or events: the
-    tournaments+usernames join (scoped by ``where``), then all their events, then
-    all those events' active entrants in one batch, then all those events'
-    fixtures in one batch (ADR-0786), then the caller's rating on every distinct
-    league those tournaments run on (which every event's ``entry_state`` is judged
-    against, ADR-0783). A per-event entry count, a per-event draw, or a
-    per-tournament rating would be the N+1 this shape exists to avoid, and a
-    statement-count tripwire in ``tests/test_tournaments.py`` fails if one comes
-    back.
+    NINE queries, no N+1, whatever the number of tournaments or events: the
+    tournaments+usernames join (scoped by ``where``), the events, all those events'
+    active entrants in one batch, all those events' fixtures in one batch
+    (ADR-0786), the caller's rating on every distinct league those tournaments run
+    on (which every event's ``entry_state`` is judged against, ADR-0783), plus the
+    venue tables / pools / pool-table-reservations / stages that ride eagerly on
+    ``Tournament``/``TournamentEvent``/``TournamentEventPool`` themselves
+    (``lazy="selectin"`` each — see ``EXPECTED_TOURNAMENT_LIST_STATEMENTS`` in
+    ``tests/test_tournaments.py`` for the full, currently-measured breakdown). A
+    per-event entry count, a per-event draw, or a per-tournament rating would be the
+    N+1 this shape exists to avoid, and a statement-count tripwire in
+    ``tests/test_tournaments.py`` fails if one comes back.
 
     ``where`` scopes the FIRST query, so the events and entrants queries are keyed
     off the surviving ids and cannot leak a hidden tournament's contents either.
@@ -178,7 +181,7 @@ async def list_tournament_details(
     only tournaments within ``radius_miles`` of ``(lat, lng)`` survive, and each
     carries its computed ``distance_miles``. Both the predicate and the computed
     column ride on that one existing query, so the statement count is unchanged and
-    the tripwire still reads five. When ``near_me`` is ``None`` (the unfiltered list,
+    the tripwire still reads nine. When ``near_me`` is ``None`` (the unfiltered list,
     and the MCP owner-scoped list, which never passes it) the query, the row set and
     every ``distance_miles`` are exactly as before — the latter all null.
     """
@@ -290,20 +293,23 @@ async def tournament_detail(
     not-found itself, since the HTTP route and the MCP tool 404/refuse
     differently) and hands it in with its creator's ``created_by_username``; this
     reader runs the shared batched composition both surfaces used to run inline —
-    SEVEN statements, no N+1 whatever the number of events, entrants, fixtures or
-    solves:
+    EIGHT statements, no N+1 whatever the number of events, entrants, fixtures,
+    stages or solves:
 
     1. the tournament's events, in creation order;
     2. those events' active entrants (one batch);
     3. those events' fixtures — their draws (one batch, ADR-0786);
     4. the games of every **completed** match on the page — the standings' raw
        material (one batch; **no statement at all** until something is played, so an
-       unplayed tournament costs six here, a played one seven);
+       unplayed tournament costs seven here, a played one eight);
     5. the caller's rating on the tournament's one league (ADR-0783);
     6. the newest row of the solve ledger (the Schedule tab's solve strip);
     7. the selectable draw formats (the event form's picker, ADR "a draw type is a
        seeded row, and the enum holds only what runs") — global reference data, so
-       it is one flat read with nothing to key or batch.
+       it is one flat read with nothing to key or batch;
+    8. those events' stages — ``TournamentEvent.stages`` is ``lazy="selectin"``
+       (ADR 20260815 decisions 1/3), so this batches automatically off the events
+       query above, never a statement per event.
 
     Then the shared ``serialize_detail`` projects it from ``current_user_id``'s
     perspective (``can_edit``, per-event ``entry_state``, ladder ``rating``). The

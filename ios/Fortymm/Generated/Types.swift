@@ -4743,6 +4743,47 @@ internal enum Components {
             case doubles = "doubles"
             case teams = "teams"
         }
+        /// One stage of an event's draw — a row the event owns (ADR 20260815 decision 1,
+        /// "a stage is a row the event owns"). A director never authors these; the system
+        /// mints them from a template keyed on the event's draw type
+        /// (``app.tournament_event_stages.mint_stages``), and every event holds at least
+        /// one from the moment it is created.
+        ///
+        /// ``draw_type`` is the stage's OWN draw type — the strategy it runs — read the same
+        /// way :attr:`TournamentEventRead.draw_type` is: the enum's hyphenated ``key``, never
+        /// ``rr_then_ko`` (that member names a template, not a runnable stage; decision 4).
+        /// An rr-then-ko event's two stages read back ``round-robin`` then ``single-elim``, in
+        /// that order.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EventStageRead`.
+        internal struct EventStageRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EventStageRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/EventStageRead/position`.
+            internal var position: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/EventStageRead/draw_type`.
+            internal var drawType: Components.Schemas.DrawType
+            /// Creates a new `EventStageRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - position:
+            ///   - drawType:
+            internal init(
+                id: Swift.String,
+                position: Swift.Int,
+                drawType: Components.Schemas.DrawType
+            ) {
+                self.id = id
+                self.position = position
+                self.drawType = drawType
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case position
+                case drawType = "draw_type"
+            }
+        }
         /// One entrant's **finish** in a single-elimination bracket (ADR-0785): its
         /// finishing position and the round it was eliminated in.
         ///
@@ -10993,6 +11034,8 @@ internal enum Components {
             internal var predicates: [Components.Schemas.Predicate]
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/pools`.
             internal var pools: [Components.Schemas.Pool]
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/stages`.
+            internal var stages: [Components.Schemas.EventStageRead]
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/created_at`.
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/updated_at`.
@@ -11122,6 +11165,7 @@ internal enum Components {
             ///   - matchSettings:
             ///   - predicates:
             ///   - pools:
+            ///   - stages:
             ///   - createdAt:
             ///   - updatedAt:
             ///   - entrants:
@@ -11144,6 +11188,7 @@ internal enum Components {
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate],
                 pools: [Components.Schemas.Pool],
+                stages: [Components.Schemas.EventStageRead],
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 entrants: [Components.Schemas.TournamentEntrantRead],
@@ -11166,6 +11211,7 @@ internal enum Components {
                 self.matchSettings = matchSettings
                 self.predicates = predicates
                 self.pools = pools
+                self.stages = stages
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.entrants = entrants
@@ -11189,6 +11235,7 @@ internal enum Components {
                 case matchSettings = "match_settings"
                 case predicates
                 case pools
+                case stages
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case entrants

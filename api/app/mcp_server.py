@@ -821,7 +821,7 @@ async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
                 select(User.username).where(User.id == tournament.created_by_user_id)
             )
         ).scalar_one()
-        # The identical seven-statement batched composition + ``serialize_detail`` the
+        # The identical eight-statement batched composition + ``serialize_detail`` the
         # HTTP route runs — extracted into the shared ``tournament_detail`` reader,
         # so this tool and the page can never drift on how a tournament is read.
         return await tournament_detail(

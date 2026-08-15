@@ -1721,6 +1721,29 @@ EventResultsRead = Annotated[
 ]
 
 
+class EventStageRead(BaseModel):
+    """One stage of an event's draw — a row the event owns (ADR 20260815 decision 1,
+    "a stage is a row the event owns"). A director never authors these; the system
+    mints them from a template keyed on the event's draw type
+    (``app.tournament_event_stages.mint_stages``), and every event holds at least
+    one from the moment it is created.
+
+    ``draw_type`` is the stage's OWN draw type — the strategy it runs — read the same
+    way :attr:`TournamentEventRead.draw_type` is: the enum's hyphenated ``key``, never
+    ``rr_then_ko`` (that member names a template, not a runnable stage; decision 4).
+    An rr-then-ko event's two stages read back ``round-robin`` then ``single-elim``, in
+    that order.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    #: 0-based, mirroring the stored column — stage 1 of the ADR's prose is
+    #: ``position == 0``.
+    position: int
+    draw_type: DrawType
+
+
 class TournamentEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1768,6 +1791,15 @@ class TournamentEventRead(BaseModel):
     match_settings: MatchSettings
     predicates: list[Predicate]
     pools: list[Pool]
+    # The event's stages, in ``position`` order (ADR 20260815 decisions 1/3/7) — a
+    # director never authors these; the system mints them from a template keyed on
+    # the event's draw type, and every event holds at least one from the moment it
+    # is created. Total, not optional: unlike ``results``/``latest_schedule_solve``,
+    # there is no state an event can be in where it has none, so this field carries
+    # no "not applicable yet" case for a client to handle, and no "not on this page"
+    # one either — ``TournamentEvent.stages`` is ``lazy="selectin"``, like ``pools``
+    # above, so every read of an event carries its real stages.
+    stages: list[EventStageRead]
     created_at: datetime
     updated_at: datetime
     # The event's active entrants, oldest entry first.

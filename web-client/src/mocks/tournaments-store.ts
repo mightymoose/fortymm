@@ -24,6 +24,7 @@ import {
   buildTournamentFixtureRead,
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
+  mintStageReads,
   planDraw,
   planRoundRobinFixtures,
   type DrawPlan,
@@ -579,6 +580,7 @@ function seed(): StoredTournament[] {
           name: 'Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          stages: mintStageReads('round-robin'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 64,
@@ -627,6 +629,7 @@ function seed(): StoredTournament[] {
           name: 'U1500 Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          stages: mintStageReads('round-robin'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 48,
@@ -652,6 +655,7 @@ function seed(): StoredTournament[] {
           name: 'Championship Singles',
           format: 'singles',
           draw_type: 'single-elim',
+          stages: mintStageReads('single-elim'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 16,
@@ -688,6 +692,7 @@ function seed(): StoredTournament[] {
           name: 'U1200 Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          stages: mintStageReads('round-robin'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 24,
@@ -753,6 +758,7 @@ function seed(): StoredTournament[] {
           name: 'Mixed Doubles',
           format: 'doubles',
           draw_type: 'single-elim',
+          stages: mintStageReads('single-elim'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 32,
@@ -813,6 +819,7 @@ function seed(): StoredTournament[] {
           name: 'Slam Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          stages: mintStageReads('round-robin'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 16,
@@ -876,6 +883,7 @@ function seed(): StoredTournament[] {
           name: "Women's Championship Singles",
           format: 'singles',
           draw_type: 'single-elim',
+          stages: mintStageReads('single-elim'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 32,
@@ -974,6 +982,7 @@ function seed(): StoredTournament[] {
           name: 'Garage Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          stages: mintStageReads('round-robin'),
           qualifiers_per_pool: null,
           rounds: null,
           max_players: 8,
@@ -1040,6 +1049,7 @@ function seed(): StoredTournament[] {
           name: 'Challenge Cup',
           format: 'singles',
           draw_type: 'rr-then-ko',
+          stages: mintStageReads('rr-then-ko'),
           // TWO qualifiers per pool — the number that sizes the bracket at the cut
           // (`P × K` = 2 × 2 = 4, derived and never configured, ADR 20260727). Unlike
           // every other event in this seed it is NOT null: a knockout stage to qualify
@@ -1131,6 +1141,7 @@ function seed(): StoredTournament[] {
           name: 'Shield Singles',
           format: 'singles',
           draw_type: 'rr-then-ko',
+          stages: mintStageReads('rr-then-ko'),
           // Two pools of three, two qualifiers from each — `K = ⌊N/P⌋`, the legal
           // maximum, where everyone but the pool's last qualifies and the pool stage
           // exists purely to seed (ADR 20260727).
@@ -2254,6 +2265,10 @@ export function createEvent(
     // choose, which is `null`, never `undefined` and never an invented number — the day
     // this event's draw is cut, this is how many rounds get written.
     rounds: body.rounds ?? null,
+    // Minted from the event's own draw type, the way the server mints them
+    // (`mintStageReads`) — never a hand-written literal that could drift from
+    // `draw_type`.
+    stages: mintStageReads(body.draw_type),
     // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
     max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
@@ -2348,6 +2363,13 @@ export function updateEvent(
       patch.draw_type === undefined || patch.draw_type === null
         ? event.rounds
         : (patch.rounds ?? null),
+    // The stages move with the draw type they describe (`mintStageReads`): a patch
+    // that re-types the event re-mints them so `stages` never drifts from
+    // `draw_type`; a patch that leaves the draw type alone leaves them alone too.
+    stages:
+      patch.draw_type === undefined || patch.draw_type === null
+        ? event.stages
+        : mintStageReads(patch.draw_type),
     // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
     // the stored cap untouched. `??` would conflate the two, silently keeping a
     // cap the editor meant to remove.

@@ -27,6 +27,8 @@ type PlayerConflictRead = components['schemas']['PlayerConflictRead']
 type AdminScheduleSolveRead = components['schemas']['AdminScheduleSolveRead']
 type AdminScheduleSolveListResponse =
   components['schemas']['AdminScheduleSolveListResponse']
+type EventStageRead = components['schemas']['EventStageRead']
+type DrawType = components['schemas']['DrawType']
 
 /** A single physical table, `T1` on court 1. */
 export function buildTournamentTable(
@@ -1131,6 +1133,27 @@ export function entryStateFor(
 }
 
 /**
+ * Mints the `stages` an event of a given draw type is born with, the way the server's
+ * `app.tournament_event_stages.mint_stages` does: a director never authors these, so
+ * every mock event derives them from its own `draw_type` rather than carrying a
+ * hand-written literal that can drift from it. Stable ids (`s-1`, `s-2`) and 0-based
+ * positions, same as every other minted-id sequence in this factory.
+ *
+ * `rr-then-ko` is the one multi-stage type — round-robin pools feeding a single-elim
+ * bracket — so it mints both, in play order; every other draw type mints its own single
+ * stage.
+ */
+export function mintStageReads(drawType: DrawType): EventStageRead[] {
+  if (drawType === 'rr-then-ko') {
+    return [
+      { id: 's-1', position: 0, draw_type: 'round-robin' },
+      { id: 's-2', position: 1, draw_type: 'single-elim' },
+    ]
+  }
+  return [{ id: 's-1', position: 0, draw_type: drawType }]
+}
+
+/**
  * A rated Bo5 "Open Singles" event with one morning pool, as returned by the
  * tournament detail/list endpoints. Defaults are internally consistent so a
  * bare call is a meaningful row.
@@ -1207,6 +1230,11 @@ export function buildTournamentEventRead(
     // for the reason the qualifier count is — the field is required-and-nullable on the read
     // shape while `Partial<…>` admits an explicit `undefined`.
     rounds: overrides.rounds ?? null,
+    // Minted from the event's OWN (possibly overridden) draw type, never a literal —
+    // see `mintStageReads`. Stated after the spread for the same reason `rounds` and
+    // `qualifiers_per_pool` are: it has to read the draw type the override chose, not
+    // the one this factory defaulted to.
+    stages: overrides.stages ?? mintStageReads(overrides.draw_type ?? 'round-robin'),
   } satisfies Omit<TournamentEventRead, 'entered'>
   return {
     ...event,

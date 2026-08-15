@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from app.models.tournament_entry import TournamentEntry
     from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
     from app.models.tournament_event_pool import TournamentEventPool
+    from app.models.tournament_event_stage import TournamentEventStage
     from app.models.tournament_fixture import TournamentFixture
     from app.models.tournament_table import VenueTable
 
@@ -382,6 +383,36 @@ class TournamentEvent(Base):
         passive_deletes=True,
         lazy="selectin",
         order_by="TournamentEventPool.position",
+    )
+
+    # The event's stages, as rows the system mints from a template keyed on the
+    # event's draw type (ADR 20260815 decision 1/3) — a director never authors these,
+    # and ``app.tournament_event_stages`` is the only writer. Every event holds at
+    # least one: the create path mints the whole template as this collection at
+    # construction time (``stages=mint_stages(...)``), in the same transaction as the
+    # event itself.
+    #
+    # ``lazy="selectin"``, matching ``pools`` above and for the same reason: async
+    # SQLAlchemy raises rather than emitting a lazy load, so every reader of an event's
+    # stages — the tournament-detail/list serializers today, and whatever reads them
+    # next — would otherwise have to remember its own loader option. ``selectin`` and
+    # not ``joined`` because this is a one-to-many, batching over the whole result set
+    # in ONE extra statement however many events a page holds (the same reasoning
+    # ``pools`` gives). ``app.tournament_event_stages`` still reaches these rows
+    # through explicit queries of its own on the mint/re-mint path — it never reads
+    # this attribute — but every OTHER reader (the serializer chief among them) now
+    # gets a populated collection for free.
+    #
+    # ``passive_deletes=True`` is what keeps ``await db.delete(event)``
+    # (``app.tournament_events.delete_event``) from needing to load this collection to
+    # cascade the delete in Python — the database's own ``ON DELETE CASCADE`` does it,
+    # exactly as it already does for ``entries``/``fixtures`` above.
+    stages: Mapped[list["TournamentEventStage"]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="TournamentEventStage.position",
     )
 
     # The event's draw: every fixture the cut produced (ADR-0786). Empty until the

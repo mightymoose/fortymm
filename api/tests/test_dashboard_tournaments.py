@@ -726,7 +726,10 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 
 # The pin, measured (print the statements below to re-measure): the caller's live
 # entries — joined to their events, those events' tournaments AND, since #1086, those
-# events' draw settings rows — plus ONE batched load of those tournaments' venue tables
+# events' draw settings rows — plus ONE batched load of every event's stages
+# (``TournamentEvent.stages``, ``lazy="selectin"`` too now, ADR 20260815 — the panel
+# does not read them, but the relationship is eager for every reader, this one
+# included) and ONE batched load of those tournaments' venue tables
 # (``Tournament.tables``, ``lazy="selectin"`` — the catalogue is rows now,
 # ADR 20260801, and the panel resolves a placement's table LABEL through it) and ONE of
 # every event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows
@@ -737,9 +740,9 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # then ONE batched load of every event's active entrants, ONE of every event's fixtures,
 # ONE of the completed matches' game counts, ONE of the handful of focus matches, and
 # that load's own eager options (the match's league, results, sides, settings, side
-# players and those players' users — one batched ``selectin`` each). Fourteen, whatever
+# players and those players' users — one batched ``selectin`` each). Fifteen, whatever
 # the number of events.
-EXPECTED_DASHBOARD_PANEL_STATEMENTS = 14
+EXPECTED_DASHBOARD_PANEL_STATEMENTS = 15
 
 
 @pytest.mark.parametrize("event_count", [1, 3])
@@ -757,8 +760,8 @@ async def test_panel_statement_count_does_not_grow_with_events(
     that already loads the event.
 
     The two ``event_count`` cases are what makes this discriminating. A per-event
-    settings load emits one statement per event, so it would measure 12 at one event and
-    14 at three — failing the pin at three even if it slipped past at one. The events
+    settings load emits one statement per event, so it would measure 13 at one event and
+    15 at three — failing the pin at three even if it slipped past at one. The events
     alternate round-robin and single-elim, so both branches of the wording are exercised
     by the same payload, and the assertions below read the label off each.
 

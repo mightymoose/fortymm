@@ -2519,6 +2519,30 @@ export interface components {
          */
         EventFormat: "singles" | "doubles" | "teams";
         /**
+         * EventStageRead
+         * @description One stage of an event's draw — a row the event owns (ADR 20260815 decision 1,
+         *     "a stage is a row the event owns"). A director never authors these; the system
+         *     mints them from a template keyed on the event's draw type
+         *     (``app.tournament_event_stages.mint_stages``), and every event holds at least
+         *     one from the moment it is created.
+         *
+         *     ``draw_type`` is the stage's OWN draw type — the strategy it runs — read the same
+         *     way :attr:`TournamentEventRead.draw_type` is: the enum's hyphenated ``key``, never
+         *     ``rr_then_ko`` (that member names a template, not a runnable stage; decision 4).
+         *     An rr-then-ko event's two stages read back ``round-robin`` then ``single-elim``, in
+         *     that order.
+         */
+        EventStageRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Position */
+            position: number;
+            draw_type: components["schemas"]["DrawType"];
+        };
+        /**
          * FinishRowRead
          * @description One entrant's **finish** in a single-elimination bracket (ADR-0785): its
          *     finishing position and the round it was eliminated in.
@@ -5090,6 +5114,8 @@ export interface components {
             predicates: components["schemas"]["Predicate"][];
             /** Pools */
             pools: components["schemas"]["Pool"][];
+            /** Stages */
+            stages: components["schemas"]["EventStageRead"][];
             /**
              * Created At
              * Format: date-time
