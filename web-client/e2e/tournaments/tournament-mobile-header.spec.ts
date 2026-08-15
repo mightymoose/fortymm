@@ -35,7 +35,7 @@
  *
  * ## Observed failing
  *
- * Reverting the two lines above and re-running reds **four of these tests**, each
+ * Reverting the two lines above and re-running reds **five of these tests**, each
  * with a measured number and none by timeout. Observed at 375x667:
  *
  * | Test | Under the revert | With the fix |
@@ -44,13 +44,13 @@
  * | keeps the lifecycle button wholly on screen | ends 452px from the left | ends at 327 |
  * | does not collapse the title | `h1` **0px** wide, 576px tall | 279px wide, 36px tall |
  * | the long name, does not scroll | `html` 452px inside 375px | 375 / 375 |
+ * | the long name, wraps inside the header | `h1` content 19px inside a **0px** box | 279 / 279 |
  *
  * That 452px is the number Quinn measured by hand, reproduced exactly.
  *
- * The rest stay green under the revert, correctly: the widest-label test is about
- * copy and not layout, the wrap test measures the `h1`'s own box, and the instrument
- * control plants its own 4000px probe, so it must notice an overflow in either state
- * — that is what makes it a control.
+ * Only two stay green under the revert, and both correctly: the widest-label test is
+ * about copy and not layout, and the instrument control plants its own 4000px probe,
+ * so it must notice an overflow in either state — that is what makes it a control.
  *
  * ## Two tests ship `test.fail()`
  *
@@ -67,8 +67,14 @@
  * asserts the page fits and reds if it stops fitting. Only the platform that
  * actually overflows expects the failure.
  *
- * The four tests that pin #1062 are unaffected: they measure the header's own boxes
- * rather than the document, so the tab strip cannot reach them.
+ * The five tests that pin #1062 are unaffected: they measure the header's own boxes
+ * rather than the document, so the tab strip cannot reach them. Measured on Linux
+ * against the production build — the two marked tests red at 377px inside 375px, the
+ * stated reason, and the other five pass.
+ *
+ * The wrap test is the strongest of the five, and worth naming: it is unaffected by
+ * the tab strip AND sensitive to the header revert, reddening at `h1` content 19px
+ * inside a 0px box. So the marks below cost the file no coverage of #1062 at all.
  *
  * Each claim is its own `test()` on purpose. `expectNoHorizontalScroll` and
  * `expectOnScreen` assert internally, so three claims in one test would report only
@@ -234,11 +240,12 @@ test.describe('the tournament detail header on a phone', () => {
     // ship without someone coming back here. A deleted test would have gone quiet.
     //
     // This does NOT weaken the file's claim. #1044 exists to pin the header fix
-    // from #1062, and the button, title and widest-label tests do that on their own
-    // — they measure the header's own boxes, not the whole document, so the tab
-    // strip cannot reach them. Under the falsification this test reds at 452px, the
-    // number Quinn measured; the 377px here is a different and smaller defect that
-    // #1044 lists under Non-Goals.
+    // from #1062, and the button, title, widest-label and long-name-wrap tests do
+    // that on their own — they measure the header's own boxes, not the whole
+    // document, so the tab strip cannot reach them, and three of the four red under
+    // the falsification. Under the falsification this test reds at 452px, the number
+    // Quinn measured; the 377px here is a different and smaller defect that #1044
+    // lists under Non-Goals.
     //
     // Conditioned on the platform rather than marked outright, because the defect
     // IS conditioned on the platform: 375/375 on macOS, 377/375 on Linux. A bare
