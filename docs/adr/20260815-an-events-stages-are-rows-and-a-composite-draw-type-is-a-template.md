@@ -103,9 +103,6 @@ work that #1338 starts. A stage row is the anchor that work will attach to.
 
 ## Consequences
 
-**Backfill is deterministic.** Each event's stages mint from its draw type.
-Each fixture's `stage_id` follows from `pool_id IS NULL` plus the type.
-
 **The twenty derivation sites become reads.** The web client's
 `unpooledShape(drawType)` switch and its warning comment go away: the stage's
 draw type says whether an un-pooled block is a bracket or swiss rounds.
@@ -113,9 +110,8 @@ draw type says whether an un-pooled block is a bracket or swiss rounds.
 **Sequencing with #1338 is one seam.** Dropping `event_id` from fixtures
 removes the column the pool composite FK uses today. The pool's group face
 therefore re-parents to the stage, giving the fixture
-`(stage_id, pool_id) → tournament_event_pools (stage_id, id)`. Every existing
-pool backfills onto its event's single round-robin stage. #1338 later splits
-the reservation face back out. Both arcs should be planned against this one
+`(stage_id, pool_id) → tournament_event_pools (stage_id, id)`. #1338 later
+splits the reservation face back out. Both arcs should be planned against this one
 target schema rather than migrating the same tables twice.
 
 **The wire changes.** OpenAPI regen on both clients, and the fixture payloads
