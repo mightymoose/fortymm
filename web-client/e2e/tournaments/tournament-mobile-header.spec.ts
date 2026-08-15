@@ -67,14 +67,20 @@
  * asserts the page fits and reds if it stops fitting. Only the platform that
  * actually overflows expects the failure.
  *
- * The five tests that pin #1062 are unaffected: they measure the header's own boxes
- * rather than the document, so the tab strip cannot reach them. Measured on Linux
- * against the production build — the two marked tests red at 377px inside 375px, the
- * stated reason, and the other five pass.
+ * The marks cost this file no coverage of #1062. **Three** unmarked tests red under
+ * the falsification — the lifecycle button, the title, and the long name's wrap —
+ * and all three measure the header's own boxes rather than the document, so the tab
+ * strip cannot reach them. (The other two unmarked tests stay green under the
+ * revert by design, per the table above; they are a copy check and a control, and
+ * they pin nothing about the header fix.)
  *
- * The wrap test is the strongest of the five, and worth naming: it is unaffected by
- * the tab strip AND sensitive to the header revert, reddening at `h1` content 19px
- * inside a 0px box. So the marks below cost the file no coverage of #1062 at all.
+ * Measured on Linux against the production build: the two marked tests red at 377px
+ * inside 375px, the stated reason and not a timeout, and the other five pass.
+ *
+ * The long name's wrap test is the one worth naming. It is unaffected by the tab
+ * strip AND sensitive to the header revert, reddening at `h1` content 19px inside a
+ * 0px box — so the strongest pin in the file is one of the tests that keeps running
+ * unmarked on every platform.
  *
  * Each claim is its own `test()` on purpose. `expectNoHorizontalScroll` and
  * `expectOnScreen` assert internally, so three claims in one test would report only
@@ -240,12 +246,12 @@ test.describe('the tournament detail header on a phone', () => {
     // ship without someone coming back here. A deleted test would have gone quiet.
     //
     // This does NOT weaken the file's claim. #1044 exists to pin the header fix
-    // from #1062, and the button, title, widest-label and long-name-wrap tests do
-    // that on their own — they measure the header's own boxes, not the whole
-    // document, so the tab strip cannot reach them, and three of the four red under
-    // the falsification. Under the falsification this test reds at 452px, the number
-    // Quinn measured; the 377px here is a different and smaller defect that #1044
-    // lists under Non-Goals.
+    // from #1062, and three unmarked tests do that on their own — the button, the
+    // title and the long name's wrap. All three measure the header's own boxes, not
+    // the whole document, so the tab strip cannot reach them, and all three red
+    // under the falsification. Under the falsification this test reds at 452px, the
+    // number Quinn measured; the 377px here is a different and smaller defect that
+    // #1044 lists under Non-Goals.
     //
     // Conditioned on the platform rather than marked outright, because the defect
     // IS conditioned on the platform: 375/375 on macOS, 377/375 on Linux. A bare
