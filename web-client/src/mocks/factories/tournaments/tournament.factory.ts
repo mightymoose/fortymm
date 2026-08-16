@@ -795,17 +795,24 @@ export type DrawPlan =
  * would put a sentence in the server's mouth it never says.
  *
  * Asked of the DEALT groups, not of arithmetic on N and P: the refusal is about the
- * groups the snake actually produced, and it names the numbers the director must
- * change. */
+ * groups the snake actually produced, and it names the numbers the director must change.
+ *
+ * **Both nouns are inflected**, exactly as `_snake` inflects them: "1 entrant across 1
+ * group", "5 entrants across 3 groups". This used to read `group(s)` and to say "1
+ * entrants", which is a sentence the server has never said — harmless-looking until #1300
+ * put the one-entrant round-robin case into the GO-LIVE refusal, where the mock's sentence
+ * and the API's are asserted against the same literal. */
 function snakeRefusal(
   entryIds: readonly string[],
   groupIds: readonly string[],
 ): string | null {
   if (groupIds.length === 0) return 'A round-robin draw needs at least one group.'
   if (snakedGroups(entryIds, groupIds.length).some((group) => group.length < 2)) {
+    const entrantNoun = entryIds.length === 1 ? 'entrant' : 'entrants'
+    const groupNoun = groupIds.length === 1 ? 'group' : 'groups'
     return (
-      `${entryIds.length} entrants across ${groupIds.length} group(s) would leave ` +
-      'a group with fewer than 2 entrants, who would have nobody to play.'
+      `${entryIds.length} ${entrantNoun} across ${groupIds.length} ${groupNoun} would ` +
+      'leave a group with fewer than 2 entrants, who would have nobody to play.'
     )
   }
   return null

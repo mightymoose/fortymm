@@ -10,10 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.draws import (
-    DegenerateDraw,
     DrawError,
-    NonSinglesDraw,
-    UnsupportedDrawType,
+    draw_error_detail,
 )
 from app.geocoding import AddressNotGeocodableError, Geocoder
 from app.geocoding.dependencies import get_geocoder
@@ -1118,71 +1116,13 @@ def _draw_refusal(error: DrawError) -> HTTPException:
     would be, and rather than a 409, which would invite a retry that will fail
     identically until the director changes the event.
 
-    A ``match`` over the error, not ``str(error)`` over whatever arrives:
-
-    * ``NonSinglesDraw`` carries its ``event_format`` **structurally**, so the sentence
-      is composed here from the fact rather than parsed out of a message written for a
-      developer — the director needs to be told which of *their* events cannot be cut,
-      and that the rest of the tournament is unaffected.
-    * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**, and
-      it is passed through on purpose: only the strategy knows *which* degeneracy it hit
-      — no groups at all, or a snake that would leave some group with one player and
-      nobody to play — and the numbers in that sentence ("5 entrants across 3 group(s)")
-      are the numbers the director has to change. Recomposing it here would be a second
-      copy of a rule this route does not own, and the copy that drifts is the one a
-      director reads. From the **schedule-preview** route it arrives only when the
-      tournament has no other event to preview: one event the draw refuses beside a
-      healthy one is skipped, and the honest-notes strip carries this same sentence.
-    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
-      reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
-      now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
-      with the **schedule-preview** route below, and ``app.schedule_preview`` raises it
-      when *no* event of a tournament can be previewed and the first such event is a
-      single-elim or a swiss draw. One such event beside a round-robin no longer
-      refuses anything: the builder skips it, previews the rest, and the honest-notes
-      strip names it. A
-      director previewing a bracket-only tournament must be told it is the *draw type*
-      that cannot be previewed, not left with the generic sentence, which says the
-      event's own state is at fault and would send them hunting through groups and
-      entrants that are perfectly fine. The sentence blames the right thing now: not
-      the scheduler, which does place a bracket over its event's own window (ADR "a
-      group restricts scheduling, it does not enable it"), but the preview, which runs
-      before anyone has entered and so has no field to lay a played-out draw over.
-    * The fallback arm is a **generic** sentence, never the exception's own. A
-      ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
-      message nobody wrote for a human — refusing vaguely is a bug report; leaking
-      internals is a defect that reaches the UI. (Its author gives it its own arm, the
-      same way ``_registration_refusal_detail`` buys its totality.)
+    The ``match`` over the error that composes the director-facing sentence now lives
+    in :func:`app.draws.draw_error_detail` — shared with the ``published → live`` dry
+    run in ``app.tournament_lifecycle``, which hits the same errors when it plans a
+    cut ahead of time to see whether it would succeed, so the two call sites' copy
+    cannot drift apart. See that function's docstring for what each error composes to.
     """
-    match error:
-        case NonSinglesDraw():
-            # Composed from the structural ``event_format``: a doubles/teams event can
-            # never be cut in any state (an entry is
-            # one row per player, with nowhere to record a partner or a team, ADR-0788),
-            # so a director is told which event is un-drawable and why — a permanent
-            # fact, not a retryable one.
-            detail = (
-                f"A {error.event_format.value} event cannot be given a draw — only "
-                "singles events can. A fixture seats one entrant on each side, and "
-                "there is nowhere to record a doubles pairing or a team."
-            )
-        case DegenerateDraw():
-            detail = str(error)
-        case UnsupportedDrawType():
-            # Reachable from the SCHEDULE-PREVIEW route only (the cut route's
-            # ``strategy_for`` is total), and only when the tournament has no
-            # previewable event at all. Named from the structural ``draw_type`` so the
-            # sentence says which format cannot be previewed.
-            detail = (
-                f"A {error.draw_type.value} draw cannot be previewed, and this "
-                "tournament has no other event to preview. A draw of that kind is "
-                "decided round by round as it is played, so before anyone has "
-                "entered there is nothing to lay out. The scheduler does place it "
-                "once the tournament is live."
-            )
-        case _:
-            detail = "This event's draw cannot be cut as the event stands."
-    return HTTPException(status_code=422, detail=detail)
+    return HTTPException(status_code=422, detail=draw_error_detail(error))
 
 
 # The play-evidence gate, the owner-scoped locking load, and the ``cut_draw`` /

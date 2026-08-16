@@ -81,6 +81,17 @@ const SAY = {
    * reviewed and merely needs to re-cut. */
   noDrawYet: 'no draw yet',
   staleDraw: 'has a draw that no longer matches its entrants',
+  /** The go-live refusal's **undrawable** half (#1300) — an event no cut can ever fix,
+   * carrying its own reason and its own fix instead of the "cut the draw" instruction it
+   * could only fail. A doubles event is the permanent case: entry is refused for it, so
+   * its field can never reach two and removal is the only way out. */
+  nonSingles:
+    'A doubles event cannot be given a draw — only singles events can.',
+  removeTheEvent: 'Remove the event.',
+  addEntrants: 'Add entrants, or remove the event.',
+  /** The instruction that closes the `uncut`/`stale` body — and the anchor the body
+   * ORDER is asserted against, since it must trail only the names a cut can fix. */
+  cutTheDraw: 'cut the draw for each event named',
   /** The freeze reasons, one per frozen control — the CLIENT's own copy
    * (`groupSetFreeze`, `data/draw.ts`), not the server's 409 sentence. */
   groupsFrozen: 'a reservation can’t be added or removed while the draw stands',
@@ -461,6 +472,33 @@ test.describe('Tournaments · going live needs a current draw', () => {
     await expect(pom.lifecycleNotice).toContainText(`“${EVENT.JOURNEY}”`)
     await expect(pom.lifecycleNotice).toContainText(`“${EVENT.EMPTY}”`)
     await expect(pom.lifecycleNotice).toContainText(`“${EVENT.DOUBLES}”`)
+
+    // …and each of them is told the truth about ITSELF (#1300). Only `JOURNEY` can
+    // actually be cut; the other two never can — `EMPTY` is a round-robin with no groups
+    // and nobody entered, `DOUBLES` is a doubles event whose field can never reach two —
+    // so they carry their own reason and their own fix rather than the "cut the draw"
+    // instruction, which for them is the dead end this ticket closes.
+    //
+    // These three lines are what pin the stub to the server. Every assertion above them
+    // passes just as happily against the PRE-#1300 refusal, which lumped all three events
+    // under "have no draw yet" and sent the director to cut two draws that can only 409.
+    await expect(pom.lifecycleNotice).toContainText(SAY.noGroups)
+    await expect(pom.lifecycleNotice).toContainText(SAY.nonSingles)
+    await expect(pom.lifecycleNotice).toContainText(SAY.removeTheEvent)
+
+    // …and in the right ORDER, which no `toContainText` above can see. The undrawable
+    // sentences come FIRST, so the `uncut`/`stale` body's closing instruction — "cut the
+    // draw for each event named" — trails only the names a cut would actually fix. With
+    // the bodies the other way round QA read that instruction, clicked Generate draw on
+    // an undrawable event named just below it, and the cut refused (#1300).
+    //
+    // This is also the ONLY assertion in any suite that pins the e2e stub's body order:
+    // every other check here is a fragment match that passes under either order, and
+    // this suite runs with MSW off, so vitest cannot see this stub at all.
+    const notice = (await pom.lifecycleNotice.innerText()).replace(/\s+/g, ' ')
+    expect(notice.indexOf(SAY.nonSingles)).toBeLessThan(notice.indexOf(SAY.cutTheDraw))
+    expect(notice.indexOf(SAY.noGroups)).toBeLessThan(notice.indexOf(SAY.cutTheDraw))
+    expect(notice.trimEnd().endsWith('then start the tournament.')).toBe(true)
 
     await pom.expectLifecycle('Published', 'Start tournament')
     expect(store.status).toBe('published')

@@ -7,7 +7,7 @@
 // - the **title** is the CLIENT's — the state, in a few words, in our voice;
 // - the **description** is, for the refusals that matter, the **SERVER's own sentence**,
 //   verbatim. Those sentences are authored for the director and they name the thing that
-//   has to change ("“Open Singles” has no draw yet…", "5 entrants across 3 group(s) would
+//   has to change ("“Open Singles” has no draw yet…", "5 entrants across 3 groups would
 //   leave a group with fewer than 2 entrants…"). Replacing one with a generic string of
 //   ours would throw away the only actionable half of the refusal.
 //

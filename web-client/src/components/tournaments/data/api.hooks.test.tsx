@@ -1367,7 +1367,7 @@ describe('useCutDraw', () => {
   })
 
   // The 422 is the director's to act on, and its SENTENCE is the answer: it names the
-  // numbers they have to change ("5 entrants across 3 group(s)…" — no code could carry
+  // numbers they have to change ("5 entrants across 3 groups…" — no code could carry
   // that). So the hook does not swallow it and does not decorate it: it REJECTS with the
   // `ApiError`, sentence intact, and the panel that awaited `mutateAsync` renders it
   // inline where the button was (`DrawPanel`, `data/draw.ts`).
@@ -1376,7 +1376,7 @@ describe('useCutDraw', () => {
       HttpResponse.json(
         {
           detail:
-            '5 entrants across 3 group(s) would leave a group with fewer than 2 entrants, who would have nobody to play.',
+            '5 entrants across 3 groups would leave a group with fewer than 2 entrants, who would have nobody to play.',
         },
         { status: 422 },
       ),
@@ -1391,7 +1391,7 @@ describe('useCutDraw', () => {
     const error = result.current.error as ApiError
     expect(error.status).toBe(422)
     expect(error.detail).toBe(
-      '5 entrants across 3 group(s) would leave a group with fewer than 2 entrants, who would have nobody to play.',
+      '5 entrants across 3 groups would leave a group with fewer than 2 entrants, who would have nobody to play.',
     )
     // …and NO toast. The draw verbs carry no global `onError`, deliberately: their
     // refusals are surfaced inline by the panel, and a toast would tell the director the

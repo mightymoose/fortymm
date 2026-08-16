@@ -1,11 +1,11 @@
 ---
-description: Test a specific In Testing ticket, or the top In Testing ticket when none is specified. Refuses without a human LGTM on the pull request. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge, clean up the run's resources, and move successful work to Done.
+description: Test one specified In Testing ticket. Refuses without a human LGTM on the pull request. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge, clean up the run's resources, and move successful work to Done. Requires the ticket number, which the implement-ticket-end-to-end orchestrator passes.
 model: sonnet
 ---
 
 # Test Next Ticket
 
-Test exactly one ticket from **In Testing**. With a ticket number, use that eligible issue only. With no argument, select the **topmost ticket according to the Project's current ordering** in **In Testing**.
+Test exactly one ticket from **In Testing**. `$ARGUMENTS` must contain a ticket number; verify that issue is eligible and test it only. If `$ARGUMENTS` is empty, stop and report: this command does not select tickets. `implement-ticket-end-to-end` selects and passes the number.
 
 Testing is an adversarial behavioral gate. Its primary testing engine is the existing `qa-review` skill.
 
@@ -18,8 +18,6 @@ Read the ticket specification, relevant parent requirements, Review Notes, and l
 If the signal is absent, **refuse to run.** Report which PR was checked and that no `LGTM` from `mightymoose` was found on any of the three surfaces, then stop.
 
 This is a **precondition check, not a status transition.** Do not move the ticket to satisfy it, and do not move it back on refusal. Do not accept a Review Note, a board column, or a coordinator's say-so as a substitute — the whole point is that this holds when someone runs the stage by hand and the coordinator was never involved. A gate that lives only in the coordinator's prose is not a gate.
-
-Do not check the signal by `gh pr view --json comments`. It returns one of the three surfaces, and the one it omits is where a review posted through the GitHub UI actually lands.
 
 ## Run QA Review
 
@@ -52,8 +50,8 @@ If the correct repair is clear:
 1. Repair it autonomously.
 2. Add or update regression coverage.
 3. Commit and push the repair.
-4. Send the ticket back through **Review**.
-5. After Review passes again, re-run `qa-review` or the relevant portion of it against the repaired behavior.
+4. Invoke `review-next-ticket` in a fresh context as a **Testing repair round** (see that command). It reviews the repair diff only, posts no decision comment, and moves no column — the ticket stays **In Testing**, and the human's earlier release still covers it because the gate's window is "ever" by design.
+5. After that round passes, re-run `qa-review` or the relevant portion of it against the repaired behavior.
 
 Do not create a follow-up ticket as a substitute for fixing the current ticket.
 
@@ -96,7 +94,7 @@ Append a ticket comment with exactly:
 
 #### Repairs and Retesting
 
-<Describe repairs, Review re-entry, and `qa-review` retesting, or `N/A`.>
+<Describe repairs, Testing repair rounds, and `qa-review` retesting, or `N/A`.>
 
 #### Acceptance Criteria Assessment
 
@@ -126,7 +124,7 @@ Only after:
 
 - `qa-review` has completed successfully;
 - all current-ticket Acceptance Criteria pass;
-- current-ticket repairs have passed Review again;
+- current-ticket repairs have passed a Testing repair round;
 - relevant checks are green;
 - no escalation remains;
 
@@ -146,7 +144,7 @@ Never bypass branch protection or required checks.
 
 Whoever merges cleans up. This command merges, so this command cleans up. A coordinator that delegated the merge does not.
 
-Run this after the merge is confirmed, and run it whether the ticket passed or the run escalated. An escalated run tears down the same resources a successful one does — the stack it started and the branch it pushed exist either way.
+The QA stack comes down whether the run merged or escalated — the stack `qa-review` started exists either way, and a failed run leaks it just as fast. The **branch** is different: delete it only after a confirmed merge. An escalated run's branch holds the only copy of unmerged work.
 
 Capture the stack id **before** merging. It derives from the branch name, and after the merge you are no longer standing on that branch.
 
@@ -159,15 +157,23 @@ scripts/qa-down.sh "$QA_ID"
 
 Then:
 
-1. Delete the branch locally and on the remote.
-2. Confirm nothing survives on the dev-server ports:
+1. After a confirmed merge only: delete the branch locally and on the remote.
+2. Fast-forward the main checkout, so the next ticket starts from the merge this run just made:
+
+   ```bash
+   MAIN="$(git worktree list | awk 'NR==1{print $1}')"   # first row is the main checkout
+   git -C "$MAIN" pull --ff-only origin main
+   ```
+
+   Only when that checkout is on `main`. If it is on another branch, or the pull refuses, run `git -C "$MAIN" fetch origin` instead and report it. Never force the update. The SessionStart freshness hook only warns about a stale main. Nothing else pulls it, and a next run on a stale root branches its worktree from code this merge already changed.
+3. Confirm nothing survives on the dev-server ports:
 
    ```bash
    lsof -ti :5173 -i :5174 || echo "clear"
    ```
 
    A dev server left on 5173 or 5174 makes the next run's `npm run dev` bind a different port, and that run then QAs a build it did not produce.
-3. Report what was torn down in the Testing Notes.
+4. Report what was torn down in the Testing Notes.
 
 ### Two ordering traps
 
@@ -180,22 +186,18 @@ Then:
 
 ## Escalation Contract
 
-Work autonomously when the path is clear. Stop and involve the user for materially ambiguous/contradictory criteria, invalid upstream assumptions, required scope changes, materially different unresolved product/UX/data/architecture choices, unexpectedly destructive/high-risk actions, unavailable required credentials/services/environments, unsafe repository state, two failed repair attempts for the same problem, inability to run `qa-review` meaningfully, or inability to complete honestly.
-
-Do not escalate for understandable failures with clear repairs. Never weaken criteria, skip stages, substitute a weaker QA pass, or redefine success.
+`.claude/rules/escalation.md` is the contract — when to stop, when not to, and how. Two additions for this stage: escalate when `qa-review` cannot run meaningfully, and never substitute a weaker QA pass.
 
 ## Hard Rules
 
-- Process exactly one ticket.
-- No argument means top of **In Testing**; an argument means that eligible ticket only.
+- Process exactly one ticket, and only the ticket number given. Never select from the board.
 - **Refuse to run without the review gate signal on the pull request.** See `.claude/rules/the-review-gate.md`.
-- Use `qa-review` as the adversarial testing engine.
-- Test behavior against the specification, not implementer expectations.
+- Use `qa-review` as the adversarial testing engine, testing behavior against the specification, not implementer expectations.
 - Current-ticket failures must be fixed before Done.
 - Separate discoveries become linked issues at the **top of To Do**.
-- Code changes during Testing require Review again.
+- Code changes during Testing require a Testing repair round through `review-next-ticket`.
 - Always leave structured Testing Notes with explicit `N/A` where appropriate.
-- Record QA setup/tooling friction even when successfully resolved.
 - Merge only after `qa-review` and the ticket's Acceptance Criteria pass.
-- Whoever merges cleans up. Tear down this run's QA stack and branch after merging, and do it on an escalation too.
+- Whoever merges cleans up. Tear down this run's QA stack after merging, and on an escalation too. Delete the branch only after a confirmed merge.
+- After a confirmed merge, fast-forward the main checkout's `main`.
 - Never run `docker system prune -a` or `docker volume prune`.

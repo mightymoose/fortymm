@@ -879,11 +879,11 @@ describe('DrawPanel', () => {
     })
 
     // The refusal whose NUMBERS are the whole message. No client-side string could carry
-    // "5 entrants across 3 group(s)", which is exactly why the server's sentence is shown
+    // "5 entrants across 3 groups", which is exactly why the server's sentence is shown
     // rather than a generic "this event can't be drawn".
     it('shows the 422 for groups that would leave someone with nobody to play — numbers and all', async () => {
       const detail =
-        '5 entrants across 3 group(s) would leave a group with fewer than 2 entrants, ' +
+        '5 entrants across 3 groups would leave a group with fewer than 2 entrants, ' +
         'who would have nobody to play.'
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail }, { status: 422 }),
@@ -905,7 +905,7 @@ describe('DrawPanel', () => {
       await userEvent.click(await page.findGenerateButton('U1500 Singles'))
 
       const notice = await page.findNoticeText()
-      expect(notice).toContain('5 entrants across 3 group(s)')
+      expect(notice).toContain('5 entrants across 3 groups')
       expect(notice).toContain('nobody to play')
     })
 
@@ -1003,7 +1003,7 @@ describe('DrawPanel', () => {
 
     it('clears once somebody enters, for a refusal about the entrant count', async () => {
       const detail =
-        '5 entrants across 3 group(s) would leave a group with fewer than 2 entrants.'
+        '5 entrants across 3 groups would leave a group with fewer than 2 entrants.'
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail }, { status: 422 }),
       )

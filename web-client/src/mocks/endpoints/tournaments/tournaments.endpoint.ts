@@ -189,7 +189,7 @@ export const mockEventEnterEndpoint = (
  *
  * The refusals are plain-string `detail`s, not coded ones — deliberately, because that
  * is what the route sends: the 422's sentence names what the director must CHANGE
- * ("5 entrants across 3 group(s) would leave a group with fewer than 2 entrants"), and
+ * ("5 entrants across 3 groups would leave a group with fewer than 2 entrants"), and
  * those numbers are not derivable from a code. There is no request body: the event is
  * the whole request. */
 export type EventCutDrawResolver = HttpResponseResolver<

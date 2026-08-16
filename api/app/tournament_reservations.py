@@ -363,18 +363,19 @@ async def apply_event_reservations(
     # ``.options(selectinload(...))`` here, rather than a default eager strategy on the
     # relationship itself: ``TournamentEventStage.groups`` is deliberately NOT eager (an
     # event-wide default would double-load against ``TournamentEvent.groups``'s own
-    # selectin), so this one direct reader asks for exactly the load it needs — the
-    # groups, their join rows, and the reservations those name, because the update arm
-    # writes through all three.
+    # selectin), so this one direct reader asks for exactly the load it needs.
     stage = (
         await db.execute(
             select(TournamentEventStage)
-            .options(
-                selectinload(TournamentEventStage.groups)
-                .selectinload(TournamentEventStageGroup.reservation_link)
-                .selectinload(TournamentEventGroupReservation.reservation)
-                .selectinload(TournamentEventReservation.tables)
-            )
+            # ONE option, not a chain down to the tables. Everything below ``groups`` is
+            # already eager on its own model — ``reservation_link`` and ``reservation``
+            # as ``joined`` (one-to-one and many-to-one, so they ride this query's own
+            # SELECT), and ``tables`` as ``selectin``. Spelling the tail out here would
+            # not add loads, it would REPLACE them: an explicit loader option overrides
+            # the mapper's default for that path, so chaining ``selectinload`` over the
+            # two joined legs turns each into its own round trip — five statements where
+            # two do, and precisely the joins those models argue for.
+            .options(selectinload(TournamentEventStage.groups))
             .where(
                 TournamentEventStage.event_id == event.id,
                 TournamentEventStage.position == 0,
@@ -383,32 +384,24 @@ async def apply_event_reservations(
     ).scalar_one()
     # ``TournamentEvent.reservations`` is deliberately NOT eager (see that
     # relationship's docstring: no reader needs it, and eager it would cost every page
-    # two statements). This is its one writer, so it loads the collection here, with the
-    # same explicit-query discipline the stage load above uses.
+    # a statement it never reads). This is its one writer, so it loads it here.
     #
     # It has to be loaded BEFORE the assignment below: assigning to an unloaded
     # ``delete-orphan`` collection makes the unit of work emit a lazy load
     # mid-assignment, to work out what is being orphaned — which under async raises
     # ``MissingGreenlet`` rather than querying.
     #
-    # The result is discarded on purpose. The rows land in the identity map and populate
-    # the collection on the very ``event`` this function was handed, which is the object
-    # the assignment goes through; binding the return value would suggest otherwise.
-    await db.execute(
-        select(TournamentEvent)
-        .options(
-            selectinload(TournamentEvent.reservations).selectinload(
-                TournamentEventReservation.tables
-            )
-        )
-        .where(TournamentEvent.id == event.id)
-    )
+    # ``awaitable_attrs`` is the sanctioned spelling for exactly that (``AsyncAttrs`` on
+    # ``app.db.Base``): it loads the one relationship, on the object already in hand. A
+    # throwaway ``select(TournamentEvent)`` carrying a loader option does the same job
+    # for two statements instead of one, and re-reads a row the session already holds.
+    await event.awaitable_attrs.reservations
     # Keyed on the RESERVATION's own id — the id the wire now exposes and the id a
     # PATCH cites — not on the group's. The two used to be the same key because only
     # the group's id ever reached a client; now that both ids are visible, the group's
     # is server-owned and read-only, and the diff has to run against the array a client
     # can actually write.
-    stored = {group.reservation_link.reservation.id: group for group in stage.groups}
+    stored = {group.reservation.id: group for group in stage.groups}
     # Judged first, over the whole payload, for the reason the catalogue's twin is: a
     # reservation list naming a reservation this event does not have is not a
     # reservation list, and every subsequent question (what is kept, and therefore what
@@ -427,7 +420,7 @@ async def apply_event_reservations(
     # the mapped set" true by construction instead of by a parallel append nobody would
     # notice drifting.
     stage.groups = groups
-    event.reservations = [group.reservation_link.reservation for group in groups]
+    event.reservations = [group.reservation for group in groups]
 
 
 def _group_for(
@@ -456,7 +449,7 @@ def _group_for(
         return _new_group(event, tournament, entry, position)
     group = stored[entry.id]
     group.position = position
-    reservation = group.reservation_link.reservation
+    reservation = group.reservation
     reservation.name = entry.name
     reservation.position = position
     reservation.slot_date, reservation.slot_start, reservation.slot_end = _slot_columns(

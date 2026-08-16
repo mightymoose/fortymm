@@ -22,7 +22,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.models import (
     DrawType,
@@ -53,6 +53,7 @@ from app.tournament_events import create_event, delete_event, update_event
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import reservation_read
 from tests._helpers import (
+    counted_statements,
     event_groups,
     make_user,
     venue_tables,
@@ -1599,3 +1600,90 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
             )
         )
     ).scalar_one() == created_at
+
+
+# The round trips ONE reservations PATCH costs, over the whole `update_event` verb: the
+# tournament and its catalogue, the event, the freeze check's read of the current
+# groups, the stage-0 load the diff is written against, and the event's reservations.
+#
+# It exists because nothing else pins the WRITE path. The three sibling tripwires
+# (`EXPECTED_TOURNAMENT_LIST_STATEMENTS`, `EXPECTED_TOURNAMENT_DETAIL_STATEMENTS`,
+# `EXPECTED_DASHBOARD_PANEL_STATEMENTS`) all count a page READ, so a loader mistake on
+# this verb costs real round trips and leaves every one of them green. Splitting the
+# one row into a group and a reservation did exactly that, twice, and both were
+# invisible:
+#
+#   * an explicit `selectinload` chain spelled down to the reservation's tables, which
+#     OVERRODE the `lazy="joined"` those one-to-one legs declare and turned each into
+#     its own statement; and
+#   * a throwaway `select(TournamentEvent)` issued purely so a loader option would
+#     populate `event.reservations`, re-reading a row already in the session.
+#
+# Together they cost 7 statements on every reservations PATCH. `app.tournament_reservations`
+# is the one write seam, so one number here covers the whole verb.
+#
+# It is not a count that must never move — a real change to what the verb does may move
+# it. It is a count that must never move BY ACCIDENT. If it changes, say why in the
+# same commit.
+EXPECTED_RESERVATION_WRITE_STATEMENTS = 15
+
+
+async def test_reservation_write_statement_count_does_not_drift(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    default_league: League,
+) -> None:
+    """A reservations PATCH costs a fixed number of round trips, whatever the loader
+    graph underneath it happens to look like.
+
+    Two reservations, both CITED by id, so this exercises the update arm of the
+    id-keyed diff — the arm that re-times and re-tables an existing reservation, and
+    therefore the one that has to have the whole group -> join -> reservation -> tables
+    chain in hand. An add-only or remove-only payload would touch less of it.
+
+    The cited id is the **reservation's**, not the group's: the wire's writable array is
+    ``reservations``, and the diff keys on the id a client can actually name.
+
+    Counted around the verb rather than the HTTP request, matching the sibling read
+    tripwires: an endpoint-level count would also sweep up session and auth statements
+    that have nothing to do with this loader graph.
+    """
+    owner = await make_user(db_session, "events-write-count-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(
+            reservations=[_reservation("Reservation A"), _reservation("Reservation B")]
+        ),
+    )
+    event_id = event.id
+    reservation_ids = [group.reservation.id for group in event.groups]
+    await db_session.commit()
+
+    async with counted_statements(engine) as (session, statements):
+        await update_event(
+            session,
+            tournament_id=tournament_id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "reservations": [
+                        {
+                            **_reservation("Reservation A"),
+                            "id": str(reservation_ids[0]),
+                        },
+                        {
+                            **_reservation("Reservation B"),
+                            "id": str(reservation_ids[1]),
+                        },
+                    ]
+                }
+            ),
+        )
+
+    selects = [s for s in statements if s.strip().upper().startswith("SELECT")]
+    assert len(selects) == EXPECTED_RESERVATION_WRITE_STATEMENTS, selects

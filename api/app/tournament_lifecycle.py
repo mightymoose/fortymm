@@ -29,9 +29,11 @@ from typing import assert_never
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.draws import DrawError, NonSinglesDraw, draw_error_detail, order_entrants
 from app.geocoding import Geocoder
 from app.leagues import _load_league, get_default_league
 from app.models import (
+    EventFormat,
     League,
     ScheduleSolveTrigger,
     Tournament,
@@ -46,7 +48,13 @@ from app.tournament_draw_settings import (
     draw_settings_ids_for_tournament,
     reap_draw_settings,
 )
-from app.tournament_draws import DrawCurrency, draw_currency_by_event
+from app.tournament_draws import (
+    DrawCurrency,
+    active_draw_entrants_by_event,
+    draw_config,
+    draw_currency_by_event,
+    strategy_for_event,
+)
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     IllegalTournamentTransitionError,
@@ -259,7 +267,9 @@ _NOTHING_TO_START = (
 )
 
 
-def _go_live_refusal_message(*, uncut: list[str], stale: list[str]) -> str:
+def _go_live_refusal_message(
+    *, undrawable: list[str], uncut: list[str], stale: list[str]
+) -> str:
     """The director-facing sentence for a tournament whose draws are not ready to be
     played (ADR-0786), naming the at-fault events **by name**.
 
@@ -268,30 +278,70 @@ def _go_live_refusal_message(*, uncut: list[str], stale: list[str]) -> str:
     ten-event tournament looking for it. Names, not ids (``named_list``) — the ids
     are what the guard compared, but they are not what the director is looking at.
 
-    The two failures are kept apart in the sentence, because they are two different
-    jobs. An **uncut** event needs a first cut. A **stale** one has a draw the
-    director may well have reviewed and approved — it is simply older than the field,
-    because somebody entered or withdrew after it was cut — and needs re-cutting,
-    which will move players around inside it. Collapsing the two into "cut the draws"
-    would tell the director of a stale event that nothing they did was kept.
+    Two bodies, built independently and joined with a space, because they answer two
+    different questions (#1300). **``undrawable`` comes first, and the order is
+    load-bearing** — see below.
+
+    * **``undrawable``** — already-composed, one-sentence-per-event refusals (each
+      carrying its own reason and its own fix, or no fix when the message states its
+      own), for events no cut could ever fix as they stand: a field under two
+      entrants, or a non-singles event. Not run through ``named_list`` — unlike
+      ``uncut``/``stale``, which share one trailing clause across every name, each
+      undrawable event has its own distinct reason, so there is no shared clause to
+      fold them into.
+    * **``uncut``/``stale``** — events a cut (or re-cut) would actually fix. The two
+      failures are kept apart within this body, because they are two different jobs.
+      An **uncut** event needs a first cut. A **stale** one has a draw the director may
+      well have reviewed and approved — it is simply older than the field, because
+      somebody entered or withdrew after it was cut — and needs re-cutting, which will
+      move players around inside it. Collapsing the two into "cut the draws" would
+      tell the director of a stale event that nothing they did was kept. This body is
+      built only when ``uncut`` or ``stale`` is non-empty, and it is
+      **byte-identical** to what this function produced before ``undrawable`` existed
+      — the regression this guarantees for every tournament with no undrawable event.
+      (Byte-identity does not depend on the order: when ``undrawable`` is empty this is
+      the only segment either way.)
+
+    **Why ``undrawable`` is first.** The ``uncut``/``stale`` body ends in "so cut the
+    draw for each event named …, then start the tournament". Put that body first and
+    the undrawable sentences trail *after* the instruction — so "each event named"
+    reads as covering the undrawable events named just below it, and a director who
+    follows it clicks **Generate draw** on an event the cut refuses. QA walked exactly
+    that circle. Emitting ``undrawable`` first keeps the instruction adjacent to the
+    only names it is true of, and leaves "then start the tournament" as the sentence
+    the refusal ends on.
+
+    When ``undrawable`` is non-empty and ``uncut``/``stale`` are both empty, the
+    "cut the draw for each event named" instruction never appears — a director cannot
+    be sent to cut a draw that will never succeed (the acceptance criterion this
+    guards).
+    """
+    segments: list[str] = []
+    if undrawable:
+        segments.append(" ".join(undrawable))
+    if uncut or stale:
+        segments.append(_uncut_stale_body(uncut, stale))
+    return "This tournament cannot start yet: " + " ".join(segments)
+
+
+def _uncut_stale_body(uncut: list[str], stale: list[str]) -> str:
+    """The "cut the draw" body of the go-live refusal — the clauses naming every
+    ``uncut``/``stale`` event plus the trailing instruction, unchanged from before
+    ``undrawable`` existed. Called only when ``uncut`` or ``stale`` is non-empty.
     """
     clauses = []
     if uncut:
-        clauses.append(
-            f"{named_list(uncut)} {'has' if len(uncut) == 1 else 'have'} no draw yet"
-        )
+        no_draw = "has" if len(uncut) == 1 else "have"
+        clauses.append(f"{named_list(uncut)} {no_draw} no draw yet")
     if stale:
-        clauses.append(
-            f"{named_list(stale)} "
-            + (
-                "has a draw that no longer matches its entrants"
-                if len(stale) == 1
-                else "have draws that no longer match their entrants"
-            )
+        mismatch = (
+            "has a draw that no longer matches its entrants"
+            if len(stale) == 1
+            else "have draws that no longer match their entrants"
         )
+        clauses.append(f"{named_list(stale)} {mismatch}")
     return (
-        "This tournament cannot start yet: "
-        + "; and ".join(clauses)
+        "; and ".join(clauses)
         + ". A draw is cut from the field as it stands at the time, and "
         "registration stays open right up to the moment a tournament goes live — "
         "so cut the draw for each event named (again, if somebody entered or "
@@ -299,10 +349,22 @@ def _go_live_refusal_message(*, uncut: list[str], stale: list[str]) -> str:
     )
 
 
+def _undrawable_sentence(name: str, reason: str, fix: str | None) -> str:
+    """One event's undrawable refusal, composed from its own reason and its own fix.
+
+    ``reason`` is :func:`~app.draws.draw_error_detail`'s composed sentence, which
+    always ends with a sentence-final period — so a ``fix``, when there is one, is
+    joined with a leading space (kept *inside* the conditional) rather than the
+    sentence gaining a second period or a double space when there is none.
+    """
+    return f"“{name}”: {reason}" + (f" {fix}" if fix else "")
+
+
 async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) -> None:
     """Raise :class:`TournamentNotReadyToGoLiveError` unless every event of this
-    tournament has a draw, and every one of those draws still describes the field it
-    will be played by (ADR-0786).
+    tournament has a draw, every one of those draws still describes the field it will
+    be played by (ADR-0786), and every event that still needs a cut is one a cut could
+    actually produce (#1300).
 
     **The** ``published → live`` **precondition** — the per-target rule ADR-0017 left
     room for at its single dispatch point, and the reason that room was left. Going
@@ -311,17 +373,27 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
     both are computed from the draw — so the draw has to be *right* at the instant the
     tournament starts, not merely to have existed at some point before it.
 
-    Three ways it is not, and each of the three is refused:
+    Four ways it is not, and each is refused:
 
     * **No events at all.** ``_NOTHING_TO_START``. It has to be checked, and checked
       first, because the per-event rules below say nothing about a tournament with no
       events: "every event has a current draw" is *true* of a tournament with none.
-    * **An event with no draw** (``uncut``) — nothing to play.
+    * **An event with no draw** (``uncut``) — nothing to play, but a cut would fix it.
     * **An event whose draw is stale** — its fixtures no longer seat exactly its
       active entrants. Registration stays open all the way to go-live, so a draw cut
       on Tuesday is a plan for Tuesday's field: a player who entered on Wednesday is
       in no fixture (they would sit out the tournament they paid for), and a player
       who withdrew is still seated in one (their opponents get a match nobody plays).
+      A re-cut would fix it.
+    * **An event a cut can never fix** (``undrawable``) — a field under two entrants
+      (of any implemented draw type), or a non-singles event (a doubles/teams event
+      is refused at the cut, ``NonSinglesDraw``, and can never gain entrants: entry
+      itself is refused for it). Telling the director to "cut the draw" for one of
+      these is unfollowable — the fix instruction the ``uncut``/``stale`` refusal
+      carries is precisely the one that cannot work here, which is the defect #1300
+      closes: **every** ``uncut``/``stale`` event now gets a dry-run cut before the
+      refusal is composed, so the sentence never sends a director to an action the
+      system will refuse a second time.
 
     **Read under the tournament's row lock, which the transition verb has already
     taken** — this function does not take a second one, and must not. That lock is the
@@ -332,51 +404,117 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
     a tournament could go live, on a draw this function had just certified as current,
     into a field with one more player in it than the draw seats. The check would have
     been true when it was made and false by the time it mattered, which is the only
-    kind of guard worse than none.
+    kind of guard worse than none. The dry run below is a pure, in-memory
+    ``plan_initial`` call — it plans fixtures and discards them, taking no lock and
+    writing nothing — so it adds no second lock and no window for the field to move
+    under it.
 
-    A ``match`` with ``assert_never``, not an ``if``: a fourth thing that can be true
-    of a draw (a fixture pointing at a group the event no longer has, say) is a type
-    error here until somebody decides whether it may go live, rather than falling
-    through to ``current`` — a precondition must never fail in the permissive
-    direction.
+    Reads stay batched at **three** reads for the whole tournament, whatever the number
+    of events: the whole-tournament event read, ``draw_currency_by_event`` (itself
+    batched), and — only for at-fault **singles** events, since a non-singles event is
+    judged by format alone and never needs a strategy call —
+    :func:`~app.tournament_draws.active_draw_entrants_by_event`.
+
+    **Reads, not statements**, and the distinction is the whole point of counting them:
+    each of the three is a fixed number of statements rather than one, so the total is
+    around seven (``draw_currency_by_event`` alone is three, and the event read pulls
+    ``groups`` and ``stages`` through their ``selectin`` loaders). What is constant is
+    that **none of the three grows with the number of events** — which is the property
+    the row lock cares about, and the reason a per-event query is forbidden here.
     """
     events = (
-        await db.execute(
-            select(TournamentEvent.id, TournamentEvent.name)
-            .where(TournamentEvent.tournament_id == tournament.id)
-            # The page's order, so the refusal names the events in the order the
-            # director is looking at them.
-            .order_by(TournamentEvent.created_at)
+        (
+            await db.execute(
+                select(TournamentEvent)
+                .where(TournamentEvent.tournament_id == tournament.id)
+                # The page's order, so the refusal names the events in the order the
+                # director is looking at them.
+                .order_by(TournamentEvent.created_at)
+            )
         )
-    ).all()
+        .scalars()
+        .all()
+    )
     if not events:
         raise TournamentNotReadyToGoLiveError(
-            _NOTHING_TO_START, uncut=[], stale=[], no_events=True
+            _NOTHING_TO_START, uncut=[], stale=[], undrawable=[], no_events=True
         )
     # ONE batched read for the whole tournament (three statements, whatever the number
     # of events — entries, fixtures, and the draw types the bye allowance turns on):
     # this runs with the row lock held, and a per-event query would hold it for a time
     # that grows with the tournament.
-    currency = await draw_currency_by_event(db, [event_id for event_id, _ in events])
-    uncut: list[str] = []
-    stale: list[str] = []
-    for event_id, name in events:
-        state = currency[event_id]
+    currency = await draw_currency_by_event(db, [event.id for event in events])
+    # The events this precondition refuses at all — everything NOT ``current`` — in
+    # the events' own order. A ``match`` with ``assert_never`` over the closed
+    # ``DrawCurrency`` set here, not an ``if``: a fourth thing that can be true of a
+    # draw (a fixture pointing at a group the event no longer has, say) is a type error
+    # until somebody decides whether it may go live, rather than silently joining
+    # ``current`` and sailing through.
+    at_fault: list[tuple[TournamentEvent, DrawCurrency]] = []
+    for event in events:
+        state = currency[event.id]
         match state:
             case DrawCurrency.current:
                 continue
-            case DrawCurrency.uncut:
-                uncut.append(name)
-            case DrawCurrency.stale:
-                stale.append(name)
+            case DrawCurrency.uncut | DrawCurrency.stale:
+                at_fault.append((event, state))
             case _:
                 assert_never(state)
-    if not uncut and not stale:
+    if not at_fault:
         return
+    # The batched field read, scoped to SINGLES at-fault events only — a non-singles
+    # event is undrawable by format alone (mirroring ``cut_draw``'s own ordering,
+    # format judged before the strategy runs) and never needs its entrants.
+    entrants_by_event = await active_draw_entrants_by_event(
+        db,
+        [event.id for event, _ in at_fault if event.format is EventFormat.singles],
+    )
+    uncut: list[str] = []
+    stale: list[str] = []
+    undrawable: list[str] = []
+    undrawable_names: list[str] = []
+    for event, state in at_fault:
+        # Format judged FIRST, before any strategy runs — mirrors ``cut_draw``'s own
+        # ordering. A non-singles event is undrawable on this fact alone: entry is
+        # refused for it entirely (``app.tournament_entries``), so its field can never
+        # reach two and a strategy call would have nothing new to fail on.
+        if event.format is not EventFormat.singles:
+            undrawable.append(
+                _undrawable_sentence(
+                    event.name,
+                    draw_error_detail(NonSinglesDraw(event.format)),
+                    "Remove the event.",
+                )
+            )
+            undrawable_names.append(event.name)
+            continue
+        entrants = entrants_by_event[event.id]
+        try:
+            strategy_for_event(event).plan_initial(
+                draw_config(event), order_entrants(entrants)
+            )
+        except DrawError as exc:
+            # A field under two entrants is fixed by adding entrants, or by removing
+            # an event nobody can fill. Every OTHER ``DegenerateDraw`` (no groups, too
+            # many qualifiers, too many rounds) already names its own fix inside the
+            # message, so nothing is appended for those.
+            fix = "Add entrants, or remove the event." if len(entrants) < 2 else None
+            undrawable.append(
+                _undrawable_sentence(event.name, draw_error_detail(exc), fix)
+            )
+            undrawable_names.append(event.name)
+            continue
+        # The dry run planned successfully: this event just needs a cut (or re-cut),
+        # nothing more — it stays in the bucket its currency already put it in.
+        if state is DrawCurrency.uncut:
+            uncut.append(event.name)
+        else:
+            stale.append(event.name)
     raise TournamentNotReadyToGoLiveError(
-        _go_live_refusal_message(uncut=uncut, stale=stale),
+        _go_live_refusal_message(undrawable=undrawable, uncut=uncut, stale=stale),
         uncut=uncut,
         stale=stale,
+        undrawable=undrawable_names,
         no_events=False,
     )
 

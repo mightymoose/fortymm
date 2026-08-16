@@ -163,6 +163,17 @@ def preview_reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> s
     ref, and the enqueue verb's infeasibility-resolution map all pass through here, so
     the string contract lives in exactly one place and cannot drift between them.
 
+    **The suffix is a RESERVATION id, the same as a live solve's**
+    (``app.schedule_solves.event_wide_reservation_key`` and its per-reservation twin).
+    It was a GROUP id until the wire split the two names apart: the preview keyed its
+    fixture refs off the projected slot's ``id``, which was the group's. Both spaces
+    key on the reservation now, because a reservation is what a fixture is actually
+    confined to — its tables, inside its window — and because a field called
+    ``reservation_id`` holding a group id is the exact conflation this rename ends.
+    Under the 1:1 the two ids are in exact correspondence, so the preview a director
+    sees is unchanged; once #1370 lets two groups share a reservation, keying on the
+    reservation is the answer that stays correct.
+
     **The namespace is no longer needed for uniqueness, and is kept anyway.** It was
     minted because a reservation id was a per-event string and two events of one
     tournament could each hold a "reservation-a"; a reservation id is a globally unique

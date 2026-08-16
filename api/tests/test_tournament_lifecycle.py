@@ -63,6 +63,7 @@ from tests._helpers import (
     CountingGeocoder,
     assert_tournament_address_is_sql_null,
     blank_addresses,
+    event_draw_settings,
     event_groups,
     make_user,
     venue_tables,
@@ -703,6 +704,66 @@ async def _enter(db: AsyncSession, event: TournamentEvent, count: int) -> None:
     await db.commit()
 
 
+async def _add_event(
+    db: AsyncSession,
+    tournament: Tournament,
+    *,
+    name: str,
+    event_format: EventFormat = EventFormat.singles,
+    draw_type: DrawType = DrawType.round_robin,
+    rounds: int | None = None,
+    qualifiers_per_group: int | None = None,
+    group_count: int = 1,
+) -> TournamentEvent:
+    """A second (or third...) event on ``tournament``, built with the format/draw type/
+    settings/group count a #1300 undrawable-classification test needs — the fixture
+    ``_make_tournament_at``'s single ``with_event=True`` round-robin event cannot cover
+    on its own.
+
+    ``group_count=0`` seeds no groups at all (the round-robin-with-no-groups edge case);
+    any other count seeds that many bare groups, positionally named, on the event's
+    first (position-0) stage — the one ``event.groups`` reads through regardless of
+    draw type (ADR 20260815). What the wire calls a group is a GROUP plus the
+    RESERVATION it maps to; ``event_groups`` builds both.
+
+    Returns the event **re-read** through a fresh ``select``, not the just-constructed
+    instance: ``groups`` is a ``viewonly`` relationship assigned only via
+    ``stages[0].groups`` above, so the in-memory object never populates it, and reading
+    it synchronously off that instance would attempt a lazy load the async session
+    refuses (``MissingGreenlet``). A plain ``select`` re-load populates every eager
+    relationship (``draw_settings`` joined, ``groups``/``stages`` selectin) the way
+    every other reader of an event gets them.
+    """
+    stages = mint_stages(draw_type)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name=name,
+        format=event_format,
+        draw_settings=event_draw_settings(
+            draw_type, qualifiers_per_group=qualifiers_per_group, rounds=rounds
+        ),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": _DATE, "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        stages=stages,
+    )
+    stages[0].groups = event_groups(
+        [{} for _ in range(group_count)], event=event, tournament=tournament
+    )
+    db.add(event)
+    # Committed, not merely flushed: ``created_at`` is a server-side ``now()``
+    # default, and Postgres freezes ``now()`` for the whole transaction — two events
+    # added under one still-open transaction would carry the SAME ``created_at`` and
+    # sort ambiguously, which several tests below depend on NOT happening (the
+    # refusal names events in the tournament's own — i.e. creation — order).
+    await db.commit()
+    return (
+        await db.execute(select(TournamentEvent).where(TournamentEvent.id == event.id))
+    ).scalar_one()
+
+
 async def test_transition_draft_to_published_moves_and_persists(
     db_session: AsyncSession,
     default_league: League,
@@ -1026,6 +1087,458 @@ async def test_go_live_with_a_stale_draw_names_it(
     assert exc.uncut == []
     assert exc.stale == ["Open Singles"]
     assert "no longer matches its entrants" in str(exc)
+
+
+# ----- the go-live dry run: undrawable events (#1300) -----------------------
+#
+# The precondition above refuses ``uncut``/``stale`` events with a "cut the draw"
+# instruction the director can follow. It cannot follow that instruction for an event
+# no cut will ever succeed on — a field under two entrants, or a non-singles event
+# (entry is refused for one entirely, so it can never gain a field at all). These
+# tests prove the dry run tells those two failures apart and composes each event's
+# own reason and fix, never a "cut the draw" instruction for an event that can't be.
+
+
+@pytest.mark.parametrize(
+    "draw_type",
+    [DrawType.round_robin, DrawType.single_elim, DrawType.swiss, DrawType.rr_then_ko],
+)
+async def test_a_one_entrant_event_is_undrawable_for_every_draw_type(
+    db_session: AsyncSession,
+    default_league: League,
+    draw_type: DrawType,
+) -> None:
+    """A field of one is undrawable for every implemented draw type — round-robin and
+    rr-then-ko both refuse it through the same group-snake floor, single-elim and swiss
+    each through their own bracket/field floor — and every one of them is fixed the
+    same way: add entrants, or remove the event."""
+    owner = await make_user(db_session, f"tx-one-{draw_type.value}")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    event = await _add_event(
+        db_session,
+        tournament,
+        name="Lone Event",
+        draw_type=draw_type,
+        rounds=3 if draw_type is DrawType.swiss else None,
+        qualifiers_per_group=1 if draw_type is DrawType.rr_then_ko else None,
+    )
+    await _enter(db_session, event, 1)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert exc.undrawable == ["Lone Event"]
+    assert exc.uncut == []
+    assert exc.stale == []
+    detail = str(exc)
+    assert "“Lone Event”:" in detail
+    assert detail.endswith("Add entrants, or remove the event.")
+    assert "cut the draw for each event named" not in detail
+
+
+async def test_a_zero_entrant_round_robin_event_is_undrawable_like_one_entrant(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Nobody has entered AND nobody has cut a draw — the ∅ == ∅ case that would read
+    as ``current`` if currency were judged on the seated set rather than on the
+    fixtures existing. The dry run still degenerates on it (a strategy plans over an
+    empty field same as a field of one), so it reports the SAME classification and fix
+    as the one-entrant case — only the reason's own entrant count differs, as the
+    strategy itself produces it."""
+    owner = await make_user(db_session, "tx-zero-rr")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    await _add_event(
+        db_session, tournament, name="Empty Event", draw_type=DrawType.round_robin
+    )
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert exc.undrawable == ["Empty Event"]
+    assert (
+        "“Empty Event”: 0 entrants across 1 group would leave a group with fewer than "
+        "2 entrants, who would have nobody to play. Add entrants, or remove the "
+        "event." in str(exc)
+    )
+
+
+async def test_a_stale_draw_shrunk_below_two_entrants_is_undrawable_not_stale(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A draw cut over four entrants, three of whom then withdraw, is stale by
+    currency — but a re-cut over the one remaining active entrant would degenerate.
+    The dry run catches that and reports it as undrawable, not stale — the edge case
+    a currency-only guard would send the director to re-cut a draw that can never
+    succeed a second time."""
+    owner = await make_user(db_session, "tx-shrunk-stale")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    event = await _add_event(
+        db_session, tournament, name="Shrinking Event", draw_type=DrawType.round_robin
+    )
+    await _enter(db_session, event, 4)
+    await cut_draw(db_session, event)
+    await db_session.commit()
+    entries = (
+        (
+            await db_session.execute(
+                select(TournamentEntry).where(TournamentEntry.event_id == event.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for entry in entries[:3]:
+        entry.status = TournamentEntryStatus.withdrawn
+    await db_session.commit()
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert exc.undrawable == ["Shrinking Event"]
+    assert exc.stale == []
+    assert exc.uncut == []
+
+
+async def test_mixed_tournament_names_undrawable_uncut_and_stale_each_with_its_fix(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """One undrawable event beside one merely-uncut event and one stale one: all three
+    are named, each under its own instruction, and the structured lists sort each
+    event into exactly one of the three buckets."""
+    owner = await make_user(db_session, "tx-mixed")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    undrawable_event = await _add_event(
+        db_session, tournament, name="A Undrawable", draw_type=DrawType.round_robin
+    )
+    await _enter(db_session, undrawable_event, 1)
+
+    uncut_event = await _add_event(
+        db_session, tournament, name="B Uncut", draw_type=DrawType.round_robin
+    )
+    await _enter(db_session, uncut_event, 4)
+
+    stale_event = await _add_event(
+        db_session, tournament, name="C Stale", draw_type=DrawType.round_robin
+    )
+    await _enter(db_session, stale_event, 4)
+    await cut_draw(db_session, stale_event)
+    await db_session.commit()
+    await _enter(db_session, stale_event, 1)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert exc.undrawable == ["A Undrawable"]
+    assert exc.uncut == ["B Uncut"]
+    assert exc.stale == ["C Stale"]
+    detail = str(exc)
+    # The ORDER first, and deliberately BEFORE the whole-sentence pin below: placed
+    # after it, these could never be the failing signal, because the exact-string
+    # assertion already pins the order and would red first. The instruction is the LAST
+    # thing the refusal says, and every name between it and the start of its own body is
+    # one a cut would actually fix.
+    assert detail.index("“A Undrawable”") < detail.index("“B Uncut”")
+    assert detail.index("“B Uncut”") < detail.index("cut the draw for each event named")
+    assert detail.endswith("then start the tournament.")
+    # The undrawable sentence comes FIRST, so "cut the draw for each event named"
+    # trails only the names it is true of. The other order sent QA's director to a
+    # Generate draw the cut refused (#1300).
+    assert detail == (
+        "This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 group "
+        "would leave a group with fewer than 2 entrants, who would have nobody to "
+        "play. Add entrants, or remove the event. “B Uncut” has no draw yet; and "
+        "“C Stale” has a draw that no longer matches its entrants. A draw is cut "
+        "from the field as it stands at the time, and registration stays open "
+        "right up to the moment a tournament goes live — so cut the draw for each "
+        "event named (again, if somebody entered or withdrew since it was last "
+        "cut), then start the tournament."
+    )
+
+
+async def test_all_undrawable_tournament_has_no_cut_instruction(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Every at-fault event is undrawable — one non-singles, one a field of one — so
+    the refusal never tells the director to cut a draw, because none of them can be."""
+    owner = await make_user(db_session, "tx-all-undrawable")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    await _add_event(
+        db_session,
+        tournament,
+        name="Doubles Event",
+        event_format=EventFormat.doubles,
+        draw_type=DrawType.round_robin,
+    )
+    lone_event = await _add_event(
+        db_session, tournament, name="Lone Event", draw_type=DrawType.single_elim
+    )
+    await _enter(db_session, lone_event, 1)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert exc.uncut == []
+    assert exc.stale == []
+    assert set(exc.undrawable) == {"Doubles Event", "Lone Event"}
+    assert str(exc) == (
+        "This tournament cannot start yet: “Doubles Event”: A doubles event cannot "
+        "be given a draw — only singles events can. A fixture seats one entrant on "
+        "each side, and there is nowhere to record a doubles pairing or a team. "
+        "Remove the event. “Lone Event”: A single-elimination draw needs at least 2 "
+        "entrants — a bracket of one has nobody to play. Add entrants, or remove "
+        "the event."
+    )
+
+
+async def test_non_singles_event_is_undrawable_without_running_a_strategy(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A doubles event is judged undrawable by format alone, before any strategy call
+    — proven behaviorally: a doubles event with PLENTY of active entrants (a field a
+    strategy would happily plan over) still reports undrawable, and the fix is to
+    remove the event, never to add entrants (which a non-singles event can never
+    receive — entry itself is refused for it, ADR-0788)."""
+    owner = await make_user(db_session, "tx-non-singles")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    event = await _add_event(
+        db_session,
+        tournament,
+        name="Doubles Event",
+        event_format=EventFormat.doubles,
+        draw_type=DrawType.round_robin,
+    )
+    await _enter(db_session, event, 8)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert exc.undrawable == ["Doubles Event"]
+    assert str(exc) == (
+        "This tournament cannot start yet: “Doubles Event”: A doubles event cannot "
+        "be given a draw — only singles events can. A fixture seats one entrant on "
+        "each side, and there is nowhere to record a doubles pairing or a team. "
+        "Remove the event."
+    )
+
+
+async def test_round_robin_with_no_groups_surfaces_snake_message_verbatim(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """``_snake`` refuses a round-robin event with no groups at all — the dry run
+    surfaces that sentence verbatim, with no fix appended (the field has 4 entrants,
+    well over the under-two floor, so the fix cannot be mistaken for that one)."""
+    owner = await make_user(db_session, "tx-no-groups")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    event = await _add_event(
+        db_session,
+        tournament,
+        name="No Groups Event",
+        draw_type=DrawType.round_robin,
+        group_count=0,
+    )
+    await _enter(db_session, event, 4)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert str(exc) == (
+        "This tournament cannot start yet: “No Groups Event”: A round-robin draw "
+        "needs at least one group."
+    )
+
+
+async def test_rr_then_ko_qualifiers_exceeding_smallest_group_is_verbatim(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """5 entrants across 2 groups snake to sizes 3 and 2; asking for 3 qualifiers from
+    each group is more than the smallest group holds. The strategy's own message is
+    surfaced verbatim, with no fix appended (5 entrants is well over the under-two
+    floor)."""
+    owner = await make_user(db_session, "tx-rrko-qualifiers")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    event = await _add_event(
+        db_session,
+        tournament,
+        name="Big Qualifiers Event",
+        draw_type=DrawType.rr_then_ko,
+        group_count=2,
+        qualifiers_per_group=3,
+    )
+    await _enter(db_session, event, 5)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert str(exc) == (
+        "This tournament cannot start yet: “Big Qualifiers Event”: Taking 3 "
+        "qualifiers from each group is more than the 2 entrants in the smallest "
+        "group — take fewer qualifiers from each group, or add entrants."
+    )
+
+
+async def test_rr_then_ko_single_qualifier_from_single_group_is_verbatim(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """One group, one qualifier: the knockout stage would hold one player with nobody
+    to play. The strategy's own message is surfaced verbatim, with no fix appended (2
+    entrants clears the under-two floor)."""
+    owner = await make_user(db_session, "tx-rrko-single-qual")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    event = await _add_event(
+        db_session,
+        tournament,
+        name="Single Qualifier Event",
+        draw_type=DrawType.rr_then_ko,
+        group_count=1,
+        qualifiers_per_group=1,
+    )
+    await _enter(db_session, event, 2)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert str(exc) == (
+        "This tournament cannot start yet: “Single Qualifier Event”: Taking 1 "
+        "qualifier from a single group leaves one player in the knockout stage, who "
+        "would have nobody to play — take more qualifiers from each group, or "
+        "configure more groups."
+    )
+
+
+async def test_swiss_round_count_above_ceiling_is_verbatim(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """4 entrants can play at most 3 rematch-free rounds; asking for 4 refuses. The
+    strategy's own message, naming the ceiling, is surfaced verbatim with no fix
+    appended (4 entrants clears the under-two floor)."""
+    owner = await make_user(db_session, "tx-swiss-rounds")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+    )
+    event = await _add_event(
+        db_session,
+        tournament,
+        name="Too Many Rounds Event",
+        draw_type=DrawType.swiss,
+        rounds=4,
+    )
+    await _enter(db_session, event, 4)
+
+    with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:
+        await transition_tournament(
+            db_session,
+            tournament_id=tournament.id,
+            actor=owner,
+            to=TournamentStatus.live,
+        )
+    exc = exc_info.value
+    assert str(exc) == (
+        "This tournament cannot start yet: “Too Many Rounds Event”: 4 rounds is "
+        "more than the 3 rounds a field of 4 entrants can play without a rematch — "
+        "play fewer rounds, or add entrants."
+    )
 
 
 async def test_transition_by_non_owner_raises_not_owner(

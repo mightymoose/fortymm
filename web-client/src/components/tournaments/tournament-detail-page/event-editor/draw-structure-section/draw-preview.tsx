@@ -47,7 +47,7 @@ export interface DrawPreviewProps {
    *
    * ⚠️ **Not `max(reservations, derived)`.** The reference shows the larger of the two
    * and moves on; ADR
-   * `20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-count-is-a-projection`
+   * ADR 20260808, the group-count-is-group-rows decision
    * refuses that, because the `max()` hides the one thing worth reporting. A director
    * with four reservation rows whose structure needs eight groups must read `8 groups`
    * in the equation and `4` in this fact, and see the gap.

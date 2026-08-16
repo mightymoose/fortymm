@@ -240,7 +240,7 @@ export const DrawStructureSection = ({
             structure={structure}
             fieldSize={fieldSize}
             // ⚠️ The event's real reservation ROWS, not `max(rows, derived)` as the
-            // reference shows (ADR 20260808-an-events-pool-count-is-its-pool-rows-and-a-
+            // reference shows (ADR 20260808, the group-count-is-group-rows-and-a-
             // derived-count-is-a-projection). Nothing sets a manual group count this
             // chore, so the two are equal today; taking the max would hide the gap the
             // moment chore 3c lets a director type one.

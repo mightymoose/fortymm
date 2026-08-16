@@ -201,7 +201,14 @@ class TournamentEventStageGroup(Base):
         ``selectinload`` that the write path attaches is exactly the one the read path
         needs.
 
-        Total in this slice: every write path writes a group and a reservation together,
-        so ``reservation_link`` is never absent.
+        Total on anything the **application** wrote: ``app.tournament_reservations`` is
+        the one write seam and every arm of it writes a group and a reservation
+        together. That is an invariant of the seam, not a constraint the database
+        enforces — the join table has no group-side NOT NULL, and a direct-to-database
+        seed can make a bare group (one test deliberately does, to prove the fixture's
+        composite foreign key refuses a cross-stage reference). Nothing projects such a
+        row today. The change that lets a group exist without a reservation has to
+        revisit this property, ``reservation_link``'s non-optional type, and
+        :func:`app.tournament_reservations.group_read` together.
         """
         return self.reservation_link.reservation
