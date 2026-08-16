@@ -19,6 +19,10 @@
 #   SKIP_IOS_OPENAPI_CHECK=1 git push   # skip only the (slow) Swift half
 #   git push --no-verify                # skip every pre-push hook
 #
+# The generators run through `mise exec --`, because a hook inherits no shell
+# activation. In a fresh worktree run `mise trust` once, or the hook warns and
+# falls back to a PATH that has no python/node.
+#
 # Enabled by `git config core.hooksPath .githooks` (scripts/install_tools.sh
 # does this for you). NOTE FOR WORKTREES: `core.hooksPath` set without
 # `--worktree` lands in the SHARED `.git/config`, so setting it from any one
@@ -75,9 +79,13 @@ is_relevant() {
 # git's pre-push protocol feeds us one line per ref on stdin:
 #   <local ref> <local sha> <remote ref> <remote sha>
 # A local sha of all zeros means the ref is being DELETED — nothing to verify.
-# A remote sha of all zeros means the remote has no such branch yet, so there is
-# no "since" commit to diff against; fall back to the merge-base with
-# origin/main, which is exactly the set of commits this push would add.
+#
+# The base is ALWAYS the merge base with origin/main, never `remote_sha`. What
+# the hook must judge is the set of commits the *branch* adds, not the set this
+# *push* happens to carry. Those differ after a rebase: the remote still points
+# at the pre-rebase tip, so diffing against it drags every commit main gained in
+# between into the range. A branch that touched four `web-client/` files and
+# nothing else fired the whole OpenAPI check that way.
 
 relevant=0
 while read -r _local_ref local_sha _remote_ref remote_sha; do
@@ -86,12 +94,12 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     continue  # branch deletion
   fi
 
-  if is_zero_sha "${remote_sha:-}" || [ -z "${remote_sha:-}" ]; then
-    # New branch. If origin/main is unknown (fresh clone, unusual remote) the
-    # base stays empty and we fall back to inspecting the tip commit alone —
-    # fail toward checking rather than toward silently skipping.
-    base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
-  else
+  base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
+
+  # origin/main unknown (fresh clone, unusual remote). Fall back to the push
+  # range if the remote has this branch, and to the tip commit alone if it does
+  # not — fail toward checking rather than toward silently skipping.
+  if [ -z "$base" ] && [ -n "${remote_sha:-}" ] && ! is_zero_sha "$remote_sha"; then
     base="$remote_sha"
   fi
 
@@ -133,6 +141,30 @@ fi
 
 echo "pre-push: this push touches api/ or ios/openapi/ — checking generated OpenAPI types..." >&2
 
+# --- Reach the toolchain mise.toml pins -----------------------------------
+#
+# A hook does not inherit the interactive shell's mise activation. A GUI git
+# client, an agent session, or any shell whose profile never ran `mise activate`
+# has no `python` and no `node` on PATH, and the hook dies with
+# `python: command not found`. Route every mise-managed tool through
+# `mise exec --`. Swift is not mise-managed and stays on the plain PATH.
+#
+# The probe is not paranoia. A fresh worktree's `mise.toml` is UNTRUSTED, and
+# every `mise exec` in it fails with "Config files ... are not trusted" — the
+# same trap that makes `npx` exit 127 in a worktree. Trusting repo config is the
+# operator's call, not a git hook's, so warn with the fix and fall back.
+if ! command -v mise >/dev/null 2>&1; then
+  mise_run() { "$@"; }
+elif mise exec -- true >/dev/null 2>&1; then
+  mise_run() { mise exec -- "$@"; }
+else
+  echo "pre-push: WARNING — 'mise exec' does not work here, so the generators" >&2
+  echo "          run against a bare PATH and may die with 'command not found'." >&2
+  echo "          In a fresh worktree this is an untrusted mise.toml; fix it with" >&2
+  echo "              mise trust" >&2
+  mise_run() { "$@"; }
+fi
+
 # --- Regenerate, reusing the same machinery as the mise tasks / CI ---------
 #
 # scripts/ensure-api-up.sh boots the API only if one isn't already listening and
@@ -140,7 +172,7 @@ echo "pre-push: this push touches api/ or ios/openapi/ — checking generated Op
 # server). Assign-then-eval through `tail -n1`: only the final stdout line is
 # the machine-readable handoff, and a bare `eval "$(cmd)"` would hide a failure
 # from `set -e`. Same convention as mise.toml's regen-api-types.
-API_STATUS="$("$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
+API_STATUS="$(mise_run "$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
 eval "$API_STATUS"
 TMP_SPEC=""
 # Registered before `mktemp` so a started-but-uncleaned server can't leak if
@@ -170,7 +202,7 @@ elif [ ! -x "$ROOT/web-client/node_modules/.bin/openapi-typescript" ]; then
   echo "          'npm ci' during a push. CI's 'verify' job still catches drift;" >&2
   echo "          run 'npm ci' in web-client/ (or 'mise run regen-api-types')." >&2
 else
-  ( cd "$ROOT/web-client" && API_URL="$API_URL" npm run gen:api )
+  ( cd "$ROOT/web-client" && export API_URL && mise_run npm run gen:api )
   if has_drift web-client/src/api/schema.d.ts; then
     drifted_files="$drifted_files web-client/src/api/schema.d.ts"
   fi
@@ -194,7 +226,7 @@ else
   # swift-openapi-generator silently DROPS `Optional[T]` fields encoded the way
   # FastAPI emits OpenAPI 3.1 (`anyOf: [T, {type: null}]`); this rewrites them
   # into the older `nullable: true` form it understands. Same step as CI.
-  python3 "$ROOT/ios/openapi/fix_openapi_nullable.py" "$TMP_SPEC" "$TMP_SPEC"
+  mise_run python3 "$ROOT/ios/openapi/fix_openapi_nullable.py" "$TMP_SPEC" "$TMP_SPEC"
 
   cd "$ROOT/ios/Tools/OpenAPIGeneratorCLI"
   swift run swift-openapi-generator generate "$TMP_SPEC" \
