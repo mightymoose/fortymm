@@ -166,7 +166,7 @@ async def _stage(
 
     called_fixture = TournamentFixture(
         stage_id=stages[0].id,
-        pool_id=pools[0].id,
+        group_id=pools[0].id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,
@@ -174,7 +174,7 @@ async def _stage(
     )
     later_fixture = TournamentFixture(
         stage_id=stages[0].id,
-        pool_id=pools[0].id,
+        group_id=pools[0].id,
         round=1,
         position=2,
         entry_a_id=entry_c.id,

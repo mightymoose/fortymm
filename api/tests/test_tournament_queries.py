@@ -140,7 +140,7 @@ async def _seed_fixtures(
         db_session.add(
             TournamentFixture(
                 stage_id=stage_id,
-                pool_id=pool_id,
+                group_id=pool_id,
                 round=round_number,
                 position=position,
             )

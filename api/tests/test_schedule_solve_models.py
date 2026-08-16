@@ -272,7 +272,7 @@ async def test_a_fresh_fixture_is_unpinned_and_never_notified(
     event = await _make_event(db_session)
     fixture = TournamentFixture(
         stage_id=event.groups[0].stage_id,
-        pool_id=event.groups[0].id,
+        group_id=event.groups[0].id,
         round=1,
         position=1,
     )
@@ -307,7 +307,7 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
     called_at = datetime(2026, 8, 1, 14, 30, tzinfo=UTC)
     fixture = TournamentFixture(
         stage_id=event.groups[0].stage_id,
-        pool_id=event.groups[0].id,
+        group_id=event.groups[0].id,
         round=1,
         position=1,
         table_id=table_id,

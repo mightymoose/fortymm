@@ -1939,7 +1939,7 @@ async def _seed_placed_fixture(
     await db_session.commit()
     fixture = TournamentFixture(
         stage_id=await stage_id_at(db_session, event_id, 0),
-        pool_id=await _only_pool_id(db_session, event_id),
+        group_id=await _only_pool_id(db_session, event_id),
         round=1,
         position=1,
         entry_a_id=entry_a.id,
@@ -3752,7 +3752,7 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
     await db.refresh(event)
     fixture = TournamentFixture(
         stage_id=stage0_id,
-        pool_id=pool0_id,
+        group_id=pool0_id,
         round=1,
         position=1,
     )
@@ -4284,7 +4284,7 @@ async def _seed_placeable_fixture(
     await db.commit()
     fixture = TournamentFixture(
         stage_id=stage0_id,
-        pool_id=pool0_id,
+        group_id=pool0_id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,

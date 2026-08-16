@@ -733,7 +733,7 @@ async def _add_cut_event(
     await db.refresh(event)
     fixture = TournamentFixture(
         stage_id=stage0_id,
-        pool_id=pool0_id,
+        group_id=pool0_id,
         round=1,
         position=1,
         scheduled_start=scheduled_start,
@@ -788,10 +788,10 @@ async def _add_cut_event_with_two_pools(
     db.add_all(
         [
             TournamentFixture(
-                stage_id=stage0_id, pool_id=pool_a_id, round=1, position=1
+                stage_id=stage0_id, group_id=pool_a_id, round=1, position=1
             ),
             TournamentFixture(
-                stage_id=stage0_id, pool_id=pool_b_id, round=1, position=1
+                stage_id=stage0_id, group_id=pool_b_id, round=1, position=1
             ),
         ]
     )

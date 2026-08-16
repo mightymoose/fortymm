@@ -158,7 +158,7 @@ async def _seed_placeable_fixture(
     await db.commit()
     fixture = TournamentFixture(
         stage_id=stage0_id,
-        pool_id=pool0_id,
+        group_id=pool0_id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,

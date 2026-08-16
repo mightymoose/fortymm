@@ -1425,9 +1425,9 @@ class TestSolveJob:
                 placements=(),
                 stats=SolveStats(wall_time_ms=77, objective=None),
                 reasons=(
-                    PoolHasNoTables(pool_id=pool_id),
+                    PoolHasNoTables(reservation_id=pool_id),
                     PoolOverCapacity(
-                        pool_id=pool_id,
+                        reservation_id=pool_id,
                         required_min=600,
                         capacity_min=480,
                         table_count=2,
@@ -1504,7 +1504,7 @@ class TestSolveJob:
                 stats=SolveStats(wall_time_ms=42, objective=None),
                 reasons=(
                     PlayerOverSubscribed(
-                        pool_id=pool_id,
+                        reservation_id=pool_id,
                         player_id=PlayerId(str(user_id)),
                         match_count=3,
                         required_min=95,
@@ -2204,18 +2204,18 @@ class TestEventWideReservation:
         key = schedule_solves.event_wide_pool_key(event_id)
         fixture = inputs.snapshot.fixtures[0]
         reasons: tuple[InfeasibilityReason, ...] = (
-            PoolHasNoTables(pool_id=key),
+            PoolHasNoTables(reservation_id=key),
             WindowTooShortForMatch(
-                pool_id=key,
+                reservation_id=key,
                 fixture_id=fixture.id,
                 needed_min=25,
                 window_span_min=10,
             ),
             PoolOverCapacity(
-                pool_id=key, required_min=600, capacity_min=480, table_count=2
+                reservation_id=key, required_min=600, capacity_min=480, table_count=2
             ),
             PlayerOverSubscribed(
-                pool_id=key,
+                reservation_id=key,
                 player_id=fixture.player_a_id,
                 match_count=3,
                 required_min=95,

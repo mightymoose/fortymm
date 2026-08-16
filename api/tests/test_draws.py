@@ -677,7 +677,7 @@ class TestRoundRobinCut:
 
         assert fixtures == [
             PlannedFixture(
-                pool_id=_pool("A"),
+                group_id=_pool("A"),
                 round=1,
                 position=1,
                 entry_a_id=_entry_id(1),
@@ -2911,27 +2911,27 @@ class TestSwissAdvance:
             _persisted(
                 [
                     PlannedFixture(
-                        pool_id=None,
+                        group_id=None,
                         round=1,
                         position=1,
                         entry_a_id=_entry_id(1),
                         entry_b_id=_entry_id(2),
                     ),
                     PlannedFixture(
-                        pool_id=None,
+                        group_id=None,
                         round=2,
                         position=1,
                         entry_a_id=_entry_id(1),
                         entry_b_id=_entry_id(3),
                     ),
                     PlannedFixture(
-                        pool_id=None,
+                        group_id=None,
                         round=3,
                         position=1,
                         entry_a_id=_entry_id(2),
                         entry_b_id=_entry_id(3),
                     ),
-                    PlannedFixture(pool_id=None, round=4, position=1),
+                    PlannedFixture(group_id=None, round=4, position=1),
                 ]
             ),
             {

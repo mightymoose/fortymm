@@ -171,7 +171,7 @@ async def _fixture(
 ) -> TournamentFixture:
     fixture = TournamentFixture(
         stage_id=stage_id,
-        pool_id=pool_id,
+        group_id=pool_id,
         round=1,
         position=position,
         entry_a_id=entry_a_id,
@@ -398,7 +398,7 @@ def test_fixture_state_projects_its_pools_place_in_the_event_order() -> None:
     fixture = TournamentFixture(
         id=uuid.uuid4(),
         stage_id=uuid.uuid4(),
-        pool_id=stored[9].id,
+        group_id=stored[9].id,
         round=1,
         position=1,
     )
@@ -416,12 +416,12 @@ def test_fixture_state_projects_no_pool_position_when_there_is_no_pool() -> None
     stored = _pools()
     event = TournamentEvent(groups=stored)
     un_pooled = TournamentFixture(
-        id=uuid.uuid4(), stage_id=uuid.uuid4(), pool_id=None, round=1, position=1
+        id=uuid.uuid4(), stage_id=uuid.uuid4(), group_id=None, round=1, position=1
     )
     pooled = TournamentFixture(
         id=uuid.uuid4(),
         stage_id=uuid.uuid4(),
-        pool_id=stored[0].id,
+        group_id=stored[0].id,
         round=1,
         position=1,
     )

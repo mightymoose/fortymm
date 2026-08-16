@@ -79,7 +79,7 @@ def _fixture(
     return ScheduleFixture(
         id=FixtureId(f"F{n}"),
         event_id=EventId(event),
-        pool_id=PoolId(pool),
+        reservation_id=PoolId(pool),
         player_a_id=player_a,
         player_b_id=player_b,
         pin=pin,
@@ -534,7 +534,7 @@ class TestInfeasibility:
         assert result.stats.objective is None
         assert result.reasons == (
             WindowTooShortForMatch(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 fixture_id=FixtureId("F1"),
                 needed_min=25,
                 window_span_min=20,
@@ -556,7 +556,7 @@ class TestInfeasibility:
         assert result.placements == ()
         assert result.reasons == (
             PoolOverCapacity(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 required_min=75,  # 3 * 25
                 capacity_min=60,  # 60-minute window * 1 table
                 table_count=1,
@@ -730,7 +730,7 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
-        assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
+        assert result.reasons == (PoolHasNoTables(reservation_id=PoolId("A")),)
 
     def test_no_tables_dominates_over_capacity_for_the_same_pool(self) -> None:
         """A no-tables pool is trivially over capacity too (capacity 0), but the
@@ -744,7 +744,7 @@ class TestInfeasibility:
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
+        assert result.reasons == (PoolHasNoTables(reservation_id=PoolId("A")),)
 
     def test_all_structural_causes_are_collected_at_once(self) -> None:
         """Two independently-broken pools: one has no tables, the other is over
@@ -771,10 +771,10 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
-        assert by_kind["pool_has_no_tables"] == [PoolHasNoTables(pool_id=PoolId("A"))]
+        assert by_kind["pool_has_no_tables"] == [PoolHasNoTables(reservation_id=PoolId("A"))]
         assert by_kind["pool_over_capacity"] == [
             PoolOverCapacity(
-                pool_id=PoolId("B"),
+                reservation_id=PoolId("B"),
                 required_min=50,
                 capacity_min=40,
                 table_count=1,
@@ -819,7 +819,7 @@ class TestInfeasibility:
         assert result.overrunning is False
         # Past window dominates: it is the only reason (the tight-window arm is
         # suppressed for the same pool), and it names the offending pool.
-        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        assert result.reasons == (PastWindow(reservation_id=PoolId("A")),)
         (reason,) = result.reasons
         assert isinstance(reason, PastWindow)
         assert reason.kind == "past_window"
@@ -854,7 +854,7 @@ class TestPlayerOverSubscribed:
         assert result.placements == ()
         assert result.reasons == (
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,  # 3 * 25 + 2 * REST_MIN
@@ -949,7 +949,7 @@ class TestPlayerOverSubscribed:
         assert result.verdict is Verdict.infeasible
         assert result.reasons == (
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,
@@ -987,14 +987,14 @@ class TestPlayerOverSubscribed:
         assert result.verdict is Verdict.infeasible
         assert result.reasons == (
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,
                 window_span_min=60,
             ),
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 player_id=p2,
                 match_count=3,
                 required_min=95,
@@ -1023,7 +1023,7 @@ class TestPlayerOverSubscribed:
         by_kind = _reasons_by_kind(result)
         assert by_kind["pool_over_capacity"] == [
             PoolOverCapacity(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 required_min=75,
                 capacity_min=60,
                 table_count=1,
@@ -1031,7 +1031,7 @@ class TestPlayerOverSubscribed:
         ]
         assert by_kind["player_over_subscribed"] == [
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,
@@ -1076,7 +1076,7 @@ class TestPlayerOverSubscribed:
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
+        assert result.reasons == (PoolHasNoTables(reservation_id=PoolId("A")),)
 
     def test_a_past_window_pool_reports_only_that(self) -> None:
         """The second of the three domination guards this arm shares with the
@@ -1099,7 +1099,7 @@ class TestPlayerOverSubscribed:
         snapshot = _one_pool_snapshot(fixtures, tables=3, window=(0, 60), now_min=120)
         assert snapshot.is_live is False
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        assert result.reasons == (PastWindow(reservation_id=PoolId("A")),)
 
     def test_a_short_window_pool_reports_only_its_unfittable_matches(self) -> None:
         """The third domination guard: a pool whose window cannot hold even one
@@ -1121,7 +1121,7 @@ class TestPlayerOverSubscribed:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.reasons == tuple(
             WindowTooShortForMatch(
-                pool_id=PoolId("A"),
+                reservation_id=PoolId("A"),
                 fixture_id=FixtureId(f"F{n}"),
                 needed_min=25,
                 window_span_min=20,
@@ -1182,7 +1182,7 @@ class TestSoftWindowOnceLive:
         assert result.placements == ()
         assert result.overrunning is False
         # Pre-live, the wholly-past window is named as a past window (pool A).
-        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        assert result.reasons == (PastWindow(reservation_id=PoolId("A")),)
 
     def test_live_day_within_its_window_is_not_flagged_overrunning(self) -> None:
         """Live but comfortably inside the window: a normal success, not

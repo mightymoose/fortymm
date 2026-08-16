@@ -172,7 +172,7 @@ async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     populated at all. The single-stage draw types this file drives never need
     position 1."""
     stage_id = await stage_id_at(db, event.id, 0)
-    db.add(TournamentFixture(stage_id=stage_id, pool_id=None, round=1, position=1))
+    db.add(TournamentFixture(stage_id=stage_id, group_id=None, round=1, position=1))
     await db.commit()
 
 

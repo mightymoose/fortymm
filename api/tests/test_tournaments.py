@@ -1795,7 +1795,7 @@ async def _cut(
     )
     fixture = TournamentFixture(
         stage_id=await stage_id_at(db_session, uuid.UUID(event_id), 0),
-        pool_id=pool_uuid,
+        group_id=pool_uuid,
         round=round,
         position=position,
         entry_a_id=entry_a.id if entry_a is not None else None,

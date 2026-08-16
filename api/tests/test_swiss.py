@@ -1184,7 +1184,7 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
                     TournamentFixture(
                         id=uuid.uuid4(),
                         stage_id=uuid.uuid4(),
-                        pool_id=None,
+                        group_id=None,
                         round=1,
                         position=1,
                         entry_a_id=entry_a_id,

@@ -159,7 +159,7 @@ async def test_a_fixture_persists_with_both_sides_tbd(
     """A cut draw may contain fixtures whose sides are not known yet — that is what a
     ``NULL`` side is *for*, and it is the only thing it means."""
     db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=2, position=1)
+        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=2, position=1)
     )
     await db_session.commit()
 
@@ -200,7 +200,7 @@ async def test_a_fixture_holds_its_two_entries(
     db_session.add(
         TournamentFixture(
             stage_id=_stage_a(event),
-            pool_id=_pool_a(event),
+            group_id=_pool_a(event),
             round=1,
             position=1,
             entry_a_id=entry_a.id,
@@ -227,14 +227,14 @@ async def test_duplicate_round_and_position_in_the_same_pool_is_rejected(
     not a read-then-write check — is what refuses it."""
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), group_id=_pool_a(event), round=1, position=1
         )
     )
     await db_session.commit()
 
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), group_id=_pool_a(event), round=1, position=1
         )
     )
     with pytest.raises(IntegrityError) as excinfo:
@@ -252,12 +252,12 @@ async def test_duplicate_round_and_position_in_an_un_pooled_draw_is_rejected(
     let this duplicate through and leave the entire single-elim draw type unguarded.
     Fails against a default (NULLS DISTINCT) constraint."""
     db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=1, position=1)
+        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=1, position=1)
     )
     await db_session.commit()
 
     db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=1, position=1)
+        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=1, position=1)
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
@@ -274,11 +274,11 @@ async def test_an_un_pooled_round_and_position_in_a_different_event_is_accepted(
     other_event = await _make_event(db_session)
 
     db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), pool_id=None, round=1, position=1)
+        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=1, position=1)
     )
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(other_event), pool_id=None, round=1, position=1
+            stage_id=_stage_a(other_event), group_id=None, round=1, position=1
         )
     )
     await db_session.commit()
@@ -298,12 +298,12 @@ async def test_the_same_round_and_position_in_a_different_pool_is_accepted(
     this legitimate row, so this test is what pins the constraint's *scope*."""
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), group_id=_pool_a(event), round=1, position=1
         )
     )
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=_pool_b(event), round=1, position=1
+            stage_id=_stage_a(event), group_id=_pool_b(event), round=1, position=1
         )
     )
     await db_session.commit()
@@ -332,13 +332,13 @@ async def test_the_same_round_and_position_in_a_different_event_is_accepted(
 
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), group_id=_pool_a(event), round=1, position=1
         )
     )
     db_session.add(
         TournamentFixture(
             stage_id=_stage_a(other_event),
-            pool_id=_pool_a(other_event),
+            group_id=_pool_a(other_event),
             round=1,
             position=1,
         )
@@ -378,7 +378,7 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
     )
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), group_id=_pool_a(event), round=1, position=1
         )
     )
     await db_session.commit()
@@ -391,7 +391,7 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
         TournamentFixture(
             # The other event's pool, under THIS event's id.
             stage_id=_stage_a(event),
-            pool_id=elsewhere,
+            group_id=elsewhere,
             round=1,
             position=2,
         )
@@ -417,7 +417,7 @@ async def test_a_fixture_naming_a_pool_that_does_not_exist_is_refused(
     ``_enforce_pool_set_frozen``. It is a foreign-key violation now."""
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=uuid.uuid4(), round=1, position=1
+            stage_id=_stage_a(event), group_id=uuid.uuid4(), round=1, position=1
         )
     )
     with pytest.raises(IntegrityError) as excinfo:
@@ -440,7 +440,7 @@ async def test_deleting_the_event_takes_its_pools_with_it(
     """
     db_session.add(
         TournamentFixture(
-            stage_id=_stage_a(event), pool_id=_pool_a(event), round=1, position=1
+            stage_id=_stage_a(event), group_id=_pool_a(event), round=1, position=1
         )
     )
     await db_session.commit()
@@ -479,7 +479,7 @@ async def test_deleting_the_event_takes_its_fixtures_with_it(
     db_session.add(
         TournamentFixture(
             stage_id=_stage_a(event),
-            pool_id=_pool_a(event),
+            group_id=_pool_a(event),
             round=1,
             position=1,
             entry_a_id=entry.id,
@@ -535,7 +535,7 @@ async def test_the_stages_fixtures_relationship_is_ordered_pool_round_position(
         db_session.add(
             TournamentFixture(
                 stage_id=_stage_a(event),
-                pool_id=pool_id,
+                group_id=pool_id,
                 round=round_number,
                 position=position,
             )
