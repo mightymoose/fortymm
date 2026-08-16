@@ -33,8 +33,19 @@ struct ProfileScreen {
     }
 
     /// Navigate to this tab.
+    ///
+    /// Waits for the tab bar first: `RootView` gates `MainTabView` behind the
+    /// async `GET /v1/session` that mints the guest, so on a cold launch
+    /// against a slow backend the bar genuinely does not exist yet when
+    /// `app.launch()` returns. Tapping straight away dies with an
+    /// element-resolution error instead of a readable assertion — same reason
+    /// `DashboardScreen` waits before it reads anything.
     @discardableResult
-    func open() -> Self {
+    func open(timeout: TimeInterval = 15) -> Self {
+        XCTAssertTrue(
+            tabButton.waitForExistence(timeout: timeout),
+            "The \"You\" tab never appeared — the app is probably still bootstrapping its session"
+        )
         tabButton.tap()
         return self
     }

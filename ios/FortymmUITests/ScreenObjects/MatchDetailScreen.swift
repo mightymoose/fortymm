@@ -39,9 +39,18 @@ struct MatchDetailScreen {
         app.otherElements["matchDetail.rating.established"]
     }
 
-    /// The moved-rating card (`before → after`, signed delta, sparkline).
-    var movedRatingCard: XCUIElement {
-        app.otherElements["matchDetail.rating.moved"]
+    /// The moved-rating card's "was <before>" line — the marker for the moved
+    /// rendering (`before → after`, signed delta, sparkline).
+    ///
+    /// This queries the `was …` `Text`, not the card's container, on purpose.
+    /// The container is not an accessibility element: unlike
+    /// `establishedRatingCard` it does not combine its children, because doing
+    /// so would change what VoiceOver reads on the moved path. An identifier
+    /// on it would therefore never match, and an `exists` check against it
+    /// would be vacuously false — passing whether or not the moved card
+    /// rendered, which is worse than no assertion at all.
+    var movedRatingWasLine: XCUIElement {
+        app.staticTexts["matchDetail.rating.moved.was"]
     }
 
     /// The moved card's signed delta chip — present only inside

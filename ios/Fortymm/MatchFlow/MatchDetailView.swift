@@ -37,7 +37,14 @@ struct MatchDetailView: View {
                         whatChangedSection(diff)
                     }
                     if !match.games.isEmpty { gamesSection }
-                    if match.rated, let outcome = match.ratingOutcome { ratingSection(outcome) }
+                    // No `match.rated` check: `MatchService` only ever builds a
+                    // non-nil `ratingOutcome` under `rated && decided &&
+                    // viewerIsParticipant`, so the presence of an outcome
+                    // already carries all three. Re-checking one of the three
+                    // here would imply this view is a second gate, and it is
+                    // not — the participant term, the one that actually
+                    // prevents a leak, lives in the service.
+                    if let outcome = match.ratingOutcome { ratingSection(outcome) }
                     infoSection
                     if let h2h = match.h2h, !match.solo { headToHeadSection(h2h) }
                 }
@@ -413,6 +420,16 @@ struct MatchDetailView: View {
                 Text("was \(before)")
                     .font(FMFont.ui(11, weight: .medium))
                     .foregroundStyle(FMColor.fgMuted)
+                    // The moved card's queryable marker. It goes on this
+                    // `Text` rather than the card's container because the
+                    // container is not an accessibility element — unlike
+                    // `establishedRatingCard`, it deliberately does NOT
+                    // combine its children (that would change what VoiceOver
+                    // reads on the moved path, which #1180 requires stay as
+                    // it was), so an identifier there could never be matched
+                    // by any XCUITest query. The "was …" line renders on this
+                    // path and only this path.
+                    .accessibilityIdentifier("matchDetail.rating.moved.was")
             }
             Spacer()
             Sparkline(up: delta >= 0, color: delta >= 0 ? FMColor.serve500 : FMColor.loss)
@@ -422,7 +439,6 @@ struct MatchDetailView: View {
         .padding(.vertical, 16)
         .background(FMColor.ink900)
         .fmRoundedBorder(radius: FMRadius.lg, color: FMColor.borderSubtle)
-        .accessibilityIdentifier("matchDetail.rating.moved")
     }
 
     // MARK: Info

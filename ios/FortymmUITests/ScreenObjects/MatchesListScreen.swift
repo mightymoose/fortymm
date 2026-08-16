@@ -23,9 +23,14 @@ struct MatchesListScreen {
         app.tabBars.buttons["Matches"]
     }
 
-    /// Navigate to this tab.
+    /// Navigate to this tab. Waits for the tab bar first — see
+    /// `ProfileScreen.open` for why a cold launch may not have one yet.
     @discardableResult
-    func open() -> Self {
+    func open(timeout: TimeInterval = 15) -> Self {
+        XCTAssertTrue(
+            tabButton.waitForExistence(timeout: timeout),
+            "The \"Matches\" tab never appeared — the app is probably still bootstrapping its session"
+        )
         tabButton.tap()
         return self
     }

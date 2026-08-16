@@ -149,8 +149,9 @@ final class EstablishedRatingMatchDetailTests: XCTestCase {
                 + "\"Unrated before this match, now rated <after>\"; got: \"\(label)\""
         )
         XCTAssertFalse(
-            detail.movedRatingCard.exists,
-            "The moved-rating card must not render alongside the established one"
+            detail.movedRatingWasLine.exists,
+            "The moved-rating card's \"was <before>\" line must not render alongside the "
+                + "established one — an established rating has no prior value to have been at"
         )
         XCTAssertFalse(
             detail.ratingDeltaText.exists,
