@@ -18,9 +18,9 @@ lock or Redis key to drift from it.
 
 (a) *Snapshot*: mark the row ``running``, read every solver input for the
     tournament, compute the input fingerprint, commit. Times become minute
-    offsets from a per-tournament base — the earliest pool window start —
+    offsets from a per-tournament base — the earliest reservation window start —
     because the pure module speaks only ``int`` minutes in one shared frame.
-    Every time is first put on **one real-instant axis**: pool ``Slot``
+    Every time is first put on **one real-instant axis**: reservation ``Slot``
     date+HH:MM components are anchored to instants by the event's venue
     ``timezone``, ``scheduled_start``/``pinned_at`` are ``timestamptz``
     instants, and ``now`` is an aware UTC instant — so ``now`` and the windows
@@ -64,7 +64,7 @@ contention for no correctness this order needs.
 The **fingerprint** is a sha256 over a canonical JSON of exactly the inputs
 the solver read, in their *wall-clock* form (never minute offsets, which
 depend on ``now``): the table catalogue, each drawn event's ``length_games``,
-pools (id, window, tables) and *active entrant set*, and every fixture row's
+reservations (id, window, tables) and *active entrant set*, and every fixture row's
 identity, seating, winner, match status, placement and pin. ``now`` itself is
 deliberately excluded — the clock advancing is not input drift. The entrant
 set is included even though the solver never reads entry *status*, because a
@@ -81,12 +81,12 @@ detects pins physics broke, so they never reach the solver *as pins*:
   ``SolveInputs.broken_pin_voids``;
 * a deleted fixture needs nothing — the pin died with its row.
 
-Pool membership does **not** break a pin: a director deliberately pinning a
-fixture to a spare catalogue table outside its pool's ``table_ids`` (the manual
+Reservation membership does **not** break a pin: a director deliberately pinning a
+fixture to a spare catalogue table outside its reservation's ``table_ids`` (the manual
 PATCH allows off-group soft placements, ADR-0790) is a legitimate hand, and pins
 are broken by physics, not preferences. Such a pin enters the snapshot as a pin
 like any other — the pure module treats pins as constants and never checks a
-pin's table against the pool (or even the catalogue) — survives every solve
+pin's table against the reservation (or even the catalogue) — survives every solve
 byte-identical, and is called by the ordinary call pass when imminent.
 
 There **was** a third case here, "the pinned table is no longer in the venue
@@ -137,33 +137,33 @@ start; the pure module holds its table to ``max(estimated end, now + bucket)``
 so an overrun keeps blocking. A real "match started" fact is a later drop-in
 that replaces one condition here.
 
-**Un-pooled fixtures (``pool_id IS NULL``) ARE scheduled, over their event's own
-reservation** (ADR "a pool restricts scheduling, it does not enable it",
+**Ungrouped fixtures (``reservation_id IS NULL``) ARE scheduled, over their event's own
+reservation** (ADR "a reservation restricts scheduling, it does not enable it",
 20260807). Until that ADR they were skipped outright — the solver's windows and
-tables came from pools, so a fixture naming none had nowhere to go — which is
+tables came from reservations, so a fixture naming none had nowhere to go — which is
 why no single-elim match, no swiss match and no rr-then-ko knockout match was
-ever placed. The skip is now a **branch**: a pooled fixture resolves its window
-and its tables from its own pool exactly as it always has, and an un-pooled one
+ever placed. The skip is now a **branch**: a grouped fixture resolves its window
+and its tables from its own reservation exactly as it always has, and an ungrouped one
 resolves them from a synthetic **event-wide reservation**
-(:func:`event_wide_pool_key`) carrying the event's own ``slot``, read in the
-event's zone, over the whole tournament catalogue. No pool row is minted, and
+(:func:`event_wide_reservation_key`) carrying the event's own ``slot``, read in the
+event's zone, over the whole tournament catalogue. No reservation row is minted, and
 :mod:`app.scheduling` is untouched: a fixture still binds to exactly one
-reservation, and every pool-keyed infeasibility reason reports against whichever
+reservation, and every reservation-keyed infeasibility reason reports against whichever
 one it named.
 
 **A TBD side is a separate rule, and it did not change.** A fixture missing
-either entrant cannot be placed and is left out of the snapshot, pooled or not.
-Un-pooled and TBD-sided fixtures alike still count toward the fingerprint, so
+either entrant cannot be placed and is left out of the snapshot, grouped or not.
+Ungrouped and TBD-sided fixtures alike still count toward the fingerprint, so
 their arrival or resolution is drift like any other. That surviving rule is what
 leaves a bracket placed only in part at first. A single-elim first round is
 seeded, so its two sides are known and it is placed straight away; every round
 above it, and every round of an rr-then-ko knockout stage — which waits on the
-pools feeding it — becomes placeable only as its sides resolve, at the very
+reservations feeding it — becomes placeable only as its sides resolve, at the very
 re-solve a completed match already triggers.
 
 **Swiss rides the same reservation, and for swiss that is the WHOLE event.**
-An rr-then-ko draw carries *one* un-pooled stage, its knockout, while a
-single-elim draw and a swiss draw are un-pooled end to end — so for those two
+An rr-then-ko draw carries *one* ungrouped stage, its knockout, while a
+single-elim draw and a swiss draw are ungrouped end to end — so for those two
 the event-wide reservation covers the whole event. Swiss is the case nothing
 else in this module states (ADR "swiss pre-cuts every round and pairs each one
 on advance"): **every** fixture of one takes its event's event-wide
@@ -171,7 +171,7 @@ reservation. Before the 20260807 ADR the only table and time a swiss fixture
 ever got was one a director typed in; this module now plans one like any other,
 round by round as each round is paired and its sides stop being TBD.
 A manual placement (:func:`app.tournaments.place_fixture`) still pins whatever
-it is given and never asks the fixture for a pool, so a hand-placed swiss
+it is given and never asks the fixture for a reservation, so a hand-placed swiss
 fixture is pinned and called exactly as before — the difference is that the
 solver now packs the free remainder around it rather than leaving it the only
 placement the event will ever have.
@@ -229,13 +229,13 @@ from app.scheduling import (
     PlayerConflict,
     PlayerId,
     PlayerOverSubscribed,
-    PoolHasNoTables,
-    PoolId,
-    PoolOverCapacity,
+    ReservationHasNoTables,
+    ReservationId,
+    ReservationOverCapacity,
     PreviousPlacement,
     RestShadow,
     ScheduleFixture,
-    SchedulePool,
+    ScheduleReservation,
     ScheduleSnapshot,
     SolveResult,
     TableConflict,
@@ -251,8 +251,8 @@ from app.schemas.schedule_solve import (
     PastWindowReasonRead,
     PlayerConflictRead,
     PlayerOverSubscribedRead,
-    PoolHasNoTablesRead,
-    PoolOverCapacityRead,
+    ReservationHasNoTablesRead,
+    ReservationOverCapacityRead,
     ReservationKind,
     ResolvedConflict,
     ResolvedReason,
@@ -260,8 +260,8 @@ from app.schemas.schedule_solve import (
     WindowTooShortForMatchRead,
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
-from app.schemas.tournament import Pool, Slot, TournamentTable
-from app.tournament_draws import event_pools
+from app.schemas.tournament import Reservation, Slot, TournamentTable
+from app.tournament_draws import event_reservations
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_realtime import stage_event_entrant_hints
 
@@ -561,8 +561,8 @@ async def latest_solve(
 
 
 #: The suffix that spells an event's **event-wide reservation** in the solver's
-#: namespaced ``{event}:{pool}`` id space (ADR "a pool restricts scheduling, it
-#: does not enable it"): the synthetic ``SchedulePool`` an un-pooled fixture is
+#: namespaced ``{event}:{reservation}`` id space (ADR "a reservation restricts scheduling, it
+#: does not enable it"): the synthetic ``ScheduleReservation`` an ungrouped fixture is
 #: placed in — the event's own ``slot`` for a window, the whole tournament
 #: catalogue for tables.
 #:
@@ -571,17 +571,17 @@ async def latest_solve(
 #: every one of them is a UUID's canonical text, 32 hex digits and four hyphens
 #: and nothing else. ``event-wide`` holds letters that are not hex digits, so no
 #: UUID can ever spell it.
-EVENT_WIDE_POOL_SUFFIX = "event-wide"
+EVENT_WIDE_RESERVATION_SUFFIX = "event-wide"
 
 
-def event_wide_pool_key(event_id: uuid.UUID) -> PoolId:
-    """The solver ``PoolId`` of ``event_id``'s event-wide reservation — the one
-    spelling of it, so the snapshot's ``SchedulePool``, the fixtures that name
+def event_wide_reservation_key(event_id: uuid.UUID) -> ReservationId:
+    """The solver ``ReservationId`` of ``event_id``'s event-wide reservation — the one
+    spelling of it, so the snapshot's ``ScheduleReservation``, the fixtures that name
     it and the resolution maps keyed by it cannot drift apart."""
-    return PoolId(f"{event_id}:{EVENT_WIDE_POOL_SUFFIX}")
+    return ReservationId(f"{event_id}:{EVENT_WIDE_RESERVATION_SUFFIX}")
 
 
-def event_wide_pool_name(event_name: str) -> str:
+def event_wide_reservation_name(event_name: str) -> str:
     """What a director reads when an infeasibility reason blames an event-wide
     reservation (ADR: "the event-wide reservation needs a name a director can
     read").
@@ -596,15 +596,15 @@ def event_wide_pool_name(event_name: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class _PoolResolution:
+class _ReservationResolution:
     """The DB-side facts an infeasibility reason needs to name a reservation a
     human can act on: its display ``name``, the ``HH:MM`` clock bounds of its
-    window (already strings on the pool's ``Slot`` — no minute→clock math), and
+    window (already strings on the reservation's ``Slot`` — no minute→clock math), and
     which kind of ``reservation`` it is.
 
     ``reservation`` is what stops a remedy naming a control that does not exist
     (:data:`~app.schemas.schedule_solve.ReservationKind`): "add a table to" and
-    "a smaller pool" are pool verbs, and an event-wide reservation already holds
+    "a smaller reservation" are reservation verbs, and an event-wide reservation already holds
     every table the tournament has. It is carried beside the name rather than
     inferred from it — a display name is copy, and bending copy to carry a fact
     is how the wrong remedy got rendered in the first place."""
@@ -612,7 +612,7 @@ class _PoolResolution:
     name: str
     window_start: str
     window_end: str
-    reservation: ReservationKind = "pool"
+    reservation: ReservationKind = "reservation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -632,10 +632,10 @@ class SolveInputs:
     catalogue; that state stopped being representable under ADR 20260801 and the
     field went with it — see the module docstring.)
 
-    ``pool_resolutions`` (keyed by the solver's namespaced ``PoolId`` string
-    ``f"{event.id}:{pool.id}"``) and ``fixture_best_of`` (keyed by
+    ``reservation_resolutions`` (keyed by the solver's namespaced ``ReservationId`` string
+    ``f"{event.id}:{reservation.id}"``) and ``fixture_best_of`` (keyed by
     ``str(fixture.id)``) are the resolution lookups the apply humanizes an
-    *infeasible* solve's structured reasons through — pool id → name+clock,
+    *infeasible* solve's structured reasons through — reservation id → name+clock,
     fixture id → its event's ``length_games``. They derive from the same
     fingerprinted inputs, so the fresh read's maps match the ones the reasons
     were computed against.
@@ -656,16 +656,16 @@ class SolveInputs:
     fingerprint: str
     base: datetime
     fixtures: dict[uuid.UUID, TournamentFixture]
-    #: Each namespaced pool id (``"{event.id}:{pool.id}"``) mapped to its
+    #: Each namespaced reservation id (``"{event.id}:{reservation.id}"``) mapped to its
     #: offending-day resolver: the venue-local calendar date of its window, in
     #: the event's own timezone frame. The apply reads this to turn a pure
-    #: :class:`~app.scheduling.PastWindow` reason (minute offsets + pool id) into
+    #: :class:`~app.scheduling.PastWindow` reason (minute offsets + reservation id) into
     #: a named ``past_window`` date on the ledger row — the pure solver stays
     #: minute-only, and naming the wall-clock day is this DB-aware layer's job.
-    pool_dates: dict[str, date] = field(default_factory=dict)
+    reservation_dates: dict[str, date] = field(default_factory=dict)
     broken_pin_voids: frozenset[uuid.UUID] = frozenset()
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
-    pool_resolutions: dict[str, _PoolResolution] = field(default_factory=dict)
+    reservation_resolutions: dict[str, _ReservationResolution] = field(default_factory=dict)
     fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = field(default_factory=dict)
     table_labels: dict[str, str] = field(default_factory=dict)
     player_names: dict[str, str] = field(default_factory=dict)
@@ -677,14 +677,14 @@ def _fingerprint(payload: dict[str, Any]) -> str:
 
     ``sort_keys`` + compact separators make the encoding canonical; every list
     inside ``payload`` is already deterministically ordered by its builder
-    (events and fixtures by id, catalogue and pools in stored order, entrant
+    (events and fixtures by id, catalogue and reservations in stored order, entrant
     sets sorted)."""
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _slot_bounds(slot: Slot, tz: ZoneInfo) -> tuple[datetime, datetime]:
-    """A pool ``Slot``'s window as timezone-aware **instants**, composed from its
+    """A reservation ``Slot``'s window as timezone-aware **instants**, composed from its
     ``{date, start, end}`` wall-clock components anchored by the event's venue
     ``timezone`` (ADR "tournament times are timezone-aware instants"). Anchoring
     is what puts the window on the same real-instant axis as ``now``, so an
@@ -739,11 +739,11 @@ async def _load_solver_inputs(
     lock: bool,
 ) -> SolveInputs | None:
     """Read every solver input for the tournament and shape it for the pure
-    module: pools become minute windows, pins become constants, live called
+    module: reservations become minute windows, pins become constants, live called
     matches become occupancy, existing unpinned placements become the
     stability tier's previous plan. Pins physics broke never reach the solver
     as pins — a pin whose table left the venue catalogue is demoted to a
-    decision variable, a pin whose entrant withdrew is excluded (pool
+    decision variable, a pin whose entrant withdrew is excluded (reservation
     membership breaks nothing — module docstring) — with the findings carried
     on the returned ``SolveInputs`` for the apply's repair (module docstring).
 
@@ -868,7 +868,7 @@ async def _load_solver_inputs(
     # boundary validated them with (parse, don't validate). The catalogue is rows now
     # (ADR 20260801), eagerly loaded on the tournament and already in the director's
     # order; the solver's ``TableId`` stays a string, so a table's UUID id crosses into
-    # it as its text — the same text a pool's ``table_ids`` and a fixture's ``table_id``
+    # it as its text — the same text a reservation's ``table_ids`` and a fixture's ``table_id``
     # hold.
     parsed_tables = [
         TournamentTable.model_validate(table) for table in tournament.tables
@@ -877,11 +877,11 @@ async def _load_solver_inputs(
     # table_id → catalogue label: the DB-aware resolution a placement conflict's
     # shared table is humanized through (mirrors ``load_copy_ingredients``).
     table_labels = {str(table.id): table.label for table in parsed_tables}
-    parsed_events: list[tuple[TournamentEvent, EventMatchSettings, list[Pool]]] = [
+    parsed_events: list[tuple[TournamentEvent, EventMatchSettings, list[Reservation]]] = [
         (
             event,
             EventMatchSettings.model_validate(event.match_settings),
-            event_pools(event),
+            event_reservations(event),
         )
         for event in drawn_events
     ]
@@ -894,11 +894,11 @@ async def _load_solver_inputs(
     }
     # Group id → the id of the RESERVATION that group plays in. This is the one
     # place the solver crosses from the wire's vocabulary into the schema's: a
-    # projected ``Pool.id`` and a ``fixture.pool_id`` are both **group** ids,
+    # projected ``Reservation.id`` and a ``fixture.group_id`` are both **group** ids,
     # while the thing this module actually constrains — a set of tables for a
     # window — is the reservation. Keying the solver on the reservation is what
     # makes "which reservation confines this fixture" a lookup rather than an
-    # assumption, and it is why the ``SchedulePool`` set below has exactly one
+    # assumption, and it is why the ``ScheduleReservation`` set below has exactly one
     # entry per reservation however many groups map to it.
     #
     # Read off the ORM rather than the projection because the projection
@@ -909,118 +909,116 @@ async def _load_solver_inputs(
         for group in event.groups
     }
 
-    # Pool ids are per-event value-objects — two events may both hold a
-    # "pool-a" — so the solver's PoolId is namespaced by the event id.
-    # A pool's ``table_ids`` are intersected with the catalogue here: the
-    # catalogue and the pools are edited by two separate PATCHes, so a pool
+    # Reservation ids are per-event value-objects — two events may both hold a
+    # "reservation-a" — so the solver's ReservationId is namespaced by the event id.
+    # A reservation's ``table_ids`` are intersected with the catalogue here: the
+    # catalogue and the reservations are edited by two separate PATCHes, so a reservation
     # may momentarily name a table the venue no longer has. The catalogue is
-    # the venue's truth — a stale ref is a table the pool cannot use, not a
+    # the venue's truth — a stale ref is a table the reservation cannot use, not a
     # reason to refuse the whole snapshot as incoherent (the raw ``table_ids``
     # still feed the fingerprint, so the edit itself is drift like any other).
     catalogue_ids = set(catalogue)
-    # One pass derives each pool's key, bounds and usable tables; the
-    # ``SchedulePool``s are built from these same specs below (only ``base``
+    # One pass derives each reservation's key, bounds and usable tables; the
+    # ``ScheduleReservation``s are built from these same specs below (only ``base``
     # — which needs every window start first — stands between the two).
-    pool_specs: list[tuple[str, tuple[TableId, ...], datetime, datetime]] = []
-    # The offending-day resolver for a past-window reason: each pool's
+    reservation_specs: list[tuple[str, tuple[TableId, ...], datetime, datetime]] = []
+    # The offending-day resolver for a past-window reason: each reservation's
     # venue-local date is exactly the day the director entered in its Slot, in
     # the event's own frame — taken verbatim so the apply can name it without
-    # re-deriving a date from minute offsets. Keyed by the same namespaced pool
+    # re-deriving a date from minute offsets. Keyed by the same namespaced reservation
     # id the pure module carries on its ``PastWindow`` reason.
-    pool_dates: dict[str, date] = {}
+    reservation_dates: dict[str, date] = {}
     # Resolution lookups the apply humanizes an infeasible solve's reasons
-    # through: solver ``PoolId`` → the pool's display name + ``HH:MM`` bounds,
+    # through: solver ``ReservationId`` → the reservation's display name + ``HH:MM`` bounds,
     # and fixture id → its event's ``length_games`` (``best_of``). Built off the
     # same parsed inputs the snapshot is, so they resolve exactly the ids the
     # reasons carry.
-    pool_resolutions: dict[str, _PoolResolution] = {}
+    reservation_resolutions: dict[str, _ReservationResolution] = {}
     fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = {}
     # fixture id → its matchup (the two players' usernames): the DB-aware
     # resolution a placement conflict names each colliding fixture through.
     # Built in the fixture loop below, alongside ``fixture_best_of``.
     fixture_matchups: dict[str, tuple[str, str]] = {}
-    for event, _settings, pools in parsed_events:
-        # The event's IANA zone anchors its pools' wall-clock windows to real
+    for event, _settings, reservations in parsed_events:
+        # The event's IANA zone anchors its reservations' wall-clock windows to real
         # instants; it is boundary-validated on write (``EventTimezone``), so
         # ``ZoneInfo`` here cannot raise on a stored value.
         event_tz = ZoneInfo(event.timezone)
-        for pool in pools:
-            # Keyed on the RESERVATION, not on the group the projection's ``id``
-            # names — the window and the tables below are the reservation's, so
-            # the key names the thing it describes. Under this slice's 1:1 the
-            # two are in exact correspondence, so this loop still emits one spec
-            # per pool; what changes is which row the key refers to, which is
-            # what makes the key stay one interval when a later change lets two
-            # groups share a reservation.
-            key = f"{event.id}:{reservation_ids[pool.id]}"
-            start, end = _slot_bounds(pool.slot, event_tz)
+        for reservation in reservations:
+            # Keyed on the reservation's OWN id, now that the projection carries
+            # one — no lookup needed here (the ``reservation_ids`` map below is
+            # for the per-fixture side, which only has a group id to resolve
+            # through). This loop emits one spec per reservation, one entry
+            # whatever the number of groups a later change lets share it.
+            key = f"{event.id}:{reservation.id}"
+            start, end = _slot_bounds(reservation.slot, event_tz)
             tables = tuple(
                 TableId(table_id)
-                for table_id in pool.table_ids
+                for table_id in reservation.table_ids
                 if TableId(table_id) in catalogue_ids
             )
-            pool_specs.append((key, tables, start, end))
-            pool_dates[key] = date.fromisoformat(pool.slot.date)
-            pool_resolutions[key] = _PoolResolution(
-                name=pool.name,
-                window_start=pool.slot.start,
-                window_end=pool.slot.end,
+            reservation_specs.append((key, tables, start, end))
+            reservation_dates[key] = date.fromisoformat(reservation.slot.date)
+            reservation_resolutions[key] = _ReservationResolution(
+                name=reservation.name,
+                window_start=reservation.slot.start,
+                window_end=reservation.slot.end,
             )
-        if any(fixture.pool_id is None for fixture in fixtures_by_event[event.id]):
-            # The event-wide reservation (ADR "a pool restricts scheduling, it
-            # does not enable it"): one synthetic pool for the event's un-pooled
+        if any(fixture.group_id is None for fixture in fixtures_by_event[event.id]):
+            # The event-wide reservation (ADR "a reservation restricts scheduling, it
+            # does not enable it"): one synthetic reservation for the event's ungrouped
             # fixtures — a single-elim or swiss draw's whole field, an
             # rr-then-ko draw's knockout stage. Its window is the event's own
             # ``slot`` read in the event's zone; its tables are the whole
-            # tournament catalogue. No pool row exists or is minted — it lives
+            # tournament catalogue. No reservation row exists or is minted — it lives
             # only in this snapshot.
             #
-            # Keyed on "the event HAS an un-pooled fixture", not on "an
-            # un-pooled fixture reached the snapshot": a knockout's fixtures
+            # Keyed on "the event HAS an ungrouped fixture", not on "an
+            # ungrouped fixture reached the snapshot": a knockout's fixtures
             # arrive with their sides still TBD and gain them round by round, so
             # the placeable-only rule would make the reservation (and with it
             # ``base``, the minute frame's origin) appear and disappear under a
             # running tournament. An event-wide reservation carrying no
             # placeable fixture constrains nothing and can prove no cause — the
-            # pure module's per-pool arms all require unpinned demand.
-            event_wide_key = event_wide_pool_key(event.id)
+            # pure module's per-reservation arms all require unpinned demand.
+            event_wide_key = event_wide_reservation_key(event.id)
             event_slot = event_slots[event.id]
             start, end = _slot_bounds(event_slot, event_tz)
-            pool_specs.append((event_wide_key, catalogue, start, end))
-            pool_dates[event_wide_key] = date.fromisoformat(event_slot.date)
-            pool_resolutions[event_wide_key] = _PoolResolution(
-                name=event_wide_pool_name(event.name),
+            reservation_specs.append((event_wide_key, catalogue, start, end))
+            reservation_dates[event_wide_key] = date.fromisoformat(event_slot.date)
+            reservation_resolutions[event_wide_key] = _ReservationResolution(
+                name=event_wide_reservation_name(event.name),
                 window_start=event_slot.start,
                 window_end=event_slot.end,
-                # Not a pool: a reason blaming this one must not be answered with
-                # a pool remedy (add a table to it, make it smaller, widen its
+                # Not a reservation: a reason blaming this one must not be answered with
+                # a reservation remedy (add a table to it, make it smaller, widen its
                 # window). Its controls are the event's window and the
                 # tournament's table catalogue.
                 reservation="event",
             )
 
     # The minute frame's origin: the earliest reservation window start — a
-    # pool's, or an event-wide one's. Everything — windows, pins, previous
+    # reservation's, or an event-wide one's. Everything — windows, pins, previous
     # placements, ``now`` itself — is offset from it, and the apply converts
     # back with the same base.
-    base = min((start for _, _, start, _ in pool_specs), default=now)
+    base = min((start for _, _, start, _ in reservation_specs), default=now)
 
     def to_min(moment: datetime) -> int:
         return int((moment - base).total_seconds() // 60)
 
     now_min = to_min(now)
 
-    schedule_pools = tuple(
-        SchedulePool(
-            id=PoolId(key),
+    schedule_reservations = tuple(
+        ScheduleReservation(
+            id=ReservationId(key),
             table_ids=tables,
             window=Window(start_min=to_min(start), end_min=to_min(end)),
         )
-        for key, tables, start, end in pool_specs
+        for key, tables, start, end in reservation_specs
     )
     event_settings = tuple(
         EventSettings(id=EventId(str(event.id)), length_games=settings.length_games)
-        for event, settings, _pools in parsed_events
+        for event, settings, _reservations in parsed_events
     )
 
     schedule_fixtures: list[ScheduleFixture] = []
@@ -1028,26 +1026,26 @@ async def _load_solver_inputs(
     previous_plan: list[PreviousPlacement] = []
     rest_shadows: list[RestShadow] = []
     broken_pin_voids: set[uuid.UUID] = set()
-    for event, settings, _pools in parsed_events:
+    for event, settings, _reservations in parsed_events:
         for fixture in fixtures_by_event[event.id]:
-            # Which reservation restricts this fixture (ADR "a pool restricts
-            # scheduling, it does not enable it"). A pooled fixture takes its
-            # own pool's tables and window, exactly as it always has. An
-            # un-pooled one — a single-elim or swiss fixture, or an rr-then-ko
+            # Which reservation restricts this fixture (ADR "a group restricts
+            # scheduling, it does not enable it"). A grouped fixture takes its
+            # own reservation's tables and window, exactly as it always has. An
+            # ungrouped one — a single-elim or swiss fixture, or an rr-then-ko
             # draw's knockout stage — takes its event's event-wide reservation,
             # built above; the branch is present for the event precisely because
             # this fixture is, so the lookup is total.
-            # ``fixture.pool_id`` is a GROUP id, so it is resolved through the
+            # ``fixture.group_id`` is a GROUP id, so it is resolved through the
             # group→reservation map rather than spliced into a key directly:
             # exactly one reservation per fixture, looked up, which is what keeps
             # the CP-SAT interval constraint a single interval instead of a
             # disjunction over several. The lookup is total — a fixture's group
             # belongs to this event's stage 0 by its own composite foreign key,
             # and every group of it is in the map.
-            pool_key = (
-                event_wide_pool_key(event.id)
-                if fixture.pool_id is None
-                else PoolId(f"{event.id}:{reservation_ids[fixture.pool_id]}")
+            reservation_key = (
+                event_wide_reservation_key(event.id)
+                if fixture.group_id is None
+                else ReservationId(f"{event.id}:{reservation_ids[fixture.group_id]}")
             )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it
@@ -1081,14 +1079,14 @@ async def _load_solver_inputs(
                     broken_pin_voids.add(fixture.id)
                     continue
                 # Otherwise the pin stands, as-is. Its table is deliberately NOT
-                # re-checked against the pool's ``table_ids`` — an off-group pin
+                # re-checked against the reservation's ``table_ids`` — an off-group pin
                 # on a catalogue table is the director's hand (the manual PATCH
                 # allows off-group soft placements, ADR-0790), and pins break on
                 # physics, not preferences. Nor against the catalogue, which the
                 # foreign key and the tournament PATCH's diff have made an
                 # invariant rather than a thing to defend against here (module
                 # docstring). The pure module honors it either way: pins are
-                # constants there, never checked against pool residency.
+                # constants there, never checked against reservation residency.
                 pin = Pin(
                     table_id=TableId(fixture.table_id),
                     start_min=to_min(fixture.scheduled_start),
@@ -1108,7 +1106,7 @@ async def _load_solver_inputs(
                 ScheduleFixture(
                     id=fixture_id,
                     event_id=EventId(str(event.id)),
-                    pool_id=pool_key,
+                    reservation_id=reservation_key,
                     # User-level ids, not entry ids: the no-double-booking and
                     # rest constraints hold across events, on humans.
                     player_a_id=PlayerId(str(entry_user[fixture.entry_a_id])),
@@ -1169,7 +1167,7 @@ async def _load_solver_inputs(
     # solve ``infeasible`` (#1145). Coalesce to the latest completion.
     snapshot = ScheduleSnapshot(
         table_ids=catalogue,
-        pools=schedule_pools,
+        reservations=schedule_reservations,
         events=event_settings,
         fixtures=tuple(schedule_fixtures),
         now_min=now_min,
@@ -1177,7 +1175,7 @@ async def _load_solver_inputs(
         previous_plan=tuple(previous_plan),
         rest_shadows=coalesce_rest_shadows(rest_shadows),
         # Soft-window policy fact (ADR "the solver stops wedging"): once the
-        # tournament is live, a pool window's end is advisory so wall-clock
+        # tournament is live, a reservation window's end is advisory so wall-clock
         # passing it makes the day "overrunning", not instantly infeasible.
         # Pre-live keeps the hard window (a provisional plan flags a misfit).
         is_live=tournament.status is TournamentStatus.live,
@@ -1194,10 +1192,10 @@ async def _load_solver_inputs(
                 "id": str(event.id),
                 "length_games": settings.length_games,
                 # The event's own window and zone: what an event-wide
-                # reservation is built from (ADR "a pool restricts scheduling,
+                # reservation is built from (ADR "a reservation restricts scheduling,
                 # it does not enable it"), so an edit to either is input drift
                 # the apply must discard as stale. Written for EVERY event, not
-                # only the ones that have un-pooled fixtures: a payload whose
+                # only the ones that have ungrouped fixtures: a payload whose
                 # *shape* varied with a fact would make that fact unhashed,
                 # which is the very drift this guard exists to catch.
                 "timezone": event.timezone,
@@ -1206,33 +1204,33 @@ async def _load_solver_inputs(
                     "start": event_slots[event.id].start,
                     "end": event_slots[event.id].end,
                 },
-                "pools": [
+                "reservations": [
                     {
                         # ``str``, because the fingerprint is canonical JSON and a
                         # ``uuid.UUID`` is not JSON-serializable — the id became one
                         # when the server started minting them (ADR 20260801).
-                        "id": str(pool.id),
-                        "date": pool.slot.date,
-                        "start": pool.slot.start,
-                        "end": pool.slot.end,
+                        "id": str(reservation.id),
+                        "date": reservation.slot.date,
+                        "start": reservation.slot.start,
+                        "end": reservation.slot.end,
                         # The event ``timezone`` anchors this window's wall-clock
                         # to the instant the solver reads (ADR "tournament times
                         # are timezone-aware instants"), so a mid-solve zone
                         # change is input drift the apply must discard as stale.
                         "timezone": event.timezone,
-                        "table_ids": list(pool.table_ids),
+                        "table_ids": list(reservation.table_ids),
                     }
-                    for pool in pools
+                    for reservation in reservations
                 ],
                 "entrants": sorted(active_entries[event.id]),
             }
-            for event, settings, pools in parsed_events
+            for event, settings, reservations in parsed_events
         ],
         "fixtures": [
             {
                 "id": str(fixture.id),
                 "event_id": str(fixture.event_id),
-                "pool_id": _opt(fixture.pool_id),
+                "reservation_id": _opt(fixture.group_id),
                 "entry_a": _opt(fixture.entry_a_id),
                 "entry_b": _opt(fixture.entry_b_id),
                 "winner": _opt(fixture.winner_entry_id),
@@ -1262,10 +1260,10 @@ async def _load_solver_inputs(
         fingerprint=_fingerprint(payload),
         base=base,
         fixtures={fixture.id: fixture for fixture in fixture_rows},
-        pool_dates=pool_dates,
+        reservation_dates=reservation_dates,
         broken_pin_voids=frozenset(broken_pin_voids),
         withdrawn_entry_ids=frozenset(withdrawn_entry_ids),
-        pool_resolutions=pool_resolutions,
+        reservation_resolutions=reservation_resolutions,
         fixture_best_of=fixture_best_of,
         table_labels=table_labels,
         player_names=player_names,
@@ -1279,13 +1277,13 @@ def _opt(value: uuid.UUID | None) -> str | None:
 
 def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> ResolvedReason:
     """Humanize one pure, id-and-minute reason into its resolved read form
-    (ADR "structured data, not prose"): the pool's display name and ``HH:MM``
-    window come from ``inputs.pool_resolutions``, ``best_of`` from
+    (ADR "structured data, not prose"): the reservation's display name and ``HH:MM``
+    window come from ``inputs.reservation_resolutions``, ``best_of`` from
     ``inputs.fixture_best_of``, the blamed human's display name from
     ``inputs.player_names``; the integer minutes pass through untouched for
     the client to format. Direct id lookups are safe here — the apply resolves
     only after the drift guard proved this read's inputs fingerprint-identical
-    to the ones the reasons were computed against, so every pool/fixture id a
+    to the ones the reasons were computed against, so every reservation/fixture id a
     reason carries is present in these maps (the same guarantee the placement
     write relies on when it indexes ``fresh.fixtures``).
 
@@ -1293,30 +1291,30 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
     an arm to :data:`app.scheduling.InfeasibilityReason` is a type error here
     until it is handled."""
     match reason:
-        case PoolHasNoTables():
-            no_tables_pool = inputs.pool_resolutions[reason.pool_id]
-            return PoolHasNoTablesRead(
-                pool_name=no_tables_pool.name,
-                reservation=no_tables_pool.reservation,
+        case ReservationHasNoTables():
+            no_tables_reservation = inputs.reservation_resolutions[reason.reservation_id]
+            return ReservationHasNoTablesRead(
+                reservation_name=no_tables_reservation.name,
+                reservation=no_tables_reservation.reservation,
             )
         case WindowTooShortForMatch():
-            pool = inputs.pool_resolutions[reason.pool_id]
+            reservation = inputs.reservation_resolutions[reason.reservation_id]
             return WindowTooShortForMatchRead(
-                pool_name=pool.name,
-                reservation=pool.reservation,
-                window_start=pool.window_start,
-                window_end=pool.window_end,
+                reservation_name=reservation.name,
+                reservation=reservation.reservation,
+                window_start=reservation.window_start,
+                window_end=reservation.window_end,
                 best_of=inputs.fixture_best_of[reason.fixture_id],
                 needed_min=reason.needed_min,
                 window_span_min=reason.window_span_min,
             )
-        case PoolOverCapacity():
-            pool = inputs.pool_resolutions[reason.pool_id]
-            return PoolOverCapacityRead(
-                pool_name=pool.name,
-                reservation=pool.reservation,
-                window_start=pool.window_start,
-                window_end=pool.window_end,
+        case ReservationOverCapacity():
+            reservation = inputs.reservation_resolutions[reason.reservation_id]
+            return ReservationOverCapacityRead(
+                reservation_name=reservation.name,
+                reservation=reservation.reservation,
+                window_start=reservation.window_start,
+                window_end=reservation.window_end,
                 required_min=reason.required_min,
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
@@ -1326,13 +1324,13 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             # ``player_names`` map the PlayerConflict humanization already uses
             # (solver PlayerId — a user-id string — → display username), built in
             # the same fingerprinted read, so no second lookup is needed.
-            pool = inputs.pool_resolutions[reason.pool_id]
+            reservation = inputs.reservation_resolutions[reason.reservation_id]
             return PlayerOverSubscribedRead(
                 player_name=inputs.player_names[reason.player_id],
-                pool_name=pool.name,
-                reservation=pool.reservation,
-                window_start=pool.window_start,
-                window_end=pool.window_end,
+                reservation_name=reservation.name,
+                reservation=reservation.reservation,
+                window_start=reservation.window_start,
+                window_end=reservation.window_end,
                 match_count=reason.match_count,
                 required_min=reason.required_min,
                 window_span_min=reason.window_span_min,
@@ -1343,10 +1341,10 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
                 available_min=reason.available_min,
             )
         case PastWindow():
-            # The offending pool resolves to the venue-local calendar day it was
-            # dated for (``inputs.pool_dates`` — from the same fingerprinted read,
-            # so the pool is present), the actionable "which day to move" fact.
-            return PastWindowReasonRead(date=inputs.pool_dates[reason.pool_id])
+            # The offending reservation resolves to the venue-local calendar day it was
+            # dated for (``inputs.reservation_dates`` — from the same fingerprinted read,
+            # so the reservation is present), the actionable "which day to move" fact.
+            return PastWindowReasonRead(date=inputs.reservation_dates[reason.reservation_id])
         case _:
             assert_never(reason)
 
@@ -1611,7 +1609,7 @@ async def _apply_result(
                 row.fixtures_placed = placed
                 row.fixtures_pinned = pinned
                 # A live day whose soft window let the plan spill past a planned
-                # pool window is recorded as overrunning, not failed — the
+                # reservation window is recorded as overrunning, not failed — the
                 # schedule shows "overrunning" rather than "doesn't fit" (ADR
                 # "the solver stops wedging"). False on every pre-live solve.
                 row.overrunning = result.overrunning
@@ -1657,7 +1655,7 @@ async def _apply_result(
                 # day does not fit. No *placement* is written (the last accepted
                 # plan stands) — but the run records *why*: each structured,
                 # id-and-minute reason is resolved to its humanized read form
-                # (pool name + HH:MM window + best_of, minutes passed through)
+                # (reservation name + HH:MM window + best_of, minutes passed through)
                 # against ``fresh``'s maps and stored as JSONB. Only this branch
                 # writes ``infeasibility_reasons``; every other status leaves it
                 # NULL (parsed back at read via
@@ -1666,7 +1664,7 @@ async def _apply_result(
                 row.verdict = SolverVerdict.infeasible
                 # Each structured, id-and-minute reason (including the pre-live
                 # ``PastWindow`` "a past day is named, not disguised" cause, whose
-                # pool id resolves to its venue-local date via ``fresh.pool_dates``)
+                # reservation id resolves to its venue-local date via ``fresh.reservation_dates``)
                 # is humanized against ``fresh``'s maps and stored as JSONB.
                 resolved: list[ResolvedReason] = [
                     _resolve_reason(reason, fresh) for reason in result.reasons

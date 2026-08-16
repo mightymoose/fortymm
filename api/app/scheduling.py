@@ -216,13 +216,15 @@ class ScheduleReservation:
     ``table_ids`` is the slice of the venue catalogue this reservation draws on;
     tables may be shared between reservations (per-table no-overlap is global).
 
-    A ``ScheduleReservation`` is a **reservation**, and not always a director's reservation.
-    The snapshot builder names one per reservation, plus one **event-wide** reservation
-    for an event that has fixtures belonging to no reservation — that event's own
-    window over the whole catalogue (ADR "a reservation restricts scheduling, it does
-    not enable it"). This module cannot tell the two apart and does not need to:
-    either way a fixture binds to exactly one of them, and every reservation-keyed
-    infeasibility reason is reported against whichever one it named."""
+    The snapshot builder names one ``ScheduleReservation`` per director-booked
+    reservation, plus one **event-wide** reservation for an event that has
+    fixtures belonging to no group (a group confines its fixtures to its own
+    reservation; an ungrouped fixture is not confined, ADR "a group restricts
+    scheduling, it does not enable it") — that event's own window over the
+    whole catalogue. This module cannot tell a booked reservation from the
+    synthetic event-wide one and does not need to: either way a fixture binds
+    to exactly one of them, and every reservation-keyed infeasibility reason is
+    reported against whichever one it named."""
 
     id: ReservationId
     table_ids: tuple[TableId, ...]
