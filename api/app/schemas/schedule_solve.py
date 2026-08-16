@@ -3,11 +3,12 @@
 ``app.scheduling`` proves a day infeasible and emits structured, id-and-minute
 only reasons (:data:`app.scheduling.InfeasibilityReason`) — pure and DB-blind on
 purpose. This module is the DB-aware humanizer: it carries the *resolved* form a
-client can render without any further lookup — the pool's display **name**, the
-kind of **reservation** that name belongs to (:data:`ReservationKind`, so a
-remedy can name a control the director has), the window's ``HH:MM`` clock bounds,
-the event's ``best_of`` — while leaving the raw integer minutes (needed / span /
-required / capacity / available) untouched so the client formats hours itself.
+client can render without any further lookup — the reservation's display
+**name**, the kind of **reservation** that name belongs to
+(:data:`ReservationKind`, so a remedy can name a control the director has), the
+window's ``HH:MM`` clock bounds, the event's ``best_of`` — while leaving the raw
+integer minutes (needed / span / required / capacity / available) untouched so
+the client formats hours itself.
 
 Structured, not prose (ADR "an infeasible solve explains itself with a resolved
 reason"): a discriminated union over ``kind`` — the *same* discriminator strings
@@ -24,44 +25,47 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-#: Which **kind of reservation** a reason blames (ADR 20260807 "a pool restricts
-#: scheduling, it does not enable it"). ``"pool"`` is a pool the director created
-#: and can edit — tables, window and all. ``"event"`` is the **event-wide
-#: reservation**: the synthetic one an un-pooled fixture (a single-elim or swiss
-#: field, an rr-then-ko draw's knockout stage) is placed in, which carries the
-#: event's own window and the whole tournament's tables and exists only inside a
-#: solve. The distinction is not cosmetic: a remedy must name a control that
-#: exists, and there is no "add a table to" or "shrink" verb for an event-wide
-#: reservation — its controls are the event's window and the tournament's table
-#: catalogue. The same two words the web view model uses for the same fact.
+#: Which **kind of reservation** a reason blames (ADR 20260807, "a group
+#: restricts scheduling, it does not enable it"). ``"booked"`` is a reservation
+#: the director created and can edit — tables, window and all. ``"event"`` is
+#: the **event-wide reservation**: the synthetic one an ungrouped fixture (a
+#: single-elim or swiss field, an rr-then-ko draw's knockout stage) is placed
+#: in, which carries the event's own window and the whole tournament's tables
+#: and exists only inside a solve. The distinction is not cosmetic: a remedy
+#: must name a control that exists, and there is no "add a table to" or
+#: "shrink" verb for an event-wide reservation — its controls are the event's
+#: window and the tournament's table catalogue. The same two words the web view
+#: model uses for the same fact.
 #:
-#: Every reason that names a reservation carries this. It defaults to ``"pool"``
-#: because that is the true value for every reason recorded before the event-wide
-#: reservation existed: until then a reason could only blame a pool row, so a
-#: ledger row read back from JSONB without the field *did* blame a pool.
-ReservationKind = Literal["pool", "event"]
+#: Every reason that names a reservation carries this. It defaults to
+#: ``"booked"`` because that is the true value for every reason recorded before
+#: the event-wide reservation existed: until then a reason could only blame a
+#: director-booked reservation row, so a ledger row read back from JSONB
+#: without the field *did* blame one.
+ReservationKind = Literal["booked", "event"]
 
 
-class PoolHasNoTablesRead(BaseModel):
-    """A pool with active fixtures but no tables at all — nowhere to place them.
-    Resolved: the pool's display ``name`` (never the namespaced solver id) and
-    which kind of ``reservation`` that name belongs to."""
+class ReservationHasNoTablesRead(BaseModel):
+    """A reservation with active fixtures but no tables at all — nowhere to
+    place them. Resolved: the reservation's display ``name`` (never the
+    namespaced solver id) and which kind of ``reservation`` that name belongs
+    to."""
 
-    kind: Literal["pool_has_no_tables"] = "pool_has_no_tables"
-    pool_name: str
-    reservation: ReservationKind = "pool"
+    kind: Literal["reservation_has_no_tables"] = "reservation_has_no_tables"
+    reservation_name: str
+    reservation: ReservationKind = "booked"
 
 
 class WindowTooShortForMatchRead(BaseModel):
-    """A single fixture whose pool window cannot hold even one match: its
-    ``best_of`` match needs ``needed_min`` minutes but the window spans only
-    ``window_span_min``. Resolved: the pool ``name``, which kind of
+    """A single fixture whose reservation window cannot hold even one match:
+    its ``best_of`` match needs ``needed_min`` minutes but the window spans
+    only ``window_span_min``. Resolved: the reservation ``name``, which kind of
     ``reservation`` it is, and its ``HH:MM`` window bounds; the minutes pass
     through as integers for the client to format."""
 
     kind: Literal["window_too_short_for_match"] = "window_too_short_for_match"
-    pool_name: str
-    reservation: ReservationKind = "pool"
+    reservation_name: str
+    reservation: ReservationKind = "booked"
     window_start: str
     window_end: str
     best_of: Literal[1, 3, 5, 7]
@@ -69,15 +73,16 @@ class WindowTooShortForMatchRead(BaseModel):
     window_span_min: int
 
 
-class PoolOverCapacityRead(BaseModel):
-    """A pool whose aggregate match-time (``required_min``) exceeds the
+class ReservationOverCapacityRead(BaseModel):
+    """A reservation whose aggregate match-time (``required_min``) exceeds the
     table-minutes its window offers (``capacity_min`` = window span ×
-    ``table_count``). Resolved: the pool ``name``, which kind of ``reservation``
-    it is, and its ``HH:MM`` bounds; the minutes stay integers."""
+    ``table_count``). Resolved: the reservation ``name``, which kind of
+    ``reservation`` it is, and its ``HH:MM`` bounds; the minutes stay
+    integers."""
 
-    kind: Literal["pool_over_capacity"] = "pool_over_capacity"
-    pool_name: str
-    reservation: ReservationKind = "pool"
+    kind: Literal["reservation_over_capacity"] = "reservation_over_capacity"
+    reservation_name: str
+    reservation: ReservationKind = "booked"
     window_start: str
     window_end: str
     required_min: int
@@ -86,20 +91,21 @@ class PoolOverCapacityRead(BaseModel):
 
 
 class PlayerOverSubscribedRead(BaseModel):
-    """One human with more match-time in a pool than its window can hold: their
-    ``match_count`` matches plus the rest between them need ``required_min``
-    minutes of *their* time, against a window spanning only ``window_span_min``.
-    A pigeonhole over one person, so adding tables cannot fix it — the remedy is
-    fewer matches for them in this pool, or a longer window. Resolved: the
-    human's display ``player_name``, the pool's ``name`` + ``HH:MM`` bounds, and
-    which kind of ``reservation`` that name is — "a smaller pool" is not a remedy
-    an event-wide reservation has; the minutes stay integers for the client to
+    """One human with more match-time in a reservation than its window can
+    hold: their ``match_count`` matches plus the rest between them need
+    ``required_min`` minutes of *their* time, against a window spanning only
+    ``window_span_min``. A pigeonhole over one person, so adding tables cannot
+    fix it — the remedy is fewer matches for them in this reservation, or a
+    longer window. Resolved: the human's display ``player_name``, the
+    reservation's ``name`` + ``HH:MM`` bounds, and which kind of
+    ``reservation`` that name is — "a smaller reservation" is not a remedy an
+    event-wide reservation has; the minutes stay integers for the client to
     format."""
 
     kind: Literal["player_over_subscribed"] = "player_over_subscribed"
     player_name: str
-    pool_name: str
-    reservation: ReservationKind = "pool"
+    reservation_name: str
+    reservation: ReservationKind = "booked"
     window_start: str
     window_end: str
     match_count: int
@@ -109,7 +115,7 @@ class PlayerOverSubscribedRead(BaseModel):
 
 class NoSingleCauseRead(BaseModel):
     """CP-SAT proved the day infeasible yet no structural arm explains it — the
-    whole-day residual. No pool: it carries only the day aggregate,
+    whole-day residual. No reservation: it carries only the day aggregate,
     ``required_min`` against ``available_min``, as integer minutes."""
 
     kind: Literal["no_single_cause"] = "no_single_cause"
@@ -118,14 +124,14 @@ class NoSingleCauseRead(BaseModel):
 
 
 class PastWindowReasonRead(BaseModel):
-    """A pool whose **entire** planned window is already in the past — the day
-    was dated behind ``now`` (most easily via the silent "today" default on an
-    event now a day old), so it cannot run until it is moved to a future day
-    (ADR "a past day is named, not disguised"). The most specific pre-live cause,
-    fixed by "move the date", not "add tables/time". Resolved: the offending
-    ``date`` — the venue-local calendar day the director gave a window for, in
-    the event's own timezone frame — so the client says which day to move with
-    no timezone math of its own. The DB-aware mirror of
+    """A reservation whose **entire** planned window is already in the past —
+    the day was dated behind ``now`` (most easily via the silent "today"
+    default on an event now a day old), so it cannot run until it is moved to
+    a future day (ADR "a past day is named, not disguised"). The most specific
+    pre-live cause, fixed by "move the date", not "add tables/time". Resolved:
+    the offending ``date`` — the venue-local calendar day the director gave a
+    window for, in the event's own timezone frame — so the client says which
+    day to move with no timezone math of its own. The DB-aware mirror of
     :class:`app.scheduling.PastWindow`."""
 
     kind: Literal["past_window"] = "past_window"
@@ -137,9 +143,9 @@ class PastWindowReasonRead(BaseModel):
 #: at apply and parsed back here at every read. Discriminated on ``kind`` so a
 #: renderer is a total function of it (add an arm → a type error until handled).
 ResolvedReason = Annotated[
-    PoolHasNoTablesRead
+    ReservationHasNoTablesRead
     | WindowTooShortForMatchRead
-    | PoolOverCapacityRead
+    | ReservationOverCapacityRead
     | PlayerOverSubscribedRead
     | NoSingleCauseRead
     | PastWindowReasonRead,
