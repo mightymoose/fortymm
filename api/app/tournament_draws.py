@@ -274,7 +274,7 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
     The groups arrive as typed :class:`Group` values, never as raw rows or dicts
-    (:func:`app.tournament_groups.group_read`) — the same model the write boundary
+    (:func:`app.tournament_reservations.group_read`) — the same model the write boundary
     validated them with, whose ``min_length=1`` id is why a ``GroupId`` reaching the
     domain is never ``""``.
 
