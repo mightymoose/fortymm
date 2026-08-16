@@ -7,7 +7,6 @@ import {
   buildTournamentEntrantReads,
   buildTournamentEventRead,
   buildTournamentFixtureRead,
-  mintStageReads,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   apiToEntrant,
@@ -202,6 +201,7 @@ describe('apiToEvent — the draw', () => {
     expect(event.fixtures).toEqual([
       {
         id: 'fx-1',
+        stageId: 's-1',
         poolId: 'p-1',
         round: 1,
         position: 1,
@@ -218,6 +218,7 @@ describe('apiToEvent — the draw', () => {
       },
       {
         id: 'fx-2',
+        stageId: 's-1',
         poolId: 'p-1',
         round: 1,
         position: 2,
@@ -257,6 +258,7 @@ describe('apiToEvent — the draw', () => {
 
     expect(event.fixtures[0]).toEqual({
       id: 'fx-final',
+      stageId: 's-1',
       poolId: null,
       round: 3,
       position: 1,
@@ -854,6 +856,9 @@ const event: TournamentEvent = {
       position: 0,
     },
   ],
+  // A round-robin event's single, system-minted stage (ADR 20260815) — never authored
+  // by the editor, and absent from every write body (`eventToApiFields` is allow-list).
+  stages: [{ id: 's-1', position: 0, drawType: 'round-robin' }],
   // No draw cut (ADR-0786). The write bodies below must not carry one either — a draw
   // is written by the two draw verbs and by nothing else.
   fixtures: [],
@@ -939,6 +944,10 @@ describe('eventToCreateBody', () => {
         id: event.pools[index].id,
         position: index,
       })),
+      // The stage is system-minted (ADR 20260815) and absent from every write body,
+      // same as the pools' server-owned fields above — supply the read shape's row so
+      // the round trip lands back on `event`.
+      stages: [{ id: 's-1', position: 0, draw_type: 'round-robin' }],
       // `max_players` is optional on the create body (`null`/absent = no cap,
       // ADR-0935); the read shape is `number | null`.
       max_players: wire.max_players ?? null,
@@ -951,10 +960,6 @@ describe('eventToCreateBody', () => {
       // …and the round count the same way, for the same reason: omitted on the way out for
       // a round-robin event, an explicit `null` on the way back.
       rounds: null,
-      // `stages` is server-minted and absent from the create body entirely; supply what
-      // the round-trip's own draw type (`round-robin`) mints so the read shape is
-      // satisfied.
-      stages: mintStageReads('round-robin'),
       id: event.id,
       tournament_id: 't-1',
       // The registrations are server-owned and absent from the create body;
@@ -1242,6 +1247,7 @@ describe('eventToUpdateBody', () => {
       fixtures: [
         {
           id: 'fx-1',
+          stageId: 's-1',
           poolId: 'p-1',
           round: 1,
           position: 1,

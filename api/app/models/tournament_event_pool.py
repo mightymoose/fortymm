@@ -19,8 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 if TYPE_CHECKING:
-    from app.models.tournament import TournamentEvent
     from app.models.tournament_event_pool_table import TournamentEventPoolTable
+    from app.models.tournament_event_stage import TournamentEventStage
 
 
 class TournamentEventPool(Base):
@@ -34,15 +34,26 @@ class TournamentEventPool(Base):
     integrity of that reference had to be procedural (``_enforce_pool_set_frozen``,
     ADR-0786). It is a row now, so the reference is a foreign key, and specifically the
     **composite** one on :class:`~app.models.tournament_fixture.TournamentFixture`:
-    ``(event_id, pool_id) → (event_id, id)``, which says the thing a plain FK to ``id``
-    cannot — that a fixture's pool belongs to *that fixture's own event*.
+    ``(stage_id, pool_id) → (stage_id, id)``, which says the thing a plain FK to ``id``
+    cannot — that a fixture's pool belongs to *that fixture's own stage*.
 
-    **The parent is the event, not the event's draw settings row.** The 2026-07-26 ADR
-    sketched ``draw_settings_id`` here; the composite FK above is what makes that
-    impossible, because ``tournament_event_draw_settings`` deliberately carries no
-    ``event_id`` and so shares no column with a fixture. The ADR named at the top is
-    that correction, and it also holds the rest of the reasoning: a pool is a 1:N
-    collection of entities with their own identity, not a scalar of a configuration.
+    **The parent is the stage, not the event and not the event's draw settings row.**
+    ADR 20260801 put the parent on the event (correcting the 2026-07-26 ADR's
+    ``draw_settings_id`` sketch, for the reasoning below); ADR 20260815's "Sequencing
+    with #1338" consequence re-parents it one hop further, onto the stage, because
+    ``tournament_fixtures.event_id`` is dropped in that same ADR and a pool must share a
+    column with the fixtures whose composite FK targets it. A director's pools always
+    hang off the event's stage 0 (ADR 20260815 decision 3) — this model does not enforce
+    that placement itself, ``app.tournament_pools.apply_event_pools`` does, by resolving
+    the event's first stage before it writes. ``TournamentEvent.pools`` stays a readable
+    association (a VIEWONLY relationship through stage 0), so every existing reader is
+    unaffected by which row is the literal parent.
+    The 2026-07-26 ADR sketched ``draw_settings_id`` as the parent instead of the event;
+    the composite FK above is what makes that impossible, because
+    ``tournament_event_draw_settings`` deliberately carries no ``event_id`` and so
+    shares no column with a fixture. ADR 20260801 also holds the rest of the reasoning:
+    a pool is a 1:N collection of entities with their own identity, not a scalar of a
+    configuration.
 
     **The slot is ``date``/``time``, not ``timestamptz``, and that is deliberate** — the
     one place in this schema where api/CLAUDE.md's "datetimes are timezone-aware,
@@ -69,24 +80,26 @@ class TournamentEventPool(Base):
     __table_args__ = (
         # The target of the fixture's — and the reservation's — composite foreign key:
         # SQL can only reference a unique set of columns, and the *pair* is what carries
-        # "my pool is my own event's pool". Redundant against the primary key as a
+        # "my pool is my own stage's pool" (ADR 20260815 re-parents this pair from
+        # ``event_id`` onto ``stage_id``). Redundant against the primary key as a
         # uniqueness claim (a uuid id is unique on its own), and that is exactly what
         # the ADR says it is for: "``UNIQUE (event_id, id)`` is redundant against the
-        # primary key and exists purely as the target that composite FK needs."
+        # primary key and exists purely as the target that composite FK needs" — the
+        # same reasoning, one hop along.
         #
-        # It earns its index twice over anyway: ``event_id`` leads, so it answers "the
-        # pools of this event" (every read there is), the event-delete cascade's lookup,
+        # It earns its index twice over anyway: ``stage_id`` leads, so it answers "the
+        # pools of this stage" (every read there is), the stage-delete cascade's lookup,
         # and the referential check of both composite foreign keys — none of which the
         # single-column primary key's index can serve.
         UniqueConstraint(
-            "event_id", "id", name="uq_tournament_event_pools_event_id_id"
+            "stage_id", "id", name="uq_tournament_event_pools_stage_id_id"
         ),
-        # Two pools of one event never share a place in its order — the guarantee
+        # Two pools of one stage never share a place in its order — the guarantee
         # ``stored_pools`` made by construction (it stamps ``range(len(pools))``) said
         # here as a constraint, now that pools are rows and a constraint is available.
         #
         # DEFERRABLE INITIALLY DEFERRED, for the reason
-        # ``uq_tournament_tables_tournament_position`` is: the pools of an event are
+        # ``uq_tournament_tables_tournament_position`` is: the pools of a stage are
         # written as an id-keyed diff, and a diff **re-orders** — patching pools C, A, B
         # back as B, C, A moves each row onto a position its neighbour has not vacated
         # yet, and SQLAlchemy cannot emit three UPDATEs as one statement. Checked
@@ -94,9 +107,9 @@ class TournamentEventPool(Base):
         # perfectly unique, i.e. it would forbid reordering — which is the one gesture
         # the payload's order exists to express.
         UniqueConstraint(
-            "event_id",
+            "stage_id",
             "position",
-            name="uq_tournament_event_pools_event_id_position",
+            name="uq_tournament_event_pools_stage_id_position",
             deferrable=True,
             initially="DEFERRED",
         ),
@@ -107,7 +120,7 @@ class TournamentEventPool(Base):
     #:
     #: **The primary key is ``id`` alone**, where it was ``(event_id, id)``. The pair
     #: was never about the fixture's foreign key (that references the ``UNIQUE
-    #: (event_id, id)`` above, which stands either way) — it was there because a
+    #: (stage_id, id)`` above, which stands either way) — it was there because a
     #: *client-minted* string is only unique per event: two events of one tournament
     #: could each hold a “pool-a”, and a bare ``id`` key would have imposed
     #: platform-wide uniqueness on a string nothing above the database controlled. A
@@ -118,9 +131,14 @@ class TournamentEventPool(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    event_id: Mapped[uuid.UUID] = mapped_column(
+    #: A pool's parent is its STAGE, not its event directly (ADR 20260815's "Sequencing
+    #: with #1338" consequence — see the class docstring). Always the event's stage at
+    #: position 0 in practice (decision 3), but that placement is not this column's job
+    #: to enforce; ``app.tournament_pools.apply_event_pools`` resolves the stage before
+    #: it writes.
+    stage_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tournament_events.id", ondelete="CASCADE"),
+        ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
         nullable=False,
     )
     #: ``Text``, not ``String(255)``: the write boundary floors a pool name at one
@@ -158,7 +176,14 @@ class TournamentEventPool(Base):
         nullable=False,
     )
 
-    event: Mapped["TournamentEvent"] = relationship(back_populates="pools")
+    #: The stage this pool hangs off — always the event's stage 0 in practice, but
+    #: nothing on this relationship enforces that (see ``stage_id``). No ``event``
+    #: relationship on this model any more: nothing reads ``pool.event`` today, and
+    #: the event is reachable through ``stage.event`` for the one caller that ever
+    #: would need it. ``TournamentEvent.pools`` is still readable directly — a VIEWONLY
+    #: association through stage 0 (see that relationship's docstring) — so every
+    #: existing reader of an event's pools is unaffected by this re-parenting.
+    stage: Mapped["TournamentEventStage"] = relationship(back_populates="pools")
 
     # The tables this pool reserves (ADR 20260801), in the order the director sent them
     # — which is what ``TournamentEventPoolTable.position`` carries and what

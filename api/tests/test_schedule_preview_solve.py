@@ -38,6 +38,7 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -68,6 +69,7 @@ from app.tournament_errors import (
     TournamentNotFoundError,
     TournamentNotPreLiveError,
 )
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_draw_settings,
     make_user,
@@ -160,6 +162,7 @@ async def _add_event(
     draw_type: DrawType = DrawType.round_robin,
     qualifiers_per_pool: int | None = None,
 ) -> TournamentEvent:
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=name,
@@ -172,10 +175,11 @@ async def _add_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": length_games},
         predicates=[],
-        pools=with_table_aliases(
-            tournament, [_pool(["t1", "t2"])] if pools is None else pools
-        ),
+        stages=stages,
         timezone=timezone,
+    )
+    stages[0].pools = with_table_aliases(
+        event, tournament, [_pool(["t1", "t2"])] if pools is None else pools
     )
     db.add(event)
     await db.commit()
@@ -215,8 +219,12 @@ async def _counts(db: AsyncSession, tournament_id: uuid.UUID) -> tuple[int, int,
             select(func.count())
             .select_from(TournamentFixture)
             .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .join(
                 TournamentEvent,
-                TournamentEvent.id == TournamentFixture.event_id,
+                TournamentEvent.id == TournamentEventStage.event_id,
             )
             .where(TournamentEvent.tournament_id == tournament_id)
         )

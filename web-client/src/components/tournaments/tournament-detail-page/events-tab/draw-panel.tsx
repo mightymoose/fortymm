@@ -464,13 +464,14 @@ const DrawBody = ({
           {state.pools.map((pool) => (
             <PoolDraw key={pool.id} pool={pool} />
           ))}
-          {/* Fixtures belonging to no pool. **Which view they get is the DRAW TYPE's
-              answer, not this list's** (`unpooledShape`, `../../data/draw`): `pool_id IS
-              NULL` is the *stage* discriminator for an `rr-then-ko` knockout stage and
-              will keep meaning that, while swiss is a pool-less draw *type* that happens
-              to share the null. Routing on the null alone is what rendered a swiss draw
-              through single-elimination's successor arithmetic. Shown both pre-live (the
-              director reviews the seeded round-1 pairings and byes) and live. */}
+          {/* Fixtures belonging to no pool. **Which view they get is their own STAGE's
+              answer, not this list's** (`shapeForStage`/`unpooledShapeOf`,
+              `../../data/draw`, ADR 20260815): `stageId` names the stage outright, so
+              `pool_id IS NULL` no longer has to double as a discriminator between an
+              `rr-then-ko` knockout stage and a pool-less swiss draw that happens to share
+              the null. Routing on the null alone is what rendered a swiss draw through
+              single-elimination's successor arithmetic. Shown both pre-live (the director
+              reviews the seeded round-1 pairings and byes) and live. */}
           {state.unpooled.length > 0 && (
             <UnpooledDraw
               shape={state.unpooledShape}
@@ -490,14 +491,15 @@ const DrawBody = ({
 }
 
 /**
- * The un-pooled block, in the view its **draw type** calls for — the second half of the
- * routing decision `unpooledShape` (`../../data/draw`) makes.
+ * The un-pooled block, in the view its **own stage's draw type** calls for — the second
+ * half of the routing decision `unpooledShapeOf`/`shapeForStage` (`../../data/draw`)
+ * makes.
  *
  * A `switch` with a `never` default, so the two halves are checked at both ends: adding a
- * draw type is a compile error in `unpooledShape` until it names a shape, and adding a
- * shape is a compile error *here* until it has a view. Neither is something a value check
- * on `pool_id` could ever have given us — which is precisely how a swiss draw came to
- * render as a knockout bracket with nothing red.
+ * (single-stage) draw type is a compile error in `shapeForStage` until it names a shape,
+ * and adding a shape is a compile error *here* until it has a view. Neither is something a
+ * value check on `pool_id` could ever have given us — which is precisely how a swiss draw
+ * came to render as a knockout bracket with nothing red.
  *
  * The block keeps its `draw-unpooled` test hook in the bracket arm: it is the same block
  * the existing bracket tests address, and renaming it would churn them for nothing. The

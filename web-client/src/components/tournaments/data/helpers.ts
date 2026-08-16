@@ -502,6 +502,13 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     predicates: [],
     match: { rated: true, lengthGames: 5 },
     pools: [],
+    // A PLACEHOLDER stage, matching the single-elim placeholder `drawType` above (ADR
+    // 20260815): the real event does not exist on the server yet, so nothing has
+    // actually minted one — the server does that at create, same as every other
+    // server-owned field on this draft. Inert until the event is drawn: `drawState`
+    // (`./draw`) never reads `stages` for an event whose `fixtures` is `[]`, which this
+    // one always is.
+    stages: [{ id: genId('stage'), position: 0, drawType: 'single-elim' }],
     // No draw (ADR-0786), and there could not be one: a draw is cut from a field, and
     // an event that does not exist on the server yet has no entrants to cut it from.
     fixtures: [],

@@ -61,8 +61,10 @@ from app.schedule_solves import execute_solve, request_solve
 from app.schemas.tournament import TournamentFixturePlacementUpdate
 from app.tournament_advancement import on_match_completed
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
 from app.tournament_lifecycle import transition_tournament
 from app.tournament_placement import place_fixture
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_pools,
     make_user,
@@ -182,6 +184,7 @@ async def _seed_field(
     db.add(tournament)
     await db.flush()
 
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -192,16 +195,18 @@ async def _seed_field(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": [str(row.id) for row in catalogue],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                "table_ids": [str(row.id) for row in catalogue],
+            }
+        ],
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.flush()
@@ -218,6 +223,11 @@ async def _seed_field(
         )
     )
     await db.commit()
+    # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
+    # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` is called
+    # on ``field.event`` downstream and reads ``event.pools`` synchronously, so this
+    # needs an explicit refresh first.
+    await db.refresh(event, attribute_names=["pools"])
 
     return Field(
         tournament=tournament,
@@ -236,7 +246,7 @@ async def _fixtures_of(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == event_id)
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
                 .order_by(TournamentFixture.id)
             )
         )

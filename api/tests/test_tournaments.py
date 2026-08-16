@@ -56,6 +56,7 @@ from app.models import (
     TournamentEventDrawSettings,
     TournamentEventPool,
     TournamentEventPoolTable,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -74,6 +75,7 @@ from app.schemas.tournament import (
 from app.tournament_draws import DrawCurrency, draw_currency_by_event, uncut_draw
 from app.tournament_entry_refusals import EntryRefusal
 from app.tournament_materialization import materialize_event, materialize_live_draw
+from app.tournament_queries import stage_ids_for_events
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
@@ -94,6 +96,7 @@ from tests._helpers import (
     make_user,
     opponent_session,
     rate_player,
+    stage_id_at,
     start_session,
 )
 
@@ -1197,7 +1200,6 @@ async def test_event_negative_entry_fee_violates_db_check(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[],
     )
     db_session.add(event)
     with pytest.raises(IntegrityError):
@@ -1674,16 +1676,17 @@ async def _ensure_pool(
     the readable ``"p-a"`` a seed says is a *name*. The uuid it resolves to is what
     every fixture, assertion and payload below actually carries.
 
-    Positioned after whatever pools the event already has, so an event that gains two
-    pools this way holds ``0`` and ``1`` and never trips
-    ``uq_tournament_event_pools_event_id_position``. The window is the shared
+    Positioned after whatever pools the event's stage 0 already has, so an event that
+    gains two pools this way holds ``0`` and ``1`` and never trips
+    ``uq_tournament_event_pools_stage_id_position``. The window is the shared
     09:00–12:30 the pool payloads in this module use; no test that seeds a fixture this
     way asserts anything about it.
     """
+    stage_id = await stage_id_at(db_session, event_id, 0)
     existing = (
         await db_session.execute(
             select(TournamentEventPool).where(
-                TournamentEventPool.event_id == event_id,
+                TournamentEventPool.stage_id == stage_id,
                 TournamentEventPool.name == name,
             )
         )
@@ -1694,12 +1697,12 @@ async def _ensure_pool(
         await db_session.execute(
             select(func.count())
             .select_from(TournamentEventPool)
-            .where(TournamentEventPool.event_id == event_id)
+            .where(TournamentEventPool.stage_id == stage_id)
         )
     ).scalar_one()
     pool = TournamentEventPool(
         id=uuid.uuid4(),
-        event_id=event_id,
+        stage_id=stage_id,
         name=name,
         position=position,
         slot_date=date(2026, 6, 13),
@@ -1714,10 +1717,11 @@ async def _ensure_pool(
 async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.UUID:
     """The id of the pool of ``event_id`` **named** ``name`` — the lookup an assertion
     about a fixture's ``pool_id`` goes through, since the id is the server's."""
+    stage_id = await stage_id_at(db_session, uuid.UUID(event_id), 0)
     return (
         await db_session.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.event_id == uuid.UUID(event_id),
+                TournamentEventPool.stage_id == stage_id,
                 TournamentEventPool.name == name,
             )
         )
@@ -1762,7 +1766,7 @@ async def _cut(
         else None
     )
     fixture = TournamentFixture(
-        event_id=uuid.UUID(event_id),
+        stage_id=await stage_id_at(db_session, uuid.UUID(event_id), 0),
         pool_id=pool_uuid,
         round=round,
         position=position,
@@ -4807,6 +4811,7 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
 
     assert set(fixture) == {
         "id",
+        "stage_id",
         "pool_id",
         "round",
         "position",
@@ -5137,9 +5142,12 @@ async def _pool_names(
     names: dict[uuid.UUID | None, str | None] = {None: None}
     for pool_id, name in (
         await db_session.execute(
-            select(TournamentEventPool.id, TournamentEventPool.name).where(
-                TournamentEventPool.event_id == uuid.UUID(event_id)
+            select(TournamentEventPool.id, TournamentEventPool.name)
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentEventPool.stage_id,
             )
+            .where(TournamentEventStage.event_id == uuid.UUID(event_id))
         )
     ).all():
         names[pool_id] = name
@@ -5185,7 +5193,7 @@ async def _fixture_rows(
     pool_position = (
         select(TournamentEventPool.position)
         .where(
-            TournamentEventPool.event_id == TournamentFixture.event_id,
+            TournamentEventPool.stage_id == TournamentFixture.stage_id,
             TournamentEventPool.id == TournamentFixture.pool_id,
         )
         .scalar_subquery()
@@ -5194,7 +5202,11 @@ async def _fixture_rows(
         (
             await db_session.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == uuid.UUID(event_id))
+                .where(
+                    TournamentFixture.stage_id.in_(
+                        stage_ids_for_events([uuid.UUID(event_id)])
+                    )
+                )
                 .order_by(
                     pool_position.asc().nulls_last(),
                     TournamentFixture.round,
@@ -6232,7 +6244,11 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
                 TournamentEventPool.slot_end,
                 TournamentEventPool.position,
             )
-            .where(TournamentEventPool.event_id == uuid.UUID(event_id))
+            .where(
+                TournamentEventPool.stage_id.in_(
+                    stage_ids_for_events([uuid.UUID(event_id)])
+                )
+            )
             .order_by(TournamentEventPool.position)
         )
     ).all()
@@ -8082,7 +8098,9 @@ async def test_advancing_a_round_robin_event_costs_one_statement_and_no_game_cou
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.event_id == uuid.UUID(event["id"])
+                    TournamentFixture.stage_id.in_(
+                        stage_ids_for_events([uuid.UUID(event["id"])])
+                    )
                 )
             )
         )

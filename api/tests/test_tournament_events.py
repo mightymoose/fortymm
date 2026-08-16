@@ -33,6 +33,7 @@ from app.models import (
     TournamentEventDrawSettings,
     TournamentEventPool,
     TournamentEventPoolTable,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -45,11 +46,14 @@ from app.tournament_errors import (
     PoolSetFrozenError,
     TournamentNotFoundError,
 )
+from app.tournament_event_stages import mint_stages
 from app.tournament_events import create_event, delete_event, update_event
 from app.tournament_pools import pool_read
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_pools,
     make_user,
+    stage_id_at,
     venue_tables,
 )
 
@@ -139,7 +143,7 @@ async def _add_event(db: AsyncSession, tournament: Tournament) -> TournamentEven
         slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=[],
+        stages=mint_stages(DrawType.round_robin),
     )
     db.add(event)
     await db.commit()
@@ -443,10 +447,11 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
     default_league: League,
 ) -> None:
     """A created event's pools are **rows in ``tournament_event_pools``**, each carrying
-    the ``event_id`` that owns it and the window in the DATE/TIME columns the ADR pins
-    (ADR 20260801, "a pool belongs to its event, not to the event's draw settings").
+    the window in the DATE/TIME columns the ADR pins (ADR 20260801, "a pool belongs to
+    its event, not to the event's draw settings") — and, since ADR 20260815, keyed by
+    the event's stage 0 rather than the event directly, one hop the join below walks.
 
-    Read with a **column-only** ``SELECT`` against the pools table, not off
+    Read with a **column-only** ``SELECT`` against the pools (and stages) table, not off
     ``event.pools``: the relationship would answer just as happily if the pools were
     still a JSONB list on the event, and the claim here is precisely that they are not.
 
@@ -470,14 +475,19 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
     rows = (
         await db_session.execute(
             select(
-                TournamentEventPool.event_id,
+                TournamentEventStage.event_id,
                 TournamentEventPool.id,
                 TournamentEventPool.name,
                 TournamentEventPool.position,
                 TournamentEventPool.slot_date,
                 TournamentEventPool.slot_start,
                 TournamentEventPool.slot_end,
-            ).order_by(TournamentEventPool.position)
+            )
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentEventPool.stage_id,
+            )
+            .order_by(TournamentEventPool.position)
         )
     ).all()
 
@@ -671,6 +681,7 @@ async def _add_cut_event(
 
     The pool's id is minted here (``event_pools``) rather than by the column's default,
     because the fixture below has to name it before either row is flushed."""
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Cut Singles",
@@ -682,23 +693,31 @@ async def _add_cut_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-                    "table_ids": ["t1", "t2"],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
     )
+    pools = event_pools(
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                "table_ids": ["t1", "t2"],
+            }
+        ],
+        event=event,
+        tournament=tournament,
+    )
+    stages[0].pools = pools
     db.add(event)
     await db.commit()
+    # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.pools``) along with it;
+    # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
+    # on the now-expired child objects.
+    stage0_id, pool0_id = stages[0].id, pools[0].id
     await db.refresh(event)
     fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stage0_id,
+        pool_id=pool0_id,
         round=1,
         position=1,
         scheduled_start=scheduled_start,
@@ -921,7 +940,9 @@ async def test_update_event_timezone_change_reanchors_placements(
     db_session.expire_all()
     fixture = (
         await db_session.execute(
-            select(TournamentFixture).where(TournamentFixture.event_id == event_id)
+            select(TournamentFixture).where(
+                TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
+            )
         )
     ).scalar_one()
     assert fixture.scheduled_start is not None
@@ -1033,7 +1054,9 @@ async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_se
     # And the same order back through the read shape everything above the database uses.
     stored = (
         await db_session.execute(
-            select(TournamentEventPool).where(TournamentEventPool.event_id == event_id)
+            select(TournamentEventPool).where(
+                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+            )
         )
     ).scalar_one()
     assert pool_read(stored).table_ids == [table_2, table_1]
@@ -1116,11 +1139,13 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
     )
     event_id = event.id
     pool_id = event.pools[0].id
+    stage_id = await stage_id_at(db_session, event_id, 0)
 
     db_session.add(
         TournamentEventPoolTable(
             tournament_id=tournament_id,
             event_id=event_id,
+            stage_id=stage_id,
             pool_id=pool_id,
             table_id=foreign_table,
             position=0,
@@ -1135,6 +1160,7 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
         TournamentEventPoolTable(
             tournament_id=other_id,
             event_id=event_id,
+            stage_id=stage_id,
             pool_id=pool_id,
             table_id=foreign_table,
             position=0,
@@ -1168,10 +1194,12 @@ async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
         payload=_event_payload(pools=[_pool_payload()]),
     )
 
+    stage_id = await stage_id_at(db_session, event.id, 0)
     db_session.add(
         TournamentEventPoolTable(
             tournament_id=tournament_id,
             event_id=event.id,
+            stage_id=stage_id,
             pool_id=event.pools[0].id,
             table_id=str(uuid.uuid4()),
             position=0,
@@ -1227,7 +1255,7 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
     assert (
         await db_session.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.event_id == event_id
+                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalars().all() == [pool_id]

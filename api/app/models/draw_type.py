@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import DateTime, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
@@ -7,6 +8,23 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.tournament import DrawType
+
+StageDrawType = Literal[DrawType.round_robin, DrawType.single_elim, DrawType.swiss]
+"""The draw types a **stage** can run — every :class:`DrawType` member except
+``rr_then_ko``, which names a template (a sequence of stages), never a runnable
+stage's own type (ADR 20260815 decision 4). Mirrors the web's ``STAGE_DRAW_TYPES``
+(``web-client/src/components/tournaments/data/draw-types.ts``).
+
+Narrowing to this type at a boundary — the stage model's ``draw_type`` getter, and
+every reader downstream of it — is what turns the dead ``rr_then_ko`` arm of an
+exhaustive ``match`` over a stage's draw type from something reached at runtime and
+refused (a ``ValueError``) into something the type checker refuses to let a caller
+write in the first place. The runtime refusal still lives at
+:attr:`~app.models.tournament_event_stage.TournamentEventStage.draw_type`'s
+SETTER, which keeps the wider :class:`DrawType` — that is the one boundary an
+arbitrary member can actually arrive at (a template entry that got it wrong), and
+where defense-in-depth still earns its keep.
+"""
 
 # Fixed ids, one per seeded slug — NOT ``gen_random_uuid()`` for these four rows,
 # even though the column's own default (below) is. ``TournamentEventDrawSettings

@@ -114,7 +114,9 @@ from app.schemas.schedule_solve import (
 from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_advancement import on_match_completed
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
 from app.tournament_materialization import materialize_event
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_draw_settings,
     event_pools,
@@ -233,6 +235,7 @@ async def _make_tournament(
         if pools is None
         else pools
     )
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -245,10 +248,21 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": slot_date, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": length_games},
-        pools=event_pools(pool_specs, tournament=tournament),
+        stages=stages,
     )
+    stages[0].pools = event_pools(pool_specs, event=event, tournament=tournament)
     db.add(event)
     await db.flush()
+    # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
+    # (ADR 20260815), populated automatically whenever an event is *queried* (its
+    # declared ``lazy="selectin"`` fires as part of any SELECT that returns
+    # ``TournamentEvent`` rows) but NOT by construction the way the old direct
+    # relationship was. ``cut_draw`` below reads ``event.pools`` synchronously
+    # (``app.tournament_draws.event_pools``/``draw_config``), so this object — built
+    # and flushed, never queried — needs an explicit refresh or that read is an async
+    # lazy load and raises ``MissingGreenlet``. A production caller never hits this:
+    # every route loads its event through a query first.
+    await db.refresh(event, attribute_names=["pools"])
 
     for _ in range(entrants):
         player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
@@ -271,7 +285,7 @@ async def _solver_pool_id(db: AsyncSession, event_id: uuid.UUID) -> PoolId:
     pool_id = (
         await db.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.event_id == event_id
+                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -285,7 +299,7 @@ async def _fixtures_of(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == event_id)
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
                 .order_by(TournamentFixture.id)
             )
         )
@@ -2030,7 +2044,9 @@ class TestEventWideReservation:
                     TournamentEventPool.id,
                     TournamentEventPool.slot_start,
                     TournamentEventPool.slot_end,
-                ).where(TournamentEventPool.event_id == event_id)
+                ).where(
+                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                )
             )
         ).all()
         assert len(pool_rows) == 2
@@ -2350,7 +2366,9 @@ async def _pool_reservations(
                     TournamentEventPool.id,
                     TournamentEventPool.slot_start,
                     TournamentEventPool.slot_end,
-                ).where(TournamentEventPool.event_id == event_id)
+                ).where(
+                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                )
             )
         ).all()
     }

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 if TYPE_CHECKING:
-    from app.models.tournament import TournamentEvent
+    from app.models.tournament_event_stage import TournamentEventStage
 
 
 class TournamentFixture(Base):
@@ -40,34 +40,46 @@ class TournamentFixture(Base):
     things, and the "is this side unknown, or is it a bye?" question would have to be
     answered by reading a second column.
 
-    ``pool_id`` is a **foreign key**, and a *composite* one: ``(event_id, pool_id) →
-    tournament_event_pools (event_id, id)``. Pools are rows now (ADR 20260801 "a pool
-    belongs to its event, not to the event's draw settings"), and the composite form is
-    what makes the reference say the thing that actually matters — not merely "this pool
-    exists" but "this pool is **my own event's**". A plain FK to
-    ``tournament_event_pools.id`` would happily seat one event's fixture in another
-    event's pool, and that is the illegal state the ADR is about; it is unrepresentable
-    here because the two tables share ``event_id`` and the constraint requires it to
-    agree. ``NULL`` means the draw is un-pooled — single-elim, and the knockout stage of
-    an rr-then-ko draw. (A composite FK with one NULL member is satisfied vacuously
-    under the SQL default MATCH SIMPLE, which is exactly right: an un-pooled fixture
-    names no pool to check.)
+    ``pool_id`` is a **foreign key**, and a *composite* one: ``(stage_id, pool_id) →
+    tournament_event_pools (stage_id, id)``. Pools are rows now (ADR 20260801 "a pool
+    belongs to its event, not to the event's draw settings"), re-parented onto the
+    stage by ADR 20260815, and the composite form is what makes the reference say the
+    thing that actually matters — not merely "this pool exists" but "this pool is **my
+    own stage's**". A plain FK to ``tournament_event_pools.id`` would happily seat one
+    stage's fixture in another stage's pool, and that is the illegal state the ADR is
+    about; it is unrepresentable here because the two tables share ``stage_id`` and the
+    constraint requires it to agree. ``NULL`` means the draw is un-pooled — single-elim,
+    and the knockout stage of an rr-then-ko draw. (A composite FK with one NULL member
+    is satisfied vacuously under the SQL default MATCH SIMPLE, which is exactly right:
+    an un-pooled fixture names no pool to check.)
 
-    The ``UNIQUE (event_id, pool_id, round, position)`` below is the identity a re-cut
+    A fixture names its **stage**, not its event (ADR 20260815 decision 5) —
+    ``event_id`` is dropped from this table entirely. The event is reachable through
+    ``stage.event``, which is what the :attr:`event_id` property below reads; it is a
+    plain Python property, not a SQL-queryable column, so any code that needs
+    ``TournamentFixture.event_id`` inside a ``select``/``where``/``join`` has to join
+    ``tournament_event_stages`` explicitly instead (mypy catches every such site, since
+    a class-level property access does not satisfy the SQL-expression types those
+    methods expect).
+
+    The ``UNIQUE (stage_id, pool_id, round, position)`` below is the identity a re-cut
     reconciles on, and it is declared **NULLS NOT DISTINCT** (Postgres 15+). Under the
     default (NULLS DISTINCT) a ``NULL`` ``pool_id`` would compare unequal to itself, so
     an *un-pooled* draw — single-elim, every KO fixture — would have **no uniqueness
-    guard at all** and could persist the same ``(event, round, position)`` twice. Since
+    guard at all** and could persist the same ``(stage, round, position)`` twice. Since
     ``NULL`` here is a real value in the domain ("this draw has no pools"), not a
-    missing one, it must be compared as one.
+    missing one, it must be compared as one. Keying on ``stage_id`` rather than
+    ``event_id`` is also what makes the knockout stage's round numbering restarting at 1
+    fall out of the key, rather than needing to be a documented namespace rule.
     """
 
     __tablename__ = "tournament_fixtures"
     __table_args__ = (
-        # "My pool is my own event's pool", as one line of DDL (ADR 20260801). The
-        # referenced ``(event_id, id)`` is a unique constraint on
-        # ``tournament_event_pools`` that exists for no other purpose — SQL can only
-        # reference a unique set of columns, and the *pair* is what carries the claim.
+        # "My pool is my own stage's pool", as one line of DDL (ADR 20260801,
+        # re-parented onto the stage by ADR 20260815). The referenced
+        # ``(stage_id, id)`` is a unique constraint on ``tournament_event_pools`` that
+        # exists for no other purpose — SQL can only reference a unique set of columns,
+        # and the *pair* is what carries the claim.
         #
         # DEFERRABLE INITIALLY DEFERRED with the default (NO ACTION) delete rule, rather
         # than ``RESTRICT``, because of the **event-delete** path — the same hazard the
@@ -77,16 +89,16 @@ class TournamentFixture(Base):
         # two separate statements. An immediately-checked constraint fires between them,
         # on fixtures that are about to be deleted one statement later, and kills the
         # whole delete. Deferring is not a weakening: the pair is checked, in full,
-        # before the transaction can commit — a fixture pointing at another event's pool
+        # before the transaction can commit — a fixture pointing at another stage's pool
         # is refused either way, just at COMMIT rather than at the INSERT.
         #
         # Removing a pool a fixture is drawn into is refused before it ever reaches this
         # constraint, by ``_enforce_pool_set_frozen``'s 409 (ADR-0786) — which is now
         # the *second* line of defence rather than the only one.
         ForeignKeyConstraint(
-            ["event_id", "pool_id"],
-            ["tournament_event_pools.event_id", "tournament_event_pools.id"],
-            name="fk_tournament_fixtures_event_id_pool_id",
+            ["stage_id", "pool_id"],
+            ["tournament_event_pools.stage_id", "tournament_event_pools.id"],
+            name="fk_tournament_fixtures_stage_id_pool_id",
             deferrable=True,
             initially="DEFERRED",
         ),
@@ -94,16 +106,16 @@ class TournamentFixture(Base):
         # also covers un-pooled draws, where ``pool_id`` is NULL for every row — see
         # the class docstring.
         UniqueConstraint(
-            "event_id",
+            "stage_id",
             "pool_id",
             "round",
             "position",
-            name="uq_tournament_fixtures_event_id_pool_id_round_position",
+            name="uq_tournament_fixtures_stage_id_pool_id_round_position",
             postgresql_nulls_not_distinct=True,
         ),
-        # Every read of a draw is "the fixtures of this event" — ``advance()`` loads
-        # the whole set, and the detail BFF loads it per event.
-        Index("ix_tournament_fixtures_event_id", "event_id"),
+        # Every read of a draw is "the fixtures of this stage" — ``advance()`` loads
+        # the whole set, and the detail BFF loads it per event (through its stages).
+        Index("ix_tournament_fixtures_stage_id", "stage_id"),
         # A completed match is the trigger to write ``winner_entry_id`` back and re-run
         # ``advance()``, and that path arrives holding a match id, not a fixture id.
         Index("ix_tournament_fixtures_match_id", "match_id"),
@@ -120,12 +132,15 @@ class TournamentFixture(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    event_id: Mapped[uuid.UUID] = mapped_column(
+    #: A fixture names its STAGE, not its event (ADR 20260815 decision 5). See the class
+    #: docstring for how each fixture's stage is decided at the cut
+    #: (``app.tournament_draws.cut_draw``).
+    stage_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tournament_events.id", ondelete="CASCADE"),
+        ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
         nullable=False,
     )
-    #: Names a pool of **this fixture's own event** — half of the composite foreign key
+    #: Names a pool of **this fixture's own stage** — half of the composite foreign key
     #: declared above. ``NULL`` = the draw is un-pooled.
     #:
     #: A ``uuid``, moved off ``Text`` in the same step as
@@ -262,4 +277,42 @@ class TournamentFixture(Base):
         nullable=False,
     )
 
-    event: Mapped["TournamentEvent"] = relationship(back_populates="fixtures")
+    #: ``lazy="joined"`` (a JOIN, not a second statement): every existing reader of
+    #: ``fixture.event_id`` becomes a reader of ``fixture.stage.event_id`` (see
+    #: :attr:`event_id` below), and that needs the stage to have ridden along with
+    #: whatever query loaded the fixture — the same reasoning
+    #: ``TournamentEventDrawSettings.draw_type_option`` and ``TournamentEventStage
+    #: .draw_type_option`` are eager for. ``innerjoin=True`` because the FK is NOT
+    #: NULL. This adds columns to every fixture query, never an extra statement, so it
+    #: does not move the ``EXPECTED_TOURNAMENT_*_STATEMENTS`` pins.
+    stage: Mapped["TournamentEventStage"] = relationship(
+        back_populates="fixtures",
+        lazy="joined",
+        innerjoin=True,
+    )
+
+    @property
+    def event_id(self) -> uuid.UUID:
+        """The fixture's event, read through its stage — never a stored column (ADR
+        20260815 decision 5 drops ``tournament_fixtures.event_id`` outright: "the event
+        is reachable through the stage").
+
+        A plain Python ``@property``, deliberately not a ``hybrid_property`` or a
+        ``column_property`` shim that would let this keep behaving like a real column
+        in a ``select``/``where``/``join``. Those exist and would work, but a fixture
+        that still *answers* every query the same way it did before this ADR is a
+        fixture whose readers never learn they are supposed to think in stages —
+        exactly the restructuring ADR 20260815 assigns to a later chore (#1348 chore
+        3b), postponed rather than quietly done here. So this property is good for
+        **instance** reads only (``fixture.event_id`` after the fixture — and its
+        eagerly-joined ``stage`` — are already loaded); any SQL-context use
+        (``TournamentFixture.event_id`` inside a query) does not type-check, which is
+        how every such site got found and rewritten onto an explicit
+        ``tournament_event_stages`` join instead of onto this property.
+
+        Raises if ``stage`` is unset — a freshly constructed, unflushed fixture reads
+        this off the ``TournamentEventStage`` object it was given, not off a database
+        row, so the caller must set ``stage`` (or ``stage_id``, then reload) before
+        reading it.
+        """
+        return self.stage.event_id

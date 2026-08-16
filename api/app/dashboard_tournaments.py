@@ -29,7 +29,7 @@ values to be filled in later, and none may be flattened to a zero or an empty st
 import logging
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import assert_never
 
@@ -48,6 +48,7 @@ from app.models import (
     TournamentEvent,
     TournamentStatus,
 )
+from app.models.draw_type import StageDrawType
 from app.models.tournament import DrawType
 from app.result_acceptance import side_win_counts
 from app.schemas.dashboard import (
@@ -111,6 +112,22 @@ async def build_tournament_panels(
     entrants = await active_entrants_by_event(db, event_ids)
     fixtures = await fixtures_by_event(db, event_ids)
     game_counts = await game_counts_by_match(db, completed_match_ids(fixtures))
+    # Every stage id on this page mapped to that stage's OWN draw type (ADR 20260815)
+    # — what ``_round_label`` and ``event_results`` read a fixture's ``stage_id``
+    # against to tell an un-pooled block's vocabulary (bracket vs swiss rounds) apart,
+    # in place of inferring it from the EVENT's overall draw type plus ``pool_id IS
+    # NULL``. Read off each event's eager (``lazy="selectin"``) stages collection —
+    # already loaded with the entities above, so this costs the panel no statement of
+    # its own.
+    #
+    # Flat, not nested by event id: a stage id is already globally unique (it is the
+    # table's own surrogate key), so an ``{event_id: {stage_id: draw_type}}`` map
+    # bought nothing a caller couldn't get by reading straight off the stage id it
+    # already has in hand — every reader here (``_build_event``, ``_build_match``)
+    # holds a fixture or a focus match, never an event, when it needs this.
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType] = {
+        stage.id: stage.draw_type for event in events for stage in event.stages
+    }
 
     # The caller's own fixtures, per event — the path list, and the pool the focus
     # match is chosen out of. Sorted chronologically (#1297): a player reading the
@@ -166,6 +183,7 @@ async def build_tournament_panels(
                 focus=focus[event.id],
                 focus_matches=focus_matches,
                 game_counts=game_counts,
+                stage_draw_types=stage_draw_types,
             )
         )
     return [
@@ -292,6 +310,7 @@ def _build_event(
     focus: TournamentFixtureRead | None,
     focus_matches: dict[uuid.UUID, Match],
     game_counts: dict[uuid.UUID, tuple[int, int]],
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType],
 ) -> DashboardTournamentEvent:
     username_by_entry = {entrant.id: entrant.username for entrant in entrants}
     pools = {pool.id: pool for pool in event_pools(event)}
@@ -300,7 +319,12 @@ def _build_event(
     # event's draw configuration is a row, not a column"). Read once here and passed
     # down: the row rides along with the event on the panel's single entries query
     # (``lazy="joined"``), so the round and stage wording below costs no extra
-    # statement per event on this endpoint's hot path.
+    # statement per event on this endpoint's hot path. ``stage_draw_types`` is the
+    # per-fixture counterpart (ADR 20260815): ``draw_type`` names the event's overall
+    # shape (what ``_stage_label`` and the results strategy read), ``stage_draw_types``
+    # names each individual STAGE's own shape (what ``_round_label`` below reads, per
+    # fixture, via ``stage_id``) — the two answer different questions and neither
+    # substitutes for the other.
     draw_type = event.draw_settings.draw_type
 
     results = event_results(
@@ -308,6 +332,7 @@ def _build_event(
         entrants=entrants,
         fixtures=all_fixtures,
         game_counts=game_counts,
+        stage_draw_types=stage_draw_types,
     )
     my_pool_id = next(
         (f.pool_id for f in my_fixtures if f.pool_id is not None),
@@ -397,7 +422,14 @@ def _build_event(
                 else None
             ),
             best_of=settings.length_games,
-            draw_type=draw_type,
+            # ``.get``, not ``[...]``: ``stage_draw_types`` and ``fixtures`` are two
+            # separate loads a beat apart, so a stage a director's re-mint deleted
+            # between them (an event's draw type changed, remint_stages_in_place,
+            # ADR 20260815) can leave ``focus.stage_id`` naming a stage this map no
+            # longer has. That is read skew on a background dashboard refresh, not a
+            # broken invariant worth 500ing the whole panel over — ``_build_match``
+            # degrades the one label that needs the vocabulary rather than raising.
+            stage_draw_type=stage_draw_types.get(focus.stage_id),
             tables=tables,
             game_counts=game_counts,
         )
@@ -465,7 +497,7 @@ def _build_match(
     username_by_entry: dict[uuid.UUID, str],
     match: Match | None,
     best_of: int,
-    draw_type: DrawType,
+    stage_draw_type: StageDrawType | None,
     tables: dict[str, TournamentTable],
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> DashboardTournamentMatch:
@@ -482,7 +514,16 @@ def _build_match(
         opponent_games=opponent_games,
         best_of=best_of,
         games=_games(match, side=side),
-        round_label=_round_label(draw_type, fixture.pool_id, fixture.round),
+        # ``round_label`` is NOT NULL on the wire (``DashboardTournamentMatch``), so a
+        # missing stage draw type (the read-skew ``stage_draw_type`` is ``None`` for
+        # — see the focus-match call site) degrades to a neutral ordinal rather than
+        # omitting the field: still true (this IS round ``fixture.round``), just
+        # without the draw type's own word for it.
+        round_label=(
+            _round_label(stage_draw_type, fixture.round)
+            if stage_draw_type is not None
+            else f"Round {fixture.round}"
+        ),
         table_label=_table_label(fixture.table_id, tables),
         start_label=_time_label(fixture),
         next_game_number=(current_game_number(match) if match is not None else None),
@@ -622,21 +663,24 @@ def _fixture_state(status: MatchStatus | None) -> TournamentFixtureState:
             assert_never(status)
 
 
-def _round_label(
-    draw_type: DrawType, pool_id: uuid.UUID | None, round_number: int
-) -> str:
+def _round_label(stage_draw_type: StageDrawType, round_number: int) -> str:
     """A round number in its draw type's own vocabulary, composed here so no client
     maps an integer to a word.
 
-    It takes the fixture's ``pool_id`` because for a two-stage draw the vocabulary is a
-    property of the **stage**, not of the event: ``pool_id IS NULL`` is already how the
-    knockout stage is spelled everywhere else (ADR-0786), so there is nothing new to
-    carry — the discriminator is on the row. The one-stage draw types ignore it; their
-    fixtures are all pooled or all un-pooled anyway.
+    It takes the fixture's OWN STAGE's draw type (ADR 20260815), not the event's overall
+    one, and no longer takes ``pool_id`` at all. A two-stage event's vocabulary used to
+    be chosen by ``pool_id IS NULL`` standing in for "which stage is this" — the same
+    two-fact inference (event draw type + un-pooled-ness) that once rendered a swiss
+    draw's rounds as a knockout bracket, because both are un-pooled and
+    indistinguishable that way. Every stage a fixture can actually belong to is one of
+    the three single-stage kinds, so this needs nothing else to decide the word.
 
-    An exhaustive ``match`` with no catch-all: a new ``DrawType`` is a type error until
-    it says what it calls a round (api/CLAUDE.md)."""
-    match draw_type:
+    An exhaustive ``match`` with no catch-all: ``stage_draw_type`` is
+    :data:`~app.models.draw_type.StageDrawType`, not the full ``DrawType``, so a new
+    stage-runnable draw type is a type error here until it says what it calls a round
+    (api/CLAUDE.md) — and ``rr_then_ko`` needs no arm at all, below, because the type
+    already says it cannot arrive."""
+    match stage_draw_type:
         case DrawType.round_robin:
             return f"Group match {round_number}"
         case DrawType.single_elim:
@@ -644,23 +688,13 @@ def _round_label(
             # cannot be composed from the round number alone — it needs the bracket's
             # depth, which this helper is not given.
             return f"Round {round_number}"
-        case DrawType.rr_then_ko:
-            # Both existing vocabularies, verbatim, chosen by the stage the fixture is
-            # in (ADR 20260727). Inventing a third — "Group match 3" becoming "Pool
-            # match 3" because the event also has a bracket — would make the same match
-            # read differently in two events for no reason a player could name.
-            return (
-                f"Group match {round_number}"
-                if pool_id is not None
-                else f"Round {round_number}"
-            )
         case DrawType.swiss:
             # A swiss round IS the vocabulary — "round 3" is what a director and a
             # player both call it — and it needs none of the bracket's caveats, because
             # the number is not a distance from a final.
             return f"Round {round_number}"
         case _:
-            assert_never(draw_type)
+            assert_never(stage_draw_type)
 
 
 def _stage_label(draw_type: DrawType, *, complete: bool) -> str:

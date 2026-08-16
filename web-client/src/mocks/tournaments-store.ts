@@ -457,9 +457,11 @@ function stampPoolWinners(
  */
 const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // Semifinal 1 — seed 1 (`player.5`, pool A's winner) v seed 4 (`player.2`, pool B's
-  // runner-up). The runner-up wins.
+  // runner-up). The runner-up wins. `stage_id: 's-2'` — `mintStageReads`'s knockout
+  // stage of this `rr-then-ko` event (ADR 20260815), never the pool stage's `'s-1'`.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
+    stage_id: 's-2',
     pool_id: null,
     round: 1,
     position: 1,
@@ -471,6 +473,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // runner-up). The runner-up wins again.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
+    stage_id: 's-2',
     pool_id: null,
     round: 1,
     position: 2,
@@ -482,6 +485,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // event's champion; the standings have no say in it.
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
+    stage_id: 's-2',
     pool_id: null,
     round: 2,
     position: 1,
@@ -507,9 +511,11 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
  */
 const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // Semifinal 1 — seed 1 (`player.1`, pool A) v seed 4 (`player.3`, pool B). The top
-  // seed holds.
+  // seed holds. `stage_id: 's-2'` — `mintStageReads`'s knockout stage of this
+  // `rr-then-ko` event (ADR 20260815), never the pool stage's `'s-1'`.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
+    stage_id: 's-2',
     pool_id: null,
     round: 1,
     position: 1,
@@ -521,6 +527,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // runner-up), and the runner-up takes it.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
+    stage_id: 's-2',
     pool_id: null,
     round: 1,
     position: 2,
@@ -533,6 +540,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // event has no champion yet.
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
+    stage_id: 's-2',
     pool_id: null,
     round: 2,
     position: 1,
@@ -580,6 +588,8 @@ function seed(): StoredTournament[] {
           name: 'Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          // System-minted, never authored (ADR 20260815) — `mintStageReads` keeps every
+          // seeded event's `stages` agreeing with its own `draw_type`, one place.
           stages: mintStageReads('round-robin'),
           qualifiers_per_pool: null,
           rounds: null,
@@ -1049,6 +1059,9 @@ function seed(): StoredTournament[] {
           name: 'Challenge Cup',
           format: 'singles',
           draw_type: 'rr-then-ko',
+          // TWO stages — `mintStageReads('rr-then-ko')` mints `'s-1'` (round-robin, the
+          // pools below) then `'s-2'` (single-elim, the knockout fixtures below), the
+          // ids `CUP_KNOCKOUT_FIXTURES` and the pool-stage plan below both name.
           stages: mintStageReads('rr-then-ko'),
           // TWO qualifiers per pool — the number that sizes the bracket at the cut
           // (`P × K` = 2 × 2 = 4, derived and never configured, ADR 20260727). Unlike
@@ -1141,6 +1154,7 @@ function seed(): StoredTournament[] {
           name: 'Shield Singles',
           format: 'singles',
           draw_type: 'rr-then-ko',
+          // TWO stages, the same convention the Cup uses above — `'s-1'`/`'s-2'`.
           stages: mintStageReads('rr-then-ko'),
           // Two pools of three, two qualifiers from each — `K = ⌊N/P⌋`, the legal
           // maximum, where everyone but the pool's last qualifies and the pool stage
@@ -2253,6 +2267,13 @@ export function createEvent(
     name: body.name,
     format: body.format,
     draw_type: body.draw_type,
+    // Minted from the event's own draw type the moment its draw settings are configured
+    // (ADR 20260815 decision 3) — at CREATE, here, which is the earliest an event has a
+    // draw type at all. `mintStageReads` is the one place this template lives; the
+    // domain-side seed factory (`data/seed.factory.ts`'s `mintStages`) mints the SAME ids
+    // for the SAME draw type, deliberately, so a component test built off one and this
+    // store's own events agree on what an `rr-then-ko` event's knockout stage is called.
+    stages: mintStageReads(body.draw_type),
     // **K**, stored beside the draw type it belongs to (ADR 20260727). Absent means the
     // draw type has no knockout stage to qualify for, which is `null` — the value the
     // settings row really holds — never `undefined`, and never an invented `1`: the day
@@ -2265,10 +2286,6 @@ export function createEvent(
     // choose, which is `null`, never `undefined` and never an invented number — the day
     // this event's draw is cut, this is how many rounds get written.
     rounds: body.rounds ?? null,
-    // Minted from the event's own draw type, the way the server mints them
-    // (`mintStageReads`) — never a hand-written literal that could drift from
-    // `draw_type`.
-    stages: mintStageReads(body.draw_type),
     // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
     max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
@@ -2345,6 +2362,18 @@ export function updateEvent(
     name: patch.name ?? event.name,
     format: patch.format ?? event.format,
     draw_type: patch.draw_type ?? event.draw_type,
+    // **Re-minted on a draw-type change, in place** (ADR 20260815 decision 3): a patch
+    // naming a new draw type re-applies the template, same as create. This can only be
+    // reached with no draw standing — `drawTypeFrozenDetail` above already 409s a
+    // draw-type change while one exists — so there is no fixture yet to leave pointing at
+    // a stage this mints away, and a full re-mint is the read this store's simpler model
+    // can give (the ADR's "stage 1 keeps its identity" nuance matters once a pool is
+    // stage-scoped, which this store's pools are not yet — ADR 20260815, "Sequencing with
+    // #1338"). A patch naming no draw type leaves the stages exactly as they stood.
+    stages:
+      patch.draw_type === undefined || patch.draw_type === null
+        ? event.stages
+        : mintStageReads(patch.draw_type),
     // **The draw configuration is patched as a UNIT** (ADR 20260727): the server refuses
     // a `qualifiers_per_pool` with no `draw_type` beside it (422), so a patch that names
     // a draw type carries the whole pair — including the `null` that *removes* a count
@@ -2363,13 +2392,6 @@ export function updateEvent(
       patch.draw_type === undefined || patch.draw_type === null
         ? event.rounds
         : (patch.rounds ?? null),
-    // The stages move with the draw type they describe (`mintStageReads`): a patch
-    // that re-types the event re-mints them so `stages` never drifts from
-    // `draw_type`; a patch that leaves the draw type alone leaves them alone too.
-    stages:
-      patch.draw_type === undefined || patch.draw_type === null
-        ? event.stages
-        : mintStageReads(patch.draw_type),
     // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
     // the stored cap untouched. `??` would conflate the two, silently keeping a
     // cap the editor meant to remove.
@@ -2573,6 +2595,10 @@ function planEventDraw(event: StoredEvent): DrawPlan {
     // for exactly the reasons the qualifier count above is. Only the `swiss` arm reads it,
     // and a swiss event always has one, so that arm never meets the null.
     event.rounds,
+    // **The event's own stages** (ADR 20260815) — never `planDraw`'s
+    // `mintStageReads(drawType)` default, which is for a caller with no event to read
+    // stages off of. A fixture this cuts must name a stage `event.stages` actually holds.
+    event.stages,
   )
 }
 

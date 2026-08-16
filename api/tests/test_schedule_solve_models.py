@@ -45,6 +45,7 @@ from app.schemas.schedule_solve import (
     parse_infeasibility_reasons,
 )
 from app.schemas.tournament import ScheduleSolveRead
+from app.tournament_event_stages import mint_stages
 from tests._helpers import event_pools, make_user, venue_tables
 
 
@@ -83,6 +84,7 @@ async def _make_tournament(db_session: AsyncSession) -> Tournament:
 
 async def _make_event(db_session: AsyncSession) -> TournamentEvent:
     tournament = await _make_tournament(db_session)
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -93,7 +95,10 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
-        pools=event_pools([{"name": "Pool A", "slot": {}, "table_ids": []}]),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [{"name": "Pool A", "slot": {}, "table_ids": []}], event=event
     )
     db_session.add(event)
     await db_session.commit()
@@ -266,7 +271,7 @@ async def test_a_fresh_fixture_is_unpinned_and_never_notified(
     anything) — without either being supplied at insert."""
     event = await _make_event(db_session)
     fixture = TournamentFixture(
-        event_id=event.id, pool_id=event.pools[0].id, round=1, position=1
+        stage_id=event.pools[0].stage_id, pool_id=event.pools[0].id, round=1, position=1
     )
     db_session.add(fixture)
     await db_session.commit()
@@ -298,7 +303,7 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
     )
     called_at = datetime(2026, 8, 1, 14, 30, tzinfo=UTC)
     fixture = TournamentFixture(
-        event_id=event.id,
+        stage_id=event.pools[0].stage_id,
         pool_id=event.pools[0].id,
         round=1,
         position=1,

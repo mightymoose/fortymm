@@ -178,7 +178,7 @@ describe('DrawPanel', () => {
   })
 
   /**
-   * **Which view the un-pooled fixtures get is the DRAW TYPE's answer** (`unpooledShape`,
+   * **Which view the un-pooled fixtures get is their own STAGE's answer** (`shapeForStage`,
    * `../../data/draw`) — the bug this suite exists to hold shut.
    *
    * Three draw types put fixtures in `unpooled`, and their payloads are indistinguishable

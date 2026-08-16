@@ -21,6 +21,7 @@ import {
   buildTournamentEntrantRead,
   DRAW_TYPE_CATALOGUE,
   entryStateFor,
+  mintStageReads,
   planDraw,
   UNBREAKABLE_TOURNAMENT_NAME,
   UNBREAKABLE_VENUE_NAME,
@@ -1074,6 +1075,10 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
     // substitution here would deal a swiss of the wrong length with nothing reporting it.
     // `null` is the honest value for the three draw types that choose no round count.
     event.rounds,
+    // **The event's own stages** (ADR 20260815) — never `planDraw`'s
+    // `mintStageReads(drawType)` default, which is for a caller with no event to read
+    // stages off of. A fixture this cuts must name a stage `event.stages` actually holds.
+    event.stages,
   )
 }
 
@@ -2209,6 +2214,12 @@ export class TournamentsStore {
         ? fields.pools.map((pool, index) => this.upsertPool(pool, index))
         : e.pools,
       entrants: e.entrants,
+      // **Re-minted on a draw-type change, in place** (ADR 20260815 decision 3) — the
+      // same rule `mocks/tournaments-store.ts`'s `updateEvent` follows, and reachable
+      // for the same reason: `frozenDetail` above already 409s a draw-type change while
+      // a draw stands, so this can only run against an undrawn event.
+      stages:
+        fields.draw_type == null ? e.stages : mintStageReads(fields.draw_type),
     }))
     return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))
   }

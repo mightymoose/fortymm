@@ -1282,6 +1282,7 @@ describe('useCutDraw', () => {
     expect(fixtures).toEqual([
       {
         id: 'fx-1',
+        stageId: 's-1',
         poolId: 'p-1',
         round: 1,
         position: 1,

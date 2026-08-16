@@ -45,6 +45,7 @@ from app.models import (
 )
 from app.schemas.tournament import MAX_QUALIFIERS_PER_POOL
 from app.tournament_draw_settings import draw_settings_of
+from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     grant_permissions,
@@ -123,7 +124,9 @@ async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.U
     return (
         await db_session.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.event_id == uuid.UUID(event_id),
+                TournamentEventPool.stage_id.in_(
+                    stage_ids_for_events([uuid.UUID(event_id)])
+                ),
                 TournamentEventPool.name == name,
             )
         )
@@ -136,7 +139,11 @@ async def _pool_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
         (
             await db_session.execute(
                 select(TournamentEventPool.id)
-                .where(TournamentEventPool.event_id == uuid.UUID(event_id))
+                .where(
+                    TournamentEventPool.stage_id.in_(
+                        stage_ids_for_events([uuid.UUID(event_id)])
+                    )
+                )
                 .order_by(TournamentEventPool.position)
             )
         )
@@ -184,7 +191,11 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == uuid.UUID(event_id))
+                .where(
+                    TournamentFixture.stage_id.in_(
+                        stage_ids_for_events([uuid.UUID(event_id)])
+                    )
+                )
                 .order_by(
                     TournamentFixture.pool_id.asc().nulls_last(),
                     TournamentFixture.round,
@@ -736,6 +747,87 @@ async def test_the_cut_emits_the_pools_and_the_whole_bracket(
     )
 
 
+async def test_a_knockout_stage_and_a_swiss_stage_are_distinguishable_by_stage_not_pool(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The regression pin for ADR 20260815's whole reason to exist.
+
+    A swiss draw's rounds and an rr-then-ko draw's knockout bracket are BOTH un-pooled
+    (``pool_id IS NULL``) — the ambiguity that once rendered a swiss draw's rounds as a
+    knockout bracket, because a reader told the two apart from the event's overall draw
+    type instead of from each fixture's own stage
+    (``web-client/src/components/tournaments/data/draw.ts:147``, cited in the ADR's
+    Context). Two SEPARATE events, one of each shape, so this is a claim about telling
+    the two apart, not merely about one event's own consistency.
+
+    Every un-pooled fixture now carries a ``stage_id`` (ADR 20260815 decision 5), and
+    every event serves its ``stages`` with each one's OWN ``draw_type`` (decision 1).
+    ``pool_id IS NULL`` cannot make this assertion — it is the same value on both
+    events' un-pooled fixtures — so this is a claim only ``stage_id`` can prove.
+
+    **Falsification** (``.claude/rules/verify-the-artifact-under-test.md``): point
+    ``app.tournament_queries.fixtures_by_event`` at the wrong stage id (e.g.
+    ``fixture.id`` instead of ``fixture.stage_id``) and confirm this reds — the wrong
+    id resolves to no stage in either event's ``stages`` array, or to the wrong one.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _twelve_entrant_event(client, db_session)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+
+    swiss_payload = {
+        "name": "Swiss Singles",
+        "format": "singles",
+        "draw_type": DrawType.swiss.value,
+        # A field of two can play at most one rematch-free round.
+        "rounds": 1,
+        "max_players": 64,
+        "entry_fee": 0,
+        "timezone": "America/Chicago",
+        "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        "match_settings": {"rated": False, "length_games": 3},
+        "predicates": [],
+        "pools": [],
+    }
+    created_swiss = await client.post(
+        f"/v1/tournaments/{tournament_id}/events", json=swiss_payload
+    )
+    assert created_swiss.status_code == 201, created_swiss.text
+    swiss_event_id = created_swiss.json()["id"]
+    swiss_a = await make_user(db_session, "swiss-a")
+    swiss_b = await make_user(db_session, "swiss-b")
+    await _enter(db_session, swiss_event_id, swiss_a, seed=1, minutes=1)
+    await _enter(db_session, swiss_event_id, swiss_b, seed=2, minutes=2)
+    assert (await _cut(client, tournament_id, swiss_event_id)).status_code == 201
+
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200, response.text
+    events = {e["id"]: e for e in response.json()["events"]}
+    rr_then_ko_event = events[event_id]
+    swiss_event = events[swiss_event_id]
+
+    def _stage_draw_type(event: dict[str, Any], stage_id: str) -> str:
+        by_id = {s["id"]: s["draw_type"] for s in event["stages"]}
+        assert stage_id in by_id, (
+            f"fixture stage_id {stage_id!r} names no stage of event {event['id']!r} "
+            f"(stages: {by_id!r}) — a fixture's stage_id must resolve into its own "
+            "event's stages array"
+        )
+        return by_id[stage_id]
+
+    bracket_fixtures = [f for f in rr_then_ko_event["fixtures"] if f["pool_id"] is None]
+    swiss_fixtures = [f for f in swiss_event["fixtures"] if f["pool_id"] is None]
+    assert bracket_fixtures, "the bracket must have un-pooled fixtures to distinguish"
+    assert swiss_fixtures, "a swiss draw must have un-pooled fixtures to distinguish"
+
+    # Same shape on the row (``pool_id: null`` on both), different stage.
+    assert {
+        _stage_draw_type(rr_then_ko_event, f["stage_id"]) for f in bracket_fixtures
+    } == {"single-elim"}
+    assert {_stage_draw_type(swiss_event, f["stage_id"]) for f in swiss_fixtures} == {
+        "swiss"
+    }
+
+
 async def test_cutting_for_more_qualifiers_than_the_smallest_pool_holds_is_refused(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
@@ -809,6 +901,42 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
     )
     event = await _settings_of(db_session, event_id)
     assert _stored_qualifiers(event) == 2, "a refusal wrote nothing"
+
+
+async def test_a_patch_response_still_splits_pools_from_the_bracket(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The PATCH response (``app.tournament_serialization.shape_event_read``) projects
+    a cut rr-then-ko event's results through the SAME pool-vs-bracket split the
+    tournament-detail GET does, even though it does not serve the event's ``stages``
+    array on its own wire body (``EventStageRead``'s documented "not projected on this
+    page" case).
+
+    That split now reads each fixture's own ``stage_id`` (ADR 20260815) rather than
+    ``pool_id IS NULL``, and doing so needs the real stage rows — which this adapter
+    does not otherwise load. A version of ``shape_event_read`` that forgot to load them
+    (passing an empty map to ``event_results``) would silently return a
+    ``standings_then_finishes`` block with an EMPTY ``pools`` list on every PATCH of a
+    cut two-stage event: this pins that against regressing.
+    """
+    client, _ = authed_client
+    tournament_id, event_id, _ = await _twelve_entrant_event(client, db_session)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": 2},
+    )
+
+    assert response.status_code == 200, response.text
+    results = response.json()["results"]
+    assert results["kind"] == "standings_then_finishes"
+    assert [pool["pool_id"] for pool in results["pools"]] == [
+        str(pool_id) for pool_id in await _pool_ids(db_session, event_id)
+    ], "the pool stage's fixtures must still be found and grouped by pool"
+    assert all(len(pool["rows"]) == 4 for pool in results["pools"]), (
+        "each of the three pools of four entrants stands its whole field"
+    )
 
 
 # ----- the seam: a finished pool seats its qualifiers -------------------------------

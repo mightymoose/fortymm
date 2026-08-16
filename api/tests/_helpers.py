@@ -29,9 +29,11 @@ from app.models import (
     Role,
     RolePermission,
     Tournament,
+    TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventPool,
     TournamentEventPoolTable,
+    TournamentEventStage,
     User,
     UserLeagueRating,
     UserRole,
@@ -181,7 +183,10 @@ def event_draw_settings(
 
 
 def event_pools(
-    pools: Sequence[Mapping[str, Any]], *, tournament: Tournament | None = None
+    pools: Sequence[Mapping[str, Any]],
+    *,
+    event: TournamentEvent,
+    tournament: Tournament | None = None,
 ) -> list[TournamentEventPool]:
     """``TournamentEventPool`` rows for an event a test seeds straight through the ORM,
     written from the ``{id, name, slot, table_ids}`` dict shape the pools JSONB used to
@@ -194,6 +199,14 @@ def event_pools(
     parsed into the row's ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly
     as the write boundary parses them, so a seeded pool and a POSTed one are the same
     row.
+
+    ``event`` is the (possibly still-unflushed) event these pools belong to — a pool's
+    real parent is its stage now, not the event (ADR 20260815, "Sequencing with
+    #1338"), so the caller is responsible for assigning the returned rows to the right
+    stage's ``.pools`` (``stages[0].pools = event_pools(..., event=event)``, mirroring
+    ``app.tournament_events.create_event``). ``event`` is threaded down to each
+    reservation row's ``event`` relationship (:func:`_reservations`), which populates
+    ``TournamentEventPoolTable.event_id`` at flush even when ``event`` has no id yet.
 
     The ``id`` is a ``uuid.UUID`` and is **optional**: pass one when the test needs to
     name the pool from somewhere else (a fixture's ``pool_id``, an assertion), and leave
@@ -247,14 +260,17 @@ def event_pools(
                 slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
                 slot_start=time.fromisoformat(slot.get("start", "09:00")),
                 slot_end=time.fromisoformat(slot.get("end", "18:00")),
-                tables=_reservations(tournament, table_ids, by_alias),
+                tables=_reservations(event, tournament, table_ids, by_alias),
             )
         )
     return rows
 
 
 def _reservations(
-    tournament: Tournament | None, table_ids: Sequence[str], by_alias: Mapping[str, str]
+    event: TournamentEvent,
+    tournament: Tournament | None,
+    table_ids: Sequence[str],
+    by_alias: Mapping[str, str],
 ) -> list[TournamentEventPoolTable]:
     """The reservation rows one seeded pool's ``table_ids`` become, aliases resolved and
     positioned in the order given.
@@ -272,22 +288,50 @@ def _reservations(
             tournament_id=tournament.id,
             table_id=by_alias.get(table_id, table_id),
             position=position,
+            event=event,
         )
         for position, table_id in enumerate(table_ids)
     ]
 
 
 def with_table_aliases(
-    tournament: Tournament, pools: Sequence[Mapping[str, Any]]
+    event: TournamentEvent,
+    tournament: Tournament,
+    pools: Sequence[Mapping[str, Any]],
 ) -> list[TournamentEventPool]:
-    """:func:`event_pools` with the tournament bound — the spelling the seeds that name
-    tables already use.
+    """:func:`event_pools` with the event and tournament bound — the spelling the seeds
+    that name tables already use.
 
     Kept as its own name because it is what the call sites are *about*: "these pools
     reserve this tournament's first two tables", said without threading a UUID through
     every helper the pools are passed to.
     """
-    return event_pools(pools, tournament=tournament)
+    return event_pools(pools, event=event, tournament=tournament)
+
+
+async def stage_id_at(
+    db_session: AsyncSession, event_id: uuid.UUID, position: int
+) -> uuid.UUID:
+    """The id of ``event_id``'s stage at ``position`` — the awaited, single-stage
+    counterpart of ``app.tournament_queries.stage_ids_for_events`` (which returns an
+    unawaited ``.in_(...)``-embeddable subquery over *every* stage of one or more
+    events, not one stage by position).
+
+    Position 0 is the one a director's pools hang off (ADR 20260815 decision 3);
+    position 1 is the knockout half of an rr-then-ko template. ``scalar_one()``, not
+    ``scalar_one_or_none()``: every event holds its minted stages from the moment it
+    exists, so a miss here is a test-fixture bug (an event seeded straight through the
+    ORM, bypassing ``create_event``/``mint_stages``), not a state worth tolerating
+    silently.
+    """
+    return (
+        await db_session.execute(
+            select(TournamentEventStage.id).where(
+                TournamentEventStage.event_id == event_id,
+                TournamentEventStage.position == position,
+            )
+        )
+    ).scalar_one()
 
 
 async def table_ids_of(db_session: AsyncSession, tournament_id: uuid.UUID) -> list[str]:

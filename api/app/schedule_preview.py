@@ -602,9 +602,15 @@ def build_preview_snapshot(
         knockout_fixtures = 0
         for fixture in plan.fixtures:
             if fixture.pool_id is None:
-                # The knockout stage of an rr-then-ko draw (``pool_id IS NULL`` *is* the
-                # stage, ADR-0786). Dropped here rather than refused, and the drop is
-                # still right for a reason that is no longer about pools: a preview runs
+                # The knockout stage of an rr-then-ko draw. ``pool_id IS NULL`` is a
+                # safe read of that HERE — unlike the persisted-fixture readers ADR
+                # 20260815 moved onto ``stage_id``, this ``fixture`` is a
+                # pre-persistence ``PlannedFixture`` from one event's own plan, with
+                # single-elim and swiss events already skipped whole above (an
+                # rr-then-ko plan's only un-pooled fixtures are its knockout stage's),
+                # so there is no swiss/knockout ambiguity for a real stage row to
+                # resolve. Dropped here rather than refused, and the drop is still
+                # right for a reason that is no longer about pools: a preview runs
                 # before anyone has registered, so no pool has been played, so both
                 # sides of every one of these fixtures are unknown — and a TBD-sided
                 # fixture is unplaceable in this engine and in the live one alike. A

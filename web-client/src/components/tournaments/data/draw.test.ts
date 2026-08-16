@@ -7,12 +7,12 @@ import {
   drawTypeFreeze,
   drawVerbFreeze,
   poolSetFreeze,
+  shapeForStage,
   undrawnLead,
-  unpooledShape,
   type DrawState,
   type FixtureSide,
 } from './draw'
-import { DRAW_TYPES } from './draw-types'
+import { DRAW_TYPES, STAGE_DRAW_TYPES } from './draw-types'
 import {
   buildBracketDrawnEvent,
   buildDrawnEvent,
@@ -24,6 +24,7 @@ import {
   buildMaterializedDrawnEvent,
   buildPlayedDrawnEvent,
   buildPool,
+  buildStage,
   buildSwissDrawnEvent,
   buildSwissOddDrawnEvent,
   buildSwissOddMidEvent,
@@ -61,54 +62,74 @@ function label(side: FixtureSide): string {
 }
 
 /**
- * **Which view an event's un-pooled fixtures get** — a fact about the DRAW TYPE, and the
- * one this module exists to keep away from `poolId === null`.
+ * **Which view a stage's own un-pooled fixtures get** — a fact about the STAGE'S draw
+ * type, and the one this module exists to keep away from `poolId === null`.
  *
- * Three draw types put fixtures in `unpooled`, and nothing about the fixtures themselves
- * tells them apart: single-elim's whole bracket, `rr-then-ko`'s knockout stage, and every
- * fixture of a swiss draw all carry a null pool id. Routing on that null rendered a swiss
- * draw as a knockout bracket, through the successor arithmetic the ADR says swiss does not
- * have — silently, because a value check is not something a type checker can read.
+ * Two single-stage draw types put fixtures in `unpooled`, and nothing about the fixtures
+ * themselves tells them apart: single-elim's whole bracket and every fixture of a swiss
+ * draw carry a null pool id. Routing on that null rendered a swiss draw as a knockout
+ * bracket, through the successor arithmetic the ADR says swiss does not have — silently,
+ * because a value check is not something a type checker can read. `stageId` (ADR
+ * 20260815) removed the guesswork: `shapeForStage` reads the stage's own `drawType`.
  */
-describe('unpooledShape', () => {
+describe('shapeForStage', () => {
   it('sends swiss to the ROUNDS view — never the bracket', () => {
-    expect(unpooledShape('swiss')).toBe('swiss-rounds')
+    expect(shapeForStage('swiss')).toBe('swiss-rounds')
   })
 
-  // The regression pin, at the decision rather than at the DOM. `pool_id IS NULL` keeps
-  // meaning "the knockout stage" for `rr-then-ko`, and a single-elim draw is a bracket
-  // whole — neither may move because swiss now shares the null.
-  it.each(['single-elim', 'rr-then-ko'] as const)(
-    'keeps %s on the bracket',
-    (drawType) => {
-      expect(unpooledShape(drawType)).toBe('bracket')
-    },
-  )
+  it('keeps single-elim on the bracket', () => {
+    expect(shapeForStage('single-elim')).toBe('bracket')
+  })
 
-  /** A round-robin fixture with no pool is a payload the server cannot send — it names a
-   * pool the event does not list. `drawState` deliberately does not DROP it, so it must
-   * have a shape; the shape it gets says only what is true of it, which is that no format
-   * view can place it.
+  /** A round-robin STAGE has no un-pooled fixtures the server can legitimately send —
+   * every fixture is dealt into a pool. One reaching here names a pool the event does not
+   * list, which is a payload that cannot legitimately arise — and `drawState` deliberately
+   * does not DROP it (see below). It is shown, as itself: `'orphaned'`, a plain list under
+   * a neutral heading.
    *
-   * It answered `'bracket'` before, and that was the same lie the swiss routing fix exists
-   * to stop: `Bracket` names its rounds backwards from the last round present, so one stray
-   * round-robin fixture read as the "Final" of a knockout the event never had. */
-  it('gives a round-robin’s orphaned fixtures their OWN shape, not the bracket', () => {
-    expect(unpooledShape('round-robin')).toBe('orphaned')
+   * It answered `'bracket'` before this module existed, and that was the same lie the
+   * swiss routing fix exists to stop: `Bracket` names its rounds backwards from the last
+   * round present, so one stray round-robin fixture read as the "Final" of a knockout the
+   * event never had. */
+  it('gives a round-robin stage’s orphaned fixtures their OWN shape, not the bracket', () => {
+    expect(shapeForStage('round-robin')).toBe('orphaned')
   })
 
-  /** Every draw type this client knows has an answer, and the `switch` has no catch-all —
-   * so a fifth member of the vocabulary is a compile error in `./draw` until somebody says
-   * how its draw reads. This asserts the runtime half: nothing falls through to
-   * `undefined`. Driven off `DRAW_TYPES` rather than a re-typed list, so adding a slug
-   * reaches this test without anybody remembering to. */
-  it('answers for every draw type in the vocabulary', () => {
-    for (const drawType of DRAW_TYPES) {
+  /** Every single-stage draw type this client knows has an answer, and the `switch` has no
+   * catch-all — so a fourth member of `STAGE_DRAW_TYPES` is a compile error in `./draw`
+   * until somebody says how its draw reads. This asserts the runtime half: nothing falls
+   * through to `undefined`. Driven off `STAGE_DRAW_TYPES` rather than a re-typed list, so
+   * adding a slug reaches this test without anybody remembering to. `rr-then-ko` cannot
+   * even be passed here — `StageDrawType` excludes it (ADR 20260815 decision 4), so there
+   * is no case for it to fall through in the first place. */
+  it('answers for every stage draw type in the vocabulary', () => {
+    for (const drawType of STAGE_DRAW_TYPES) {
       expect(['bracket', 'swiss-rounds', 'orphaned']).toContain(
-        unpooledShape(drawType),
+        shapeForStage(drawType),
       )
     }
   })
+})
+
+/**
+ * **The falsification for the whole stage-based derivation.** Every OTHER fixture in
+ * this suite builds its stages from its event's own `drawType` (`buildEvent`'s default
+ * minting), so the stage-based code and the deleted `unpooledShape(event.drawType)` code
+ * agree on every one of them — a regression that quietly went back to reading the EVENT's
+ * draw type would still turn this whole file green.
+ *
+ * This one disagrees on purpose: a `single-elim` EVENT whose one STAGE is hand-set to
+ * `swiss`. If `drawState` ever again reads `event.drawType` instead of the fixtures' own
+ * `stageId` → `stages` join, this reds — and only this does.
+ */
+it('reads the STAGE’s draw type, never the event’s, for the un-pooled shape', () => {
+  const event = buildBracketDrawnEvent({
+    stages: [buildStage({ id: 's-1', position: 0, drawType: 'swiss' })],
+  })
+
+  const state = drawn(drawState(event))
+
+  expect(state.unpooledShape).toBe('swiss-rounds')
 })
 
 describe('drawState', () => {

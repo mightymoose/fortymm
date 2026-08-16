@@ -57,6 +57,7 @@ from app.tournament_errors import (
 )
 from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
+from app.tournament_queries import stage_ids_for_tournament
 from app.tournament_realtime import stage_tournament_entrant_hints
 from app.tournament_tables import stored_tables
 
@@ -233,15 +234,11 @@ async def delete_tournament(
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     settings_ids = await draw_settings_ids_for_tournament(db, tournament.id)
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage.
     await db.execute(
         update(TournamentFixture)
-        .where(
-            TournamentFixture.event_id.in_(
-                select(TournamentEvent.id).where(
-                    TournamentEvent.tournament_id == tournament.id
-                )
-            )
-        )
+        .where(TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament.id)))
         .values(table_id=None)
     )
     await db.delete(tournament)

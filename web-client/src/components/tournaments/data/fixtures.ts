@@ -67,11 +67,18 @@ const fixtureTimeSchema = fixtureTimeWireSchema.transform(
  * below so the *runtime* contract is legible next to the generated type it mirrors. */
 const fixtureWireSchema = z.object({
   id: z.string(),
-  /** `null` = an un-pooled draw (single-elim, swiss), or the **knockout stage** of an
-   * `rr-then-ko` one (#1227). It says the fixture belongs to no pool; it does NOT say
-   * what the fixture *is* — the event's **draw type** answers that, which is why
-   * `unpooledShape` (`./draw`) routes on the draw type rather than on this null.
-   * When set it is a **string ref** into the event's own `pools` — not a foreign key,
+  /** The **stage** (`EventStageRead`, ADR 20260815 decision 5) this fixture belongs to
+   * — `NOT NULL`, never inferred. A string ref into the event's own `stages`. Join it
+   * against that array to read the stage's own `draw_type`, which is what
+   * `shapeForStage` (`./draw`) routes an un-pooled block's view on — never `pool_id`
+   * plus the event's overall `drawType`, the inference that once rendered a swiss
+   * draw's rounds as a knockout bracket because both are un-pooled and
+   * indistinguishable by `pool_id` alone. */
+  stage_id: z.string(),
+  /** `null` = this fixture belongs to no pool: the draw is un-pooled (single-elim,
+   * swiss), or this is the knockout stage of an `rr-then-ko` one. Which one is
+   * `stage_id`'s business to say, not this field's. When set it is a **string ref**
+   * into **this fixture's own stage's** pools (`event.pools`) — not a foreign key,
    * because pools are JSONB value-objects (ADR-0786). */
   pool_id: z.string().nullable(),
   round: z.number().int(),
@@ -117,6 +124,7 @@ const fixtureWireSchema = z.object({
 export const fixtureSchema = fixtureWireSchema.transform(
   (f): Fixture => ({
     id: f.id,
+    stageId: f.stage_id,
     poolId: f.pool_id,
     round: f.round,
     position: f.position,

@@ -52,6 +52,7 @@ from app.models import (
 )
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
 from app.tournaments import NO_DRAWN_EVENTS_CODE, TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     event_pools,
@@ -156,6 +157,7 @@ async def _make_tournament(
         await db.commit()
         return tournament.id, None
 
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -166,16 +168,18 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": [str(row.id) for row in catalogue],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                "table_ids": [str(row.id) for row in catalogue],
+            }
+        ],
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.flush()
@@ -186,6 +190,11 @@ async def _make_tournament(
     await db.flush()
 
     if cut:
+        # ``TournamentEvent.pools`` is a VIEWONLY association through the event's
+        # stage now (ADR 20260815) — populated on QUERY, not on construction.
+        # ``cut_draw`` reads ``event.pools`` synchronously, so this needs an explicit
+        # refresh first.
+        await db.refresh(event, attribute_names=["pools"])
         await cut_draw(db, event)
     await db.commit()
     return tournament.id, event.id

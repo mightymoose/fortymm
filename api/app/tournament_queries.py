@@ -12,11 +12,12 @@ regardless of how many events there are. A per-event count would be an N+1, and
 """
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import contains_eager
 from sqlalchemy.sql.expression import ScalarSelect
 
 from app.models import (
@@ -30,6 +31,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventPool,
+    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -89,6 +91,36 @@ def visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
     return or_(
         Tournament.status.in_(ANNOUNCED_STATUSES),
         Tournament.created_by_user_id == user_id,
+    )
+
+
+def stage_ids_for_events(
+    event_ids: Collection[uuid.UUID],
+) -> Select[tuple[uuid.UUID]]:
+    """Every stage id belonging to any of ``event_ids`` — the subquery a
+    ``TournamentFixture`` read scoped to one or more events is filtered through now
+    that a fixture names its stage, not its event (ADR 20260815 decision 5 drops
+    ``tournament_fixtures.event_id`` outright).
+
+    The one canonical copy: every caller still asks its question **about an event**
+    (or several); this is only how that question reaches a table keyed on stage now.
+    Used as a ``.in_(...)`` subquery, never awaited on its own — callers that already
+    hold an ``AsyncSession`` fold it straight into their own statement.
+    """
+    return select(TournamentEventStage.id).where(
+        TournamentEventStage.event_id.in_(event_ids)
+    )
+
+
+def stage_ids_for_tournament(tournament_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
+    """Every stage id belonging to any event of ``tournament_id`` — the tournament-
+    scoped sibling of :func:`stage_ids_for_events`, for a caller (a tournament-wide
+    fixture read or write) that has no event id list to hand the other one and joins
+    through ``tournament_events`` instead."""
+    return (
+        select(TournamentEventStage.id)
+        .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
+        .where(TournamentEvent.tournament_id == tournament_id)
     )
 
 
@@ -239,11 +271,12 @@ def _pool_position() -> ScalarSelect[int | None]:
 
     A fixture holds its pool's **id**, not its index, so "where does this fixture's pool
     sit in the director's order?" is a join: find the ``tournament_event_pools`` row
-    this fixture's ``(event_id, pool_id)`` names — the same pair the composite foreign
-    key matches on (ADR 20260801) — and read its ``position``
-    (:data:`app.schemas.tournament.PoolPosition` — 0-based, stamped by the server from
-    the order the pools were sent in). Scalar by construction, since ``(event_id, id)``
-    is unique, rather than by a ``LIMIT`` papering over duplicates.
+    this fixture's ``(stage_id, pool_id)`` names — the same pair the composite foreign
+    key matches on (ADR 20260801, re-parented onto the stage by ADR 20260815) — and
+    read its ``position`` (:data:`app.schemas.tournament.PoolPosition` — 0-based,
+    stamped by the server from the order the pools were sent in). Scalar by
+    construction, since ``(stage_id, id)`` is unique, rather than by a ``LIMIT``
+    papering over duplicates.
 
     It is ``NULL`` in exactly one case now, and that case wants to sort at the end of
     the pooled group: an **un-pooled** fixture (``pool_id IS NULL`` — single-elim,
@@ -252,15 +285,15 @@ def _pool_position() -> ScalarSelect[int | None]:
     has closed; the id stays on as a secondary sort key below because the *order* still
     has to be total when this is NULL for every row of an un-pooled draw.
 
-    Correlated on ``TournamentFixture`` alone. The ``event_id`` comes off the fixture
-    rather than off the joined ``TournamentEvent`` — the same column either way, and
-    taking it from the fixture keeps the subquery independent of which of the two tables
-    the enclosing statement happens to have in scope.
+    Correlated on ``TournamentFixture`` alone. ``stage_id`` comes off the fixture
+    directly now — simpler than before this ADR, which correlated on ``event_id``
+    because that was the fixture's own column too; the fixture's identity key moved
+    from ``event_id`` to ``stage_id`` (decision 5), and so does this join.
     """
     return (
         select(TournamentEventPool.position)
         .where(
-            TournamentEventPool.event_id == TournamentFixture.event_id,
+            TournamentEventPool.stage_id == TournamentFixture.stage_id,
             TournamentEventPool.id == TournamentFixture.pool_id,
         )
         .correlate(TournamentFixture)
@@ -307,6 +340,15 @@ async def fixtures_by_event(
     The id stays on as a secondary key so the order is still total when the positions
     cannot decide it — every fixture of an un-pooled draw resolves a ``NULL`` position.
 
+    ``TournamentFixture.id`` closes the order out as a final tiebreaker. The unique
+    key the rest of this ordering leans on, ``(stage_id, pool_id, round, position)``,
+    is scoped to one STAGE, not to the event — so two un-pooled fixtures from two
+    *different* stages of one event (a template with more than one un-pooled stage;
+    none exists today, but nothing here should assume it never will) can tie on every
+    key above (``NULL``, ``NULL``, same round, same position) and still be two rows.
+    The fixture id is the one column guaranteed unique platform-wide, so appending it
+    is what makes this a total order regardless of the template shape.
+
     Sorted in Postgres rather than in Python because a NULL is not comparable to an
     ``int`` (nor, before it, to a string): ``sorted(key=lambda f: (f.pool_position,
     ...))`` is a ``TypeError`` the moment an un-pooled fixture meets a pooled one, and
@@ -350,14 +392,31 @@ async def fixtures_by_event(
                 Match.status,
                 Match.completed_at,
             )
-            .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
+            # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5), so
+            # this joins ``tournament_event_stages`` for it — the event is reachable
+            # through the stage — rather than reading ``TournamentFixture.event_id``.
+            # ``contains_eager(TournamentFixture.stage)`` tells the ORM this explicit
+            # join IS the eager load ``TournamentFixture.stage`` (``lazy="joined"``)
+            # would otherwise add a SECOND, aliased join for — so the fixture's
+            # ``event_id`` property (which reads ``self.stage.event_id``) is free below,
+            # off the one join already here, rather than a separately-selected column.
+            # ``TournamentEventStage.pools`` is deliberately NOT eager (see that
+            # relationship's docstring), so attaching a stage here costs nothing extra
+            # — no ``.noload(...)`` needed to suppress a cascade that doesn't exist.
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
-            .where(TournamentFixture.event_id.in_(fixtures.keys()))
+            .where(TournamentEventStage.event_id.in_(fixtures.keys()))
+            .options(contains_eager(TournamentFixture.stage))
             .order_by(
                 _pool_position().asc().nulls_last(),
                 TournamentFixture.pool_id.asc().nulls_last(),
                 TournamentFixture.round,
                 TournamentFixture.position,
+                TournamentFixture.id,
             )
         )
     ).all()
@@ -365,6 +424,7 @@ async def fixtures_by_event(
         fixtures[fixture.event_id].append(
             TournamentFixtureRead(
                 id=fixture.id,
+                stage_id=fixture.stage_id,
                 pool_id=fixture.pool_id,
                 round=fixture.round,
                 position=fixture.position,

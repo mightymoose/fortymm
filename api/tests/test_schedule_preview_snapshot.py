@@ -48,6 +48,7 @@ from app.schedule_preview import (
     UnpreviewableDrawType,
     build_preview_snapshot,
 )
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_draw_settings,
     make_user,
@@ -111,6 +112,7 @@ async def _add_event(
     name: str = "Open Singles",
     timezone: str = "America/Los_Angeles",
 ) -> TournamentEvent:
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=name,
@@ -123,10 +125,11 @@ async def _add_event(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": length_games},
         predicates=[],
-        pools=with_table_aliases(
-            tournament, [_one_pool(["t1"])] if pools is None else pools
-        ),
+        stages=stages,
         timezone=timezone,
+    )
+    stages[0].pools = with_table_aliases(
+        event, tournament, [_one_pool(["t1"])] if pools is None else pools
     )
     db.add(event)
     await db.commit()

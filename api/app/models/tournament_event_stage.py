@@ -1,17 +1,19 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.draw_type import DRAW_TYPE_IDS, DRAW_TYPES_BY_ID
+from app.models.draw_type import DRAW_TYPE_IDS, DRAW_TYPES_BY_ID, StageDrawType
 from app.models.tournament import DrawType
 
 if TYPE_CHECKING:
     from app.models.tournament import TournamentEvent
+    from app.models.tournament_event_pool import TournamentEventPool
+    from app.models.tournament_fixture import TournamentFixture
 
 
 class TournamentEventStage(Base):
@@ -97,16 +99,72 @@ class TournamentEventStage(Base):
     # queries, never through that relationship, so nothing here needs its own strategy.
     event: Mapped["TournamentEvent"] = relationship(back_populates="stages")
 
+    # A stage's pools, as rows — re-parented here from ``TournamentEvent.pools`` (ADR
+    # 20260815, "Sequencing with #1338": "the pool's group face therefore re-parents to
+    # the stage"). In practice only ever populated on the stage at position 0 (a
+    # director's pools always hang off stage 1, decision 3), but nothing on this
+    # relationship enforces that placement — ``app.tournament_pools`` does, by resolving
+    # the event's first stage before it writes.
+    #
+    # Deliberately **not** eager, unlike ``TournamentEvent.pools`` before this move —
+    # and unlike that relationship's own replacement, the new VIEWONLY
+    # ``TournamentEvent.pools`` (``lazy="selectin"``, declared on that model), which is
+    # the one mechanism every ordinary reader goes through now. Making BOTH eager would
+    # double-load: any statement that also eager-loads ``TournamentEvent.stages`` (the
+    # detail read's stage-serving option) would chain THIS collection's own selectin
+    # load off of it, on top of the one ``TournamentEvent.pools`` already issues,
+    # costing a redundant statement nobody asked for. The one direct reader of
+    # ``stage.pools`` — ``app.tournament_pools.apply_event_pools``, which needs the
+    # CURRENT rows to diff against — asks for it explicitly
+    # (``selectinload(TournamentEventStage.pools)`` on its own query) rather than
+    # leaning on a default here. ``delete-orphan`` still applies regardless of load
+    # strategy: a pool dropped from a diff is removed by taking it out of whatever
+    # collection is in hand, loaded or not.
+    pools: Mapped[list["TournamentEventPool"]] = relationship(
+        back_populates="stage",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TournamentEventPool.position",
+    )
+
+    # A stage's fixtures — re-parented here from ``TournamentEvent.fixtures`` (ADR
+    # 20260815 decision 5: "a fixture names its stage"). Unlike pools, BOTH stages of an
+    # rr-then-ko event hold fixtures (the pool stage's round-robin fixtures, the
+    # position-1 stage's knockout bracket) — see ``app.tournament_draws.cut_draw``, the
+    # one write seam that decides a fixture's ``stage_id``.
+    #
+    # Deliberately **not** eager, mirroring ``TournamentEvent.fixtures`` before this
+    # move (and unlike ``pools`` above): every production read of a draw already goes
+    # through the batched ``fixtures_by_event`` loader, never through an ORM
+    # relationship walk, so an eager option here would add a statement to every stage
+    # read for a path nothing exercises. ``cut_draw`` / ``uncut_draw`` write fixtures
+    # through bulk ``INSERT`` / ``DELETE`` statements, not through this collection.
+    fixtures: Mapped[list["TournamentFixture"]] = relationship(
+        back_populates="stage",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by=(
+            "TournamentFixture.pool_id.asc().nulls_last(), "
+            "TournamentFixture.round, TournamentFixture.position"
+        ),
+    )
+
     @property
-    def draw_type(self) -> DrawType:
+    def draw_type(self) -> StageDrawType:
         """The stage's own draw type, parsed back into the closed set the code
         dispatches on. A plain dict lookup on
         :data:`~app.models.draw_type.DRAW_TYPES_BY_ID`, keyed by ``draw_type_id`` —
         never a join or a relationship walk, and no loaded relationship or lazy load
         needed — same shape as ``TournamentEventDrawSettings.draw_type``, same reason
         (ADR 20260815 retired the join this used to make).
+
+        Narrowed to :data:`~app.models.draw_type.StageDrawType`, not the full
+        :class:`DrawType`. The ``cast`` is safe, not a suppression: the setter below
+        is the ONLY writer of ``draw_type_id`` and refuses ``rr_then_ko`` outright, so
+        ``DRAW_TYPES_BY_ID[self.draw_type_id]`` can never actually resolve to that
+        member here.
         """
-        return DRAW_TYPES_BY_ID[self.draw_type_id]
+        return cast(StageDrawType, DRAW_TYPES_BY_ID[self.draw_type_id])
 
     @draw_type.setter
     def draw_type(self, draw_type: DrawType) -> None:

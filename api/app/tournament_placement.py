@@ -33,6 +33,7 @@ from typing import assert_never
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import contains_eager
 
 from app.match_calls import apply_manual_placement, enqueue_call_fanout
 from app.models import (
@@ -41,6 +42,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     User,
 )
@@ -76,15 +78,26 @@ async def _load_fixture_for_placement(
     ``completed``/``voided`` is history and can no longer be moved. Never an
     ``HTTPException``.
     """
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage. ``contains_eager(TournamentFixture.stage)`` tells
+    # the ORM this explicit join IS the eager load ``TournamentFixture.stage``
+    # (``lazy="joined"``) would otherwise add a second, aliased join for.
+    # ``TournamentEventStage.pools`` is deliberately NOT eager (see that
+    # relationship's docstring), so attaching a stage here costs nothing extra.
     row = (
         await db.execute(
             select(TournamentFixture, Match.status, TournamentEvent.timezone)
-            .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(
                 TournamentFixture.id == fixture_id,
                 TournamentEvent.tournament_id == tournament_id,
             )
+            .options(contains_eager(TournamentFixture.stage))
         )
     ).one_or_none()
     if row is None:

@@ -37,6 +37,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
 )
+from app.tournament_event_stages import mint_stages
 from app.tournament_queries import fixtures_by_event
 from tests._helpers import event_pools, make_user
 
@@ -62,6 +63,13 @@ def _pool_ids(event: TournamentEvent) -> list[uuid.UUID]:
     """The event's pool ids **in the director's order** — ``event.pools`` is ordered by
     ``position``, which is the order they were seeded in."""
     return [pool.id for pool in event.pools]
+
+
+def _stage_a(event: TournamentEvent) -> uuid.UUID:
+    """The id of the event's (only, for round-robin) stage — position 0, the one a
+    director's pools hang off (ADR 20260815 decision 3), and what every fixture this
+    file seeds directly is named by now (ADR 20260815 decision 5)."""
+    return event.stages[0].id
 
 
 async def _make_event(
@@ -96,6 +104,7 @@ async def _make_event(
     db_session.add(tournament)
     await db_session.flush()
 
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -106,11 +115,14 @@ async def _make_event(
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
-        pools=event_pools(pools),
+        stages=stages,
     )
+    stages[0].pools = event_pools(pools, event=event)
     db_session.add(event)
     await db_session.commit()
-    await db_session.refresh(event)
+    # Both ``pools`` (VIEWONLY) and ``stages`` (not eager) are populated on refresh, not
+    # by construction (ADR 20260815) — ``_pool_ids``/``_stage_a`` need both.
+    await db_session.refresh(event, attribute_names=["pools", "stages"])
     return event
 
 
@@ -123,10 +135,11 @@ async def _seed_fixtures(
     caller below deliberately scrambles: insertion order is what an unsorted read
     returns, so rows seeded in the right order could not tell a broken ``ORDER BY`` from
     a working one."""
+    stage_id = _stage_a(event)
     for pool_id, round_number, position in rows:
         db_session.add(
             TournamentFixture(
-                event_id=event.id,
+                stage_id=stage_id,
                 pool_id=pool_id,
                 round=round_number,
                 position=position,

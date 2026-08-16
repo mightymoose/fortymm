@@ -61,6 +61,7 @@ from app.tournament_errors import (
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_pools import apply_event_pools, stored_pools
+from app.tournament_queries import stage_ids_for_events
 
 
 async def _load_event(
@@ -121,6 +122,14 @@ async def create_event(
     it is judged on, ADR-0783) without re-querying the column the verb just loaded.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    # The event's stages, also ROWS (ADR 20260815) and also created with the event in
+    # this same transaction — every event holds its minted stages from the moment it
+    # exists, never as a follow-up write. ``mint_stages`` reads the template straight
+    # off the requested draw type; there is no separate "which stages" input on the
+    # create payload, by design (decision 3: a director never authors these). Minted
+    # BEFORE the event object below, so the event's own pools (composed next) have a
+    # stage-0 row to hang off.
+    stages = mint_stages(payload.draw_settings.draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=payload.name,
@@ -143,20 +152,18 @@ async def create_event(
         slot=payload.slot.model_dump(),
         match_settings=payload.match_settings.model_dump(),
         predicates=[p.model_dump() for p in payload.predicates],
-        # The one thing here that is not a column at all: the event's pools are ROWS
-        # (ADR 20260801), created with the event and flushed after it by the
-        # relationship. ``stored_pools`` composes them — turning the WRITE shape, which
-        # carries no ``position``, into rows that do, from each pool's index in the list
-        # this payload sent.
-        pools=stored_pools(tournament, payload.pools),
-        # The event's stages, also ROWS (ADR 20260815) and also created with the event
-        # in this same transaction — every event holds its minted stages from the
-        # moment it exists, never as a follow-up write. ``mint_stages`` reads the
-        # template straight off the requested draw type; there is no separate "which
-        # stages" input on the create payload, by design (decision 3: a director never
-        # authors these).
-        stages=mint_stages(payload.draw_settings.draw_type),
+        stages=stages,
     )
+    # The event's pools are ROWS too (ADR 20260801), but hang off the event's stage 0
+    # rather than the event directly (ADR 20260815, "Sequencing with #1338") — assigned
+    # here, onto the just-minted stage, rather than passed into the ``TournamentEvent``
+    # constructor above: ``TournamentEvent.pools`` is a read-only (VIEWONLY) association
+    # now, and would silently drop a write. ``stored_pools`` composes them — turning the
+    # WRITE shape, which carries no ``position``, into rows that do, from each pool's
+    # index in the list this payload sent. ``event`` is already a live Python object at
+    # this point (just not flushed yet), which is all ``stored_pools`` needs for its
+    # reservations' ``event`` relationship.
+    stages[0].pools = stored_pools(event, tournament, payload.pools)
     db.add(event)
     await db.commit()
     await db.refresh(event)
@@ -540,11 +547,13 @@ async def _reanchor_placements_for_timezone_change(
         wall_clock = instant.astimezone(old_tz).replace(tzinfo=None)
         return wall_clock.replace(tzinfo=new_tz)
 
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage.
     placed = (
         (
             await db.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.event_id == event_id,
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])),
                     TournamentFixture.scheduled_start.is_not(None),
                 )
             )
@@ -672,7 +681,7 @@ async def update_event(
     for key, value in changes.items():
         setattr(event, key, value)
     if updates.pools is not None:
-        apply_event_pools(tournament, event, updates.pools)
+        await apply_event_pools(db, tournament, event, updates.pools)
     if draw_settings is not None:
         # Captured BEFORE ``store_draw_settings`` overwrites it: the re-mint gate below
         # needs to know whether the TYPE actually moved, and the setter is the only

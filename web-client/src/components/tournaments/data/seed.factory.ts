@@ -3,13 +3,18 @@
 // consistent default (a published two-day open, an Open Singles event, etc.)
 // that callers tweak via overrides.
 
-import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  DRAW_TYPE_CATALOGUE,
+  mintStageReads,
+} from '@/mocks/factories/tournaments/tournament.factory'
 
 import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
 import { keepPools } from './pool-entries'
+import { parseStages } from './stages'
 import type {
   Address,
+  DrawType,
   DrawTypeOption,
   EditedEvent,
   Entrant,
@@ -22,6 +27,7 @@ import type {
   PoolEntry,
   PoolStandings,
   Predicate,
+  Stage,
   StandingRow,
   StandingsResults,
   StandingsThenFinishesResults,
@@ -74,6 +80,37 @@ export function buildTables(count = 12): TournamentTable[] {
 /** A `rating < 1500` eligibility rule. */
 export function buildPredicate(overrides: Partial<Predicate> = {}): Predicate {
   return { id: 'pr-1', field: 'rating', op: '<', value: 1500, ...overrides }
+}
+
+/** One stage of an event's draw (ADR 20260815) — stage 1, `round-robin`, the shape a
+ * single-stage round-robin event's own (system-minted) stage has. Pass `drawType` for
+ * the other single-stage kinds, and `id`/`position` for a later stage of a multi-stage
+ * event (`buildStage({ id: 's-2', position: 1, drawType: 'single-elim' })`, the shape
+ * of an `rr-then-ko` event's knockout stage). */
+export function buildStage(overrides: Partial<Stage> = {}): Stage {
+  return { id: 's-1', position: 0, drawType: 'round-robin', ...overrides }
+}
+
+/**
+ * The stages the system mints for an event of the given `drawType` (ADR 20260815
+ * decision 3, the template `app.tournament_event_stages.mint_stages` applies): every
+ * single-stage draw type gets its own one stage running itself, and `rr-then-ko` gets
+ * the two its template names, `round-robin` then `single-elim` — in that order, at
+ * `position` 0 and 1, matching what the server always cuts an `rr-then-ko` bracket
+ * from (`buildRrThenKoEvent`'s doc, and `planKnockoutFixtures` in the MSW factory).
+ *
+ * Derived, not re-implemented: `mintStageReads` (the MSW factory's wire-shape mirror)
+ * already carries this switch, so this is just that same template read through the
+ * domain's own parser (`parseStages`, `./stages`) — one switch, not two kept in sync by
+ * a comment. A test that wants the wire shape directly still has `mintStageReads`.
+ *
+ * `buildEvent` calls this for its own default, so a fixture that only overrides
+ * `drawType` gets stages that agree with it for free — the trap this factory exists to
+ * avoid is a fixture whose EVENT says `swiss` while its STAGE still says `round-robin`,
+ * which is exactly the disagreement `unpooledShapeOf` (`./draw`) now reads through.
+ */
+function mintStages(drawType: DrawType): Stage[] {
+  return parseStages(mintStageReads(drawType))
 }
 
 /** A four-table morning pool, **first** in its event (`position: 0`).
@@ -188,6 +225,12 @@ export function buildEvent(
     // the qualifier count is: `Partial<…>` admits an explicit `undefined` while the field is
     // required-and-nullable (`number | null`).
     rounds: overrides.rounds ?? null,
+    // **Minted from the event's own (post-override) draw type** (ADR 20260815 decision
+    // 3), stated AFTER the spread so it reads the drawType the caller actually asked
+    // for — never the base literal's `'round-robin'`. An explicit `stages` override
+    // wins outright, for the one test that needs a stage disagreeing with its event
+    // (`draw.test.ts`'s falsification for the stage-based derivation).
+    stages: overrides.stages ?? mintStages(overrides.drawType ?? 'round-robin'),
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
   // the server guarantees it, and so does the fixture. The null check is the whole
@@ -421,11 +464,18 @@ type FixtureOverrides = Partial<
  * `poolId: null` for an un-pooled (knockout) fixture. Placement (ADR-0790) defaults
  * empty: `tableId: null` unassigned, `scheduledStart: null` unscheduled. The three
  * placement times take a naive wall-clock string for convenience (`buildFixtureTime`
- * shapes it into the `FixtureTime` the wire now sends) or a full `FixtureTime`. */
+ * shapes it into the `FixtureTime` the wire now sends) or a full `FixtureTime`.
+ *
+ * `stageId` defaults to `'s-1'` (ADR 20260815) — `buildStage`'s own default id, and the
+ * id `buildEvent`'s minted single-stage draws use. A fixture of a multi-stage event's
+ * SECOND stage (an `rr-then-ko` bracket) must override it to `'s-2'`, matching
+ * `mintStages`'s own numbering — `buildTwoStageDrawnEvent` does this for its knockout
+ * fixtures. */
 export function buildFixture(overrides: FixtureOverrides = {}): Fixture {
   const { scheduledStart, pinnedAt, completedAt, ...rest } = overrides
   return {
     id: 'fx-1',
+    stageId: 's-1',
     poolId: 'p-a',
     round: 1,
     position: 1,
@@ -847,9 +897,11 @@ export function buildSwissOddMidEvent(
  * because nobody has qualified yet.
  *
  * The regression pin for the routing. Its knockout fixtures are `poolId: null`, exactly as
- * a swiss draw's are, and they must keep rendering as a **bracket**: for this draw type the
- * null really is the stage discriminator, which is the meaning the swiss fix must not
- * disturb.
+ * a swiss draw's are, and they must keep rendering as a **bracket** — which is now their
+ * `stageId: 's-2'` naming `mintStages`'s own single-elim stage (ADR 20260815), rather
+ * than the event's `drawType` being read whole. That is the meaning the swiss fix must
+ * not disturb: `s-2`'s fixtures route through `shapeForStage('single-elim')` exactly as
+ * a plain single-elim event's un-pooled fixtures do.
  */
 export function buildTwoStageDrawnEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
@@ -876,9 +928,11 @@ export function buildTwoStageDrawnEvent(
         entryBId: 'entry-4',
       }),
       // The knockout stage: `P × K` = 2 × 2 = 4 slots, so two semifinals and a final, every
-      // side TBD until the pools decide their qualifiers.
+      // side TBD until the pools decide their qualifiers. `stageId: 's-2'` — `mintStages`'s
+      // second stage of an `rr-then-ko` event, the single-elim one.
       buildFixture({
         id: 'fx-ko-r1-p1',
+        stageId: 's-2',
         poolId: null,
         round: 1,
         position: 1,
@@ -887,6 +941,7 @@ export function buildTwoStageDrawnEvent(
       }),
       buildFixture({
         id: 'fx-ko-r1-p2',
+        stageId: 's-2',
         poolId: null,
         round: 1,
         position: 2,
@@ -895,6 +950,7 @@ export function buildTwoStageDrawnEvent(
       }),
       buildFixture({
         id: 'fx-ko-r2-p1',
+        stageId: 's-2',
         poolId: null,
         round: 2,
         position: 1,

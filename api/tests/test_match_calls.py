@@ -66,6 +66,8 @@ from app.models import (
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB, SUPERSEDED_ERROR, request_solve
 from app.schemas.notification import NotificationJob
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events, stage_ids_for_tournament
 from tests._helpers import (
     event_pools,
     hijack_solve,
@@ -136,6 +138,7 @@ async def _make_tournament(
     db.add(tournament)
     await db.flush()
 
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -146,19 +149,26 @@ async def _make_tournament(
         timezone="America/Chicago",
         slot={"date": DATE, "start": window[0], "end": window[1]},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": window[0], "end": window[1]},
-                    "table_ids": [str(row.id) for row in catalogue],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": DATE, "start": window[0], "end": window[1]},
+                "table_ids": [str(row.id) for row in catalogue],
+            }
+        ],
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.flush()
+    # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
+    # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` below
+    # reads ``event.pools`` synchronously, so this freshly built (never re-queried)
+    # object needs an explicit refresh first, or that read is an async lazy load.
+    await db.refresh(event, attribute_names=["pools"])
 
     for _ in range(entrants):
         player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
@@ -174,7 +184,7 @@ async def _the_fixture(db: AsyncSession, event_id: uuid.UUID) -> TournamentFixtu
     return (
         await db.execute(
             select(TournamentFixture)
-            .where(TournamentFixture.event_id == event_id)
+            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
             .order_by(TournamentFixture.id)
         )
     ).scalar_one()
@@ -925,6 +935,7 @@ async def _hold_user_in_second_event(
     cross-event occupancy the user-level gate must see. Returns the fixture id."""
     tournament = await db.get(Tournament, tournament_id)
     assert tournament is not None
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament_id,
         name="Consolation Singles",
@@ -935,16 +946,18 @@ async def _hold_user_in_second_event(
         timezone="America/Chicago",
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool B",
-                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": [table_id],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
+    )
+    stages[0].pools = event_pools(
+        [
+            {
+                "name": "Pool B",
+                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                "table_ids": [table_id],
+            }
+        ],
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.flush()
@@ -962,7 +975,7 @@ async def _hold_user_in_second_event(
     db.add(match)
     await db.flush()
     fixture = TournamentFixture(
-        event_id=event.id,
+        stage_id=stages[0].id,
         round=1,
         position=1,
         entry_a_id=entry_held.id,
@@ -990,11 +1003,7 @@ async def _in_progress_count_by_user(
             select(TournamentFixture.entry_a_id, TournamentFixture.entry_b_id)
             .join(Match, Match.id == TournamentFixture.match_id)
             .where(
-                TournamentFixture.event_id.in_(
-                    select(TournamentEvent.id).where(
-                        TournamentEvent.tournament_id == tournament_id
-                    )
-                ),
+                TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
                 Match.status == MatchStatus.in_progress,
             )
         )
@@ -1434,7 +1443,7 @@ async def _all_fixtures(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == event_id)
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
                 .order_by(TournamentFixture.id)
             )
         )
@@ -2065,7 +2074,9 @@ class TestManualPlacementPin:
             (
                 await db_session.execute(
                     select(TournamentFixture)
-                    .where(TournamentFixture.event_id == event_id)
+                    .where(
+                        TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
+                    )
                     .order_by(TournamentFixture.id)
                 )
             )
@@ -2097,7 +2108,9 @@ class TestManualPlacementPin:
             (
                 await db_session.execute(
                     select(TournamentFixture)
-                    .where(TournamentFixture.event_id == event_id)
+                    .where(
+                        TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
+                    )
                     .order_by(TournamentFixture.id)
                 )
             )

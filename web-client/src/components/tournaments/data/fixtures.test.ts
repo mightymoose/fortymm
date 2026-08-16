@@ -28,6 +28,7 @@ describe('parseFixtures — the happy path', () => {
     ).toEqual([
       {
         id: 'fx-9',
+        stageId: 's-1',
         poolId: 'p-a',
         round: 2,
         position: 3,

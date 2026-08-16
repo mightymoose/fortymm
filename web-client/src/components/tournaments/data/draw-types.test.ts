@@ -3,6 +3,7 @@ import type { components } from '@/api/schema'
 import {
   DRAW_TYPES,
   parseDrawTypeCatalogue,
+  STAGE_DRAW_TYPES,
   type DrawType,
 } from './draw-types'
 
@@ -52,6 +53,21 @@ describe('the draw-type vocabulary (a contract with the API, not a menu)', () =>
     // @ts-expect-error 'double-elim' is not in the API's enum — nothing can plan it.
     const drawType: DrawType = 'double-elim'
     expect(drawType).toBe('double-elim')
+  })
+})
+
+/** `STAGE_DRAW_TYPES` is `DRAW_TYPES` minus `rr-then-ko` (ADR 20260815 decision 4: a
+ * stage's own draw type is always single-stage) — pinned here, rather than left to two
+ * lists that happen to agree, so a fifth draw type added to `DRAW_TYPES` without a
+ * ruling on whether it is single-stage is caught the moment it lands, not the moment
+ * `shapeForStage` (`./draw`) is asked to switch on it. */
+describe('STAGE_DRAW_TYPES (a stage’s own draw type is never a template)', () => {
+  it('is every DRAW_TYPES member except rr-then-ko', () => {
+    expect(STAGE_DRAW_TYPES).toEqual(DRAW_TYPES.filter((t) => t !== 'rr-then-ko'))
+  })
+
+  it('does not hold rr-then-ko', () => {
+    expect(STAGE_DRAW_TYPES).not.toContain('rr-then-ko')
   })
 })
 
