@@ -1460,7 +1460,7 @@ async def update_event(
             # offending id rides in the sentence rather than in a ``loc`` — the same
             # treatment the catalogue's ``TableNotInCatalogueError`` gets above.
             raise ToolError(
-                f"{exc} (pools entry {exc.index} names “{exc.pool_id}”)."
+                f"{exc} (reservations entry {exc.index} names “{exc.reservation_id}”)."
             ) from exc
         # The verb returns the tournament's ``league_id`` (the ladder the caller's
         # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,

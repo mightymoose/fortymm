@@ -54,18 +54,20 @@ class MatchCallCancellationReason(StrEnum):
 @dataclass(frozen=True)
 class MatchCallContext:
     """Where the fixture lives, in the player's terms: tournament and event
-    always exist for a scheduled fixture; the pool name is present only for
-    pooled draws (``TournamentFixture.pool_id`` may be NULL)."""
+    always exist for a scheduled fixture; the group label is present only for
+    grouped draws (``TournamentFixture.group_id`` may be NULL). Derived —
+    ``group_label(position)`` — never a stored reservation name (ADR
+    20260808)."""
 
     tournament_name: str
     event_name: str
-    pool_name: str | None = None
+    group_label: str | None = None
 
     @property
     def label(self) -> str:
         parts = [self.tournament_name, self.event_name]
-        if self.pool_name is not None:
-            parts.append(self.pool_name)
+        if self.group_label is not None:
+            parts.append(self.group_label)
         return _CONTEXT_SEP.join(parts)
 
 

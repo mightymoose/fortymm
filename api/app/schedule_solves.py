@@ -612,7 +612,7 @@ class _ReservationResolution:
     name: str
     window_start: str
     window_end: str
-    reservation: ReservationKind = "reservation"
+    reservation: ReservationKind = "booked"
 
 
 @dataclass(frozen=True, slots=True)
