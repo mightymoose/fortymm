@@ -125,17 +125,38 @@ gate silently answers `WAITING` forever. See `.claude/rules/verify-the-artifact-
 GitHub timestamps are ISO-8601 UTC with a fixed width, so a string comparison orders them
 correctly. Use `>`, strictly after, so the anchor comment can never match itself.
 
+## The column that shows the gate is open
+
+A ticket awaiting this signal sits in **Waiting For Sign Off**. The column exists so a human can
+find the work without an agent's report in front of them, and so a ticket does not look like it
+is still being worked while it is really waiting on a person.
+
+The comment is the gate. The column is only its signpost. So the column never releases anything,
+and it never holds anything shut — the check above reads comments, and only comments. A ticket in
+the wrong column with a real `LGTM` on its pull request has been released. A ticket in
+**Waiting For Sign Off** with no `LGTM` has not.
+
+Post the ask before moving the column. If the move fails, the human still has the ask.
+
 ## What each side does with it
 
+- **`review-next-ticket`** posts the decision comment, then moves the ticket to
+  **Waiting For Sign Off**. In targeted mode it moves the ticket to **In Progress** first,
+  because a change request means the work is being done again, and back to
+  **Waiting For Sign Off** when it posts the next round's ask. It never sets **In Testing**.
 - **`implement-ticket-end-to-end`** watches for the signal for a bounded 15 minutes after
   Review stops, over the **since-the-anchor** window. On release it moves the ticket to
   **In Testing** and invokes `test-next-ticket`. On any other comment from `mightymoose` newer
-  than the anchor it re-invokes `review-next-ticket` in targeted mode. On expiry it stops and
-  reports.
+  than the anchor it re-invokes `review-next-ticket` in targeted mode, and lets that command
+  write both columns. On expiry it stops and reports, leaving the ticket in
+  **Waiting For Sign Off**.
 - **`test-next-ticket`** re-runs this same check as a **precondition**, over the **ever**
   window, and refuses to run without it. That refusal is the gate's only enforcement outside
   the coordinator, and it is what makes the gate hold when someone runs the stage by hand. A
   rule that lives only in the coordinator's prose is not a gate.
 
-It is a precondition check, not a status transition. `test-next-ticket` does not move the
-ticket to satisfy it.
+**In Testing** is the coordinator's write. **Waiting For Sign Off** and the **In Progress**
+bounce-back are Review's. One transition, one owner.
+
+The precondition is a check, not a status transition. `test-next-ticket` does not move the
+ticket to satisfy it, and it does not accept a board column as a substitute for the comment.
