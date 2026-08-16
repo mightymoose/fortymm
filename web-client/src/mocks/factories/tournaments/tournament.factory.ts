@@ -795,16 +795,24 @@ export type DrawPlan =
  * sentence in the server's mouth it never says.
  *
  * Asked of the DEALT pools, not of arithmetic on N and P: the refusal is about the pools
- * the snake actually produced, and it names the numbers the director must change. */
+ * the snake actually produced, and it names the numbers the director must change.
+ *
+ * **Both nouns are inflected**, exactly as `_snake` inflects them: "1 entrant across 1
+ * pool", "5 entrants across 3 pools". This used to read `pool(s)` and to say "1 entrants",
+ * which is a sentence the server has never said — harmless-looking until #1300 put the
+ * one-entrant round-robin case into the GO-LIVE refusal, where the mock's sentence and the
+ * API's are asserted against the same literal. */
 function snakeRefusal(
   entryIds: readonly string[],
   poolIds: readonly string[],
 ): string | null {
   if (poolIds.length === 0) return 'A round-robin draw needs at least one pool.'
   if (snakedPools(entryIds, poolIds.length).some((pool) => pool.length < 2)) {
+    const entrantNoun = entryIds.length === 1 ? 'entrant' : 'entrants'
+    const poolNoun = poolIds.length === 1 ? 'pool' : 'pools'
     return (
-      `${entryIds.length} entrants across ${poolIds.length} pool(s) would leave ` +
-      'a pool with fewer than 2 entrants, who would have nobody to play.'
+      `${entryIds.length} ${entrantNoun} across ${poolIds.length} ${poolNoun} would ` +
+      'leave a pool with fewer than 2 entrants, who would have nobody to play.'
     )
   }
   return null

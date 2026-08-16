@@ -431,24 +431,33 @@ class TournamentNotReadyToGoLiveError(Exception):
     """Raised by the transition verb when the ``published → live`` precondition fails
     (ADR-0786): the tournament has **no events**, or an event with **no draw**, or an
     event whose **draw is stale** (cut before somebody entered or withdrew, so its
-    fixtures no longer seat exactly its active entrants).
+    fixtures no longer seat exactly its active entrants), or an event whose draw a dry
+    run finds it can **never** cut (a field under two entrants, or a non-singles
+    event) — ``undrawable``, #1300.
 
     Going live seals the field and turns every ready fixture into a real match, both
     computed from the draw — so the draw must be right at the instant the tournament
     starts. It carries the composed, director-facing sentence (naming the at-fault
     events **by name**, never by id) so the HTTP adapter rebuilds the exact 409 body
     with ``str(exc)`` and the MCP tool its equivalent ``ToolError`` prose, plus the
-    structured lists (``uncut`` / ``stale`` names, ``no_events``) for any adapter that
-    wants to reshape rather than echo. It is a 409, not a 403: the same request
-    succeeds the moment the draws are cut, which is what a conflict means. Never an
-    ``HTTPException``."""
+    structured lists (``uncut`` / ``stale`` / ``undrawable`` names, ``no_events``) for
+    any adapter that wants to reshape rather than echo. It is a 409, not a 403: the
+    same request succeeds the moment the draws are cut (or the undrawable events are
+    fixed or removed), which is what a conflict means. Never an ``HTTPException``."""
 
     def __init__(
-        self, message: str, *, uncut: list[str], stale: list[str], no_events: bool
+        self,
+        message: str,
+        *,
+        uncut: list[str],
+        stale: list[str],
+        undrawable: list[str],
+        no_events: bool,
     ) -> None:
         super().__init__(message)
         self.uncut = uncut
         self.stale = stale
+        self.undrawable = undrawable
         self.no_events = no_events
 
 

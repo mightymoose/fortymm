@@ -179,11 +179,28 @@ describe('LifecycleActions · a refused Start tournament (409)', () => {
     'it stands at the time, and registration stays open right up to the moment a ' +
     'tournament goes live — so cut the draw for each event named (again, if somebody ' +
     'entered or withdrew since it was last cut), then start the tournament.'
+  // The two shapes #1300 added, and they are LONGER than the four above for a reason: an
+  // event no cut could ever fix carries its own reason and its own fix, so there is no
+  // shared clause to fold it into. Both are the API's composed sentence, verbatim.
+  const ALL_UNDRAWABLE =
+    'This tournament cannot start yet: “Doubles Event”: A doubles event cannot be ' +
+    'given a draw — only singles events can. A fixture seats one entrant on each side, ' +
+    'and there is nowhere to record a doubles pairing or a team. Remove the event. ' +
+    '“Lone Event”: A single-elimination draw needs at least 2 entrants — a bracket of ' +
+    'one has nobody to play. Add entrants, or remove the event.'
+  const MIXED =
+    'This tournament cannot start yet: “B Uncut” has no draw yet; and “C Stale” has a ' +
+    'draw that no longer matches its entrants. A draw is cut from the field as it ' +
+    'stands at the time, and registration stays open right up to the moment a ' +
+    'tournament goes live — so cut the draw for each event named (again, if somebody ' +
+    'entered or withdrew since it was last cut), then start the tournament. ' +
+    '“A Undrawable”: 1 entrant across 1 pool would leave a pool with fewer than 2 ' +
+    'entrants, who would have nobody to play. Add entrants, or remove the event.'
 
-  // Each of the three refusals renders — and renders the SERVER's sentence, which is the
-  // only half that says what to go and do. The assertions name the *events*, because a
-  // test that asserted merely "an error is shown" would pass just as happily against a
-  // generic "something went wrong".
+  // Each refusal renders — and renders the SERVER's sentence, which is the only half that
+  // says what to go and do. The assertions name the *events*, because a test that
+  // asserted merely "an error is shown" would pass just as happily against a generic
+  // "something went wrong".
   it.each([
     { name: 'an empty tournament', detail: NOTHING_TO_START, names: ['no events'] },
     { name: 'an event with no draw', detail: NO_DRAW, names: ['“Open Singles”'] },
@@ -197,6 +214,16 @@ describe('LifecycleActions · a refused Start tournament (409)', () => {
       detail: TWO_EVENTS,
       names: ['“Under 1200”', '“Over 40s”'],
     },
+    {
+      name: 'every at-fault event undrawable (#1300)',
+      detail: ALL_UNDRAWABLE,
+      names: ['“Doubles Event”', '“Lone Event”'],
+    },
+    {
+      name: 'an undrawable, an uncut and a stale event at once (#1300)',
+      detail: MIXED,
+      names: ['“A Undrawable”', '“B Uncut”', '“C Stale”'],
+    },
   ])('names what is wrong — $name', async ({ detail, names }) => {
     refuseTransition(409, detail)
 
@@ -209,6 +236,26 @@ describe('LifecycleActions · a refused Start tournament (409)', () => {
     expect(text).toContain(detail)
     for (const name of names) expect(text).toContain(name)
     expect(await lifecycleActionsPage.findNoticeKind()).toBe('refused')
+  })
+
+  /**
+   * The acceptance criterion of #1300, asserted on the rendered notice rather than on the
+   * string: when every at-fault event is undrawable, the director must not be sent to cut
+   * a draw.
+   *
+   * It reads as an ABSENCE on purpose. The `toContain(detail)` above is satisfied by any
+   * notice that carries the whole sentence, and would be equally satisfied by a component
+   * that decided to append a helpful "…so cut the draw for each event named" of its own —
+   * which is the exact instruction this refusal exists to withhold.
+   */
+  it('shows no cut-the-draw instruction when every at-fault event is undrawable', async () => {
+    refuseTransition(409, ALL_UNDRAWABLE)
+
+    await clickStart()
+
+    const text = await lifecycleActionsPage.findNoticeText()
+    expect(text).toContain('Remove the event.')
+    expect(text).not.toContain('cut the draw')
   })
 
   it('does NOT toast the refusal it has already shown inline', async () => {

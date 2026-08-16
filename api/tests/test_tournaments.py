@@ -3088,6 +3088,14 @@ async def test_going_live_with_an_event_nobody_entered_is_refused(
     of that function and this is the test that holds it there: rewrite the ``uncut`` arm
     as ``if not seated[event_id]`` — which passes every other go-live test in this file,
     because every one of them has entrants — and only this one reds.
+
+    Since #1300 an event this ``uncut`` is then dry-run, and a field of zero degenerates
+    exactly as a field of one does (``app.draws._snake``'s own floor) — so the refusal
+    it actually gets is the **undrawable** shape, not the plain "has no draw yet" a
+    fixable ``uncut`` event gets. Proving THAT classification is
+    ``test_a_zero_entrant_round_robin_event_is_undrawable_like_one_entrant`` in
+    ``test_tournament_lifecycle.py``; this test's job stays what its name says — the
+    ∅ == ∅ event is refused (409) and named, not silently waved through as ``current``.
     """
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
@@ -3101,7 +3109,7 @@ async def test_going_live_with_an_event_nobody_entered_is_refused(
 
     assert response.status_code == 409, response.text
     detail = response.json()["detail"]
-    assert "“Under 1200” has no draw yet" in detail
+    assert "“Under 1200”:" in detail
     assert event_id not in detail
     assert await _status_of(client, created["id"]) == "published"
 
@@ -3251,6 +3259,40 @@ async def test_the_refusal_names_every_offending_event_and_spares_the_ready_one(
     assert "“Over 40s” has a draw that no longer matches its entrants" in detail
     assert "Open Singles" not in detail
     assert await _status_of(client, tournament_id) == "published"
+
+
+async def test_going_live_with_a_one_entrant_event_names_it_undrawable_not_uncut(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+):
+    """A field of one is never merely ``uncut`` — no cut will ever succeed on it — so
+    the go-live guard's dry run reports it as undrawable, with its own reason (the
+    draw type's own refusal) and its own fix (add entrants, or remove the event), and
+    never with the "cut the draw" instruction that a merely-uncut event gets (#1300).
+
+    The end-to-end wiring proof: the real HTTP route, the real event-creation and
+    entry routes, and still a 409 — matching the service-layer matrix in
+    ``test_tournament_lifecycle.py`` (which covers every draw type and edge case; this
+    is the one HTTP-level case that guards the wiring between them).
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event_id, _entries = await _event_with_entrants(
+        client, db_session, created["id"], name="Lone Entrant", players=1
+    )
+    await _set_status(db_session, created["id"], TournamentStatus.published)
+
+    response = await _go_live(client, created["id"])
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert (
+        "“Lone Entrant”: 1 entrant across 1 pool would leave a pool with fewer than "
+        "2 entrants, who would have nobody to play. Add entrants, or remove the "
+        "event." in detail
+    )
+    assert "cut the draw for each event named" not in detail
+    assert event_id not in detail
+    assert await _status_of(client, created["id"]) == "published"
 
 
 async def test_publish_and_archive_ask_nothing_of_the_draws(
