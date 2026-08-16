@@ -722,15 +722,16 @@ async def _add_event(
 
     ``pool_count=0`` seeds no pools at all (the round-robin-with-no-pools edge case);
     any other count seeds that many bare pools, positionally named, on the event's
-    first (position-0) stage — the one ``event.pools`` reads through regardless of
-    draw type (ADR 20260815).
+    first (position-0) stage — the one ``event.groups`` reads through regardless of
+    draw type (ADR 20260815). What the wire calls a pool is a GROUP plus the
+    RESERVATION it maps to; ``event_pools`` builds both.
 
     Returns the event **re-read** through a fresh ``select``, not the just-constructed
-    instance: ``pools`` is a ``viewonly`` relationship assigned only via
-    ``stages[0].pools`` above, so the in-memory object never populates it, and reading
+    instance: ``groups`` is a ``viewonly`` relationship assigned only via
+    ``stages[0].groups`` above, so the in-memory object never populates it, and reading
     it synchronously off that instance would attempt a lazy load the async session
     refuses (``MissingGreenlet``). A plain ``select`` re-load populates every eager
-    relationship (``draw_settings`` joined, ``pools``/``stages`` selectin) the way
+    relationship (``draw_settings`` joined, ``groups``/``stages`` selectin) the way
     every other reader of an event gets them.
     """
     stages = mint_stages(draw_type)
@@ -748,7 +749,7 @@ async def _add_event(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [{} for _ in range(pool_count)], event=event, tournament=tournament
     )
     db.add(event)
