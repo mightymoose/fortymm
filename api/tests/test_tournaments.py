@@ -3429,7 +3429,9 @@ async def test_two_events_each_with_a_current_draw_go_live_together(
     """
     client, _ = authed_client
     tournament_id, (one, two) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, POOL_B), _rr_payload(RESERVATION_A, POOL_B)
+        client,
+        _rr_payload(RESERVATION_A, RESERVATION_B),
+        _rr_payload(RESERVATION_A, RESERVATION_B),
     )
     await _seed_field(db_session, one["id"], 4, prefix="one")
     await _seed_field(db_session, two["id"], 4, prefix="two")
@@ -3471,7 +3473,7 @@ async def test_going_live_is_undisturbed_by_another_tournaments_entries(
     # A wholly unrelated tournament, with an event and a field of its own. Nothing about
     # it is this tournament's business — including, especially, on the way to live.
     _other_id, (other_event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, POOL_B)
+        client, _rr_payload(RESERVATION_A, RESERVATION_B)
     )
     await _seed_field(db_session, other_event["id"], 4, prefix="other")
 
@@ -5335,8 +5337,8 @@ async def test_cutting_a_draw_persists_the_fixtures_the_strategy_planned(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """The owner cuts a two-group round-robin over five players, and the draw it plans is
-    the draw that lands in the database.
+    """The owner cuts a two-group round-robin over five players, and the draw it
+    plans is the draw that lands in the database.
 
     Five over two groups is the smallest field that exercises the whole substrate at
     once: the snake deals it unevenly (3 and 2, seeds 1/4/5 against 2/3 — the top two
@@ -5372,9 +5374,10 @@ async def test_cutting_a_draw_persists_the_fixtures_the_strategy_planned(
     rows = await _fixture_rows(db_session, event["id"])
     # The response IS the persisted draw — same rows, same ids, same order.
     assert [uuid.UUID(f["id"]) for f in body] == [f.id for f in rows]
-    # Group A (seeds 1, 4, 5) is the odd one: three rounds, one fixture each, because the
-    # entrant drawn against the phantom that round simply has no fixture. Group B (seeds
-    # 2, 3) is a single pairing. Ordered group → round → position.
+    # Group A (seeds 1, 4, 5) is the odd one: three rounds, one fixture each,
+    # because the entrant drawn against the phantom that round simply has no
+    # fixture. Group B (seeds 2, 3) is a single pairing. Ordered group → round →
+    # position.
     names = await _group_names(db_session, event["id"])
     assert [(names[f.group_id], f.round, f.position) for f in rows] == [
         ("Reservation A", 1, 1),
@@ -5513,7 +5516,9 @@ async def test_the_cut_reads_only_the_field_of_the_event_it_is_cutting(
     """
     client, _ = authed_client
     tournament_id, (event, other) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B), _rr_payload(RESERVATION_A, RESERVATION_B)
+        client,
+        _rr_payload(RESERVATION_A, RESERVATION_B),
+        _rr_payload(RESERVATION_A, RESERVATION_B),
     )
     ours = await _seed_field(db_session, event["id"], 4, prefix="ours")
     theirs = await _seed_field(db_session, other["id"], 4, prefix="theirs")
@@ -5815,7 +5820,9 @@ async def test_cutting_a_singles_event_is_allowed(
     door refuses the doubles/teams format, not the round-robin or the field.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     await _seed_field(db_session, event["id"], 4)
 
     response = await client.post(_draw_url(tournament_id, event["id"]))
@@ -5870,7 +5877,9 @@ async def test_cutting_a_draw_that_is_not_a_competition_is_422(
     fixtures it had thrown away and none of the ones it could not make.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(*reservations))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(*reservations)
+    )
     await _seed_field(db_session, event["id"], entrants)
 
     response = await client.post(_draw_url(tournament_id, event["id"]))
@@ -5913,7 +5922,8 @@ async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_me
         db: AsyncSession, event: TournamentEvent
     ) -> None:
         raise SwissRoundNotSettled(
-            "tournament_fixtures.group_id='g-a' has a NULL seat at (round=2, position=1)"
+            "tournament_fixtures.group_id='g-a' has a NULL seat at "
+            "(round=2, position=1)"
         )
 
     # The ``cut_draw`` core call moved onto the transport-neutral draw verb
@@ -6317,8 +6327,8 @@ async def _reservations_of(
     rows = (
         await db_session.execute(
             select(
-                TournamentEventStageGroup.id,
-                TournamentEventReservation.id,
+                TournamentEventStageGroup.id.label("group_id"),
+                TournamentEventReservation.id.label("reservation_id"),
                 TournamentEventReservation.name,
                 TournamentEventReservation.slot_date,
                 TournamentEventReservation.slot_start,
@@ -6371,17 +6381,17 @@ async def _reservations_of(
             # As the wire carries it: a JSON payload cannot hold a ``uuid.UUID``, and
             # these dicts are posted straight back as citations (``_kept``). The
             # RESERVATION's id, never the group's — see the docstring above.
-            "id": str(reservation_id),
-            "name": name,
+            "id": str(row.reservation_id),
+            "name": row.name,
             "slot": {
-                "date": slot_date.isoformat(),
-                "start": slot_start.strftime("%H:%M"),
-                "end": slot_end.strftime("%H:%M"),
+                "date": row.slot_date.isoformat(),
+                "start": row.slot_start.strftime("%H:%M"),
+                "end": row.slot_end.strftime("%H:%M"),
             },
-            "table_ids": reserved.get(group_id, []),
-            "position": position,
+            "table_ids": reserved.get(row.group_id, []),
+            "position": row.position,
         }
-        for group_id, reservation_id, name, slot_date, slot_start, slot_end, position in rows
+        for row in rows
     ]
 
 
@@ -6450,7 +6460,7 @@ async def test_posting_an_event_whose_reservations_carry_a_position_is_refused(
     assert await _events_of(client, created["id"]) == []
 
 
-async def test_patching_reservations_that_carry_a_position_is_refused_and_writes_nothing(
+async def test_reservations_carrying_a_position_are_refused_and_write_nothing(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
@@ -6599,7 +6609,9 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
     # Both reservations are CITED by the ids the server minted — which is what makes
     # this an edit of the reservations the draw was cut across rather than a request to
     # replace them.
-    reservation_a, reservation_b = _kept(await _reservations_of(db_session, event["id"]))
+    reservation_a, reservation_b = _kept(
+        await _reservations_of(db_session, event["id"])
+    )
     edited = [
         {**reservation_a, **edit(await _catalogue_table_ids(client, tournament_id))},
         reservation_b,
@@ -6698,7 +6710,7 @@ async def test_a_cut_draw_refuses_a_reservations_patch_that_changes_which_groups
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
 
 
-async def test_a_refused_reservations_patch_writes_none_of_the_rest_of_the_payload_either(
+async def test_a_refused_reservations_patch_writes_none_of_the_payload_either(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
@@ -6858,9 +6870,9 @@ async def test_the_group_freeze_is_scoped_to_the_event_being_patched(
         json={"reservations": [RESERVATION_C]},
     )
     assert free.status_code == 200, free.text
-    assert _anonymous(
-        await _reservations_of(db_session, undrawn["id"])
-    ) == _positioned(RESERVATION_C)
+    assert _anonymous(await _reservations_of(db_session, undrawn["id"])) == _positioned(
+        RESERVATION_C
+    )
 
 
 async def test_the_event_patch_takes_the_tournaments_row_lock(
@@ -6907,11 +6919,12 @@ async def test_the_event_patch_takes_the_tournaments_row_lock(
 # ``tournament_event_reservations`` row now (ADR 20260801) and its id is minted by
 # ``gen_random_uuid()``.
 #
-# Minting and CITING are different things, and the diff needs the second. A **create**
-# has no reservations to cite, so its write shape has no ``id`` field at all and sending
-# one is a 422. A **patch** is a diff, so each entry may carry the id of a reservation it
-# is keeping — but only one this event actually has: an id is something a client was
-# *given*, never something it authors. What is left of the duplicate rule is therefore a
+# Minting and CITING are different things, and the diff needs the second. A
+# **create** has no reservations to cite, so its write shape has no ``id`` field at
+# all and sending one is a 422. A **patch** is a diff, so each entry may carry the
+# id of a reservation it is keeping — but only one this event actually has: an id
+# is something a client was *given*, never something it authors. What is left of
+# the duplicate rule is therefore a
 # rule about CITATIONS: one entry per reservation you are keeping.
 
 
@@ -6988,7 +7001,7 @@ async def test_creating_an_event_whose_reservation_carries_an_id_is_refused(
     assert await _events_of(client, created["id"]) == []
 
 
-async def test_a_reservations_patch_keeps_the_reservation_it_cites_and_mints_one_for_the_rest(
+async def test_a_reservations_patch_keeps_the_cited_one_and_mints_the_rest(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
@@ -7059,7 +7072,7 @@ async def test_a_reservations_patch_citing_an_id_this_event_does_not_have_is_a_4
     assert await _reservations_of(db_session, event["id"]) == before
 
 
-async def test_a_reservations_patch_citing_one_reservation_twice_never_reaches_the_cut_draw(
+async def test_a_reservations_patch_citing_one_twice_never_reaches_the_cut_draw(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
@@ -7104,7 +7117,7 @@ async def test_a_reservations_patch_citing_one_reservation_twice_never_reaches_t
     assert re_cut.status_code == 201, re_cut.text
 
 
-async def test_an_undrawn_event_also_refuses_a_reservations_patch_that_cites_one_reservation_twice(
+async def test_an_undrawn_event_also_refuses_a_reservations_patch_citing_one_twice(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
@@ -7257,8 +7270,9 @@ async def test_creating_a_tournament_that_sends_a_table_id_is_refused(
     not a field of the write shape and ``extra="forbid"`` turns sending one into a 422
     that names it.
 
-    Refused rather than ignored, for the reason ``ReservationWrite`` refuses a ``position``: a
-    client cannot tell from the schema that the id it sent decided nothing, and a
+    Refused rather than ignored, for the reason ``ReservationWrite`` refuses a
+    ``position``: a client cannot tell from the schema that the id it sent decided
+    nothing, and a
     boundary that silently discards half a payload has to be documented to be
     understood."""
     client, _ = authed_client
@@ -7845,9 +7859,10 @@ async def test_re_sending_the_same_draw_type_with_a_venue_edit_still_succeeds(
 
     This is the case a guard written as "``draw_type`` in the payload and a draw exists
     → 409" would break, and it is not exotic: a client that PATCHes the whole event form
-    back sends every field it rendered, draw type included. Refusing it would make the
-    reservation-venue edit — the very thing the freeze above exists to *permit* — unreachable
-    from that page, and a table that broke on the morning of the tournament would cost
+    back sends every field it rendered, draw type included. Refusing it would make
+    the reservation-venue edit — the very thing the freeze above exists to *permit*
+    — unreachable from that page, and a table that broke on the morning of the
+    tournament would cost
     the director their draw.
 
     Re-asserting a value that is already there changes nothing, so it is not a conflict.
@@ -7918,8 +7933,8 @@ async def test_the_draw_type_freeze_is_scoped_to_the_event_being_patched(
     client, _ = authed_client
     tournament_id, (drawn, undrawn) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A, POOL_B, name="Under 13s"),
-        _rr_payload(RESERVATION_A, POOL_B, name="Open Singles"),
+        _rr_payload(RESERVATION_A, RESERVATION_B, name="Under 13s"),
+        _rr_payload(RESERVATION_A, RESERVATION_B, name="Open Singles"),
     )
     await _seed_field(db_session, drawn["id"], 4, prefix="u13-")
     await _cut_the_draw(client, tournament_id, drawn["id"])
@@ -8145,7 +8160,9 @@ async def test_the_detail_bff_links_a_materialized_fixture_to_its_scheduled_matc
     scheduled — the moment it is created, until the schedule calls it).
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
 
     # Before go-live: cut but not materialized — the slot links to nothing yet.
     await _seed_field(db_session, event["id"], 3)
@@ -8183,7 +8200,9 @@ async def test_go_live_materialization_is_idempotent(
     move — if readiness ignored ``match_id`` this would double every fixture's match.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
@@ -8231,7 +8250,9 @@ async def test_advancing_a_round_robin_event_costs_one_statement_and_no_game_cou
     folds the game load into the fixture statement still reds.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
@@ -8294,11 +8315,13 @@ async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(
     client, _owner = authed_client
     # A rated round-robin, so its materialized match is rated and the self-play
     # collision takes the void path (an unrated collision would not be voided).
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     guest = await make_user(db_session, "guest-ghost-collision")
     survivor = await make_user(db_session, "survivor-collision")
     # Both actively entered in the one event — the collision. Two players in a single
-    # pool is exactly one fixture, drawing the guest against the survivor, so it seats
+    # group is exactly one fixture, drawing the guest against the survivor, so it seats
     # one human on each side and the merge turns that match into self-play.
     await _enter(db_session, event["id"], guest)
     await _enter(db_session, event["id"], survivor)
@@ -8333,9 +8356,9 @@ async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(
     assert [e.user_id for e in active] == [survivor.id]
 
     # And the standings are not frozen by the void. A voided fixture never yields an
-    # outcome, so it is excluded from the pool's completeness count (ADR-0788). The
+    # outcome, so it is excluded from the group's completeness count (ADR-0788). The
     # event reports ``complete`` rather than hanging one short of its count forever —
-    # before this fix it stuck at incomplete permanently, with no champion. (The pool
+    # before this fix it stuck at incomplete permanently, with no champion. (The group
     # is degenerate after the merge, one human on an N+1 draw; a director re-cuts it.)
     (read,) = await _events_of(client, tournament_id)
     assert read["results"]["complete"] is True
@@ -8685,9 +8708,9 @@ async def test_completing_a_round_robin_match_materializes_nothing_new(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """Round-robin's ``advance()`` is empty after go-live — the whole pool is already
+    """Round-robin's ``advance()`` is empty after go-live — the whole group is already
     materialized — so the completion seam records the one winner and creates no new
-    match. Proven by completing one match of a three-fixture pool and pinning the
+    match. Proven by completing one match of a three-fixture group and pinning the
     match count."""
     client, owner = authed_client
     async with (
@@ -8699,7 +8722,7 @@ async def test_completing_a_round_robin_match_materializes_nothing_new(
         )
         e1, e2, e3 = entries
         before = await _match_count(db_session)
-        assert before == 3, "the pool materialized into three matches at go-live"
+        assert before == 3, "the group materialized into three matches at go-live"
 
         by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in fixtures}
         clients = {e1.id: client, e2.id: c2, e3.id: c3}
@@ -8723,7 +8746,8 @@ async def test_completing_a_round_robin_match_materializes_nothing_new(
 # ----- single-elimination: the draw advances a winner into the next round (#785) ------
 # Round-robin knows every pairing at the cut, so its completion seam is honestly empty
 # (``test_completing_a_round_robin_match_materializes_nothing_new`` above pins that, and
-# ``test_going_live_materializes_the_whole_pool`` pins its whole-pool go-live). Single-
+# ``test_going_live_materializes_the_whole_group`` pins its whole-group go-live).
+# Single-
 # elim is the first draw type whose ``advance()`` does real work: a decided fixture
 # seats its winner **forward** into its successor's side, and a fixture made whole by
 # those fills materializes into a match in the SAME transaction (``materialize_event``
@@ -8732,13 +8756,13 @@ async def test_completing_a_round_robin_match_materializes_nothing_new(
 
 
 def _se_payload(**overrides: Any) -> dict[str, Any]:
-    """A **single-elimination** event — un-pooled, so ``pools=[]`` (ADR-0785). Rated
-    best-of-3 by default so the completion flow's propose→accept is the exercised path;
-    ``predicates=[]`` because eligibility is not what these assert."""
+    """A **single-elimination** event — ungrouped, so ``reservations=[]`` (ADR-0785).
+    Rated best-of-3 by default so the completion flow's propose→accept is the
+    exercised path; ``predicates=[]`` because eligibility is not what these assert."""
     return _event_payload(
         **{
             "draw_type": "single-elim",
-            "pools": [],
+            "reservations": [],
             "predicates": [],
             "match_settings": {"rated": True, "length_games": 3},
             **overrides,
@@ -8970,7 +8994,7 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
     """The tournament-detail BFF carries each round-robin event's standings, derived
     live from its fixtures' completed matches (ADR-0788):
 
-    * mid-pool it is present but **incomplete**, with every seated entrant already on
+    * mid-group it is present but **incomplete**, with every seated entrant already on
       the table (even one who has not played) and no champion;
     * once every fixture is decided it is **complete**, ordered by wins, and its leader
       is the champion.
@@ -9004,14 +9028,14 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         )
         assert partial["complete"] is False
         assert partial["champion"] is None
-        (pool,) = partial["pools"]
-        assert {row["entry_id"] for row in pool["rows"]} == {
+        (group,) = partial["groups"]
+        assert {row["entry_id"] for row in group["rows"]} == {
             str(e1.id),
             str(e2.id),
             str(e3.id),
         }, "every seated entrant is on the table, even before they've played"
 
-        # Finish the pool: p1 wins both of their matches.
+        # Finish the group: p1 wins both of their matches.
         await _win_fixture_match(
             by_pair[frozenset({e1.id, e3.id})],
             clients_by_entry=clients,
@@ -9030,8 +9054,8 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
     assert results["kind"] == "standings"
     assert results["complete"] is True
     assert results["champion"] == str(e1.id)
-    (pool,) = results["pools"]
-    assert [(row["entry_id"], row["wins"], row["rank"]) for row in pool["rows"]] == [
+    (group,) = results["groups"]
+    assert [(row["entry_id"], row["wins"], row["rank"]) for row in group["rows"]] == [
         (str(e1.id), 2, 1),
         (str(e2.id), 1, 2),
         (str(e3.id), 0, 3),
@@ -9138,7 +9162,9 @@ async def test_an_uncut_event_carries_no_results(
     ``null`` — not an empty table, which would read as a played event with nobody
     in it."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     await _seed_field(db_session, event["id"], 3)
     (read,) = await _events_of(client, tournament_id)
     assert read["fixtures"] == [], "no draw cut yet"
@@ -9155,7 +9181,9 @@ async def test_the_list_endpoint_does_not_ship_standings(
     per event for data a card throws away. A cut event proves the split — the detail
     carries its standings, the list carries ``None`` for the same event."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
 
@@ -9215,7 +9243,7 @@ async def _drawn_fixture(
     prefix: str = "pl",
     **tournament: Any,
 ) -> tuple[str, str, TournamentFixture]:
-    """A one-pool round-robin over three players, cut through the real route, and the
+    """A one-group round-robin over three players, cut through the real route, and the
     first of the fixtures it produced — the smallest field that gives a placeable slot.
 
     ``prefix`` names the seeded players, so two draws in one test don't collide on
@@ -9359,9 +9387,10 @@ async def test_an_out_of_window_or_off_group_placement_still_saves(
 ) -> None:
     """The placement is still **soft** everywhere ADR-0790 made it soft:
     ``scheduled_start`` is a prediction, and three of its four constraints (table-in-
-    pool, time-in-window, no double-booking) are flags on read, not invariants — so the
-    write does not reject them. Pool A reserves the first table for 09:00–12:30; the
-    SECOND table (in the catalogue, off the pool) at 23:00 **saves** rather than 4xx.
+    group, time-in-window, no double-booking) are flags on read, not invariants — so the
+    write does not reject them. Reservation A reserves the first table for 09:00–12:30;
+    the SECOND table (in the catalogue, off the group) at 23:00 **saves** rather than
+    4xx.
     Conflict detection is the scheduler's job, not this boundary's.
 
     This test used to carry a second parameter — a ``table_id`` naming nothing in the
@@ -9708,7 +9737,7 @@ async def test_a_timezone_only_event_patch_on_a_drawn_event_requeues_a_solve(
 ) -> None:
     """A timezone-only correction on a *drawn* event is a genuine solver-input
     change (ADR "tournament times are timezone-aware instants"; Finding 1): the
-    event ``timezone`` anchors every pool window's wall-clock to the real instant
+    event ``timezone`` anchors every reservation window's wall-clock to the real instant
     the solver compares against ``now``, so re-anchoring it can flip an
     ``infeasible``/``past_window`` verdict. ``_event_scheduling_facts`` therefore
     carries the timezone, and a tz-only PATCH enqueues a ``settings_changed``

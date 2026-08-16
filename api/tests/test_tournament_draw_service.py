@@ -114,7 +114,9 @@ async def _make_event(
         stages=stages,
     )
     stages[0].groups = event_groups(
-        [RESERVATION_A, RESERVATION_B] if groups is None else groups, event=event, tournament=tournament
+        [RESERVATION_A, RESERVATION_B] if groups is None else groups,
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.commit()

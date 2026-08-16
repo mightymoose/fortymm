@@ -543,9 +543,9 @@ async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_pag
     """End to end, read back through the page: POST queues the run, the worker
     drains it, and the detail BFF then shows the whole outcome — the strip
     ``succeeded`` with a verdict and its counts, and every fixture placed on a
-    reservation table inside the reservation's window, carrying its pin facts (``pinned_at``
-    null — every placement is still an estimate, the manual route pins nothing —
-    and ``call_notified_count`` 0, nobody told)."""
+    reservation table inside the reservation's window, carrying its pin facts
+    (``pinned_at`` null — every placement is still an estimate, the manual route pins
+    nothing — and ``call_notified_count`` 0, nobody told)."""
     client, owner = authed_client
     tournament_id, _ = await _make_tournament(db_session, owner)
     catalogue = set(await table_ids_of(db_session, tournament_id))

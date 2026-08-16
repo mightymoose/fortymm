@@ -31,10 +31,10 @@ from app.scheduling import (
     PlayerConflict,
     PlayerId,
     PlayerOverSubscribed,
-    ReservationHasNoTables,
     PoolId,
-    ReservationOverCapacity,
     PreviousPlacement,
+    ReservationHasNoTables,
+    ReservationOverCapacity,
     RestShadow,
     ScheduleFixture,
     ScheduleReservation,
@@ -329,7 +329,9 @@ class TestPinsArePromises:
             dataclasses.replace(
                 pinned_snap,
                 table_ids=shrunk_tables,
-                pools=(ScheduleReservation(PoolId("A"), shrunk_tables, Window(0, 480)),),
+                pools=(
+                    ScheduleReservation(PoolId("A"), shrunk_tables, Window(0, 480)),
+                ),
             ),
             dataclasses.replace(pinned_snap, now_min=45),
         ]
@@ -771,7 +773,9 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
-        assert by_kind["pool_has_no_tables"] == [ReservationHasNoTables(reservation_id=PoolId("A"))]
+        assert by_kind["pool_has_no_tables"] == [
+            ReservationHasNoTables(reservation_id=PoolId("A"))
+        ]
         assert by_kind["pool_over_capacity"] == [
             ReservationOverCapacity(
                 reservation_id=PoolId("B"),

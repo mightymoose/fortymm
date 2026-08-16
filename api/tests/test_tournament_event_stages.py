@@ -226,8 +226,9 @@ def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
 
     Restated in up to four places before this test existed — the template itself,
     ``cut_draw``'s positional write, this composite's own (now-removed)
-    ``_RR_THEN_KO_GROUP_STAGE``/``_RR_THEN_KO_KNOCKOUT_STAGE`` position literals, and the
-    ``app.draws`` test suite's own copy of that same pair — with nothing checking that
+    ``_RR_THEN_KO_GROUP_STAGE``/``_RR_THEN_KO_KNOCKOUT_STAGE`` position literals, and
+    the ``app.draws`` test suite's own copy of that same pair — with nothing checking
+    that
     they agreed. This drives a REAL split through ``advance()`` using
     :class:`~app.draws.FixtureStage`\\ s built straight off ``mint_stages``'s own rows
     (never a position literal of its own), so a template reorder (say, knockout before
@@ -275,8 +276,8 @@ def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
     # The one-group waiver (ADR "one group is an explicit waiver, not a failure"): both
     # of the group's entrants qualify, seed 1 (the winner) to side a and seed 2 to side
     # b of the bracket's only fixture. Seeing this fill at all is only possible if the
-    # GROUP fixture (stage 0) was read as the group half its result feeds standings from,
-    # and the KNOCKOUT fixture (the template's last position) as the half that
+    # GROUP fixture (stage 0) was read as the group half its result feeds standings
+    # from, and the KNOCKOUT fixture (the template's last position) as the half that
     # receives the seating — i.e. only if the writer's template and the reader's split
     # agree on which position means what.
     assert set(plan.side_fills) == {

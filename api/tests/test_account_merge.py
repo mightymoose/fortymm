@@ -951,9 +951,9 @@ async def _make_rr_event(
     tournament: Tournament | None = None,
     name: str = "Open Singles",
 ) -> TournamentEvent:
-    """A **cuttable-into-groups** event: round-robin with one group. ``_make_event`` above
-    is single-elim, which cuts an ungrouped bracket instead — no group for every entrant
-    to meet every other in.
+    """A **cuttable-into-groups** event: round-robin with one group. ``_make_event``
+    above is single-elim, which cuts an ungrouped bracket instead — no group for every
+    entrant to meet every other in.
 
     One group, not two, so that *every* entrant is seated in a fixture against every
     other — which is what makes "the guest's entry is in this draw" true by
@@ -979,9 +979,9 @@ async def _make_rr_event(
             tables=venue_tables(("Table 1", "A")),
         )
     db.add(tournament)
-    # Flushed before the event is composed, because the reservation below reserves a table and
-    # a reservation row carries the tournament's id — which is the database's to mint
-    # (ADR 20260801).
+    # Flushed before the event is composed, because the reservation below reserves a
+    # table and a reservation row carries the tournament's id — which is the
+    # database's to mint (ADR 20260801).
     await db.flush()
     slot = {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     stages = mint_stages(DrawType.round_robin)

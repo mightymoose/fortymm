@@ -109,9 +109,9 @@ async def _make_tournament(
     ``with_event=False``, one grouped event of ``draw_type`` capped at four players
     over both tables). ``with_single_elim_event`` adds a second event the preview
     lays out nothing of, to prove it costs the first event nothing; it needs no
-    reservations, since a skipped event's reservations are never read. Written straight to the database —
-    creation routes are not under test here. No ``TournamentEntry`` rows: a preview
-    draws a synthetic field."""
+    reservations, since a skipped event's reservations are never read. Written
+    straight to the database — creation routes are not under test here. No
+    ``TournamentEntry`` rows: a preview draws a synthetic field."""
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
 

@@ -462,7 +462,9 @@ async def test_a_tournament_that_is_not_live_gets_no_panel(
     played yet and an archived one is over; neither belongs at the top of a
     dashboard."""
     client, owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     await _enter(db_session, event["id"], owner, seed=1)
 
     await _set_status(db_session, tournament_id, TournamentStatus.published)
@@ -483,7 +485,9 @@ async def test_a_withdrawn_player_gets_no_panel(
     filter on the status rather than on the row's existence, or a player who pulled out
     keeps being shown a tournament they are no longer in."""
     client, owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     entry = await _enter(db_session, event["id"], owner, seed=1)
     await _set_status(db_session, tournament_id, TournamentStatus.live)
     assert len(await _panels(client)) == 1
@@ -503,7 +507,9 @@ async def test_a_live_tournament_the_caller_only_directs_gets_no_panel(
     tournament. A director who is running an event they are not playing in has no match
     to be shown, and their dashboard must not claim otherwise."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     async with opponent_session(db_session, "entrant-not-owner") as (_c, entrant):
         await _enter(db_session, event["id"], entrant, seed=1)
         await _set_status(db_session, tournament_id, TournamentStatus.live)
@@ -520,7 +526,9 @@ async def test_an_event_with_no_draw_cut_stands_the_player_nowhere(
     """``position: None`` is a fact, not a zero: an event whose draw has not been cut
     has no standings to stand in, and a ``0`` there would read as a rank."""
     client, owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     await _enter(db_session, event["id"], owner, seed=1)
     await _set_status(db_session, tournament_id, TournamentStatus.live)
 
@@ -710,7 +718,9 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
     """A guard on the membership query itself: an entry row belonging to *another*
     user in the same live event must not put that event on this caller's panel."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
     async with opponent_session(db_session, "someone-else") as (_c, other):
         await _enter(
             db_session,
@@ -914,8 +924,8 @@ async def test_a_swiss_panel_reads_the_callers_rank_off_the_group_less_table(
     assert swiss_event["position"] == 1, "the caller won the only match, so they lead"
     assert (swiss_event["wins"], swiss_event["losses"]) == (1, 0)
     assert swiss_event["stage_label"] == "Complete", (
-        "the only round is decided, so the event is over — and swiss has no group whose "
-        "completeness could have answered this instead"
+        "the only round is decided, so the event is over — and swiss has no group "
+        "whose completeness could have answered this instead"
     )
 
 
@@ -982,13 +992,9 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
 
         # -- the group stage: the caller's own group match is the focus, and it is a
         #    "Group match".
-        groups = [
-            f for f in await _fixture_rows(db_session, event["id"]) if f.group_id
-        ]
+        groups = [f for f in await _fixture_rows(db_session, event["id"]) if f.group_id]
         await _call_fixtures(db_session, tournament_id, groups)
-        groups = [
-            f for f in await _fixture_rows(db_session, event["id"]) if f.group_id
-        ]
+        groups = [f for f in await _fixture_rows(db_session, event["id"]) if f.group_id]
         (panel,) = await _panels(client)
         (group_event,) = panel["events"]
         assert group_event["match"]["round_label"] == "Group match 1"

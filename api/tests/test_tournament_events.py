@@ -44,14 +44,14 @@ from app.schemas.tournament import Address, TournamentEventCreate, TournamentEve
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
-    NotTournamentOwnerError,
     GroupSetFrozenError,
+    NotTournamentOwnerError,
     TournamentNotFoundError,
 )
 from app.tournament_event_stages import mint_stages
 from app.tournament_events import create_event, delete_event, update_event
-from app.tournament_reservations import group_read
 from app.tournament_queries import stage_ids_for_events
+from app.tournament_reservations import group_read
 from tests._helpers import (
     event_groups,
     make_user,

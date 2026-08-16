@@ -39,8 +39,8 @@ from app.draws import (
     FixtureGames,
     FixtureId,
     FixtureState,
-    MatchId,
     GroupId,
+    MatchId,
     _swiss_standings_order,
 )
 from app.group_finishing_order import (

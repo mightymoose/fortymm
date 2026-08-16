@@ -459,8 +459,9 @@ async def test_an_out_of_window_start_still_saves_as_a_flag(
 
     This is the test that would red if the foreign key were read as licence to validate
     the whole placement rather than the one claim ADR 20260801 hardened. A
-    reservation's tables and window stay editable under a standing draw precisely because the venue
-    changes under a running tournament, so a placement a later edit outranges is a flag
+    reservation's tables and window stay editable under a standing draw precisely
+    because the venue changes under a running tournament, so a placement a later edit
+    outranges is a flag
     derived on read, never a refusal."""
     owner = await make_user(db_session, "place-out-of-window-owner")
     tournament, _event, fixture = await _seed_placeable_fixture(

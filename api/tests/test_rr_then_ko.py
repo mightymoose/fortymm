@@ -1182,7 +1182,9 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
             entries[5].id: client_5,
         }
 
-        async def _play_pool(reservation_name: str, seeds: tuple[int, int, int]) -> None:
+        async def _play_pool(
+            reservation_name: str, seeds: tuple[int, int, int]
+        ) -> None:
             """Play one pool of three out in full — the LOWER seed always wins, 2-0 —
             so its finishing order (and therefore its qualifiers) is simply its two
             lowest seeds, with no tiebreak needed and no third client."""
