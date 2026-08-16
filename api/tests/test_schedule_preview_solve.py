@@ -78,16 +78,17 @@ from tests._helpers import (
 )
 
 # Built per tournament, never as a module constant: a catalogue is
-# ``tournament_tables`` rows now (ADR 20260801). The pools name them by the positional
+# ``tournament_tables`` rows now (ADR 20260801). The reservations name them by the
+# positional
 # ``t1``/``t2`` aliases ``with_table_aliases`` resolves.
 TABLE_CATALOGUE = (("Table 1", "A"), ("Table 2", "A"))
 
 
-def _pool(
+def _reservation(
     table_ids: list[str], *, start: str = "09:00", end: str = "18:00"
 ) -> dict[str, object]:
     return {
-        "name": "Pool A",
+        "name": "Reservation A",
         "slot": {"date": "2026-06-13", "start": start, "end": end},
         "table_ids": table_ids,
     }
@@ -155,7 +156,7 @@ async def _add_event(
     tournament: Tournament,
     *,
     max_players: int | None = 4,
-    pools: list[dict[str, object]] | None = None,
+    reservations: list[dict[str, object]] | None = None,
     length_games: int = 5,
     name: str = "Open Singles",
     timezone: str = "America/Los_Angeles",
@@ -179,7 +180,9 @@ async def _add_event(
         timezone=timezone,
     )
     stages[0].groups = with_table_aliases(
-        event, tournament, [_pool(["t1", "t2"])] if pools is None else pools
+        event,
+        tournament,
+        [_reservation(["t1", "t2"])] if reservations is None else reservations,
     )
     db.add(event)
     await db.commit()
@@ -255,8 +258,9 @@ async def test_preview_solve_enqueues_on_the_preview_queue_and_yields_a_result(
     assert enqueued.token
     assert [s.field_size for s in enqueued.field_summaries] == [4]
     assert len(enqueued.fixtures) == 6
-    # Each drawn fixture carries its human pool label off the event's pool config.
-    assert {f.reservation_name for f in enqueued.fixtures} == {"Pool A"}
+    # Each drawn fixture carries its human reservation label off the event's
+    # reservation config.
+    assert {f.reservation_name for f in enqueued.fixtures} == {"Reservation A"}
 
     # The job landed on the PREVIEW queue with the right timeout, and running it
     # yields the full PreviewResult.
@@ -292,21 +296,23 @@ async def test_preview_solve_finish_anchors_on_the_earliest_window_start(
     db_session: AsyncSession, default_league: League, preview_queue: Queue
 ) -> None:
     """The wall-clock finish is anchored on the builder's returned ``base`` — the
-    earliest pool window start across the tournament — so ``estimated_finish`` is
-    exactly ``base + estimated_duration``. Pins the value the enqueue verb now reads
-    off ``PreviewSnapshot.base`` (rather than re-walking the pools), so the anchor
+    earliest reservation window start across the tournament — so
+    ``estimated_finish`` is exactly ``base + estimated_duration``. Pins the value
+    the enqueue verb now reads off ``PreviewSnapshot.base`` (rather than
+    re-walking the reservations), so the anchor
     can't silently drift from the minute frame the snapshot was built on."""
     owner = await make_user(db_session, "prev-finish")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    # Two pools: the earliest start (08:30) is the frame origin, not the 09:00 one.
+    # Two reservations: the earliest start (08:30) is the frame origin, not the
+    # 09:00 one.
     await _add_event(
         db_session,
         tournament,
         max_players=4,
-        pools=[
-            _pool(["t1"], start="09:00", end="18:00"),
+        reservations=[
+            _reservation(["t1"], start="09:00", end="18:00"),
             {
-                "name": "Pool B",
+                "name": "Reservation B",
                 "slot": {"date": "2026-06-13", "start": "08:30", "end": "18:00"},
                 "table_ids": ["t2"],
             },
@@ -317,8 +323,8 @@ async def test_preview_solve_finish_anchors_on_the_earliest_window_start(
     (job,) = preview_queue.jobs
     (inputs,) = job.args
     assert isinstance(inputs, PreviewJobInputs)
-    # The base handed to the job is the earliest window start, not the later pool's —
-    # an aware instant in the event's venue zone.
+    # The base handed to the job is the earliest window start, not the later
+    # reservation's — an aware instant in the event's venue zone.
     assert inputs.base == datetime(
         2026, 6, 13, 8, 30, tzinfo=ZoneInfo("America/Los_Angeles")
     )
@@ -347,49 +353,52 @@ async def test_preview_solve_reports_byes_for_an_odd_field(
 
     result = PreviewResult.model_validate(run_schedule_preview(inputs))
 
-    # A pool of 5 (odd) casts one bye per round over 5 rounds — 5 byes total.
+    # A group of 5 (odd) casts one bye per round over 5 rounds — 5 byes total.
     assert result.total_matches == 10  # C(5, 2)
     assert result.total_byes == 5
     assert result.events[0].byes == 5
 
 
-#: The two pools an rr-then-ko subject is drawn over, with distinct ids (the shared
-#: ``_pool`` helper's id is fixed, and two pools of one event may not collide).
-_TWO_POOLS: list[dict[str, object]] = [
+#: The two reservations an rr-then-ko subject is drawn over, with distinct ids (the
+#: shared ``_reservation`` helper's id is fixed, and two reservations of one event
+#: may not collide).
+_TWO_RESERVATIONS: list[dict[str, object]] = [
     {
-        "name": "Pool A",
+        "name": "Reservation A",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "table_ids": ["t1"],
     },
     {
-        "name": "Pool B",
+        "name": "Reservation B",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "table_ids": ["t2"],
     },
 ]
 
 #: The exact honest note an rr-then-ko event earns, pinned so the wording a director
-#: reads cannot drift silently. Six entrants over two pools taking the top 2 each
+#: reads cannot drift silently. Six entrants over two groups taking the top 2 each
 #: gives 4 qualifiers → a 4-slot bracket → 3 knockout fixtures, none of them
 #: scheduled.
 _KNOCKOUT_NOTE = (
-    "Only the pool stage of Championship is scheduled here: its knockout "
-    "bracket (3 further matches) is played after the pools finish and is not "
-    "in this estimate."
+    "Only the reservation stage of Championship is scheduled here: its knockout "
+    "bracket (3 further matches) is played after the reservations finish and is "
+    "not in this estimate."
 )
 
 
 async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_scheduled(
     db_session: AsyncSession, default_league: League, preview_queue: Queue
 ) -> None:
-    """The preview plans an rr-then-ko event's whole draw but schedules only its pool
-    stage (ADR 20260727 — a freshly cut bracket is entirely TBD-sided, so it is
-    placeable only incrementally as the pools resolve; that is #1228). Silently showing
+    """The preview plans an rr-then-ko event's whole draw but schedules only its
+    reservation stage (ADR 20260727 — a freshly cut bracket is entirely TBD-sided,
+    so it is placeable only incrementally as the reservations resolve; that is
+    #1228). Silently showing
     the director a schedule that covers part of their event is the failure this note
     prevents, so the strip says so in as many words.
 
     The tournament also holds a plain round-robin event, which is the discriminating
-    part: its pools are scheduled beside the rr-then-ko event's (both events' match
+    part: its reservations are scheduled beside the rr-then-ko event's (both events'
+    match
     counts are asserted), and **it** earns no such note — the strip names the event
     that is actually missing a stage, not every event on the day.
     """
@@ -400,14 +409,14 @@ async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_sche
         tournament,
         name="Open Singles",
         max_players=4,
-        pools=[_pool(["t1"])],
+        reservations=[_reservation(["t1"])],
     )
     await _add_event(
         db_session,
         tournament,
         name="Championship",
         max_players=6,
-        pools=_TWO_POOLS,
+        reservations=_TWO_RESERVATIONS,
         draw_type=DrawType.rr_then_ko,
         qualifiers_per_group=2,
     )
@@ -419,8 +428,9 @@ async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_sche
 
     result = PreviewResult.model_validate(run_schedule_preview(inputs))
 
-    # Both events' POOL fixtures are previewed: C(4, 2) = 6 for the round-robin, and
-    # 2 × C(3, 2) = 6 for the rr-then-ko event's two pools of three. Its 3 knockout
+    # Both events' GROUP fixtures are previewed: C(4, 2) = 6 for the round-robin,
+    # and 2 × C(3, 2) = 6 for the rr-then-ko event's two groups of three. Its 3
+    # knockout
     # fixtures are not counted — they are what the note is about.
     assert {e.name: e.matches for e in result.events} == {
         "Open Singles": 6,
@@ -470,14 +480,14 @@ async def test_preview_notes_say_a_bracket_event_is_not_previewed_at_all(
         tournament,
         name="Open Singles",
         max_players=4,
-        pools=[_pool(["t1"])],
+        reservations=[_reservation(["t1"])],
     )
     await _add_event(
         db_session,
         tournament,
         name="Championship",
         max_players=8,
-        pools=[_pool(["t2"])],
+        reservations=[_reservation(["t2"])],
         draw_type=DrawType.single_elim,
     )
 
@@ -514,13 +524,13 @@ async def test_preview_notes_say_a_bracket_event_is_not_previewed_at_all(
 
 
 #: The draw strategy's own refusal for the configuration a real director hit — one
-#: pool taking one qualifier — and the note the preview wraps it in. Pinned whole
+#: group taking one qualifier — and the note the preview wraps it in. Pinned whole
 #: because the domain's sentence reaching the director IS the fix: it names the two
 #: things they can change, and a generic "could not be previewed" names neither.
 _ONE_QUALIFIER_REFUSAL = (
-    "Taking 1 qualifier from a single pool leaves one player in the knockout "
-    "stage, who would have nobody to play — take more qualifiers from each pool, "
-    "or configure more pools."
+    "Taking 1 qualifier from a single group leaves one player in the knockout "
+    "stage, who would have nobody to play — take more qualifiers from each group, "
+    "or configure more groups."
 )
 _DEGENERATE_EVENT_NOTE = (
     "Championship is not in this preview: its draw cannot be cut as the event "
@@ -556,16 +566,16 @@ async def test_preview_notes_carry_a_degenerate_events_own_refusal(
         tournament,
         name="Open Singles",
         max_players=4,
-        pools=[_pool(["t1"])],
+        reservations=[_reservation(["t1"])],
     )
     await _add_event(
         db_session,
         tournament,
         name="Championship",
         max_players=6,
-        pools=[_pool(["t2"])],
+        reservations=[_reservation(["t2"])],
         draw_type=DrawType.rr_then_ko,
-        # One pool taking one qualifier: the knockout stage would hold a single
+        # One group taking one qualifier: the knockout stage would hold a single
         # player with nobody to play, so the strategy refuses the cut.
         qualifiers_per_group=1,
     )
@@ -718,7 +728,7 @@ async def test_preview_solve_infeasible_resolves_its_reasons(
         tournament,
         max_players=4,
         length_games=5,
-        pools=[_pool(["t1"], start="09:00", end="09:10")],
+        reservations=[_reservation(["t1"], start="09:00", end="09:10")],
         name="Tight Singles",
     )
 
@@ -736,17 +746,18 @@ async def test_preview_solve_infeasible_resolves_its_reasons(
     assert result.peak_concurrent_tables == 0
     assert result.table_utilization == 0.0
     # The reasons are humanized through the shared resolved-reason machinery: the
-    # pool's display name + HH:MM window, not the namespaced solver id.
+    # reservation's display name + HH:MM window, not the namespaced solver id.
     assert result.infeasibility_reasons
     reason = result.infeasibility_reasons[0]
     assert isinstance(reason, WindowTooShortForMatchRead)
-    assert reason.reservation_name == "Pool A"
+    assert reason.reservation_name == "Reservation A"
     assert reason.window_start == "09:00"
     assert reason.best_of == 5
-    # A preview schedules pooled fixtures only — it drops an rr-then-ko draw's
-    # un-pooled knockout — so the reservation it blames is always a real pool,
-    # and the remedy the client offers may name a pool control.
-    assert reason.reservation == "pool"
+    # A preview schedules grouped fixtures only — it drops an rr-then-ko draw's
+    # ungrouped knockout — so the reservation it blames is always a real, director-
+    # booked reservation, and the remedy the client offers may name a
+    # reservation control.
+    assert reason.reservation == "booked"
 
 
 async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
@@ -762,7 +773,7 @@ async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
     Four entrants in a round-robin means every one of them plays three
     35-minute matches: 105 minutes plus two 10-minute rests is 125 minutes of one
     person's time against a 120-minute window, so all four are certainly
-    over-subscribed. Two tables keep the *pool* under capacity (210 needed
+    over-subscribed. Two tables keep the *reservation* under capacity (210 needed
     against 120 × 2 = 240), so this arm is the only one that can fire."""
     owner = await make_user(db_session, "prev-oversubscribed")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
@@ -771,7 +782,7 @@ async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
         tournament,
         max_players=4,
         length_games=5,
-        pools=[_pool(["t1", "t2"], start="09:00", end="11:00")],
+        reservations=[_reservation(["t1", "t2"], start="09:00", end="11:00")],
     )
 
     await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)
@@ -790,13 +801,13 @@ async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
         f"Placeholder {k}" for k in (1, 2, 3, 4)
     }
     first = over_subscribed[0]
-    assert first.reservation_name == "Pool A"
+    assert first.reservation_name == "Reservation A"
     assert first.window_start == "09:00"
     assert first.window_end == "11:00"
     assert first.match_count == 3
     assert first.required_min == 125  # 3 * 35 + 2 * REST_MIN
     assert first.window_span_min == 120
-    assert first.reservation == "pool"
+    assert first.reservation == "booked"
 
 
 async def test_preview_solve_past_dated_window_resolves_past_window(
@@ -805,7 +816,7 @@ async def test_preview_solve_past_dated_window_resolves_past_window(
     preview_queue: Queue,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A pool dated in the **past** relative to the real ``now`` (the stale
+    """A reservation dated in the **past** relative to the real ``now`` (the stale
     "today"-default-gone-a-day-old case, #1101) previews **infeasible with a
     resolved ``past_window`` reason** — the same verdict + venue-local date the live
     pre-solve reports, proving the preview agrees with go-live. This exercises the
@@ -832,8 +843,8 @@ async def test_preview_solve_past_dated_window_resolves_past_window(
 
     assert result.verdict is PreviewVerdict.infeasible
     assert result.fits is False
-    # Resolved to the offending pool's venue-local calendar day — the "which day to
-    # move" fact, identical to what a real infeasible solve records.
+    # Resolved to the offending reservation's venue-local calendar day — the "which
+    # day to move" fact, identical to what a real infeasible solve records.
     assert result.infeasibility_reasons
     reason = result.infeasibility_reasons[0]
     assert isinstance(reason, PastWindowReasonRead)
