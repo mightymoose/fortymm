@@ -1001,7 +1001,7 @@ async def _make_rr_event(
         predicates=[],
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [{"name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
         event=event,
         tournament=tournament,
@@ -1009,9 +1009,9 @@ async def _make_rr_event(
     db.add(event)
     await db.commit()
     # ``pools`` explicitly: ``_cut`` below hands this event straight to ``cut_draw``,
-    # which reads ``event.pools`` synchronously — a plain refresh leaves that VIEWONLY
+    # which reads ``event.groups`` synchronously — a plain refresh leaves that VIEWONLY
     # association unloaded (ADR 20260815), and the read would be an async lazy load.
-    await db.refresh(event, attribute_names=["pools"])
+    await db.refresh(event, attribute_names=["groups"])
     return event
 
 

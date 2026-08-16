@@ -39,7 +39,9 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventPool,
+    TournamentEventGroupReservation,
+    TournamentEventReservation,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -119,16 +121,30 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
 
 
 async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.UUID:
-    """The id of the event's pool **named** ``name`` — the lookup every assertion about
-    a fixture's ``pool_id`` goes through, since the id is the server's
-    (ADR 20260801)."""
+    """The id of the **group** whose reservation is named ``name`` — the lookup every
+    assertion about a fixture's ``pool_id`` goes through, since the id is the server's
+    (ADR 20260801).
+
+    The name lives on the reservation and the id on the group, so this walks the join:
+    the two halves of what the wire calls one pool."""
     return (
         await db_session.execute(
-            select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(
+            select(TournamentEventStageGroup.id)
+            .join(
+                TournamentEventGroupReservation,
+                TournamentEventGroupReservation.group_id
+                == TournamentEventStageGroup.id,
+            )
+            .join(
+                TournamentEventReservation,
+                TournamentEventReservation.id
+                == TournamentEventGroupReservation.reservation_id,
+            )
+            .where(
+                TournamentEventStageGroup.stage_id.in_(
                     stage_ids_for_events([uuid.UUID(event_id)])
                 ),
-                TournamentEventPool.name == name,
+                TournamentEventReservation.name == name,
             )
         )
     ).scalar_one()
@@ -139,13 +155,13 @@ async def _pool_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
     return list(
         (
             await db_session.execute(
-                select(TournamentEventPool.id)
+                select(TournamentEventStageGroup.id)
                 .where(
-                    TournamentEventPool.stage_id.in_(
+                    TournamentEventStageGroup.stage_id.in_(
                         stage_ids_for_events([uuid.UUID(event_id)])
                     )
                 )
-                .order_by(TournamentEventPool.position)
+                .order_by(TournamentEventStageGroup.position)
             )
         )
         .scalars()
@@ -1069,20 +1085,25 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
         assert all(f.match_id is None for f in bracket)
 
 
-def _pool_payload(pool: TournamentEventPool) -> dict[str, Any]:
+def _pool_payload(group: TournamentEventStageGroup) -> dict[str, Any]:
     """The full :class:`~app.schemas.tournament.PoolUpsert` a PATCH must send to
     *cite* an existing pool: an id alone is not enough, since the shape carries
-    ``name``, ``slot`` and ``table_ids`` too. ``table_ids`` is sent empty rather than
-    round-tripped — a reservation naming a table this test's tournament does not have
-    is dropped silently (``app.tournament_pools._reservations``) — so the emptiness
-    itself asserts nothing either way."""
+    ``name``, ``slot`` and ``table_ids`` too.
+
+    The id is the **group's** and the rest is its **reservation's** — the same split
+    ``app.tournament_pools.pool_read`` projects, spelled here against the rows.
+    ``table_ids`` is sent empty rather than round-tripped — a table this test's
+    tournament does not have is dropped silently
+    (``app.tournament_pools._reservation_tables``) — so the emptiness itself asserts
+    nothing either way."""
+    reservation = group.reservation
     return {
-        "id": str(pool.id),
-        "name": pool.name,
+        "id": str(group.id),
+        "name": reservation.name,
         "slot": {
-            "date": pool.slot_date.isoformat(),
-            "start": pool.slot_start.strftime("%H:%M"),
-            "end": pool.slot_end.strftime("%H:%M"),
+            "date": reservation.slot_date.isoformat(),
+            "start": reservation.slot_start.strftime("%H:%M"),
+            "end": reservation.slot_end.strftime("%H:%M"),
         },
         "table_ids": [],
     }
@@ -1202,13 +1223,13 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
         pools = (
             (
                 await db_session.execute(
-                    select(TournamentEventPool)
+                    select(TournamentEventStageGroup)
                     .where(
-                        TournamentEventPool.stage_id.in_(
+                        TournamentEventStageGroup.stage_id.in_(
                             stage_ids_for_events([uuid.UUID(event_id)])
                         )
                     )
-                    .order_by(TournamentEventPool.position)
+                    .order_by(TournamentEventStageGroup.position)
                 )
             )
             .scalars()
@@ -1243,8 +1264,8 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
         "/v1/tournaments/{id}/events/{event_id} whose body includes a `pools` key "
         "returns 500, reordered or resent unchanged: app/tournament_events.py's "
         "update_event ends with `await db.refresh(event)`, which leaves "
-        "TournamentEventPool.tables expired rather than eagerly reloaded, and "
-        "app/tournament_pools.py's pool_read then touches `pool.tables` during "
+        "a reservation's tables expired rather than eagerly reloaded, and "
+        "app/tournament_pools.py's pool_read then touches them during "
         "response serialization, which lazy-loads under async and raises "
         "sqlalchemy.exc.MissingGreenlet. No test in the suite exercised a `pools` "
         "PATCH over HTTP before this one, so it has never been caught."
@@ -1256,7 +1277,7 @@ async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
 ) -> None:
     """The permitted sibling of the refusal above, run all the way through the HTTP
     response serializer rather than stopping at a service-layer call: once a draw is
-    cut, `_enforce_pool_set_frozen` refuses a reorder before serialization is ever
+    cut, `_enforce_group_set_frozen` refuses a reorder before serialization is ever
     reached, so the crash this pins was never observable through that guard. It is a
     genuine, separate, pre-existing bug on the *permitted* path — see the `xfail`
     reason for the mechanism. Parametrized because the crash does not depend on the
@@ -1270,13 +1291,13 @@ async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
     pools = (
         (
             await db_session.execute(
-                select(TournamentEventPool)
+                select(TournamentEventStageGroup)
                 .where(
-                    TournamentEventPool.stage_id.in_(
+                    TournamentEventStageGroup.stage_id.in_(
                         stage_ids_for_events([uuid.UUID(event_id)])
                     )
                 )
-                .order_by(TournamentEventPool.position)
+                .order_by(TournamentEventStageGroup.position)
             )
         )
         .scalars()

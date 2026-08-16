@@ -566,11 +566,11 @@ async def latest_solve(
 #: placed in — the event's own ``slot`` for a window, the whole tournament
 #: catalogue for tables.
 #:
-#: It cannot collide with a real pool's key. A real key's suffix is
-#: ``str(pool.id)`` and ``Pool.id`` is typed ``uuid.UUID`` (server-minted since
-#: ADR 20260801), so every one of them is a UUID's canonical text — 32 hex
-#: digits and four hyphens, and nothing else. ``event-wide`` holds letters that
-#: are not hex digits, so no UUID can ever spell it.
+#: It cannot collide with a real reservation's key. A real key's suffix is the
+#: text of a ``TournamentEventReservation.id`` — a server-minted ``uuid`` — so
+#: every one of them is a UUID's canonical text, 32 hex digits and four hyphens
+#: and nothing else. ``event-wide`` holds letters that are not hex digits, so no
+#: UUID can ever spell it.
 EVENT_WIDE_POOL_SUFFIX = "event-wide"
 
 
@@ -892,6 +892,22 @@ async def _load_solver_inputs(
     event_slots: dict[uuid.UUID, Slot] = {
         event.id: Slot.model_validate(event.slot) for event, _s, _p in parsed_events
     }
+    # Group id → the id of the RESERVATION that group plays in. This is the one
+    # place the solver crosses from the wire's vocabulary into the schema's: a
+    # projected ``Pool.id`` and a ``fixture.pool_id`` are both **group** ids,
+    # while the thing this module actually constrains — a set of tables for a
+    # window — is the reservation. Keying the solver on the reservation is what
+    # makes "which reservation confines this fixture" a lookup rather than an
+    # assumption, and it is why the ``SchedulePool`` set below has exactly one
+    # entry per reservation however many groups map to it.
+    #
+    # Read off the ORM rather than the projection because the projection
+    # deliberately does not carry a reservation id — no client has ever seen one.
+    reservation_ids: dict[uuid.UUID, uuid.UUID] = {
+        group.id: group.reservation.id
+        for event in drawn_events
+        for group in event.groups
+    }
 
     # Pool ids are per-event value-objects — two events may both hold a
     # "pool-a" — so the solver's PoolId is namespaced by the event id.
@@ -929,7 +945,14 @@ async def _load_solver_inputs(
         # ``ZoneInfo`` here cannot raise on a stored value.
         event_tz = ZoneInfo(event.timezone)
         for pool in pools:
-            key = f"{event.id}:{pool.id}"
+            # Keyed on the RESERVATION, not on the group the projection's ``id``
+            # names — the window and the tables below are the reservation's, so
+            # the key names the thing it describes. Under this slice's 1:1 the
+            # two are in exact correspondence, so this loop still emits one spec
+            # per pool; what changes is which row the key refers to, which is
+            # what makes the key stay one interval when a later change lets two
+            # groups share a reservation.
+            key = f"{event.id}:{reservation_ids[pool.id]}"
             start, end = _slot_bounds(pool.slot, event_tz)
             tables = tuple(
                 TableId(table_id)
@@ -1014,10 +1037,17 @@ async def _load_solver_inputs(
             # draw's knockout stage — takes its event's event-wide reservation,
             # built above; the branch is present for the event precisely because
             # this fixture is, so the lookup is total.
+            # ``fixture.pool_id`` is a GROUP id, so it is resolved through the
+            # group→reservation map rather than spliced into a key directly:
+            # exactly one reservation per fixture, looked up, which is what keeps
+            # the CP-SAT interval constraint a single interval instead of a
+            # disjunction over several. The lookup is total — a fixture's group
+            # belongs to this event's stage 0 by its own composite foreign key,
+            # and every group of it is in the map.
             pool_key = (
                 event_wide_pool_key(event.id)
                 if fixture.pool_id is None
-                else PoolId(f"{event.id}:{fixture.pool_id}")
+                else PoolId(f"{event.id}:{reservation_ids[fixture.pool_id]}")
             )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it

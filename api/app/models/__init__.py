@@ -36,9 +36,15 @@ from app.models.tournament import (
 )
 from app.models.tournament_entry import TournamentEntry, TournamentEntryStatus
 from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
-from app.models.tournament_event_pool import TournamentEventPool
-from app.models.tournament_event_pool_table import TournamentEventPoolTable
+from app.models.tournament_event_group_reservation import (
+    TournamentEventGroupReservation,
+)
+from app.models.tournament_event_reservation import TournamentEventReservation
+from app.models.tournament_event_reservation_table import (
+    TournamentEventReservationTable,
+)
 from app.models.tournament_event_stage import TournamentEventStage
+from app.models.tournament_event_stage_group import TournamentEventStageGroup
 from app.models.tournament_fixture import TournamentFixture
 from app.models.tournament_table import VenueTable
 from app.models.user import User
@@ -82,9 +88,11 @@ __all__ = [
     "TournamentEntryStatus",
     "TournamentEvent",
     "TournamentEventDrawSettings",
-    "TournamentEventPool",
-    "TournamentEventPoolTable",
+    "TournamentEventGroupReservation",
+    "TournamentEventReservation",
+    "TournamentEventReservationTable",
     "TournamentEventStage",
+    "TournamentEventStageGroup",
     "TournamentFixture",
     "TournamentStatus",
     "User",

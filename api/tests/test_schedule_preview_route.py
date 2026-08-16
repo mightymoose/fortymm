@@ -149,7 +149,7 @@ async def _make_tournament(
             timezone="America/Los_Angeles",
             stages=stages,
         )
-        stages[0].pools = with_table_aliases(
+        stages[0].groups = with_table_aliases(
             event,
             tournament,
             [

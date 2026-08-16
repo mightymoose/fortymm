@@ -735,7 +735,7 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # every event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows
 # now too, ADR 20260801, and the panel resolves a fixture's pool NAME through them) and
 # ONE of every one of THOSE pools' table reservations
-# (``TournamentEventPool.tables``, ``lazy="selectin"`` — chained onto the pools' own
+# (the reservation's ``tables``, ``lazy="selectin"`` — chained onto the groups' own
 # batched load, so it is one statement per panel build and not one per pool),
 # then ONE batched load of every event's active entrants, ONE of every event's fixtures,
 # ONE of the completed matches' game counts, ONE batched eager load of every event's
@@ -744,9 +744,17 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # inferring a fixture's stage from the event's overall draw type plus
 # ``pool_id IS NULL``, ADR 20260815), ONE of the handful of focus matches, and that
 # load's own eager options (the match's league, results, sides, settings, side
-# players and those players' users — one batched ``selectin`` each). Fifteen, whatever
+# players and those players' users — one batched ``selectin`` each). Sixteen, whatever
 # the number of events.
-EXPECTED_DASHBOARD_PANEL_STATEMENTS = 15
+#
+# The count moved by exactly ONE when a pool row split into a GROUP and a
+# RESERVATION: a group reaches its reservation through
+# ``tournament_event_group_reservations``, whose own batched ``selectin`` is the
+# added statement. The reservation itself rides along inside it
+# (``lazy="joined"``, a many-to-one, so no second statement), and
+# ``TournamentEvent.reservations`` is deliberately NOT eager, which is what keeps
+# the move at one rather than three. Still constant in the number of events.
+EXPECTED_DASHBOARD_PANEL_STATEMENTS = 16
 
 
 @pytest.mark.parametrize("event_count", [1, 3])

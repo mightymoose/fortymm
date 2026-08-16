@@ -69,10 +69,11 @@ from app.schemas.tournament import (
 EntryId = NewType("EntryId", uuid.UUID)
 FixtureId = NewType("FixtureId", uuid.UUID)
 MatchId = NewType("MatchId", uuid.UUID)
-#: A pool is a row (``tournament_event_pools``, ADR 20260801) with a server-minted uuid
+#: A pool is a row (``tournament_event_stage_groups``, ADR 20260801) with a
+#: server-minted uuid
 #: primary key, and a fixture's ``pool_id`` is a real composite foreign key onto it — so
 #: this is a ``uuid.UUID``, exactly like the ids above. It was a ``str``, a dangling ref
-#: into ``TournamentEvent.pools`` JSONB, for as long as there was no pools table to
+#: into ``TournamentEvent.pools`` JSONB, for as long as there was no groups table to
 #: point at and no server to mint one.
 PoolId = NewType("PoolId", uuid.UUID)
 

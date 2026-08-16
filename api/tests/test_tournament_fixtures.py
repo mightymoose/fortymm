@@ -25,7 +25,6 @@ covered by running ``alembic upgrade head`` against a fresh database.
 """
 
 import uuid
-from datetime import date, time
 from decimal import Decimal
 
 import pytest
@@ -43,8 +42,8 @@ from app.models import (
     TournamentEntry,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
     TournamentEventStage,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -109,7 +108,7 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
     # real parent is its stage now (ADR 20260815), so they hang off ``stages[0]``, not
     # the event directly; ``_pool_a`` / ``_pool_b`` read them back off the event's
     # (VIEWONLY) ``pools`` association.
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [
             {"name": "Pool A", "slot": {}, "table_ids": []},
             {"name": "Pool B", "slot": {}, "table_ids": []},
@@ -120,19 +119,19 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
     await db_session.commit()
     # Both ``pools`` (VIEWONLY) and ``stages`` (not eager) are populated on refresh, not
     # by construction (ADR 20260815) — every fixture this file seeds needs both ids.
-    await db_session.refresh(event, attribute_names=["pools", "stages"])
+    await db_session.refresh(event, attribute_names=["groups", "stages"])
     return event
 
 
 def _pool_a(event: TournamentEvent) -> uuid.UUID:
-    """The id of the event's first pool — ``event.pools`` is ordered by ``position``,
+    """The id of the event's first pool — ``event.groups`` is ordered by ``position``,
     which is the order ``_make_event`` seeded them in."""
-    return event.pools[0].id
+    return event.groups[0].id
 
 
 def _pool_b(event: TournamentEvent) -> uuid.UUID:
     """The id of the event's second pool."""
-    return event.pools[1].id
+    return event.groups[1].id
 
 
 def _stage_a(event: TournamentEvent) -> uuid.UUID:
@@ -371,14 +370,10 @@ async def test_a_fixture_in_another_events_pool_is_refused_by_the_database(
     other_event = await _make_event(db_session)
     elsewhere = uuid.uuid4()
     db_session.add(
-        TournamentEventPool(
+        TournamentEventStageGroup(
             id=elsewhere,
             stage_id=_stage_a(other_event),
-            name="Pool Elsewhere",
             position=2,
-            slot_date=date(2026, 8, 1),
-            slot_start=time(9, 0),
-            slot_end=time(12, 30),
         )
     )
     db_session.add(
@@ -457,8 +452,10 @@ async def test_deleting_the_event_takes_its_pools_with_it(
     pools = (
         (
             await db_session.execute(
-                select(TournamentEventPool).where(
-                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                select(TournamentEventStageGroup).where(
+                    TournamentEventStageGroup.stage_id.in_(
+                        stage_ids_for_events([event_id])
+                    )
                 )
             )
         )

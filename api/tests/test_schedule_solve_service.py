@@ -69,8 +69,10 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventPool,
-    TournamentEventPoolTable,
+    TournamentEventGroupReservation,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -250,19 +252,19 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": length_games},
         stages=stages,
     )
-    stages[0].pools = event_pools(pool_specs, event=event, tournament=tournament)
+    stages[0].groups = event_pools(pool_specs, event=event, tournament=tournament)
     db.add(event)
     await db.flush()
     # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
     # (ADR 20260815), populated automatically whenever an event is *queried* (its
     # declared ``lazy="selectin"`` fires as part of any SELECT that returns
     # ``TournamentEvent`` rows) but NOT by construction the way the old direct
-    # relationship was. ``cut_draw`` below reads ``event.pools`` synchronously
+    # relationship was. ``cut_draw`` below reads ``event.groups`` synchronously
     # (``app.tournament_draws.event_pools``/``draw_config``), so this object — built
     # and flushed, never queried — needs an explicit refresh or that read is an async
     # lazy load and raises ``MissingGreenlet``. A production caller never hits this:
     # every route loads its event through a query first.
-    await db.refresh(event, attribute_names=["pools"])
+    await db.refresh(event, attribute_names=["groups"])
 
     for _ in range(entrants):
         player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
@@ -284,8 +286,8 @@ async def _solver_pool_id(db: AsyncSession, event_id: uuid.UUID) -> PoolId:
     ``app.schedule_preview.preview_pool_key`` for why it stayed."""
     pool_id = (
         await db.execute(
-            select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+            select(TournamentEventStageGroup.id).where(
+                TournamentEventStageGroup.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -2041,11 +2043,24 @@ class TestEventWideReservation:
         pool_rows = (
             await db_session.execute(
                 select(
-                    TournamentEventPool.id,
-                    TournamentEventPool.slot_start,
-                    TournamentEventPool.slot_end,
-                ).where(
-                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                    TournamentEventStageGroup.id,
+                    TournamentEventReservation.slot_start,
+                    TournamentEventReservation.slot_end,
+                )
+                .join(
+                    TournamentEventGroupReservation,
+                    TournamentEventGroupReservation.group_id
+                    == TournamentEventStageGroup.id,
+                )
+                .join(
+                    TournamentEventReservation,
+                    TournamentEventReservation.id
+                    == TournamentEventGroupReservation.reservation_id,
+                )
+                .where(
+                    TournamentEventStageGroup.stage_id.in_(
+                        stage_ids_for_events([event_id])
+                    )
                 )
             )
         ).all()
@@ -2061,8 +2076,15 @@ class TestEventWideReservation:
         for pool_id, table_id in (
             await db_session.execute(
                 select(
-                    TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id
-                ).where(TournamentEventPoolTable.event_id == event_id)
+                    TournamentEventGroupReservation.group_id,
+                    TournamentEventReservationTable.table_id,
+                )
+                .join(
+                    TournamentEventReservationTable,
+                    TournamentEventReservationTable.reservation_id
+                    == TournamentEventGroupReservation.reservation_id,
+                )
+                .where(TournamentEventReservationTable.event_id == event_id)
             )
         ).all():
             pool_tables[pool_id].add(str(table_id))
@@ -2363,11 +2385,24 @@ async def _pool_reservations(
         for pool_id, start, end in (
             await db.execute(
                 select(
-                    TournamentEventPool.id,
-                    TournamentEventPool.slot_start,
-                    TournamentEventPool.slot_end,
-                ).where(
-                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                    TournamentEventStageGroup.id,
+                    TournamentEventReservation.slot_start,
+                    TournamentEventReservation.slot_end,
+                )
+                .join(
+                    TournamentEventGroupReservation,
+                    TournamentEventGroupReservation.group_id
+                    == TournamentEventStageGroup.id,
+                )
+                .join(
+                    TournamentEventReservation,
+                    TournamentEventReservation.id
+                    == TournamentEventGroupReservation.reservation_id,
+                )
+                .where(
+                    TournamentEventStageGroup.stage_id.in_(
+                        stage_ids_for_events([event_id])
+                    )
                 )
             )
         ).all()
@@ -2376,8 +2411,15 @@ async def _pool_reservations(
     for pool_id, table_id in (
         await db.execute(
             select(
-                TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id
-            ).where(TournamentEventPoolTable.event_id == event_id)
+                TournamentEventGroupReservation.group_id,
+                TournamentEventReservationTable.table_id,
+            )
+            .join(
+                TournamentEventReservationTable,
+                TournamentEventReservationTable.reservation_id
+                == TournamentEventGroupReservation.reservation_id,
+            )
+            .where(TournamentEventReservationTable.event_id == event_id)
         )
     ).all():
         tables[pool_id].add(str(table_id))

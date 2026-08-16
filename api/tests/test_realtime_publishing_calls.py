@@ -148,7 +148,7 @@ async def _stage(
         event=event,
         tournament=tournament,
     )
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.flush()
 

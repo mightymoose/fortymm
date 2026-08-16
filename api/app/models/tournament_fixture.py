@@ -40,18 +40,25 @@ class TournamentFixture(Base):
     things, and the "is this side unknown, or is it a bye?" question would have to be
     answered by reading a second column.
 
-    ``pool_id`` is a **foreign key**, and a *composite* one: ``(stage_id, pool_id) →
-    tournament_event_pools (stage_id, id)``. Pools are rows now (ADR 20260801 "a pool
-    belongs to its event, not to the event's draw settings"), re-parented onto the
-    stage by ADR 20260815, and the composite form is what makes the reference say the
-    thing that actually matters — not merely "this pool exists" but "this pool is **my
-    own stage's**". A plain FK to ``tournament_event_pools.id`` would happily seat one
-    stage's fixture in another stage's pool, and that is the illegal state the ADR is
-    about; it is unrepresentable here because the two tables share ``stage_id`` and the
-    constraint requires it to agree. ``NULL`` means the draw is un-pooled — single-elim,
-    and the knockout stage of an rr-then-ko draw. (A composite FK with one NULL member
-    is satisfied vacuously under the SQL default MATCH SIMPLE, which is exactly right:
-    an un-pooled fixture names no pool to check.)
+    ``pool_id`` names a **group** — a row in ``tournament_event_stage_groups``, the half
+    of the old pool row that says *these entrants play each other*. The other half, the
+    tables and the window, is a reservation the group maps to, and a fixture reaches it
+    through that mapping rather than by naming it. **The column keeps the name
+    ``pool_id``** deliberately: it is what the wire calls the field, and renaming the
+    column and the wire field is one move that belongs to one change, not two.
+
+    It is a **foreign key**, and a *composite* one: ``(stage_id, pool_id) →
+    tournament_event_stage_groups (stage_id, id)``. Groups are rows (ADR 20260801 "a
+    pool belongs to its event, not to the event's draw settings"), parented on the stage
+    by ADR 20260815, and the composite form is what makes the reference say the thing
+    that actually matters — not merely "this group exists" but "this group is **my own
+    stage's**". A plain FK to ``tournament_event_stage_groups.id`` would happily seat
+    one stage's fixture in another stage's group, and that is the illegal state the ADR
+    is about; it is unrepresentable here because the two tables share ``stage_id`` and
+    the constraint requires it to agree. ``NULL`` means the draw is un-pooled —
+    single-elim, and the knockout stage of an rr-then-ko draw. (A composite FK with one
+    NULL member is satisfied vacuously under the SQL default MATCH SIMPLE, which is
+    exactly right: an un-pooled fixture names no group to check.)
 
     A fixture names its **stage**, not its event (ADR 20260815 decision 5) —
     ``event_id`` is dropped from this table entirely. The event is reachable through
@@ -75,29 +82,31 @@ class TournamentFixture(Base):
 
     __tablename__ = "tournament_fixtures"
     __table_args__ = (
-        # "My pool is my own stage's pool", as one line of DDL (ADR 20260801,
-        # re-parented onto the stage by ADR 20260815). The referenced
-        # ``(stage_id, id)`` is a unique constraint on ``tournament_event_pools`` that
-        # exists for no other purpose — SQL can only reference a unique set of columns,
-        # and the *pair* is what carries the claim.
-        #
-        # DEFERRABLE INITIALLY DEFERRED with the default (NO ACTION) delete rule, rather
-        # than ``RESTRICT``, because of the **event-delete** path — the same hazard the
-        # entry FKs below name. Deleting an event removes its pools through the ORM (the
-        # collection is eagerly loaded, so the unit of work issues that DELETE itself)
-        # and its fixtures through Postgres' ``ON DELETE CASCADE``, in that order and in
-        # two separate statements. An immediately-checked constraint fires between them,
-        # on fixtures that are about to be deleted one statement later, and kills the
-        # whole delete. Deferring is not a weakening: the pair is checked, in full,
-        # before the transaction can commit — a fixture pointing at another stage's pool
-        # is refused either way, just at COMMIT rather than at the INSERT.
-        #
-        # Removing a pool a fixture is drawn into is refused before it ever reaches this
-        # constraint, by ``_enforce_pool_set_frozen``'s 409 (ADR-0786) — which is now
-        # the *second* line of defence rather than the only one.
+        # "My group is my own stage's group", as one line of DDL (ADR 20260801,
+        # parented on the stage by ADR 20260815). The referenced ``(stage_id, id)`` is a
+        # unique constraint on ``tournament_event_stage_groups`` that exists for no
+        # other purpose — SQL can only reference a unique set of columns, and the *pair*
+        # is what carries the claim. The constraint's own name is unchanged, because the
+        # referencing columns are unchanged. DEFERRABLE INITIALLY DEFERRED with the
+        # default (NO ACTION) delete rule, rather than ``RESTRICT``, because of the
+        # **event-delete** path — the same hazard the entry FKs below name. Deleting an
+        # event removes its groups through the ORM (the collection is eagerly loaded, so
+        # the unit of work issues that DELETE itself) and its fixtures through Postgres'
+        # ``ON DELETE CASCADE``, in that order and in two separate statements. An
+        # immediately-checked constraint fires between them, on fixtures that are about
+        # to be deleted one statement later, and kills the whole delete. Deferring is
+        # not a weakening: the pair is checked, in full, before the transaction can
+        # commit — a fixture pointing at another stage's group is refused either way,
+        # just at COMMIT rather than at the INSERT. Removing a group a fixture is drawn
+        # into is refused before it ever reaches this constraint, by
+        # ``_enforce_group_set_frozen``'s 409 (ADR-0786) — which is now the *second*
+        # line of defence rather than the only one.
         ForeignKeyConstraint(
             ["stage_id", "pool_id"],
-            ["tournament_event_pools.stage_id", "tournament_event_pools.id"],
+            [
+                "tournament_event_stage_groups.stage_id",
+                "tournament_event_stage_groups.id",
+            ],
             name="fk_tournament_fixtures_stage_id_pool_id",
             deferrable=True,
             initially="DEFERRED",
@@ -140,12 +149,14 @@ class TournamentFixture(Base):
         ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
         nullable=False,
     )
-    #: Names a pool of **this fixture's own stage** — half of the composite foreign key
+    #: Names a **group** of this fixture's own stage — half of the composite foreign key
     #: declared above. ``NULL`` = the draw is un-pooled.
     #:
-    #: A ``uuid``, moved off ``Text`` in the same step as
-    #: :attr:`~app.models.tournament_event_pool.TournamentEventPool.id` — the column it
-    #: references, and therefore the column whose type it *is*.
+    #: The column name is deliberately still ``pool_id``: it is the wire's own field
+    #: name, and the two rename together or not at all (see the class docstring). What
+    #: it points at is what moved. A ``uuid``, matching
+    #: :attr:`~app.models.tournament_event_stage_group.TournamentEventStageGroup.id` —
+    #: the column it references, and therefore the column whose type it *is*.
     pool_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     #: 1-based.
     round: Mapped[int] = mapped_column(Integer, nullable=False)

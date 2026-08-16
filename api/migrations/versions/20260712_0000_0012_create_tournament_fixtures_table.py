@@ -161,7 +161,7 @@ def upgrade() -> None:
         ),
         # "A fixture's pool belongs to that fixture's own stage", as one line of DDL
         # (ADR 20260801, re-parented onto the stage by ADR 20260815). It references
-        # ``tournament_event_pools (stage_id, id)`` — a unique constraint that exists
+        # ``tournament_event_stage_groups (stage_id, id)`` — a unique constraint that exists
         # purely to be this FK's target, since a plain FK to the pool's ``id`` alone
         # could not say the stage part, which is the whole claim. Added here in place
         # per the pre-deploy convention; the pools table is created by 0010, so it
@@ -175,7 +175,10 @@ def upgrade() -> None:
         # COMMIT.
         sa.ForeignKeyConstraint(
             ["stage_id", "pool_id"],
-            ["tournament_event_pools.stage_id", "tournament_event_pools.id"],
+            [
+                "tournament_event_stage_groups.stage_id",
+                "tournament_event_stage_groups.id",
+            ],
             name="fk_tournament_fixtures_stage_id_pool_id",
             deferrable=True,
             initially="DEFERRED",

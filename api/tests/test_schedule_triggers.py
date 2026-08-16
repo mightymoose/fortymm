@@ -43,7 +43,7 @@ from app.models import (
     TournamentEntry,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -124,7 +124,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [
             {
                 "name": "Pool A",
@@ -150,8 +150,8 @@ async def _enter_and_cut(
     await db.flush()
     # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
     # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` below
-    # reads ``event.pools`` synchronously, so this needs an explicit refresh first.
-    await db.refresh(event, attribute_names=["pools"])
+    # reads ``event.groups`` synchronously, so this needs an explicit refresh first.
+    await db.refresh(event, attribute_names=["groups"])
     await cut_draw(db, event)
     await db.commit()
 
@@ -524,8 +524,10 @@ async def _pool_id(db: AsyncSession, event_id: uuid.UUID) -> str:
     return str(
         (
             await db.execute(
-                select(TournamentEventPool.id).where(
-                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                select(TournamentEventStageGroup.id).where(
+                    TournamentEventStageGroup.stage_id.in_(
+                        stage_ids_for_events([event_id])
+                    )
                 )
             )
         ).scalar_one()
@@ -868,7 +870,7 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
         match_settings={"rated": False, "length_games": 3},
         stages=second_stages,
     )
-    second_stages[0].pools = event_pools(
+    second_stages[0].groups = event_pools(
         [
             {
                 "name": "Pool B",

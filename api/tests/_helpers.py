@@ -31,9 +31,11 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
-    TournamentEventPoolTable,
+    TournamentEventGroupReservation,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
     TournamentEventStage,
+    TournamentEventStageGroup,
     User,
     UserLeagueRating,
     UserRole,
@@ -187,50 +189,59 @@ def event_pools(
     *,
     event: TournamentEvent,
     tournament: Tournament | None = None,
-) -> list[TournamentEventPool]:
-    """``TournamentEventPool`` rows for an event a test seeds straight through the ORM,
-    written from the ``{id, name, slot, table_ids}`` dict shape the pools JSONB used to
-    hold and positioned in the order given.
+) -> list[TournamentEventStageGroup]:
+    """The GROUP rows — each already mapped to its own reservation — for an event a test
+    seeds straight through the ORM, written from the ``{id, name, slot, table_ids}``
+    dict shape the pools JSONB used to hold and positioned in the order given.
 
-    Pools are rows now (ADR 20260801), so ``TournamentEvent(pools=[{...}])`` is a
-    ``TypeError`` waiting to happen; this is the one translation from the shape the
-    tests already say a pool in, so a seed reads as the pool it is about rather than as
-    five keyword arguments. The ``slot``'s ``YYYY-MM-DD`` / ``HH:MM`` strings are
-    parsed into the row's ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly
-    as the write boundary parses them, so a seeded pool and a POSTed one are the same
-    row.
+    What the wire calls a pool is two rows: a
+    :class:`~app.models.tournament_event_stage_group.TournamentEventStageGroup`
+    (identity and order, parented on a stage) and a
+    :class:`~app.models.tournament_event_reservation.TournamentEventReservation` (the
+    name, the window and the tables, parented on the event), joined by a
+    :class:`~app.models.tournament_event_group_reservation.TournamentEventGroupReservation`.
+    This helper builds all three from one dict, exactly as
+    ``app.tournament_pools.stored_pools`` does from one payload entry, so a seeded pool
+    and a POSTed one are the same rows — and so a seed cannot accidentally create the
+    group-without-reservation state no application path produces.
 
-    ``event`` is the (possibly still-unflushed) event these pools belong to — a pool's
-    real parent is its stage now, not the event (ADR 20260815, "Sequencing with
-    #1338"), so the caller is responsible for assigning the returned rows to the right
-    stage's ``.pools`` (``stages[0].pools = event_pools(..., event=event)``, mirroring
-    ``app.tournament_events.create_event``). ``event`` is threaded down to each
-    reservation row's ``event`` relationship (:func:`_reservations`), which populates
-    ``TournamentEventPoolTable.event_id`` at flush even when ``event`` has no id yet.
+    It returns the **groups**, with the reservations riding along inside them, so the
+    caller assigns one collection and gets the whole graph:
+    ``stages[0].groups = event_pools(..., event=event)``, mirroring
+    ``app.tournament_events.create_event``. Each reservation's ``event`` relationship is
+    set to ``event``, which populates its ``event_id`` at flush even when ``event`` has
+    no id yet.
 
-    The ``id`` is a ``uuid.UUID`` and is **optional**: pass one when the test needs to
-    name the pool from somewhere else (a fixture's ``pool_id``, an assertion), and leave
-    it out when it does not care. A minted ``uuid4`` per call, never a module constant —
-    the id is a primary key, so two events in one test cannot share one. Minted *here*,
-    up front, rather than left to the column's ``gen_random_uuid()`` default, for the
-    reason :func:`venue_tables` mints table ids: a seed that names the pool needs the id
-    before the row is flushed. Through the API the ids are the *server's* and there is
-    no ``id`` on the create shape at all (ADR 20260801); this is the direct-to-database
-    seam, which no HTTP caller can reach.
+    The ``slot``'s ``YYYY-MM-DD`` / ``HH:MM`` strings are parsed into the reservation's
+    ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly as the write boundary
+    parses them.
 
-    A pool's ``table_ids`` become ``TournamentEventPoolTable`` **rows** (ADR 20260801),
-    so naming any table needs the ``tournament`` — twice over. It supplies the alias
-    map, rewriting the positional aliases a test writes (``"t1"``, ``"t2"``, …) into the
-    real ids of that tournament's catalogue rows (1-based, in catalogue order), because
-    a table id is a server-minted UUID a seed cannot spell as a literal. And it supplies
-    the ``tournament_id`` every reservation row carries — the denormalized column the
-    composite foreign keys compare, without which the row is not one Postgres accepts.
-    It must already be flushed, since that id is the database's to mint.
+    The ``id`` is a ``uuid.UUID`` and is **optional**, and it is the **group's** — the
+    id a fixture's ``pool_id`` holds and the id the wire serves. Pass one when the test
+    needs to name the pool from somewhere else (a fixture's ``pool_id``, an assertion),
+    and leave it out when it does not care. A minted ``uuid4`` per call, never a module
+    constant — the id is a primary key, so two events in one test cannot share one.
+    Minted *here*, up front, rather than left to the column's ``gen_random_uuid()``
+    default, for the reason :func:`venue_tables` mints table ids: a seed that names the
+    group needs the id before the row is flushed. Through the API the ids are the
+    *server's* and there is no ``id`` on the create shape at all (ADR 20260801); this is
+    the direct-to-database seam, which no HTTP caller can reach.
+
+    A reservation's ``table_ids`` become
+    :class:`~app.models.tournament_event_reservation_table.TournamentEventReservationTable`
+    **rows** (ADR 20260801), so naming any table needs the ``tournament`` — twice over.
+    It supplies the alias map, rewriting the positional aliases a test writes (``"t1"``,
+    ``"t2"``, …) into the real ids of that tournament's catalogue rows (1-based, in
+    catalogue order), because a table id is a server-minted UUID a seed cannot spell as
+    a literal. And it supplies the ``tournament_id`` every row carries — the
+    denormalized column the composite foreign keys compare, without which the row is not
+    one Postgres accepts. It must already be flushed, since that id is the database's to
+    mint.
 
     Naming a table with no ``tournament`` is a ``ValueError`` rather than a silently
-    empty reservation list: a seed that means "this pool runs on two tables" and gets a
-    pool running on none would go on passing while testing something else. (A pool with
-    no ``table_ids`` at all needs no tournament, which is most of the suite.)
+    empty table list: a seed that means "this pool runs on two tables" and gets one
+    running on none would go on passing while testing something else. (A pool with no
+    ``table_ids`` at all needs no tournament, which is most of the suite.)
     """
     by_alias = (
         {
@@ -240,7 +251,7 @@ def event_pools(
         if tournament is not None
         else {}
     )
-    rows: list[TournamentEventPool] = []
+    groups: list[TournamentEventStageGroup] = []
     for position, pool in enumerate(pools):
         slot = pool.get("slot") or {}
         table_ids = [str(table_id) for table_id in pool.get("table_ids", [])]
@@ -252,30 +263,37 @@ def event_pools(
                 "seed has to say which tournament's tables these are — pass "
                 "tournament=… (or with_table_aliases(tournament, pools))"
             )
-        rows.append(
-            TournamentEventPool(
+        reservation = TournamentEventReservation(
+            name=name,
+            position=pool.get("position", position),
+            slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
+            slot_start=time.fromisoformat(slot.get("start", "09:00")),
+            slot_end=time.fromisoformat(slot.get("end", "18:00")),
+            event=event,
+            tables=_reservation_tables(event, tournament, table_ids, by_alias),
+        )
+        groups.append(
+            TournamentEventStageGroup(
                 id=pool.get("id") or uuid.uuid4(),
-                name=name,
                 position=pool.get("position", position),
-                slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
-                slot_start=time.fromisoformat(slot.get("start", "09:00")),
-                slot_end=time.fromisoformat(slot.get("end", "18:00")),
-                tables=_reservations(event, tournament, table_ids, by_alias),
+                reservation_link=TournamentEventGroupReservation(
+                    reservation=reservation
+                ),
             )
         )
-    return rows
+    return groups
 
 
-def _reservations(
+def _reservation_tables(
     event: TournamentEvent,
     tournament: Tournament | None,
     table_ids: Sequence[str],
     by_alias: Mapping[str, str],
-) -> list[TournamentEventPoolTable]:
-    """The reservation rows one seeded pool's ``table_ids`` become, aliases resolved and
+) -> list[TournamentEventReservationTable]:
+    """The rows one seeded reservation's ``table_ids`` become, aliases resolved and
     positioned in the order given.
 
-    Unlike the write path (``app.tournament_pools._reservations``), an id that no
+    Unlike the write path (``app.tournament_pools._reservation_tables``), an id that no
     catalogue row holds is **not** dropped — it is passed through to the database, which
     refuses it. This is the direct-to-database seam, and a seed that names a table this
     tournament does not have is a mistake in the seed; swallowing it here would hide the
@@ -284,7 +302,7 @@ def _reservations(
     if tournament is None:
         return []
     return [
-        TournamentEventPoolTable(
+        TournamentEventReservationTable(
             tournament_id=tournament.id,
             table_id=by_alias.get(table_id, table_id),
             position=position,
@@ -298,7 +316,7 @@ def with_table_aliases(
     event: TournamentEvent,
     tournament: Tournament,
     pools: Sequence[Mapping[str, Any]],
-) -> list[TournamentEventPool]:
+) -> list[TournamentEventStageGroup]:
     """:func:`event_pools` with the event and tournament bound — the spelling the seeds
     that name tables already use.
 
