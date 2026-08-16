@@ -11,16 +11,16 @@ import { Locator, Page } from '@playwright/test'
  * ## Two vocabularies, deliberately
  *
  * The **settings** are addressed by the words a director reads. Each row renders a named
- * `region` (`<section aria-labelledby>` over the setting's name), so `settingValue('Pool
+ * `region` (`<section aria-labelledby>` over the setting's name), so `settingValue('Group
  * count')` asks for the row by the thing it sets rather than by its position in a list of
  * four identically-shaped rows. The **preview** is addressed by testid, because its parts
  * are one card each with no accessible name of their own.
  *
  * ## Why nothing here is a `toHaveText` of a whole card
  *
- * `textContent` inserts no whitespace between block elements, so a pool card reads
- * `Pool A8playerstop 2 advance` and the knockout card reads
- * `Knockout8-player bracketNo first-round byes112 pool matches`. A spec therefore states
+ * `textContent` inserts no whitespace between block elements, so a group card reads
+ * `Group A8playerstop 2 advance` and the knockout card reads
+ * `Knockout8-player bracketNo first-round byes112 group matches`. A spec therefore states
  * one fact per assertion, each against a string that lives inside a single element. The
  * equation is the exception and is safe whole: its literals carry their own spaces.
  */
@@ -54,9 +54,12 @@ export class DrawStructureTabPage {
 
   // ----- the four setting rows ----------------------------------------------
 
-  /** One setting row, **by the setting's name** — `Pool count`, `Pool size`,
-   * `Membership`, `Qualifiers per pool`. The row is a named `region`, which is the whole
-   * reason a spec never needs an `nth(…)` here. */
+  /** One setting row, **by the setting's name** — `Group count`, `Group size`,
+   * `Membership`, `Qualifiers per group`. The row is a named `region`, which is the
+   * whole reason a spec never needs an `nth(…)` here.
+   *
+   * ⚠️ **Assumed row names** (`Group count` / `Group size` / `Qualifiers per group`,
+   * renamed off the old venue-facing names) — see the e2e-agent report for #1369. */
   settingRow(name: string): Locator {
     return this.page.getByRole('region', { name, exact: true })
   }
@@ -66,7 +69,7 @@ export class DrawStructureTabPage {
     return this.settingRow(name).getByTestId('draw-setting-value')
   }
 
-  /** The plain words after the value — `pools`, `players per pool`. A `Membership` row
+  /** The plain words after the value — `groups`, `players per group`. A `Membership` row
    * has none: its value is already a sentence. */
   settingUnit(name: string): Locator {
     return this.settingRow(name).getByTestId('draw-setting-unit')
@@ -104,28 +107,31 @@ export class DrawStructureTabPage {
     return this.page.getByTestId('draw-preview-badge')
   }
 
-  /** The whole draw in one line: `{field} players ÷ {count} pools = {size} per pool`.
+  /** The whole draw in one line: `{field} players ÷ {count} groups = {size} per group`.
    * Safe to assert whole — every literal in it carries its own spaces. */
   get previewEquation(): Locator {
     return this.page.getByTestId('draw-preview-equation')
   }
 
-  /** Every projected pool card, in pool order, so a spec can count them. */
-  get previewPoolCards(): Locator {
-    return this.page.getByTestId('draw-preview-pool-card')
+  /** Every projected group card, in group order, so a spec can count them.
+   *
+   * ⚠️ **Assumed testid** (`draw-preview-group-card`, renamed off the old preview-card
+   * testid) — see the e2e-agent report for #1369. */
+  get previewGroupCards(): Locator {
+    return this.page.getByTestId('draw-preview-group-card')
   }
 
-  /** One projected pool card, **by its letter** — `A`, `B`, … Filtered on the card's own
-   * `Pool {letter}` line with `exact`, because `Pool A` is a substring of `Pool AA` and
-   * the letters run past `Z` on a large field. */
-  previewPoolCard(letter: string): Locator {
-    return this.previewPoolCards.filter({
-      has: this.page.getByText(`Pool ${letter}`, { exact: true }),
+  /** One projected group card, **by its letter** — `A`, `B`, … Filtered on the card's
+   * own `Group {letter}` line with `exact`, because `Group A` is a substring of
+   * `Group AA` and the letters run past `Z` on a large field. */
+  previewGroupCard(letter: string): Locator {
+    return this.previewGroupCards.filter({
+      has: this.page.getByText(`Group ${letter}`, { exact: true }),
     })
   }
 
   /** The knockout card: the bracket size, the first-round byes, and how many matches the
-   * pool stage plays to fill it. */
+   * group stage plays to fill it. */
   get previewKnockout(): Locator {
     return this.page.getByTestId('draw-preview-knockout')
   }

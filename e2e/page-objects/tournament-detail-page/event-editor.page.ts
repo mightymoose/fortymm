@@ -5,11 +5,12 @@ import { DrawStructureTabPage } from './event-editor/draw-structure-tab.page'
 /**
  * The **event editor** — the slide-in sheet the Events tab opens for "New event" and
  * for any event card. Scoped to what the rr-then-ko spec authors through it: the name,
- * the draw type, its qualifier count, and the pools the draw will be dealt across.
+ * the draw type, its qualifier count, and the reservations the draw's groups will be
+ * dealt across.
  *
  * ## Why a spec drives this sheet rather than seeding the event over the API
  *
- * The event's draw configuration is a **pair** — `draw_type` and `qualifiers_per_pool`
+ * The event's draw configuration is a **pair** — `draw_type` and `qualifiers_per_group`
  * — and the client builds it in exactly one place (`drawSettingsToApi`, shared by the
  * create POST and the update PATCH). That builder is the seam the arc's 422 lived in:
  * an event whose type says `rr-then-ko` and whose body carries no qualifier count is
@@ -36,12 +37,14 @@ export class EventEditorPage {
     return this.page.getByRole('combobox', { name: 'Draw type' })
   }
 
-  /** **K** — the per-pool qualifier count. Present for `rr-then-ko` and for nothing
+  /** **K** — the per-group qualifier count. Present for `rr-then-ko` and for nothing
    * else: the control is ABSENT, not disabled, for a draw type with no knockout stage
    * to qualify for, so its visibility is itself the assertion that the picker's choice
-   * reached the form. */
+   * reached the form.
+   *
+   * ⚠️ **Assumed label** (`Qualifiers per group`) — see the e2e-agent report for #1369. */
   get qualifiersInput(): Locator {
-    return this.page.getByLabel('Qualifiers per pool')
+    return this.page.getByLabel('Qualifiers per group')
   }
 
   /** **R** — the round count a `swiss` event plays. Present for `swiss` and for nothing
@@ -77,14 +80,14 @@ export class EventEditorPage {
 
   /** Type the qualifier count. A blank box is a *missing answer* for this draw type
    * (never `0`), so it is filled with a real number and read back. */
-  async setQualifiersPerPool(count: number): Promise<void> {
+  async setQualifiersPerGroup(count: number): Promise<void> {
     await this.qualifiersInput.fill(String(count))
     await expect(this.qualifiersInput).toHaveValue(String(count))
   }
 
   /** Type the round count. A blank box is a *missing answer* for this draw type (never
    * `0`, which would be a swiss that plays nothing), so it is filled with a real number
-   * and read back — the same shape `setQualifiersPerPool` takes. */
+   * and read back — the same shape `setQualifiersPerGroup` takes. */
   async setRounds(rounds: number): Promise<void> {
     await this.roundsInput.fill(String(rounds))
     await expect(this.roundsInput).toHaveValue(String(rounds))
@@ -98,13 +101,16 @@ export class EventEditorPage {
    * (ADR 20260808): it exists only while the draft's draw type is `rr-then-ko`, so a spec
    * reaching for it on any other format is asking for a tab that is deliberately not
    * there. Typed rather than left as a bare `string` so that "assert this tab is absent"
-   * cannot quietly become "assert a tab I misspelled is absent", which passes for free. */
+   * cannot quietly become "assert a tab I misspelled is absent", which passes for free.
+   *
+   * ⚠️ **Assumed tab label** (`Reservations`, renamed off the old venue-tab label) — see
+   * the e2e-agent report for #1369. */
   tab(
     name:
       | 'Basics'
       | 'Eligibility'
       | 'Match settings'
-      | 'Table pools'
+      | 'Reservations'
       | 'Draw structure',
   ): Locator {
     return this.page.getByRole('tab', { name, exact: true })
@@ -127,36 +133,45 @@ export class EventEditorPage {
     return this.drawStructure
   }
 
-  // ----- Table pools --------------------------------------------------------
+  // ----- Reservations --------------------------------------------------------
 
-  /** The "Table pools" tab of the sheet — plain component state, no navigation. */
-  get poolsTab(): Locator {
-    return this.tab('Table pools')
+  /** The "Reservations" tab of the sheet — plain component state, no navigation. */
+  get reservationsTab(): Locator {
+    return this.tab('Reservations')
   }
 
-  /** Every pool card currently in the draft, so a spec can count them. */
-  get poolCards(): Locator {
-    return this.page.getByTestId('pool-card')
+  /** Every reservation card currently in the draft, so a spec can count them.
+   *
+   * ⚠️ **Assumed testid** (`reservation-card`, renamed off the old card testid) —
+   * see the e2e-agent report for #1369. */
+  get reservationCards(): Locator {
+    return this.page.getByTestId('reservation-card')
   }
 
   /**
-   * Add `count` pools, minting each with the section's own defaults (`Pool A`, `Pool B`,
-   * … over the event's window). The first one comes from the empty state's "Add first
-   * pool" and the rest from the header's "Add pool" — two different controls for the
-   * same act, which is a distinction the section makes and a caller should not have to.
+   * Add `count` reservations, minting each with the section's own defaults
+   * (`Reservation A`, `Reservation B`, … over the event's window). The first one comes
+   * from the empty state's "Add first reservation" and the rest from the header's "Add
+   * reservation" — two different controls for the same act, which is a distinction the
+   * section makes and a caller should not have to.
    *
-   * Leaves the pools with **no tables reserved**: `table_ids` may be empty on the wire,
-   * and the draw does not need a table to be *cut* (placement is the scheduler's job).
+   * Leaves the reservations with **no tables booked**: `table_ids` may be empty on the
+   * wire, and the draw does not need a table to be *cut* (placement is the scheduler's
+   * job).
+   *
+   * ⚠️ **Assumed button labels** (`Add first reservation` / `Add reservation`) — see the
+   * e2e-agent report for #1369.
    */
-  async addPools(count: number): Promise<void> {
-    await this.poolsTab.click()
-    await this.page.getByRole('button', { name: 'Add first pool' }).click()
+  async addReservations(count: number): Promise<void> {
+    await this.reservationsTab.click()
+    await this.page.getByRole('button', { name: 'Add first reservation' }).click()
     for (let i = 1; i < count; i += 1) {
-      await this.page.getByRole('button', { name: 'Add pool' }).click()
+      await this.page.getByRole('button', { name: 'Add reservation' }).click()
     }
-    // The draft really holds `count` pools before anything is submitted — otherwise a
-    // missed click surfaces as a wrong pool count in the *draw*, three steps away.
-    await expect(this.poolCards).toHaveCount(count)
+    // The draft really holds `count` reservations before anything is submitted —
+    // otherwise a missed click surfaces as a wrong group count in the *draw*, three
+    // steps away.
+    await expect(this.reservationCards).toHaveCount(count)
   }
 
   // ----- footer -------------------------------------------------------------
