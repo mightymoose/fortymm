@@ -1,13 +1,13 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.draw_type import DRAW_TYPE_IDS, DRAW_TYPES_BY_ID
+from app.models.draw_type import DRAW_TYPE_IDS, DRAW_TYPES_BY_ID, StageDrawType
 from app.models.tournament import DrawType
 
 if TYPE_CHECKING:
@@ -150,15 +150,21 @@ class TournamentEventStage(Base):
     )
 
     @property
-    def draw_type(self) -> DrawType:
+    def draw_type(self) -> StageDrawType:
         """The stage's own draw type, parsed back into the closed set the code
         dispatches on. A plain dict lookup on
         :data:`~app.models.draw_type.DRAW_TYPES_BY_ID`, keyed by ``draw_type_id`` —
         never a join or a relationship walk, and no loaded relationship or lazy load
         needed — same shape as ``TournamentEventDrawSettings.draw_type``, same reason
         (ADR 20260815 retired the join this used to make).
+
+        Narrowed to :data:`~app.models.draw_type.StageDrawType`, not the full
+        :class:`DrawType`. The ``cast`` is safe, not a suppression: the setter below
+        is the ONLY writer of ``draw_type_id`` and refuses ``rr_then_ko`` outright, so
+        ``DRAW_TYPES_BY_ID[self.draw_type_id]`` can never actually resolve to that
+        member here.
         """
-        return DRAW_TYPES_BY_ID[self.draw_type_id]
+        return cast(StageDrawType, DRAW_TYPES_BY_ID[self.draw_type_id])
 
     @draw_type.setter
     def draw_type(self, draw_type: DrawType) -> None:

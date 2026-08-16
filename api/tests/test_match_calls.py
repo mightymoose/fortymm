@@ -58,7 +58,6 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -68,6 +67,7 @@ from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB, SUPERSEDED_ERROR, reques
 from app.schemas.notification import NotificationJob
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events, stage_ids_for_tournament
 from tests._helpers import (
     event_pools,
     hijack_solve,
@@ -184,13 +184,7 @@ async def _the_fixture(db: AsyncSession, event_id: uuid.UUID) -> TournamentFixtu
     return (
         await db.execute(
             select(TournamentFixture)
-            .where(
-                TournamentFixture.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == event_id
-                    )
-                )
-            )
+            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
             .order_by(TournamentFixture.id)
         )
     ).scalar_one()
@@ -1009,14 +1003,7 @@ async def _in_progress_count_by_user(
             select(TournamentFixture.entry_a_id, TournamentFixture.entry_b_id)
             .join(Match, Match.id == TournamentFixture.match_id)
             .where(
-                TournamentFixture.stage_id.in_(
-                    select(TournamentEventStage.id)
-                    .join(
-                        TournamentEvent,
-                        TournamentEvent.id == TournamentEventStage.event_id,
-                    )
-                    .where(TournamentEvent.tournament_id == tournament_id)
-                ),
+                TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
                 Match.status == MatchStatus.in_progress,
             )
         )
@@ -1456,13 +1443,7 @@ async def _all_fixtures(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
-                )
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
                 .order_by(TournamentFixture.id)
             )
         )
@@ -2094,11 +2075,7 @@ class TestManualPlacementPin:
                 await db_session.execute(
                     select(TournamentFixture)
                     .where(
-                        TournamentFixture.stage_id.in_(
-                            select(TournamentEventStage.id).where(
-                                TournamentEventStage.event_id == event_id
-                            )
-                        )
+                        TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                     )
                     .order_by(TournamentFixture.id)
                 )
@@ -2132,11 +2109,7 @@ class TestManualPlacementPin:
                 await db_session.execute(
                     select(TournamentFixture)
                     .where(
-                        TournamentFixture.stage_id.in_(
-                            select(TournamentEventStage.id).where(
-                                TournamentEventStage.event_id == event_id
-                            )
-                        )
+                        TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                     )
                     .order_by(TournamentFixture.id)
                 )

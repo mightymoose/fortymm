@@ -31,7 +31,6 @@ from app.models import (
     DrawType,
     ScheduleSolveTrigger,
     TournamentEvent,
-    TournamentEventStage,
     TournamentFixture,
     User,
 )
@@ -62,6 +61,7 @@ from app.tournament_errors import (
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_pools import apply_event_pools, stored_pools
+from app.tournament_queries import stage_ids_for_events
 
 
 async def _load_event(
@@ -553,11 +553,7 @@ async def _reanchor_placements_for_timezone_change(
         (
             await db.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    ),
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])),
                     TournamentFixture.scheduled_start.is_not(None),
                 )
             )

@@ -80,7 +80,6 @@ from app.models import (
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventPool,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -91,12 +90,14 @@ from app.rate_limiting import RedisRateLimiter
 from app.rbac import user_has_permission
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
     event_pools,
     grant_permissions,
     make_user,
+    stage_id_at,
     start_session,
     table_ids_of,
     venue_tables,
@@ -1901,31 +1902,13 @@ async def _first_event_id(db_session: AsyncSession, tournament_id: str) -> uuid.
     ).scalar_one()
 
 
-async def _stage0_id(db_session: AsyncSession, event_id: uuid.UUID) -> uuid.UUID:
-    """The id of ``event_id``'s stage 0 — the one a director's pools hang off (ADR
-    20260815 decision 3). Every event created through the HTTP routes this file
-    drives has one from the moment it exists."""
-    return (
-        await db_session.execute(
-            select(TournamentEventStage.id).where(
-                TournamentEventStage.event_id == event_id,
-                TournamentEventStage.position == 0,
-            )
-        )
-    ).scalar_one()
-
-
 async def _only_pool_id(db_session: AsyncSession, event_id: uuid.UUID) -> uuid.UUID:
     """The id of the event's one pool — server-minted (ADR 20260801), so a seed that
     puts a fixture in it has to look it up rather than spell it."""
     return (
         await db_session.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == event_id
-                    )
-                )
+                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -1955,7 +1938,7 @@ async def _seed_placed_fixture(
     db_session.add_all([entry_a, entry_b])
     await db_session.commit()
     fixture = TournamentFixture(
-        stage_id=await _stage0_id(db_session, event_id),
+        stage_id=await stage_id_at(db_session, event_id, 0),
         pool_id=await _only_pool_id(db_session, event_id),
         round=1,
         position=1,
@@ -2368,9 +2351,7 @@ async def test_build_cut_returns_fixtures_visible_via_schedule_then_uncut_remove
                 await db_session.execute(
                     select(TournamentEventPool.id).where(
                         TournamentEventPool.stage_id.in_(
-                            select(TournamentEventStage.id).where(
-                                TournamentEventStage.event_id == event.id
-                            )
+                            stage_ids_for_events([event.id])
                         )
                     )
                 )
@@ -2442,11 +2423,7 @@ async def test_build_cut_non_owner_raises_tool_error(
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event.id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
                 )
             )
         )
@@ -2497,11 +2474,7 @@ async def test_build_cut_played_draw_raises_tool_error(
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         )
@@ -2522,11 +2495,7 @@ async def test_build_cut_played_draw_raises_tool_error(
         (
             await db_session.execute(
                 select(TournamentFixture.id).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         )
@@ -2557,11 +2526,7 @@ async def test_build_cut_non_singles_event_raises_readable_tool_error(
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event.id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
                 )
             )
         )
@@ -2655,11 +2620,7 @@ async def test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leak
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event.id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
                 )
             )
         )
@@ -3381,11 +3342,7 @@ async def test_transition_tournament_owner_walks_the_whole_lifecycle(
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         )

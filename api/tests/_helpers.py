@@ -33,6 +33,7 @@ from app.models import (
     TournamentEventDrawSettings,
     TournamentEventPool,
     TournamentEventPoolTable,
+    TournamentEventStage,
     User,
     UserLeagueRating,
     UserRole,
@@ -306,6 +307,31 @@ def with_table_aliases(
     every helper the pools are passed to.
     """
     return event_pools(pools, event=event, tournament=tournament)
+
+
+async def stage_id_at(
+    db_session: AsyncSession, event_id: uuid.UUID, position: int
+) -> uuid.UUID:
+    """The id of ``event_id``'s stage at ``position`` — the awaited, single-stage
+    counterpart of ``app.tournament_queries.stage_ids_for_events`` (which returns an
+    unawaited ``.in_(...)``-embeddable subquery over *every* stage of one or more
+    events, not one stage by position).
+
+    Position 0 is the one a director's pools hang off (ADR 20260815 decision 3);
+    position 1 is the knockout half of an rr-then-ko template. ``scalar_one()``, not
+    ``scalar_one_or_none()``: every event holds its minted stages from the moment it
+    exists, so a miss here is a test-fixture bug (an event seeded straight through the
+    ORM, bypassing ``create_event``/``mint_stages``), not a state worth tolerating
+    silently.
+    """
+    return (
+        await db_session.execute(
+            select(TournamentEventStage.id).where(
+                TournamentEventStage.event_id == event_id,
+                TournamentEventStage.position == position,
+            )
+        )
+    ).scalar_one()
 
 
 async def table_ids_of(db_session: AsyncSession, tournament_id: uuid.UUID) -> list[str]:

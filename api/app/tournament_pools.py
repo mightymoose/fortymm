@@ -56,8 +56,11 @@ means resolving the actual stage row and assigning ``stage.pools``. On the creat
 the stage is a fresh, unflushed object the caller already built
 (``app.tournament_events.create_event`` passes it straight through); on the edit path
 :func:`apply_event_pools` resolves it itself, with an explicit query, the same way
-``app.tournament_event_stages.remint_stages_in_place`` does — never through
-``TournamentEvent.stages`` (not eager; an async lazy load there would raise). That
+``app.tournament_event_stages.remint_stages_in_place`` does — not because
+``TournamentEvent.stages`` is unavailable (it is eager, ``lazy="selectin"``, and would
+already be populated on the caller's ``event``), but because ``stage.pools`` itself is
+deliberately NOT eager (see that relationship's docstring), so this function needs its
+own query anyway to attach the ``selectinload`` that loads it. That
 query is why :func:`apply_event_pools` takes a session now, which is the one exception
 to the claim below.
 
@@ -251,10 +254,13 @@ async def apply_event_pools(
     supplies the catalogue each pool's ``table_ids`` are resolved against and the
     ``tournament_id`` their rows carry (:func:`_reservations`).
 
-    Resolves the event's stage 0 with an explicit query — **never** through
-    ``TournamentEvent.stages`` (deliberately not eager; an async lazy load there would
-    raise), the same discipline
-    ``app.tournament_event_stages.remint_stages_in_place`` follows for the same reason.
+    Resolves the event's stage 0 with an explicit query, the same discipline
+    ``app.tournament_event_stages.remint_stages_in_place`` follows. Not because
+    ``TournamentEvent.stages`` would fail — it is eager (``lazy="selectin"``) and would
+    already be populated on ``event`` — but because ``TournamentEventStage.pools`` is
+    the one that is deliberately NOT eager (see that relationship's docstring), so this
+    still needs its own query to attach the ``selectinload`` that loads it, regardless
+    of whether ``event.stages`` was already in hand.
     ``scalar_one()``, not ``scalar_one_or_none()``: every event holds at least one stage
     from the moment it exists (ADR 20260815 decision 1), so a miss here means the event
     was seeded straight through the ORM bypassing ``create_event`` — a test-fixture bug,

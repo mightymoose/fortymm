@@ -49,9 +49,11 @@ from app.tournament_errors import (
 from app.tournament_event_stages import mint_stages
 from app.tournament_events import create_event, delete_event, update_event
 from app.tournament_pools import pool_read
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_pools,
     make_user,
+    stage_id_at,
     venue_tables,
 )
 
@@ -939,11 +941,7 @@ async def test_update_event_timezone_change_reanchors_placements(
     fixture = (
         await db_session.execute(
             select(TournamentFixture).where(
-                TournamentFixture.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == event_id
-                    )
-                )
+                TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -1057,11 +1055,7 @@ async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_se
     stored = (
         await db_session.execute(
             select(TournamentEventPool).where(
-                TournamentEventPool.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == event_id
-                    )
-                )
+                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -1145,14 +1139,7 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
     )
     event_id = event.id
     pool_id = event.pools[0].id
-    stage_id = (
-        await db_session.execute(
-            select(TournamentEventStage.id).where(
-                TournamentEventStage.event_id == event_id,
-                TournamentEventStage.position == 0,
-            )
-        )
-    ).scalar_one()
+    stage_id = await stage_id_at(db_session, event_id, 0)
 
     db_session.add(
         TournamentEventPoolTable(
@@ -1207,14 +1194,7 @@ async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
         payload=_event_payload(pools=[_pool_payload()]),
     )
 
-    stage_id = (
-        await db_session.execute(
-            select(TournamentEventStage.id).where(
-                TournamentEventStage.event_id == event.id,
-                TournamentEventStage.position == 0,
-            )
-        )
-    ).scalar_one()
+    stage_id = await stage_id_at(db_session, event.id, 0)
     db_session.add(
         TournamentEventPoolTable(
             tournament_id=tournament_id,
@@ -1275,11 +1255,7 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
     assert (
         await db_session.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == event_id
-                    )
-                )
+                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalars().all() == [pool_id]

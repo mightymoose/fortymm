@@ -44,7 +44,6 @@ from app.models import (
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventPool,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -52,6 +51,7 @@ from app.models import (
 )
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     event_pools,
@@ -169,13 +169,7 @@ async def _fixtures_of(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
-                )
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
                 .order_by(TournamentFixture.id)
             )
         )
@@ -531,11 +525,7 @@ async def _pool_id(db: AsyncSession, event_id: uuid.UUID) -> str:
         (
             await db.execute(
                 select(TournamentEventPool.id).where(
-                    TournamentEventPool.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
+                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         ).scalar_one()

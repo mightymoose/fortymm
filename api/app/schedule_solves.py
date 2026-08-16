@@ -53,7 +53,13 @@ take the tournament row lock before calling :func:`request_solve` (which takes
 ``FOR UPDATE`` on solve rows); phase (c) takes the same three in the same
 order, so the job and the routes queue behind each other and no pair can
 deadlock. Phase (a) takes only the solve-row lock — it never touches the
-tournament row, so it participates in no cycle.
+tournament row, so it participates in no cycle. **Three tables, deliberately,
+not four**: every ``TournamentFixture`` lock here is taken ``with_for_update(of=
+TournamentFixture)``, so ``tournament_event_stages`` — which rides along on
+every fixture query as the eagerly-joined ``TournamentFixture.stage``
+(``lazy="joined"``, ``innerjoin=True``) — is never locked. Nothing writes a
+stage row on this path, so widening the lock to include it would only cost
+contention for no correctness this order needs.
 
 The **fingerprint** is a sha256 over a canonical JSON of exactly the inputs
 the solver read, in their *wall-clock* form (never minute offsets, which
@@ -256,6 +262,7 @@ from app.schemas.schedule_solve import (
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Pool, Slot, TournamentTable
 from app.tournament_draws import event_pools
+from app.tournament_queries import stage_ids_for_events
 from app.tournament_realtime import stage_event_entrant_hints
 
 log = logging.getLogger(__name__)
@@ -772,15 +779,19 @@ async def _load_solver_inputs(
             select(TournamentFixture)
             .where(
                 TournamentFixture.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id.in_([e.id for e in events])
-                    )
+                    stage_ids_for_events([e.id for e in events])
                 )
             )
             .order_by(TournamentFixture.id)
         )
         if lock:
-            fixtures_stmt = fixtures_stmt.with_for_update()
+            # ``of=TournamentFixture``: a bare ``FOR UPDATE`` would also lock
+            # ``tournament_event_stages``, which rides along on every fixture query
+            # as the eagerly-joined ``TournamentFixture.stage`` (``lazy="joined"``,
+            # ``innerjoin=True``). Stages are deliberately NOT part of this lock —
+            # the documented "tournament → schedule_solves → tournament_fixtures"
+            # order (module docstring) names three tables, not four.
+            fixtures_stmt = fixtures_stmt.with_for_update(of=TournamentFixture)
         fixture_rows = (await db.execute(fixtures_stmt)).scalars().all()
 
     fixtures_by_event: defaultdict[uuid.UUID, list[TournamentFixture]] = defaultdict(

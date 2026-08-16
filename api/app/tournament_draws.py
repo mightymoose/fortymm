@@ -31,7 +31,7 @@ import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
 
-from sqlalchemy import Select, delete, func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
@@ -63,19 +63,7 @@ from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import Pool
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_pools import pool_read
-
-
-def _stage_ids(event_ids: Collection[uuid.UUID]) -> Select[tuple[uuid.UUID]]:
-    """Every stage id belonging to any of ``event_ids`` — the subquery every
-    ``TournamentFixture`` read below is filtered through now that a fixture names its
-    stage, not its event (ADR 20260815 decision 5 drops
-    ``tournament_fixtures.event_id`` outright). Mechanical, not a restructure: every
-    caller still asks its question **about an event**; this is only how that question
-    reaches a table keyed on stage now.
-    """
-    return select(TournamentEventStage.id).where(
-        TournamentEventStage.event_id.in_(event_ids)
-    )
+from app.tournament_queries import stage_ids_for_events
 
 
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
@@ -319,7 +307,7 @@ async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
         await db.execute(
             select(func.count())
             .select_from(TournamentFixture)
-            .where(TournamentFixture.stage_id.in_(_stage_ids([event_id])))
+            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
         )
     ).scalar_one()
     return fixtures > 0
@@ -375,7 +363,7 @@ async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
             select(func.count())
             .select_from(TournamentFixture)
             .where(
-                TournamentFixture.stage_id.in_(_stage_ids([event_id])),
+                TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])),
                 or_(
                     TournamentFixture.winner_entry_id.is_not(None),
                     TournamentFixture.match_id.is_not(None),
@@ -655,7 +643,13 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )
     await uncut_draw(db, [event.id])
-    stage_ids = await _stage_ids_by_position(db, event.id)
+    # This event's stage ids keyed by ``position`` — what a planned fixture's
+    # ``stage_id`` is resolved against below (ADR 20260815 decision 5's write seam).
+    # Built from the already-eager ``TournamentEvent.stages`` collection
+    # (``lazy="selectin"``) rather than a query of its own: the caller already loaded
+    # ``event`` with its stages, so re-selecting them here would be a second
+    # statement for a collection already in hand.
+    stage_ids = {stage.position: stage.id for stage in event.stages}
     # A planned fixture's STAGE (ADR 20260815 decision 5) — the write seam this chore
     # adds, the strategy layer above knows nothing about it. Pooled fixtures always
     # belong to the event's stage 0: a director's pools never hang off any other stage
@@ -671,10 +665,9 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     db.add_all(
         [
             TournamentFixture(
-                stage_id=(
-                    stage_ids[0]
-                    if fixture.pool_id is not None
-                    else stage_ids[unpooled_stage_position]
+                stage_id=_stage_id_at(
+                    stage_ids,
+                    0 if fixture.pool_id is not None else unpooled_stage_position,
                 ),
                 pool_id=fixture.pool_id,
                 round=fixture.round,
@@ -687,26 +680,28 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     )
 
 
-async def _stage_ids_by_position(
-    db: AsyncSession, event_id: uuid.UUID
-) -> dict[int, uuid.UUID]:
-    """This event's stage ids keyed by ``position`` — what :func:`cut_draw` resolves a
-    planned fixture's ``stage_id`` against (ADR 20260815 decision 5's write seam).
+def _stage_id_at(stage_ids: Mapping[int, uuid.UUID], position: int) -> uuid.UUID:
+    """The id of this event's stage at ``position``, or a loud failure — never a
+    silent ``IndexError``/``KeyError`` — when the event's minted stages and its draw
+    settings' draw type disagree about how many there should be.
 
-    Read through an explicit query, never through ``TournamentEvent.stages`` — that
-    relationship is deliberately not eager (see its docstring), so a lazy load off it
-    in this async context would raise. Same discipline
-    ``app.tournament_event_stages.remint_stages_in_place`` and
-    ``app.tournament_pools.apply_event_pools`` both follow, for the same reason.
+    The template (``app.tournament_event_stages``) is the only writer of an event's
+    stages, and it keeps them in lockstep with the draw type on ``draw_settings`` by
+    construction: an rr-then-ko event always has a stage at position 1, everything
+    else always has one at position 0. This can only fire if that invariant has
+    already broken elsewhere — a re-mint that ran stale, a draw type changed without
+    remint — in which case a fixture minted onto a nonexistent stage would be a worse
+    failure, raised somewhere with no context linking it back to the cause.
     """
-    rows = (
-        await db.execute(
-            select(TournamentEventStage.position, TournamentEventStage.id).where(
-                TournamentEventStage.event_id == event_id
-            )
-        )
-    ).all()
-    return {position: stage_id for position, stage_id in rows}
+    try:
+        return stage_ids[position]
+    except KeyError:
+        raise RuntimeError(
+            f"cut_draw needs a stage at position {position} but the event has none "
+            f"(stages at {sorted(stage_ids)}) — its stages and its draw settings' "
+            "draw type have drifted out of the template's lockstep (ADR 20260815 "
+            "decision 3)"
+        ) from None
 
 
 async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None:
@@ -743,6 +738,6 @@ async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None
         return
     await db.execute(
         delete(TournamentFixture).where(
-            TournamentFixture.stage_id.in_(_stage_ids(event_ids))
+            TournamentFixture.stage_id.in_(stage_ids_for_events(event_ids))
         )
     )

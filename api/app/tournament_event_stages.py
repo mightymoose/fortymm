@@ -41,7 +41,6 @@ moved, the freeze above has already proven the event has no draw — it would ha
 otherwise — so this gate needs no COUNT of its own to establish that.
 """
 
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

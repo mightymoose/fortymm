@@ -36,7 +36,6 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -50,6 +49,7 @@ from app.schemas.tournament import (
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_draws import DrawCurrency, draw_currency_by_event, fixture_state
 from app.tournament_materialization import materialize_event
+from app.tournament_queries import stage_ids_for_events
 from app.tournament_serialization import _field_input, _seated_pairings
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
@@ -192,9 +192,7 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
                 select(TournamentFixture)
                 .where(
                     TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == uuid.UUID(event_id)
-                        )
+                        stage_ids_for_events([uuid.UUID(event_id)])
                     )
                 )
                 .order_by(TournamentFixture.round, TournamentFixture.position)

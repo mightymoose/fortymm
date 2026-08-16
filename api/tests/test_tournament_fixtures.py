@@ -50,6 +50,7 @@ from app.models import (
     User,
 )
 from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import event_pools, make_user
 
 FIXTURE_IDENTITY_CONSTRAINT = "uq_tournament_fixtures_stage_id_pool_id_round_position"
@@ -166,11 +167,7 @@ async def test_a_fixture_persists_with_both_sides_tbd(
     stored = (
         await db_session.execute(
             select(TournamentFixture).where(
-                TournamentFixture.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == event.id
-                    )
-                )
+                TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
             )
         )
     ).scalar_one()
@@ -216,11 +213,7 @@ async def test_a_fixture_holds_its_two_entries(
     stored = (
         await db_session.execute(
             select(TournamentFixture).where(
-                TournamentFixture.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == event.id
-                    )
-                )
+                TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
             )
         )
     ).scalar_one()
@@ -320,11 +313,7 @@ async def test_the_same_round_and_position_in_a_different_pool_is_accepted(
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event.id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
                 )
             )
         )
@@ -469,11 +458,7 @@ async def test_deleting_the_event_takes_its_pools_with_it(
         (
             await db_session.execute(
                 select(TournamentEventPool).where(
-                    TournamentEventPool.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
+                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         )
@@ -516,12 +501,12 @@ async def test_deleting_the_event_takes_its_fixtures_with_it(
     assert (await db_session.execute(select(TournamentFixture))).scalars().all() == []
 
 
-async def test_the_events_fixtures_relationship_is_ordered_pool_round_position(
+async def test_the_stages_fixtures_relationship_is_ordered_pool_round_position(
     db_session: AsyncSession, event: TournamentEvent
 ) -> None:
-    """``TournamentEvent.fixtures`` comes back in the **one** canonical draw order —
-    pool → round → position — which is the order the read path's ``fixtures_by_event``
-    loader already returns.
+    """``TournamentEventStage.fixtures`` comes back in the **one** canonical draw
+    order — pool → round → position — which is the order the read path's
+    ``fixtures_by_event`` loader already returns.
 
     A draw has one order. The relationship used to sort by ``(round, position)`` alone,
     which for a *pooled* draw interleaved the pools: pool A's round 1 next to pool B's
@@ -562,9 +547,9 @@ async def test_the_events_fixtures_relationship_is_ordered_pool_round_position(
 
     loaded = (
         await db_session.execute(
-            select(TournamentEvent)
-            .where(TournamentEvent.id == event.id)
-            .options(selectinload(TournamentEvent.fixtures))
+            select(TournamentEventStage)
+            .where(TournamentEventStage.id == _stage_a(event))
+            .options(selectinload(TournamentEventStage.fixtures))
         )
     ).scalar_one()
 

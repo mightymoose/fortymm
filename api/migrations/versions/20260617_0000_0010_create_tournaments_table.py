@@ -815,19 +815,33 @@ def upgrade() -> None:
         ),
     )
     # Postgres indexes the REFERENCED key of a foreign key, never the referencing
-    # columns. The primary key covers the two legs that lead with ``event_id``; this is
-    # the third, and it is the one on a routine DELETE path — every venue table removed
-    # cascades through it, which unindexed is a sequential scan of every reservation on
-    # the platform per table removed.
+    # columns. The primary key covers the leg that leads with ``event_id`` (the fourth,
+    # ``(event_id, stage_id)``); this is the one on a routine DELETE path — every venue
+    # table removed cascades through it, which unindexed is a sequential scan of every
+    # reservation on the platform per table removed.
     op.create_index(
         "ix_tournament_event_pool_tables_tournament_id_table_id",
         "tournament_event_pool_tables",
         ["tournament_id", "table_id"],
     )
+    # The index the PK used to cover for free before the pool leg re-targeted from
+    # ``(event_id, pool_id)`` onto ``(stage_id, pool_id)`` above: the old leg was a
+    # prefix of ``pk_tournament_event_pool_tables`` (which leads with ``event_id``), so
+    # it rode the PK's own index. ``stage_id`` isn't a PK column at all, so that
+    # referential check — and the pool-delete cascade through it — needs its own index.
+    op.create_index(
+        "ix_tournament_event_pool_tables_stage_id_pool_id",
+        "tournament_event_pool_tables",
+        ["stage_id", "pool_id"],
+    )
 
 
 def downgrade() -> None:
     # Dropped before all three of the tables it references.
+    op.drop_index(
+        "ix_tournament_event_pool_tables_stage_id_pool_id",
+        table_name="tournament_event_pool_tables",
+    )
     op.drop_index(
         "ix_tournament_event_pool_tables_tournament_id_table_id",
         table_name="tournament_event_pool_tables",

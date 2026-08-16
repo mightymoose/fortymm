@@ -26,7 +26,6 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -40,6 +39,7 @@ from app.tournament_errors import (
     TournamentNotFoundError,
 )
 from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_pools,
     make_user,
@@ -149,11 +149,7 @@ async def _fixture_rows(
         (
             await db.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         )

@@ -38,7 +38,7 @@ import fakeredis
 import pytest
 from redis.exceptions import RedisError
 from rq import Queue
-from sqlalchemy import Select, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -71,7 +71,6 @@ from app.models import (
     TournamentEvent,
     TournamentEventPool,
     TournamentEventPoolTable,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -117,6 +116,7 @@ from app.tournament_advancement import on_match_completed
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_materialization import materialize_event
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_draw_settings,
     event_pools,
@@ -276,16 +276,6 @@ async def _make_tournament(
     return tournament.id, event.id
 
 
-def _stage_ids(event_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
-    """Every stage id of ``event_id`` — what a ``TournamentEventPool`` /
-    ``TournamentFixture`` read scoped to one event is filtered through now that a pool
-    re-parents onto its stage and a fixture names its stage rather than its event
-    (ADR 20260815)."""
-    return select(TournamentEventStage.id).where(
-        TournamentEventStage.event_id == event_id
-    )
-
-
 async def _solver_pool_id(db: AsyncSession, event_id: uuid.UUID) -> PoolId:
     """The solver's namespaced ``{event}:{pool}`` key for the event's one pool.
 
@@ -295,7 +285,7 @@ async def _solver_pool_id(db: AsyncSession, event_id: uuid.UUID) -> PoolId:
     pool_id = (
         await db.execute(
             select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(_stage_ids(event_id))
+                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -309,7 +299,7 @@ async def _fixtures_of(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.stage_id.in_(_stage_ids(event_id)))
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
                 .order_by(TournamentFixture.id)
             )
         )
@@ -2054,7 +2044,9 @@ class TestEventWideReservation:
                     TournamentEventPool.id,
                     TournamentEventPool.slot_start,
                     TournamentEventPool.slot_end,
-                ).where(TournamentEventPool.stage_id.in_(_stage_ids(event_id)))
+                ).where(
+                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                )
             )
         ).all()
         assert len(pool_rows) == 2
@@ -2374,7 +2366,9 @@ async def _pool_reservations(
                     TournamentEventPool.id,
                     TournamentEventPool.slot_start,
                     TournamentEventPool.slot_end,
-                ).where(TournamentEventPool.stage_id.in_(_stage_ids(event_id)))
+                ).where(
+                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                )
             )
         ).all()
     }

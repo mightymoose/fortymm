@@ -39,13 +39,13 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventPool,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
 )
 from app.schemas.tournament import MAX_QUALIFIERS_PER_POOL
 from app.tournament_draw_settings import draw_settings_of
+from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     grant_permissions,
@@ -125,9 +125,7 @@ async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.U
         await db_session.execute(
             select(TournamentEventPool.id).where(
                 TournamentEventPool.stage_id.in_(
-                    select(TournamentEventStage.id).where(
-                        TournamentEventStage.event_id == uuid.UUID(event_id)
-                    )
+                    stage_ids_for_events([uuid.UUID(event_id)])
                 ),
                 TournamentEventPool.name == name,
             )
@@ -143,9 +141,7 @@ async def _pool_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
                 select(TournamentEventPool.id)
                 .where(
                     TournamentEventPool.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == uuid.UUID(event_id)
-                        )
+                        stage_ids_for_events([uuid.UUID(event_id)])
                     )
                 )
                 .order_by(TournamentEventPool.position)
@@ -197,9 +193,7 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
                 select(TournamentFixture)
                 .where(
                     TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == uuid.UUID(event_id)
-                        )
+                        stage_ids_for_events([uuid.UUID(event_id)])
                     )
                 )
                 .order_by(

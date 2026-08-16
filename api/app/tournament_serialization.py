@@ -14,7 +14,7 @@ it stays cycle-free, mirroring ``app/match_serialization.py``.
 import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from typing import Any, assert_never
+from typing import Any, assert_never, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ from app.models import (
     Tournament,
     TournamentEvent,
 )
+from app.models.draw_type import StageDrawType
 from app.results import (
     BracketFinishes,
     BracketFixture,
@@ -231,7 +232,7 @@ def event_results(
     entrants: Sequence[TournamentEntrantRead],
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
-    stage_draw_types: Mapping[uuid.UUID, DrawType],
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType],
 ) -> EventResultsRead | None:
     """The event's results, projected from its fixtures' completed matches, or ``None``
     when there are none to compute — a **discriminated union tagged by shape**
@@ -254,9 +255,19 @@ def event_results(
     ``stages`` array on the wire (the single-event create/update reads) still load it
     for this computation — see ``app.tournament_serialization.shape_event_read`` — so a
     default here would be the one call site that quietly forgets to, and it would be the
-    one an rr-then-ko event's edit page silently mis-projects. ``round_robin`` and
-    ``single_elim`` never read the map (their fixtures are all one stage), so an empty
-    one costs them nothing; ``swiss`` never has a knockout half to split out either.
+    one an rr-then-ko event's edit page silently mis-projects.
+
+    It is **not** true that ``round_robin`` never reads the map: every arm here that
+    calls ``_pool_inputs`` (``round_robin`` and ``rr_then_ko``'s pool half alike) reads
+    it, because that is where a fixture's own pool-stage-ness is decided now (ADR
+    20260815). It is a no-op for ``round_robin`` only in the sense that every one of a
+    round-robin event's fixtures shares the one stage the map already has to name —
+    ``single_elim`` is the arm that truly never reads it at all (``_bracket_fixtures``
+    takes no ``stage_draw_types`` argument), and ``swiss`` never has a knockout half to
+    split out either. The map is required precisely because it is read for every
+    pooled shape: an unknown ``stage_id`` is a loud failure (a fixture and the map it
+    is projected against were built off two different stage sets), never a fixture
+    quietly dropped from the table.
 
     ``None`` in exactly one case, meaning "no results here" rather than an empty table:
     an event whose draw has not been cut (no fixtures to stand). There used to be a
@@ -301,7 +312,8 @@ def event_results(
                         [
                             f
                             for f in fixtures
-                            if stage_draw_types.get(f.stage_id) is DrawType.single_elim
+                            if _stage_draw_type_of(stage_draw_types, f.stage_id)
+                            is DrawType.single_elim
                         ],
                         game_counts,
                     ),
@@ -317,10 +329,32 @@ def event_results(
             assert_never(strategy)
 
 
+def _stage_draw_type_of(
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType], stage_id: uuid.UUID
+) -> StageDrawType:
+    """The fixture's own stage's draw type — a loud failure, never a silent
+    ``.get(...)``, when ``stage_id`` is missing from the map.
+
+    A fixture's ``stage_id`` always names one of its own event's stages (the
+    composite FK, ADR 20260815), so a miss here means the caller built
+    ``stage_draw_types`` off a different, stale set of stages than the fixtures it
+    is projecting against it — a bug in how the two were assembled, worth
+    surfacing loudly at the seam that found it, not a fixture quietly vanishing
+    from a director's results table with no error anywhere."""
+    try:
+        return stage_draw_types[stage_id]
+    except KeyError:
+        raise RuntimeError(
+            f"fixture's stage {stage_id} is missing from stage_draw_types — the map "
+            "and the fixtures it is projecting were built from two different stage "
+            "sets (ADR 20260815)"
+        ) from None
+
+
 def _pool_inputs(
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
-    stage_draw_types: Mapping[uuid.UUID, DrawType],
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType],
 ) -> list[PoolInput]:
     by_pool: dict[uuid.UUID, list[TournamentFixtureRead]] = defaultdict(list)
     for f in fixtures:
@@ -331,7 +365,10 @@ def _pool_inputs(
         # stage's fixtures are always pooled, so this can never actually skip a fixture
         # ``stage_draw_types`` already selected — it only tells the type checker
         # ``f.pool_id`` is not ``None`` before it is used as a dict key below.
-        if stage_draw_types.get(f.stage_id) is not DrawType.round_robin:
+        if (
+            _stage_draw_type_of(stage_draw_types, f.stage_id)
+            is not DrawType.round_robin
+        ):
             continue
         if f.pool_id is None:
             continue
@@ -660,12 +697,20 @@ def _serialize_standings_then_finishes(
 
 def _stage_draw_types(
     stages: Sequence[EventStageRead],
-) -> dict[uuid.UUID, DrawType]:
+) -> dict[uuid.UUID, StageDrawType]:
     """Stage id → that stage's own draw type — the map :func:`event_results` reads
     to tell a two-stage event's pool-stage fixtures from its knockout-stage ones
     (ADR 20260815), built off whatever ``stages`` a caller has in hand rather than
-    fetched again here."""
-    return {stage.id: stage.draw_type for stage in stages}
+    fetched again here.
+
+    ``EventStageRead.draw_type`` is typed ``DrawType`` on the wire (unchanged: it is a
+    served field, and narrowing it would change the OpenAPI schema), but its only
+    source is ``TournamentEventStage.draw_type`` — already
+    :data:`~app.models.draw_type.StageDrawType`-narrowed at the model boundary, whose
+    setter refuses ``rr_then_ko`` outright — so the cast below is safe, not a
+    suppression: this value can never actually be that member.
+    """
+    return {stage.id: cast(StageDrawType, stage.draw_type) for stage in stages}
 
 
 def serialize_event(

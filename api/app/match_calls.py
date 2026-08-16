@@ -68,9 +68,14 @@ one write site that publishes directly rather than staging on the session.
 
 **Exactly-once.** Both call paths re-check the due predicate — ``pinned_at IS
 NULL`` for the call, ``call_notified_count = 0`` for the notify-without-re-pin
-transition — while holding the fixture's row lock (``FOR UPDATE``, ordered by
-id, behind the tournament row lock — the exact lock order of the guarded
-apply). A concurrent tick and apply therefore serialize: whichever transaction
+transition — while holding the fixture's row lock (``FOR UPDATE OF
+tournament_fixtures``, ordered by id, behind the tournament row lock — the
+exact lock order of the guarded apply, ``app.schedule_solves``' module
+docstring). ``OF tournament_fixtures`` on purpose: ``tournament_event_stages``
+rides along on every fixture query as the eagerly-joined
+``TournamentFixture.stage`` (``lazy="joined"``, ``innerjoin=True``), and stages
+are deliberately **not** locked here — nothing on this path writes one. A
+concurrent tick and apply therefore serialize: whichever transaction
 commits first sets ``pinned_at`` (or, for a silent pin, bumps the count), and
 the other re-reads under the lock and skips. The count re-check is the *only*
 guard for the silent-pin transition — the solve fingerprint deliberately
@@ -107,7 +112,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, Select, exists, or_, select, update
+from sqlalchemy import ColumnElement, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import db as db_module
@@ -121,7 +126,6 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEvent,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -145,6 +149,7 @@ from app.rq_async import run_async_db_job
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import TournamentTable
 from app.tournament_draws import event_pools
+from app.tournament_queries import stage_ids_for_tournament
 from app.venue_time import anchor_wallclock, venue_local
 
 log = logging.getLogger(__name__)
@@ -206,19 +211,6 @@ def _due_for_call(fixture: TournamentFixture, now: datetime) -> bool:
     )
 
 
-def _tournament_stage_ids(tournament_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
-    """Every stage id belonging to any event of ``tournament_id`` — what a
-    ``TournamentFixture`` read scoped to one tournament is filtered through now that a
-    fixture names its stage, not its event (ADR 20260815 decision 5 drops
-    ``tournament_fixtures.event_id`` outright; the event, and the tournament, are
-    reachable through the stage)."""
-    return (
-        select(TournamentEventStage.id)
-        .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
-        .where(TournamentEvent.tournament_id == tournament_id)
-    )
-
-
 def _due_fixture_clauses(
     tournament_id: uuid.UUID, now: datetime
 ) -> tuple[ColumnElement[bool], ...]:
@@ -230,7 +222,7 @@ def _due_fixture_clauses(
     :func:`_due_for_call` re-check under the row lock remains the
     authoritative exactly-once guard."""
     return (
-        TournamentFixture.stage_id.in_(_tournament_stage_ids(tournament_id)),
+        TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
         or_(
             TournamentFixture.pinned_at.is_(None),
             TournamentFixture.call_notified_count == 0,
@@ -336,7 +328,7 @@ async def _held_resources(
             )
             .join(Match, Match.id == TournamentFixture.match_id)
             .where(
-                TournamentFixture.stage_id.in_(_tournament_stage_ids(tournament_id)),
+                TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
                 Match.status == MatchStatus.in_progress,
             )
         )
@@ -1200,7 +1192,14 @@ async def execute_pin_tick(
                     select(TournamentFixture)
                     .where(*due_clauses)
                     .order_by(TournamentFixture.id)
-                    .with_for_update()
+                    # ``of=TournamentFixture``: a bare ``FOR UPDATE`` would also lock
+                    # ``tournament_event_stages``, which rides along on every fixture
+                    # query as the eagerly-joined ``TournamentFixture.stage``
+                    # (``lazy="joined"``, ``innerjoin=True``). Stages are deliberately
+                    # NOT part of this lock — nothing here writes one, and no writer of
+                    # a stage row takes a fixture lock first, so locking it would only
+                    # widen the row set contended for no benefit.
+                    .with_for_update(of=TournamentFixture)
                 )
             )
             .scalars()

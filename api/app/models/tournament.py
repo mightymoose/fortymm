@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
     from app.models.tournament_event_pool import TournamentEventPool
     from app.models.tournament_event_stage import TournamentEventStage
-    from app.models.tournament_fixture import TournamentFixture
     from app.models.tournament_table import VenueTable
 
 
@@ -430,51 +429,15 @@ class TournamentEvent(Base):
         order_by="TournamentEventStage.position",
     )
 
-    # The event's draw: every fixture the cut produced (ADR-0786), read through its
-    # stages — VIEWONLY, and no longer the real parent-child relationship, since a
-    # fixture names its stage rather than its event now (ADR 20260815 decision 5,
-    # "a fixture names its stage"; ``tournament_fixtures.event_id`` is dropped
-    # outright). ``TournamentEventStage.fixtures`` is the real relationship
-    # ``cut_draw`` / ``uncut_draw`` write through (by bulk statement, not the ORM
-    # collection — see that relationship's docstring); this one spans BOTH of an
-    # rr-then-ko event's stages, unlike ``pools`` above, because both the pool stage
-    # and the knockout stage hold fixtures.
-    #
-    # Kept here, readable, for the one test that walks it directly
-    # (``test_the_events_fixtures_relationship_is_ordered_pool_round_position``) — every
-    # production read of a draw goes through the batched ``fixtures_by_event`` loader
-    # instead, never through this relationship.
-    #
-    # Ordered pool → round → position — the same total order the read path's
-    # ``fixtures_by_event`` loader applies, and the one the fixtures' own
-    # ``UNIQUE (stage_id, pool_id, round, position)`` makes a total order at all. The
-    # ``pool_id`` used to be missing from this list, which left the relationship
-    # ordering a *pooled* draw by round and position alone: pool A's round 1 and pool
-    # B's round 1 would interleave, so the same draw would come back in two different
-    # sequences depending on which of the two ways a caller happened to read it. A
-    # bracket has one order, and there is no reader that wants the other one.
-    #
-    # NULLs last, explicitly, rather than relying on Postgres' ASC default: a NULL
-    # ``pool_id`` is a real value here ("this fixture belongs to no pool" —
-    # single-elim or swiss, or this is the KO stage of an rr-then-ko event), and it
-    # belongs after the pools that feed it — where a swiss event has none, every
-    # fixture of one being un-pooled.
-    #
-    # It orders the pools by ``pool_id``, where ``fixtures_by_event`` orders them by the
-    # pool's ``position`` in the event's own pool order (ADR 20260801) — a relationship
-    # ``order_by`` is an expression over *this* table, so saying it here would still
-    # take a correlated subquery in a string, even now that the position is a column on
-    # ``tournament_event_pools`` and joinable. The two agree wherever the ids sort as
-    # the director ordered them and part company where they do not (``p-10-`` sorts
-    # between ``p-1-`` and ``p-2-``). Nothing in the app reads this relationship's order
-    # today — every draw a client sees comes through the loader.
-    fixtures: Mapped[list["TournamentFixture"]] = relationship(
-        secondary="tournament_event_stages",
-        primaryjoin="TournamentEvent.id == TournamentEventStage.event_id",
-        secondaryjoin="TournamentEventStage.id == TournamentFixture.stage_id",
-        viewonly=True,
-        order_by=(
-            "TournamentFixture.pool_id.asc().nulls_last(), "
-            "TournamentFixture.round, TournamentFixture.position"
-        ),
-    )
+    # There is deliberately no ``fixtures`` relationship here any more. A fixture
+    # names its stage, not its event (ADR 20260815 decision 5, "a fixture names its
+    # stage"; ``tournament_fixtures.event_id`` is dropped outright) —
+    # :attr:`~app.models.tournament_event_stage.TournamentEventStage.fixtures` is the
+    # real relationship, one stage at a time; an rr-then-ko event's draw spans BOTH of
+    # its stages, unlike ``pools`` above, because both the pool stage and the knockout
+    # stage hold fixtures. This model carried a VIEWONLY shim spanning both stages,
+    # ordered pool → round → position, for the one test that walked it directly; that
+    # test now walks a stage's own ``fixtures`` instead (the same order, declared on
+    # that relationship). Every production read of a draw goes through the batched
+    # ``app.tournament_queries.fixtures_by_event`` loader, never through either
+    # relationship.

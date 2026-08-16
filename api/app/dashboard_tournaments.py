@@ -48,6 +48,7 @@ from app.models import (
     TournamentEvent,
     TournamentStatus,
 )
+from app.models.draw_type import StageDrawType
 from app.models.tournament import DrawType
 from app.result_acceptance import side_win_counts
 from app.schemas.dashboard import (
@@ -111,15 +112,21 @@ async def build_tournament_panels(
     entrants = await active_entrants_by_event(db, event_ids)
     fixtures = await fixtures_by_event(db, event_ids)
     game_counts = await game_counts_by_match(db, completed_match_ids(fixtures))
-    # Each event's stage ids mapped to that stage's OWN draw type (ADR 20260815) — what
-    # ``_round_label`` and ``event_results`` read a fixture's ``stage_id`` against to
-    # tell an un-pooled block's vocabulary (bracket vs swiss rounds) apart, in place of
-    # inferring it from the EVENT's overall draw type plus ``pool_id IS NULL``. Read
-    # off each event's eager (``lazy="selectin"``) stages collection — already loaded
-    # with the entities above, so this costs the panel no statement of its own.
-    stage_draw_types = {
-        event.id: {stage.id: stage.draw_type for stage in event.stages}
-        for event in events
+    # Every stage id on this page mapped to that stage's OWN draw type (ADR 20260815)
+    # — what ``_round_label`` and ``event_results`` read a fixture's ``stage_id``
+    # against to tell an un-pooled block's vocabulary (bracket vs swiss rounds) apart,
+    # in place of inferring it from the EVENT's overall draw type plus ``pool_id IS
+    # NULL``. Read off each event's eager (``lazy="selectin"``) stages collection —
+    # already loaded with the entities above, so this costs the panel no statement of
+    # its own.
+    #
+    # Flat, not nested by event id: a stage id is already globally unique (it is the
+    # table's own surrogate key), so an ``{event_id: {stage_id: draw_type}}`` map
+    # bought nothing a caller couldn't get by reading straight off the stage id it
+    # already has in hand — every reader here (``_build_event``, ``_build_match``)
+    # holds a fixture or a focus match, never an event, when it needs this.
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType] = {
+        stage.id: stage.draw_type for event in events for stage in event.stages
     }
 
     # The caller's own fixtures, per event — the path list, and the pool the focus
@@ -176,7 +183,7 @@ async def build_tournament_panels(
                 focus=focus[event.id],
                 focus_matches=focus_matches,
                 game_counts=game_counts,
-                stage_draw_types=stage_draw_types[event.id],
+                stage_draw_types=stage_draw_types,
             )
         )
     return [
@@ -303,7 +310,7 @@ def _build_event(
     focus: TournamentFixtureRead | None,
     focus_matches: dict[uuid.UUID, Match],
     game_counts: dict[uuid.UUID, tuple[int, int]],
-    stage_draw_types: Mapping[uuid.UUID, DrawType],
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType],
 ) -> DashboardTournamentEvent:
     username_by_entry = {entrant.id: entrant.username for entrant in entrants}
     pools = {pool.id: pool for pool in event_pools(event)}
@@ -415,7 +422,14 @@ def _build_event(
                 else None
             ),
             best_of=settings.length_games,
-            stage_draw_type=stage_draw_types[focus.stage_id],
+            # ``.get``, not ``[...]``: ``stage_draw_types`` and ``fixtures`` are two
+            # separate loads a beat apart, so a stage a director's re-mint deleted
+            # between them (an event's draw type changed, remint_stages_in_place,
+            # ADR 20260815) can leave ``focus.stage_id`` naming a stage this map no
+            # longer has. That is read skew on a background dashboard refresh, not a
+            # broken invariant worth 500ing the whole panel over — ``_build_match``
+            # degrades the one label that needs the vocabulary rather than raising.
+            stage_draw_type=stage_draw_types.get(focus.stage_id),
             tables=tables,
             game_counts=game_counts,
         )
@@ -483,7 +497,7 @@ def _build_match(
     username_by_entry: dict[uuid.UUID, str],
     match: Match | None,
     best_of: int,
-    stage_draw_type: DrawType,
+    stage_draw_type: StageDrawType | None,
     tables: dict[str, TournamentTable],
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> DashboardTournamentMatch:
@@ -500,7 +514,16 @@ def _build_match(
         opponent_games=opponent_games,
         best_of=best_of,
         games=_games(match, side=side),
-        round_label=_round_label(stage_draw_type, fixture.round),
+        # ``round_label`` is NOT NULL on the wire (``DashboardTournamentMatch``), so a
+        # missing stage draw type (the read-skew ``stage_draw_type`` is ``None`` for
+        # — see the focus-match call site) degrades to a neutral ordinal rather than
+        # omitting the field: still true (this IS round ``fixture.round``), just
+        # without the draw type's own word for it.
+        round_label=(
+            _round_label(stage_draw_type, fixture.round)
+            if stage_draw_type is not None
+            else f"Round {fixture.round}"
+        ),
         table_label=_table_label(fixture.table_id, tables),
         start_label=_time_label(fixture),
         next_game_number=(current_game_number(match) if match is not None else None),
@@ -640,7 +663,7 @@ def _fixture_state(status: MatchStatus | None) -> TournamentFixtureState:
             assert_never(status)
 
 
-def _round_label(stage_draw_type: DrawType, round_number: int) -> str:
+def _round_label(stage_draw_type: StageDrawType, round_number: int) -> str:
     """A round number in its draw type's own vocabulary, composed here so no client
     maps an integer to a word.
 
@@ -652,8 +675,11 @@ def _round_label(stage_draw_type: DrawType, round_number: int) -> str:
     indistinguishable that way. Every stage a fixture can actually belong to is one of
     the three single-stage kinds, so this needs nothing else to decide the word.
 
-    An exhaustive ``match`` with no catch-all: a new ``DrawType`` is a type error until
-    it says what it calls a round (api/CLAUDE.md)."""
+    An exhaustive ``match`` with no catch-all: ``stage_draw_type`` is
+    :data:`~app.models.draw_type.StageDrawType`, not the full ``DrawType``, so a new
+    stage-runnable draw type is a type error here until it says what it calls a round
+    (api/CLAUDE.md) — and ``rr_then_ko`` needs no arm at all, below, because the type
+    already says it cannot arrive."""
     match stage_draw_type:
         case DrawType.round_robin:
             return f"Group match {round_number}"
@@ -667,19 +693,6 @@ def _round_label(stage_draw_type: DrawType, round_number: int) -> str:
             # player both call it — and it needs none of the bracket's caveats, because
             # the number is not a distance from a final.
             return f"Round {round_number}"
-        case DrawType.rr_then_ko:
-            # Unreachable: ``rr_then_ko`` names a TEMPLATE, never a runnable stage's own
-            # type (ADR 20260815 decision 4) — ``TournamentEventStage.draw_type``'s
-            # setter is the one place that is enforced, and it refuses to write this
-            # value onto a stage row (raising ``ValueError``, matched here). A
-            # fixture's ``stage_id`` always resolves to a real stage, so
-            # ``stage_draw_type`` can never actually be this member; kept as an
-            # explicit ``raise`` rather than folded into another arm so a future bug
-            # that *does* reach it fails loudly instead of misreading its label.
-            raise ValueError(
-                "a fixture's own stage can never be rr_then_ko — that member names a "
-                "template, not a runnable stage (ADR 20260815 decision 4)"
-            )
         case _:
             assert_never(stage_draw_type)
 

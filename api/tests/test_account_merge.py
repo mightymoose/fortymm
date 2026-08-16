@@ -37,7 +37,6 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventStage,
     TournamentFixture,
     User,
     UserLeagueRating,
@@ -48,6 +47,7 @@ from app.roles import grant_default_role
 from app.sessions import SESSION_TOKEN_CONTEXT
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_pools,
     start_session,
@@ -1034,13 +1034,7 @@ async def _fixtures_for(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event.id
-                        )
-                    )
-                )
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event.id])))
                 .execution_options(populate_existing=True)
             )
         )

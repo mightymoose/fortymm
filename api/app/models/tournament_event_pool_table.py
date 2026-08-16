@@ -86,8 +86,10 @@ class TournamentEventPoolTable(Base):
     __table_args__ = (
         # A pool reserves a table at most once. ``event_id`` leads for the reason it
         # leads on ``tournament_event_pools``: every read is "the reservations of this
-        # pool", and its own index answers the (event_id, pool_id) foreign key's
-        # referential check as well as the event-delete cascade's lookup.
+        # pool", and its own index answers the (event_id, table_id) shape of that read
+        # as well as the event-delete cascade's lookup. It no longer covers the pool
+        # leg's own referential check — that FK re-targeted to ``(stage_id, pool_id)``
+        # (ADR 20260815), which needs its own index below.
         PrimaryKeyConstraint(
             "event_id",
             "pool_id",
@@ -143,13 +145,24 @@ class TournamentEventPoolTable(Base):
         # The index Postgres does NOT create for a REFERENCING pair, on the leg that
         # needs it most: removing a venue table cascades through this FK, and unindexed
         # that check is a sequential scan of every reservation on the platform per table
-        # removed. The primary key covers the other two legs (both lead with
-        # ``event_id``); this pair leads with ``tournament_id``, which no other index
-        # here does.
+        # removed. The primary key covers the other leg that leads with ``event_id``
+        # (the fourth, ``(event_id, stage_id)``); this pair leads with
+        # ``tournament_id``, which no other index here does.
         Index(
             "ix_tournament_event_pool_tables_tournament_id_table_id",
             "tournament_id",
             "table_id",
+        ),
+        # The index the PK used to cover for free before ADR 20260815 re-targeted the
+        # pool leg from ``(event_id, pool_id)`` onto ``(stage_id, pool_id)``: the old
+        # leg was a prefix of ``pk_tournament_event_pool_tables`` (which leads with
+        # ``event_id``), so it rode the PK's own index. ``stage_id`` isn't a PK column
+        # at all, so that referential check — and the pool-delete cascade through it —
+        # went unindexed until this index was added back.
+        Index(
+            "ix_tournament_event_pool_tables_stage_id_pool_id",
+            "stage_id",
+            "pool_id",
         ),
     )
 

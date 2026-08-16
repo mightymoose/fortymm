@@ -32,7 +32,6 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -59,6 +58,7 @@ from app.tournament_lifecycle import (
     delete_tournament,
     transition_tournament,
 )
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     CountingGeocoder,
     assert_tournament_address_is_sql_null,
@@ -794,11 +794,7 @@ async def test_transition_published_to_live_materializes_matches_and_queues_a_so
         (
             await db_session.execute(
                 select(TournamentFixture).where(
-                    TournamentFixture.stage_id.in_(
-                        select(TournamentEventStage.id).where(
-                            TournamentEventStage.event_id == event_id
-                        )
-                    )
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         )

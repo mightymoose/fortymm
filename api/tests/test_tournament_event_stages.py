@@ -45,6 +45,7 @@ from tests._helpers import (
     event_draw_settings,
     grant_permissions,
     make_user,
+    stage_id_at,
     start_session,
     venue_tables,
 )
@@ -153,17 +154,13 @@ async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     real pool to point the fixture at (single-elim/swiss fixtures carry no pool
     either).
 
-    Named by its stage 0, resolved by an explicit query (``TournamentEvent.stages`` is
-    deliberately not eager) — the single-stage draw types this file drives never need
+    Named by its stage 0, resolved through ``stage_id_at`` rather than
+    ``event.stages[0]`` — not because ``TournamentEvent.stages`` would fail (it is
+    eager, ``lazy="selectin"``), but because ``event`` here may be a Python-built
+    object this helper's caller never re-queried, so its collection may not be
+    populated at all. The single-stage draw types this file drives never need
     position 1."""
-    stage_id = (
-        await db.execute(
-            select(TournamentEventStage.id).where(
-                TournamentEventStage.event_id == event.id,
-                TournamentEventStage.position == 0,
-            )
-        )
-    ).scalar_one()
+    stage_id = await stage_id_at(db, event.id, 0)
     db.add(TournamentFixture(stage_id=stage_id, pool_id=None, round=1, position=1))
     await db.commit()
 
