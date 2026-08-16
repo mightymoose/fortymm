@@ -84,10 +84,10 @@ DRAW_TYPE_SEED = [
         uuid.UUID("22222222-2222-2222-2222-222222220001"),
         "round-robin",
         "Round robin",
-        "Everyone in a pool plays everyone else in that pool. Every entrant is "
+        "Everyone in a group plays everyone else in that group. Every entrant is "
         "guaranteed the same number of matches and the final standings rank the "
         "whole field, so it is the fairest read on form — but the match count "
-        "climbs quickly with pool size, and the event needs at least one pool.",
+        "climbs quickly with group size, and the event needs at least one group.",
         1,
     ),
     (
@@ -107,7 +107,7 @@ DRAW_TYPE_SEED = [
         # stages upfront and seeds qualifiers rematch-free" — it is seed data, so
         # changing either string is a migration.
         "Round-robin then knockout",
-        "Pools play all-play-all, then the top finishers from each pool meet in a "
+        "Groups play all-play-all, then the top finishers from each group meet in a "
         "knockout bracket.",
         3,
     ),

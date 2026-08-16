@@ -1933,15 +1933,15 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # batched load of every event's fixtures — its draw (ADR-0786) — and ONE batched load
 # of the caller's rating on every league those tournaments run on (which each event's
 # ``entry_state`` is judged against, ADR-0783), ONE batched load of every event's
-# pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
+# groups (``TournamentEvent.groups``, ``lazy="selectin"`` — groups are rows now,
 # ADR 20260801, batched across the whole page exactly as the tables are), ONE
-# batched load of every one of THOSE pools' table reservations
+# batched load of every one of THOSE groups' reservations' table reservations
 # (the reservation's ``tables``, ``lazy="selectin"`` — they are rows too
-# now, and selectin chains onto the pools' own batched load rather than costing a query
-# per pool), and ONE batched load of every event's stages
+# now, and selectin chains onto the groups' own batched load rather than costing a
+# query per group), and ONE batched load of every event's stages
 # (``TournamentEvent.stages``, ``lazy="selectin"`` too now, ADR 20260815 — the list is
 # no longer a special case that skips them, it just never asked for a separate batch).
-# Nine, whatever the number of tournaments, tables, events, pools, reservations and
+# Nine, whatever the number of tournaments, tables, events, groups, reservations and
 # stages.
 EXPECTED_TOURNAMENT_LIST_STATEMENTS = 9
 
@@ -2031,12 +2031,12 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
         and not any(x.username.startswith("gone-") for x in e.entrants)
         for e in tournament.events
     )
-    # The pool ids are the server's, and each event has its own "p-a" row, so the
+    # The group ids are the server's, and each event has its own "g-a" row, so the
     # assertion is about the SHAPE of each event's draw: two fixtures, both in the one
-    # pool that event has, at (1, 1) and (1, 2).
+    # group that event has, at (1, 1) and (1, 2).
     for e in tournament.events:
-        pool_ids = {f.pool_id for f in e.fixtures}
-        assert len(pool_ids) == 1 and None not in pool_ids
+        group_ids = {f.group_id for f in e.fixtures}
+        assert len(group_ids) == 1 and None not in group_ids
         assert [(f.round, f.position) for f in e.fixtures] == [(1, 1), (1, 2)]
 
 
@@ -4494,7 +4494,7 @@ async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
     await db_session.execute(
         text(
             "UPDATE draw_types SET name = 'Everybody plays everybody', "
-            "description = 'One pool, every pairing.', display_order = 2 "
+            "description = 'One group, every pairing.', display_order = 2 "
             "WHERE key = 'round-robin'"
         )
     )
@@ -4512,12 +4512,12 @@ async def test_the_draw_type_copy_and_order_are_the_rows_not_hardcoded(
 
     assert [(row["key"], row["name"], row["description"]) for row in catalogue] == [
         ("single-elim", "Knockout", "Lose once and you are out."),
-        ("round-robin", "Everybody plays everybody", "One pool, every pairing."),
+        ("round-robin", "Everybody plays everybody", "One group, every pairing."),
         (
             "rr-then-ko",
             "Round-robin then knockout",
-            "Pools play all-play-all, then the top finishers from each pool meet in "
-            "a knockout bracket.",
+            "Groups play all-play-all, then the top finishers from each group meet "
+            "in a knockout bracket.",
         ),
         (
             "swiss",
@@ -4562,10 +4562,11 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # solve strip, ADR "the schedule is solved, the call is pinned"), and ONE read of the
 # ``draw_types`` catalogue the event form's picker renders (ADR "a draw type is a
 # seeded row, and the enum holds only what runs"), plus ONE batched load of every
-# event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
-# ADR 20260801), plus ONE batched load of every one of those pools' table reservations
-# (the reservation's ``tables``, ``lazy="selectin"`` — chained onto the groups' own
-# batched load, so it is one statement per page and not one per pool), plus ONE batched
+# event's groups (``TournamentEvent.groups``, ``lazy="selectin"`` — groups are rows
+# now, ADR 20260801), plus ONE batched load of every one of those groups' reservations'
+# table reservations (the reservation's ``tables``, ``lazy="selectin"`` — chained onto
+# the groups' own batched load, so it is one statement per page and not one per
+# group), plus ONE batched
 # load of every event's STAGES (``selectinload(TournamentEvent.stages)`` at the
 # ``tournament_detail`` read site — ADR 20260815 — riding
 # ``TournamentEventStage.draw_type_option``'s own ``lazy="joined"`` along on that same
@@ -4698,7 +4699,7 @@ async def test_detail_statement_count_does_not_grow_with_entrants(
 
 # ----- the draw on the detail page (ADR-0786) -------------------------------
 #
-# A draw is the event's **fixtures**: planned pairings, each at a (pool, round,
+# A draw is the event's **fixtures**: planned pairings, each at a (group, round,
 # position), whose sides may still be TBD. They ride on the tournament-detail BFF
 # rather than on a ``GET …/draw`` of their own — one endpoint per page (root
 # CLAUDE.md), so a bracket is never a second round-trip the page has to wait for.
@@ -4708,18 +4709,26 @@ async def test_detail_statement_count_does_not_grow_with_entrants(
 
 
 def _coords(event: dict[str, Any]) -> list[tuple[str | None, int, int]]:
-    """An event's draw as the sequence of coordinates it came back in, with each pool
-    named rather than identified.
+    """An event's draw as the sequence of coordinates it came back in, with each group
+    named (by its reservation's name) rather than identified.
 
-    A pool id is a server-minted uuid (ADR 20260801), so no expectation below could
-    spell one; the pool's **name** is what a test can say and what a director reads. The
-    mapping comes off the event's own ``pools``, which is the same join a client makes
-    to title a bracket — so a fixture naming a pool this event does not have would show
-    up here as a ``KeyError`` rather than as a quietly unmatched id."""
-    names = {pool["id"]: pool["name"] for pool in event["pools"]}
+    A group id is a server-minted uuid (ADR 20260801), so no expectation below could
+    spell one; the group's reservation **name** is what a test can say and what a
+    director reads. The mapping comes off the event's own ``groups``, joined to their
+    ``reservations`` — the same join a client makes to title a bracket — so a fixture
+    naming a group this event does not have would show up here as a ``KeyError``
+    rather than as a quietly unmatched id."""
+    reservation_by_group = {
+        group["id"]: group["reservation_id"] for group in event["groups"]
+    }
+    names = {
+        reservation["id"]: reservation["name"] for reservation in event["reservations"]
+    }
     return [
         (
-            names[f["pool_id"]] if f["pool_id"] is not None else None,
+            names[reservation_by_group[f["group_id"]]]
+            if f["group_id"] is not None
+            else None,
             f["round"],
             f["position"],
         )
@@ -4733,24 +4742,24 @@ async def _events_by_name(
     return {e["name"]: e for e in await _events_of(client, tournament_id)}
 
 
-async def test_an_events_draw_comes_back_in_pool_round_position_order(
+async def test_an_events_draw_comes_back_in_group_round_position_order(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """The draw is ordered by the server, deterministically: pool, then round, then
+    """The draw is ordered by the server, deterministically: group, then round, then
     position — the three columns that identify a fixture within its draw.
 
-    The rows are written in deliberately the WRONG order (round 2 before round 1, pool
-    B before pool A, the KO fixture first of all), because insertion order is what a
+    The rows are written in deliberately the WRONG order (round 2 before round 1, group
+    B before group A, the KO fixture first of all), because insertion order is what a
     read that forgot to order by anything would come back in — and on a draw cut in one
     pass, insertion order and the right order would happen to coincide. A test seeded
     in the right order could not tell the two apart, and would pass against a read with
     no ORDER BY at all.
 
-    The un-pooled fixture (``pool_id`` NULL — as a knockout stage's fixtures are)
-    sorts LAST, after the pools that feed it. NULL is a real value in this domain ("this
-    fixture belongs to no pool"), not a missing one, so it has a defined place in the
-    order rather than an incidental one.
+    The ungrouped fixture (``group_id`` NULL — as a knockout stage's fixtures are)
+    sorts LAST, after the groups that feed it. NULL is a real value in this domain
+    ("this fixture belongs to no group"), not a missing one, so it has a defined place
+    in the order rather than an incidental one.
     """
     client, _ = authed_client
     tournament_id, (drawn, _) = await _tournament_with_events(
@@ -4758,13 +4767,13 @@ async def test_an_events_draw_comes_back_in_pool_round_position_order(
         _event_payload(name="Open Singles"),
         _event_payload(name="Under 1500"),
     )
-    # The event's pool ORDER, stated before any fixture names a pool, because that order
-    # is what the read sorts by (ADR 20260801) and it is not the order the fixtures are
-    # written in below — which is the whole point of writing them in the wrong one.
-    # ``_cut`` would otherwise create each pool as it first met it, and pool B would
-    # legitimately come first.
-    await _ensure_pool(db_session, uuid.UUID(drawn["id"]), "p-a")
-    await _ensure_pool(db_session, uuid.UUID(drawn["id"]), "p-b")
+    # The event's group ORDER, stated before any fixture names a group, because that
+    # order is what the read sorts by (ADR 20260801) and it is not the order the
+    # fixtures are written in below — which is the whole point of writing them in the
+    # wrong one. ``_cut`` would otherwise create each group as it first met it, and
+    # group B would legitimately come first.
+    await _ensure_group(db_session, uuid.UUID(drawn["id"]), "g-a")
+    await _ensure_group(db_session, uuid.UUID(drawn["id"]), "g-b")
 
     await _cut(db_session, drawn["id"], group_id="g-b", round=2, position=1)
     await _cut(db_session, drawn["id"], group_id=None, round=1, position=1)
@@ -4775,10 +4784,10 @@ async def test_an_events_draw_comes_back_in_pool_round_position_order(
     events = await _events_by_name(client, tournament_id)
 
     assert _coords(events["Open Singles"]) == [
-        ("p-a", 1, 1),
-        ("p-b", 1, 1),
-        ("p-b", 1, 2),
-        ("p-b", 2, 1),
+        ("g-a", 1, 1),
+        ("g-b", 1, 1),
+        ("g-b", 1, 2),
+        ("g-b", 2, 1),
         (None, 1, 1),
     ]
 
@@ -4805,7 +4814,7 @@ async def test_an_event_whose_draw_is_uncut_carries_an_empty_list(
 
     events = await _events_by_name(client, tournament_id)
 
-    assert _coords(events["Open Singles"]) == [("p-a", 1, 1)]
+    assert _coords(events["Open Singles"]) == [("g-a", 1, 1)]
     assert events["Under 1500"]["fixtures"] == []
 
 
@@ -4843,7 +4852,7 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     assert set(fixture) == {
         "id",
         "stage_id",
-        "pool_id",
+        "group_id",
         "round",
         "position",
         "entry_a_id",
@@ -4919,10 +4928,11 @@ async def test_the_list_and_the_detail_agree_about_an_events_draw(
     a draw the detail page disagrees with — including its order."""
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
-    # Pool A first in the event's pool order, said here rather than left to the order
-    # the fixtures below happen to be seeded in (which is deliberately the reverse).
-    await _ensure_pool(db_session, uuid.UUID(event["id"]), "p-a")
-    await _ensure_pool(db_session, uuid.UUID(event["id"]), "p-b")
+    # Group A first in the event's group order, said here rather than left to the
+    # order the fixtures below happen to be seeded in (which is deliberately the
+    # reverse).
+    await _ensure_group(db_session, uuid.UUID(event["id"]), "g-a")
+    await _ensure_group(db_session, uuid.UUID(event["id"]), "g-b")
     await _cut(db_session, event["id"], group_id="g-b", round=1, position=1)
     await _cut(db_session, event["id"], group_id="g-a", round=1, position=1)
 
@@ -4931,7 +4941,7 @@ async def test_the_list_and_the_detail_agree_about_an_events_draw(
     (listed_event,) = listed["events"]
     (detail_event,) = await _events_of(client, tournament_id)
 
-    assert _coords(listed_event) == [("p-a", 1, 1), ("p-b", 1, 1)]
+    assert _coords(listed_event) == [("g-a", 1, 1), ("g-b", 1, 1)]
     assert listed_event["fixtures"] == detail_event["fixtures"]
 
 
