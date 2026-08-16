@@ -185,6 +185,6 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **A human releases work from Review to Testing** — see `.claude/rules/the-review-gate.md`. `review-next-ticket` posts a decision comment on the PR, parks the ticket in **Waiting For Sign Off**, and stops; `implement-ticket-end-to-end` holds a bounded watch for an `LGTM` from `mightymoose`; `test-next-ticket` refuses without one.
 
-**Collect the garbage you create** — `land-the-plane` Step 7 runs `scripts/reap-worktrees.sh` and `scripts/qa-down.sh` (see their headers for why). Whoever merges cleans up: `test-next-ticket` after its own merge, `land-the-plane` after its stack walk. `implement-ticket-end-to-end` reaps the worktree, first and last, because it is the only thing standing outside one.
+**Collect the garbage you create** — `land-the-plane` Step 7 runs `scripts/reap-worktrees.sh` and `scripts/qa-down.sh` (see their headers for why). Whoever merges cleans up: `test-next-ticket` after its own merge, `land-the-plane` after its stack walk. Whoever merges also fast-forwards `main` at the repo root, so the next run starts from a current base. `implement-ticket-end-to-end` reaps the worktree, first and last, because it is the only thing standing outside one.
 
 Layer-specific architecture and conventions live in `api/CLAUDE.md` and `web-client/CLAUDE.md` (loaded automatically when working in those directories).

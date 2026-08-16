@@ -1,5 +1,5 @@
 ---
-description: Implement a specific Ready For Implementation ticket, or the top Ready For Implementation ticket when none is specified. Leave structured implementation notes, then hand off to review-next-ticket in a fresh context so the run ends at Waiting For Sign Off with CI green, ready for a human's LGTM.
+description: Implement a specific Ready For Implementation ticket, or the top Ready For Implementation ticket when none is specified. Leave structured implementation notes and move successful work to In Review, where the implement-ticket-end-to-end orchestrator dispatches Review.
 model: sonnet
 ---
 
@@ -114,33 +114,13 @@ Only after implementation and relevant verification succeed:
 1. Append Implementation Notes.
 2. Ensure the PR is linked.
 3. Move the ticket to **In Review**.
-4. Hand off to Review, below.
+4. Stop, and report the next command: `review-next-ticket <ticket-number>`.
 
-## Hand Off to Review
+`implement-ticket-end-to-end` is the orchestrator. It dispatches Review as its next stage, in a fresh context, and the fresh context is what makes the review a review: a reviewer that just wrote the code is not a reviewer. Do not review your own implementation, and do not invoke `review-next-ticket` yourself.
 
-**Do not stop at In Review.** Invoke `review-next-ticket` for this ticket, by number, **in a fresh context/subagent**, and let it run to its own stop.
+**Do not wait for CI before stopping.** `review-next-ticket` waits for green itself, as a step of its own. A red build is Review's finding to report, not a reason to sit on a finished implementation.
 
-**The fresh context is not optional, and it is not about tidiness.** This command is pinned to `sonnet` and `review-next-ticket` is pinned to `opus`. A command's `model:` frontmatter only takes effect when the stage is dispatched as its own unit — invoked inline, its instructions would load into *this* context and Review would quietly run on the implementer's model, which is the same class of silent downgrade the root `CLAUDE.md` warns about for call-site `model` overrides. Dispatch it the way `implement-ticket-end-to-end` dispatches its stages.
-
-The second reason is the ordinary one: a reviewer that just wrote the code is not a reviewer. Fresh context is what makes the review a review.
-
-**If this session has no mechanism to dispatch a fresh context, do not run Review inline.** Stop at **In Review** and report that Review still needs to run. `implement-ticket-end-to-end` invokes Review itself in exactly that case, and a manual `review-next-ticket` picks it up outside the coordinator.
-
-The human's touch point is the **Waiting For Sign Off** column, not this handoff. A ticket parked in **In Review** is waiting on nothing: no cron, no GitHub Action and no hook starts Review, so it sits there until a person notices. That wait is what this handoff removes.
-
-**Do not wait for CI before invoking it.** `review-next-ticket` waits for green itself, as a step of its own, and it is the stage that owns that wait. Waiting here would only duplicate it — and a red build is Review's finding to report, not a reason for this command to sit on a finished implementation.
-
-Review is a genuinely separate stage and stays one:
-
-- It runs the `land-the-plane` review commands against the diff, rather than re-reading the work with the eyes that just wrote it.
-- It ends by posting the decision comment and moving the ticket to **Waiting For Sign Off**, which is where a human picks it up.
-- **It cannot release its own gate.** Only a comment from the reviewer whose whole body normalizes to `lgtm` moves work to Testing, and `test-next-ticket` refuses without one. See `.claude/rules/the-review-gate.md`. Chaining Review onto Implementation changes when Review starts. It does not change who approves.
-
-If Review escalates, or its repairs cannot be made cleanly, stop and report — leaving the ticket wherever Review left it. Do not paper over a Review finding to reach the column.
-
-Report both stages when you finish: what was implemented, what Review found and repaired, what CI says, and the PR URL.
-
-Do not begin Testing in this command.
+Run standalone, this command still stops here. Nothing watches an In Review ticket — no cron, no GitHub Action, no hook — so say so in the final report and name the resume command.
 
 ## Escalation Contract
 
@@ -153,8 +133,8 @@ Do not begin Testing in this command.
 - Never silently change scope, and never include unrelated user changes.
 - Verify before handing to Review.
 - Always leave structured Implementation Notes with explicit `N/A` where appropriate.
-- Move successful implementation to **In Review**, then invoke `review-next-ticket` for it by number, in a fresh context/subagent so its `model: opus` pin still applies.
-- The run ends at **Waiting For Sign Off**, at an escalation, or at the no-fresh-context stop above. Never review inline.
-- Do not wait for CI before handing off. Review owns that wait.
+- Move successful implementation to **In Review**, then stop. The orchestrator dispatches Review.
+- Do not review your own implementation, and do not invoke `review-next-ticket` yourself.
+- Do not wait for CI before stopping. Review owns that wait.
 - Never set **In Testing**, and never post the release signal on your own pull request. A human releases Review to Testing (`.claude/rules/the-review-gate.md`).
 - Do not test or merge in this command.

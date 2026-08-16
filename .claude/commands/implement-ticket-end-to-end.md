@@ -42,23 +42,21 @@ The script is dry-run by default and only ever reaps a worktree whose PR has **m
 
 Run each stage — `implement-next-ticket`, `review-next-ticket`, `test-next-ticket` — in a **fresh context/subagent** whenever Claude Code provides a mechanism to do so, passing the explicit ticket number.
 
+Dispatch each stage as its own unit. A stage's `model:` frontmatter only takes effect when it runs as its own context — loaded inline, the stage quietly runs on the coordinator's model, the same class of silent override the root `CLAUDE.md` warns about for call-site `model` parameters.
+
 Do not let the implementation context become its own reviewer/tester merely to save time. Handoff through durable artifacts: ticket specification, Planning notes, stage notes, code, PR, tests, and repository state — not private reasoning transcripts.
 
-## Stage 1 — Implementation, Which Hands Off to Review Itself
+## Stage 1 — Implementation
 
-Invoke `implement-next-ticket` for the selected ticket in a fresh context. That stage moves the ticket to **In Progress** when it claims it, so a ticket sitting In Progress with no pull request is an implementation run in flight or a dead one, not an unclaimed ticket.
+Invoke `implement-next-ticket` for the selected ticket in a fresh context. That stage moves the ticket to **In Progress** when it claims it, so a ticket sitting In Progress with no pull request is an implementation run in flight or a dead one, not an unclaimed ticket. Success means implementation on a pushed branch, PR linked, Implementation Notes appended, and the ticket **In Review**. If it escalates, stop and surface the escalation unchanged.
 
-The stage does not stop at implementation: it dispatches `review-next-ticket` in its own fresh context and runs to Review's stop. So one dispatch normally carries the ticket through **both** stages, and success means: implementation on a pushed branch, PR linked, Implementation Notes and Review Notes appended, a non-draft PR with CI green, a decision comment posted, and the ticket in **Waiting For Sign Off**.
+Do not wait for CI between the stages. Review waits for green itself, as a step of its own, and a red build is Review's finding to report.
+
+## Stage 2 — Review
+
+Invoke `review-next-ticket` for the same ticket in a new fresh context. Success means adversarial review completed, clear findings repaired/re-reviewed, Review Notes appended, a non-draft pull request open with CI green, a decision comment posted on it, and the ticket in **Waiting For Sign Off**. If it escalates, stop.
 
 **Recover the decision comment's timestamp from the stage report.** It is the watch anchor.
-
-If the stage escalates, stop and surface the escalation unchanged.
-
-## Stage 2 — Review, Only When Stage 1 Could Not Run It
-
-`implement-next-ticket` stops at **In Review** when it has no mechanism to dispatch Review in a fresh context. Only then invoke `review-next-ticket` for the same ticket in a new fresh context. Success means the same Review outputs as above, ending in **Waiting For Sign Off**.
-
-**Do not run Review a second time when Stage 1 already ran it.** A second pass costs a full review and posts a second decision comment, which resets the anchor for nothing.
 
 **Review writes the Waiting For Sign Off column, not the coordinator.** The ticket is In Review while the repair loop runs, and moves to Waiting For Sign Off at the moment the ask is posted. Verify it landed there before entering the watch; do not write it yourself to paper over a stage that did not finish.
 
@@ -156,7 +154,7 @@ The coordinator succeeds only when the selected ticket reaches **Done** through 
 - Use fresh contexts/subagents between stages whenever possible.
 - Never merge before Review and Testing pass.
 - Never continue past a stage escalation.
-- Do not duplicate stage prompts inside the coordinator, and do not re-run Review when Stage 1 already ran it.
+- Do not duplicate stage prompts inside the coordinator.
 - Preserve every stage's structured retrospective notes.
 - Never move a ticket into **In Testing** without the gate signal.
 - **In Testing** is the coordinator's only gate-related column write. `review-next-ticket` owns **Waiting For Sign Off** and the **In Progress** bounce-back.
