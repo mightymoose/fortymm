@@ -49,12 +49,12 @@ from tests._helpers import (
 # Two groups, so the snake has somewhere to snake to and a fixture's ``group_id`` is
 # a ref that resolves against the right one — the same shape ``test_tournaments.py``'s
 # draw tests cut across.
-GROUP_A: dict[str, object] = {
+RESERVATION_A: dict[str, object] = {
     "name": "Reservation A",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
     "table_ids": ["t1"],
 }
-GROUP_B: dict[str, object] = {
+RESERVATION_B: dict[str, object] = {
     "name": "Reservation B",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
     "table_ids": ["t2"],
@@ -114,7 +114,7 @@ async def _make_event(
         stages=stages,
     )
     stages[0].groups = event_groups(
-        [GROUP_A, GROUP_B] if groups is None else groups, event=event, tournament=tournament
+        [RESERVATION_A, RESERVATION_B] if groups is None else groups, event=event, tournament=tournament
     )
     db.add(event)
     await db.commit()
