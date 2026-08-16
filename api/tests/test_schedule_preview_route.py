@@ -59,7 +59,7 @@ from tests._helpers import (
 )
 
 # Built per tournament, never as a module constant: a catalogue is
-# ``tournament_tables`` rows now (ADR 20260801). The pool below names them by the
+# ``tournament_tables`` rows now (ADR 20260801). The reservation below names them by the
 # positional ``t1``/``t2`` aliases ``with_table_aliases`` resolves.
 TABLE_CATALOGUE = (("Table 1", "A"), ("Table 2", "A"))
 
@@ -106,10 +106,10 @@ async def _make_tournament(
     with_single_elim_event: bool = False,
 ) -> uuid.UUID:
     """A tournament owned by ``owner`` (a two-table catalogue and, unless
-    ``with_event=False``, one pooled event of ``draw_type`` capped at four players
+    ``with_event=False``, one grouped event of ``draw_type`` capped at four players
     over both tables). ``with_single_elim_event`` adds a second event the preview
-    lays out nothing of, to prove it costs the first event nothing; it needs no pools,
-    since a skipped event's pools are never read. Written straight to the database —
+    lays out nothing of, to prove it costs the first event nothing; it needs no
+    reservations, since a skipped event's reservations are never read. Written straight to the database —
     creation routes are not under test here. No ``TournamentEntry`` rows: a preview
     draws a synthetic field."""
     league = await get_default_league(db)
@@ -154,7 +154,7 @@ async def _make_tournament(
             tournament,
             [
                 {
-                    "name": "Pool A",
+                    "name": "Reservation A",
                     "slot": {
                         "date": "2030-01-01",
                         "start": "09:00",
@@ -223,9 +223,9 @@ async def test_owner_enqueues_a_preview_and_gets_a_token_and_structure(
     assert body["token"]
     assert [s["field_size"] for s in body["field_summaries"]] == [4]
     assert len(body["fixtures"]) == 6
-    # Each drawn fixture carries the human pool label (not just the namespaced
-    # composite) so the grid can head its column "Pool A".
-    assert {f["reservation_name"] for f in body["fixtures"]} == {"Pool A"}
+    # Each drawn fixture carries the human reservation label (not just the
+    # namespaced composite) so the grid can head its column "Reservation A".
+    assert {f["reservation_name"] for f in body["fixtures"]} == {"Reservation A"}
 
     (job,) = preview_queue.jobs
     assert job.func_name == RUN_SCHEDULE_PREVIEW_JOB
@@ -494,7 +494,7 @@ async def test_preview_of_a_bracket_only_tournament_is_a_422_that_names_the_draw
     route shares, where the error is now unreachable because ``strategy_for`` is
     total. That asymmetry is exactly the trap: the arm looks dead from the cut route's
     side, and deleting it still leaves this route answering 422 — just with the
-    generic fallback, which blames the event's own pools and field and sends the
+    generic fallback, which blames the event's own groups and field and sends the
     director hunting through two things that are perfectly fine.
 
     So the assertion is on the **sentence**, not the status. ``status_code == 422``
@@ -517,7 +517,7 @@ async def test_preview_of_a_bracket_only_tournament_is_a_422_that_names_the_draw
     assert detail != "This event's draw cannot be cut as the event stands."
     assert "cannot be cut" not in detail
     # The sentence blames the PREVIEW, not the scheduler: a live solve does place a
-    # bracket now (ADR "a pool restricts scheduling, it does not enable it"), so copy
+    # bracket now (ADR "a group restricts scheduling, it does not enable it"), so copy
     # saying the scheduler cannot would send the director to fix a thing that works.
     assert "cannot be previewed" in detail, detail
     # Nothing is queued: with nothing previewable there is no partial solve to run.

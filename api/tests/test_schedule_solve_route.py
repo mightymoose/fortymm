@@ -68,7 +68,7 @@ DATE = "2030-01-01"
 #: The event's venue timezone, anchoring its wall-clock windows to real instants
 #: (ADR "tournament times are timezone-aware instants").
 VENUE_TZ = ZoneInfo("America/Chicago")
-#: The pool window's start and end — the solve's minute-frame origin, as in the
+#: The reservation window's start and end — the solve's minute-frame origin, as in the
 #: service tests — as timezone-aware instants in the venue frame.
 BASE = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
 WINDOW_END = datetime(2030, 1, 1, 17, 0, tzinfo=VENUE_TZ)
@@ -125,7 +125,7 @@ async def _make_tournament(
     tables: tuple[str, ...] = ("t1", "t2"),
 ) -> tuple[uuid.UUID, uuid.UUID | None]:
     """A published tournament owned by ``owner``: a two-table catalogue and (unless
-    ``with_event=False``) one pooled round-robin event whose single pool spans both
+    ``with_event=False``) one grouped round-robin event whose single group spans both
     tables, ``entrants`` entered players, and (unless ``cut=False``) a cut draw.
     Written straight to the database — creation routes are not under test here.
     Returns plain ids, like the service tests, so nothing lazy-loads later."""
@@ -173,7 +173,7 @@ async def _make_tournament(
     stages[0].groups = event_groups(
         [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                 "table_ids": [str(row.id) for row in catalogue],
             }
@@ -190,7 +190,7 @@ async def _make_tournament(
     await db.flush()
 
     if cut:
-        # ``TournamentEvent.pools`` is a VIEWONLY association through the event's
+        # ``TournamentEvent.groups`` is a VIEWONLY association through the event's
         # stage now (ADR 20260815) — populated on QUERY, not on construction.
         # ``cut_draw`` reads ``event.groups`` synchronously, so this needs an explicit
         # refresh first.
@@ -422,7 +422,7 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
 ) -> None:
     """An ``infeasible`` solve's strip carries the resolved, DB-humanized reasons
     the day did not fit — parsed from the ledger's raw JSONB into the typed union
-    at the read boundary, so a client renders the pool name / window / minutes
+    at the read boundary, so a client renders the reservation name / window / minutes
     without any further lookup."""
     client, owner = authed_client
     tournament_id, _ = await _make_tournament(db_session, owner)
@@ -433,10 +433,10 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
         verdict=SolverVerdict.infeasible,
         requested_at=datetime(2030, 1, 1, 9, 0, tzinfo=UTC),
         infeasibility_reasons=[
-            {"kind": "pool_has_no_tables", "reservation_name": "Pool A"},
+            {"kind": "reservation_has_no_tables", "reservation_name": "Reservation A"},
             {
-                "kind": "pool_over_capacity",
-                "reservation_name": "Pool A",
+                "kind": "reservation_over_capacity",
+                "reservation_name": "Reservation A",
                 "window_start": "09:00",
                 "window_end": "17:00",
                 "required_min": 600,
@@ -457,12 +457,12 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
     assert strip["verdict"] == "infeasible"
     reasons = strip["infeasibility_reasons"]
     assert [r["kind"] for r in reasons] == [
-        "pool_has_no_tables",
-        "pool_over_capacity",
+        "reservation_has_no_tables",
+        "reservation_over_capacity",
     ]
-    assert reasons[0]["reservation_name"] == "Pool A"
+    assert reasons[0]["reservation_name"] == "Reservation A"
     over_capacity = reasons[1]
-    assert over_capacity["reservation_name"] == "Pool A"
+    assert over_capacity["reservation_name"] == "Reservation A"
     assert over_capacity["window_start"] == "09:00"
     assert over_capacity["window_end"] == "17:00"
     assert over_capacity["required_min"] == 600
@@ -543,7 +543,7 @@ async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_pag
     """End to end, read back through the page: POST queues the run, the worker
     drains it, and the detail BFF then shows the whole outcome — the strip
     ``succeeded`` with a verdict and its counts, and every fixture placed on a
-    pool table inside the pool's window, carrying its pin facts (``pinned_at``
+    reservation table inside the reservation's window, carrying its pin facts (``pinned_at``
     null — every placement is still an estimate, the manual route pins nothing —
     and ``call_notified_count`` 0, nobody told)."""
     client, owner = authed_client

@@ -73,7 +73,7 @@ def _table(tournament: Tournament, position: int) -> str:
     Table ids are the server's UUIDs since ADR 20260801, so a test cannot spell one as
     a literal — and now that ``table_id`` is a foreign key it cannot invent one either.
     Positional, in the tournament's own catalogue order, exactly like the ``"t1"``
-    aliases the pool seeds use."""
+    aliases the reservation seeds use."""
     return str(tournament.tables[position - 1].id)
 
 
@@ -88,8 +88,8 @@ async def _seed_placeable_fixture(
     two active entrants — written straight to the database, the state the place verb's
     load path expects. The catalogue carries two real ``tournament_tables`` rows so a
     placement can name a real table (it must, since ADR 20260801 made ``table_id`` a
-    foreign key), and the event's pool ``p-os-1`` — which reserves the first of them and
-    runs 09:00–12:30 — anchors the fixture."""
+    foreign key), and the event's group — whose mapped reservation reserves the
+    first of them and runs 09:00–12:30 — anchors the fixture."""
     tournament = Tournament(
         name="Placement Cup",
         address={
@@ -124,25 +124,25 @@ async def _seed_placeable_fixture(
         predicates=[],
         stages=stages,
     )
-    pools = with_table_aliases(
+    groups = with_table_aliases(
         event,
         tournament,
         [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1"],
             }
         ],
     )
-    stages[0].groups = pools
+    stages[0].groups = groups
     db.add(event)
     await db.commit()
     # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
     # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
-    # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
+    # re-reading ``stages[0].id``/``groups[0].id`` afterward would be an async lazy load
     # on the now-expired child objects.
-    stage0_id, pool0_id = stages[0].id, pools[0].id
+    stage0_id, group0_id = stages[0].id, groups[0].id
     await db.refresh(event)
     entry_a = TournamentEntry(
         event_id=event.id,
@@ -158,7 +158,7 @@ async def _seed_placeable_fixture(
     await db.commit()
     fixture = TournamentFixture(
         stage_id=stage0_id,
-        group_id=pool0_id,
+        group_id=group0_id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,
@@ -452,13 +452,14 @@ async def test_an_out_of_window_start_still_saves_as_a_flag(
     default_league: League,
 ) -> None:
     """The placement is still SOFT everywhere ADR-0790 made it soft. A start hours
-    outside the fixture's pool window (09:00–12:30) on a table outside the pool's
+    outside the fixture's reservation window (09:00–12:30) on a table outside the
+    reservation's
     ``table_ids`` saves — and pins — exactly as an in-window one does: no refusal, no
     ``None`` columns, the time the director asked for.
 
     This is the test that would red if the foreign key were read as licence to validate
-    the whole placement rather than the one claim ADR 20260801 hardened. A pool's
-    tables and window stay editable under a standing draw precisely because the venue
+    the whole placement rather than the one claim ADR 20260801 hardened. A
+    reservation's tables and window stay editable under a standing draw precisely because the venue
     changes under a running tournament, so a placement a later edit outranges is a flag
     derived on read, never a refusal."""
     owner = await make_user(db_session, "place-out-of-window-owner")
@@ -466,8 +467,8 @@ async def test_an_out_of_window_start_still_saves_as_a_flag(
         db_session, owner, default_league
     )
     fixture_id = fixture.id
-    # Table 2 is in the catalogue but NOT in pool ``p-os-1``'s ``table_ids``, and
-    # 23:30 is long past the pool's 12:30 end — two flags in one placement.
+    # Table 2 is in the catalogue but NOT in the group's reservation's ``table_ids``,
+    # and 23:30 is long past the reservation's 12:30 end — two flags in one placement.
     off_group_table = _table(tournament, 2)
     out_of_window = datetime(2026, 6, 13, 23, 30)
 
