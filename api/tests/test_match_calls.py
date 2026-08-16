@@ -76,11 +76,11 @@ from tests._helpers import (
 )
 
 DATE = "2030-01-01"
-#: The event's venue timezone — the IANA zone that anchors its wall-clock pool
+#: The event's venue timezone — the IANA zone that anchors its wall-clock reservation
 #: windows (and manual placements) to real instants (ADR "tournament times are
 #: timezone-aware instants"). Every clock in this module is aware in this frame.
 VENUE_TZ = ZoneInfo("America/Chicago")
-#: The pool window's start — the tournament's minute-frame origin — as a
+#: The reservation window's start — the tournament's minute-frame origin — as a
 #: timezone-aware instant in the venue frame (``09:00`` local on ``DATE``).
 BASE = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
 
@@ -110,7 +110,7 @@ async def _make_tournament(
     tables: tuple[str, ...] = ("t1",),
     window: tuple[str, str] = ("09:00", "17:00"),
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """A tournament with a cut single-pool round-robin draw, defaulting to the
+    """A tournament with a cut single-group round-robin draw, defaulting to the
     smallest deterministic shape: 2 entrants on 1 table → exactly one fixture,
     which an optimal solve must place at the window's start."""
     owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
@@ -154,7 +154,7 @@ async def _make_tournament(
     stages[0].groups = event_groups(
         [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": DATE, "start": window[0], "end": window[1]},
                 "table_ids": [str(row.id) for row in catalogue],
             }
@@ -164,7 +164,7 @@ async def _make_tournament(
     )
     db.add(event)
     await db.flush()
-    # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
+    # ``TournamentEvent.groups`` is a VIEWONLY association through the event's stage now
     # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` below
     # reads ``event.groups`` synchronously, so this freshly built (never re-queried)
     # object needs an explicit refresh first, or that read is an async lazy load.
@@ -951,7 +951,7 @@ async def _hold_user_in_second_event(
     stages[0].groups = event_groups(
         [
             {
-                "name": "Pool B",
+                "name": "Reservation B",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                 "table_ids": [table_id],
             }
@@ -1505,14 +1505,15 @@ async def _match_status(db: AsyncSession, match_id: uuid.UUID) -> MatchStatus:
     return match.status
 
 
-async def _drop_table_from_pools(
+async def _drop_table_from_reservations(
     db: AsyncSession,
     event_id: uuid.UUID,
     table_id: str,
 ) -> None:
-    """Take a table out of every pool's ``table_ids``, leaving it in the tournament's
-    venue catalogue — the pre-state the "pool membership is a preference, not physics"
-    tests below react to. ``table_id`` is a positional alias (``"t1"``), resolved by
+    """Take a table out of every reservation's ``table_ids``, leaving it in the
+    tournament's venue catalogue — the pre-state the "reservation membership is a
+    preference, not physics" tests below react to. ``table_id`` is a positional alias
+    (``"t1"``), resolved by
     :func:`_table`.
 
     There used to be a ``from_catalogue`` arm here too, constructing "the placement's
@@ -1532,7 +1533,7 @@ async def _drop_table_from_pools(
     # Dropping the table ROW (ADR 20260801) rather than filtering a JSONB list: a
     # reservation's tables are their own rows, and taking one out of the collection is
     # what ``delete-orphan`` turns into the DELETE. They hang off the RESERVATION, not
-    # the group — that is the half of the old pool row which carries the venue. The
+    # the group — that is the half of the old group-and-reservation row which
     # groups themselves are untouched, and must be: rebuilding one would delete and
     # re-insert the very row this event's fixtures foreign-key.
     for group in event.groups:
@@ -1573,7 +1574,7 @@ async def _usernames(
 class TestBrokenPinRepair:
     """Chore 3c: pins are inviolable against optimization, not against
     physics. A pinned fixture whose entrant withdrew is voided (placement
-    cleared, the remaining entrant cancelled-notified). Pool membership is a
+    cleared, the remaining entrant cancelled-notified). Reservation membership is a
     preference, not physics: an off-group pin on a table still in the catalogue
     is the director's legitimate hand and is honored byte-identical.
 
@@ -1583,15 +1584,15 @@ class TestBrokenPinRepair:
     — so the only way its tests could reach the state was to re-parent a table
     row onto a throwaway tournament, which no production path performs."""
 
-    async def test_a_table_dropped_from_the_pool_keeps_the_pin(
+    async def test_a_table_dropped_from_the_reservation_keeps_the_pin(
         self,
         db_session: AsyncSession,
         solver_queue: Queue,
         fake_notifications_queue: Queue,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Pool membership is a preference, not physics: a called pin whose
-        table left the pool's ``table_ids`` but is STILL in the venue
+        """Reservation membership is a preference, not physics: a called pin whose
+        table left the reservation's ``table_ids`` but is STILL in the venue
         catalogue is the director's legitimate off-group hand (the manual
         PATCH allows off-group soft placements, ADR-0790) — the next solve
         honors it byte-identical: no repair, no moved correction, no
@@ -1609,7 +1610,7 @@ class TestBrokenPinRepair:
             start=start,
             pinned_at=pin_time,
         )
-        await _drop_table_from_pools(db_session, event_id, "t1")
+        await _drop_table_from_reservations(db_session, event_id, "t1")
         _freeze_clocks(monkeypatch, BASE)
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
@@ -1642,7 +1643,7 @@ class TestBrokenPinRepair:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A pre-live SILENT pin (count 0) on a spare catalogue table outside
-        the pool survives the live solve byte-identical — and, being imminent
+        the reservation survives the live solve byte-identical — and, being imminent
         and untold, the same apply delivers its *match_called*
         (notify-without-re-pin): the two fixes composed."""
         tournament_id, event_id = await _make_tournament(
@@ -1659,7 +1660,7 @@ class TestBrokenPinRepair:
             pinned_at=silent_pin_time,
             notified=0,  # placed silently while planning; never announced
         )
-        await _drop_table_from_pools(db_session, event_id, "t2")
+        await _drop_table_from_reservations(db_session, event_id, "t2")
         _freeze_clocks(monkeypatch, BASE)
 
         await _request_and_run_solve(db_session, solver_queue, tournament_id)
