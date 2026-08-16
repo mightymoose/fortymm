@@ -1,33 +1,33 @@
 import { type Control, useForm, useWatch } from 'react-hook-form'
 
 import { eventToFormValues, type EventFormValues } from '../event-form'
-import { PoolsSection } from './pools-section'
-import type { PoolsHarnessInputs } from './pools-section.factory'
+import { ReservationsSection } from './reservations-section'
+import type { ReservationsHarnessInputs } from './reservations-section.factory'
 
-/** Exposes the form's live `pools` array as JSON so a test can assert that an
+/** Exposes the form's live `reservations` array as JSON so a test can assert that an
  * add / edit / remove landed in form state. Rendered *outside* the section root,
  * so it is never swept by the read-only guard. */
-const PoolsProbe = ({ control }: { control: Control<EventFormValues> }) => {
-  const pools = useWatch({ control, name: 'pools' })
-  return <output data-testid="pools-probe">{JSON.stringify(pools)}</output>
+const ReservationsProbe = ({ control }: { control: Control<EventFormValues> }) => {
+  const reservations = useWatch({ control, name: 'reservations' })
+  return <output data-testid="reservations-probe">{JSON.stringify(reservations)}</output>
 }
 
-/** Wraps `PoolsSection` in a form seeded from `event` — the section drives a
+/** Wraps `ReservationsSection` in a form seeded from `event` — the section drives a
  * `useFieldArray` off that form's control (chore 1e), so the harness is how a
  * test renders it in isolation and reads back the resulting form state. */
-export const PoolsHarness = ({
+export const ReservationsHarness = ({
   event,
   tables,
   canEdit,
   freeze,
   nameIssues,
-}: PoolsHarnessInputs) => {
+}: ReservationsHarnessInputs) => {
   const form = useForm<EventFormValues>({
     defaultValues: eventToFormValues(event),
   })
   return (
     <>
-      <PoolsSection
+      <ReservationsSection
         control={form.control}
         tables={tables}
         canEdit={canEdit}
@@ -37,7 +37,7 @@ export const PoolsHarness = ({
         // right one, and refuses the save, is `event-editor.test.tsx`'s claim.)
         nameIssues={nameIssues}
       />
-      <PoolsProbe control={form.control} />
+      <ReservationsProbe control={form.control} />
     </>
   )
 }

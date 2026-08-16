@@ -2,108 +2,108 @@ import userEvent from '@testing-library/user-event'
 
 import { fireEvent, screen } from '@/test/utilities'
 
-import { buildPool } from '../../../data/seed.factory'
-import { poolCardPage } from './pool-card.page'
+import { buildReservation } from '../../../data/seed.factory'
+import { reservationCardPage } from './reservation-card.page'
 
-describe('PoolCard', () => {
+describe('ReservationCard', () => {
   it('marks the selected tables as pressed', () => {
-    poolCardPage.render({ pool: buildPool({ tableIds: ['t1', 't2'] }) })
-    expect(poolCardPage.getSelectedTableToggle('T1')).toBeInTheDocument()
-    expect(poolCardPage.getTableToggle('T5')).toBeInTheDocument()
+    reservationCardPage.render({ reservation: buildReservation({ tableIds: ['t1', 't2'] }) })
+    expect(reservationCardPage.getSelectedTableToggle('T1')).toBeInTheDocument()
+    expect(reservationCardPage.getTableToggle('T5')).toBeInTheDocument()
   })
 
   it('adds an unselected table on click', async () => {
     const onChange = vi.fn()
-    poolCardPage.render({ pool: buildPool({ tableIds: ['t1'] }), onChange })
-    await userEvent.click(poolCardPage.getTableToggle('T5'))
+    reservationCardPage.render({ reservation: buildReservation({ tableIds: ['t1'] }), onChange })
+    await userEvent.click(reservationCardPage.getTableToggle('T5'))
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ tableIds: ['t1', 't5'] }),
     )
   })
 
-  it('removes the pool', async () => {
+  it('removes the reservation', async () => {
     const onRemove = vi.fn()
-    poolCardPage.render({ onRemove })
-    await userEvent.click(poolCardPage.getRemoveButton())
+    reservationCardPage.render({ onRemove })
+    await userEvent.click(reservationCardPage.getRemoveButton())
     expect(onRemove).toHaveBeenCalledTimes(1)
   })
 
-  // The pool window carries the event's timezone as a caption (ADR 20260719) — the
-  // frame its wall-clock times are in. A pool holds no zone of its own; the event's
+  // The reservation window carries the event's timezone as a caption (ADR 20260719) — the
+  // frame its wall-clock times are in. A reservation holds no zone of its own; the event's
   // is handed down.
   it('labels the window with the event timezone', () => {
-    poolCardPage.render({ timezone: 'America/Denver' })
-    expect(poolCardPage.getTimezoneLabel()).toHaveTextContent('America/Denver')
+    reservationCardPage.render({ timezone: 'America/Denver' })
+    expect(reservationCardPage.getTimezoneLabel()).toHaveTextContent('America/Denver')
   })
 
   /**
-   * The name box is the one control on this card that can author a pool the server
-   * refuses (`Pool.name`, `min_length=1`) — the id and the default name are minted. The
+   * The name box is the one control on this card that can author a reservation the server
+   * refuses (`Reservation.name`, `min_length=1`) — the id and the default name are minted. The
    * card does not *judge* the name (the editor's resolver does, and refuses the save);
    * what it owes is the verdict, under the box, in red, wired so a screen reader hears
    * it too.
    */
   describe('a name the server would refuse', () => {
     it('renders the message under the box, and marks the box invalid', () => {
-      poolCardPage.render({
-        pool: buildPool({ name: '' }),
+      reservationCardPage.render({
+        reservation: buildReservation({ name: '' }),
         nameError: 'Name is required.',
       })
 
-      expect(poolCardPage.queryNameError()).toHaveTextContent('Name is required.')
-      expect(poolCardPage.getNameInput()).toHaveAttribute('aria-invalid', 'true')
+      expect(reservationCardPage.queryNameError()).toHaveTextContent('Name is required.')
+      expect(reservationCardPage.getNameInput()).toHaveAttribute('aria-invalid', 'true')
     })
 
     // A `<p>` that merely sits below an input is *beside* it on screen and nowhere at
     // all to a screen reader.
     it('points the box at the message', () => {
-      poolCardPage.render({
-        pool: buildPool({ name: '' }),
+      reservationCardPage.render({
+        reservation: buildReservation({ name: '' }),
         nameError: 'Name is required.',
       })
 
-      const describedBy = poolCardPage.getNameInput().getAttribute('aria-describedby')
+      const describedBy = reservationCardPage.getNameInput().getAttribute('aria-describedby')
       expect(describedBy).toBeTruthy()
-      expect(poolCardPage.queryNameError()).toHaveAttribute('id', describedBy)
+      expect(reservationCardPage.queryNameError()).toHaveAttribute('id', describedBy)
     })
 
     it('says nothing, and claims nothing, when the name is fine', () => {
-      poolCardPage.render({ pool: buildPool({ name: 'Pool A' }) })
+      reservationCardPage.render({ reservation: buildReservation({ name: 'Reservation A' }) })
 
-      expect(poolCardPage.queryNameError()).toBeNull()
-      expect(poolCardPage.getNameInput()).not.toHaveAttribute('aria-invalid', 'true')
+      expect(reservationCardPage.queryNameError()).toBeNull()
+      expect(reservationCardPage.getNameInput()).not.toHaveAttribute('aria-invalid', 'true')
       // No dangling description either — an `aria-describedby` pointing at an element
       // that is not there is an axe violation of its own.
-      expect(poolCardPage.getNameInput()).not.toHaveAttribute('aria-describedby')
+      expect(reservationCardPage.getNameInput()).not.toHaveAttribute('aria-describedby')
     })
 
     // A viewer has no box to clear, so there is nothing to tell them to fix. (The
     // editor never hands one down for a read-only card; this is the card refusing to
     // render one even if it did.)
     it('tells a viewer nothing about a name they cannot edit', () => {
-      poolCardPage.render({
-        pool: buildPool({ name: '' }),
+      reservationCardPage.render({
+        reservation: buildReservation({ name: '' }),
         nameError: 'Name is required.',
         canEdit: false,
       })
 
-      expect(poolCardPage.queryNameError()).toBeNull()
-      expect(poolCardPage.queryNameInput()).toBeNull()
+      expect(reservationCardPage.queryNameError()).toBeNull()
+      expect(reservationCardPage.queryNameInput()).toBeNull()
     })
   })
 
-  // The pool-set freeze, at the level of one card (ADR-0786). The *reason* is not the
+  // The reservation-set freeze, at the level of one card (ADR-0786). The *reason* is not the
   // card's to say — the section says it once, above the cards — so what the card owes is
   // a dead button that points at it.
   describe('when the event’s draw is cut', () => {
     it('disables the remove button and points it at the reason', async () => {
       const onRemove = vi.fn()
-      poolCardPage.render({
+      reservationCardPage.render({
         removal: { kind: 'frozen', reasonId: 'freeze-notice' },
         onRemove,
       })
 
-      const button = poolCardPage.getRemoveButton()
+      const button = reservationCardPage.getRemoveButton()
       expect(button).toBeDisabled()
       expect(button).toHaveAttribute('aria-describedby', 'freeze-notice')
       // Disabled means disabled: the click is refused by the DOM, not merely styled away.
@@ -115,33 +115,33 @@ describe('PoolCard', () => {
     // draw), unlike the viewer's, whose buttons never come back. Hiding it would take
     // the way out with it.
     it('still renders the remove button', () => {
-      poolCardPage.render({
+      reservationCardPage.render({
         removal: { kind: 'frozen', reasonId: 'freeze-notice' },
       })
-      expect(poolCardPage.queryRemoveButton()).toBeInTheDocument()
+      expect(reservationCardPage.queryRemoveButton()).toBeInTheDocument()
     })
 
     // The whole reason the freeze is scoped to identity: a table breaks and is pulled, a
-    // pool slips an hour, a pool is renamed — all of it mid-event, none of it costing
+    // reservation slips an hour, a reservation is renamed — all of it mid-event, none of it costing
     // the draw. A card that greyed itself out wholesale would break exactly this.
     it('leaves the name, the window and the table toggles live', async () => {
       const onChange = vi.fn()
-      poolCardPage.render({
-        pool: buildPool({ tableIds: ['t1'] }),
+      reservationCardPage.render({
+        reservation: buildReservation({ tableIds: ['t1'] }),
         removal: { kind: 'frozen', reasonId: 'freeze-notice' },
         onChange,
       })
 
-      await userEvent.click(poolCardPage.getTableToggle('T5'))
+      await userEvent.click(reservationCardPage.getTableToggle('T5'))
       expect(onChange).toHaveBeenLastCalledWith(
         expect.objectContaining({ tableIds: ['t1', 't5'] }),
       )
 
-      fireEvent.change(poolCardPage.getNameInput(), {
-        target: { value: 'Morning Pool' },
+      fireEvent.change(reservationCardPage.getNameInput(), {
+        target: { value: 'Morning Reservation' },
       })
       expect(onChange).toHaveBeenLastCalledWith(
-        expect.objectContaining({ name: 'Morning Pool' }),
+        expect.objectContaining({ name: 'Morning Reservation' }),
       )
 
       fireEvent.change(screen.getByLabelText('End'), {
@@ -162,77 +162,77 @@ describe('PoolCard', () => {
     // ARIA role at all, so the four canonical roles would miss a live date row
     // entirely and go green with the whole window still editable.
     it('renders no interactive controls', () => {
-      poolCardPage.render({ canEdit: false })
+      reservationCardPage.render({ canEdit: false })
       // The DOM sweep first: it is the load-bearing one, so it is the one whose
       // red is worth seeing.
-      expect(poolCardPage.getFormElements()).toHaveLength(0)
-      expect(poolCardPage.getInteractiveControls()).toHaveLength(0)
+      expect(reservationCardPage.getFormElements()).toHaveLength(0)
+      expect(reservationCardPage.getInteractiveControls()).toHaveLength(0)
     })
 
-    it('reads the pool name as text, not a name box', () => {
-      poolCardPage.render({
-        pool: buildPool({ name: 'Pool A' }),
+    it('reads the reservation name as text, not a name box', () => {
+      reservationCardPage.render({
+        reservation: buildReservation({ name: 'Reservation A' }),
         canEdit: false,
       })
-      expect(poolCardPage.getName()).toHaveTextContent('Pool A')
-      expect(poolCardPage.queryNameInput()).toBeNull()
+      expect(reservationCardPage.getName()).toHaveTextContent('Reservation A')
+      expect(reservationCardPage.queryNameInput()).toBeNull()
     })
 
     // The date reads in words, never as the `YYYY-MM-DD` the editor's
     // `<input type="date">` takes. The times have no such helper and stay raw
     // here, on the event card, and everywhere else.
     it('reads the window back under the same Date / Start / End labels', () => {
-      poolCardPage.render({
-        pool: buildPool({
+      reservationCardPage.render({
+        reservation: buildReservation({
           slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
         }),
         canEdit: false,
       })
-      expect(poolCardPage.getFieldValue('Date')).toHaveTextContent(
+      expect(reservationCardPage.getFieldValue('Date')).toHaveTextContent(
         'Jun 13, 2026',
       )
-      expect(poolCardPage.getFieldValue('Start')).toHaveTextContent('09:00')
-      expect(poolCardPage.getFieldValue('End')).toHaveTextContent('12:30')
+      expect(reservationCardPage.getFieldValue('Start')).toHaveTextContent('09:00')
+      expect(reservationCardPage.getFieldValue('End')).toHaveTextContent('12:30')
       expect(screen.queryByText('2026-06-13')).toBeNull()
     })
 
-    // The reserved tables are the point of a pool. Read-only they are a list of
+    // The reserved tables are the point of a reservation. Read-only they are a list of
     // the very labels the toggles showed — no second vocabulary.
-    it('lists the tables the pool reserves', () => {
-      poolCardPage.render({
-        pool: buildPool({ tableIds: ['t1', 't2', 't5'] }),
+    it('lists the tables the reservation reserves', () => {
+      reservationCardPage.render({
+        reservation: buildReservation({ tableIds: ['t1', 't2', 't5'] }),
         canEdit: false,
       })
-      expect(poolCardPage.getReservedTables()).toHaveTextContent('T1, T2, T5')
+      expect(reservationCardPage.getReservedTables()).toHaveTextContent('T1, T2, T5')
     })
 
     // Catalogue order, not the order the organizer happened to click them in.
     it('lists the tables in catalogue order', () => {
-      poolCardPage.render({
-        pool: buildPool({ tableIds: ['t5', 't1'] }),
+      reservationCardPage.render({
+        reservation: buildReservation({ tableIds: ['t5', 't1'] }),
         canEdit: false,
       })
-      expect(poolCardPage.getReservedTables()).toHaveTextContent('T1, T5')
+      expect(reservationCardPage.getReservedTables()).toHaveTextContent('T1, T5')
     })
 
-    // A pool that reserves nothing is unset, not blank: an em-dash, so absent
+    // A reservation that reserves nothing is unset, not blank: an em-dash, so absent
     // stays distinguishable from not-applicable (ADR 0015, rule 3).
-    it('reads a pool with no tables as an em-dash', () => {
-      poolCardPage.render({ pool: buildPool({ tableIds: [] }), canEdit: false })
-      expect(poolCardPage.getReservedTables()).toHaveTextContent('—')
+    it('reads a reservation with no tables as an em-dash', () => {
+      reservationCardPage.render({ reservation: buildReservation({ tableIds: [] }), canEdit: false })
+      expect(reservationCardPage.getReservedTables()).toHaveTextContent('—')
     })
 
     // Hidden, never disabled: a disabled button is an unexplained dead end.
     it('hides the remove button', () => {
-      poolCardPage.render({ canEdit: false })
-      expect(poolCardPage.queryRemoveButton()).toBeNull()
+      reservationCardPage.render({ canEdit: false })
+      expect(reservationCardPage.queryRemoveButton()).toBeNull()
     })
 
     // The timezone caption is a fact about the window a reader is owed too — and it
     // is a plain caption, not a control, so it survives the read-only guard.
     it('still labels the window with the timezone', () => {
-      poolCardPage.render({ timezone: 'America/New_York', canEdit: false })
-      expect(poolCardPage.getTimezoneLabel()).toHaveTextContent('America/New_York')
+      reservationCardPage.render({ timezone: 'America/New_York', canEdit: false })
+      expect(reservationCardPage.getTimezoneLabel()).toHaveTextContent('America/New_York')
     })
   })
 })
