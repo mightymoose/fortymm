@@ -245,6 +245,38 @@ def _pool_set_frozen_detail(removed: list[str], added: list[str]) -> str:
     )
 
 
+def _pool_order_frozen_detail(names: list[str]) -> str:
+    """The 409 sentence for a pools payload that cites exactly the pools a cut event
+    already has, in a **different order** — the freeze's second way to fire, beside the
+    set changing (ADR-0786, extended: pool order is identity once fixtures exist).
+
+    The snake seeded the draw against the event's pool order (``app.draws.DrawConfig``,
+    ``app.tournament_draws.draw_config``), and a pools-then-knockout draw's qualifier
+    seam labels a finished pool's seats by that same order
+    (``RrThenKoStrategy._qualifier_fills``'s ``pool_position``). Both are read once at
+    the moment they are needed and never again, so a PATCH that re-sends the same pools
+    in a new sequence would relabel which physical pool counts as "pool 1" **between**
+    two pools finishing — one already-seated pool's qualifiers retargeting fresh slots
+    (a double seating) while another's find those slots already filled and are silently
+    dropped. Nothing downstream — not the composite foreign key, not the qualifier seam
+    itself — would notice the relabelling; it would look like an ordinary, playable
+    bracket.
+
+    Deliberately its own sentence rather than a fold into
+    :func:`_pool_set_frozen_detail` above: that one names pools *gained* and *lost*,
+    and a reorder loses none — the honest complaint is about the order, not the
+    membership, so the director is told that.
+    """
+    return (
+        "This event's draw is already cut, so the order of its pools is frozen "
+        f"({named_list(names)}): the draw was seeded against that order, and a "
+        "pools-then-knockout event's qualifiers are seated into their bracket by it. "
+        "Re-ordering the pools now would relabel which pool is “first” partway "
+        "through the draw. A pool's tables, its time and its name can all still be "
+        "changed. To reorder the pools, remove the draw first, then cut it again."
+    )
+
+
 def _draw_type_frozen_detail(current: DrawType) -> str:
     """The 409 sentence for a ``draw_type`` change on an event whose draw is already cut
     — composed exactly as the router's ``_draw_type_refusal`` used to compose it inline,
@@ -338,14 +370,28 @@ async def _enforce_pool_set_frozen(
     db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
     """Raise :class:`PoolSetFrozenError` once a ``pools`` payload would change *which
-    pools* an event with a cut draw has (ADR-0786).
+    pools* an event with a cut draw has, **or the order they stand in** (ADR-0786).
 
     Remove a pool and every fixture drawn into it refers to nothing; add one and it
     arrives with no fixtures, because the draw was dealt across the pools that existed
-    at the cut.
+    at the cut. Reorder them — cite exactly the same pools, in a different sequence —
+    and neither of those is true, but the order itself is load-bearing: it is what the
+    snake seeded the draw against (``app.draws.DrawConfig.pool_ids``) and what a
+    pools-then-knockout draw's qualifier seam labels a finished pool's seats by
+    (``RrThenKoStrategy._qualifier_fills``'s ``pool_position``, read off
+    ``Pool.position`` — the very column a reorder restamps). Both reads happen once,
+    lazily, as each pool finishes — never all at once at the cut — so a reorder between
+    two pools finishing silently relabels which physical pool is "first": an
+    already-seated pool's qualifiers retarget fresh bracket slots (a double seating)
+    while another pool's qualifiers find those slots already filled and are dropped,
+    with nothing downstream loud enough to notice. See ADR-0786 and the qualifier
+    seam's own docstring for why "pool order is identity once fixtures exist" is the
+    fix, not a data-repair migration — there is no existing production data to migrate.
 
     **What this guard is left saying, now that the ids are minted.** Three categories
-    used to reach it; only two still can, and neither is one a foreign key could answer.
+    used to reach it; only two of the original three still can, and neither is one a
+    foreign key could answer — plus the reorder case above, which no constraint could
+    ever answer, because a reorder changes no foreign key at all.
 
     * **Re-identifying** a pool — the case that used to be a removal and an addition at
       once, and the loudest reason this guard was written — is **no longer
@@ -361,10 +407,14 @@ async def _enforce_pool_set_frozen(
     * **Adding** a pool: no constraint says anything at all. A pool arriving into a cut
       draw with no fixtures in it is perfectly legal SQL and still an incoherent draw,
       so this is the only thing standing between a director and one.
+    * **Reordering** the same set of pools: also nothing a constraint could answer — no
+      row is added, removed or reassigned a foreign key, only ``position`` moves — so
+      this is, again, the only thing standing between a director and a mislabelled
+      qualifier seam.
 
-    What is frozen is the **id set**, and only the id set. A pool's ``table_ids``, its
-    ``slot`` and its ``name`` stay editable with a draw standing, on purpose — this is
-    the case the freeze exists to *permit*, not to prevent.
+    What is frozen is the **id set, in order**. A pool's ``table_ids``, its ``slot`` and
+    its ``name`` stay editable with a draw standing, on purpose — this is the case the
+    freeze exists to *permit*, not to prevent.
 
     Asked **before** anything is written (and, like every judge-then-write guard, under
     the tournament's row lock the verb holds), so a refusal leaves both the pools and
@@ -383,17 +433,25 @@ async def _enforce_pool_set_frozen(
     # orphanable as a played one.
     if not await event_has_draw(db, event.id):
         return
-    # Projected ONCE, and kept: the id set decides *whether* to refuse, and the pools
-    # themselves say *which* — a refusal names them (``named_list``), and re-projecting
-    # the rows to recover the names would be the same work run twice per pool.
-    current = event_pools(event)
-    existing = {PoolId(pool.id) for pool in current}
+    # Projected ONCE, and kept: the ordered id sequence decides *whether* to refuse, and
+    # the pools themselves say *which* — a refusal names them (``named_list``), and
+    # re-projecting the rows to recover the names would be the same work run twice per
+    # pool. Sorted by ``position`` explicitly rather than trusted to arrive that way —
+    # the same belt-and-braces stance ``app.tournament_draws._ordered_pools`` takes on
+    # the very same relationship, and for the identical reason: this is the statement of
+    # what "the event's pool order" means, and it must agree with the snake's, not with
+    # whatever sequence a caller's ``event.pools`` happened to load in.
+    current = sorted(event_pools(event), key=lambda pool: pool.position)
+    existing_order = [PoolId(pool.id) for pool in current]
     # An entry with no ``id`` is an addition and contributes nothing to the incoming
-    # SET — which is what makes ``existing == incoming`` "you cited exactly the pools
-    # you have" rather than "you sent the same number of them".
-    incoming = {PoolId(pool.id) for pool in updates.pools if pool.id is not None}
-    if existing == incoming and len(updates.pools) == len(incoming):
+    # SEQUENCE — which is what makes ``existing_order == incoming_order`` "you cited
+    # exactly the pools you have, in the order you have them" rather than merely "you
+    # sent the same number of them".
+    incoming_order = [PoolId(pool.id) for pool in updates.pools if pool.id is not None]
+    if existing_order == incoming_order and len(updates.pools) == len(incoming_order):
         return
+    existing = set(existing_order)
+    incoming = set(incoming_order)
     # Named by their names, from whichever side of the change still knows them: a pool
     # being removed is only described by the row we hold, and one being added only by
     # the payload. An entry citing an id this event does not have counts as an addition
@@ -405,8 +463,20 @@ async def _enforce_pool_set_frozen(
         for pool in updates.pools
         if pool.id is None or PoolId(pool.id) not in existing
     ]
+    if removed or added:
+        raise PoolSetFrozenError(
+            _pool_set_frozen_detail(removed, added), removed=removed, added=added
+        )
+    # The set is unchanged (this is the ``existing_order != incoming_order`` branch
+    # that falls through the equality check above with an equal SET) — so what moved
+    # is purely the order, which the set comparison the old guard made could never
+    # see. Its own sentence, not a fold into the set refusal above: no pool was gained
+    # or lost, so the honest complaint is about the sequence, and the director is told
+    # that.
     raise PoolSetFrozenError(
-        _pool_set_frozen_detail(removed, added), removed=removed, added=added
+        _pool_order_frozen_detail([pool.name for pool in current]),
+        removed=[],
+        added=[],
     )
 
 
@@ -590,9 +660,9 @@ async def update_event(
     * **404** — an event id that names no event under this tournament raises
       :class:`EventNotFoundError`.
     * **409** — once the event's draw is cut, two things freeze (ADR-0786): a ``pools``
-      payload that changes *which pools* the event has raises
-      :class:`PoolSetFrozenError`, and a draw-configuration payload that changes the
-      draw type **or its qualifier count** (ADR 20260727) raises
+      payload that changes *which pools* the event has, **or the order they stand in**,
+      raises :class:`PoolSetFrozenError`, and a draw-configuration payload that changes
+      the draw type **or its qualifier count** (ADR 20260727) raises
       :class:`DrawTypeFrozenError`. Both are judged **before** anything is
       written, so a refusal persists nothing.
 

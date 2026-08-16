@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
+    FixtureStage,
     OrderedEntrant,
     Side,
     SideFill,
@@ -154,6 +155,19 @@ async def materialize_event(
     # fills ``FixtureState.pool_position``, and so what makes an ``advance()`` plan's
     # ready list run pool 1, 2, … 10 rather than the ids' 1, 10, 2 (ADR 20260801).
     pools = pool_order(event)
+    # The event's stages, resolved once and handed to every projection: it fills
+    # ``FixtureState.stage``, which is what lets ``RrThenKoStrategy`` split its event's
+    # fixtures between its two stages without re-deriving the split from ``pool_id is
+    # None`` (ADR 20260815 decision 6). ``pool_order``'s sibling, not gated the way
+    # ``pool_order``'s own game-counts/entrants neighbours above are — ``event.stages``
+    # is EAGER (``lazy="selectin"``, populated on every plain load of ``event``, this
+    # function's own caller's included), so building this dict costs nothing beyond the
+    # Python loop: there is no round trip left to gate. The other three draw types are
+    # one stage each and simply never read the field this fills.
+    stages: dict[uuid.UUID, FixtureStage] = {
+        stage.id: FixtureStage(position=stage.position, draw_type=stage.draw_type)
+        for stage in event.stages
+    }
     # The **field**, beside the fixtures, for the one draw type that cannot recover it
     # from them: a swiss bye is the absence of a fixture row, so pairing the next round
     # from the seated set alone would drop the byed entrant out of the event. Read
@@ -169,7 +183,10 @@ async def materialize_event(
         else ()
     )
     plan = strategy.advance(
-        [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures],
+        [
+            fixture_state(f, game_counts, voided_match_ids, pools, stages)
+            for f in fixtures
+        ],
         entrants,
     )
     # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
@@ -189,7 +206,10 @@ async def materialize_event(
     # plan's and needs no second side-fill pass beyond the loop above.
     ready = set(
         ready_fixtures(
-            [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures]
+            [
+                fixture_state(f, game_counts, voided_match_ids, pools, stages)
+                for f in fixtures
+            ]
         )
     )
     ready_fixture_rows = [f for f in fixtures if f.id in ready]

@@ -22,6 +22,17 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.draws import (
+    EntryId,
+    FixtureGames,
+    FixtureId,
+    FixtureStage,
+    FixtureState,
+    PoolId,
+    RrThenKoStrategy,
+    Side,
+    SideFill,
+)
 from app.models import (
     DrawType,
     EventFormat,
@@ -200,6 +211,77 @@ def test_mint_stages_positions_from_zero() -> None:
         (0, DrawType.round_robin),
         (1, DrawType.single_elim),
     ]
+
+
+def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
+    """The lockstep pin for ADR 20260815 decisions 3 and 6: what
+    :func:`~app.tournament_event_stages.stage_template` mints for ``rr-then-ko`` (the
+    WRITER — ``app.tournament_draws.cut_draw`` hangs every pooled planned fixture off
+    position 0 and the un-pooled bracket off the template's LAST position,
+    unconditionally) and what :class:`~app.draws.RrThenKoStrategy` reads back through
+    :attr:`~app.draws.FixtureState.stage` (the READER — its ``_stage_split`` matches on
+    ``draw_type``, never on a position literal) have to be the SAME two facts, or a
+    real cut's fixtures would land on stages the strategy cannot place.
+
+    Restated in up to four places before this test existed — the template itself,
+    ``cut_draw``'s positional write, this composite's own (now-removed)
+    ``_RR_THEN_KO_POOL_STAGE``/``_RR_THEN_KO_KNOCKOUT_STAGE`` position literals, and the
+    ``app.draws`` test suite's own copy of that same pair — with nothing checking that
+    they agreed. This drives a REAL split through ``advance()`` using
+    :class:`~app.draws.FixtureStage`\\ s built straight off ``mint_stages``'s own rows
+    (never a position literal of its own), so a template reorder (say, knockout before
+    pool) reds this test for the stated reason, not merely a tuple-equality check.
+    """
+    stages = mint_stages(DrawType.rr_then_ko)
+    fixture_stage_at = {
+        stage.position: FixtureStage(position=stage.position, draw_type=stage.draw_type)
+        for stage in stages
+    }
+    # cut_draw's own assumption (app.tournament_draws.cut_draw): every POOLED planned
+    # fixture is hung off position 0, and the un-pooled bracket off the template's
+    # LAST position — restated here as data pulled off the real mint, not trusted
+    # silently to still be true.
+    pool_stage = fixture_stage_at[0]
+    knockout_stage = fixture_stage_at[len(stages) - 1]
+
+    entry_1, entry_2 = EntryId(uuid.uuid4()), EntryId(uuid.uuid4())
+    pool_fixture = FixtureState(
+        fixture_id=FixtureId(uuid.uuid4()),
+        pool_id=PoolId(uuid.uuid4()),
+        stage=pool_stage,
+        round=1,
+        position=1,
+        entry_a_id=entry_1,
+        entry_b_id=entry_2,
+        winner_entry_id=entry_1,
+        games=FixtureGames(entry_a_games=2, entry_b_games=0),
+    )
+    knockout_fixture_id = FixtureId(uuid.uuid4())
+    knockout_fixture = FixtureState(
+        fixture_id=knockout_fixture_id,
+        pool_id=None,
+        stage=knockout_stage,
+        round=1,
+        position=1,
+        entry_a_id=None,
+        entry_b_id=None,
+    )
+
+    plan = RrThenKoStrategy(qualifiers_per_pool=2).advance(
+        [pool_fixture, knockout_fixture], ()
+    )
+
+    # The one-pool waiver (ADR "one pool is an explicit waiver, not a failure"): both
+    # of the pool's entrants qualify, seed 1 (the winner) to side a and seed 2 to side
+    # b of the bracket's only fixture. Seeing this fill at all is only possible if the
+    # POOL fixture (stage 0) was read as the pool half its result feeds standings from,
+    # and the KNOCKOUT fixture (the template's last position) as the half that
+    # receives the seating — i.e. only if the writer's template and the reader's split
+    # agree on which position means what.
+    assert set(plan.side_fills) == {
+        SideFill(fixture_id=knockout_fixture_id, side=Side.a, entry_id=entry_1),
+        SideFill(fixture_id=knockout_fixture_id, side=Side.b, entry_id=entry_2),
+    }
 
 
 def test_rr_then_ko_is_unmintable_as_a_stages_own_draw_type() -> None:

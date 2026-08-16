@@ -1182,11 +1182,13 @@ export interface paths {
          *     **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
          *     fixtures were derived from:
          *
-         *     * **its set of pools.** A `pools` payload must cite exactly the pools the event
-         *       already has, or it is refused with a `409`: a removed pool would leave the
-         *       fixtures drawn into it pointing at nothing, and an added one would arrive with no
-         *       fixtures, since the draw was dealt across the pools that existed at the cut.
-         *       Re-ordering them, and editing each one, are still allowed.
+         *     * **its set of pools, in order.** A `pools` payload must cite exactly the pools the
+         *       event already has, in the order they already stand, or it is refused with a
+         *       `409`: a removed pool would leave the fixtures drawn into it pointing at nothing,
+         *       an added one would arrive with no fixtures (the draw was dealt across the pools
+         *       that existed at the cut), and a reorder would relabel which pool counts as
+         *       "first" for a knockout bracket's qualifier seats mid-draw. Editing each pool's
+         *       `name`, `slot` and `table_ids` in place is still allowed.
          *     * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
          *       so changing it under a standing draw is a `409` too: the event would claim a shape
          *       its draw does not have. Re-sending the draw type the event already has is not a

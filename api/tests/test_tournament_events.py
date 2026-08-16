@@ -727,6 +727,181 @@ async def _add_cut_event(
     return event
 
 
+async def _add_cut_event_with_two_pools(
+    db: AsyncSession, tournament: Tournament
+) -> TournamentEvent:
+    """An event carrying two pools ("Pool A" at position 0, "Pool B" at position 1),
+    each with a fixture — so ``event_has_draw`` is True and, unlike
+    :func:`_add_cut_event`'s single pool, an *order* actually exists to change."""
+    stages = mint_stages(DrawType.round_robin)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Cut Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        stages=stages,
+    )
+    pools = event_pools(
+        [
+            {
+                "name": "Pool A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                "table_ids": ["t1"],
+            },
+            {
+                "name": "Pool B",
+                "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
+                "table_ids": ["t2"],
+            },
+        ],
+        event=event,
+        tournament=tournament,
+    )
+    stages[0].pools = pools
+    db.add(event)
+    await db.commit()
+    stage0_id = stages[0].id
+    pool_a_id, pool_b_id = pools[0].id, pools[1].id
+    await db.refresh(event)
+    db.add_all(
+        [
+            TournamentFixture(
+                stage_id=stage0_id, pool_id=pool_a_id, round=1, position=1
+            ),
+            TournamentFixture(
+                stage_id=stage0_id, pool_id=pool_b_id, round=1, position=1
+            ),
+        ]
+    )
+    await db.commit()
+    return event
+
+
+async def test_update_event_frozen_pool_reorder_is_refused(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Once the draw is cut, a ``pools`` payload citing exactly the pools the event
+    already has — the same set, in a **different order** — raises
+    :class:`PoolSetFrozenError` and writes nothing, exactly as adding or removing one
+    does (ADR-0786, extended).
+
+    This is the regression pin for the mutable-``pool_position`` bug: before this guard
+    existed, ``_enforce_pool_set_frozen`` compared only the pool id SET, so a PATCH
+    resending the same ids in a new order sailed through and restamped ``Pool.position``
+    (``apply_event_pools``) — which is exactly what the qualifier seam labels a finished
+    pool's bracket seats by (``RrThenKoStrategy._qualifier_fills``'s ``pool_position``).
+    Between two pools finishing, that relabelling double-seats one pool's qualifiers and
+    strands another's — see ``tests/test_rr_then_ko.py``'s
+    ``test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct`` for the
+    end-to-end demonstration.
+    """
+    owner = await make_user(db_session, "events-update-poolreorder-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event_with_two_pools(db_session, tournament)
+    event_id = event.id
+    (pool_a, pool_b) = sorted(event.pools, key=lambda pool: pool.position)
+
+    updates = TournamentEventUpdate.model_validate(
+        {
+            "name": "Should Not Apply",
+            "pools": [
+                {
+                    "id": str(pool_b.id),
+                    "name": pool_b.name,
+                    "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
+                    "table_ids": [],
+                },
+                {
+                    "id": str(pool_a.id),
+                    "name": pool_a.name,
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                    "table_ids": [],
+                },
+            ],
+        }
+    )
+    with pytest.raises(PoolSetFrozenError) as excinfo:
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=updates,
+        )
+    assert "order of its pools is frozen" in str(excinfo.value)
+    assert excinfo.value.removed == []
+    assert excinfo.value.added == []
+
+    # Refused before the setattr loop: neither the pools' order nor the name changed.
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert row.name == "Cut Singles"
+    assert [pool.name for pool in row.pools] == ["Pool A", "Pool B"]
+
+
+async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Re-sending the pools an event already has, in the order it already has them,
+    changes nothing, so it is NOT refused even with a cut draw — the case the freeze
+    exists to permit, and the sibling of the same-draw-type test above."""
+    owner = await make_user(db_session, "events-update-poolsameorder-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event_with_two_pools(db_session, tournament)
+    event_id = event.id
+    (pool_a, pool_b) = sorted(event.pools, key=lambda pool: pool.position)
+
+    updated, league_id = await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {
+                "name": "Renamed Under Draw",
+                "pools": [
+                    {
+                        "id": str(pool_a.id),
+                        "name": pool_a.name,
+                        "slot": {
+                            "date": "2026-06-13",
+                            "start": "09:00",
+                            "end": "12:30",
+                        },
+                        "table_ids": [],
+                    },
+                    {
+                        "id": str(pool_b.id),
+                        "name": pool_b.name,
+                        "slot": {
+                            "date": "2026-06-13",
+                            "start": "13:00",
+                            "end": "16:30",
+                        },
+                        "table_ids": [],
+                    },
+                ],
+            }
+        ),
+    )
+
+    assert league_id == default_league.id
+    assert updated.name == "Renamed Under Draw"
+    assert [pool.name for pool in updated.pools] == ["Pool A", "Pool B"]
+
+
 async def test_update_event_persists_a_normal_field_edit(
     db_session: AsyncSession,
     default_league: League,
