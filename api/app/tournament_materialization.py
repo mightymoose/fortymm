@@ -23,13 +23,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
+    FixtureStage,
     OrderedEntrant,
     Side,
     SideFill,
     order_entrants,
     reads_entrants,
     reads_fixture_games,
-    reads_stage_position,
     ready_fixtures,
 )
 from app.models import (
@@ -48,7 +48,6 @@ from app.tournament_draws import (
     active_draw_entrants,
     fixture_state,
     pool_order,
-    stage_order,
     strategy_for_event,
 )
 from app.tournament_queries import game_counts_by_match, stage_ids_for_events
@@ -156,17 +155,19 @@ async def materialize_event(
     # fills ``FixtureState.pool_position``, and so what makes an ``advance()`` plan's
     # ready list run pool 1, 2, … 10 rather than the ids' 1, 10, 2 (ADR 20260801).
     pools = pool_order(event)
-    # The event's STAGE order, resolved the same way and gated the same way as the
-    # game counts and the field above: it fills ``FixtureState.stage_position``, which
-    # is what lets ``RrThenKoStrategy`` split its event's fixtures between its two
-    # stages without re-deriving the split from ``pool_id is None`` (ADR 20260815
-    # decision 6). Only it declares ``reads_stage_position`` — the other three draw
-    # types are one stage each and would pay a round trip for a field they discard.
-    stages = (
-        await stage_order(db, event.id)
-        if reads_stage_position(event.draw_settings.draw_type)
-        else {}
-    )
+    # The event's stages, resolved once and handed to every projection: it fills
+    # ``FixtureState.stage``, which is what lets ``RrThenKoStrategy`` split its event's
+    # fixtures between its two stages without re-deriving the split from ``pool_id is
+    # None`` (ADR 20260815 decision 6). ``pool_order``'s sibling, not gated the way
+    # ``pool_order``'s own game-counts/entrants neighbours above are — ``event.stages``
+    # is EAGER (``lazy="selectin"``, populated on every plain load of ``event``, this
+    # function's own caller's included), so building this dict costs nothing beyond the
+    # Python loop: there is no round trip left to gate. The other three draw types are
+    # one stage each and simply never read the field this fills.
+    stages: dict[uuid.UUID, FixtureStage] = {
+        stage.id: FixtureStage(position=stage.position, draw_type=stage.draw_type)
+        for stage in event.stages
+    }
     # The **field**, beside the fixtures, for the one draw type that cannot recover it
     # from them: a swiss bye is the absence of a fixture row, so pairing the next round
     # from the seated set alone would drop the byed entrant out of the event. Read

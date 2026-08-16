@@ -1098,7 +1098,11 @@ order things happened to be in — and it is what the pool-set freeze judges, be
 anything is written, when the event's draw is already cut.
 
 Re-ordering the entries re-orders the event's pools, on this verb alone: the create verb
-has only one order to state, and this one can restate it.
+has only one order to state, and this one can restate it. Only while the event has no
+draw, though — once a draw is cut, the order is frozen along with the id set
+(``app.tournament_events._enforce_pool_set_frozen``), because it is what the draw was
+seeded against and what a pools-then-knockout draw's qualifier seam labels a finished
+pool's seats by.
 
 An ``AfterValidator``, deliberately: it runs on the parsed entries (so it reads
 ``pool.id``, not ``pool["id"]``) and it contributes **nothing** to the JSON schema, so

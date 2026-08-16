@@ -21,6 +21,7 @@ would have noticed. That test is green only when real game counts flow through t
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
+from itertools import combinations
 from typing import Any
 
 import pytest
@@ -1066,6 +1067,232 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
         # Nothing is ready to play: every knockout fixture still has a TBD side, so none
         # of them materialized into a match.
         assert all(f.match_id is None for f in bracket)
+
+
+def _pool_payload(pool: TournamentEventPool) -> dict[str, Any]:
+    """The full :class:`~app.schemas.tournament.PoolUpsert` a PATCH must send to
+    *cite* an existing pool: an id alone is not enough, since the shape carries
+    ``name``, ``slot`` and ``table_ids`` too. ``table_ids`` is sent empty rather than
+    round-tripped — a reservation naming a table this test's tournament does not have
+    is dropped silently (``app.tournament_pools._reservations``) — so the emptiness
+    itself asserts nothing either way."""
+    return {
+        "id": str(pool.id),
+        "name": pool.name,
+        "slot": {
+            "date": pool.slot_date.isoformat(),
+            "start": pool.slot_start.strftime("%H:%M"),
+            "end": pool.slot_end.strftime("%H:%M"),
+        },
+        "table_ids": [],
+    }
+
+
+async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The end-to-end regression for the mutable-``pool_position`` bug
+    (``app.tournament_events._enforce_pool_set_frozen``'s reorder guard).
+
+    Three pools of **three**, top two per pool (nine entrants rather than the twelve
+    other tests in this file use — see below for why): the snake deals seeds 1, 6, 7
+    into pool A, 2, 5, 8 into pool B, 3, 4, 9 into pool C. Pool A is played out first —
+    the LOWER seed always wins, so its two matches touching seed 1 and its one match
+    between 6 and 7 leave 1 and 6 as its only winners, and therefore its top two — and
+    they seat into their predetermined bracket slots. A PATCH then cites the SAME three
+    pools, reversed, and is refused with a `409` naming the pool order as frozen — pools
+    B and C are still playing, and pool B's qualifiers have not been seated yet. Pool B
+    is then played out, and its own top two (seeds 2 and 5) seat in too, alongside pool
+    A's untouched pair — exactly four distinct entrants seated, nobody doubled and
+    nobody dropped.
+
+    Three-a-side rather than four-a-side on purpose: in a pool of three, "the lower seed
+    always wins" makes every one of a pool's three matches won by one of its own top two
+    (the third match is between them), so only two real player sessions are needed per
+    pool. A pool of four adds a match between its bottom two seeds, whose winner is
+    neither — a third client this test has no use for otherwise.
+
+    **Falsification** (``.claude/rules/verify-the-artifact-under-test.md``): revert
+    ``_enforce_pool_set_frozen``'s reorder branch to the old id-SET comparison (so a
+    same-set, different-order payload is treated as unchanged) and this test's own
+    ``assert reorder.status_code == 409`` reds — confirmed directly, along with
+    ``tests/test_tournament_events.py::test_update_event_frozen_pool_reorder_is_refused``,
+    which reds with ``DID NOT RAISE PoolSetFrozenError`` against the same revert.
+    Past that assertion the reorder DOES restamp each pool's ``position`` exactly as
+    documented (``apply_event_pools``'s "re-positioned as this payload says"), which is
+    what ``tests/test_draws.py::test_rr_then_ko_labels_pools_by_the_directors_position_
+    not_sorted_ids`` pins at the pure-strategy layer: a position swap alone flips which
+    physical pool a knockout seed is labelled against. This test does not press further
+    into that HTTP round trip past the 409 — a reorder that reaches the response
+    serializer is a path the guard makes permanently unreachable, and a previous probe
+    of it (with the guard removed) hit an unrelated lazy-load crash in
+    ``app.tournament_pools.pool_read``, not a clean 200 to build a strand/double-seat
+    assertion on. The mechanism is proven at the two layers above instead.
+    """
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "reorder-6") as (client_6, user_6),
+        opponent_session(db_session, "reorder-2") as (client_2, user_2),
+        opponent_session(db_session, "reorder-5") as (client_5, user_5),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (
+            await _create_event(client, tournament_id, qualifiers_per_pool=2)
+        ).json()["id"]
+        # Seeds 1, 6, 7 snake into pool A; 2, 5, 8 into pool B; 3, 4, 9 into pool C.
+        players = {1: owner, 6: user_6, 2: user_2, 5: user_5}
+        entries: dict[int, TournamentEntry] = {}
+        for seed in range(1, 10):
+            user = players.get(seed) or await make_user(db_session, f"reorder{seed}")
+            entries[seed] = await _enter(
+                db_session, event_id, user, seed=seed, minutes=seed
+            )
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (
+            await client.post(
+                f"/v1/tournaments/{tournament_id}/transitions", json={"to": "live"}
+            )
+        ).status_code == 201
+        clients_by_entry = {
+            entries[1].id: client,
+            entries[6].id: client_6,
+            entries[2].id: client_2,
+            entries[5].id: client_5,
+        }
+
+        async def _play_pool(pool_name: str, seeds: tuple[int, int, int]) -> None:
+            """Play one pool of three out in full — the LOWER seed always wins, 2-0 —
+            so its finishing order (and therefore its qualifiers) is simply its two
+            lowest seeds, with no tiebreak needed and no third client."""
+            pool_id = await _pool_id(db_session, event_id, pool_name)
+            fixtures = [
+                f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_id
+            ]
+            await _call(db_session, tournament_id, fixtures)
+            fixtures = [
+                f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_id
+            ]
+            by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in fixtures}
+            for a, b in combinations(seeds, 2):
+                winner = min(a, b)
+                fixture = by_pair[frozenset({entries[a].id, entries[b].id})]
+                await _win(
+                    fixture,
+                    clients_by_entry=clients_by_entry,
+                    winner_entry_id=entries[winner].id,
+                )
+
+        await _play_pool("Pool A", (1, 6, 7))
+
+        def _seated(fixtures: Sequence[TournamentFixture]) -> set[uuid.UUID]:
+            return {
+                entry_id
+                for f in fixtures
+                if f.pool_id is None
+                for entry_id in (f.entry_a_id, f.entry_b_id)
+                if entry_id is not None
+            }
+
+        assert _seated(await _fixtures(db_session, event_id)) == {
+            entries[1].id,
+            entries[6].id,
+        }, "pool A's top two must already be seated before the reorder is attempted"
+
+        pools = (
+            (
+                await db_session.execute(
+                    select(TournamentEventPool)
+                    .where(
+                        TournamentEventPool.stage_id.in_(
+                            stage_ids_for_events([uuid.UUID(event_id)])
+                        )
+                    )
+                    .order_by(TournamentEventPool.position)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        stored_order = [pool.id for pool in pools]
+        reorder = await client.patch(
+            f"/v1/tournaments/{tournament_id}/events/{event_id}",
+            json={"pools": [_pool_payload(pool) for pool in reversed(pools)]},
+        )
+        assert reorder.status_code == 409, reorder.text
+        assert "order of its pools is frozen" in reorder.json()["detail"]
+        assert await _pool_ids(db_session, event_id) == stored_order, (
+            "a refused reorder writes nothing — the stored order is unchanged"
+        )
+
+        await _play_pool("Pool B", (2, 5, 8))
+
+        assert _seated(await _fixtures(db_session, event_id)) == {
+            entries[1].id,
+            entries[6].id,
+            entries[2].id,
+            entries[5].id,
+        }, "both finished pools' qualifiers are seated, once each, with nobody dropped"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "PRE-EXISTING, unrelated to this slice (confirmed by reverting app/ to "
+        "ef773eaa and rerunning this test unchanged — same crash). ANY PATCH to "
+        "/v1/tournaments/{id}/events/{event_id} whose body includes a `pools` key "
+        "returns 500, reordered or resent unchanged: app/tournament_events.py's "
+        "update_event ends with `await db.refresh(event)`, which leaves "
+        "TournamentEventPool.tables expired rather than eagerly reloaded, and "
+        "app/tournament_pools.py's pool_read then touches `pool.tables` during "
+        "response serialization, which lazy-loads under async and raises "
+        "sqlalchemy.exc.MissingGreenlet. No test in the suite exercised a `pools` "
+        "PATCH over HTTP before this one, so it has never been caught."
+    ),
+)
+@pytest.mark.parametrize("reorder", [True, False], ids=["reordered", "same-order"])
+async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession, reorder: bool
+) -> None:
+    """The permitted sibling of the refusal above, run all the way through the HTTP
+    response serializer rather than stopping at a service-layer call: once a draw is
+    cut, `_enforce_pool_set_frozen` refuses a reorder before serialization is ever
+    reached, so the crash this pins was never observable through that guard. It is a
+    genuine, separate, pre-existing bug on the *permitted* path — see the `xfail`
+    reason for the mechanism. Parametrized because the crash does not depend on the
+    order actually changing: a same-order resend (the shape a director's plain venue
+    edit takes) 500s exactly as a reorder does.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event_id = (await _create_event(client, tournament_id)).json()["id"]
+
+    pools = (
+        (
+            await db_session.execute(
+                select(TournamentEventPool)
+                .where(
+                    TournamentEventPool.stage_id.in_(
+                        stage_ids_for_events([uuid.UUID(event_id)])
+                    )
+                )
+                .order_by(TournamentEventPool.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(pools) > 1, "a reorder needs at least two pools to be meaningful"
+    sent = list(reversed(pools)) if reorder else pools
+    expected_order = [pool.id for pool in sent]
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}",
+        json={"pools": [_pool_payload(pool) for pool in sent]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert await _pool_ids(db_session, event_id) == expected_order
 
 
 async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(

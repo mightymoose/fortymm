@@ -30,6 +30,7 @@ that field must not be separated by another writer's entry (see the route).
 import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
+from types import MappingProxyType
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,7 @@ from app.draws import (
     EntryId,
     FixtureGames,
     FixtureId,
+    FixtureStage,
     FixtureState,
     MatchId,
     NonSinglesDraw,
@@ -117,35 +119,6 @@ def pool_order(event: TournamentEvent) -> dict[PoolId, int]:
     return {PoolId(pool.id): index for index, pool in enumerate(_ordered_pools(event))}
 
 
-async def stage_order(db: AsyncSession, event_id: uuid.UUID) -> dict[uuid.UUID, int]:
-    """This event's stage ids mapped to their ``position`` — :func:`pool_order`'s
-    sibling for stages, and the id-keyed inverse of :func:`_stage_ids_by_position`
-    (the cut's position-keyed lookup). What :func:`fixture_state` resolves a fixture's
-    ``stage_id`` through to fill its ``stage_positions`` argument, which fills
-    :attr:`~app.draws.FixtureState.stage_position` (ADR 20260815 decision 6). Named
-    for the sibling pair rather than after its own return type, so the loader
-    (``stage_order``) and the parameter it feeds (``stage_positions``) read as two
-    different things — the same split :func:`pool_order` and ``pool_positions`` keep.
-
-    Read through an explicit query, never through ``TournamentEvent.stages`` — that
-    relationship is deliberately not eager (see its docstring), so a lazy load off it
-    in this async context would raise. The same discipline
-    :func:`_stage_ids_by_position` already follows, for the same reason.
-
-    Computed once per event rather than per fixture, exactly as :func:`pool_order` is:
-    a fixture carries its stage's *id*, not its position, so somebody has to do the
-    join, and the materialization seam should not pay it once per fixture.
-    """
-    rows = (
-        await db.execute(
-            select(TournamentEventStage.id, TournamentEventStage.position).where(
-                TournamentEventStage.event_id == event_id
-            )
-        )
-    ).all()
-    return {stage_id: position for stage_id, position in rows}
-
-
 def _ordered_pools(event: TournamentEvent) -> list[Pool]:
     """This event's pools, projected, in the director's order — ascending ``position``.
 
@@ -163,12 +136,22 @@ def _ordered_pools(event: TournamentEvent) -> list[Pool]:
     return sorted(event_pools(event), key=lambda pool: pool.position)
 
 
+#: The one spelling of "no stage was resolved" :func:`fixture_state`'s ``stages``
+#: parameter accepts — a real, empty mapping rather than ``None``, exactly as
+#: ``app.models.tournament_event_draw_settings.NO_SETTINGS`` is for the same reason: a
+#: ``.get()`` against an empty dict and a ``.get()`` guarded by ``is not None`` return
+#: the identical ``None``, so carrying both spellings bought nothing but a branch to
+#: keep in sync. ``MappingProxyType`` so the shared default cannot be mutated by
+#: whoever receives it.
+_NO_STAGES: Mapping[uuid.UUID, FixtureStage] = MappingProxyType({})
+
+
 def fixture_state(
     fixture: TournamentFixture,
     game_counts: Mapping[uuid.UUID, tuple[int, int]] | None = None,
     voided_match_ids: frozenset[uuid.UUID] = frozenset(),
     pool_positions: Mapping[PoolId, int] | None = None,
-    stage_positions: Mapping[uuid.UUID, int] | None = None,
+    stages: Mapping[uuid.UUID, FixtureStage] = _NO_STAGES,
 ) -> FixtureState:
     """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
     into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
@@ -221,19 +204,22 @@ def fixture_state(
     nothing else. Reading the games here would mean a query per fixture inside the
     projection; the batched load belongs at the seam, alongside the fixture load.
 
-    ``stage_positions`` maps this event's stage ids to their places in the event's
-    stage order (:func:`stage_order`, the id-keyed sibling
-    ``_stage_ids_by_position`` reads at the cut), and is what fills
-    :attr:`~app.draws.FixtureState.stage_position` — the discriminator
+    ``stages`` maps this event's stage ids to a :class:`~app.draws.FixtureStage`
+    carrying that stage's place in the event's stage order AND its own draw type
+    (``app.tournament_materialization.materialize_event`` builds it straight off the
+    already-eager ``TournamentEvent.stages``, the sibling of what ``pool_order``
+    resolves for ``pool_positions``), and is what fills
+    :attr:`~app.draws.FixtureState.stage` — the discriminator
     :class:`~app.draws.RrThenKoStrategy` reads to split one event's fixtures between
     its two stages, in place of re-deriving the split from ``pool_id is None`` (ADR
     20260815 decision 6). It rides in from the caller for the same reason
     ``pool_positions`` does: it is one fact about the *event*, resolved once rather
-    than reconstructed per fixture. Passing nothing means "the stage order was not
-    resolved", which projects ``stage_position=None`` — harmless for the three draw
-    types that never read it, and refused loudly by
-    :class:`~app.draws.RrThenKoStrategy` (:class:`~app.draws.MissingStageAssignment`)
-    for the one that does.
+    than reconstructed per fixture. **Always a real mapping, never** ``None`` — the
+    empty default (:data:`_NO_STAGES`) and an event's real stage map read identically
+    through ``.get()``, so there is exactly one spelling of "no stage resolved" rather
+    than two. Passing the default projects ``stage=None`` — harmless for the three draw
+    types that never read it, and refused loudly by :class:`~app.draws.RrThenKoStrategy`
+    (:class:`~app.draws.MissingStageAssignment`) for the one that does.
     """
     games = (
         game_counts.get(fixture.match_id)
@@ -251,11 +237,7 @@ def fixture_state(
             if pool_positions is not None and pool_id is not None
             else None
         ),
-        stage_position=(
-            stage_positions.get(fixture.stage_id)
-            if stage_positions is not None
-            else None
-        ),
+        stage=stages.get(fixture.stage_id),
         entry_a_id=(
             EntryId(fixture.entry_a_id) if fixture.entry_a_id is not None else None
         ),

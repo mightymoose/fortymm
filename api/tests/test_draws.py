@@ -23,6 +23,7 @@ from app.draws import (
     EntryId,
     FixtureGames,
     FixtureId,
+    FixtureStage,
     FixtureState,
     MatchId,
     MissingBracketSlot,
@@ -43,7 +44,6 @@ from app.draws import (
     qualifier_seed_assignment,
     reads_entrants,
     reads_fixture_games,
-    reads_stage_position,
     ready_fixtures,
     strategy_for,
     swiss_byes,
@@ -376,26 +376,6 @@ class TestStrategyRegistry:
             DrawType.swiss: True,
         }
 
-    def test_the_stage_gate_names_every_draw_type_and_only_the_one_with_two_stages(
-        self,
-    ) -> None:
-        """``reads_stage_position`` is the games gate's and the field gate's sibling
-        (ADR 20260815 decision 6): it lets the same seam skip resolving the event's
-        stage order when nothing will read it.
-
-        A whole-enum equality, so a new ``DrawType`` reds here as well as failing to
-        type-check in the catch-all-free ``match``. Only ``rr_then_ko`` is ``True`` —
-        it is the one composite, so it is the one strategy that has to tell its two
-        stages' fixtures apart; the other three are one stage each."""
-        assert {
-            draw_type: reads_stage_position(draw_type) for draw_type in DrawType
-        } == {
-            DrawType.round_robin: False,
-            DrawType.single_elim: False,
-            DrawType.rr_then_ko: True,
-            DrawType.swiss: False,
-        }
-
     def test_a_draw_type_the_field_gate_clears_advances_the_same_without_a_field(
         self,
     ) -> None:
@@ -412,14 +392,14 @@ class TestStrategyRegistry:
             strategy = strategy_for(_settings(draw_type))
             ordered = _ordered(8)
             planned = strategy.plan_initial(_config(2), ordered)
-            # rr-then-ko's own advance() reads ``stage_position`` (ADR 20260815
-            # decision 6) — the one draw type in this loop that needs the richer
-            # projection ``_persisted`` (shared by every other draw type's tests, and
-            # ignorant of stages) does not build.
-            cut = (
-                _persisted_rr_then_ko(planned, _config(2).pool_ids)
-                if draw_type is DrawType.rr_then_ko
-                else _persisted(planned)
+            # One call for every draw type in the loop, ``pool_ids`` harmless for the
+            # two that never read ``pool_position`` — only ``rr_then_ko`` genuinely
+            # varies, since rr-then-ko's own advance() is the one reader of ``stage``
+            # (ADR 20260815 decision 6) among the three this loop reaches.
+            cut = _persisted(
+                planned,
+                pool_ids=_config(2).pool_ids,
+                rr_then_ko=draw_type is DrawType.rr_then_ko,
             )
             played = _played(
                 cut,
@@ -790,41 +770,41 @@ class TestRoundRobinCut:
         }
 
 
+_RR_THEN_KO_POOL_STAGE = FixtureStage(position=0, draw_type=DrawType.round_robin)
+_RR_THEN_KO_KNOCKOUT_STAGE = FixtureStage(position=1, draw_type=DrawType.single_elim)
+
+
 def _persisted(
-    planned: list[PlannedFixture], *, materialized: bool = False
+    planned: Sequence[PlannedFixture],
+    *,
+    materialized: bool = False,
+    pool_ids: Sequence[PoolId] = (),
+    rr_then_ko: bool = False,
 ) -> list[FixtureState]:
-    """The planned fixtures as they'd read back after ``plan_initial`` was persisted."""
-    return [
-        FixtureState(
-            fixture_id=FixtureId(uuid.UUID(int=1000 + i)),
-            pool_id=f.pool_id,
-            round=f.round,
-            position=f.position,
-            entry_a_id=f.entry_a_id,
-            entry_b_id=f.entry_b_id,
-            match_id=MatchId(uuid.UUID(int=2000 + i)) if materialized else None,
-        )
-        for i, f in enumerate(planned)
-    ]
+    """The planned fixtures as they'd read back after ``plan_initial`` was persisted.
 
+    ``pool_ids`` and ``rr_then_ko`` are optional, and exist for the one draw type whose
+    fixtures the real seam resolves two extra discriminators for — the composite. Every
+    other draw type's test calls this with neither, and every fixture's
+    ``pool_position``/``stage`` come back unresolved (``None``), exactly as before this
+    helper absorbed what used to be a near-duplicate ``_persisted_rr_then_ko``.
 
-def _persisted_rr_then_ko(
-    planned: Sequence[PlannedFixture], pool_ids: Sequence[PoolId] = ()
-) -> list[FixtureState]:
-    """The rr-then-ko fixtures as they'd read back after the cut, carrying the two
-    discriminators the real seam resolves and ``_persisted`` above does not — it is
-    shared by every draw type's tests, and single-elim and swiss have neither a second
-    stage nor a pool to place:
+    ``pool_ids``: ``app.tournament_draws.pool_order`` resolves each pool's place in the
+    event's own pool order — the same sequence ``DrawConfig.pool_ids`` carries.
+    Omitted (the default, ``()``) leaves every pool's position unresolved — the shape a
+    caller that skipped that plumbing hands the strategy, and the fallback the
+    labelling repair degrades to.
 
-    - ``stage_position``: ``app.tournament_draws.cut_draw`` assigns every pooled
-      fixture to stage 0 (the pool stage) and the un-pooled bracket to stage 1 (the
-      knockout stage) — mirrored here as the literal ``0``/``1`` ``RrThenKoStrategy``
-      itself reads (``_RR_THEN_KO_POOL_STAGE`` / ``_RR_THEN_KO_KNOCKOUT_STAGE``).
-    - ``pool_position``: ``app.tournament_draws.pool_order`` resolves each pool's
-      place in ``pool_ids`` — the event's own pool order, the same sequence
-      ``DrawConfig.pool_ids`` carries. Omitting ``pool_ids`` (the default) leaves every
-      pool's position unresolved — the shape a caller that skipped that plumbing
-      hands the strategy, and the fallback the labelling repair degrades to.
+    ``rr_then_ko``: mirrors ``app.tournament_draws.cut_draw``'s own write — every
+    POOLED fixture belongs to stage 0 (round-robin) and every UN-POOLED one to stage 1
+    (single-elim), the exact template ``app.tournament_event_stages.stage_template``
+    mints for ``DrawType.rr_then_ko``. That is a fact about the WRITER, not a rule this
+    helper is entitled to apply to a fixture some other test hands it wearing a
+    different shape — a test that needs a fixture whose pool-ness and stage DISAGREE
+    builds that ONE fixture by hand with ``dataclasses.replace(..., stage=...)`` over
+    this helper's ordinary output, rather than asking this function to guess at a shape
+    it does not itself derive (see
+    ``TestRrThenKoAdvance.test_rr_then_ko_splits_by_stage_not_by_pool_ness``).
     """
     pool_position = {pool_id: index for index, pool_id in enumerate(pool_ids)}
     return [
@@ -834,11 +814,20 @@ def _persisted_rr_then_ko(
             pool_position=(
                 pool_position.get(f.pool_id) if f.pool_id is not None else None
             ),
-            stage_position=0 if f.pool_id is not None else 1,
+            stage=(
+                (
+                    _RR_THEN_KO_POOL_STAGE
+                    if f.pool_id is not None
+                    else _RR_THEN_KO_KNOCKOUT_STAGE
+                )
+                if rr_then_ko
+                else None
+            ),
             round=f.round,
             position=f.position,
             entry_a_id=f.entry_a_id,
             entry_b_id=f.entry_b_id,
+            match_id=MatchId(uuid.UUID(int=2000 + i)) if materialized else None,
         )
         for i, f in enumerate(planned)
     ]
@@ -1919,8 +1908,10 @@ class TestRrThenKoAdvance:
     def _cut(self) -> list[FixtureState]:
         """The 3-pool, 12-entrant, top-2 draw as it reads back after the cut. The snake
         deals pool A seeds 1, 6, 7, 12; B 2, 5, 8, 11; C 3, 4, 9, 10."""
-        return _persisted_rr_then_ko(
-            _rr_then_ko(2).plan_initial(_config(3), _ordered(12)), _config(3).pool_ids
+        return _persisted(
+            _rr_then_ko(2).plan_initial(_config(3), _ordered(12)),
+            pool_ids=_config(3).pool_ids,
+            rr_then_ko=True,
         )
 
     def test_rr_then_ko_seats_a_finished_pools_qualifiers_and_nobody_elses(
@@ -1970,8 +1961,10 @@ class TestRrThenKoAdvance:
         # is live: a three-way cycle on wins is settled on game difference, which seats
         # entry 2 above entry 1 even though 1 beat 2 head-to-head. An order computed on
         # wins alone (or wins + head-to-head + entry id) puts 1 first.
-        cut = _persisted_rr_then_ko(
-            _rr_then_ko(2).plan_initial(_config(1), _ordered(4)), _config(1).pool_ids
+        cut = _persisted(
+            _rr_then_ko(2).plan_initial(_config(1), _ordered(4)),
+            pool_ids=_config(1).pool_ids,
+            rr_then_ko=True,
         )
         fixtures = _played(cut, CYCLIC_POOL_RESULTS)
 
@@ -2072,7 +2065,11 @@ class TestRrThenKoAdvance:
             for pool_id, seeds in _members_by_pool(_pooled(planned)).items()
             for seed in seeds
         }
-        cut = _persisted_rr_then_ko(planned, _config(3).pool_ids)
+        cut = _persisted(
+            planned,
+            pool_ids=_config(3).pool_ids,
+            rr_then_ko=True,
+        )
         fixtures = _played(cut, _lower_seed_wins(cut))
 
         seeded = _apply(fixtures, _rr_then_ko(2).advance(fixtures, NO_FIELD))
@@ -2103,7 +2100,11 @@ class TestRrThenKoAdvance:
         # one qualifier each — the smallest bracket big enough to have a "seed 1" and a
         # "seed 2" to tell apart.
         planned = _rr_then_ko(1).plan_initial(config, _ordered(4))
-        cut = _persisted_rr_then_ko(planned, pool_ids)
+        cut = _persisted(
+            planned,
+            pool_ids=pool_ids,
+            rr_then_ko=True,
+        )
         fixtures = _played(cut, _lower_seed_wins(cut))
 
         seeded = _apply(fixtures, _rr_then_ko(1).advance(fixtures, NO_FIELD))
@@ -2161,8 +2162,10 @@ class TestRrThenKoAdvance:
         # quietly wrong — the outcome the event editor's 409 freeze calls unacceptable —
         # the domain says so instead of the freeze being the only thing standing between
         # a director and a half-seated bracket.
-        cut = _persisted_rr_then_ko(
-            _rr_then_ko(1).plan_initial(_config(2), _ordered(4)), _config(2).pool_ids
+        cut = _persisted(
+            _rr_then_ko(1).plan_initial(_config(2), _ordered(4)),
+            pool_ids=_config(2).pool_ids,
+            rr_then_ko=True,
         )
         fixtures = _played(cut, _lower_seed_wins(cut))
 
@@ -2176,22 +2179,53 @@ class TestRrThenKoAdvance:
 
     def test_rr_then_ko_refuses_fixtures_with_no_stage_resolved(self) -> None:
         # ``MissingBracketSlot`` and ``MissingFixtureGames``'s sibling: a caller that
-        # skips the stage-order plumbing (``_persisted`` — shared by every OTHER draw
-        # type's tests, and ignorant of stages — rather than ``_persisted_rr_then_ko``)
-        # hands ``advance()`` fixtures with no ``stage_position`` at all. Silently, that
-        # is a fixture matching NEITHER ``stage_position == 0`` nor ``== 1``: it drops
-        # out of both stages, no qualifier is ever seated, no bracket fixture is ever
-        # ready, and nothing raises — a whole-suite-stays-green failure. It fails loudly
-        # instead.
+        # skips the stage plumbing (``_persisted``'s plain, ``rr_then_ko=False``
+        # default — shared by every OTHER draw type's tests, and ignorant of stages)
+        # hands ``advance()`` fixtures with ``stage`` unresolved (``None``) at all.
+        # Silently, that is a fixture matching neither of this composite's two stages:
+        # it drops out of both, no qualifier is ever seated, no bracket fixture is ever
+        # ready, and nothing raises — a whole-suite-stays-green failure. It fails
+        # loudly instead.
         cut = _persisted(_rr_then_ko(2).plan_initial(_config(3), _ordered(12)))
 
         with pytest.raises(MissingStageAssignment) as excinfo:
             _rr_then_ko(2).advance(cut, NO_FIELD)
 
-        assert "stage_position resolved" in str(excinfo.value)
+        assert "neither of this composite's own stages" in str(excinfo.value)
         # Not a DrawError: nothing a director can type reaches this, so it is a wiring
         # bug and a 500, not a 422 they could act on.
         assert not isinstance(excinfo.value, DrawError)
+
+    def test_rr_then_ko_splits_by_stage_not_by_pool_ness(self) -> None:
+        # THE discriminating case item 5/ADR 20260815 decision 6 exists for: an
+        # UN-POOLED fixture (``pool_id=None``) whose STAGE is nonetheless the POOL
+        # stage — the exact shape a swiss round's fixtures also carry (both are
+        # ``pool_id IS NULL``), and the reason ``_stage_split`` may not derive its
+        # split from ``pool_id is None`` (see :class:`FixtureStage`'s docstring).
+        # Built entirely from literals, not from a real cut — the disagreement this
+        # proves cannot arise from ``cut_draw``'s own write (which always sets
+        # ``pool_id`` to match the pool stage), only from a hostile or buggy caller,
+        # which is exactly what this fixture models.
+        #
+        # Decided (a winner, no games) with nothing else in the input carrying any
+        # games, it must still trip the ``MissingFixtureGames`` guard the way a real
+        # POOL fixture would, proving ``_stage_split`` sorted it into the pool half by
+        # its STAGE. A ``pool_id is None``-keyed split would instead sort it into the
+        # knockout half — where nothing reads games at all — and this assertion would
+        # find no raise.
+        unpooled_but_pool_staged = FixtureState(
+            fixture_id=FixtureId(uuid.UUID(int=9001)),
+            pool_id=None,
+            stage=_RR_THEN_KO_POOL_STAGE,
+            round=1,
+            position=1,
+            entry_a_id=_entry_id(1),
+            entry_b_id=_entry_id(2),
+            winner_entry_id=_entry_id(1),
+        )
+
+        with pytest.raises(MissingFixtureGames):
+            _rr_then_ko(1).advance([unpooled_but_pool_staged], NO_FIELD)
 
     def test_rr_then_ko_tolerates_one_result_in_flux_among_scored_neighbours(
         self,
@@ -2227,8 +2261,10 @@ class TestRrThenKoAdvance:
         # and 3 rises past it, so the pool finishes 2, 3, 1, 4 and qualifies **{2, 3}**:
         # a different runner-up, which is what makes this evidence about the ordering
         # and not just about the seating.
-        cut = _persisted_rr_then_ko(
-            _rr_then_ko(2).plan_initial(_config(1), _ordered(4)), _config(1).pool_ids
+        cut = _persisted(
+            _rr_then_ko(2).plan_initial(_config(1), _ordered(4)),
+            pool_ids=_config(1).pool_ids,
+            rr_then_ko=True,
         )
         voided_pair = frozenset({1, 4})
         played = _played(
@@ -2257,8 +2293,10 @@ class TestRrThenKoAdvance:
         # is arbitrary rather than earned. So the pool is not finished, and nobody is
         # seated — the one place this deliberately parts company with the standings,
         # which call such a pool ``complete`` and show a table of zeros.
-        cut = _persisted_rr_then_ko(
-            _rr_then_ko(2).plan_initial(_config(1), _ordered(4)), _config(1).pool_ids
+        cut = _persisted(
+            _rr_then_ko(2).plan_initial(_config(1), _ordered(4)),
+            pool_ids=_config(1).pool_ids,
+            rr_then_ko=True,
         )
         fixtures = _voided(cut, set(CYCLIC_POOL_RESULTS))
 
