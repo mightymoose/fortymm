@@ -4,14 +4,14 @@ import { Overline } from '@/components/overline'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
-import { poolLetter, type DrawStructure } from '../../../data/draw-structure'
-import { PoolCard } from './draw-preview/pool-card'
+import { groupLetter, type DrawStructure } from '../../../data/draw-structure'
+import { GroupCard } from './draw-preview/group-card'
 
-/** How many pool cards the preview draws. The reference stops at eight, and so does
- * this: the equation directly above already states the pool count, so a twelve-pool draw
- * reads `12 pools` over eight cards rather than losing the number. The cards are a shape,
- * not an inventory. */
-const MAX_POOL_CARDS = 8
+/** How many group cards the preview draws. The reference stops at eight, and so does
+ * this: the equation directly above already states the group count, so a twelve-group
+ * draw reads `12 groups` over eight cards rather than losing the number. The cards are a
+ * shape, not an inventory. */
+const MAX_GROUP_CARDS = 8
 
 /** The three states the preview can be in, in the words the reference uses. **The
  * heading and the badge are one decision**, so they are one table — split across two
@@ -43,16 +43,16 @@ export interface DrawPreviewProps {
    * side. */
   fieldSize: number
   /**
-   * How many pool rows the event actually has.
+   * How many reservation rows the event actually has.
    *
    * ⚠️ **Not `max(reservations, derived)`.** The reference shows the larger of the two
    * and moves on; ADR
    * `20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-count-is-a-projection`
    * refuses that, because the `max()` hides the one thing worth reporting. A director
-   * with four pool rows whose structure needs eight must read `8 pools` in the equation
-   * and `4` in this fact, and see the gap.
+   * with four reservation rows whose structure needs eight groups must read `8 groups`
+   * in the equation and `4` in this fact, and see the gap.
    */
-  poolReservationCount: number
+  reservationCount: number
   /** Where the preview field came from, in words — `32-player cap`, or the honest
    * sentence for an event with no cap. Built by `previewBasisLabel` **at the caller**, so
    * the heading block and this fact are one call and cannot come apart. */
@@ -75,7 +75,7 @@ export interface DrawPreviewProps {
  * The numbers move on every keystroke in the settings next door, and a preview that
  * silently swaps its text is a preview a screen-reader user never learns changed. The
  * body is therefore a `status` region — polite, and **not** atomic: an atomic region
- * would re-read the equation, all eight pools, the knockout and the three facts every
+ * would re-read the equation, all eight groups, the knockout and the three facts every
  * time a single digit moved.
  *
  * ## What is not here
@@ -88,7 +88,7 @@ export interface DrawPreviewProps {
 export const DrawPreview = ({
   structure,
   fieldSize,
-  poolReservationCount,
+  reservationCount,
   previewBasis,
 }: DrawPreviewProps) => {
   const overlineId = useId()
@@ -102,15 +102,15 @@ export const DrawPreview = ({
         ? VERDICTS.disagreement
         : VERDICTS.sound
 
-  // Read off the derived sizes rather than divided out again — the pools are routinely
+  // Read off the derived sizes rather than divided out again — the groups are routinely
   // unequal, and `8` where the draw holds `6–5` would be the silent reshaping #1320
   // exists to remove.
-  const smallestPool = Math.min(...structure.poolSizes)
-  const largestPool = Math.max(...structure.poolSizes)
+  const smallestGroup = Math.min(...structure.groupSizes)
+  const largestGroup = Math.max(...structure.groupSizes)
   const sizeLabel =
-    smallestPool === largestPool
-      ? String(smallestPool)
-      : `${smallestPool}–${largestPool}`
+    smallestGroup === largestGroup
+      ? String(smallestGroup)
+      : `${smallestGroup}–${largestGroup}`
 
   const byes = structure.firstRoundByes
   const byesLine =
@@ -124,8 +124,8 @@ export const DrawPreview = ({
   // sentence in the UI face.
   const facts = [
     {
-      term: 'Pool reservations',
-      value: String(poolReservationCount),
+      term: 'Reservations',
+      value: String(reservationCount),
       mono: true,
     },
     { term: 'Membership', value: 'Snake', mono: false },
@@ -182,31 +182,31 @@ export const DrawPreview = ({
           </span>
           {' players ÷ '}
           <span className="font-mono text-[15px] font-semibold text-[color:var(--fg-1)]">
-            {structure.poolCount}
+            {structure.groupCount}
           </span>
-          {' pools = '}
+          {' groups = '}
           <span className="font-mono text-[15px] font-semibold text-[color:var(--fg-1)]">
             {sizeLabel}
           </span>
-          {' per pool'}
+          {' per group'}
         </p>
 
         {/* Named, because eight identically-shaped cards are otherwise a wall of
             numbers a screen reader cannot introduce. */}
         {/* Two across: the preview column is 280px at its widest, and a third card
             would squeeze the figures below the size the mono face is set at. */}
-        <ul aria-label="Projected pools" className="grid grid-cols-2 gap-2">
-          {structure.poolSizes.slice(0, MAX_POOL_CARDS).map((size, index) => (
-            <PoolCard
-              key={poolLetter(index)}
-              letter={poolLetter(index)}
+        <ul aria-label="Projected groups" className="grid grid-cols-2 gap-2">
+          {structure.groupSizes.slice(0, MAX_GROUP_CARDS).map((size, index) => (
+            <GroupCard
+              key={groupLetter(index)}
+              letter={groupLetter(index)}
               size={size}
-              qualifiers={structure.qualifiersPerPool}
+              qualifiers={structure.qualifiersPerGroup}
             />
           ))}
         </ul>
 
-        {/* Decorative: the pools feeding the knockout is already said in words below. */}
+        {/* Decorative: the groups feeding the knockout is already said in words below. */}
         <p
           aria-hidden="true"
           className="text-center text-[13px] leading-none text-[color:var(--fg-3)]"
@@ -231,7 +231,7 @@ export const DrawPreview = ({
             {/* Not pluralised, deliberately: the reference does not pluralise this line
                 and `data/draw-structure.ts` records why an unasked-for improvement here
                 is drift against the Python twin. */}
-            <p>{structure.poolMatchCount} pool matches</p>
+            <p>{structure.groupMatchCount} group matches</p>
           </div>
         </div>
 

@@ -16,15 +16,15 @@ const OWNERSHIP_LABEL: Record<SettingOwnership, string> = {
 }
 
 export interface SettingRowProps {
-  /** The setting's name — `Pool count`, `Pool size`, `Membership`,
-   * `Qualifiers per pool`. It is also the row's accessible name, so a test (and a
+  /** The setting's name — `Group count`, `Group size`, `Membership`,
+   * `Qualifiers per group`. It is also the row's accessible name, so a test (and a
    * screen reader) addresses the row by the thing it sets. */
   name: string
   /** One short line under the name, saying what the setting means. */
   hint: string
   /**
    * The value the director reads. Already formatted by the caller, because only the
-   * caller knows what the number means: `4`, or `6–10` when the pools are uneven, or a
+   * caller knows what the number means: `4`, or `6–10` when the groups are uneven, or a
    * whole phrase for Membership.
    */
   value: string
@@ -36,12 +36,12 @@ export interface SettingRowProps {
    *   is the only setting with no number, so it is the only row that takes this.
    */
   kind: 'number' | 'phrase'
-  /** Plain words after the value (`pools`, `players per pool`). A `phrase` row has
+  /** Plain words after the value (`groups`, `players per group`). A `phrase` row has
    * none: its value is already a sentence. */
   unit?: string
   /** Who owns the value — the badge is this and nothing else (ADR 20260808). */
   ownership: SettingOwnership
-  /** One line saying where the value came from, e.g. `32 players ÷ 4 pools`. Derived
+  /** One line saying where the value came from, e.g. `32 players ÷ 4 groups`. Derived
    * by `deriveDrawStructure` for the three numeric settings, so the copy cannot fork
    * away from the arithmetic it describes. */
   source: string

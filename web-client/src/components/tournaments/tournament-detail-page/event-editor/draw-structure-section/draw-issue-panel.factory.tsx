@@ -4,8 +4,8 @@ import type { DrawIssuePanelProps } from './draw-issue-panel'
 /**
  * The reference's **"Uneven field"** state
  * (`docs/designs/rr-then-ko-draw-structure/uneven-field-panel.png`): 22 players across 4
- * pools, which the balanced split makes `6, 6, 5, 5` and the tally reads out as
- * `2 pools of 6 · 2 pools of 5`.
+ * groups, which the balanced split makes `6, 6, 5, 5` and the tally reads out as
+ * `2 groups of 6 · 2 groups of 5`.
  *
  * ⚠️ **Largest first**, because that is the order `tallySizes` produces and the order the
  * title states. A fixture written the other way round would pass a test that only counts
@@ -17,8 +17,8 @@ export function buildUnevenDrawIssue(
   return {
     kind: 'uneven',
     distribution: [
-      { pools: 2, size: 6 },
-      { pools: 2, size: 5 },
+      { groups: 2, size: 6 },
+      { groups: 2, size: 5 },
     ],
     ...overrides,
   }

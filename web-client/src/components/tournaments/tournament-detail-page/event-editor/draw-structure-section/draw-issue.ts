@@ -10,8 +10,8 @@
 import type {
   DrawStructure,
   DrawStructureDisagreement,
+  GroupSizeTally,
   ImpossibleProblem,
-  PoolSizeTally,
 } from '../../../data/draw-structure'
 
 /**
@@ -23,16 +23,16 @@ import type {
 export type DrawIssue =
   | { kind: 'impossible'; problem: ImpossibleProblem }
   | { kind: 'disagreement'; disagreement: DrawStructureDisagreement }
-  | { kind: 'uneven'; distribution: PoolSizeTally[] }
+  | { kind: 'uneven'; distribution: GroupSizeTally[] }
 
 /**
  * Pick the one issue, in the reference's order: impossible, then disagreement, then
  * uneven.
  *
  * The order is the order a director can act in. A draw that cannot be played is not
- * "your call", and an uneven split is not worth reading while a pool has one player in
- * it. A field of 8 across 6 pool reservations splits `2, 2, 1, 1, 1, 1` — an uneven tally
- * AND four unplayable pools, both reported — so this is a live case and not a defensive
+ * "your call", and an uneven split is not worth reading while a group has one player in
+ * it. A field of 8 across 6 reservations splits `2, 2, 1, 1, 1, 1` — an uneven tally
+ * AND four unplayable groups, both reported — so this is a live case and not a defensive
  * one.
  */
 export function drawIssueFor(structure: DrawStructure): DrawIssue | null {

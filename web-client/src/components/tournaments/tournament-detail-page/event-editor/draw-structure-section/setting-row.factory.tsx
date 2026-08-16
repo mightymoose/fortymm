@@ -1,9 +1,9 @@
 import type { SettingRowProps } from './setting-row'
 
 /**
- * The reference's **Pool count** row in its "Nothing set" state
- * (`docs/designs/rr-then-ko-draw-structure/nothing-set.png`): four pools, derived from
- * four pool reservations, so every part of the row is populated — a numeric value, a
+ * The reference's **Group count** row in its "Nothing set" state
+ * (`docs/designs/rr-then-ko-draw-structure/nothing-set.png`): four groups, derived from
+ * four reservations, so every part of the row is populated — a numeric value, a
  * unit, an `Automatic` badge and a source sentence.
  *
  * The Membership row (no number, no unit) is built by overriding
@@ -13,13 +13,13 @@ export function buildSettingRowProps(
   overrides: Partial<SettingRowProps> = {},
 ): SettingRowProps {
   return {
-    name: 'Pool count',
-    hint: 'How many pools the field splits into. Each pool also books its tables and time window.',
+    name: 'Group count',
+    hint: 'How many groups the field splits into. Each group’s reservation also books its tables and time window.',
     value: '4',
     kind: 'number',
-    unit: 'pools',
+    unit: 'groups',
     ownership: 'automatic',
-    source: "4 pool reservations · today's behaviour",
+    source: "4 reservations · today's behaviour",
     ...overrides,
   }
 }

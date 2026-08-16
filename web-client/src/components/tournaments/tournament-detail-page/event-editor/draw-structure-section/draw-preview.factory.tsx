@@ -7,9 +7,9 @@ import { previewBasisLabel } from './preview-field'
 
 /**
  * The eight derivation inputs of the reference's **"Nothing set"** state
- * (`docs/designs/rr-then-ko-draw-structure/nothing-set.png`): 32 players across 4 pool
- * reservations, every setting the system's. That derives 4 pools of 8, 2 qualifiers
- * apiece, an 8-player bracket with no byes, and 112 pool matches.
+ * (`docs/designs/rr-then-ko-draw-structure/nothing-set.png`): 32 players across 4
+ * reservations, every setting the system's. That derives 4 groups of 8, 2 qualifiers
+ * apiece, an 8-player bracket with no byes, and 112 group matches.
  *
  * The split is deliberately **even** and the draw deliberately **sound**, so an uneven,
  * disagreeing or impossible preview is something a test asks for by overriding an input
@@ -20,11 +20,11 @@ export function buildDrawPreviewOptions(
 ): DrawStructureOptions {
   return {
     previewFieldSize: 32,
-    poolReservationCount: 4,
-    poolCountMode: 'automatic',
-    manualPoolCount: null,
-    poolSizeMode: 'automatic',
-    manualPoolSize: null,
+    reservationCount: 4,
+    groupCountMode: 'automatic',
+    manualGroupCount: null,
+    groupSizeMode: 'automatic',
+    manualGroupSize: null,
     qualifiersMode: 'automatic',
     manualQualifiers: null,
     ...overrides,
@@ -46,7 +46,7 @@ export function buildDrawPreviewPropsFor(
   return {
     structure: deriveDrawStructure(options),
     fieldSize: options.previewFieldSize,
-    poolReservationCount: options.poolReservationCount,
+    reservationCount: options.reservationCount,
     // The default builder treats the field as a cap the director set, which is the
     // reference's state. The uncapped sentence is a prop a test overrides.
     previewBasis: previewBasisLabel(options.previewFieldSize),
