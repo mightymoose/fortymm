@@ -2115,11 +2115,15 @@ function goLiveRefusal(tournament: StoredTournament): string | null {
     return null
   }
 
+  // `undrawable` FIRST, mirroring the server. The `uncut`/`stale` body ends in "so cut
+  // the draw for each event named …" — trailing the undrawable sentences after that
+  // instruction makes "each event named" read as covering them too, and sends the
+  // director to a Generate draw the cut refuses (#1300 QA).
   const segments: string[] = []
+  if (undrawable.length > 0) segments.push(undrawable.join(' '))
   if (uncut.length > 0 || stale.length > 0) {
     segments.push(uncutStaleBody(uncut, stale))
   }
-  if (undrawable.length > 0) segments.push(undrawable.join(' '))
   return 'This tournament cannot start yet: ' + segments.join(' ')
 }
 

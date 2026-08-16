@@ -188,14 +188,16 @@ describe('LifecycleActions · a refused Start tournament (409)', () => {
     'and there is nowhere to record a doubles pairing or a team. Remove the event. ' +
     '“Lone Event”: A single-elimination draw needs at least 2 entrants — a bracket of ' +
     'one has nobody to play. Add entrants, or remove the event.'
+  // Undrawable first, so "cut the draw for each event named" trails only the names a cut
+  // would actually fix — the other order walked QA's director into a refused cut (#1300).
   const MIXED =
-    'This tournament cannot start yet: “B Uncut” has no draw yet; and “C Stale” has a ' +
+    'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool would ' +
+    'leave a pool with fewer than 2 entrants, who would have nobody to play. Add ' +
+    'entrants, or remove the event. “B Uncut” has no draw yet; and “C Stale” has a ' +
     'draw that no longer matches its entrants. A draw is cut from the field as it ' +
     'stands at the time, and registration stays open right up to the moment a ' +
     'tournament goes live — so cut the draw for each event named (again, if somebody ' +
-    'entered or withdrew since it was last cut), then start the tournament. ' +
-    '“A Undrawable”: 1 entrant across 1 pool would leave a pool with fewer than 2 ' +
-    'entrants, who would have nobody to play. Add entrants, or remove the event.'
+    'entered or withdrew since it was last cut), then start the tournament.'
 
   // Each refusal renders — and renders the SERVER's sentence, which is the only half that
   // says what to go and do. The assertions name the *events*, because a test that

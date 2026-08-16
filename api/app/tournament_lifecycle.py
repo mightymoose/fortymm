@@ -279,8 +279,16 @@ def _go_live_refusal_message(
     are what the guard compared, but they are not what the director is looking at.
 
     Two bodies, built independently and joined with a space, because they answer two
-    different questions (#1300):
+    different questions (#1300). **``undrawable`` comes first, and the order is
+    load-bearing** — see below.
 
+    * **``undrawable``** — already-composed, one-sentence-per-event refusals (each
+      carrying its own reason and its own fix, or no fix when the message states its
+      own), for events no cut could ever fix as they stand: a field under two
+      entrants, or a non-singles event. Not run through ``named_list`` — unlike
+      ``uncut``/``stale``, which share one trailing clause across every name, each
+      undrawable event has its own distinct reason, so there is no shared clause to
+      fold them into.
     * **``uncut``/``stale``** — events a cut (or re-cut) would actually fix. The two
       failures are kept apart within this body, because they are two different jobs.
       An **uncut** event needs a first cut. A **stale** one has a draw the director may
@@ -291,13 +299,17 @@ def _go_live_refusal_message(
       built only when ``uncut`` or ``stale`` is non-empty, and it is
       **byte-identical** to what this function produced before ``undrawable`` existed
       — the regression this guarantees for every tournament with no undrawable event.
-    * **``undrawable``** — already-composed, one-sentence-per-event refusals (each
-      carrying its own reason and its own fix, or no fix when the message states its
-      own), for events no cut could ever fix as they stand: a field under two
-      entrants, or a non-singles event. Not run through ``named_list`` — unlike
-      ``uncut``/``stale``, which share one trailing clause across every name, each
-      undrawable event has its own distinct reason, so there is no shared clause to
-      fold them into.
+      (Byte-identity does not depend on the order: when ``undrawable`` is empty this is
+      the only segment either way.)
+
+    **Why ``undrawable`` is first.** The ``uncut``/``stale`` body ends in "so cut the
+    draw for each event named …, then start the tournament". Put that body first and
+    the undrawable sentences trail *after* the instruction — so "each event named"
+    reads as covering the undrawable events named just below it, and a director who
+    follows it clicks **Generate draw** on an event the cut refuses. QA walked exactly
+    that circle. Emitting ``undrawable`` first keeps the instruction adjacent to the
+    only names it is true of, and leaves "then start the tournament" as the sentence
+    the refusal ends on.
 
     When ``undrawable`` is non-empty and ``uncut``/``stale`` are both empty, the
     "cut the draw for each event named" instruction never appears — a director cannot
@@ -305,10 +317,10 @@ def _go_live_refusal_message(
     guards).
     """
     segments: list[str] = []
-    if uncut or stale:
-        segments.append(_uncut_stale_body(uncut, stale))
     if undrawable:
         segments.append(" ".join(undrawable))
+    if uncut or stale:
+        segments.append(_uncut_stale_body(uncut, stale))
     return "This tournament cannot start yet: " + " ".join(segments)
 
 

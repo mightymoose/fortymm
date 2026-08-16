@@ -1059,11 +1059,14 @@ function goLiveRefusal(tournament: TournamentDetailRead): string | null {
     return null
   }
 
+  // `undrawable` FIRST, mirroring the server — the `uncut`/`stale` body ends in "so cut
+  // the draw for each event named …", and undrawable sentences trailing that instruction
+  // read as covered by it (#1300 QA).
   const segments: string[] = []
+  if (undrawable.length > 0) segments.push(undrawable.join(' '))
   if (uncut.length > 0 || stale.length > 0) {
     segments.push(uncutStaleBody(uncut, stale))
   }
-  if (undrawable.length > 0) segments.push(undrawable.join(' '))
   return 'This tournament cannot start yet: ' + segments.join(' ')
 }
 

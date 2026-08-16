@@ -1203,15 +1203,17 @@ describe('transitionTournament', () => {
     })
     if (!enterEvent(id, lone).ok) throw new Error('setup failed: could not enter')
 
+    // Undrawable first, mirroring the server: "cut the draw for each event named" must
+    // trail only the names a cut would actually fix (#1300 QA).
     expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
-      'This tournament cannot start yet: “B Uncut” has no draw yet; and “C Stale” has ' +
+      'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool would ' +
+        'leave a pool with fewer than 2 entrants, who would have nobody to play. Add ' +
+        'entrants, or remove the event. “B Uncut” has no draw yet; and “C Stale” has ' +
         'a draw that no longer matches its entrants. A draw is cut from the field as ' +
         'it stands at the time, and registration stays open right up to the moment a ' +
         'tournament goes live — so cut the draw for each event named (again, if ' +
         'somebody entered or withdrew since it was last cut), then start the ' +
-        'tournament. “A Undrawable”: 1 entrant across 1 pool would leave a pool with ' +
-        'fewer than 2 entrants, who would have nobody to play. Add entrants, or ' +
-        'remove the event.',
+        'tournament.',
     )
     expect(findTournament(id)!.status).toBe('published')
   })
