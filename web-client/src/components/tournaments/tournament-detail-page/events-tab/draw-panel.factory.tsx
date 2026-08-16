@@ -1,8 +1,8 @@
 import { buildDrawnEvent } from '../../data/seed.factory'
 import type { DrawPanelProps } from './draw-panel'
 
-/** Props for `DrawPanel` — the **drawn** U1200 Singles (round-robin, two pools, an odd
- * Pool A), read by its director.
+/** Props for `DrawPanel` — the **drawn** U1200 Singles (round-robin, two groups, an odd
+ * Group A), read by its director.
  *
  * Drawn by default because that is the state with something in it: the undrawn case is
  * one line of copy, and a bare `render()` that showed it would make the panel's whole

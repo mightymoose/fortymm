@@ -25,19 +25,19 @@ import type { SwissStandingLine } from '../../../../data/swiss-standings'
  * `SwissStandingLine[]`, and the header and the cells are both read off the same tag.
  */
 export type StandingsTableRows =
-  /** A round-robin pool's table. Every entrant in a pool faces the same opposition, so
+  /** A round-robin group's table. Every entrant in a group faces the same opposition, so
    * strength of schedule carries no information and there is no Buchholz column. */
-  | { format: 'pool'; rows: StandingLine[] }
+  | { format: 'group'; rows: StandingLine[] }
   /** A swiss event's table, which shows the **Buchholz** figure that ordered it. */
   | { format: 'swiss'; rows: SwissStandingLine[] }
 
 export type StandingsTableProps = {
   /** The table's accessible name — what a screen reader is told this table ranks. The
-   * caller owns the wording because it owns the scope: a pool names itself ("Standings for
-   * Pool A"), a swiss event names the event, and neither fact is knowable here. */
+   * caller owns the wording because it owns the scope: a group names itself ("Standings for
+   * Group A"), a swiss event names the event, and neither fact is knowable here. */
   ariaLabel: string
-  /** Spacing from whatever sits above, which is the caller's to decide: a pool's table
-   * follows an `<h4>` naming the pool and wants a gap, a swiss event's is the first thing
+  /** Spacing from whatever sits above, which is the caller's to decide: a group's table
+   * follows an `<h4>` naming the group and wants a gap, a swiss event's is the first thing
    * in its box and does not. The table owns no margin of its own for that reason. */
   className?: string
 } & StandingsTableRows
@@ -71,12 +71,12 @@ const NumCell = ({
  *
  * The alternative, a `buchholz?: number` prop beside a plain `StandingLine`, re-admits at
  * the row exactly what the tag removed at the table: a swiss line arriving without its
- * figure, or a pool line arriving with one, neither of which the type could refuse. Carrying
+ * figure, or a group line arriving with one, neither of which the type could refuse. Carrying
  * the tag down means `swiss` **requires** a `SwissStandingLine` and the cell is read off the
  * row it belongs to, one narrowing, no optional.
  */
 type StandingsTableLine =
-  | { format: 'pool'; row: StandingLine }
+  | { format: 'group'; row: StandingLine }
   | { format: 'swiss'; row: SwissStandingLine }
 
 const StandingsLineRow = (line: StandingsTableLine) => {
@@ -113,13 +113,13 @@ const StandingsLineRow = (line: StandingsTableLine) => {
  *
  * The `map` lives *inside* the switch on purpose: that is what narrows `rows` to the arm's
  * own row type, so the swiss arm hands `StandingsLineRow` a row carrying `buchholz` with no
- * cast, and the pool arm cannot hand it one that claims to.
+ * cast, and the group arm cannot hand it one that claims to.
  */
 const bodyRows = (table: StandingsTableRows) => {
   switch (table.format) {
-    case 'pool':
+    case 'group':
       return table.rows.map((row) => (
-        <StandingsLineRow key={row.entryId} format="pool" row={row} />
+        <StandingsLineRow key={row.entryId} format="group" row={row} />
       ))
     case 'swiss':
       return table.rows.map((row) => (
@@ -137,8 +137,8 @@ const bodyRows = (table: StandingsTableRows) => {
  * with wins, losses, game difference and games won — and, for a swiss event, the
  * **Buchholz** figure that ordered them.
  *
- * **One table for every results shape that ranks players.** A round-robin pool
- * (`PoolStandingsTable`) and a pool-less swiss event (`SwissStandingsPanel`) share six
+ * **One table for every results shape that ranks players.** A round-robin group
+ * (`GroupStandingsTable`) and a group-less swiss event (`SwissStandingsPanel`) share six
  * columns computed the same way, so they render through this one component rather than two
  * that agree today. What differs is the *title*, the test hooks — both the caller's — and
  * the one extra column, which is `format`'s.
@@ -163,7 +163,7 @@ export const StandingsTable = ({
 }: StandingsTableProps) => (
   // `className` FIRST, unusually — it is spacing from whatever sits above, and putting it
   // ahead of the table's own type scale keeps the emitted class string byte-identical to
-  // the one `PoolStandingsTable` rendered before this component was extracted. The
+  // the one `GroupStandingsTable` rendered before this component was extracted. The
   // standings panel carries a whole-DOM inline snapshot guard, which is what makes "this
   // extraction is DOM-preserving" a measured fact rather than an intention.
   <Table aria-label={ariaLabel} className={cn(className, 'text-[13px]')}>

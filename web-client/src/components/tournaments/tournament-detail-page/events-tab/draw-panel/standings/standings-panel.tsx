@@ -2,7 +2,7 @@ import { useId } from 'react'
 
 import type { StandingsView } from '../../../../data/standings'
 import { ChampionBanner } from '../champion-banner'
-import { PoolStandingsTable } from './pool-standings-table'
+import { GroupStandingsTable } from './group-standings-table'
 
 export interface StandingsPanelProps {
   /** The event the standings belong to — its id is what the panel's own test hooks hang
@@ -17,7 +17,7 @@ export interface StandingsPanelProps {
 
 /**
  * A **standings block** on an event's card in the Events tab (ADR-0788): a standings table
- * per pool, and — once the event is decided — its champion.
+ * per group, and — once the event is decided — its champion.
  *
  * ## It renders what it is handed
  *
@@ -40,9 +40,9 @@ export interface StandingsPanelProps {
  * ## The champion
  *
  * Shown only when the event is **complete** and has a single champion (a complete,
- * single-pool round-robin). A multi-pool event has no single champion without a knockout
- * stage to join its pool winners (a later slice), so `champion` is `null` there even when
- * complete, and the callout simply does not appear — the pool tables still do.
+ * single-group round-robin). A multi-group event has no single champion without a
+ * knockout stage to join its group winners (a later slice), so `champion` is `null` there
+ * even when complete, and the callout simply does not appear — the group tables still do.
  */
 export const StandingsPanel = ({ eventId, standings }: StandingsPanelProps) => {
   const headingId = useId()
@@ -72,8 +72,8 @@ export const StandingsPanel = ({ eventId, standings }: StandingsPanelProps) => {
       )}
 
       <div className="mt-2 flex flex-col gap-2.5">
-        {standings.pools.map((pool) => (
-          <PoolStandingsTable key={pool.poolId} pool={pool} />
+        {standings.groups.map((group) => (
+          <GroupStandingsTable key={group.groupId} group={group} />
         ))}
       </div>
     </section>

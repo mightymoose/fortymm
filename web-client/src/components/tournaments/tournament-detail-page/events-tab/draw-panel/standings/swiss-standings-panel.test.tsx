@@ -7,18 +7,18 @@ import { swissStandingsPanelPage } from './swiss-standings-panel.page'
 
 describe('SwissStandingsPanel', () => {
   /**
-   * The claim that separates this panel from the pooled one (the swiss ADR): **one table
-   * over the whole field**. A swiss event has no pools, so a panel that grouped — or that
-   * forged a pool to reuse `PoolStandingsTable` — would put an id nobody can read into the
-   * DOM and name a pool that does not exist.
+   * The claim that separates this panel from the grouped one (the swiss ADR): **one table
+   * over the whole field**. A swiss event has no groups, so a panel that grouped — or that
+   * forged a group to reuse `GroupStandingsTable` — would put an id nobody can read into the
+   * DOM and name a group that does not exist.
    */
-  it('renders ONE table over the whole field, and no pool at all', () => {
+  it('renders ONE table over the whole field, and no group at all', () => {
     swissStandingsPanelPage.render()
 
     expect(swissStandingsPanelPage.getTableNames()).toEqual([
       'Standings for Swiss Singles',
     ])
-    expect(swissStandingsPanelPage.queryPoolTables()).toHaveLength(0)
+    expect(swissStandingsPanelPage.queryGroupTables()).toHaveLength(0)
   })
 
   it('names the panel’s region from its heading', () => {
@@ -67,7 +67,7 @@ describe('SwissStandingsPanel', () => {
     ])
   })
 
-  // The columns are the pool table's, because they ARE the pool table's — one
+  // The columns are the group table's, because they ARE the group table's — one
   // `StandingsTable`, not two that agree today. `+6` and `-4` are different standings, so the
   // sign is asserted, not just the digit.
   it('shows the server’s wins, losses, game difference and games won', () => {

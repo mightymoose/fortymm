@@ -10,7 +10,7 @@ export interface SwissStandingsPanelProps {
    * block still names each one. */
   eventId: string
   /** The event's name, used as the table's accessible name. A swiss table ranks the whole
-   * field, so the event is what it is "standings for" — there is no pool to name. */
+   * field, so the event is what it is "standings for" — there is no group to name. */
   eventName: string
   /** The standings to render, already selected and joined to names (`eventSwissStandings`).
    * **Never null**: whether an event *has* standings is the caller's decision, not this
@@ -23,11 +23,11 @@ export interface SwissStandingsPanelProps {
  * round and pairs each one on advance"): **one table over the whole field**, and — once
  * every round is decided — the leader.
  *
- * ## One table, because swiss has no pools
+ * ## One table, because swiss has no groups
  *
  * That is the only thing separating this from `StandingsPanel`: everybody is ranked against
  * everybody, which is what pairing by score is for. The table is the very `StandingsTable` a
- * pool renders, so the columns, the order and the withdrawn-entrant label are structurally
+ * group renders, so the columns, the order and the withdrawn-entrant label are structurally
  * the same and not two implementations agreeing.
  *
  * ## It renders what it is handed
@@ -77,7 +77,7 @@ export const SwissStandingsPanel = ({
         />
       )}
 
-      {/* The bordered box a pool's table sits in, minus the `<h4>` — there is no pool to
+      {/* The bordered box a group's table sits in, minus the `<h4>` — there is no group to
           name, and the section's own heading already says "Standings". The table therefore
           takes no top margin here: it is the first thing in the box, not something
           following a heading. */}

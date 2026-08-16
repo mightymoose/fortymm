@@ -15,7 +15,7 @@ import {
   type DrawRound,
   type EditFreeze,
   type SwissByes,
-  type UnpooledShape,
+  type UngroupedShape,
 } from '../../data/draw'
 import type { DrawType, TournamentEvent } from '../../data/types'
 import { useScopedNotice } from '../../data/use-scoped-notice'
@@ -25,7 +25,7 @@ import {
 } from '../confirm-irreversible-act-dialog'
 import { LeadReason } from './lead-reason'
 import { Bracket } from './draw-panel/bracket'
-import { PoolDraw } from './draw-panel/pool-draw'
+import { GroupDraw } from './draw-panel/group-draw'
 import { ResultsPanel } from './draw-panel/results-panel'
 import { RoundList } from './draw-panel/round-list'
 import { SwissRounds } from './draw-panel/swiss-rounds'
@@ -107,7 +107,7 @@ export interface DrawPanelProps {
 }
 
 /**
- * An event's **draw**, on its card in the Events tab (ADR-0786): the pools it was cut
+ * An event's **draw**, on its card in the Events tab (ADR-0786): the groups it was cut
  * across, and — for the director — the three verbs that cut, re-cut and remove it.
  *
  * There is no "Draw" tab, and there should not be: a draw belongs to an *event*, and
@@ -124,8 +124,8 @@ export interface DrawPanelProps {
  *   state, not a spinner and not an error: the panel says there is no draw yet, and (for
  *   the director) offers to cut one. Nothing here ever auto-cuts; cutting is an explicit,
  *   reviewable act, which is exactly why the ADR refused to fold it into go-live.
- * - **drawn** — the pools, their members and their fixtures, round by round
- *   (`PoolDraw`).
+ * - **drawn** — the groups, their members and their fixtures, round by round
+ *   (`GroupDraw`).
  *
  * ## The two destructive verbs are priced, the first cut is not
  *
@@ -177,7 +177,7 @@ export interface DrawPanelProps {
  * - **422** — this event cannot be planned **as it stands**. Always about the event's
  *   configuration, never about its type: every member of `DrawType` has a strategy behind
  *   it (ADR 20260726 shrank the enum to exactly what runs), so the refusals left are a
- *   round-robin with no pools, a pool that would get fewer than two entrants, and a
+ *   round-robin with no groups, a group that would get fewer than two entrants, and a
  *   bracket with fewer than two entrants.
  *
  * Everything else (403, an expired session, a 5xx, a dead network) has designed words of
@@ -199,7 +199,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
   // (`useScopedNotice`). Cleared when a new attempt starts, and again the moment the
   // director *fixes* what it named: "A single-elim draw cannot be cut yet. Change the
   // event's draw type to one that can" must not survive the draw type being changed to one
-  // that can (#1123), and "0 entrants across 2 pools" must not survive somebody entering
+  // that can (#1123), and "0 entrants across 2 groups" must not survive somebody entering
   // (#1049). The panel does not remount on either — the card is keyed by event id — so
   // without the scope the sentence sat there until the next Generate.
   //
@@ -340,7 +340,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
           gating it with the buttons keeps the description from ever pointing at an element
           that is not on the page.
 
-          Addressed by testid rather than by role, exactly as the pools section learned to
+          Addressed by testid rather than by role, exactly as the reservations section learned to
           be: this and the refusal below are both `Alert`s, so "the alert" was never a name
           for one of them. It is not one now either — this notice is a `status` and that one
           is an `alert` — but a testid says which notice a test means, where a role only
@@ -395,7 +395,7 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
 
       <DrawBody state={state} drawType={event.drawType} canEdit={canEdit} />
 
-      {/* The results (ADR-0788, ADR-0785): pool **standings** for a round-robin, a
+      {/* The results (ADR-0788, ADR-0785): group **standings** for a round-robin, a
           **finishes** placement list for a single-elimination bracket — `ResultsPanel`
           switches on the results `kind`. Dropped in unconditionally — it renders NOTHING for
           an event with no results (`event.results === null`: uncut, or a draw type with no
@@ -442,7 +442,7 @@ const DrawBody = ({
       //
       // The director's half is the DRAW TYPE's answer (`undrawnLead`), not one sentence
       // for all four: a bracket event was being told to deal its entrants "into its
-      // pools" (#1220). The reader's half needs no such split — "the fixtures will
+      // groups" (#1220). The reader's half needs no such split — "the fixtures will
       // appear here" is true of every draw type, and naming the format would only tell a
       // player something they cannot act on.
       return (
@@ -461,21 +461,21 @@ const DrawBody = ({
     case 'drawn':
       return (
         <div className="mt-2.5 flex flex-col gap-2.5">
-          {state.pools.map((pool) => (
-            <PoolDraw key={pool.id} pool={pool} />
+          {state.groups.map((group) => (
+            <GroupDraw key={group.id} group={group} />
           ))}
-          {/* Fixtures belonging to no pool. **Which view they get is their own STAGE's
-              answer, not this list's** (`shapeForStage`/`unpooledShapeOf`,
+          {/* Fixtures belonging to no group. **Which view they get is their own STAGE's
+              answer, not this list's** (`shapeForStage`/`ungroupedShapeOf`,
               `../../data/draw`, ADR 20260815): `stageId` names the stage outright, so
-              `pool_id IS NULL` no longer has to double as a discriminator between an
-              `rr-then-ko` knockout stage and a pool-less swiss draw that happens to share
+              `group_id IS NULL` no longer has to double as a discriminator between an
+              `rr-then-ko` knockout stage and a groupless swiss draw that happens to share
               the null. Routing on the null alone is what rendered a swiss draw through
               single-elimination's successor arithmetic. Shown both pre-live (the director
               reviews the seeded round-1 pairings and byes) and live. */}
-          {state.unpooled.length > 0 && (
-            <UnpooledDraw
-              shape={state.unpooledShape}
-              rounds={state.unpooled}
+          {state.ungrouped.length > 0 && (
+            <UngroupedDraw
+              shape={state.ungroupedShape}
+              rounds={state.ungrouped}
               byes={state.swissByes}
             />
           )}
@@ -491,17 +491,17 @@ const DrawBody = ({
 }
 
 /**
- * The un-pooled block, in the view its **own stage's draw type** calls for — the second
- * half of the routing decision `unpooledShapeOf`/`shapeForStage` (`../../data/draw`)
+ * The ungrouped block, in the view its **own stage's draw type** calls for — the second
+ * half of the routing decision `ungroupedShapeOf`/`shapeForStage` (`../../data/draw`)
  * makes.
  *
  * A `switch` with a `never` default, so the two halves are checked at both ends: adding a
  * (single-stage) draw type is a compile error in `shapeForStage` until it names a shape,
  * and adding a shape is a compile error *here* until it has a view. Neither is something a
- * value check on `pool_id` could ever have given us — which is precisely how a swiss draw
+ * value check on `group_id` could ever have given us — which is precisely how a swiss draw
  * came to render as a knockout bracket with nothing red.
  *
- * The block keeps its `draw-unpooled` test hook in the bracket arm: it is the same block
+ * The block keeps its `draw-ungrouped` test hook in the bracket arm: it is the same block
  * the existing bracket tests address, and renaming it would churn them for nothing. The
  * other two arms get hooks of their own, so "this event got the rounds view and NOT the
  * bracket" is one assertion rather than an inference.
@@ -511,12 +511,12 @@ const DrawBody = ({
  * first is what `drawState` guarantees (a fixture is never dropped), the second is a claim
  * about the event's shape that a round-robin cannot make.
  */
-const UnpooledDraw = ({
+const UngroupedDraw = ({
   shape,
   rounds,
   byes,
 }: {
-  shape: UnpooledShape
+  shape: UngroupedShape
   rounds: DrawRound[]
   /** Read by the swiss arm alone. `drawState` computes it for that draw type only, so the
    * other two arms are handed an empty map rather than a claim about their format: an
@@ -527,7 +527,7 @@ const UnpooledDraw = ({
     case 'bracket':
       return (
         <section
-          data-testid="draw-unpooled"
+          data-testid="draw-ungrouped"
           aria-label="Bracket"
           className="rounded-[10px] border border-[color:var(--border-subtle)] p-3"
         >
@@ -556,7 +556,7 @@ const UnpooledDraw = ({
       )
 
     case 'orphaned':
-      // Fixtures this event's format cannot place — a round-robin fixture naming a pool the
+      // Fixtures this event's format cannot place — a round-robin fixture naming a group the
       // event does not list. **Never dropped** (`drawState`), and never dressed up: a plain
       // numbered list under a neutral heading, because every other view here would say
       // something untrue about it. The bracket said the most: it names its rounds backwards

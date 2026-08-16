@@ -37,21 +37,21 @@ const scoped = (container: Container) => ({
     return container.queryByTestId(`standings-champion-${eventId}`)
   },
 
-  /** Every pool table in the panel, by their accessible names — one per pool. */
-  getPoolTableNames() {
+  /** Every group table in the panel, by their accessible names — one per group. */
+  getGroupTableNames() {
     return container
       .getAllByRole('table')
       .map((t: HTMLElement) => t.getAttribute('aria-label') ?? '')
   },
 
-  /** One pool table's player names, top to bottom (the rendered order) — for the "the
-   * panel shows each pool, joined to names" assertion. Read through `standingsTablePage`,
+  /** One group table's player names, top to bottom (the rendered order) — for the "the
+   * panel shows each group, joined to names" assertion. Read through `standingsTablePage`,
    * which owns the table these rows are in, and asked for by the Player header rather than
    * by an index a new column would shift. */
-  getRowNames(poolName: string) {
+  getRowNames(groupLabel: string) {
     return standingsTablePage
       .within(container)
-      .getColumnUnder(`Standings for ${poolName}`, 'Player')
+      .getColumnUnder(`Standings for ${groupLabel}`, 'Player')
   },
 })
 

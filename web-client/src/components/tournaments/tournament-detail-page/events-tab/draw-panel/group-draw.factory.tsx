@@ -1,20 +1,20 @@
-import type { PoolDraw } from '../../../data/draw'
+import type { GroupDraw } from '../../../data/draw'
 import { buildEntrant } from '../../../data/seed.factory'
-import type { PoolDrawProps } from './pool-draw'
+import type { GroupDrawProps } from './group-draw'
 import { buildDrawRounds } from './round-list.factory'
 
 /**
- * Pool A of the seeded round-robin draw: an **odd** pool — `player.1`, `player.4` and
+ * Group A of the seeded round-robin draw: an **odd** group — `player.1`, `player.4` and
  * `player.5` — playing three rounds of one fixture each (one of them sits out every
  * round; that absence is the bye).
  *
- * Odd on purpose: an even pool's rounds all hold the same number of fixtures, so a
+ * Odd on purpose: an even group's rounds all hold the same number of fixtures, so a
  * renderer that invented a "bye" row would look identical against one.
  */
-export function buildPoolDrawView(overrides: Partial<PoolDraw> = {}): PoolDraw {
+export function buildGroupDrawView(overrides: Partial<GroupDraw> = {}): GroupDraw {
   return {
-    id: 'p-a',
-    name: 'Pool A',
+    id: 'grp-a',
+    label: 'Group A',
     entrants: [
       buildEntrant({ id: 'entry-1', userId: 'u-1', username: 'player.1' }),
       buildEntrant({ id: 'entry-4', userId: 'u-4', username: 'player.4' }),
@@ -25,9 +25,9 @@ export function buildPoolDrawView(overrides: Partial<PoolDraw> = {}): PoolDraw {
   }
 }
 
-/** Props for `PoolDraw`. */
-export function buildPoolDrawProps(
-  overrides: Partial<PoolDrawProps> = {},
-): PoolDrawProps {
-  return { pool: buildPoolDrawView(), ...overrides }
+/** Props for `GroupDraw`. */
+export function buildGroupDrawProps(
+  overrides: Partial<GroupDrawProps> = {},
+): GroupDrawProps {
+  return { group: buildGroupDrawView(), ...overrides }
 }
