@@ -31,15 +31,15 @@ from app.models import (
 )
 from tests._helpers import counted_statements, opponent_session
 from tests.test_tournaments import (
-    POOL_A,
-    POOL_B,
+    RESERVATION_A,
+    RESERVATION_B,
     _call_fixtures,
     _cut_the_draw,
     _enter,
     _event_payload,
     _fixture_rows,
     _go_live,
-    _live_two_player_pool,
+    _live_two_player_group,
     _rr_payload,
     _set_status,
     _tournament_with_events,
@@ -79,10 +79,10 @@ async def test_a_live_tournament_the_caller_is_entered_in_becomes_a_panel(
 ) -> None:
     """The whole projection, end to end: a live round-robin the caller is playing in
     comes back as one panel, with a tab for the event, the live match in the card, the
-    caller's own record and pool position, and their schedule."""
+    caller's own record and group position, and their schedule."""
     client, owner = authed_client
     async with opponent_session(db_session, "panel-opp") as (_opp_client, opp):
-        await _live_two_player_pool(client, owner, opp, db_session, rated=True)
+        await _live_two_player_group(client, owner, opp, db_session, rated=True)
 
         (panel,) = await _panels(client)
 
@@ -91,8 +91,9 @@ async def test_a_live_tournament_the_caller_is_entered_in_becomes_a_panel(
     assert event["is_live"] is True
     assert event["draw_type"] == "round-robin"
     assert event["stage_label"] == "Group play"
-    assert event["group_label"] == "Pool A", (
-        "the pool the caller was drawn into, by name — not its 'p-a' string ref"
+    assert event["group_label"] == "Group A", (
+        "the group the caller was drawn into, by its derived position label — never "
+        "the reservation's own stored name"
     )
 
     card = event["match"]
@@ -133,7 +134,7 @@ async def test_the_panel_states_the_score_from_the_callers_own_side(
     async with opponent_session(db_session, "flip-opp") as (opp_client, opp):
         # Owner is seed 1 → entry A → side 1. The *opponent* is entry B, so the
         # opponent's panel is the one that must be flipped.
-        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True
         )
         write = await client.post(
@@ -170,7 +171,7 @@ async def test_a_completed_match_carries_its_outcome_and_the_record_follows(
     count of the same match."""
     client, owner = authed_client
     async with opponent_session(db_session, "done-opp") as (opp_client, opp):
-        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True
         )
         await _win_fixture_match(
@@ -189,7 +190,7 @@ async def test_a_completed_match_carries_its_outcome_and_the_record_follows(
     assert (event["wins"], event["losses"]) == (1, 0)
     assert event["position"] == 1 and event["field_size"] == 2
     assert event["stage_label"] == "Group complete", (
-        "the pool's only fixture is decided, so group play is over"
+        "the group's only fixture is decided, so group play is over"
     )
 
     card = event["match"]
@@ -219,7 +220,7 @@ async def test_the_card_prefers_the_live_match_over_a_finished_one(
     they are standing at a table for: with one match finished and another called, the
     card shows the one being played.
 
-    Three-player pool so the caller has two fixtures and the choice is real — with a
+    Three-player group so the caller has two fixtures and the choice is real — with a
     single fixture the priority rule is unobservable, since whichever match exists is
     also the only one that could be picked.
     """
@@ -229,7 +230,7 @@ async def test_the_card_prefers_the_live_match_over_a_finished_one(
             tournament_id, (event,) = await _tournament_with_events(
                 client,
                 _rr_payload(
-                    POOL_A,
+                    RESERVATION_A,
                     match_settings={"rated": False, "length_games": 3},
                     predicates=[],
                 ),
@@ -285,7 +286,7 @@ async def test_an_uncalled_match_reads_as_the_next_one_up(
     must invite neither scoring nor a result."""
     client, owner = authed_client
     async with opponent_session(db_session, "uncalled-opp") as (_opp_client, opp):
-        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True, call=False
         )
         match = await db_session.get(Match, fixture.match_id)
@@ -319,7 +320,7 @@ async def test_the_record_is_counted_directly_when_there_are_no_standings(
     """
     client, owner = authed_client
     async with opponent_session(db_session, "no-standings-opp") as (opp_client, opp):
-        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True
         )
         await _win_fixture_match(
@@ -365,7 +366,7 @@ async def test_a_standing_result_owes_a_review_to_one_side_and_nothing_to_the_ot
     """
     client, owner = authed_client
     async with opponent_session(db_session, "owed-opp") as (opp_client, opp):
-        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True
         )
         # Mid-board, nothing posted: both sides owe a score.
@@ -419,7 +420,7 @@ async def test_a_voided_match_shows_no_winner_and_no_score(
     """
     client, owner = authed_client
     async with opponent_session(db_session, "void-opp") as (opp_client, opp):
-        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, e_owner, e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True
         )
         await _win_fixture_match(
@@ -461,7 +462,7 @@ async def test_a_tournament_that_is_not_live_gets_no_panel(
     played yet and an archived one is over; neither belongs at the top of a
     dashboard."""
     client, owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     await _enter(db_session, event["id"], owner, seed=1)
 
     await _set_status(db_session, tournament_id, TournamentStatus.published)
@@ -482,7 +483,7 @@ async def test_a_withdrawn_player_gets_no_panel(
     filter on the status rather than on the row's existence, or a player who pulled out
     keeps being shown a tournament they are no longer in."""
     client, owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     entry = await _enter(db_session, event["id"], owner, seed=1)
     await _set_status(db_session, tournament_id, TournamentStatus.live)
     assert len(await _panels(client)) == 1
@@ -502,7 +503,7 @@ async def test_a_live_tournament_the_caller_only_directs_gets_no_panel(
     tournament. A director who is running an event they are not playing in has no match
     to be shown, and their dashboard must not claim otherwise."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     async with opponent_session(db_session, "entrant-not-owner") as (_c, entrant):
         await _enter(db_session, event["id"], entrant, seed=1)
         await _set_status(db_session, tournament_id, TournamentStatus.live)
@@ -519,7 +520,7 @@ async def test_an_event_with_no_draw_cut_stands_the_player_nowhere(
     """``position: None`` is a fact, not a zero: an event whose draw has not been cut
     has no standings to stand in, and a ``0`` there would read as a rank."""
     client, owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     await _enter(db_session, event["id"], owner, seed=1)
     await _set_status(db_session, tournament_id, TournamentStatus.live)
 
@@ -531,7 +532,7 @@ async def test_an_event_with_no_draw_cut_stands_the_player_nowhere(
     assert panel_event["match"] is None, "no fixtures, so there is no match to show"
     assert panel_event["fixtures"] == []
     assert panel_event["group_label"] is None, (
-        "the caller has no fixture yet, so no pool has been dealt to them"
+        "the caller has no fixture yet, so no group has been dealt to them"
     )
 
 
@@ -545,8 +546,8 @@ async def test_every_event_the_caller_entered_becomes_a_tab_of_one_panel(
     client, owner = authed_client
     tournament_id, (first, second) = await _tournament_with_events(
         client,
-        _rr_payload(POOL_A, name="Open Singles"),
-        _rr_payload(POOL_A, name="U1500"),
+        _rr_payload(RESERVATION_A, name="Open Singles"),
+        _rr_payload(RESERVATION_A, name="U1500"),
     )
     await _enter(db_session, first["id"], owner, seed=1)
     await _enter(db_session, second["id"], owner, seed=1)
@@ -570,7 +571,7 @@ async def test_the_panel_names_the_tournament_and_its_venue(
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
         client,
-        _rr_payload(POOL_A),
+        _rr_payload(RESERVATION_A),
         name="Riverside Summer Slam",
         start_date="2026-07-24",
         end_date="2026-07-25",
@@ -613,7 +614,7 @@ async def test_a_tournament_with_no_venue_is_a_panel_of_dates_alone(
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
         client,
-        _rr_payload(POOL_A),
+        _rr_payload(RESERVATION_A),
         name="Unbooked Open",
         address=None,
         start_date="2026-07-24",
@@ -660,7 +661,7 @@ async def test_a_tournament_whose_stored_venue_is_corrupt_degrades_and_says_so(
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
         client,
-        _rr_payload(POOL_A),
+        _rr_payload(RESERVATION_A),
         name="Corrupted Venue Open",
         start_date="2026-07-24",
         end_date="2026-07-25",
@@ -709,7 +710,7 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
     """A guard on the membership query itself: an entry row belonging to *another*
     user in the same live event must not put that event on this caller's panel."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     async with opponent_session(db_session, "someone-else") as (_c, other):
         await _enter(
             db_session,
@@ -732,17 +733,17 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # included) and ONE batched load of those tournaments' venue tables
 # (``Tournament.tables``, ``lazy="selectin"`` — the catalogue is rows now,
 # ADR 20260801, and the panel resolves a placement's table LABEL through it) and ONE of
-# every event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows
-# now too, ADR 20260801, and the panel resolves a fixture's pool NAME through them) and
-# ONE of every one of THOSE pools' table reservations
+# every event's groups (``TournamentEvent.groups``, ``lazy="selectin"`` — groups are
+# rows now too, ADR 20260801, and the panel resolves a fixture's group LABEL through
+# them) and ONE of every one of THOSE groups' reservations' table reservations
 # (the reservation's ``tables``, ``lazy="selectin"`` — chained onto the groups' own
-# batched load, so it is one statement per panel build and not one per pool),
+# batched load, so it is one statement per panel build and not one per group),
 # then ONE batched load of every event's active entrants, ONE of every event's fixtures,
 # ONE of the completed matches' game counts, ONE batched eager load of every event's
 # STAGES (``TournamentEvent.stages``, ``lazy="selectin"`` — what
 # ``_round_label``/``event_results`` read a fixture's ``stage_id`` against, in place of
 # inferring a fixture's stage from the event's overall draw type plus
-# ``pool_id IS NULL``, ADR 20260815), ONE of the handful of focus matches, and that
+# ``group_id IS NULL``, ADR 20260815), ONE of the handful of focus matches, and that
 # load's own eager options (the match's league, results, sides, settings, side
 # players and those players' users — one batched ``selectin`` each). Fifteen, whatever
 # the number of events.
@@ -785,7 +786,7 @@ async def test_panel_statement_count_does_not_grow_with_events(
             client,
             *[
                 (
-                    _rr_payload(POOL_A, name=f"Round robin {n}")
+                    _rr_payload(RESERVATION_A, name=f"Round robin {n}")
                     if n % 2 == 0
                     else _event_payload(name=f"Bracket {n}", draw_type="single-elim")
                 )
@@ -838,11 +839,11 @@ async def test_panel_statement_count_does_not_grow_with_events(
         ), (event.name, event.match.round_label)
 
 
-async def test_a_swiss_panel_reads_the_callers_rank_off_the_pool_less_table(
+async def test_a_swiss_panel_reads_the_callers_rank_off_the_group_less_table(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """A swiss event's results are one table over the whole field, with no pool to key
+    """A swiss event's results are one table over the whole field, with no group to key
     it by — so the panel has to read that shape, or a swiss player is shown no rank at
     all while the table carrying their row rides along on the same payload.
 
@@ -852,8 +853,8 @@ async def test_a_swiss_panel_reads_the_callers_rank_off_the_pool_less_table(
     on wins who never met, separated by the entry-id fallback, so the test would pass or
     fail on which uuid the database minted. ``position`` comes off the standings row
     (counting the caller's own fixtures cannot produce a rank at all), and
-    ``stage_label`` reads the event's own completeness rather than a pool's, because
-    swiss has no pool whose flag could stand in.
+    ``stage_label`` reads the event's own completeness rather than a group's, because
+    swiss has no group whose flag could stand in.
 
     An **odd** field is deliberately not the subject: its byed entrant is seated in no
     fixture, so ``draw_currency_by_event`` reads the draw as stale and go-live refuses
@@ -866,7 +867,7 @@ async def test_a_swiss_panel_reads_the_callers_rank_off_the_pool_less_table(
             _event_payload(
                 draw_type="swiss",
                 rounds=1,
-                pools=[],
+                reservations=[],
                 match_settings={"rated": False, "length_games": 3},
                 predicates=[],
             ),
@@ -913,7 +914,7 @@ async def test_a_swiss_panel_reads_the_callers_rank_off_the_pool_less_table(
     assert swiss_event["position"] == 1, "the caller won the only match, so they lead"
     assert (swiss_event["wins"], swiss_event["losses"]) == (1, 0)
     assert swiss_event["stage_label"] == "Complete", (
-        "the only round is decided, so the event is over — and swiss has no pool whose "
+        "the only round is decided, so the event is over — and swiss has no group whose "
         "completeness could have answered this instead"
     )
 
@@ -925,15 +926,16 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
     """A two-stage event's round wording is a property of the **fixture's stage**, not
     of the event (ADR 20260727).
 
-    ``pool_id IS NULL`` is already how the knockout stage is spelled everywhere else, so
-    ``_round_label`` reads the discriminator off the row: a pooled fixture is a "Group
-    match N", an un-pooled one a "Round N" — both vocabularies verbatim from the
-    one-stage draw types, because the same match must not read differently depending on
-    which event it happens to be in.
+    ``group_id IS NULL`` is already how the knockout stage is spelled everywhere else,
+    so ``_round_label`` reads the discriminator off the row: a grouped fixture is a
+    "Group match N", an ungrouped one a "Round N" — both vocabularies verbatim from
+    the one-stage draw types, because the same match must not read differently
+    depending on which event it happens to be in.
 
-    Driven end to end: four players, two pools of two, top one out of each, so the pool
-    winners meet in a single final. The caller's card is asserted **twice** — once while
-    their pool match is the focus, once after the final has materialized — which is what
+    Driven end to end: four players, two groups of two, top one out of each, so the
+    group winners meet in a single final. The caller's card is asserted **twice** —
+    once while their group match is the focus, once after the final has materialized
+    — which is what
     makes this about the stage rather than about the event's draw type. ``stage_label``
     stays minimal ("In play"), deliberately: naming which stage is live needs plumbing
     this ticket does not buy, and "Group complete" on an event whose bracket is still
@@ -948,8 +950,8 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
         tournament_id, (event,) = await _tournament_with_events(
             client,
             _rr_payload(
-                POOL_A,
-                POOL_B,
+                RESERVATION_A,
+                RESERVATION_B,
                 draw_type="rr-then-ko",
                 qualifiers_per_group=1,
                 match_settings={"rated": False, "length_games": 3},
@@ -978,24 +980,28 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
             )
         )
 
-        # -- the pool stage: the caller's own pool match is the focus, and it is a
+        # -- the group stage: the caller's own group match is the focus, and it is a
         #    "Group match".
-        pools = [f for f in await _fixture_rows(db_session, event["id"]) if f.pool_id]
-        await _call_fixtures(db_session, tournament_id, pools)
-        pools = [f for f in await _fixture_rows(db_session, event["id"]) if f.pool_id]
+        groups = [
+            f for f in await _fixture_rows(db_session, event["id"]) if f.group_id
+        ]
+        await _call_fixtures(db_session, tournament_id, groups)
+        groups = [
+            f for f in await _fixture_rows(db_session, event["id"]) if f.group_id
+        ]
         (panel,) = await _panels(client)
-        (pool_event,) = panel["events"]
-        assert pool_event["match"]["round_label"] == "Group match 1"
-        assert pool_event["stage_label"] == "In play"
+        (group_event,) = panel["events"]
+        assert group_event["match"]["round_label"] == "Group match 1"
+        assert group_event["stage_label"] == "In play"
 
-        # -- both pools decided: each winner is seated into the final, which becomes a
+        # -- both groups decided: each winner is seated into the final, which becomes a
         #    real match in the same transaction.
-        for fixture in pools:
+        for fixture in groups:
             assert fixture.entry_a_id is not None
             await _win_fixture_match(
                 fixture,
                 clients_by_entry=clients,
-                # ``entry_a`` is the higher seed in both pools (1 over 4, 2 over 3).
+                # ``entry_a`` is the higher seed in both groups (1 over 4, 2 over 3).
                 winner_entry_id=fixture.entry_a_id,
                 rated=False,
             )
@@ -1005,10 +1011,10 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
     (ko_event,) = panel["events"]
     assert ko_event["draw_type"] == "rr-then-ko"
     assert ko_event["match"]["round_label"] == "Round 1", (
-        "the knockout fixture is un-pooled, so it is a Round, not a Group match"
+        "the knockout fixture is ungrouped, so it is a Round, not a Group match"
     )
     assert ko_event["match"]["opponent_username"] == "rrko-panel-2", (
-        "the caller's final is against the other pool's winner"
+        "the caller's final is against the other group's winner"
     )
     assert ko_event["stage_label"] == "In play"
     assert [row["label"] for row in ko_event["fixtures"]] == ["M1", "M2"]
@@ -1019,9 +1025,9 @@ async def test_the_path_list_sorts_by_scheduled_time_not_draw_order(
     db_session: AsyncSession,
 ) -> None:
     """#1297: "Your matches" reads top-to-bottom in the order the caller actually
-    plays it, not in draw order (pool -> round -> position, ADR-0786).
+    plays it, not in draw order (group -> round -> position, ADR-0786).
 
-    A three-entrant round-robin pool seats the caller (seed 1) into two of the
+    A three-entrant round-robin group seats the caller (seed 1) into two of the
     draw's three rounds. Placed IN draw order they would already read correctly, so
     the fixtures are placed OUT of it on purpose — the later round scheduled for the
     earlier time, exactly the shape the issue reports (a noon ``M1`` ahead of a
@@ -1034,7 +1040,7 @@ async def test_the_path_list_sorts_by_scheduled_time_not_draw_order(
         tournament_id, (event,) = await _tournament_with_events(
             client,
             _rr_payload(
-                POOL_A,
+                RESERVATION_A,
                 match_settings={"rated": False, "length_games": 3},
                 predicates=[],
             ),
@@ -1101,7 +1107,7 @@ async def test_untimed_fixtures_sort_last_and_keep_draw_order_among_themselves(
     every timed fixture, and untimed fixtures keep their relative draw order among
     themselves (#1297).
 
-    A four-entrant round-robin pool seats the caller into all three rounds. Only
+    A four-entrant round-robin group seats the caller into all three rounds. Only
     the middle one is given a time; the other two stay unplaced and must still come
     out in draw order (round 1 before round 3), both trailing the one timed match."""
     client, owner = authed_client
@@ -1113,7 +1119,7 @@ async def test_untimed_fixtures_sort_last_and_keep_draw_order_among_themselves(
         tournament_id, (event,) = await _tournament_with_events(
             client,
             _rr_payload(
-                POOL_A,
+                RESERVATION_A,
                 match_settings={"rated": False, "length_games": 3},
                 predicates=[],
             ),
@@ -1144,7 +1150,7 @@ async def test_untimed_fixtures_sort_last_and_keep_draw_order_among_themselves(
             (f for f in rows if owner_entry.id in (f.entry_a_id, f.entry_b_id)),
             key=lambda f: f.round,
         )
-        assert len(my_fixtures) == 3, "a 4-entrant pool plays every round"
+        assert len(my_fixtures) == 3, "a 4-entrant group plays every round"
         round_1, round_2, round_3 = my_fixtures
 
         # Only the middle round gets a time; rounds 1 and 3 stay unplaced.

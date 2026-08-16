@@ -3429,7 +3429,7 @@ async def test_two_events_each_with_a_current_draw_go_live_together(
     """
     client, _ = authed_client
     tournament_id, (one, two) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B), _rr_payload(POOL_A, POOL_B)
+        client, _rr_payload(RESERVATION_A, POOL_B), _rr_payload(RESERVATION_A, POOL_B)
     )
     await _seed_field(db_session, one["id"], 4, prefix="one")
     await _seed_field(db_session, two["id"], 4, prefix="two")
@@ -3471,7 +3471,7 @@ async def test_going_live_is_undisturbed_by_another_tournaments_entries(
     # A wholly unrelated tournament, with an event and a field of its own. Nothing about
     # it is this tournament's business — including, especially, on the way to live.
     _other_id, (other_event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B)
+        client, _rr_payload(RESERVATION_A, POOL_B)
     )
     await _seed_field(db_session, other_event["id"], 4, prefix="other")
 
@@ -7918,8 +7918,8 @@ async def test_the_draw_type_freeze_is_scoped_to_the_event_being_patched(
     client, _ = authed_client
     tournament_id, (drawn, undrawn) = await _tournament_with_events(
         client,
-        _rr_payload(POOL_A, POOL_B, name="Under 13s"),
-        _rr_payload(POOL_A, POOL_B, name="Open Singles"),
+        _rr_payload(RESERVATION_A, POOL_B, name="Under 13s"),
+        _rr_payload(RESERVATION_A, POOL_B, name="Open Singles"),
     )
     await _seed_field(db_session, drawn["id"], 4, prefix="u13-")
     await _cut_the_draw(client, tournament_id, drawn["id"])
@@ -7996,13 +7996,13 @@ async def _active_entries(
 
 
 @pytest.mark.parametrize(("rated", "length_games"), [(True, 5), (False, 3)])
-async def test_going_live_materializes_the_whole_pool(
+async def test_going_live_materializes_the_whole_group(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     rated: bool,
     length_games: int,
 ) -> None:
-    """Going live turns **every** ready fixture of a round-robin pool into a real
+    """Going live turns **every** ready fixture of a round-robin group into a real
     ``pending`` (scheduled) match in one stroke (ADR-0788, amended by the "born
     scheduled, goes live when called" ADR), and each match is exactly the fixture made
     real:
@@ -8024,11 +8024,11 @@ async def test_going_live_materializes_the_whole_pool(
     tournament_id, (event,) = await _tournament_with_events(
         client,
         _rr_payload(
-            POOL_A, match_settings={"rated": rated, "length_games": length_games}
+            RESERVATION_A, match_settings={"rated": rated, "length_games": length_games}
         ),
     )
-    # One pool of three → three fixtures, each a distinct pairing — enough to see the
-    # whole pool materialize and to check the side↔entry mapping on every one of them.
+    # One group of three → three fixtures, each a distinct pairing — enough to see the
+    # whole group materialize and to check the side↔entry mapping on every one of them.
     entries = await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
@@ -8047,7 +8047,7 @@ async def test_going_live_materializes_the_whole_pool(
     assert all(f.match_id is not None for f in fixtures), (
         "every ready fixture must have materialized into a match at go-live"
     )
-    assert await _match_count(db_session) == 3, "the whole pool, and nothing more"
+    assert await _match_count(db_session) == 3, "the whole group, and nothing more"
 
     entry_user = {e.id: e.user_id for e in entries}
     for fixture in fixtures:
@@ -8084,19 +8084,19 @@ async def test_go_live_does_not_flood_an_entrants_dashboard_with_uncalled_matche
     ``waiting_count`` instead, so ``attention_total_count`` is **0** and those 4
     matches fold into the waiting count.
 
-    The field is deliberately 5 players: a smaller pool wouldn't exhibit the flood
-    (a 2-player pool gives the entrant a single match, and the whole point is the
+    The field is deliberately 5 players: a smaller group wouldn't exhibit the flood
+    (a 2-player group gives the entrant a single match, and the whole point is the
     *many* uncalled matches a real round-robin seats at once)."""
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
         client,
         _rr_payload(
-            POOL_A,
+            RESERVATION_A,
             match_settings={"rated": True, "length_games": 3},
             predicates=[],
         ),
     )
-    # Owner is one of five entrants in a single round-robin pool, so the draw seats
+    # Owner is one of five entrants in a single round-robin group, so the draw seats
     # C(5,2) = 10 fixtures and the owner is a party to four of them.
     base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
     await _enter(
@@ -8145,7 +8145,7 @@ async def test_the_detail_bff_links_a_materialized_fixture_to_its_scheduled_matc
     scheduled — the moment it is created, until the schedule calls it).
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
 
     # Before go-live: cut but not materialized — the slot links to nothing yet.
     await _seed_field(db_session, event["id"], 3)
@@ -8183,7 +8183,7 @@ async def test_go_live_materialization_is_idempotent(
     move — if readiness ignored ``match_id`` this would double every fixture's match.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
@@ -8231,7 +8231,7 @@ async def test_advancing_a_round_robin_event_costs_one_statement_and_no_game_cou
     folds the game load into the fixture statement still reds.
     """
     client, _ = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
@@ -8294,7 +8294,7 @@ async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(
     client, _owner = authed_client
     # A rated round-robin, so its materialized match is rated and the self-play
     # collision takes the void path (an unrated collision would not be voided).
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     guest = await make_user(db_session, "guest-ghost-collision")
     survivor = await make_user(db_session, "survivor-collision")
     # Both actively entered in the one event — the collision. Two players in a single
@@ -8423,7 +8423,7 @@ async def _call_fixtures(
     await db.commit()
 
 
-async def _live_two_player_pool(
+async def _live_two_player_group(
     client: AsyncClient,
     owner: User,
     opponent: User,
@@ -8442,7 +8442,7 @@ async def _live_two_player_pool(
     tournament_id, (event,) = await _tournament_with_events(
         client,
         _rr_payload(
-            POOL_A,
+            RESERVATION_A,
             match_settings={"rated": rated, "length_games": 3},
             predicates=[],
         ),
@@ -8468,7 +8468,7 @@ async def _live_two_player_pool(
     return tournament_id, event, e_owner, e_opp, fixture
 
 
-async def _live_three_player_pool(
+async def _live_three_player_group(
     client: AsyncClient,
     owner: User,
     second: User,
@@ -8482,12 +8482,12 @@ async def _live_three_player_pool(
     tuple[TournamentEntry, TournamentEntry, TournamentEntry],
     list[TournamentFixture],
 ]:
-    """A round-robin pool of three seeded players (seeds 1, 2, 3), live, so its three
+    """A round-robin group of three seeded players (seeds 1, 2, 3), live, so its three
     fixtures have all materialized into matches."""
     tournament_id, (event,) = await _tournament_with_events(
         client,
         _rr_payload(
-            POOL_A,
+            RESERVATION_A,
             match_settings={"rated": rated, "length_games": 3},
             predicates=[],
         ),
@@ -8523,7 +8523,7 @@ async def test_a_completed_rated_tournament_match_writes_the_winner_to_its_fixtu
     fixture's ``winner_entry_id`` is the winning side's entry (side 1 → ``entry_a``)."""
     client, owner = authed_client
     async with opponent_session(db_session, "rr-rated-opp") as (opp_client, opp):
-        _tid, event, e_owner, e_opp, fixture = await _live_two_player_pool(
+        _tid, event, e_owner, e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True
         )
 
@@ -8563,7 +8563,7 @@ async def test_a_completed_unrated_tournament_match_writes_the_winner_to_its_fix
     fixture's winner is written the instant it lands."""
     client, owner = authed_client
     async with opponent_session(db_session, "rr-unrated-opp") as (opp_client, opp):
-        _tid, event, e_owner, e_opp, fixture = await _live_two_player_pool(
+        _tid, event, e_owner, e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=False
         )
         await _win_fixture_match(
@@ -8586,7 +8586,7 @@ async def test_a_pending_tournament_match_is_not_scorable(
     BFF — you cannot play a match the scheduler has not called (#1073)."""
     client, owner = authed_client
     async with opponent_session(db_session, "rr-uncalled-opp") as (_opp_client, opp):
-        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True, call=False
         )
         match = await db_session.get(Match, fixture.match_id)
@@ -8612,10 +8612,10 @@ async def test_a_called_tournament_match_becomes_scorable(
 ) -> None:
     """Once the schedule *calls* the match to a table (``pending → in_progress``), it
     is scorable: a per-game write is accepted and the BFF reads ``can_score = true``.
-    The default ``_live_two_player_pool`` routes the fixture through the real call."""
+    The default ``_live_two_player_group`` routes the fixture through the real call."""
     client, owner = authed_client
     async with opponent_session(db_session, "rr-called-opp") as (_opp_client, opp):
-        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_pool(
+        _tid, _event, _e_owner, _e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=True
         )
         match = await db_session.get(Match, fixture.match_id)
@@ -8650,7 +8650,7 @@ async def test_a_completed_matchs_fixture_carries_its_actual_completion_time(
     """
     client, owner = authed_client
     async with opponent_session(db_session, "gantt-opp") as (opp_client, opp):
-        tournament_id, event, e_owner, e_opp, fixture = await _live_two_player_pool(
+        tournament_id, event, e_owner, e_opp, fixture = await _live_two_player_group(
             client, owner, opp, db_session, rated=False
         )
         (before,) = await _events_of(client, tournament_id)
@@ -8694,7 +8694,7 @@ async def test_completing_a_round_robin_match_materializes_nothing_new(
         opponent_session(db_session, "rr-empty-2") as (c2, u2),
         opponent_session(db_session, "rr-empty-3") as (c3, u3),
     ):
-        _tid, event, entries, fixtures = await _live_three_player_pool(
+        _tid, event, entries, fixtures = await _live_three_player_group(
             client, owner, u2, u3, db_session, rated=True
         )
         e1, e2, e3 = entries
@@ -8982,7 +8982,7 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         opponent_session(db_session, "rr-bff-2") as (c2, u2),
         opponent_session(db_session, "rr-bff-3") as (c3, u3),
     ):
-        tournament_id, event, entries, fixtures = await _live_three_player_pool(
+        tournament_id, event, entries, fixtures = await _live_three_player_group(
             client, owner, u2, u3, db_session, rated=True
         )
         e1, e2, e3 = entries
@@ -9138,7 +9138,7 @@ async def test_an_uncut_event_carries_no_results(
     ``null`` — not an empty table, which would read as a played event with nobody
     in it."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     await _seed_field(db_session, event["id"], 3)
     (read,) = await _events_of(client, tournament_id)
     assert read["fixtures"] == [], "no draw cut yet"
@@ -9155,7 +9155,7 @@ async def test_the_list_endpoint_does_not_ship_standings(
     per event for data a card throws away. A cut event proves the split — the detail
     carries its standings, the list carries ``None`` for the same event."""
     client, _owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(POOL_A))
+    tournament_id, (event,) = await _tournament_with_events(client, _rr_payload(RESERVATION_A))
     await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
 
@@ -9221,7 +9221,7 @@ async def _drawn_fixture(
     ``prefix`` names the seeded players, so two draws in one test don't collide on
     usernames (``make_user`` mints one real ``User`` per name)."""
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A), **tournament
+        client, _rr_payload(RESERVATION_A), **tournament
     )
     await _seed_field(db_session, event["id"], 3, prefix=prefix)
     await _cut_the_draw(client, tournament_id, event["id"])
