@@ -1170,12 +1170,13 @@ describe('transitionTournament', () => {
     expect(findTournament(id)!.status).toBe('published')
   })
 
-  it('reports an undrawable, an uncut and a stale event side by side, cut-instruction first', () => {
+  it('reports an undrawable, an uncut and a stale event side by side, undrawable first', () => {
     // The mixed tournament: all three at-fault kinds at once. The cut instruction is
     // still there — two of these events really are one click from ready — and it now
-    // names only the events it is true of. The undrawable event is the tournament's
-    // FIRST, and it is reported LAST, because the bodies are ordered even though the
-    // events inside each keep the page's own order.
+    // names only the events it is true of. The undrawable body is reported FIRST so that
+    // instruction, which closes the uncut/stale body, trails only those two names; with
+    // the bodies the other way round QA read "cut the draw for each event named" and
+    // clicked Generate draw on the undrawable event, which the cut refuses (#1300).
     const id = PUBLISHED
     // Down to the two seeded events with a real field. (The seed's other three are an
     // empty pool-less round-robin, a doubles event and the drawn U1200 — each a case
@@ -1215,6 +1216,13 @@ describe('transitionTournament', () => {
         'somebody entered or withdrew since it was last cut), then start the ' +
         'tournament.',
     )
+    // Asserted separately from the `toBe` above, because the ORDER is the property the
+    // repair is about and it must fail under its own name when it breaks. All three
+    // buckets are non-empty here, so this really is the three-bucket ordering.
+    const mixed = refusalDetail(transitionTournament(id, 'live'))!
+    expect(mixed.endsWith('then start the tournament.')).toBe(true)
+    expect(mixed.indexOf('“A Undrawable”')).toBeLessThan(mixed.indexOf('“B Uncut”'))
+    expect(mixed.indexOf('“B Uncut”')).toBeLessThan(mixed.indexOf('cut the draw'))
     expect(findTournament(id)!.status).toBe('published')
   })
 
