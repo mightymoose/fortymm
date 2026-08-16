@@ -154,16 +154,18 @@ async def create_event(
         predicates=[p.model_dump() for p in payload.predicates],
         stages=stages,
     )
-    # The event's pools are ROWS too (ADR 20260801), but hang off the event's stage 0
-    # rather than the event directly (ADR 20260815, "Sequencing with #1338") — assigned
-    # here, onto the just-minted stage, rather than passed into the ``TournamentEvent``
-    # constructor above: ``TournamentEvent.pools`` is a read-only (VIEWONLY) association
-    # now, and would silently drop a write. ``stored_pools`` composes them — turning the
-    # WRITE shape, which carries no ``position``, into rows that do, from each pool's
-    # index in the list this payload sent. ``event`` is already a live Python object at
-    # this point (just not flushed yet), which is all ``stored_pools`` needs for its
-    # reservations' ``event`` relationship.
-    stages[0].pools = stored_pools(event, tournament, payload.pools)
+    # What the wire calls a pool is TWO rows: a group, which hangs off the event's
+    # stage 0 (ADR 20260815, "Sequencing with #1338"), and a reservation, which hangs
+    # off the event. ``stored_pools`` composes both — turning the WRITE shape, which
+    # carries no ``position``, into rows that do, from each pool's index in the list
+    # this payload sent — and returns the groups with their reservations already mapped,
+    # so assigning the groups to the stage attaches the whole graph. Assigned here, onto
+    # the just-minted stage, rather than passed into the ``TournamentEvent`` constructor
+    # above: ``TournamentEvent.groups`` is a read-only (VIEWONLY) association and would
+    # silently drop a write. ``event`` is already a live Python object at this point
+    # (just not flushed yet), which is all ``stored_pools`` needs for the reservations'
+    # own ``event`` relationship.
+    stages[0].groups = stored_pools(event, tournament, payload.pools)
     db.add(event)
     await db.commit()
     await db.refresh(event)
@@ -366,7 +368,7 @@ def _draw_settings_frozen_detail(stored: DrawSettingsWriteArm) -> str:
             return _draw_type_frozen_detail(stored.draw_type)
 
 
-async def _enforce_pool_set_frozen(
+async def _enforce_group_set_frozen(
     db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
     """Raise :class:`PoolSetFrozenError` once a ``pools`` payload would change *which
@@ -439,8 +441,8 @@ async def _enforce_pool_set_frozen(
     # pool. Sorted by ``position`` explicitly rather than trusted to arrive that way —
     # the same belt-and-braces stance ``app.tournament_draws._ordered_pools`` takes on
     # the very same relationship, and for the identical reason: this is the statement of
-    # what "the event's pool order" means, and it must agree with the snake's, not with
-    # whatever sequence a caller's ``event.pools`` happened to load in.
+    # what "the event's group order" means, and it must agree with the snake's, not with
+    # whatever sequence a caller's ``event.groups`` happened to load in.
     current = sorted(event_pools(event), key=lambda pool: pool.position)
     existing_order = [PoolId(pool.id) for pool in current]
     # An entry with no ``id`` is an addition and contributes nothing to the incoming
@@ -704,7 +706,7 @@ async def update_event(
     event = await _load_event(db, tournament_id, event_id)
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
-    await _enforce_pool_set_frozen(db, event, updates)
+    await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
@@ -731,16 +733,14 @@ async def update_event(
     # Pools are rows, so they are taken OUT of the generic setattr loop entirely and
     # applied as a diff (:func:`app.tournament_pools.apply_event_pools`) — assigning the
     # dumped payload would put dicts where the relationship expects
-    # ``TournamentEventPool``s, and a wholesale replace would delete and recreate the
-    # very rows this event's fixtures foreign-key. The diff also stamps the order the
-    # patch sent, on this verb as much as on create: an event born positioned and then
-    # patched flat is the "the patch path is the hole" bug this repo keeps
-    # rediscovering.
-    #
-    # ``is not None`` is exactly "the key was sent": an explicit ``null`` is already a
-    # 422 (``TournamentEventUpdate._reject_explicit_null``), so this cannot be mistaking
-    # a clear for an absence. The applying happens after the loop below, with the other
-    # writes, so a payload that touches nothing else still reaches it.
+    # ``TournamentEventStageGroup``s, and a wholesale replace would delete and recreate
+    # the very rows this event's fixtures foreign-key. The diff also stamps the order
+    # the patch sent, on this verb as much as on create: an event born positioned and
+    # then patched flat is the "the patch path is the hole" bug this repo keeps
+    # rediscovering. ``is not None`` is exactly "the key was sent": an explicit ``null``
+    # is already a 422 (``TournamentEventUpdate._reject_explicit_null``), so this cannot
+    # be mistaking a clear for an absence. The applying happens after the loop below,
+    # with the other writes, so a payload that touches nothing else still reaches it.
     changes.pop("pools", None)
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is

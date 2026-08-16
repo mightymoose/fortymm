@@ -664,7 +664,7 @@ async def _make_tournament_at(
             match_settings={"rated": False, "length_games": 3},
             stages=stages,
         )
-        stages[0].pools = event_pools(
+        stages[0].groups = event_pools(
             [
                 {
                     "name": "Pool A",

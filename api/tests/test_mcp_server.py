@@ -79,7 +79,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -1907,8 +1907,8 @@ async def _only_pool_id(db_session: AsyncSession, event_id: uuid.UUID) -> uuid.U
     puts a fixture in it has to look it up rather than spell it."""
     return (
         await db_session.execute(
-            select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+            select(TournamentEventStageGroup.id).where(
+                TournamentEventStageGroup.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -2286,16 +2286,16 @@ async def _seed_drawable_tournament(
         predicates=[],
         stages=stages,
     )
-    stages[0].pools = with_table_aliases(
+    stages[0].groups = with_table_aliases(
         event, tournament, [_DRAW_POOL_A, _DRAW_POOL_B]
     )
     db_session.add(event)
     await db_session.commit()
     # ``pools`` explicitly: a caller may hand this event straight to ``cut_draw``,
-    # which reads ``event.pools`` synchronously (``app.tournament_draws
+    # which reads ``event.groups`` synchronously (``app.tournament_draws
     # .event_pools``/``draw_config``) — a plain refresh leaves that VIEWONLY
     # association unloaded (ADR 20260815), and the read would be an async lazy load.
-    await db_session.refresh(event, attribute_names=["pools"])
+    await db_session.refresh(event, attribute_names=["groups"])
     db_session.add_all(
         [
             TournamentEntry(
@@ -2349,8 +2349,8 @@ async def test_build_cut_returns_fixtures_visible_via_schedule_then_uncut_remove
             str(pool_id)
             for pool_id in (
                 await db_session.execute(
-                    select(TournamentEventPool.id).where(
-                        TournamentEventPool.stage_id.in_(
+                    select(TournamentEventStageGroup.id).where(
+                        TournamentEventStageGroup.stage_id.in_(
                             stage_ids_for_events([event.id])
                         )
                     )
@@ -2854,7 +2854,7 @@ async def _seed_previewable_tournament(
         timezone="America/Los_Angeles",
         stages=stages,
     )
-    stages[0].pools = with_table_aliases(
+    stages[0].groups = with_table_aliases(
         event,
         tournament,
         [
@@ -3741,11 +3741,11 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
         ],
         event=event,
     )
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.commit()
     # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
-    # genuinely LOADED collection — unlike the VIEWONLY ``event.pools``) along with it;
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
     # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
     # on the now-expired child objects.
     stage0_id, pool0_id = stages[0].id, pools[0].id
@@ -4261,11 +4261,11 @@ async def _seed_placeable_fixture(
             }
         ],
     )
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.commit()
     # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
-    # genuinely LOADED collection — unlike the VIEWONLY ``event.pools``) along with it;
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
     # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
     # on the now-expired child objects.
     stage0_id, pool0_id = stages[0].id, pools[0].id

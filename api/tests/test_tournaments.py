@@ -54,9 +54,11 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
-    TournamentEventPoolTable,
+    TournamentEventGroupReservation,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
     TournamentEventStage,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -1683,49 +1685,75 @@ async def _ensure_pool(
     way asserts anything about it.
     """
     stage_id = await stage_id_at(db_session, event_id, 0)
-    existing = (
-        await db_session.execute(
-            select(TournamentEventPool).where(
-                TournamentEventPool.stage_id == stage_id,
-                TournamentEventPool.name == name,
-            )
-        )
-    ).scalar_one_or_none()
+    existing = await _group_id_named(db_session, stage_id, name)
     if existing is not None:
-        return existing.id
+        return existing
     position = (
         await db_session.execute(
             select(func.count())
-            .select_from(TournamentEventPool)
-            .where(TournamentEventPool.stage_id == stage_id)
+            .select_from(TournamentEventStageGroup)
+            .where(TournamentEventStageGroup.stage_id == stage_id)
         )
     ).scalar_one()
-    pool = TournamentEventPool(
+    # A pool is two rows and a mapping, so seeding one directly means seeding all three
+    # — the same graph ``app.tournament_pools.stored_pools`` builds. Seeding only the
+    # group would leave it reservation-less, which no write path produces and which the
+    # projection would then trip over.
+    group = TournamentEventStageGroup(
         id=uuid.uuid4(),
         stage_id=stage_id,
-        name=name,
         position=position,
-        slot_date=date(2026, 6, 13),
-        slot_start=time(9, 0),
-        slot_end=time(12, 30),
+        reservation_link=TournamentEventGroupReservation(
+            reservation=TournamentEventReservation(
+                event_id=event_id,
+                name=name,
+                position=position,
+                slot_date=date(2026, 6, 13),
+                slot_start=time(9, 0),
+                slot_end=time(12, 30),
+            )
+        ),
     )
-    db_session.add(pool)
+    db_session.add(group)
     await db_session.commit()
-    return pool.id
+    return group.id
+
+
+async def _group_id_named(
+    db_session: AsyncSession, stage_id: uuid.UUID, name: str
+) -> uuid.UUID | None:
+    """The id of ``stage_id``'s group whose reservation is named ``name``, or ``None``.
+
+    The name is the reservation's and the id is the group's, so this walks the join —
+    the two rows the wire serves as one pool."""
+    return (
+        await db_session.execute(
+            select(TournamentEventStageGroup.id)
+            .join(
+                TournamentEventGroupReservation,
+                TournamentEventGroupReservation.group_id
+                == TournamentEventStageGroup.id,
+            )
+            .join(
+                TournamentEventReservation,
+                TournamentEventReservation.id
+                == TournamentEventGroupReservation.reservation_id,
+            )
+            .where(
+                TournamentEventStageGroup.stage_id == stage_id,
+                TournamentEventReservation.name == name,
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.UUID:
     """The id of the pool of ``event_id`` **named** ``name`` — the lookup an assertion
     about a fixture's ``pool_id`` goes through, since the id is the server's."""
     stage_id = await stage_id_at(db_session, uuid.UUID(event_id), 0)
-    return (
-        await db_session.execute(
-            select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id == stage_id,
-                TournamentEventPool.name == name,
-            )
-        )
-    ).scalar_one()
+    group_id = await _group_id_named(db_session, stage_id, name)
+    assert group_id is not None, f"no pool named {name!r} on this event"
+    return group_id
 
 
 async def _cut(
@@ -1905,14 +1933,21 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
 # ADR 20260801, batched across the whole page exactly as the tables are), ONE
 # batched load of every one of THOSE pools' table reservations
-# (``TournamentEventPool.tables``, ``lazy="selectin"`` — the reservations are rows too
+# (the reservation's ``tables``, ``lazy="selectin"`` — they are rows too
 # now, and selectin chains onto the pools' own batched load rather than costing a query
 # per pool), and ONE batched load of every event's stages
 # (``TournamentEvent.stages``, ``lazy="selectin"`` too now, ADR 20260815 — the list is
 # no longer a special case that skips them, it just never asked for a separate batch).
 # Nine, whatever the number of tournaments, tables, events, pools, reservations and
 # stages.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 9
+# The count moved by exactly ONE when a pool row split into a GROUP and a
+# RESERVATION: a group reaches its reservation through
+# ``tournament_event_group_reservations``, whose own batched ``selectin`` is the
+# added statement. The reservation itself rides along inside it
+# (``lazy="joined"``, a many-to-one, so no second statement), and
+# ``TournamentEvent.reservations`` is deliberately NOT eager, which is what keeps
+# the move at one rather than three. Still constant in the number of events.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 10
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4582,7 +4617,7 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # seeded row, and the enum holds only what runs"), plus ONE batched load of every
 # event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows now,
 # ADR 20260801), plus ONE batched load of every one of those pools' table reservations
-# (``TournamentEventPool.tables``, ``lazy="selectin"`` — chained onto the pools' own
+# (the reservation's ``tables``, ``lazy="selectin"`` — chained onto the groups' own
 # batched load, so it is one statement per page and not one per pool), plus ONE batched
 # load of every event's STAGES (``selectinload(TournamentEvent.stages)`` at the
 # ``tournament_detail`` read site — ADR 20260815 — riding
@@ -4596,7 +4631,14 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 11
+# The count moved by exactly ONE when a pool row split into a GROUP and a
+# RESERVATION: a group reaches its reservation through
+# ``tournament_event_group_reservations``, whose own batched ``selectin`` is the
+# added statement. The reservation itself rides along inside it
+# (``lazy="joined"``, a many-to-one, so no second statement), and
+# ``TournamentEvent.reservations`` is deliberately NOT eager, which is what keeps
+# the move at one rather than three. Still constant in the number of events.
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 12
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -5191,10 +5233,20 @@ async def _pool_names(
     names: dict[uuid.UUID | None, str | None] = {None: None}
     for pool_id, name in (
         await db_session.execute(
-            select(TournamentEventPool.id, TournamentEventPool.name)
+            select(TournamentEventStageGroup.id, TournamentEventReservation.name)
             .join(
                 TournamentEventStage,
-                TournamentEventStage.id == TournamentEventPool.stage_id,
+                TournamentEventStage.id == TournamentEventStageGroup.stage_id,
+            )
+            .join(
+                TournamentEventGroupReservation,
+                TournamentEventGroupReservation.group_id
+                == TournamentEventStageGroup.id,
+            )
+            .join(
+                TournamentEventReservation,
+                TournamentEventReservation.id
+                == TournamentEventGroupReservation.reservation_id,
             )
             .where(TournamentEventStage.event_id == uuid.UUID(event_id))
         )
@@ -5240,10 +5292,10 @@ async def _fixture_rows(
     position column exists to kill.
     """
     pool_position = (
-        select(TournamentEventPool.position)
+        select(TournamentEventStageGroup.position)
         .where(
-            TournamentEventPool.stage_id == TournamentFixture.stage_id,
-            TournamentEventPool.id == TournamentFixture.pool_id,
+            TournamentEventStageGroup.stage_id == TournamentFixture.stage_id,
+            TournamentEventStageGroup.id == TournamentFixture.pool_id,
         )
         .scalar_subquery()
     )
@@ -6286,28 +6338,50 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
     rows = (
         await db_session.execute(
             select(
-                TournamentEventPool.id,
-                TournamentEventPool.name,
-                TournamentEventPool.slot_date,
-                TournamentEventPool.slot_start,
-                TournamentEventPool.slot_end,
-                TournamentEventPool.position,
+                TournamentEventStageGroup.id,
+                TournamentEventReservation.name,
+                TournamentEventReservation.slot_date,
+                TournamentEventReservation.slot_start,
+                TournamentEventReservation.slot_end,
+                TournamentEventStageGroup.position,
+            )
+            .join(
+                TournamentEventGroupReservation,
+                TournamentEventGroupReservation.group_id
+                == TournamentEventStageGroup.id,
+            )
+            .join(
+                TournamentEventReservation,
+                TournamentEventReservation.id
+                == TournamentEventGroupReservation.reservation_id,
             )
             .where(
-                TournamentEventPool.stage_id.in_(
+                TournamentEventStageGroup.stage_id.in_(
                     stage_ids_for_events([uuid.UUID(event_id)])
                 )
             )
-            .order_by(TournamentEventPool.position)
+            .order_by(TournamentEventStageGroup.position)
         )
     ).all()
+    # Keyed by the GROUP id, not the reservation's, so it lines up with the ids the
+    # first query selected — the reservation-table rows carry the reservation's id, so
+    # this walks the join back to the group the wire names.
     reserved: dict[uuid.UUID, list[str]] = {}
     for pool_id, table_id in (
         await db_session.execute(
-            select(TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id)
-            .where(TournamentEventPoolTable.event_id == uuid.UUID(event_id))
+            select(
+                TournamentEventGroupReservation.group_id,
+                TournamentEventReservationTable.table_id,
+            )
+            .join(
+                TournamentEventReservationTable,
+                TournamentEventReservationTable.reservation_id
+                == TournamentEventGroupReservation.reservation_id,
+            )
+            .where(TournamentEventReservationTable.event_id == uuid.UUID(event_id))
             .order_by(
-                TournamentEventPoolTable.pool_id, TournamentEventPoolTable.position
+                TournamentEventGroupReservation.group_id,
+                TournamentEventReservationTable.position,
             )
         )
     ).all():

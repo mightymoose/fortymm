@@ -72,11 +72,12 @@ class VenueTable(Base):
         ),
         # Redundant against the primary key, and there for exactly one purpose: SQL can
         # only reference a UNIQUE set of columns, so this is the target that lets
-        # ``tournament_event_pool_tables`` foreign-key ``(tournament_id, table_id)`` and
-        # thereby say "the table this pool reserves is my own tournament's" (ADR
-        # 20260801). The same trick, one level down, as ``tournament_event_pools``'
-        # ``(event_id, id)`` primary key — which is that table's key rather than an
-        # extra constraint only because a pool id is per-event and a table id is not.
+        # ``tournament_event_reservation_tables`` foreign-key ``(tournament_id,
+        # table_id)`` and thereby say "the table this pool reserves is my own
+        # tournament's" (ADR 20260801). The same trick, one level down, as
+        # ``tournament_event_reservations``' ``(event_id, id)`` primary key — which is
+        # that table's key rather than an extra constraint only because a pool id is
+        # per-event and a table id is not.
         UniqueConstraint(
             "tournament_id", "id", name="uq_tournament_tables_tournament_id_id"
         ),

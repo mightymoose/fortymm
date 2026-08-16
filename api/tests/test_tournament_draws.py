@@ -31,7 +31,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -62,7 +62,7 @@ async def _make_event(
 ) -> tuple[TournamentEvent, uuid.UUID, uuid.UUID]:
     """Returns the event, its (only) pool's id and its (only) stage's id.
 
-    The ids are handed back explicitly rather than read off ``event.pools`` /
+    The ids are handed back explicitly rather than read off ``event.groups`` /
     ``event.stages`` afterward: both are VIEWONLY / not-eager now (ADR 20260815 — a
     pool's real parent is its stage, and ``TournamentEvent.stages`` is deliberately not
     eager), so a fresh attribute access on either in this async context would either
@@ -104,7 +104,7 @@ async def _make_event(
         stages=stages,
     )
     pools = event_pools([POOL_A], event=event, tournament=tournament)
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.flush()
     return event, pools[0].id, stages[0].id
@@ -334,15 +334,15 @@ async def test_a_match_that_has_not_completed_projects_no_games(
 POOL_COUNT = 10
 
 
-def _pools() -> list[TournamentEventPool]:
-    """Ten pool rows in the director's order — each carrying the ``position`` of its
-    index, which is what the write boundary stamps, and a minted id.
+def _pools() -> list[TournamentEventStageGroup]:
+    """Ten group rows in the director's order — each carrying the ``position`` of its
+    index, which is what the write boundary stamps, and a minted id, with its
+    reservation mapped alongside.
 
-    ``event_pools`` requires an ``event`` now (a pool's real parent is its stage,
-    ADR 20260815), but every pool below has empty ``table_ids``, so it is never
-    actually read (``_reservations`` only touches it to build a reservation row) — a
-    throwaway, never-persisted :class:`TournamentEvent` satisfies the signature with
-    nothing behind it to be wrong.
+    ``event_pools`` requires an ``event`` (a group's real parent is its stage, ADR
+    20260815, and a reservation's is the event), but every pool below has empty
+    ``table_ids``, so the event is never actually read — a throwaway, never-persisted
+    :class:`TournamentEvent` satisfies the signature with nothing behind it to be wrong.
     """
     return event_pools(
         [

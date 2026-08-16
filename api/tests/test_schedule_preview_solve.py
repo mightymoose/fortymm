@@ -178,7 +178,7 @@ async def _add_event(
         stages=stages,
         timezone=timezone,
     )
-    stages[0].pools = with_table_aliases(
+    stages[0].groups = with_table_aliases(
         event, tournament, [_pool(["t1", "t2"])] if pools is None else pools
     )
     db.add(event)

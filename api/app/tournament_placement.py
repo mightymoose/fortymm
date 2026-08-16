@@ -82,7 +82,7 @@ async def _load_fixture_for_placement(
     # is reachable through the stage. ``contains_eager(TournamentFixture.stage)`` tells
     # the ORM this explicit join IS the eager load ``TournamentFixture.stage``
     # (``lazy="joined"``) would otherwise add a second, aliased join for.
-    # ``TournamentEventStage.pools`` is deliberately NOT eager (see that
+    # ``TournamentEventStage.groups`` is deliberately NOT eager (see that
     # relationship's docstring), so attaching a stage here costs nothing extra.
     row = (
         await db.execute(

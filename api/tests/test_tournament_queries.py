@@ -60,9 +60,9 @@ def _pool(position: int) -> dict[str, Any]:
 
 
 def _pool_ids(event: TournamentEvent) -> list[uuid.UUID]:
-    """The event's pool ids **in the director's order** — ``event.pools`` is ordered by
+    """The event's pool ids **in the director's order** — ``event.groups`` is ordered by
     ``position``, which is the order they were seeded in."""
-    return [pool.id for pool in event.pools]
+    return [pool.id for pool in event.groups]
 
 
 def _stage_a(event: TournamentEvent) -> uuid.UUID:
@@ -117,12 +117,12 @@ async def _make_event(
         match_settings={"rated": True, "length_games": 5},
         stages=stages,
     )
-    stages[0].pools = event_pools(pools, event=event)
+    stages[0].groups = event_pools(pools, event=event)
     db_session.add(event)
     await db_session.commit()
     # Both ``pools`` (VIEWONLY) and ``stages`` (not eager) are populated on refresh, not
     # by construction (ADR 20260815) — ``_pool_ids``/``_stage_a`` need both.
-    await db_session.refresh(event, attribute_names=["pools", "stages"])
+    await db_session.refresh(event, attribute_names=["groups", "stages"])
     return event
 
 

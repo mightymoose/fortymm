@@ -151,7 +151,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [
             {
                 "name": "Pool A",
@@ -166,9 +166,9 @@ async def _make_tournament(
     await db.flush()
     # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
     # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` below
-    # reads ``event.pools`` synchronously, so this freshly built (never re-queried)
+    # reads ``event.groups`` synchronously, so this freshly built (never re-queried)
     # object needs an explicit refresh first, or that read is an async lazy load.
-    await db.refresh(event, attribute_names=["pools"])
+    await db.refresh(event, attribute_names=["groups"])
 
     for _ in range(entrants):
         player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
@@ -948,7 +948,7 @@ async def _hold_user_in_second_event(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [
             {
                 "name": "Pool B",
@@ -1529,16 +1529,16 @@ async def _drop_table_from_pools(
     event = (
         await db.execute(select(TournamentEvent).where(TournamentEvent.id == event_id))
     ).scalar_one()
-    # Dropping the reservation ROW (ADR 20260801) rather than filtering a JSONB list:
-    # a pool's reserved tables are their own rows now, and taking one out of the
-    # collection is what ``delete-orphan`` turns into the DELETE. The pool rows
-    # themselves are untouched — rebuilding them would delete and re-insert the very
-    # pools this event's fixtures foreign-key.
-    for pool in event.pools:
-        pool.tables = [
-            reservation
-            for reservation in pool.tables
-            if reservation.table_id != table_id
+    # Dropping the table ROW (ADR 20260801) rather than filtering a JSONB list: a
+    # reservation's tables are their own rows, and taking one out of the collection is
+    # what ``delete-orphan`` turns into the DELETE. They hang off the RESERVATION, not
+    # the group — that is the half of the old pool row which carries the venue. The
+    # groups themselves are untouched, and must be: rebuilding one would delete and
+    # re-insert the very row this event's fixtures foreign-key.
+    for group in event.groups:
+        reservation = group.reservation
+        reservation.tables = [
+            row for row in reservation.tables if row.table_id != table_id
         ]
     await db.commit()
 
