@@ -1,3 +1,4 @@
+import { TOURNAMENT_STATUS_KEYS } from './options'
 import { tournamentsSearchSchema, type TournamentsSearch } from './search'
 import type { TournamentStatus } from './types'
 
@@ -12,9 +13,11 @@ describe('tournamentsSearchSchema', () => {
     })
   })
 
+  // Iterated off `TOURNAMENT_STATUS_KEYS`, never a hand-typed list: a re-typed list
+  // here would be the fifth place a new status has to be named, and it would stay
+  // green when the enum grew — the exact failure #970 exists to close.
   it('accepts every status the tabs offer', () => {
-    const statuses: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
-    for (const status of statuses) {
+    for (const status of TOURNAMENT_STATUS_KEYS) {
       expect(tournamentsSearchSchema.parse({ status }).status).toBe(status)
     }
   })

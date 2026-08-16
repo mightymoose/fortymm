@@ -8,14 +8,12 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { zodValidator } from '@tanstack/zod-adapter'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
 import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournament.factory'
-import { tournamentsSearchSchema } from '@/components/tournaments/data/search'
 import { Route } from './index'
 
 const TournamentsRoute = Route.options.component!
@@ -91,10 +89,12 @@ function renderRoute() {
     getParentRoute: () => rootRoute,
     path: '/tournaments/',
     component: TournamentsRoute,
-    // The real route's validator, not a stand-in: without it `useSearch` inside
-    // `TournamentsListPage` hands back raw, unparsed search and these tests would
-    // exercise a page the app never renders.
-    validateSearch: zodValidator(tournamentsSearchSchema),
+    // The real route's validator, read off `Route.options` rather than rebuilt from
+    // the schema: without it `useSearch` inside `TournamentsListPage` hands back raw,
+    // unparsed search and these tests would exercise a page the app never renders —
+    // and a rebuilt copy would stay green after the real route changed its validator.
+    // Same spelling as `matches/index.test.tsx` and `players/index.test.tsx`.
+    validateSearch: Route.options.validateSearch,
   })
   const router = createRouter({
     routeTree: rootRoute.addChildren([indexRoute]),

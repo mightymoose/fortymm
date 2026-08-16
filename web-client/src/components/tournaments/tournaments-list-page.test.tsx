@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event'
-import { waitFor } from '@testing-library/react'
+import { act, waitFor } from '@testing-library/react'
 
 import { buildTournament } from './data/seed.factory'
 import { tournamentsListPagePage } from './tournaments-list-page.page'
@@ -198,6 +198,40 @@ describe('TournamentsListPage', () => {
       // Nothing is filtered out — the whole list renders.
       expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
       expect(tournamentsListPagePage.getCard('Autumn Cup 2026')).toBeInTheDocument()
+    })
+
+    // The app shell's sidebar entry is `to: '/tournaments'` with no search, so clicking
+    // it while a search is active is a SAME-ROUTE navigation — the URL drops `q` and
+    // this component never unmounts. A search box that only seeds from the URL kept its
+    // text and left the grid filtered while the URL said unfiltered.
+    it('clears the box and the grid when a same-route navigation drops q', async () => {
+      await renderList()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'Winter')
+      await waitFor(() =>
+        expect(tournamentsListPagePage.queryCard('Bay Area Open 2026')).toBeNull(),
+      )
+
+      await act(async () => {
+        await tournamentsListPagePage.navigateTo('/tournaments')
+      })
+
+      expect(tournamentsListPagePage.getSearch()).toHaveValue('')
+      expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
+    })
+
+    // The other half of the same rule: a same-route navigation that CARRIES a q adopts
+    // it, rather than leaving the box showing the previous search.
+    it('adopts a q that a same-route navigation brings in', async () => {
+      await renderList()
+
+      await act(async () => {
+        await tournamentsListPagePage.navigateTo('/tournaments', { q: 'Winter' })
+      })
+
+      expect(tournamentsListPagePage.getSearch()).toHaveValue('Winter')
+      expect(tournamentsListPagePage.queryCard('Bay Area Open 2026')).toBeNull()
+      expect(tournamentsListPagePage.getCard('Winter Classic 2025')).toBeInTheDocument()
     })
 
     // The schema's `.trim()` is a transform, so binding the input to the parsed value

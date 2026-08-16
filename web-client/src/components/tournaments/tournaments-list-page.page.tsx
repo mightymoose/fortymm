@@ -103,6 +103,14 @@ export const tournamentsListPagePage = {
     return router.history.length
   },
 
+  /** Navigate the harness's router without unmounting the page — what the app shell's
+   * own sidebar entry (`to: '/tournaments'`, no search) does to a page already showing
+   * a filtered list. */
+  navigateTo(to: string, search: Record<string, unknown> = {}) {
+    if (!router) throw new Error('navigateTo() called before render()')
+    return router.navigate({ to, search })
+  },
+
   /**
    * Render under the memory-router harness. `initialEntry` deep-links the URL, which
    * is how the reload/restore and unrecognized-`status` cases are exercised.

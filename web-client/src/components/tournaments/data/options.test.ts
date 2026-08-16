@@ -66,14 +66,13 @@ describe('the tournament status filter tabs', () => {
     ])
   })
 
-  // The exhaustiveness itself is the `Record`'s and is enforced by `tsc` (dropping a
-  // key is a TS2741). This is its runtime shadow: no status may be missing a tab.
-  it('leaves no status without a tab', () => {
-    const tabbed = STATUS_FILTER_OPTIONS.map((o) => o.value).filter(
-      (v) => v !== 'all',
-    )
-    expect([...tabbed].sort()).toEqual([...TOURNAMENT_STATUS_KEYS].sort())
-  })
+  // Deliberately NOT a `STATUS_FILTER_OPTIONS` vs `TOURNAMENT_STATUS_KEYS` comparison.
+  // Both sides are built from `STATUS_TAB_LABEL`, so dropping a key removes it from
+  // both and such a test can never fail — it would read as coverage while pinning
+  // nothing. The exhaustiveness guard is `tsc -b`: deleting the `live` key reds with
+  // `TS2741: Property 'live' is missing … but required in type
+  // Record<TournamentStatus, string>`, falsified on this branch. The runtime shadow is
+  // the literal five-value, five-label list asserted above, which does red on a drop.
 
   // A tab must read as the status pill does for the status it names — `Live` on both.
   it('labels the live tab the way the status pill does', () => {

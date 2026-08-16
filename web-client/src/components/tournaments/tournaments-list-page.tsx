@@ -72,6 +72,25 @@ export const TournamentsListPage = ({
   // input drops the trailing space of "Bay " on every keystroke and a two-word search
   // becomes untypeable. The URL still gets every keystroke, below.
   const [queryText, setQueryText] = useState(urlSearch.q ?? '')
+
+  // ...but a buffer that only ever seeds goes stale. The app shell's own sidebar entry
+  // is `to: '/tournaments'` with no search, so clicking it while a search is active is
+  // a SAME-ROUTE navigation: the URL drops `q` and this component never unmounts. The
+  // box kept its text and the grid stayed filtered while the URL said otherwise — the
+  // user asked for the unfiltered list and got the filtered one. Back does it too.
+  //
+  // So the buffer follows the URL when the URL changes underneath it. Written as the
+  // render-time "adjust state when the thing it derives from changed" pattern, keyed on
+  // the PREVIOUS url value, not on a mismatch: a mismatch is the normal mid-keystroke
+  // state (the buffer leads the URL by a render), and resetting on it would eat the
+  // character just typed. `!== queryText.trim()` then ignores the echo of our own
+  // write, which is what keeps the trailing space of "Bay " alive.
+  const [urlQueryEcho, setUrlQueryEcho] = useState(urlSearch.q)
+  if (urlSearch.q !== urlQueryEcho) {
+    setUrlQueryEcho(urlSearch.q)
+    if ((urlSearch.q ?? '') !== queryText.trim()) setQueryText(urlSearch.q ?? '')
+  }
+
   const [createOpen, setCreateOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Tournament | null>(null)
 
@@ -113,16 +132,15 @@ export const TournamentsListPage = ({
 
   const query = queryText.trim()
 
-  const filtered = useMemo(
-    () =>
-      tournaments.filter((t) => {
-        if (status !== 'all' && t.status !== status) return false
-        if (query && !t.name.toLowerCase().includes(query.toLowerCase()))
-          return false
-        return true
-      }),
-    [tournaments, status, query],
-  )
+  const filtered = useMemo(() => {
+    // Lowercased once, not once per row: the needle does not change across the scan.
+    const needle = query.toLowerCase()
+    return tournaments.filter((t) => {
+      if (status !== 'all' && t.status !== status) return false
+      if (needle && !t.name.toLowerCase().includes(needle)) return false
+      return true
+    })
+  }, [tournaments, status, query])
 
   // Only `live`, not `published || live`. The subtitle now names the status it counts,
   // so "3 total · 0 live" is a normal, correct reading of a board nobody has started.
