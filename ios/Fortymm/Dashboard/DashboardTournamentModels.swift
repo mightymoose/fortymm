@@ -74,7 +74,7 @@ enum TournamentFixtureState: String, LenientRawDecodable {
 ///
 /// The panel keys its vocabulary ("Your matches" vs "Your path") off
 /// round-robin and treats everything else — a bracket, or an unrecognised
-/// value — as a bracket. See `isPooledDraw` in
+/// value — as a bracket. See `isGroupedDraw` in
 /// `DashboardTournamentPanelProjection.swift`.
 enum TournamentDrawType: String, LenientRawDecodable {
     case singleElim = "single-elim"
@@ -177,7 +177,7 @@ struct DashboardTournamentEvent: Decodable, Equatable, Identifiable {
     let isLive: Bool
     let wins: Int
     let losses: Int
-    /// The caller's 1-based rank in their pool. `nil` when the event has no
+    /// The caller's 1-based rank in their group. `nil` when the event has no
     /// standings yet (no draw cut, or a draw type with no results strategy),
     /// which is a fact, not a zero.
     let position: Int?
@@ -185,8 +185,9 @@ struct DashboardTournamentEvent: Decodable, Equatable, Identifiable {
     let fieldSize: Int
     /// e.g. `Group play` / `Group complete`.
     let stageLabel: String
-    /// The caller's pool name, or `nil` for an un-pooled draw.
-    let poolLabel: String?
+    /// The caller's group label (e.g. `Group A`), derived server-side from the
+    /// group's position — `nil` for an ungrouped draw.
+    let groupLabel: String?
     let match: DashboardTournamentMatch?
     let fixtures: [DashboardTournamentFixtureRow]
 }
