@@ -740,8 +740,9 @@ async def update_event(
     # settings row's JSON object, not on the event, so the loop would bind an unmapped
     # attribute and drop the edit silently.
     changes.pop("rounds", None)
-    # Groups are rows, so they are taken OUT of the generic setattr loop entirely and
-    # applied as a diff (:func:`app.tournament_reservations.apply_event_reservations`) — assigning the
+    # Reservations (and their mapped groups) are rows, so they are taken OUT of the
+    # generic setattr loop entirely and applied as a diff
+    # (:func:`app.tournament_reservations.apply_event_reservations`) — assigning the
     # dumped payload would put dicts where the relationship expects
     # ``TournamentEventStageGroup``s, and a wholesale replace would delete and recreate
     # the very rows this event's fixtures foreign-key. The diff also stamps the order
@@ -751,7 +752,14 @@ async def update_event(
     # is already a 422 (``TournamentEventUpdate._reject_explicit_null``), so this cannot
     # be mistaking a clear for an absence. The applying happens after the loop below,
     # with the other writes, so a payload that touches nothing else still reaches it.
-    changes.pop("groups", None)
+    #
+    # The dict key here is ``"reservations"`` — ``TournamentEventUpdate``'s own field
+    # name — never ``"groups"``: the schema carries no such field, so popping that key
+    # was a no-op and left ``"reservations"`` in ``changes``, which the generic loop
+    # below then tried to ``setattr`` onto the event's VIEWONLY ``groups`` association
+    # (a lazy relationship, not a plain column) — a lazy load in a sync context that
+    # SQLAlchemy's async extension refuses with ``MissingGreenlet``.
+    changes.pop("reservations", None)
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is
     # one the write union accepted at the request boundary (ADR 20260727). That union is

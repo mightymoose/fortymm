@@ -4965,7 +4965,7 @@ async def test_patching_an_event_answers_with_the_draw_it_still_has(
     )
 
     assert response.status_code == 200, response.text
-    assert _coords(response.json()) == [("p-a", 1, 1)]
+    assert _coords(response.json()) == [("g-a", 1, 1)]
 
 
 async def test_a_new_event_is_born_with_an_empty_draw(
@@ -6631,16 +6631,12 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
 @pytest.mark.parametrize(
     ("payload", "named"),
     [
-        pytest.param(
-            lambda kept: [*kept, RESERVATION_C], ["Reservation C"], id="added"
-        ),
-        pytest.param(lambda kept: kept[:1], ["Reservation B"], id="removed"),
-        pytest.param(
-            lambda _kept: [], ["Reservation A", "Reservation B"], id="cleared"
-        ),
+        pytest.param(lambda kept: [*kept, RESERVATION_C], ["Group C"], id="added"),
+        pytest.param(lambda kept: kept[:1], ["Group B"], id="removed"),
+        pytest.param(lambda _kept: [], ["Group A", "Group B"], id="cleared"),
         pytest.param(
             lambda kept: [kept[0], {k: v for k, v in kept[1].items() if k != "id"}],
-            ["Reservation B"],
+            ["Group B"],
             id="re-added",
         ),
     ],
@@ -6669,10 +6665,10 @@ async def test_a_cut_draw_refuses_a_reservations_patch_that_changes_which_groups
       **500**. The 409 here is what makes it actionable, and it is judged first;
     * **re-added** — a reservation re-sent with its ``id`` dropped is a removal and an
       addition at once, and it is the one a director would never see coming: the
-      reservations page looks unchanged and every fixture in Reservation B's group is
-      orphaned. (Its predecessor, a reservation *re-identified* by giving it a different
-      id, is no longer expressible at all — the id is minted by the server now, so the
-      only two things a client can say are "keep this one" and "add one".)
+      reservations page looks unchanged and every fixture in Group B is orphaned.
+      (Its predecessor, a reservation *re-identified* by giving it a different id, is
+      no longer expressible at all — the id is minted by the server now, so the only
+      two things a client can say are "keep this one" and "add one".)
 
     409, not 403 (ADR-0017): the caller is the owner and the payload is well-formed — it
     is the event that is in the wrong *state* for it, and the same payload becomes legal
@@ -6700,9 +6696,10 @@ async def test_a_cut_draw_refuses_a_reservations_patch_that_changes_which_groups
     )
 
     assert response.status_code == 409, response.text
-    # The copy names the groups that are in the way, by their reservation's NAME: a
-    # director reads names, and "the group set is frozen" without saying which one
-    # moved is unactionable.
+    # The copy names the groups that are in the way, by their DERIVED label ("Group A",
+    # "Group B", …, never the reservation's own stored name): a director reads the
+    # label their page renders, and "the group set is frozen" without saying which
+    # group moved is unactionable.
     detail = response.json()["detail"]
     for name in named:
         assert name in detail, detail
