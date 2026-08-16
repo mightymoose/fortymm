@@ -11,8 +11,8 @@ import { findUserId, mintGuest, type Guest } from './match-api'
 //
 // What is seeded here is everything a tournament needs to *exist* but that has no
 // interesting UI of its own: the tournament, one singles round-robin event, its
-// single pool with a table, and (see `enterPlayer`) the second entrant, added by
-// director-entry — for which there is deliberately no web UI today (the entry
+// single reservation with a table, and (see `enterPlayer`) the second entrant, added
+// by director-entry — for which there is deliberately no web UI today (the entry
 // card only self-registers the signed-in player). The director's own entry is
 // left for the browser to make through the Enter control.
 //
@@ -20,24 +20,39 @@ import { findUserId, mintGuest, type Guest } from './match-api'
 // context), so the tournament comes back with `can_edit: true` and the browser,
 // signed in as that same guest, sees the owner-only controls (Publish, Generate
 // draw, Start tournament).
+//
+// **Two faces, one seed.** One term used to name both the competitive unit (an
+// ordered set of entrants who play all-play-all) and the venue booking (a slice of
+// tables held for a window of time). They are two arrays on the wire now — a
+// **group** (`groups[]`: server-owned identity and order, read-only) and a
+// **reservation** (`reservations[]`: the venue side, client-writable) — mapped 1:1.
+// A client can only ever *write* a reservation; the server mints exactly one group
+// per reservation in lockstep. So every spec-facing "seed N of them" knob here is
+// reservation-shaped (`ReservationSpec`), and what comes back carries both:
+// `StoredReservation` (what was written, plus the id and position the server
+// stamped) and `StoredGroup` (the group the server minted for it, plus the
+// `reservation_id` it maps to). A fixture's own `group_id` and everything the draw
+// renders (entrants, standings, qualification) are group-face; a reservation's
+// name, window and tables are venue-face.
 
 const API = '/api/v1'
 const CSRF_HEADER = 'x-csrf-token'
 
 /** The **label** of the one table seeded into the tournament's catalogue, reserved by
- * the event's single pool. A round-robin pool wants at least one table.
+ * the event's single reservation. A round-robin reservation wants at least one table.
  *
  * A label, not an id, because the id is no longer the seed's to choose (see
  * `TableSpec`). */
 const TABLE_LABEL = 'Table 1'
-/** The **name** of the event's single pool — a round-robin needs ≥1 pool, and two
- * entrants in one pool is exactly one fixture: the minimal playable draw.
+/** The **name** of the event's single reservation — a round-robin needs ≥1
+ * reservation (and therefore ≥1 group), and two entrants in one group is exactly
+ * one fixture: the minimal playable draw.
  *
- * A name, not an id, for the same reason `TABLE_LABEL` is a label: the id is no longer
- * the seed's to choose (see `PoolSpec`). */
-const POOL_NAME = 'Pool A'
+ * A name, not an id, for the same reason `TABLE_LABEL` is a label: the id is no
+ * longer the seed's to choose (see `ReservationSpec`). */
+const RESERVATION_NAME = 'Reservation A'
 
-/** A pool/event window (`Slot` on the wire): a date plus `HH:MM` bounds, all
+/** A reservation/event window (`Slot` on the wire): a date plus `HH:MM` bounds, all
  * naive wall-clock strings in the venue's frame (ADR-0790). */
 export interface SlotSpec {
   readonly date: string
@@ -45,15 +60,15 @@ export interface SlotSpec {
   readonly end: string
 }
 
-/** Tomorrow, `YYYY-MM-DD`, UTC — the date a seeded window sits on. The default pool
- * window uses it, and so does any spec that builds its own `SlotSpec`, so the rule lives
- * here once.
+/** Tomorrow, `YYYY-MM-DD`, UTC — the date a seeded window sits on. The default
+ * reservation window uses it, and so does any spec that builds its own `SlotSpec`,
+ * so the rule lives here once.
  *
  * **Computed, never a literal.** This used to be the string `'2026-08-01'`, which
  * was comfortably far-future when it was written and then arrived: from 17:00 UTC
  * that day every seeded window was in the *past*, and from the next day it was
- * permanently so. The schedule preview solves fixtures into their pool's window,
- * and a window behind `now` admits no placement — so the solve is honestly
+ * permanently so. The schedule preview solves fixtures into their reservation's
+ * window, and a window behind `now` admits no placement — so the solve is honestly
  * infeasible and the verdict reads `Doesn't fit · peak 0 tables`. The solver was
  * right; the fixture had expired.
  *
@@ -80,9 +95,9 @@ export function tomorrowUtc(): string {
  * **422 naming the field**, not a stack that agrees to call the table `t1` — which is
  * exactly how this helper broke when the catalogue became a real table.
  *
- * So nothing here names a table by id. A pool cites the tables it reserves by
- * **label** (`PoolSpec.tableLabels`), and anything that needs the real id reads it back
- * off the create response (`StoredTable`, returned by `createTournament` and
+ * So nothing here names a table by id. A reservation cites the tables it books by
+ * **label** (`ReservationSpec.tableLabels`), and anything that needs the real id reads
+ * it back off the create response (`StoredTable`, returned by `createTournament` and
  * `seedTournament`). The label is also the vocabulary the server's own in-use refusal
  * speaks, so a spec asserting on that sentence and a spec seeding the catalogue name
  * the same table the same way. */
@@ -95,63 +110,110 @@ export interface TableSpec {
  * sent, plus the uuid the server minted for it.
  *
  * The only place a spec can learn a table id — and the id everything downstream is
- * keyed by: a fixture's `table_id`, the schedule board's table sections, a pool's
- * `table_ids`. */
+ * keyed by: a fixture's `table_id`, the schedule board's table sections, a
+ * reservation's `table_ids`. */
 export interface StoredTable {
   readonly id: string
   readonly label: string
   readonly court: string
 }
 
-/** One pool of the event's draw, as a **client sends it** (`PoolWrite` on the wire):
- * what it is called and which tables it reserves, and deliberately **neither an `id` nor
- * a `position`**.
+/** One reservation of the event's draw, as a **client sends it** (`ReservationWrite`
+ * on the wire): what it is called and which tables it books, and deliberately
+ * **neither an `id` nor a `position`**.
  *
- * Both absences are the wire's, not this helper's taste. `PoolWrite` is `extra="forbid"`
- * and has no field for either, so a seed supplying its own `pool-a` is a **422 naming
- * `body.pools[i].id`** — which is exactly how this helper broke when a pool became a real
- * row with a `gen_random_uuid()` primary key (ADR 20260801). The id is the database's
- * now, the same as a catalogue table's.
+ * Both absences are the wire's, not this helper's taste. `ReservationWrite` is
+ * `extra="forbid"` and has no field for either, so a seed supplying its own
+ * `reservation-a` is a **422 naming `body.reservations[i].id`** — which is exactly how
+ * this helper broke when a reservation became a real row with a
+ * `gen_random_uuid()` primary key (ADR 20260801). The id is the database's now,
+ * the same as a catalogue table's.
  *
- * So nothing here names a pool by id:
+ * So nothing here names a reservation by id:
  *
- * - a pool is written down by **name**, which is also what the draw renders and what a
- *   spec's ordering assertions read;
- * - a pool cites the tables it reserves by **label** (`tableLabels`), resolved against
- *   the catalogue `seedTournament` just created — the ids are minted too;
- * - anything that needs the real pool id reads it back off the create response
- *   (`StoredPool`, returned by `seedTournament`).
+ * - a reservation is written down by **name**, the label a director types and
+ *   what a spec's venue-facing assertions read;
+ * - a reservation cites the tables it books by **label** (`tableLabels`), resolved
+ *   against the catalogue `seedTournament` just created — the ids are minted too;
+ * - anything that needs the real reservation id reads it back off the create
+ *   response (`StoredReservation`, returned by `seedTournament`).
  *
- * The **order of `SeedTournamentOptions.pools`** is therefore the payload's one statement
- * about pool order: the server stamps each pool's `position` from its index in the list
- * it was sent (ADR 20260801, "Pools carry an explicit `position`"), and that is what the
- * draw, the deal and the rendered pool sections are all ordered by.
+ * The **order of `SeedTournamentOptions.reservations`** is therefore the payload's
+ * one statement about draw order: the server stamps each reservation's `position`
+ * from its index in the list it was sent (ADR 20260801, "reservations carry an
+ * explicit `position`"), mints exactly one **group** per reservation in the same
+ * order, and that group order is what the draw, the deal and the rendered group
+ * sections are all ordered by (`StoredGroup`).
  *
- * `tableLabels` is optional because the single-pool default reserves the whole catalogue;
- * a multi-pool seed usually wants a table each, so ten pools raise no double-booking
- * warning over one shared table.
+ * `tableLabels` is optional because the single-reservation default books the whole
+ * catalogue; a multi-reservation seed usually wants a table each, so ten
+ * reservations raise no double-booking warning over one shared table.
  *
  * `tableIdsFor` throws on a label that names no seeded table rather than sending a
  * reservation the solver would quietly intersect away to nothing. */
-export interface PoolSpec {
+export interface ReservationSpec {
   readonly name: string
-  /** The catalogue tables this pool reserves, **by label**. Omitted = **every** seeded
-   * table. */
+  /** The catalogue tables this reservation books, **by label**. Omitted = **every**
+   * seeded table. */
   readonly tableLabels?: ReadonlyArray<string>
 }
 
-/** One pool as the API **reads it back** (`Pool` on the wire): what was sent, plus the
- * uuid the server minted for it and the 0-based `position` it stamped from the pool's
- * index in the list it arrived in (ADR 20260801).
+/** One reservation as the API **reads it back** (`Reservation` on the wire): what
+ * was sent, plus the uuid the server minted for it and the 0-based `position` it
+ * stamped from the reservation's index in the list it arrived in (ADR 20260801).
  *
- * The only place a spec can learn a pool id — and the id everything downstream is keyed
- * by: a fixture's `pool_id`, the draw's pool sections, the `pool-standings-{id}` table.
- * Only the three fields an ordering assertion is about are named; the window and tables
- * ride along untyped. */
-export interface StoredPool {
+ * The only place a spec can learn a reservation id — the id a future PATCH would
+ * cite to keep this row. Only the three fields an ordering assertion is about are
+ * named; the window and tables ride along untyped. **Not** the id everything
+ * downstream is keyed by — a fixture, the draw's sections and the standings table
+ * are all keyed by the **group's** id (`StoredGroup`), never this one. */
+export interface StoredReservation {
   readonly id: string
   readonly name: string
   readonly position: number
+}
+
+/** One **group** the server minted for a reservation, as the API reads it back
+ * (`GroupRead` on the wire): server-owned identity and order, plus which
+ * reservation it plays under.
+ *
+ * A group has no write shape — a client never authors one directly; the server
+ * mints exactly one per reservation, in lockstep, from `EventReservations` /
+ * `EditedEventReservations` (ADR 20260801, extended). `reservation_id` is the
+ * join back to `StoredReservation.id`, kept in the wire's own snake case because
+ * this interface types a direct JSON parse of the create/read response, the same
+ * convention `FixtureDetail` below uses for its own `*_id` fields.
+ *
+ * The id everything competitive is keyed by: a fixture's `group_id`, the draw's
+ * group sections, the `group-standings-{id}` table. */
+export interface StoredGroup {
+  readonly id: string
+  readonly position: number
+  readonly reservation_id: string
+}
+
+/** `Group A`, `Group B`, … and past `Group Z` the spreadsheet's `AA` — a bijective
+ * base-26 label, so a hundred-group field names its groups instead of printing
+ * punctuation.
+ *
+ * The e2e-side mirror of the server's `app.draws.group_letter`/`group_label` (ADR
+ * 20260808, "draw-structure derivation runs on both sides and shares its vectors"):
+ * once a group carries no director-typed name of its own, its rendered label is
+ * *computed* from `position`, so a spec asserting on what the draw shows has to
+ * compute the same label rather than assume the director's seed order reads back
+ * as its own names. `position` is 0-based. */
+export function groupLetter(position: number): string {
+  let letters = ''
+  for (let n = position; n >= 0; n = Math.floor(n / 26) - 1) {
+    letters = String.fromCharCode(65 + (n % 26)) + letters
+  }
+  return letters
+}
+
+/** `Group {letter}` — the full label a group renders as, everywhere the app used to
+ * print a stored reservation name. */
+export function groupLabel(position: number): string {
+  return `Group ${groupLetter(position)}`
 }
 
 /** A venue's six free-text address components (`AddressInput` on the wire). The
@@ -196,12 +258,12 @@ export interface StoredAddress extends Coords {
 /** The draw types this seed can author.
  *
  * `round-robin` and `single-elim` carry no draw settings at all (their arms of the
- * server's union are the empty object — a bracket has no pools to qualify out of and its
- * depth is derived from the field), so seeding them is one key on the wire.
+ * server's union are the empty object — a bracket has no groups to qualify out of and
+ * its depth is derived from the field), so seeding them is one key on the wire.
  *
- * `rr-then-ko` carries **K** (`qualifiers_per_pool`), required with no default on its arm,
- * so seeding it means sending `SeedEventOptions.qualifiersPerPool` too — the option says
- * what happens when you don't.
+ * `rr-then-ko` carries **K** (`qualifiers_per_group`), required with no default on its
+ * arm, so seeding it means sending `SeedEventOptions.qualifiersPerGroup` too — the
+ * option says what happens when you don't.
  *
  * ⚠️ **`swiss` is still deliberately absent, and `rr-then-ko`'s CREATE PAYLOAD is still
  * the browser's job.** The payload the event editor builds (`drawSettingsToApi`) is the
@@ -230,68 +292,76 @@ export interface SeedEventOptions {
   /** The event's draw type. Omitted = `round-robin`, the original minimal shape.
    *
    * `single-elim` is what `tournament-single-elim-schedule.spec.ts` seeds, and it is
-   * seeded **with `pools: []`**: a bracket is un-pooled end to end (ADR-0786), so a pool
-   * on such an event would reserve a slice of the venue no fixture is ever drawn into —
-   * and the spec's whole subject is what the scheduler does with a fixture that names no
-   * pool (ADR 20260807, "a pool restricts scheduling, it does not enable it"). */
+   * seeded **with `reservations: []`**: a bracket is un-grouped end to end (ADR-0786),
+   * so a reservation on such an event would book a slice of the venue no group's fixture
+   * is ever drawn into — and the spec's whole subject is what the scheduler does with a
+   * fixture that names no group (ADR 20260807, "a group restricts scheduling, it does
+   * not enable it"). */
   readonly drawType?: SeededDrawType
-  /** **K** — how many finishers of each pool reach the knockout. Sent only when given,
+  /** **K** — how many finishers of each group reach the knockout. Sent only when given,
    * because the key is a **422 naming itself** on every arm but `rr-then-ko`: the union's
    * arms are `extra="forbid"`, and a qualifier count on a format with no knockout stage is
    * refused at the request boundary rather than dropped.
    *
    * Required *with* `drawType: 'rr-then-ko'`, and required in the other direction too —
    * that arm has no default. Omitting it there is the same 422, naming the field. */
-  readonly qualifiersPerPool?: number
-  /** The window both the event and its pools carry. Omitted = tomorrow, 09:00–17:00. */
+  readonly qualifiersPerGroup?: number
+  /** The window both the event and its reservations carry. Omitted = tomorrow,
+   * 09:00–17:00. */
   readonly slot?: SlotSpec
-  /** The event's pools, **in the director's order** — see
-   * `SeedTournamentOptions.pools`, which is this same option. */
-  readonly pools?: ReadonlyArray<PoolSpec>
+  /** The event's reservations, **in the director's order** — see
+   * `SeedTournamentOptions.reservations`, which is this same option. */
+  readonly reservations?: ReadonlyArray<ReservationSpec>
   /** The event's `max_players` cap. Omitted = uncapped — see
    * `SeedTournamentOptions.maxPlayers`. */
   readonly maxPlayers?: number
 }
 
-/** One event as `addEvent` reads it back: the uuid the server minted for it, and its
- * pools **as stored** (empty for an event seeded with `pools: []`). */
+/** One event as `addEvent` reads it back: the uuid the server minted for it, its
+ * reservations **as stored** (empty for an event seeded with `reservations: []`), and
+ * the groups the server minted for them **in lockstep**, one per reservation. */
 export interface SeededEvent {
   readonly eventId: string
-  readonly pools: ReadonlyArray<StoredPool>
+  readonly reservations: ReadonlyArray<StoredReservation>
+  readonly groups: ReadonlyArray<StoredGroup>
 }
 
 /** Optional knobs on `seedTournament`. Defaults reproduce the original minimal
- * shape (one round-robin, one table, one pool, a far-future window), so existing specs
- * are untouched; the solver-schedule spec overrides two of them — its pool window must
- * bracket the stack's real NOW for the call-ahead pinning to fire naturally,
- * and a 4-entrant round-robin wants two tables to run its rounds in parallel. */
+ * shape (one round-robin, one table, one reservation, a far-future window), so
+ * existing specs are untouched; the solver-schedule spec overrides two of them — its
+ * reservation window must bracket the stack's real NOW for the call-ahead pinning to
+ * fire naturally, and a 4-entrant round-robin wants two tables to run its rounds in
+ * parallel. */
 export interface SeedTournamentOptions {
   /** The event's draw type. Omitted = `round-robin`, the original minimal shape.
    *
    * `single-elim` is what `tournament-single-elim-schedule.spec.ts` seeds, and it is
-   * seeded **with `pools: []`**: a bracket is un-pooled end to end (ADR-0786), so a pool
-   * on such an event would reserve a slice of the venue no fixture is ever drawn into —
-   * and the spec's whole subject is what the scheduler does with a fixture that names no
-   * pool (ADR 20260807, "a pool restricts scheduling, it does not enable it"). */
+   * seeded **with `reservations: []`**: a bracket is un-grouped end to end (ADR-0786),
+   * so a reservation on such an event would book a slice of the venue no group's fixture
+   * is ever drawn into — and the spec's whole subject is what the scheduler does with a
+   * fixture that names no group (ADR 20260807, "a group restricts scheduling, it does
+   * not enable it"). */
   readonly drawType?: SeededDrawType
-  /** **K** — see `SeedEventOptions.qualifiersPerPool`, which is this same option on the
-   * one event `seedTournament` adds. */
-  readonly qualifiersPerPool?: number
-  /** The window both the event and its single pool carry. */
+  /** **K** — see `SeedEventOptions.qualifiersPerGroup`, which is this same option on
+   * the one event `seedTournament` adds. */
+  readonly qualifiersPerGroup?: number
+  /** The window both the event and its single reservation carry. */
   readonly slot?: SlotSpec
-  /** The table catalogue; the pool references every listed table. */
+  /** The table catalogue; the reservation books every listed table. */
   readonly tables?: ReadonlyArray<TableSpec>
-  /** The event's pools, **in the director's order** — omitted = the original single
-   * `Pool A` over the whole catalogue, so existing specs are untouched. **`[]` seeds an
-   * event with NO pools**, which is what an un-pooled draw type wants: the create verb
-   * takes any number of pools, zero included, and `??` leaves an explicit empty list
-   * alone (only an *omitted* option falls back to the default).
+  /** The event's reservations, **in the director's order** — omitted = the original
+   * single `Reservation A` over the whole catalogue, so existing specs are untouched.
+   * **`[]` seeds an event with NO reservations**, which is what an un-grouped draw type
+   * wants: the create verb takes any number of reservations, zero included, and `??`
+   * leaves an explicit empty list alone (only an *omitted* option falls back to the
+   * default).
    *
    * The list's order is the whole point of the option: it is what the server turns into
-   * the stored `position`s, and therefore what the draw, the deal and the rendered pool
-   * sections are all ordered by. A caller seeding several pools is making a statement
-   * about their order whether it means to or not. */
-  readonly pools?: ReadonlyArray<PoolSpec>
+   * the stored `position`s — of the reservations themselves, and of the groups it mints
+   * for them in lockstep — and therefore what the draw, the deal and the rendered group
+   * sections are all ordered by. A caller seeding several reservations is making a
+   * statement about their (and their groups') order whether it means to or not. */
+  readonly reservations?: ReadonlyArray<ReservationSpec>
   /** The event's `max_players` cap. Omitted = uncapped (the original minimal
    * shape). The schedule-preview spec sets a small cap so the synthetic field a
    * preview auto-fills to (an uncapped event defaults to 16) is small enough that
@@ -325,18 +395,25 @@ export interface CreatedTournament {
 /** A seeded tournament and the ids a spec needs to address it and its event. */
 export interface SeededTournament extends CreatedTournament {
   readonly eventId: string
-  /** The event's pools **as stored** — read off the create response, so each carries the
-   * uuid the server minted and the `position` it stamped, in the order they were sent.
-   * The only handle a spec has on a pool id, and the order the draw must read in. */
-  readonly pools: ReadonlyArray<StoredPool>
-  /** The event's **first** pool id — its only one under the default seed — so a spec
-   * can scope its standings assertions without indexing `pools` itself.
+  /** The event's reservations **as stored** — read off the create response, so each
+   * carries the uuid the server minted and the `position` it stamped, in the order they
+   * were sent. The only handle a spec has on a reservation id — what a future PATCH
+   * would cite to keep the row. */
+  readonly reservations: ReadonlyArray<StoredReservation>
+  /** The groups the server minted for those reservations, **in lockstep**, one per
+   * reservation, in the same order. The id everything competitive is keyed by — a
+   * fixture's `group_id`, the draw's group sections, a standings table — and the order
+   * the draw must read in. */
+  readonly groups: ReadonlyArray<StoredGroup>
+  /** The event's **first** group id — its only one under the default seed — so a spec
+   * can scope its standings assertions without indexing `groups` itself.
    *
-   * **`null` for a seed with no pools** (`pools: []`, an un-pooled draw type). Nullable
-   * rather than "the first element of a possibly-empty list", which reads as a `string`
-   * and is `undefined`: a pool-less event has no first pool, and saying so here is what
-   * stops that `undefined` travelling into a locator and resolving nothing. */
-  readonly poolId: string | null
+   * **`null` for a seed with no reservations** (`reservations: []`, an un-grouped draw
+   * type, which mints no groups either). Nullable rather than "the first element of a
+   * possibly-empty list", which reads as a `string` and is `undefined`: a group-less
+   * event has no first group, and saying so here is what stops that `undefined`
+   * travelling into a locator and resolving nothing. */
+  readonly groupId: string | null
 }
 
 /**
@@ -345,13 +422,13 @@ export interface SeededTournament extends CreatedTournament {
  * The empty shell is a first-class seed, not half of `seedTournament`: an event is the
  * subject of some specs rather than their scaffolding. `tournament-rr-then-ko.spec.ts`
  * authors its event through the **event editor in the browser**, because the payload
- * that editor builds — specifically whether it carries `qualifiers_per_pool` — is the
+ * that editor builds — specifically whether it carries `qualifiers_per_group` — is the
  * exact seam the arc's 422 lived in, and an event seeded here by hand-written JSON
  * would prove only that the *server* accepts the field.
  *
- * The table catalogue is still seeded (a pool references its tables by id, and the
- * browser has no way to invent one), as is the venue — see `SeedTournamentOptions` for
- * what `address: null` means.
+ * The table catalogue is still seeded (a reservation references its tables by id, and
+ * the browser has no way to invent one), as is the venue — see `SeedTournamentOptions`
+ * for what `address: null` means.
  */
 export async function createTournament(
   director: Guest,
@@ -384,9 +461,9 @@ export async function createTournament(
       // two routes distinct is deliberate: the browser's explicit `null` is
       // covered through the UI in `tournament-no-venue.spec.ts`.
       ...(address === null ? {} : { address }),
-      // A pool references these tables by id, so the catalogue must carry them —
-      // sent WITHOUT ids (see `TableSpec`), and read back below with the ones the
-      // server minted.
+      // A reservation references these tables by id, so the catalogue must carry
+      // them — sent WITHOUT ids (see `TableSpec`), and read back below with the
+      // ones the server minted.
       table_catalogue: tables.map((table) => ({
         label: table.label,
         court: table.court,
@@ -408,9 +485,10 @@ export async function createTournament(
 
 /**
  * Create a **draft** tournament with one singles, **round-robin**, **unrated**,
- * best-of-1 event, drawn across a single pool that holds one table — the minimal
- * shape that can go live and produce a champion. `options.pools` seeds several
- * instead, in the order given (see `PoolSpec`).
+ * best-of-1 event, drawn across a single group that plays under one reservation
+ * holding one table — the minimal shape that can go live and produce a champion.
+ * `options.reservations` seeds several instead, in the order given (see
+ * `ReservationSpec`).
  *
  * `rated: false` + `length_games: 1` is load-bearing, not incidental: an unrated
  * tournament match takes the immediate self-accept completion path, so recording
@@ -430,10 +508,10 @@ export async function seedTournament(
 ): Promise<SeededTournament> {
   const tables = options.tables ?? [{ label: TABLE_LABEL, court: 'A' }]
   // Resolve the catalogue HERE and pass it down, rather than letting
-  // `createTournament` default it again: the event's pools reserve tables out of the
-  // catalogue it creates, so the two must be the same list by construction. What comes
-  // back (`storedTables`) is that same list carrying the ids the server minted — the
-  // only form in which a pool can name a table on the wire.
+  // `createTournament` default it again: the event's reservations book tables out of
+  // the catalogue it creates, so the two must be the same list by construction. What
+  // comes back (`storedTables`) is that same list carrying the ids the server minted —
+  // the only form in which a reservation can name a table on the wire.
   const { tournamentId, tables: storedTables } = await createTournament(
     director,
     name,
@@ -442,23 +520,30 @@ export async function seedTournament(
 
   // The options are forwarded ONE BY ONE rather than spread. `SeedTournamentOptions`
   // also carries `tables` and `address`, which are the *tournament's*, and a spread
-  // would hand them to an event that has no such fields. `pools` in particular must
-  // travel as-is: an explicit `[]` is "this event has NO pools", and only an *omitted*
-  // option may fall back to the single `Pool A`.
-  const { eventId, pools } = await addEvent(director, tournamentId, storedTables, {
-    drawType: options.drawType,
-    qualifiersPerPool: options.qualifiersPerPool,
-    slot: options.slot,
-    pools: options.pools,
-    maxPlayers: options.maxPlayers,
-  })
+  // would hand them to an event that has no such fields. `reservations` in particular
+  // must travel as-is: an explicit `[]` is "this event has NO reservations (and mints
+  // no groups)", and only an *omitted* option may fall back to the single
+  // `Reservation A`.
+  const { eventId, reservations, groups } = await addEvent(
+    director,
+    tournamentId,
+    storedTables,
+    {
+      drawType: options.drawType,
+      qualifiersPerGroup: options.qualifiersPerGroup,
+      slot: options.slot,
+      reservations: options.reservations,
+      maxPlayers: options.maxPlayers,
+    },
+  )
 
   return {
     tournamentId,
     tables: storedTables,
     eventId,
-    pools,
-    poolId: pools[0]?.id ?? null,
+    reservations,
+    groups,
+    groupId: groups[0]?.id ?? null,
   }
 }
 
@@ -474,8 +559,8 @@ export async function seedTournament(
  * express either way.
  *
  * `catalogue` is the tournament's stored tables (from `createTournament` or
- * `seedTournament`), because a pool names the tables it reserves by catalogue **id** and
- * a caller only holds labels — see `PoolSpec`.
+ * `seedTournament`), because a reservation names the tables it books by catalogue
+ * **id** and a caller only holds labels — see `ReservationSpec`.
  */
 export async function addEvent(
   director: Guest,
@@ -489,9 +574,10 @@ export async function addEvent(
     end: '17:00',
   }
   // `??`, never `||` or a truthiness test: `[]` is a MEANINGFUL value here ("this event
-  // has no pools", which is what an un-pooled draw type wants), and a truthy check would
-  // quietly give it `Pool A` back and destroy the premise of any spec that asked for one.
-  const pools = options.pools ?? [{ name: POOL_NAME }]
+  // has no reservations, and therefore mints no groups", which is what an un-grouped
+  // draw type wants), and a truthy check would quietly give it `Reservation A` back and
+  // destroy the premise of any spec that asked for none.
+  const reservations = options.reservations ?? [{ name: RESERVATION_NAME }]
 
   const eventRes = await director.ctx.post(
     `${API}/tournaments/${tournamentId}/events`,
@@ -500,8 +586,8 @@ export async function addEvent(
       data: {
         name: options.name ?? 'Open Singles',
         // The compose stack's clock is UTC, and the solver-schedule spec builds
-        // its pool window around the stack's real NOW; anchoring the event to
-        // UTC keeps a naive wall-clock window resolving to the same instant it
+        // its reservation window around the stack's real NOW; anchoring the event
+        // to UTC keeps a naive wall-clock window resolving to the same instant it
         // did before events carried a venue timezone (ADR "tournament times are
         // timezone-aware instants"), so the window still brackets NOW.
         timezone: 'UTC',
@@ -511,10 +597,10 @@ export async function addEvent(
         // **K**, beside the draw type it belongs to — the server parses the two as one
         // pair (ADR 20260727). Sent only when the caller gives it: the key is refused on
         // every other arm of the union (`extra="forbid"`), so an unconditional
-        // `qualifiers_per_pool: null` would 422 every round-robin this helper has ever
+        // `qualifiers_per_group: null` would 422 every round-robin this helper has ever
         // seeded.
-        ...(options.qualifiersPerPool !== undefined
-          ? { qualifiers_per_pool: options.qualifiersPerPool }
+        ...(options.qualifiersPerGroup !== undefined
+          ? { qualifiers_per_group: options.qualifiersPerGroup }
           : {}),
         entry_fee: 0,
         // Only sent when the caller caps the field; omitting the key leaves the
@@ -526,19 +612,21 @@ export async function addEvent(
         match_settings: { rated: false, length_games: 1 },
         predicates: [],
         // Sent in the caller's order and NEVER re-sorted here: this array's order is
-        // what `stored_pools` stamps the pools' `position`s from, so re-ordering it —
-        // even "tidily", by name — would silently seed a different event than the one the
-        // spec asked for. No pool carries an `id` or a `position` key either; sending
-        // either is a 422 naming it (`PoolWrite` is `extra="forbid"` and has neither
+        // what `stored_groups` stamps the reservations' (and, in lockstep, the
+        // groups') `position`s from, so re-ordering it — even "tidily", by name —
+        // would silently seed a different event than the one the spec asked for. No
+        // reservation carries an `id` or a `position` key either; sending either is a
+        // 422 naming it (`ReservationWrite` is `extra="forbid"` and has neither
         // field).
-        pools: pools.map((pool) => ({
-          name: pool.name,
+        reservations: reservations.map((reservation) => ({
+          name: reservation.name,
           slot,
-          // Labels resolved to the ids the server just minted — a pool's `table_ids`
-          // are catalogue ids on the wire, and a stale one is silently intersected
-          // away by the solver ("a stale ref is a table the pool cannot use"), so a
-          // typo would surface as an inexplicably infeasible day rather than an error.
-          table_ids: tableIdsFor(catalogue, pool.tableLabels),
+          // Labels resolved to the ids the server just minted — a reservation's
+          // `table_ids` are catalogue ids on the wire, and a stale one is silently
+          // intersected away by the solver ("a stale ref is a table the reservation
+          // cannot use"), so a typo would surface as an inexplicably infeasible day
+          // rather than an error.
+          table_ids: tableIdsFor(catalogue, reservation.tableLabels),
         })),
       },
     },
@@ -548,29 +636,38 @@ export async function addEvent(
       `create event failed: ${eventRes.status()} ${await eventRes.text()}`,
     )
   }
-  // `TournamentEventRead` carries the stored pools, ordered by the `position` the server
-  // just stamped (the relationship's own `order_by`) — so the minted ids come back on the
-  // create itself, in the order they were sent, and no second read is needed to learn
-  // them.
+  // `TournamentEventRead` carries the stored reservations AND the groups minted for
+  // them, both ordered by the `position` the server just stamped (each relationship's
+  // own `order_by`) — so the minted ids come back on the create itself, in the order
+  // they were sent, and no second read is needed to learn them.
   const created = (await eventRes.json()) as {
     id: string
-    pools: ReadonlyArray<StoredPool>
+    reservations: ReadonlyArray<StoredReservation>
+    groups: ReadonlyArray<StoredGroup>
   }
-  if (created.pools.length !== pools.length) {
+  if (created.reservations.length !== reservations.length) {
     throw new Error(
-      `seeded ${pools.length} pools but the event stored ${created.pools.length}`,
+      `seeded ${reservations.length} reservations but the event stored ${created.reservations.length}`,
+    )
+  }
+  // The 1:1 (ADR 20260801, extended): one group per reservation, minted in lockstep.
+  // A mismatch here means the lockstep broke, which no caller of this helper could ever
+  // observe from the reservations array alone.
+  if (created.groups.length !== reservations.length) {
+    throw new Error(
+      `seeded ${reservations.length} reservations but the event minted ${created.groups.length} groups`,
     )
   }
 
-  return { eventId: created.id, pools: created.pools }
+  return { eventId: created.id, reservations: created.reservations, groups: created.groups }
 }
 
-/** Resolve a pool's reserved-table **labels** to the catalogue ids the wire wants;
- * omitted labels reserve the whole catalogue (the single-pool default).
+/** Resolve a reservation's booked-table **labels** to the catalogue ids the wire
+ * wants; omitted labels book the whole catalogue (the single-reservation default).
  *
  * Throws on a label the catalogue does not hold. That is not defensiveness for its own
- * sake: an unresolvable label sent as-is would be a table the pool "reserves" and the
- * solver cannot see, so the seed would look fine and the day would come back
+ * sake: an unresolvable label sent as-is would be a table the reservation "books" and
+ * the solver cannot see, so the seed would look fine and the day would come back
  * infeasible three screens away. */
 function tableIdsFor(
   tables: ReadonlyArray<StoredTable>,
@@ -582,7 +679,7 @@ function tableIdsFor(
     if (!table) {
       const known = tables.map((t) => t.label).join(', ') || '(none)'
       throw new Error(
-        `pool reserves "${label}", which the seeded catalogue does not hold — has: ${known}`,
+        `reservation books "${label}", which the seeded catalogue does not hold — has: ${known}`,
       )
     }
     return table.id
@@ -621,7 +718,7 @@ export async function enterPlayer(
 /** The slice of an event the rr-then-ko spec reads back off the tournament detail:
  * its id, and the **draw configuration as the server stored it**.
  *
- * `draw_type` and `qualifiers_per_pool` are one fact in two columns (ADR 20260727), so
+ * `draw_type` and `qualifiers_per_group` are one fact in two columns (ADR 20260727), so
  * they are read as a pair. Reading them back is what turns "the create request did not
  * 422" into "the server holds the configuration the director typed" — a 201 alone would
  * also be returned by a server that had quietly dropped K. */
@@ -630,15 +727,15 @@ export interface EventDrawConfig {
   readonly name: string
   readonly draw_type: string
   /** **K**. `null` for every draw type that has no knockout stage to qualify for. */
-  readonly qualifiers_per_pool: number | null
+  readonly qualifiers_per_group: number | null
   /** **R** — how many rounds a `swiss` event plays. `null` for every other draw type,
    * which does not ask the question (a round-robin's rounds fall out of the circle
    * method, a bracket's depth out of the field).
    *
-   * Read back for the reason `qualifiers_per_pool` is: it is **required with no default**
-   * on the swiss arm of the server's draw-settings union, so it is the field a create
-   * body is refused for omitting — and a 201 alone would also come back from a server
-   * that accepted the body and dropped R on the floor. */
+   * Read back for the reason `qualifiers_per_group` is: it is **required with no
+   * default** on the swiss arm of the server's draw-settings union, so it is the field
+   * a create body is refused for omitting — and a 201 alone would also come back from
+   * a server that accepted the body and dropped R on the floor. */
   readonly rounds: number | null
   /** The server's own count of active entries. Read here rather than counted off the
    * roster on screen, which **truncates** at eight chips and a `+N more` line: a spec
@@ -721,45 +818,75 @@ export async function getDrawTypeCatalogue(
 }
 
 /**
- * Read an event's pools back off the tournament detail, **as stored**.
+ * Read an event's reservations back off the tournament detail, **as stored**.
  *
  * This is the one seam that can say whether the server took the order the director sent
- * and made it a fact: a client cannot send a `position` at all (`PoolWrite` is
+ * and made it a fact: a client cannot send a `position` at all (`ReservationWrite` is
  * `extra="forbid"` — it is a 422), so every position on the wire was assigned here. A
  * spec that only read the rendered page could not tell "the server ordered them" from
  * "the client re-derived an order that happened to agree".
  *
- * The pools are returned **exactly as the payload carries them**, unsorted, so a caller
- * asserting on the order is asserting on the server's, not on this helper's.
+ * The reservations are returned **exactly as the payload carries them**, unsorted, so a
+ * caller asserting on the order is asserting on the server's, not on this helper's.
  */
-export async function getEventPools(
+export async function getEventReservations(
   viewer: Guest,
   tournamentId: string,
   eventId: string,
-): Promise<ReadonlyArray<StoredPool>> {
+): Promise<ReadonlyArray<StoredReservation>> {
   const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
   if (!res.ok()) {
     throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
   }
   const detail = (await res.json()) as {
-    events: ReadonlyArray<{ id: string; pools: ReadonlyArray<StoredPool> }>
+    events: ReadonlyArray<{ id: string; reservations: ReadonlyArray<StoredReservation> }>
   }
   const event = detail.events.find((e) => e.id === eventId)
   if (!event) {
     throw new Error(`no event ${eventId} on tournament ${tournamentId}`)
   }
-  return event.pools
+  return event.reservations
+}
+
+/**
+ * Read an event's **groups** back off the tournament detail, **as stored** — the
+ * competitive-face twin of `getEventReservations`.
+ *
+ * A group is never client-written, so there is no "did the server take the order"
+ * question here the way there is for reservations — the server mints one group per
+ * reservation, in lockstep, and stamps its `position` from the same list index. What a
+ * caller *can* only learn here is the id everything competitive is keyed by: a
+ * fixture's `group_id`, the draw's group sections, a standings table.
+ */
+export async function getEventGroups(
+  viewer: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<ReadonlyArray<StoredGroup>> {
+  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
+  if (!res.ok()) {
+    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
+  }
+  const detail = (await res.json()) as {
+    events: ReadonlyArray<{ id: string; groups: ReadonlyArray<StoredGroup> }>
+  }
+  const event = detail.events.find((e) => e.id === eventId)
+  if (!event) {
+    throw new Error(`no event ${eventId} on tournament ${tournamentId}`)
+  }
+  return event.groups
 }
 
 /**
  * Mint `count` fresh guests and **director-enter** every one of them into the event,
  * returning them so the spec can name them (and dispose their contexts).
  *
- * The fleet exists because some draw shapes only appear at scale: three pools with three
- * players each is nine entrants, and nine self-registrations through the browser would
- * be nine sign-ins to run a test whose subject is the *draw*, not registration. Each
- * guest is minted the same way `mintGuest` mints one — `GET /v1/session` into its own
- * cookie jar — and entered by the director (`enterPlayer`), the seam that has no web UI.
+ * The fleet exists because some draw shapes only appear at scale: three groups with
+ * three players each is nine entrants, and nine self-registrations through the browser
+ * would be nine sign-ins to run a test whose subject is the *draw*, not registration.
+ * Each guest is minted the same way `mintGuest` mints one — `GET /v1/session` into its
+ * own cookie jar — and entered by the director (`enterPlayer`), the seam that has no web
+ * UI.
  *
  * Sequential on purpose: entries land in registration order, which is the order the
  * draw deals from (ADR-0786), so a serial loop makes the seeded field deterministic
@@ -843,11 +970,11 @@ export interface FixtureTime {
 
 export interface FixtureDetail {
   readonly id: string
-  /** The pool this fixture was drawn into, or `null` for an un-pooled one (a knockout
-   * slot). Read because the detail's fixtures arrive **ordered by their pool's
-   * position** (ADR 20260801) — so the order these ids first appear in *is* the
-   * server's statement of the event's pool order, before any client touches it. */
-  readonly pool_id: string | null
+  /** The group this fixture was drawn into, or `null` for an un-grouped one (a
+   * knockout slot). Read because the detail's fixtures arrive **ordered by their
+   * group's position** (ADR 20260801) — so the order these ids first appear in *is*
+   * the server's statement of the event's group order, before any client touches it. */
+  readonly group_id: string | null
   /** Which round of its draw the fixture belongs to, 1-based. The handle on a bracket's
    * **first round** — the only round of a freshly cut single-elim draw whose fixtures
    * have both sides, and therefore the only one the solver can place at all. */
@@ -907,7 +1034,7 @@ export async function getScheduleDetail(
 
 /**
  * Read the tournament detail and return the event's **first fixture** — the one
- * pairing a two-entrant single pool cuts. It carries both its own `id` (needed to
+ * pairing a two-entrant single group cuts. It carries both its own `id` (needed to
  * address its placement, i.e. to call it) and the `match_id` it materialized into
  * at go-live (#788), plus its live `match_status`.
  *
@@ -977,7 +1104,7 @@ function naiveNow(): string {
  *
  * `scheduled_start` defaults to NOW as a naive wall-clock; the placement is *soft*
  * (an out-of-window time is a flag on read, not a rejection), so a near-now time
- * against a far-future pool window still calls the match.
+ * against a far-future reservation window still calls the match.
  *
  * `tableId` is a **required argument with no default**, and that is the shape of the
  * ADR rather than a style choice: `tournament_fixtures.table_id` is a real foreign key
