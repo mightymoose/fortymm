@@ -2,6 +2,7 @@ import os
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
+    AsyncAttrs,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
@@ -16,8 +17,18 @@ def get_database_url() -> str:
     return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 
-class Base(DeclarativeBase):
-    pass
+class Base(AsyncAttrs, DeclarativeBase):
+    """The declarative base every model hangs off.
+
+    ``AsyncAttrs`` adds one thing: ``await obj.awaitable_attrs.<relationship>``, the
+    sanctioned way to load a **lazy** relationship on an already-loaded object under
+    async. Without it the only spellings are a plain attribute access — which emits IO
+    from a sync context and raises ``MissingGreenlet`` rather than querying — or a
+    throwaway ``select()`` issued purely so its loader option populates the identity
+    map, which costs a second round trip to re-read a row already in the session.
+
+    It adds no columns, no behaviour and no cost to a model that never uses it.
+    """
 
 
 _engine: AsyncEngine | None = None

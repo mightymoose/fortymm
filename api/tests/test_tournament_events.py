@@ -22,7 +22,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.models import (
     DrawType,
@@ -31,9 +31,10 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
-    TournamentEventPoolTable,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
     TournamentEventStage,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -51,9 +52,10 @@ from app.tournament_events import create_event, delete_event, update_event
 from app.tournament_pools import pool_read
 from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
+    counted_statements,
     event_pools,
+    joined_to_reservation,
     make_user,
-    stage_id_at,
     venue_tables,
 )
 
@@ -178,8 +180,8 @@ async def test_create_persists_an_event_on_an_owned_tournament(
     assert event.slot == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     # The pools persisted as rows of their own, not as a value inside the event, each
     # with an id the SERVER minted (ADR 20260801) — the payload carried none.
-    assert [pool.name for pool in event.pools] == ["Pool A"]
-    assert all(isinstance(pool.id, uuid.UUID) for pool in event.pools)
+    assert [group.reservation.name for group in event.groups] == ["Pool A"]
+    assert all(isinstance(pool.id, uuid.UUID) for pool in event.groups)
     event_id = event.id
 
     # Persisted, not merely returned.
@@ -277,7 +279,9 @@ def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
     what discriminate, since ordering by position cannot itself reveal whether the
     positions were stamped from the payload's order or from the pools' names.
     """
-    return [(pool.name, pool.position) for pool in event.pools]
+    # The name is the RESERVATION's and the position is the GROUP's — the split the
+    # projection reads back, spelled here against the rows.
+    return [(group.reservation.name, group.position) for group in event.groups]
 
 
 async def test_create_positions_pools_by_the_order_they_were_sent(
@@ -320,7 +324,7 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
     ).scalar_one()
     assert _named_positions(row) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
     # No two pools of one event share a position.
-    positions = [pool.position for pool in row.pools]
+    positions = [pool.position for pool in row.groups]
     assert len(set(positions)) == len(positions)
 
 
@@ -438,7 +442,7 @@ async def test_update_repositions_pools_by_the_order_they_were_patched(
         )
     ).scalar_one()
     assert _named_positions(row) == [("Pool B", 0), ("Pool C", 1), ("Pool A", 2)]
-    positions = [pool.position for pool in row.pools]
+    positions = [pool.position for pool in row.groups]
     assert len(set(positions)) == len(positions)
 
 
@@ -452,7 +456,7 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
     the event's stage 0 rather than the event directly, one hop the join below walks.
 
     Read with a **column-only** ``SELECT`` against the pools (and stages) table, not off
-    ``event.pools``: the relationship would answer just as happily if the pools were
+    ``event.groups``: the relationship would answer just as happily if the pools were
     still a JSONB list on the event, and the claim here is precisely that they are not.
 
     The slot columns are asserted as real ``date``/``time`` VALUES rather than as
@@ -474,20 +478,25 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
     db_session.expire_all()
     rows = (
         await db_session.execute(
-            select(
-                TournamentEventStage.event_id,
-                TournamentEventPool.id,
-                TournamentEventPool.name,
-                TournamentEventPool.position,
-                TournamentEventPool.slot_date,
-                TournamentEventPool.slot_start,
-                TournamentEventPool.slot_end,
+            joined_to_reservation(
+                select(
+                    TournamentEventStage.event_id,
+                    TournamentEventStageGroup.id,
+                    TournamentEventReservation.name,
+                    TournamentEventStageGroup.position,
+                    TournamentEventReservation.slot_date,
+                    TournamentEventReservation.slot_start,
+                    TournamentEventReservation.slot_end,
+                )
             )
             .join(
                 TournamentEventStage,
-                TournamentEventStage.id == TournamentEventPool.stage_id,
+                TournamentEventStage.id == TournamentEventStageGroup.stage_id,
             )
-            .order_by(TournamentEventPool.position)
+            # The name and the window live on the reservation, the id and the position
+            # on the group: what the wire serves as one pool is these two rows, walked
+            # through the join that maps them.
+            .order_by(TournamentEventStageGroup.position)
         )
     ).all()
 
@@ -706,11 +715,11 @@ async def _add_cut_event(
         event=event,
         tournament=tournament,
     )
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.commit()
     # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
-    # genuinely LOADED collection — unlike the VIEWONLY ``event.pools``) along with it;
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
     # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
     # on the now-expired child objects.
     stage0_id, pool0_id = stages[0].id, pools[0].id
@@ -763,7 +772,7 @@ async def _add_cut_event_with_two_pools(
         event=event,
         tournament=tournament,
     )
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.commit()
     stage0_id = stages[0].id
@@ -806,7 +815,7 @@ async def test_update_event_frozen_pool_reorder_is_refused(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _add_cut_event_with_two_pools(db_session, tournament)
     event_id = event.id
-    (pool_a, pool_b) = sorted(event.pools, key=lambda pool: pool.position)
+    (pool_a, pool_b) = sorted(event.groups, key=lambda pool: pool.position)
 
     updates = TournamentEventUpdate.model_validate(
         {
@@ -814,13 +823,13 @@ async def test_update_event_frozen_pool_reorder_is_refused(
             "pools": [
                 {
                     "id": str(pool_b.id),
-                    "name": pool_b.name,
+                    "name": pool_b.reservation.name,
                     "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
                     "table_ids": [],
                 },
                 {
                     "id": str(pool_a.id),
-                    "name": pool_a.name,
+                    "name": pool_a.reservation.name,
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": [],
                 },
@@ -847,7 +856,7 @@ async def test_update_event_frozen_pool_reorder_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [pool.name for pool in row.pools] == ["Pool A", "Pool B"]
+    assert [group.reservation.name for group in row.groups] == ["Pool A", "Pool B"]
 
 
 async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
@@ -861,7 +870,7 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _add_cut_event_with_two_pools(db_session, tournament)
     event_id = event.id
-    (pool_a, pool_b) = sorted(event.pools, key=lambda pool: pool.position)
+    (pool_a, pool_b) = sorted(event.groups, key=lambda pool: pool.position)
 
     updated, league_id = await update_event(
         db_session,
@@ -874,7 +883,7 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
                 "pools": [
                     {
                         "id": str(pool_a.id),
-                        "name": pool_a.name,
+                        "name": pool_a.reservation.name,
                         "slot": {
                             "date": "2026-06-13",
                             "start": "09:00",
@@ -884,7 +893,7 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
                     },
                     {
                         "id": str(pool_b.id),
-                        "name": pool_b.name,
+                        "name": pool_b.reservation.name,
                         "slot": {
                             "date": "2026-06-13",
                             "start": "13:00",
@@ -899,7 +908,7 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
 
     assert league_id == default_league.id
     assert updated.name == "Renamed Under Draw"
-    assert [pool.name for pool in updated.pools] == ["Pool A", "Pool B"]
+    assert [group.reservation.name for group in updated.groups] == ["Pool A", "Pool B"]
 
 
 async def test_update_event_persists_a_normal_field_edit(
@@ -1023,7 +1032,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [pool.name for pool in row.pools] == ["Pool A"]
+    assert [group.reservation.name for group in row.groups] == ["Pool A"]
 
 
 async def test_update_event_frozen_draw_type_change_is_refused(
@@ -1147,17 +1156,21 @@ async def test_update_event_timezone_change_reanchors_placements(
 
 #: The leg that catches a reservation naming a table of a tournament other than the one
 #: the row claims to be inside.
-POOL_TABLE_TABLE_CONSTRAINT = "fk_tournament_event_pool_tables_tournament_id_table_id"
+POOL_TABLE_TABLE_CONSTRAINT = (
+    "fk_tournament_event_reservation_tables_tournament_id_table_id"
+)
 #: The leg that catches a reservation whose claimed tournament is not the one its pool's
 #: event belongs to — the one that looks redundant and is not (see the model).
-POOL_TABLE_EVENT_CONSTRAINT = "fk_tournament_event_pool_tables_tournament_id_event_id"
+POOL_TABLE_EVENT_CONSTRAINT = (
+    "fk_tournament_event_reservation_tables_tournament_id_event_id"
+)
 
 
 async def _reservation_rows(
     db: AsyncSession, event_id: uuid.UUID
 ) -> list[tuple[uuid.UUID, str, str, int]]:
-    """``(tournament_id, pool_id, table_id, position)`` per stored reservation of this
-    event, in pool then position order.
+    """``(tournament_id, reservation_id, table_id, position)`` per stored reservation of
+    this event, in pool then position order.
 
     A column-only ``SELECT`` so it reads the rows and not the session's opinion of them:
     two of the tests below delete rows out from under loaded ORM instances (that is the
@@ -1165,19 +1178,19 @@ async def _reservation_rows(
     what the session last saw.
     """
     return [
-        (tournament_id, pool_id, table_id, position)
-        for tournament_id, pool_id, table_id, position in (
+        (tournament_id, reservation_id, table_id, position)
+        for tournament_id, reservation_id, table_id, position in (
             await db.execute(
                 select(
-                    TournamentEventPoolTable.tournament_id,
-                    TournamentEventPoolTable.pool_id,
-                    TournamentEventPoolTable.table_id,
-                    TournamentEventPoolTable.position,
+                    TournamentEventReservationTable.tournament_id,
+                    TournamentEventReservationTable.reservation_id,
+                    TournamentEventReservationTable.table_id,
+                    TournamentEventReservationTable.position,
                 )
-                .where(TournamentEventPoolTable.event_id == event_id)
+                .where(TournamentEventReservationTable.event_id == event_id)
                 .order_by(
-                    TournamentEventPoolTable.pool_id,
-                    TournamentEventPoolTable.position,
+                    TournamentEventReservationTable.reservation_id,
+                    TournamentEventReservationTable.position,
                 )
             )
         ).all()
@@ -1218,19 +1231,19 @@ async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_se
         payload=_event_payload(pools=[_pool_payload(table_2, table_1)]),
     )
     event_id = event.id
-    pool_id = event.pools[0].id
+    reservation_id = event.groups[0].reservation.id
 
     # Rows, carrying the denormalized tournament and the order sent.
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, pool_id, table_2, 0),
-        (tournament_id, pool_id, table_1, 1),
+        (tournament_id, reservation_id, table_2, 0),
+        (tournament_id, reservation_id, table_1, 1),
     ]
     # And the same order back through the read shape everything above the database uses.
     stored = (
         await db_session.execute(
-            select(TournamentEventPool).where(
-                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+            select(TournamentEventStageGroup).where(
+                TournamentEventStageGroup.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -1269,11 +1282,11 @@ async def test_a_reservation_of_another_tournaments_table_never_reaches_the_data
         payload=_event_payload(pools=[_pool_payload(mine, foreign_table)]),
     )
     event_id = event.id
-    pool_id = event.pools[0].id
+    reservation_id = event.groups[0].reservation.id
 
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, pool_id, mine, 0)
+        (tournament_id, reservation_id, mine, 0)
     ]
 
 
@@ -1313,15 +1326,12 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
         payload=_event_payload(pools=[_pool_payload()]),
     )
     event_id = event.id
-    pool_id = event.pools[0].id
-    stage_id = await stage_id_at(db_session, event_id, 0)
-
+    reservation_id = event.groups[0].reservation.id
     db_session.add(
-        TournamentEventPoolTable(
+        TournamentEventReservationTable(
             tournament_id=tournament_id,
             event_id=event_id,
-            stage_id=stage_id,
-            pool_id=pool_id,
+            reservation_id=reservation_id,
             table_id=foreign_table,
             position=0,
         )
@@ -1332,11 +1342,10 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
     await db_session.rollback()
 
     db_session.add(
-        TournamentEventPoolTable(
+        TournamentEventReservationTable(
             tournament_id=other_id,
             event_id=event_id,
-            stage_id=stage_id,
-            pool_id=pool_id,
+            reservation_id=reservation_id,
             table_id=foreign_table,
             position=0,
         )
@@ -1369,13 +1378,11 @@ async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
         payload=_event_payload(pools=[_pool_payload()]),
     )
 
-    stage_id = await stage_id_at(db_session, event.id, 0)
     db_session.add(
-        TournamentEventPoolTable(
+        TournamentEventReservationTable(
             tournament_id=tournament_id,
             event_id=event.id,
-            stage_id=stage_id,
-            pool_id=event.pools[0].id,
+            reservation_id=event.groups[0].reservation.id,
             table_id=str(uuid.uuid4()),
             position=0,
         )
@@ -1417,23 +1424,27 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
         payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
     )
     event_id = event.id
-    pool_id = event.pools[0].id
+    # Two ids, because the row that holds the table and the row a client cites are
+    # different rows now: the reservation carries the tables, the group carries the
+    # identity the wire serves.
+    group_id = event.groups[0].id
+    reservation_id = event.groups[0].reservation.id
 
     await db_session.delete(doomed)
     await db_session.commit()
 
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, pool_id, table_1, 0)
+        (tournament_id, reservation_id, table_1, 0)
     ]
     # The pool itself is untouched — a reservation went, not a pool.
     assert (
         await db_session.execute(
-            select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+            select(TournamentEventStageGroup.id).where(
+                TournamentEventStageGroup.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
-    ).scalars().all() == [pool_id]
+    ).scalars().all() == [group_id]
 
 
 async def test_removing_a_pool_takes_its_table_reservations_with_it(
@@ -1497,12 +1508,13 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
         payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
     )
     event_id = event.id
-    pool_id = event.pools[0].id
+    group_id = event.groups[0].id
+    reservation_id = event.groups[0].reservation.id
     created_at = (
         await db_session.execute(
-            select(TournamentEventPoolTable.created_at).where(
-                TournamentEventPoolTable.event_id == event_id,
-                TournamentEventPoolTable.table_id == table_1,
+            select(TournamentEventReservationTable.created_at).where(
+                TournamentEventReservationTable.event_id == event_id,
+                TournamentEventReservationTable.table_id == table_1,
             )
         )
     ).scalar_one()
@@ -1515,20 +1527,95 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
         updates=TournamentEventUpdate.model_validate(
             # The pool is CITED by the id the server minted, so the diff keeps its row —
             # which is the whole premise of the claim below about its reservations.
-            {"pools": [{**_pool_payload(table_2, table_1), "id": str(pool_id)}]}
+            {"pools": [{**_pool_payload(table_2, table_1), "id": str(group_id)}]}
         ),
     )
 
     db_session.expire_all()
     assert await _reservation_rows(db_session, event_id) == [
-        (tournament_id, pool_id, table_2, 0),
-        (tournament_id, pool_id, table_1, 1),
+        (tournament_id, reservation_id, table_2, 0),
+        (tournament_id, reservation_id, table_1, 1),
     ]
     assert (
         await db_session.execute(
-            select(TournamentEventPoolTable.created_at).where(
-                TournamentEventPoolTable.event_id == event_id,
-                TournamentEventPoolTable.table_id == table_1,
+            select(TournamentEventReservationTable.created_at).where(
+                TournamentEventReservationTable.event_id == event_id,
+                TournamentEventReservationTable.table_id == table_1,
             )
         )
     ).scalar_one() == created_at
+
+
+# The round trips ONE pools PATCH costs, over the whole `update_event` verb: the
+# tournament and its catalogue, the event, the freeze check's read of the current
+# groups, the stage-0 load the diff is written against, and the event's reservations.
+#
+# It exists because nothing else pins the WRITE path. The three sibling tripwires
+# (`EXPECTED_TOURNAMENT_LIST_STATEMENTS`, `EXPECTED_TOURNAMENT_DETAIL_STATEMENTS`,
+# `EXPECTED_DASHBOARD_PANEL_STATEMENTS`) all count a page READ, so a loader mistake on
+# this verb costs real round trips and leaves every one of them green. Splitting a pool
+# into a group and a reservation did exactly that, twice, and both were invisible:
+#
+#   * an explicit `selectinload` chain spelled down to the reservation's tables, which
+#     OVERRODE the `lazy="joined"` those one-to-one legs declare and turned each into
+#     its own statement; and
+#   * a throwaway `select(TournamentEvent)` issued purely so a loader option would
+#     populate `event.reservations`, re-reading a row already in the session.
+#
+# Together they cost 7 statements on every pools PATCH. `app.tournament_pools` is the
+# one write seam, so one number here covers the whole verb.
+#
+# It is not a count that must never move — a real change to what the verb does may move
+# it. It is a count that must never move BY ACCIDENT. If it changes, say why in the
+# same commit.
+EXPECTED_POOL_WRITE_STATEMENTS = 15
+
+
+async def test_pool_write_statement_count_does_not_drift(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    default_league: League,
+) -> None:
+    """A pools PATCH costs a fixed number of round trips, whatever the loader graph
+    underneath it happens to look like.
+
+    Two pools, both CITED by id, so this exercises the update arm of the id-keyed diff
+    — the arm that re-times and re-tables an existing reservation, and therefore the one
+    that has to have the whole group -> join -> reservation -> tables chain in hand. An
+    add-only or remove-only payload would touch less of it.
+
+    Counted around the verb rather than the HTTP request, matching the sibling read
+    tripwires: an endpoint-level count would also sweep up session and auth statements
+    that have nothing to do with this loader graph.
+    """
+    owner = await make_user(db_session, "events-write-count-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament_id = tournament.id
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tournament_id,
+        actor=owner,
+        payload=_event_payload(pools=[_pool("Pool A"), _pool("Pool B")]),
+    )
+    event_id = event.id
+    group_ids = [group.id for group in event.groups]
+    await db_session.commit()
+
+    async with counted_statements(engine) as (session, statements):
+        await update_event(
+            session,
+            tournament_id=tournament_id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "pools": [
+                        {**_pool("Pool A"), "id": str(group_ids[0])},
+                        {**_pool("Pool B"), "id": str(group_ids[1])},
+                    ]
+                }
+            ),
+        )
+
+    selects = [s for s in statements if s.strip().upper().startswith("SELECT")]
+    assert len(selects) == EXPECTED_POOL_WRITE_STATEMENTS, selects

@@ -390,7 +390,7 @@ rating rank, never the player's index on the current page).
 
 **Draw**:
 The complete set of **fixtures** an event's draw type prescribes for its
-entrants — a bracket, a set of pools, pools feeding a bracket, or **swiss**
+entrants — a bracket, a set of **groups**, groups feeding a bracket, or **swiss**
 rounds of pairings. A draw is
 **cut** (the deliberate, reviewable act of generating it; re-cutting replaces
 it wholesale and is refused once there is any evidence of play), and it is
@@ -402,7 +402,7 @@ _Avoid_: bracket (one draw type's shape, not the general concept), schedule
 (when a fixture is *played* is the schedule's concern, not the draw's).
 
 **Fixture**:
-A planned pairing in a **draw**: a round and a position (and a **pool**, when
+A planned pairing in a **draw**: a round and a position (and a **group**, when
 the draw is pooled), whose sides may still be unknown. A fixture is not a
 **match** — it *materializes* into one the moment both of its sides are known,
 and the match then runs the normal propose/accept lifecycle. A fixture is
@@ -463,29 +463,43 @@ for the withheld case — a tournament with no venue shows nothing, not a
 placeholder), location (ambiguous between the address and the coordinates),
 address (that is one *part* of a venue, not the whole).
 
-**Pool**:
-One concept with two faces, deliberately not split: a reserved slice of the
-venue (a set of tables for a window of time) *and*, once a round-robin draw is
-cut, the group of entrants who play all-play-all on that slice. The set of pool
-**identities** an event has is frozen the moment a draw exists — pools can no
-longer be added, removed, or re-identified, because every **fixture** names the
-pool it belongs to — but a pool's venue attributes (its tables, its time window)
-and its display name stay editable mid-event, because the venue changes under a
-running tournament (a table breaks, a table frees up).
-A pool **restricts** scheduling rather than enabling it, and it restricts per
-**fixture** (ADR 20260807): a fixture that names a pool is placed on that pool's
-tables inside its window, while a fixture that names none is placed across the
-whole venue over its **event**'s window. A pool never confines a fixture that
-does not name it — a **knockout stage**'s fixtures take the event-wide
-reservation even though their event has pools, because those pools describe the
-**pool stage**.
-_Avoid_: group (a pool is not a grouping abstraction separate from the venue
-slice), division.
+**Group**:
+An ordered set of entrants who play all-play-all. A group belongs to a **stage**
+— the **pool stage** of a round-robin draw — and its label derives from its
+position in that stage's order, so the first group is "Group 1". Nothing stores a
+group's name.
+The set of group **identities** a stage has is frozen the moment a **draw**
+exists: groups can no longer be added, removed, or re-identified, because every
+**fixture** names the group it belongs to. The order is frozen with them, because
+that order is what the draw was seeded against.
+A group plays in a **reservation**, and it is the reservation that **restricts**
+scheduling rather than the group (ADR 20260807). A fixture that names a group is
+placed on that group's reservation — its tables, inside its window — while a
+fixture that names none is placed across the whole venue over its **event**'s
+window. A group never confines a fixture that does not name it: a **knockout
+stage**'s fixtures take the event-wide reservation even though their event has
+groups, because those groups belong to the pool stage.
+_Avoid_: pool (one word was used for a group and its **reservation** together,
+which is the confusion the two entries exist to end), division, grouping.
+
+**Reservation**:
+A set of **tables** held for a window of time. A reservation belongs to the
+**event**, not to a **stage**, so both stages of a round-robin-then-knockout event
+read one set of them. It carries the tables, the window, and the name a director
+types.
+A director may edit a reservation's name, its tables and its window **mid-event**,
+and none of that is frozen by a **draw** — because the venue changes under a
+running tournament (a table breaks, a table frees up), and nothing about the draw
+depends on where a **group** plays. Only the set of group identities freezes.
+Every group plays in exactly one reservation. A reservation with no group is a
+state nothing produces today.
+_Avoid_: pool (see **group**), slot (that is the reservation's *window*, one part
+of it), booking, allocation.
 
 **Freeze**:
 A control the director owns but cannot use *right now*, because the resource has
 moved into a state that refuses the act — a **draw** under way, a cut event's
-draw type, an event's set of pool identities. A frozen control renders disabled
+draw type, an event's set of **group** identities. A frozen control renders disabled
 with its reason stated, and the reason names the way out where one exists. It is
 keyed on the resource's state, never on who is asking: a control withheld by
 **permission** is hidden instead, and carries no reason at all (ADR-0015). The
@@ -510,31 +524,33 @@ exactly one stage (ADR 20260815). Each stage is run by one single-stage draw
 type: a round robin, a single elimination, or a **swiss**. Most events have
 exactly one stage; a round-robin-then-knockout event has two — a **pool
 stage** run as a round robin, feeding a **knockout stage** run as a single
-elimination. The system derives an event's stages from its draw type; a
+elimination. A stage's **groups** hang off it; the **reservations** they play in
+hang off the event. The system derives an event's stages from its draw type; a
 director never authors them, and they freeze when a draw exists. Both of a
 two-stage draw's stages are **cut together** in one stroke, so the knockout
 bracket exists — with its sides still unknown — from the moment the draw
 does. This is the sport's own word: ITTF regulations play a "group stage",
 then a "knock-out stage".
 _Avoid_: round (a **round** is one layer *within* a stage), phase, leg, group
-stage (a **pool** is not a group).
+(a **group** is one set of entrants *inside* the pool stage, not the stage
+itself).
 
 **Qualifier**:
-An entrant who advances out of a **pool** into the **knockout stage**: the top
-*K* of that pool's **standings**, where *K* is the event's qualifiers-per-pool
-setting. Qualifiers are seated into the bracket **as each pool finishes**, not
-when the whole **pool stage** does. Within a finishing place, pools are **not
-ranked against each other** — every pool winner is an equal — and that freedom
+An entrant who advances out of a **group** into the **knockout stage**: the top
+*K* of that group's **standings**, where *K* is the event's qualifiers-per-pool
+setting. Qualifiers are seated into the bracket **as each group finishes**, not
+when the whole **pool stage** does. Within a finishing place, groups are **not
+ranked against each other** — every group winner is an equal — and that freedom
 is what lets the seating guarantee no first-round knockout **fixture** pairs two
-entrants from the same pool. The guarantee holds for two or more pools; with a
-single pool every knockout match is necessarily a rematch, which is the format
+entrants from the same group. The guarantee holds for two or more groups; with a
+single group every knockout match is necessarily a rematch, which is the format
 working as intended, not a failure of the rule.
 _Avoid_: seed (a **seed** is an *input* to the draw; a qualifier is what playing
 it produces), advancer, survivor, winner (that is one side of one **match**).
 
 **Structural setting**:
 One of the four numbers or choices that decide the shape of a
-round-robin-then-knockout **draw**: **pool count**, **pool size**,
+round-robin-then-knockout **draw**: **group count**, **group size**,
 **membership**, and qualifiers per pool. Each carries an **ownership** of its
 own, and the four together live on the event editor's Draw structure tab, which
 exists for no other **draw type** (ADR 20260808).
@@ -553,24 +569,24 @@ _Avoid_: manual/auto toggle (it is a state that is stated, not a switch that is
 flipped), override, default (a **default** is a starting value, not a claim about
 who owns it).
 
-**Pool count**:
-How many **pools** an event has, which is always the number of pool rows it has.
-There is no second number stored anywhere. When a director sets it by hand, the
-pool rows are created or removed to match, through the same write the Table pools
-tab uses. When the system derives a count larger than the rows, that is a
+**Group count**:
+How many **groups** an event has, which is always the number of group rows it
+has. There is no second number stored anywhere. When a director sets it by hand,
+the group rows are created or removed to match, through the same write the Table
+pools tab uses. When the system derives a count larger than the rows, that is a
 **projection** of what the structure needs, and the gap is reported rather than
 filled in (ADR 20260808).
-_Avoid_: number of groups, pool total, group count.
+_Avoid_: pool count, number of pools, group total.
 
-**Pool size**:
-How many entrants play in one **pool**. When the system derives it, the field is
-split as evenly as it goes and the extra entrants land in the earliest pools, so
-22 across 4 pools gives 6, 6, 5, 5. Sizes that differ by one are legal and are
+**Group size**:
+How many entrants play in one **group**. When the system derives it, the field is
+split as evenly as it goes and the extra entrants land in the earliest groups, so
+22 across 4 groups gives 6, 6, 5, 5. Sizes that differ by one are legal and are
 reported as **uneven**, not as an error. When a director sets it by hand and
-leaves **pool count** automatic, the size is a target: pools are filled to it in
-turn and the last pool takes what is left.
-_Avoid_: group size, pool capacity (a pool's **tables** are its capacity, which
-is a scheduling idea, not this one).
+leaves **group count** automatic, the size is a target: groups are filled to it in
+turn and the last group takes what is left.
+_Avoid_: pool size, group capacity (a **reservation**'s **tables** are the
+capacity, which is a scheduling idea, not this one).
 
 **Preview field**:
 The invented number of entrants the app reasons against before registration
@@ -583,10 +599,10 @@ _Avoid_: field size on its own (it hides that these entrants do not exist),
 expected entrants, projected field.
 
 **Disagreement**:
-A director's **pool count** and **pool size** that do not seat the **preview
-field**. Six pools of five seat thirty, and a field of forty leaves ten entrants
+A director's **group count** and **group size** that do not seat the **preview
+field**. Six groups of five seat thirty, and a field of forty leaves ten entrants
 with nowhere to go. The app keeps both numbers, states the shortfall, and offers
-named resolutions. It never adds a pool or enlarges one to make the arithmetic
+named resolutions. It never adds a group or enlarges one to make the arithmetic
 work. A disagreement still **saves**, because the director may be mid-thought,
 and it blocks the **cut**, because a cut would have to invent the answer
 (ADR 20260808).
@@ -594,7 +610,7 @@ _Avoid_: error, invalid, conflict (a **conflict** is the scoring sense of the
 word, and a disagreement is legal).
 
 **Impossible competition**:
-A configuration that describes matches nobody can play: a **pool** of one
+A configuration that describes matches nobody can play: a **group** of one
 entrant, a **knockout stage** of one entrant, or more **qualifiers** than the
 smallest pool holds. Unlike a **disagreement**, it blocks saving as well as
 cutting, and it is reported as the director types rather than at **cut** time.
@@ -610,7 +626,7 @@ sides become the match's two sides, the event's `match_settings` (rated flag,
 game count) become the match's rules, and it runs the normal propose/accept
 lifecycle. Materialization happens **only once the tournament is `live`** — never
 while registration is open — and going live materializes every ready fixture in
-one stroke (for a round-robin, the whole pool). A fixture materializes **at most
+one stroke (for a round-robin, the whole group). A fixture materializes **at most
 once**: its `match_id` is what makes creating the match idempotent, so an
 `advance()` re-run never proposes the same match twice. Today only **singles**
 events materialize (one player per side); other formats are refused.
@@ -632,7 +648,7 @@ _Avoid_: standings (the round-robin *shape* of results, not the general concept)
 score, summary.
 
 **Standings**:
-The round-robin **shape** of an event's **results**: the pool's entrants ordered
+The round-robin **shape** of an event's **results**: the group's entrants ordered
 by an extensible chain of tiebreakers — **wins**, then **head-to-head** when
 exactly two are tied, then **game difference** (games won minus games lost), then
 **games won**. Renders **live** as matches complete, not only at the end. Ordered
@@ -661,7 +677,7 @@ seed (a seed is an *input* to the draw; a finish is its *outcome*).
 The entrant atop a **complete** event's **results** — for a round-robin, first in
 the **standings**; for a single-elimination, the undefeated entrant, first in the
 **finishes**; for a round-robin-then-knockout, the winner of the **knockout
-stage**, never the leader of a **pool**. **Derived, never stored**: a
+stage**, never the leader of a **group**. **Derived, never stored**: a
 **correction** can re-crown, so the champion is always read from the current
 results. A **multi-pool** round-robin has **no champion even when complete** —
 there is nothing to join its pool winners, which is exactly the gap a knockout
@@ -671,9 +687,9 @@ event's), first place.
 
 **Schedule**:
 Where and when a tournament's **matches** are played: the assignment of each
-**match** to a **table** and a **wall-clock time**, within the reserved window of its
-**pool** — or, for a fixture with no pool, within its **event**'s own window and on
-any table in the tournament (ADR 20260807). It is **tournament-scoped, not
+**match** to a **table** and a **wall-clock time**, within the window of its
+**group**'s **reservation** — or, for a fixture with no group, within its **event**'s
+own window and on any table in the tournament (ADR 20260807). It is **tournament-scoped, not
 per-event** — the venue's tables are shared across events, so "two matches on one
 table at once" is a cross-event fact — which is why it is its own surface rather than
 a panel inside a single event's draw. A **placement** is written two ways that touch
@@ -706,10 +722,11 @@ an outcome, not a schedule cell).
 One physical playing surface at the **venue** — what a match is actually played on,
 identified by a label and the court it stands on. Tables belong to the **tournament**,
 not to any one **event**, and the tournament's whole set of them is its **catalogue**.
-A **pool** *reserves* a subset of the catalogue for its window; a **placement** *names*
-one. The venue changes under a running tournament — a table breaks, a table frees up —
-so a table can be removed from the catalogue mid-event: pools that reserved it simply
-stop reserving it, while a **placement** standing on it blocks the removal until the
+A **reservation** *holds* a subset of the catalogue for its window; a **placement**
+*names* one. The venue changes under a running tournament — a table breaks, a table
+frees up — so a table can be removed from the catalogue mid-event: reservations that
+held it simply stop holding it, while a **placement** standing on it blocks the removal
+until the
 director unplaces it.
 _Avoid_: court (a table *stands on* a court; several tables may share one), board,
 station, "table" for the database sense (say **catalogue** for the tournament's set).
@@ -740,8 +757,8 @@ notify (the call includes a notification but is the whole state transition, not 
 
 **Solve**:
 One run of the **scheduler** over a tournament: the CP-SAT job that packs the
-event's unplayed, **free** **placements** onto **tables** within each **pool**'s
-**Slot**, holding **pinned** ones fixed, and writes the resulting placements back.
+event's unplayed, **free** **placements** onto **tables** within each
+**reservation**'s **Slot**, holding **pinned** ones fixed, and writes the resulting placements back.
 A solve is **requested** (queued), **running**, then reaches a **verdict** —
 `succeeded`, `infeasible`, or `failed` — recorded on the tournament's **solve
 ledger**; at most one is in flight per tournament at a time (a fresh request
@@ -790,34 +807,36 @@ _Avoid_: failed (a broken job, not a proven non-fit), impossible, error.
 **Infeasibility reason** (scheduler-era):
 Why an **infeasible** solve does not fit, carried as a small closed set of causes rather
 than the bare verdict. Each is either a **structural cause** (certain, and it names the
-offending **pool** or **fixture**) or the single residual **timing conflict** (best-effort).
-The reason is computed in ids and minutes by the pure solver, then **resolved to the pool's
-display name and wall-clock window at the moment the solve is applied** — so the ledger row
-records what the director saw then and stays legible even if that pool is later renamed or
-removed. All structural causes are reported together, so a director fixes them in one pass.
+offending **reservation** or **fixture**) or the single residual **timing conflict**
+(best-effort). The reason is computed in ids and minutes by the pure solver, then
+**resolved to the reservation's display name and wall-clock window at the moment the
+solve is applied** — so the ledger row records what the director saw then and stays
+legible even if that reservation is later renamed or removed. All structural causes are reported together, so a director fixes them in one pass.
 _Avoid_: error message (it is structured data the client renders, not a server sentence),
 diagnostic.
 
 **Structural cause** (scheduler-era):
 An **infeasibility reason** the scheduler is *certain* of, provable by arithmetic before
-CP-SAT runs, and that **names an entity**: a **pool** with no tables, a **fixture** whose
-window is too short to hold even one of its matches, a pool over **per-pool capacity**, or
-an **over-subscribed** player. Contrast the **timing conflict**, which is the residual
+CP-SAT runs, and that **names an entity**: a **reservation** with no tables, a
+**fixture** whose window is too short to hold even one of its matches, a reservation over
+**per-pool capacity**, or an **over-subscribed** player. Contrast the **timing conflict**, which is the residual
 best-effort case.
 _Avoid_: hard failure, constraint violation.
 
 **Per-pool capacity** (scheduler-era):
-A **pool**'s ceiling on match time: its window length times its table count. Because a
-pool's **fixtures** can run only on that pool's tables in that pool's window, aggregate
-match-time exceeding this ceiling is a *proof* the pool cannot fit (sharing tables across
-pools only lowers real capacity, never raises it) — one of the **structural causes**.
+A **reservation**'s ceiling on match time: its window length times its table count.
+Because the **fixtures** of the **groups** it holds can run only on those tables in that
+window, aggregate match-time exceeding this ceiling is a *proof* the reservation cannot
+fit (sharing tables across reservations only lowers real capacity, never raises it) — one
+of the **structural causes**.
 _Avoid_: table-time budget (reserve for the whole-day figure the **timing conflict** cites).
 
 **Over-subscribed** (scheduler-era):
-A **player** whose matches within one **pool** need more time than that pool's window holds,
-counting the rest gap owed *between* consecutive matches. A pigeonhole over a single human —
-one person plays one match at a time — so it is a **structural cause**, certain, and the one
-that names a *person* rather than a pool or fixture.
+A **player** whose matches within one **group** need more time than that group's
+**reservation** holds, counting the rest gap owed *between* consecutive matches. A
+pigeonhole over a single human — one person plays one match at a time — so it is a
+**structural cause**, certain, and the one that names a *person* rather than a
+reservation or fixture.
 _Avoid_: overbooked, double-booked (that is a **placement conflict** — two matches already
 recorded on top of each other, not a day that cannot be arranged).
 

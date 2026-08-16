@@ -69,8 +69,10 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventPool,
-    TournamentEventPoolTable,
+    TournamentEventGroupReservation,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -121,6 +123,7 @@ from tests._helpers import (
     event_draw_settings,
     event_pools,
     hijack_solve,
+    joined_to_reservation,
     make_user,
     table_ids_of,
     venue_tables,
@@ -250,19 +253,19 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": length_games},
         stages=stages,
     )
-    stages[0].pools = event_pools(pool_specs, event=event, tournament=tournament)
+    stages[0].groups = event_pools(pool_specs, event=event, tournament=tournament)
     db.add(event)
     await db.flush()
     # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
     # (ADR 20260815), populated automatically whenever an event is *queried* (its
     # declared ``lazy="selectin"`` fires as part of any SELECT that returns
     # ``TournamentEvent`` rows) but NOT by construction the way the old direct
-    # relationship was. ``cut_draw`` below reads ``event.pools`` synchronously
+    # relationship was. ``cut_draw`` below reads ``event.groups`` synchronously
     # (``app.tournament_draws.event_pools``/``draw_config``), so this object — built
     # and flushed, never queried — needs an explicit refresh or that read is an async
     # lazy load and raises ``MissingGreenlet``. A production caller never hits this:
     # every route loads its event through a query first.
-    await db.refresh(event, attribute_names=["pools"])
+    await db.refresh(event, attribute_names=["groups"])
 
     for _ in range(entrants):
         player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
@@ -277,19 +280,26 @@ async def _make_tournament(
 
 
 async def _solver_pool_id(db: AsyncSession, event_id: uuid.UUID) -> PoolId:
-    """The solver's namespaced ``{event}:{pool}`` key for the event's one pool.
+    """The solver's namespaced ``{event}:{reservation}`` key for the event's one pool.
 
-    Looked up rather than spelled, because a pool id is a server-minted uuid now
-    (ADR 20260801). The namespacing itself is unchanged — see
+    The suffix is the **RESERVATION's** id, not the group's. The solver constrains a
+    fixture to a set of tables inside a window, which is exactly what a reservation is,
+    so that is what it keys on — a group only decides *which* reservation applies. The
+    wire type is unchanged (it was always an opaque namespaced string), and under the
+    1:1 the two id spaces are in exact correspondence; what moved is which row the
+    suffix names.
+
+    Looked up rather than spelled, because both ids are server-minted uuids (ADR
+    20260801). The namespacing itself is unchanged — see
     ``app.schedule_preview.preview_pool_key`` for why it stayed."""
-    pool_id = (
+    reservation_id = (
         await db.execute(
-            select(TournamentEventPool.id).where(
-                TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+            select(TournamentEventReservation.id).where(
+                TournamentEventReservation.event_id == event_id
             )
         )
     ).scalar_one()
-    return PoolId(f"{event_id}:{pool_id}")
+    return PoolId(f"{event_id}:{reservation_id}")
 
 
 async def _fixtures_of(
@@ -2038,34 +2048,17 @@ class TestEventWideReservation:
         so that assertion would pass while the confinement was gone."""
         tournament_id, event_id = await _make_two_pool_tournament(db_session)
 
-        pool_rows = (
-            await db_session.execute(
-                select(
-                    TournamentEventPool.id,
-                    TournamentEventPool.slot_start,
-                    TournamentEventPool.slot_end,
-                ).where(
-                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
-                )
-            )
-        ).all()
-        assert len(pool_rows) == 2
+        # ``_pool_reservations`` is the same two queries this test used to spell out
+        # for itself — same joins, same shape, keyed by the same group id. One reader
+        # of the group -> reservation walk per file is enough.
+        reservations = await _pool_reservations(db_session, event_id)
+        assert len(reservations) == 2
         pool_windows = {
-            pool_id: (
-                datetime.combine(date.fromisoformat(DATE), start, tzinfo=VENUE_TZ),
-                datetime.combine(date.fromisoformat(DATE), end, tzinfo=VENUE_TZ),
-            )
-            for pool_id, start, end in pool_rows
+            pool_id: (start, end) for pool_id, (start, end, _t) in reservations.items()
         }
-        pool_tables: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
-        for pool_id, table_id in (
-            await db_session.execute(
-                select(
-                    TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id
-                ).where(TournamentEventPoolTable.event_id == event_id)
-            )
-        ).all():
-            pool_tables[pool_id].add(str(table_id))
+        pool_tables = {
+            pool_id: tables for pool_id, (_s, _e, tables) in reservations.items()
+        }
         assert [len(tables) for tables in pool_tables.values()] == [1, 1]
 
         fixture_pool = {
@@ -2362,12 +2355,16 @@ async def _pool_reservations(
         )
         for pool_id, start, end in (
             await db.execute(
-                select(
-                    TournamentEventPool.id,
-                    TournamentEventPool.slot_start,
-                    TournamentEventPool.slot_end,
+                joined_to_reservation(
+                    select(
+                        TournamentEventStageGroup.id,
+                        TournamentEventReservation.slot_start,
+                        TournamentEventReservation.slot_end,
+                    )
                 ).where(
-                    TournamentEventPool.stage_id.in_(stage_ids_for_events([event_id]))
+                    TournamentEventStageGroup.stage_id.in_(
+                        stage_ids_for_events([event_id])
+                    )
                 )
             )
         ).all()
@@ -2376,8 +2373,15 @@ async def _pool_reservations(
     for pool_id, table_id in (
         await db.execute(
             select(
-                TournamentEventPoolTable.pool_id, TournamentEventPoolTable.table_id
-            ).where(TournamentEventPoolTable.event_id == event_id)
+                TournamentEventGroupReservation.group_id,
+                TournamentEventReservationTable.table_id,
+            )
+            .join(
+                TournamentEventReservationTable,
+                TournamentEventReservationTable.reservation_id
+                == TournamentEventGroupReservation.reservation_id,
+            )
+            .where(TournamentEventReservationTable.event_id == event_id)
         )
     ).all():
         tables[pool_id].add(str(table_id))

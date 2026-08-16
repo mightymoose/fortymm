@@ -31,7 +31,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -62,7 +62,7 @@ async def _make_event(
 ) -> tuple[TournamentEvent, uuid.UUID, uuid.UUID]:
     """Returns the event, its (only) pool's id and its (only) stage's id.
 
-    The ids are handed back explicitly rather than read off ``event.pools`` /
+    The ids are handed back explicitly rather than read off ``event.groups`` /
     ``event.stages`` afterward: both are VIEWONLY / not-eager now (ADR 20260815 — a
     pool's real parent is its stage, and ``TournamentEvent.stages`` is deliberately not
     eager), so a fresh attribute access on either in this async context would either
@@ -104,7 +104,7 @@ async def _make_event(
         stages=stages,
     )
     pools = event_pools([POOL_A], event=event, tournament=tournament)
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.flush()
     return event, pools[0].id, stages[0].id
@@ -334,15 +334,15 @@ async def test_a_match_that_has_not_completed_projects_no_games(
 POOL_COUNT = 10
 
 
-def _pools() -> list[TournamentEventPool]:
-    """Ten pool rows in the director's order — each carrying the ``position`` of its
-    index, which is what the write boundary stamps, and a minted id.
+def _pools() -> list[TournamentEventStageGroup]:
+    """Ten group rows in the director's order — each carrying the ``position`` of its
+    index, which is what the write boundary stamps, and a minted id, with its
+    reservation mapped alongside.
 
-    ``event_pools`` requires an ``event`` now (a pool's real parent is its stage,
-    ADR 20260815), but every pool below has empty ``table_ids``, so it is never
-    actually read (``_reservations`` only touches it to build a reservation row) — a
-    throwaway, never-persisted :class:`TournamentEvent` satisfies the signature with
-    nothing behind it to be wrong.
+    ``event_pools`` requires an ``event`` (a group's real parent is its stage, ADR
+    20260815, and a reservation's is the event), but every pool below has empty
+    ``table_ids``, so the event is never actually read — a throwaway, never-persisted
+    :class:`TournamentEvent` satisfies the signature with nothing behind it to be wrong.
     """
     return event_pools(
         [
@@ -367,7 +367,7 @@ def test_draw_config_orders_the_pools_by_position_not_by_id() -> None:
     the array's nor the ids'.
     """
     stored = _pools()
-    event = TournamentEvent(pools=list(reversed(stored)))
+    event = TournamentEvent(groups=list(reversed(stored)))
 
     assert draw_config(event).pool_ids == tuple(pool.id for pool in stored)
 
@@ -383,7 +383,7 @@ def test_pool_order_ranks_every_pool_id_by_the_events_order() -> None:
     sequence ``draw_config`` hands the snake, so a draw is advanced in the order it was
     cut in."""
     stored = _pools()
-    event = TournamentEvent(pools=list(reversed(stored)))
+    event = TournamentEvent(groups=list(reversed(stored)))
 
     assert pool_order(event) == {pool.id: index for index, pool in enumerate(stored)}
 
@@ -394,7 +394,7 @@ def test_fixture_state_projects_its_pools_place_in_the_event_order() -> None:
     it is last in the director's order and, under random uuid ids, nowhere in particular
     in theirs."""
     stored = _pools()
-    event = TournamentEvent(pools=stored)
+    event = TournamentEvent(groups=stored)
     fixture = TournamentFixture(
         id=uuid.uuid4(),
         stage_id=uuid.uuid4(),
@@ -414,7 +414,7 @@ def test_fixture_state_projects_no_pool_position_when_there_is_no_pool() -> None
     caller that passes no lookup at all gets ``None`` for a *pooled* fixture too: the
     order was not resolved, which is a different thing from position zero."""
     stored = _pools()
-    event = TournamentEvent(pools=stored)
+    event = TournamentEvent(groups=stored)
     un_pooled = TournamentFixture(
         id=uuid.uuid4(), stage_id=uuid.uuid4(), pool_id=None, round=1, position=1
     )

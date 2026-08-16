@@ -170,7 +170,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [
             {
                 "name": "Pool A",
@@ -192,9 +192,9 @@ async def _make_tournament(
     if cut:
         # ``TournamentEvent.pools`` is a VIEWONLY association through the event's
         # stage now (ADR 20260815) — populated on QUERY, not on construction.
-        # ``cut_draw`` reads ``event.pools`` synchronously, so this needs an explicit
+        # ``cut_draw`` reads ``event.groups`` synchronously, so this needs an explicit
         # refresh first.
-        await db.refresh(event, attribute_names=["pools"])
+        await db.refresh(event, attribute_names=["groups"])
         await cut_draw(db, event)
     await db.commit()
     return tournament.id, event.id

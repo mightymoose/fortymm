@@ -1100,7 +1100,7 @@ anything is written, when the event's draw is already cut.
 Re-ordering the entries re-orders the event's pools, on this verb alone: the create verb
 has only one order to state, and this one can restate it. Only while the event has no
 draw, though — once a draw is cut, the order is frozen along with the id set
-(``app.tournament_events._enforce_pool_set_frozen``), because it is what the draw was
+(``app.tournament_events._enforce_group_set_frozen``), because it is what the draw was
 seeded against and what a pools-then-knockout draw's qualifier seam labels a finished
 pool's seats by.
 
@@ -1166,8 +1166,9 @@ arrangement :data:`EventPools` uses for the same reason."""
 
 # The composition of the pools an event stores lives in ``app.tournament_pools`` now,
 # not here. It used to be ``stored_pools``, a list of JSONB dicts, because the column
-# was JSONB; a pool is a row (ADR 20260801), so what a write verb composes is
-# ``TournamentEventPool`` rows — a model, which a schema module must not import.
+# was JSONB; a pool is rows (ADR 20260801), so what a write verb composes is
+# ``TournamentEventStageGroup`` rows and the ``TournamentEventReservation`` rows they
+# map to — models, which a schema module must not import.
 
 
 # ----- read models ----------------------------------------------------------

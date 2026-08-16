@@ -402,7 +402,7 @@ def upgrade() -> None:
         ),
         # Redundant against the primary key, and here for exactly one purpose: SQL can
         # only reference a UNIQUE set of columns, so this is the target
-        # ``tournament_event_pool_tables`` foreign-keys ``(tournament_id, table_id)``
+        # ``tournament_event_reservation_tables`` foreign-keys ``(tournament_id, table_id)``
         # against — the leg that says the table a pool reserves is its OWN tournament's
         # (ADR 20260801). Added in place per the pre-deploy convention.
         sa.UniqueConstraint(
@@ -465,7 +465,7 @@ def upgrade() -> None:
             "entry_fee >= 0", name="ck_tournament_events_entry_fee_non_negative"
         ),
         # Redundant against the primary key, and here for exactly one purpose: it is the
-        # target ``tournament_event_pool_tables`` foreign-keys ``(tournament_id,
+        # target ``tournament_event_reservation_tables`` foreign-keys ``(tournament_id,
         # event_id)`` against, which is what forces a reservation's denormalized
         # ``tournament_id`` to be the tournament its pool's event really belongs to. The
         # other two legs of that row are satisfiable by a cross-tournament reservation
@@ -488,7 +488,8 @@ def upgrade() -> None:
         ),
         # There is deliberately NO ``pools`` column. An event's pools were a NOT NULL
         # JSONB list of ``{id, name, slot, table_ids}`` objects keyed by client-supplied
-        # strings; they are the ``tournament_event_pools`` table created below (ADR
+        # strings; they are the ``tournament_event_stage_groups`` and
+        # ``tournament_event_reservations`` tables created below (ADR
         # 20260801 "a pool belongs to its event, not to the event's draw settings"), so
         # a fixture can foreign-key the pool it names — and specifically one of its OWN
         # event's pools. Edited out of this migration in place, per the pre-deploy
@@ -534,7 +535,7 @@ def upgrade() -> None:
     # An event's stages, as rows the system mints from its draw type (ADR 20260815
     # "an event's stages are rows and a composite draw type is a template"). Created
     # immediately after ``tournament_events`` because it FKs it, and before
-    # ``tournament_event_pools`` only for readability — the two tables do not
+    # ``tournament_event_stage_groups`` only for readability — the two tables do not
     # reference each other in this migration; a later revision is what re-parents a
     # pool's composite FK onto a stage (see the ADR's "Sequencing with #1338"
     # consequence). Added here in place per the pre-deploy convention — revision ids
@@ -600,39 +601,38 @@ def upgrade() -> None:
             name="uq_tournament_event_stages_event_id_position",
         ),
     )
-    # No separate ``ix_`` index here, matching ``tournament_event_pools`` immediately
+    # No separate ``ix_`` index here, matching ``tournament_event_stage_groups``
+    # immediately
     # below rather than ``tournament_events``/``tournament_tables`` above: the
     # ``event_id`` FK is ``ON DELETE CASCADE``, not ``RESTRICT``, so its
     # referential-integrity check never runs a query the ``uq_..._event_id_id``
     # constraint's own (``event_id``-leading) index does not already serve.
 
-    # An event's pools, as rows (ADR 20260801 "a pool belongs to its event, not to the
-    # event's draw settings"), RE-PARENTED onto the pool's stage rather than its event
-    # (ADR 20260815, "Sequencing with #1338" consequence: "the pool's group face
-    # therefore re-parents to the stage"). A director's pools always hang off the
-    # event's stage 0 (decision 3) — this migration does not enforce that placement
-    # itself, ``app.tournament_pools.apply_event_pools`` does, by resolving the
-    # event's first stage before it writes. Created after ``tournament_event_stages``
-    # because it FKs it, and before ``tournament_fixtures`` (0012), which carries the
-    # composite foreign key onto the ``(stage_id, id)`` unique constraint below. Added
-    # here in place per the pre-deploy convention, not as a chained ALTER.
+    # A stage's GROUPS, as rows. This table is what ``tournament_event_pools`` was until
+    # the pool row split into the two things it had always meant at once: a **group** is
+    # an ordered set of entrants who play all-play-all, and a **reservation** (created
+    # below) is a set of tables held for a window of time. The five columns that
+    # described the venue side — ``name``, ``slot_date``, ``slot_start``, ``slot_end``
+    # and the tables relationship — moved to the reservation; what is left here is
+    # identity and order. Renamed and re-shaped in place per the pre-deploy convention,
+    # not as a chained ALTER.
+    #
+    # The parent stays the STAGE (ADR 20260815, "Sequencing with #1338" consequence:
+    # "the pool's group face therefore re-parents to the stage"), and it has to: a
+    # fixture's composite foreign key names this row, and a fixture carries ``stage_id``
+    # and no ``event_id`` at all. A director's groups always hang off the event's stage 0
+    # (decision 3) — this migration does not enforce that placement itself,
+    # ``app.tournament_pools.apply_event_pools`` does, by resolving the event's first
+    # stage before it writes. Created after ``tournament_event_stages`` because it FKs
+    # it, and before ``tournament_fixtures`` (0012), which carries the composite foreign
+    # key onto the ``(stage_id, id)`` unique constraint below.
     #
     # ``id`` is a server-minted uuid — ``gen_random_uuid()``, exactly as
-    # ``tournament_tables.id`` is. It was a client-supplied string for as long as a pool
-    # was a JSONB value-object with nothing to mint it; this column,
-    # ``tournament_event_pool_tables.pool_id`` and ``tournament_fixtures.pool_id`` moved
-    # onto uuid in one step, because they are one representation and a half-moved one is
-    # not a state worth having.
-    #
-    # The window is ``date``/``time``, NOT ``timestamptz``, and that is the ADR's call
-    # rather than an oversight (api/CLAUDE.md's "datetimes are timezone-aware, always"
-    # governs datetimes, and these are not datetimes). A pool's window is wall-clock in
-    # the venue's own frame, which ``tournament_events.timezone`` carries and the solver
-    # anchors; storing an instant would bake that anchoring into the column, so a
-    # timezone correction would have to rewrite every pool window instead of re-reading
-    # the same wall-clock in the new zone.
+    # ``tournament_tables.id`` is — and it is **the id the wire serves**: ``pools[].id``,
+    # ``fixture.pool_id`` and ``PoolStandingsRead.pool_id`` are all this column. A
+    # reservation's own id never reaches a client.
     op.create_table(
-        "tournament_event_pools",
+        "tournament_event_stage_groups",
         sa.Column(
             "id",
             postgresql.UUID(as_uuid=True),
@@ -640,30 +640,22 @@ def upgrade() -> None:
             nullable=False,
         ),
         # CASCADE: deleting an event takes its stages with it, and a stage's deletion
-        # takes its pools with it in turn — the same lifecycle ``event_id`` gave pools
-        # directly, now one hop further along (ADR 20260815).
+        # takes its groups with it in turn.
         sa.Column(
             "stage_id",
             postgresql.UUID(as_uuid=True),
             sa.ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("name", sa.Text(), nullable=False),
-        # Where the pool sits in the event's own pool order: 0-based, contiguous,
-        # server-assigned from the order the pools were sent in. The JSONB array carried
-        # this for free and the client-minted ids sorted into it by accident; neither
-        # survives, and the snake seeds against this order (ADR 20260801, "Pools carry an
-        # explicit ``position``").
+        # Where the group sits in its stage's order: 0-based, contiguous, server-assigned
+        # from the order the pools were sent in. The snake seeds against this order (ADR
+        # 20260801, "Pools carry an explicit ``position``"), a group's label derives from
+        # it, and it is what the wire reports as ``pools[].position``.
         sa.Column("position", sa.Integer(), nullable=False),
-        sa.Column("slot_date", sa.Date(), nullable=False),
-        sa.Column("slot_start", sa.Time(), nullable=False),
-        sa.Column("slot_end", sa.Time(), nullable=False),
-        # There is deliberately NO ``table_ids`` column. The tables a pool reserves were
-        # a NOT NULL JSONB array of table-id strings — which could name another
-        # tournament's table, or no table at all — and they are the
-        # ``tournament_event_pool_tables`` rows created below (ADR 20260801, "the
-        # tournament-scoping stops at the join table"). Edited out of this migration in
-        # place, per the pre-deploy convention in api/CLAUDE.md.
+        # There is deliberately NO ``name`` column. A group's label is a function of its
+        # ``position``; what the wire calls ``pools[].name`` is the mapped reservation's
+        # name, projected. Nor a window, nor tables — all four moved to
+        # ``tournament_event_reservations`` below.
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -676,29 +668,22 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        # The key is ``id`` ALONE. It was the pair ``(event_id, id)`` for as long as the
-        # id was a client-minted string, which is only unique per event — two events of
-        # one tournament could each hold a "pool-a", and a bare ``id`` key would have
-        # imposed platform-wide uniqueness on a string nothing above the database
-        # controlled. A minted uuid is globally unique by construction, so the narrower
-        # key is the honest one.
-        sa.PrimaryKeyConstraint("id", name="pk_tournament_event_pools"),
-        # ``UNIQUE (stage_id, id)`` — the ADR's own DDL for pools, re-parented onto the
-        # stage (ADR 20260815). "Redundant against the primary key and exists purely as
-        # the target that composite FK needs". SQL can only reference a unique set of
-        # columns, and the *pair* is what carries "my pool is my own stage's pool" — for
-        # ``tournament_fixtures`` (0012) and for ``tournament_event_pool_tables`` below.
+        sa.PrimaryKeyConstraint("id", name="pk_tournament_event_stage_groups"),
+        # ``UNIQUE (stage_id, id)`` — "redundant against the primary key and exists purely
+        # as the target that composite FK needs". SQL can only reference a unique set of
+        # columns, and the *pair* is what carries "my group is my own stage's group" —
+        # for ``tournament_fixtures`` (0012) and for the join table below.
         #
         # Its index earns its keep besides: ``stage_id`` leads, so it answers every read
-        # of "this stage's pools", the stage-delete cascade's lookup, and both foreign
+        # of "this stage's groups", the stage-delete cascade's lookup, and both foreign
         # keys' referential checks — none of which the single-column primary key serves.
         sa.UniqueConstraint(
-            "stage_id", "id", name="uq_tournament_event_pools_stage_id_id"
+            "stage_id", "id", name="uq_tournament_event_stage_groups_stage_id_id"
         ),
-        # Two pools of one stage never share a place in its order.
+        # Two groups of one stage never share a place in its order.
         #
         # DEFERRABLE INITIALLY DEFERRED, exactly as ``tournament_tables``' position
-        # constraint is: the pools are written as an id-keyed diff, and a diff re-orders
+        # constraint is: the groups are written as an id-keyed diff, and a diff re-orders
         # — sending C, A, B back as B, C, A moves each row onto a position its neighbour
         # has not vacated yet. An immediately-checked constraint would refuse that
         # intermediate state and so forbid reordering, though the transaction's END state
@@ -706,52 +691,118 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "stage_id",
             "position",
-            name="uq_tournament_event_pools_stage_id_position",
+            name="uq_tournament_event_stage_groups_stage_id_position",
             deferrable=True,
             initially="DEFERRED",
         ),
     )
 
-    # The tables a pool reserves, as rows (ADR 20260801, "the tournament-scoping stops
-    # at the join table"). Created last in this migration because it references four of
-    # the tables above. Added here in place per the pre-deploy convention, not as a
-    # chained ALTER.
+    # An event's RESERVATIONS — the other half of the old pool row: a set of tables held
+    # for a window of time, carrying the ``name``, ``position``, ``slot_date``,
+    # ``slot_start`` and ``slot_end`` that used to sit beside a group's identity.
     #
-    # ``tournament_id`` is DENORMALIZED, and it is the whole mechanism: a pool hangs off
-    # its stage (ADR 20260815) and a table hangs off its tournament, so the two sides
-    # share no column until this row supplies one for them to agree on. ``event_id``
-    # stays denormalized too, for the same reason, now one hop further from the pool:
-    # a pool no longer carries ``event_id`` at all, so this row is what still lets a
-    # reservation say "my tournament's event" without walking pool -> stage -> event.
-    # Four composite foreign keys pin every leg of the path — the pool is a real pool
-    # of THIS row's stage, the table is a real table of tournament X, this row's event
-    # really does belong to tournament X, and (new in this ADR) this row's stage really
-    # does belong to this row's event. Drop that last one and ``event_id`` /
-    # ``stage_id`` could name two different events while every other constraint stays
-    # satisfied — exactly the row the first three legs were written to forbid, one hop
-    # further along now that the pool leg points at a stage instead of an event.
+    # The parent is the EVENT, not the stage, and that asymmetry with the group above is
+    # deliberate. Nothing names a reservation through a composite key rooted in a
+    # fixture, so the constraint that pins a group to its stage does not apply; and a
+    # stage-parented reservation would hand every stage a reservation set before anything
+    # exists to edit one. On the event, an rr-then-ko draw's two stages read one set, and
+    # a knockout stage can later point at a reservation its event already holds.
     #
-    # All four are ON DELETE CASCADE. The one that carries a decision is the table leg:
+    # The window is ``date``/``time``, NOT ``timestamptz``, and that is the ADR's call
+    # rather than an oversight (api/CLAUDE.md's "datetimes are timezone-aware, always"
+    # governs datetimes, and these are not datetimes). A window is wall-clock in the
+    # venue's own frame, which ``tournament_events.timezone`` carries and the solver
+    # anchors; storing an instant would bake that anchoring into the column, so a
+    # timezone correction would have to rewrite every window instead of re-reading the
+    # same wall-clock in the new zone.
+    op.create_table(
+        "tournament_event_reservations",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            server_default=sa.text("gen_random_uuid()"),
+            nullable=False,
+        ),
+        # CASCADE: an event's reservations go with the event, exactly as its stages do.
+        sa.Column(
+            "event_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("tournament_events.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("name", sa.Text(), nullable=False),
+        # Where the reservation sits in its event's own order. NOT what the wire reports
+        # — ``pools[].position`` is the group's — but a stable read order of its own,
+        # since ordering by a random uuid would shuffle a director's list on every read.
+        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column("slot_date", sa.Date(), nullable=False),
+        sa.Column("slot_start", sa.Time(), nullable=False),
+        sa.Column("slot_end", sa.Time(), nullable=False),
+        # There is deliberately NO ``table_ids`` column. The tables were a NOT NULL JSONB
+        # array of table-id strings — which could name another tournament's table, or no
+        # table at all — and they are the ``tournament_event_reservation_tables`` rows
+        # created below (ADR 20260801, "the tournament-scoping stops at the join table").
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id", name="pk_tournament_event_reservations"),
+        # The target of the join row's reservation leg and of the reservation tables'
+        # own — the same "unique pair as composite-FK target" trick the group above uses,
+        # one parent along.
+        sa.UniqueConstraint(
+            "event_id", "id", name="uq_tournament_event_reservations_event_id_id"
+        ),
+        # Two reservations of one event never share a place in its order. DEFERRABLE for
+        # the reason every sibling position constraint is: the reservations are written
+        # as a diff keyed on their group's id, and a diff re-orders.
+        sa.UniqueConstraint(
+            "event_id",
+            "position",
+            name="uq_tournament_event_reservations_event_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
+
+    # The tables a reservation holds, as rows (ADR 20260801, "the tournament-scoping
+    # stops at the join table"). This is ``tournament_event_pool_tables``, re-pointed:
+    # its pool leg becomes a reservation leg, and because a reservation hangs off the
+    # event directly, the ``stage_id`` column and the FOURTH leg ADR 20260815 needed to
+    # close the stage indirection's gap both disappear. Three legs again, as before that
+    # ADR.
+    #
+    # ``tournament_id`` is DENORMALIZED, and it is the whole mechanism: a reservation
+    # hangs off its event and a table hangs off its tournament, so the two sides share no
+    # column until this row supplies one for them to agree on. **The ``tournament_id``
+    # leg is the cross-tournament guard and is not droppable**: with only the reservation
+    # and table legs, a row could say ``tournament_id = X`` while its reservation's event
+    # belonged to tournament ``Y`` — both satisfied, and exactly the cross-tournament
+    # reservation the ADR forbids.
+    #
+    # All three are ON DELETE CASCADE. The one that carries a decision is the table leg:
     # removing a venue table a fixture is PLACED at is refused (``ON DELETE RESTRICT``
     # on ``tournament_fixtures.table_id``) and the director opts in on purpose, while
-    # removing one a pool merely RESERVES is silent — a reservation is a preference, a
-    # placement is a commitment (ADR 20260801, "a placement names a real table").
+    # removing one a reservation merely HOLDS is silent — a reservation is a preference,
+    # a placement is a commitment (ADR 20260801, "a placement names a real table").
     op.create_table(
-        "tournament_event_pool_tables",
+        "tournament_event_reservation_tables",
         sa.Column("tournament_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("event_id", postgresql.UUID(as_uuid=True), nullable=False),
-        # The pool's stage (ADR 20260815) — added beside ``event_id`` rather than in
-        # its place, because the ``(tournament_id, event_id)`` leg below still needs a
-        # column that names the event directly. Half of the pool leg's composite key
-        # now, and half of the new fourth leg that ties it back to ``event_id``.
-        sa.Column("stage_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("pool_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("reservation_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("table_id", postgresql.UUID(as_uuid=True), nullable=False),
-        # Where the table sits in the pool's reservation list: 0-based, contiguous,
+        # Where the table sits in the reservation's list: 0-based, contiguous,
         # server-assigned from the order the ids were sent in. The JSONB array carried
         # this for free and the wire shape is still an array; ordering by the random
-        # ``table_id`` instead would shuffle a director's list on every read. Same
-        # argument as the two sibling ``position`` columns above.
+        # ``table_id`` instead would shuffle a director's list on every read.
         sa.Column("position", sa.Integer(), nullable=False),
         sa.Column(
             "created_at",
@@ -765,96 +816,176 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        # A pool reserves a table at most once. ``event_id`` leads so the key's own
-        # index answers the pool leg's referential check and the event-delete cascade.
+        # A reservation holds a table at most once. ``event_id`` leads so the key's own
+        # index answers the reservation leg's referential check and the event-delete
+        # cascade — which is why, unlike the pool-era version, this table needs no second
+        # ``ix_`` for its parent leg.
         sa.PrimaryKeyConstraint(
-            "event_id", "pool_id", "table_id", name="pk_tournament_event_pool_tables"
+            "event_id",
+            "reservation_id",
+            "table_id",
+            name="pk_tournament_event_reservation_tables",
         ),
-        # "My pool is my own stage's pool" (ADR 20260815) — the pool leg re-targeted
-        # from ``(event_id, pool_id)`` onto the pair a pool is keyed on now.
+        # "My reservation is my own event's reservation" — replacing the pool-era
+        # ``(stage_id, pool_id)`` leg.
         sa.ForeignKeyConstraint(
-            ["stage_id", "pool_id"],
-            ["tournament_event_pools.stage_id", "tournament_event_pools.id"],
-            name="fk_tournament_event_pool_tables_stage_id_pool_id",
+            ["event_id", "reservation_id"],
+            [
+                "tournament_event_reservations.event_id",
+                "tournament_event_reservations.id",
+            ],
+            name="fk_tournament_event_reservation_tables_event_id_reservation_id",
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["tournament_id", "table_id"],
             ["tournament_tables.tournament_id", "tournament_tables.id"],
-            name="fk_tournament_event_pool_tables_tournament_id_table_id",
+            name="fk_tournament_event_reservation_tables_tournament_id_table_id",
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["tournament_id", "event_id"],
             ["tournament_events.tournament_id", "tournament_events.id"],
-            name="fk_tournament_event_pool_tables_tournament_id_event_id",
+            name="fk_tournament_event_reservation_tables_tournament_id_event_id",
             ondelete="CASCADE",
         ),
-        # "My stage is my own event's stage" — the fourth leg ADR 20260815 adds. Without
-        # it, ``event_id`` and ``stage_id`` could each satisfy their own FK while naming
-        # two different events, which is the same illegal state the other three legs
-        # exist to forbid, one hop further along now that the pool leg points at a stage.
-        sa.ForeignKeyConstraint(
-            ["event_id", "stage_id"],
-            ["tournament_event_stages.event_id", "tournament_event_stages.id"],
-            name="fk_tournament_event_pool_tables_event_id_stage_id",
-            ondelete="CASCADE",
-        ),
-        # Two reservations of one pool never share a place in its order. DEFERRABLE
-        # INITIALLY DEFERRED for the reason both sibling position constraints are: the
-        # reservations are written as a diff keyed on the table id, and a diff re-orders
-        # — moving a table up the list puts it on a position its neighbour has not
-        # vacated yet, though the transaction's END state is perfectly unique.
+        # Two tables of one reservation never share a place in its order. DEFERRABLE
+        # INITIALLY DEFERRED for the reason every sibling position constraint is: the
+        # tables are written as a diff keyed on the table id, and a diff re-orders —
+        # moving a table up the list puts it on a position its neighbour has not vacated
+        # yet, though the transaction's END state is perfectly unique.
         sa.UniqueConstraint(
             "event_id",
-            "pool_id",
+            "reservation_id",
             "position",
-            name="uq_tournament_event_pool_tables_event_id_pool_id_position",
+            name="uq_tournament_event_reservation_tables_reservation_position",
             deferrable=True,
             initially="DEFERRED",
         ),
     )
     # Postgres indexes the REFERENCED key of a foreign key, never the referencing
-    # columns. The primary key covers the leg that leads with ``event_id`` (the fourth,
-    # ``(event_id, stage_id)``); this is the one on a routine DELETE path — every venue
-    # table removed cascades through it, which unindexed is a sequential scan of every
-    # reservation on the platform per table removed.
+    # columns. The primary key covers both legs that lead with ``event_id``; this is the
+    # one on a routine DELETE path — every venue table removed cascades through it, which
+    # unindexed is a sequential scan of every reservation table on the platform per table
+    # removed.
     op.create_index(
-        "ix_tournament_event_pool_tables_tournament_id_table_id",
-        "tournament_event_pool_tables",
+        "ix_tournament_event_reservation_tables_tournament_id_table_id",
+        "tournament_event_reservation_tables",
         ["tournament_id", "table_id"],
     )
-    # The index the PK used to cover for free before the pool leg re-targeted from
-    # ``(event_id, pool_id)`` onto ``(stage_id, pool_id)`` above: the old leg was a
-    # prefix of ``pk_tournament_event_pool_tables`` (which leads with ``event_id``), so
-    # it rode the PK's own index. ``stage_id`` isn't a PK column at all, so that
-    # referential check — and the pool-delete cascade through it — needs its own index.
+
+    # The row that maps one GROUP to the RESERVATION it plays in. Created last because it
+    # references three of the tables above.
+    #
+    # THREE legs, because two cannot say it. A group is parented on its stage and a
+    # reservation on its event, so the two sides share no column at all; one composite key
+    # cannot assert that both belong to one event. The first two legs say each side is
+    # real and correctly parented. The third — ``(event_id, stage_id)`` — is the one that
+    # matters: without it, ``event_id`` and ``stage_id`` may name two different events
+    # while both other legs stay satisfied, and the row hands one event's stage a
+    # different event's reservation. ``tournament_fixtures`` carries four legs for exactly
+    # this reason after ADR 20260815, so the shape is idiomatic here.
+    #
+    # The primary key is ``group_id`` ALONE, and that IS the 1:1: one group maps to at
+    # most one reservation. There is deliberately NO uniqueness on ``reservation_id`` —
+    # two groups of one event naming one reservation is a state the database accepts and
+    # no application path in this slice produces. ``reservation_id`` is NOT NULL because
+    # under today's write paths a reservation-less group is unreachable; the column states
+    # what is true rather than what a later change will allow.
+    #
+    # All three delete rules are CASCADE: the mapping exists only while both ends do.
+    op.create_table(
+        "tournament_event_group_reservations",
+        sa.Column("group_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("stage_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("event_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("reservation_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint(
+            "group_id", name="pk_tournament_event_group_reservations"
+        ),
+        # "My group is my own stage's group".
+        sa.ForeignKeyConstraint(
+            ["stage_id", "group_id"],
+            [
+                "tournament_event_stage_groups.stage_id",
+                "tournament_event_stage_groups.id",
+            ],
+            name="fk_tournament_event_group_reservations_stage_id_group_id",
+            ondelete="CASCADE",
+        ),
+        # "My reservation is my own event's reservation".
+        sa.ForeignKeyConstraint(
+            ["event_id", "reservation_id"],
+            [
+                "tournament_event_reservations.event_id",
+                "tournament_event_reservations.id",
+            ],
+            name="fk_tournament_event_group_reservations_event_id_reservation_id",
+            ondelete="CASCADE",
+        ),
+        # "My stage is my own event's stage" — the leg that ties the other two together.
+        sa.ForeignKeyConstraint(
+            ["event_id", "stage_id"],
+            ["tournament_event_stages.event_id", "tournament_event_stages.id"],
+            name="fk_tournament_event_group_reservations_event_id_stage_id",
+            ondelete="CASCADE",
+        ),
+    )
+    # The primary key (``group_id``) covers nothing that leads with ``event_id``, so both
+    # remaining legs — and the reservation-delete and stage-delete cascades through them
+    # — would otherwise be sequential scans.
     op.create_index(
-        "ix_tournament_event_pool_tables_stage_id_pool_id",
-        "tournament_event_pool_tables",
-        ["stage_id", "pool_id"],
+        "ix_tournament_event_group_reservations_event_id_reservation_id",
+        "tournament_event_group_reservations",
+        ["event_id", "reservation_id"],
+    )
+    op.create_index(
+        "ix_tournament_event_group_reservations_event_id_stage_id",
+        "tournament_event_group_reservations",
+        ["event_id", "stage_id"],
     )
 
 
 def downgrade() -> None:
     # Dropped before all three of the tables it references.
     op.drop_index(
-        "ix_tournament_event_pool_tables_stage_id_pool_id",
-        table_name="tournament_event_pool_tables",
+        "ix_tournament_event_group_reservations_event_id_stage_id",
+        table_name="tournament_event_group_reservations",
     )
     op.drop_index(
-        "ix_tournament_event_pool_tables_tournament_id_table_id",
-        table_name="tournament_event_pool_tables",
+        "ix_tournament_event_group_reservations_event_id_reservation_id",
+        table_name="tournament_event_group_reservations",
     )
-    op.drop_table("tournament_event_pool_tables")
+    op.drop_table("tournament_event_group_reservations")
 
-    # Dropped before the events it references (and before the fixtures of 0012 reference
+    # Dropped before the reservations, events and tables it references.
+    op.drop_index(
+        "ix_tournament_event_reservation_tables_tournament_id_table_id",
+        table_name="tournament_event_reservation_tables",
+    )
+    op.drop_table("tournament_event_reservation_tables")
+
+    # Dropped before the events it references.
+    op.drop_table("tournament_event_reservations")
+
+    # Dropped before the stages it references (and before the fixtures of 0012 reference
     # it — that migration is torn down first by the chain).
-    op.drop_table("tournament_event_pools")
+    op.drop_table("tournament_event_stage_groups")
 
-    # Dropped before the events it references, mirroring ``tournament_event_pools``
-    # immediately above — the two do not reference each other, so their relative order
-    # here does not matter.
+    # Dropped before the events it references, mirroring the groups immediately above —
+    # the two do not reference each other, so their relative order here does not matter.
     op.drop_table("tournament_event_stages")
 
     op.drop_index(

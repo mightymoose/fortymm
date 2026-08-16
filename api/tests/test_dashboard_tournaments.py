@@ -735,7 +735,7 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # every event's pools (``TournamentEvent.pools``, ``lazy="selectin"`` — pools are rows
 # now too, ADR 20260801, and the panel resolves a fixture's pool NAME through them) and
 # ONE of every one of THOSE pools' table reservations
-# (``TournamentEventPool.tables``, ``lazy="selectin"`` — chained onto the pools' own
+# (the reservation's ``tables``, ``lazy="selectin"`` — chained onto the groups' own
 # batched load, so it is one statement per panel build and not one per pool),
 # then ONE batched load of every event's active entrants, ONE of every event's fixtures,
 # ONE of the completed matches' game counts, ONE batched eager load of every event's

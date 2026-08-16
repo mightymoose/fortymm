@@ -785,11 +785,12 @@ def serialize_event(
             "slot": e.slot,
             "match_settings": e.match_settings,
             "predicates": e.predicates,
-            # Projected from the event's pool ROWS (ADR 20260801), not handed over as a
-            # JSONB column. They ride on the event's own eager ``selectin`` load, so
-            # this costs the page no statement of its own — the same arrangement the
-            # venue catalogue has.
-            "pools": [pool_read(pool) for pool in e.pools],
+            # Projected from the event's GROUP rows and the reservations they map to
+            # (ADR 20260801), not handed over as a JSONB column — ``pool_read`` is the
+            # join that keeps this wire field exactly what it was. Both sides ride on
+            # the event's own eager ``selectin`` loads, so this costs the page no
+            # statement of its own — the same arrangement the venue catalogue has.
+            "pools": [pool_read(group) for group in e.groups],
             # Read straight off the relationship, exactly as ``pools`` above is:
             # ``TournamentEvent.stages`` is ``lazy="selectin"`` now, so every event this
             # serializer reaches already carries its stages, however it was loaded — no

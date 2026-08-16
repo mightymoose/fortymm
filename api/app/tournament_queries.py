@@ -30,8 +30,8 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventPool,
     TournamentEventStage,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -269,10 +269,11 @@ def _pool_position() -> ScalarSelect[int | None]:
     """The ``position`` of a fixture's pool within its own event — the correlated
     subquery the draw order below sorts on.
 
-    A fixture holds its pool's **id**, not its index, so "where does this fixture's pool
-    sit in the director's order?" is a join: find the ``tournament_event_pools`` row
-    this fixture's ``(stage_id, pool_id)`` names — the same pair the composite foreign
-    key matches on (ADR 20260801, re-parented onto the stage by ADR 20260815) — and
+    A fixture holds its group's **id**, not its index, so "where does this fixture's
+    group sit in the director's order?" is a join: find the
+    ``tournament_event_stage_groups`` row this fixture's ``(stage_id, pool_id)`` names —
+    the same pair the composite foreign key matches on (ADR 20260801, parented on the
+    stage by ADR 20260815) — and
     read its ``position`` (:data:`app.schemas.tournament.PoolPosition` — 0-based,
     stamped by the server from the order the pools were sent in). Scalar by
     construction, since ``(stage_id, id)`` is unique, rather than by a ``LIMIT``
@@ -291,10 +292,10 @@ def _pool_position() -> ScalarSelect[int | None]:
     from ``event_id`` to ``stage_id`` (decision 5), and so does this join.
     """
     return (
-        select(TournamentEventPool.position)
+        select(TournamentEventStageGroup.position)
         .where(
-            TournamentEventPool.stage_id == TournamentFixture.stage_id,
-            TournamentEventPool.id == TournamentFixture.pool_id,
+            TournamentEventStageGroup.stage_id == TournamentFixture.stage_id,
+            TournamentEventStageGroup.id == TournamentFixture.pool_id,
         )
         .correlate(TournamentFixture)
         .scalar_subquery()
@@ -400,7 +401,7 @@ async def fixtures_by_event(
             # would otherwise add a SECOND, aliased join for — so the fixture's
             # ``event_id`` property (which reads ``self.stage.event_id``) is free below,
             # off the one join already here, rather than a separately-selected column.
-            # ``TournamentEventStage.pools`` is deliberately NOT eager (see that
+            # ``TournamentEventStage.groups`` is deliberately NOT eager (see that
             # relationship's docstring), so attaching a stage here costs nothing extra
             # — no ``.noload(...)`` needed to suppress a cascade that doesn't exist.
             .join(

@@ -170,9 +170,10 @@ def _ordered_pools(event: TournamentEvent) -> list[Pool]:
     seeds the snake against it) and :func:`pool_order` (which the read of a persisted
     fixture resolves through), so a draw is cut in the same order it is advanced in.
 
-    The ``sorted`` is belt-and-braces rather than the mechanism: the ``pools``
-    relationship carries ``order_by=TournamentEventPool.position``, so the rows arrive
-    in this order already, and ``UNIQUE (event_id, position)`` makes it a total one. It
+    The ``sorted`` is belt-and-braces rather than the mechanism: the ``groups``
+    relationship carries ``order_by=TournamentEventStageGroup.position``, so the rows
+    arrive in this order already, and ``UNIQUE (stage_id, position)`` makes it a total
+    one. It
     is kept because this function is *the* statement of what "the event's pool order"
     means, and a caller who builds a ``TournamentEvent`` in memory (a test, a REPL)
     never went through that ``ORDER BY``.
@@ -392,10 +393,12 @@ def event_pools(event: TournamentEvent) -> list[Pool]:
     """The pools this event *currently* has, projected — the ones the freeze protects.
 
     Every reader of an event's pools comes through here (or through
-    :func:`_ordered_pools`, which is this plus the order), which is why moving pools out
-    of a JSONB column and into ``tournament_event_pools`` rows was invisible above this
-    line: :func:`app.tournament_pools.pool_read` composes the same :class:`Pool` out of
-    typed columns that this used to validate out of untyped dicts.
+    :func:`_ordered_pools`, which is this plus the order), which is why the storage
+    underneath has moved twice without anything above this line noticing: out of a JSONB
+    column into rows, and then from one row into a **group** and a **reservation**.
+    :func:`app.tournament_pools.pool_read` is the projection that puts the two back
+    together, and it is what makes ``Pool.id`` a group id — the same id a fixture's
+    ``pool_id`` holds.
 
     Returns the **pools**, not just their ids, though identity is all the freeze
     compares: a refusal has to *name* the pools it is about (``named_list``), and a
@@ -404,11 +407,12 @@ def event_pools(event: TournamentEvent) -> list[Pool]:
     comprehension away.
 
     The ids are the only load-bearing part after the cut, because the ids are what the
-    fixtures hold. Everything else here — a pool's tables, its window, its name, and
-    the ORDER of the list (read only at the cut, where it seeds the snake) — is free to
-    change under a standing draw.
+    fixtures hold — and they are the **group** ids, which is exactly why the reservation
+    half is free to move under a standing draw. Everything else here (the tables, the
+    window, the name) lives on the reservation, and the ORDER of the list is read only
+    at the cut, where it seeds the snake.
     """
-    return [pool_read(pool) for pool in event.pools]
+    return [pool_read(group) for group in event.groups]
 
 
 async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:

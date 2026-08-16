@@ -157,11 +157,25 @@ def placeholder_label(player_id: str) -> str:
     return f"Placeholder {player_id.removeprefix(PLACEHOLDER_PREFIX)}"
 
 
-def preview_pool_key(event_id: uuid.UUID, pool_id: uuid.UUID) -> str:
-    """The one namespaced ``event:pool`` spelling every preview site keys a pool by
-    — the ``SchedulePool`` id, a fixture's ``pool_id`` ref, and the enqueue verb's
+def preview_pool_key(event_id: uuid.UUID, group_id: uuid.UUID) -> str:
+    """The one namespaced ``event:group`` spelling every **preview** site keys a pool
+    by — the ``SchedulePool`` id, a fixture's ``pool_id`` ref, and the enqueue verb's
     infeasibility-resolution map all pass through here, so the string contract lives
     in exactly one place and cannot drift between them.
+
+    **The suffix is a GROUP id here, and a RESERVATION id in a live solve**
+    (``app.schedule_solves.reservation_pool_key``). That is a real split, not a
+    drift: the preview names pool identity to a client and builds both its pool list
+    and its fixture refs from the projected ``Pool``, whose ``id`` is the group's,
+    while a solve constrains tables inside a window — which is the reservation, and
+    is what a fixture is actually confined to.
+
+    The two spaces share this string shape and the ``PoolId`` type, so nothing stops
+    a value from one reaching a map keyed by the other. Under the current 1:1 they
+    are in exact correspondence and a mixup is invisible; once two groups may share a
+    reservation, it stops being. Neither key crosses between the two modules today,
+    and each mints its own through a named function so the split is at least
+    greppable.
 
     **The namespace is no longer needed for uniqueness, and is kept anyway.** It was
     minted because a pool id was a per-event string and two events of one tournament
@@ -174,7 +188,7 @@ def preview_pool_key(event_id: uuid.UUID, pool_id: uuid.UUID) -> str:
     solve row already in a database keyed in a space nothing computes any more. It also
     still earns its keep as a *label*: a solver pool id that says which event it belongs
     to is one a human reading a plan or a reason can place."""
-    return f"{event_id}:{pool_id}"
+    return f"{event_id}:{group_id}"
 
 
 @dataclass(frozen=True, slots=True)

@@ -113,7 +113,7 @@ async def _make_event(
         predicates=[],
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [POOL_A, POOL_B] if pools is None else pools, event=event, tournament=tournament
     )
     db.add(event)

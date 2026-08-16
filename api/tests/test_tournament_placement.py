@@ -135,11 +135,11 @@ async def _seed_placeable_fixture(
             }
         ],
     )
-    stages[0].pools = pools
+    stages[0].groups = pools
     db.add(event)
     await db.commit()
     # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
-    # genuinely LOADED collection — unlike the VIEWONLY ``event.pools``) along with it;
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
     # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
     # on the now-expired child objects.
     stage0_id, pool0_id = stages[0].id, pools[0].id

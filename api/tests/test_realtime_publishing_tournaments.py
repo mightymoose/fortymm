@@ -197,7 +197,7 @@ async def _seed_field(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].pools = event_pools(
+    stages[0].groups = event_pools(
         [
             {
                 "name": "Pool A",
@@ -225,9 +225,9 @@ async def _seed_field(
     await db.commit()
     # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
     # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` is called
-    # on ``field.event`` downstream and reads ``event.pools`` synchronously, so this
+    # on ``field.event`` downstream and reads ``event.groups`` synchronously, so this
     # needs an explicit refresh first.
-    await db.refresh(event, attribute_names=["pools"])
+    await db.refresh(event, attribute_names=["groups"])
 
     return Field(
         tournament=tournament,

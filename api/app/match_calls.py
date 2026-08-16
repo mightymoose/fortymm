@@ -981,7 +981,8 @@ class CopyIngredients:
     events: dict[uuid.UUID, TournamentEvent]
     table_labels: dict[str, str]
     #: Per event, its pools' id → display name. Both keys are uuids: the outer one is
-    #: the event's, the inner one the pool's own ``tournament_event_pools`` primary key
+    #: the event's, the inner one the group's own ``tournament_event_stage_groups``
+    #: primary key
     #: (ADR 20260801), which is exactly what a fixture's ``pool_id`` holds.
     pool_names: dict[uuid.UUID, dict[uuid.UUID, str]]
 
