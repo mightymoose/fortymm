@@ -367,7 +367,7 @@ def test_draw_config_orders_the_pools_by_position_not_by_id() -> None:
     the array's nor the ids'.
     """
     stored = _pools()
-    event = TournamentEvent(pools=list(reversed(stored)))
+    event = TournamentEvent(groups=list(reversed(stored)))
 
     assert draw_config(event).pool_ids == tuple(pool.id for pool in stored)
 
@@ -383,7 +383,7 @@ def test_pool_order_ranks_every_pool_id_by_the_events_order() -> None:
     sequence ``draw_config`` hands the snake, so a draw is advanced in the order it was
     cut in."""
     stored = _pools()
-    event = TournamentEvent(pools=list(reversed(stored)))
+    event = TournamentEvent(groups=list(reversed(stored)))
 
     assert pool_order(event) == {pool.id: index for index, pool in enumerate(stored)}
 
@@ -394,7 +394,7 @@ def test_fixture_state_projects_its_pools_place_in_the_event_order() -> None:
     it is last in the director's order and, under random uuid ids, nowhere in particular
     in theirs."""
     stored = _pools()
-    event = TournamentEvent(pools=stored)
+    event = TournamentEvent(groups=stored)
     fixture = TournamentFixture(
         id=uuid.uuid4(),
         stage_id=uuid.uuid4(),
@@ -414,7 +414,7 @@ def test_fixture_state_projects_no_pool_position_when_there_is_no_pool() -> None
     caller that passes no lookup at all gets ``None`` for a *pooled* fixture too: the
     order was not resolved, which is a different thing from position zero."""
     stored = _pools()
-    event = TournamentEvent(pools=stored)
+    event = TournamentEvent(groups=stored)
     un_pooled = TournamentFixture(
         id=uuid.uuid4(), stage_id=uuid.uuid4(), pool_id=None, round=1, position=1
     )

@@ -279,19 +279,26 @@ async def _make_tournament(
 
 
 async def _solver_pool_id(db: AsyncSession, event_id: uuid.UUID) -> PoolId:
-    """The solver's namespaced ``{event}:{pool}`` key for the event's one pool.
+    """The solver's namespaced ``{event}:{reservation}`` key for the event's one pool.
 
-    Looked up rather than spelled, because a pool id is a server-minted uuid now
-    (ADR 20260801). The namespacing itself is unchanged — see
+    The suffix is the **RESERVATION's** id, not the group's. The solver constrains a
+    fixture to a set of tables inside a window, which is exactly what a reservation is,
+    so that is what it keys on — a group only decides *which* reservation applies. The
+    wire type is unchanged (it was always an opaque namespaced string), and under the
+    1:1 the two id spaces are in exact correspondence; what moved is which row the
+    suffix names.
+
+    Looked up rather than spelled, because both ids are server-minted uuids (ADR
+    20260801). The namespacing itself is unchanged — see
     ``app.schedule_preview.preview_pool_key`` for why it stayed."""
-    pool_id = (
+    reservation_id = (
         await db.execute(
-            select(TournamentEventStageGroup.id).where(
-                TournamentEventStageGroup.stage_id.in_(stage_ids_for_events([event_id]))
+            select(TournamentEventReservation.id).where(
+                TournamentEventReservation.event_id == event_id
             )
         )
     ).scalar_one()
-    return PoolId(f"{event_id}:{pool_id}")
+    return PoolId(f"{event_id}:{reservation_id}")
 
 
 async def _fixtures_of(

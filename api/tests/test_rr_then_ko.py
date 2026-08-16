@@ -1256,21 +1256,6 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
         }, "both finished pools' qualifiers are seated, once each, with nobody dropped"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PRE-EXISTING, unrelated to this slice (confirmed by reverting app/ to "
-        "ef773eaa and rerunning this test unchanged — same crash). ANY PATCH to "
-        "/v1/tournaments/{id}/events/{event_id} whose body includes a `pools` key "
-        "returns 500, reordered or resent unchanged: app/tournament_events.py's "
-        "update_event ends with `await db.refresh(event)`, which leaves "
-        "a reservation's tables expired rather than eagerly reloaded, and "
-        "app/tournament_pools.py's pool_read then touches them during "
-        "response serialization, which lazy-loads under async and raises "
-        "sqlalchemy.exc.MissingGreenlet. No test in the suite exercised a `pools` "
-        "PATCH over HTTP before this one, so it has never been caught."
-    ),
-)
 @pytest.mark.parametrize("reorder", [True, False], ids=["reordered", "same-order"])
 async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession, reorder: bool
@@ -1278,11 +1263,26 @@ async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
     """The permitted sibling of the refusal above, run all the way through the HTTP
     response serializer rather than stopping at a service-layer call: once a draw is
     cut, `_enforce_group_set_frozen` refuses a reorder before serialization is ever
-    reached, so the crash this pins was never observable through that guard. It is a
-    genuine, separate, pre-existing bug on the *permitted* path — see the `xfail`
-    reason for the mechanism. Parametrized because the crash does not depend on the
-    order actually changing: a same-order resend (the shape a director's plain venue
-    edit takes) 500s exactly as a reorder does.
+    reached, so this path was never observable through that guard.
+
+    **This was an `xfail(strict=True)` until the group/reservation split, and it pinned
+    a real 500.** ANY PATCH whose body carried a `pools` key returned 500, reordered or
+    resent unchanged: `update_event` ends with `await db.refresh(event)`, which left the
+    venue side of each pool expired rather than eagerly reloaded, and `pool_read` then
+    touched it during response serialization — a lazy load, which under async raises
+    `MissingGreenlet`. No test exercised a `pools` PATCH over HTTP before this one, so
+    it had never been caught.
+
+    The split fixed it incidentally, and structurally rather than by luck: a group
+    reaches its reservation through `lazy="joined"` relationships, so the reservation
+    and its mapping arrive in whatever SELECT loads the group instead of waiting to be
+    fetched on access. The one collection still loaded separately, the reservation's
+    `tables`, chains its `selectin` off that same load. There is nothing left for the
+    refresh to leave behind.
+
+    Parametrized because the crash did not depend on the order actually changing: a
+    same-order resend (the shape a director's plain venue edit takes) 500'd exactly as a
+    reorder did, and both must now answer 200.
     """
     client, _ = authed_client
     tournament_id = await _tournament(client)

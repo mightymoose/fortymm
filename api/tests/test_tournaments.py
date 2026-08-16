@@ -1940,14 +1940,7 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # no longer a special case that skips them, it just never asked for a separate batch).
 # Nine, whatever the number of tournaments, tables, events, pools, reservations and
 # stages.
-# The count moved by exactly ONE when a pool row split into a GROUP and a
-# RESERVATION: a group reaches its reservation through
-# ``tournament_event_group_reservations``, whose own batched ``selectin`` is the
-# added statement. The reservation itself rides along inside it
-# (``lazy="joined"``, a many-to-one, so no second statement), and
-# ``TournamentEvent.reservations`` is deliberately NOT eager, which is what keeps
-# the move at one rather than three. Still constant in the number of events.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 10
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 9
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4582,14 +4575,7 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-# The count moved by exactly ONE when a pool row split into a GROUP and a
-# RESERVATION: a group reaches its reservation through
-# ``tournament_event_group_reservations``, whose own batched ``selectin`` is the
-# added statement. The reservation itself rides along inside it
-# (``lazy="joined"``, a many-to-one, so no second statement), and
-# ``TournamentEvent.reservations`` is deliberately NOT eager, which is what keeps
-# the move at one rather than three. Still constant in the number of events.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 12
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 11
 
 
 @pytest.mark.parametrize("event_count", [1, 4])

@@ -179,7 +179,7 @@ async def test_create_persists_an_event_on_an_owned_tournament(
     assert event.slot == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     # The pools persisted as rows of their own, not as a value inside the event, each
     # with an id the SERVER minted (ADR 20260801) — the payload carried none.
-    assert [pool.name for pool in event.groups] == ["Pool A"]
+    assert [group.reservation.name for group in event.groups] == ["Pool A"]
     assert all(isinstance(pool.id, uuid.UUID) for pool in event.groups)
     event_id = event.id
 
@@ -278,7 +278,9 @@ def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
     what discriminate, since ordering by position cannot itself reveal whether the
     positions were stamped from the payload's order or from the pools' names.
     """
-    return [(pool.name, pool.position) for pool in event.groups]
+    # The name is the RESERVATION's and the position is the GROUP's — the split the
+    # projection reads back, spelled here against the rows.
+    return [(group.reservation.name, group.position) for group in event.groups]
 
 
 async def test_create_positions_pools_by_the_order_they_were_sent(
@@ -828,13 +830,13 @@ async def test_update_event_frozen_pool_reorder_is_refused(
             "pools": [
                 {
                     "id": str(pool_b.id),
-                    "name": pool_b.name,
+                    "name": pool_b.reservation.name,
                     "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
                     "table_ids": [],
                 },
                 {
                     "id": str(pool_a.id),
-                    "name": pool_a.name,
+                    "name": pool_a.reservation.name,
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": [],
                 },
@@ -861,7 +863,7 @@ async def test_update_event_frozen_pool_reorder_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [pool.name for pool in row.groups] == ["Pool A", "Pool B"]
+    assert [group.reservation.name for group in row.groups] == ["Pool A", "Pool B"]
 
 
 async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
@@ -888,7 +890,7 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
                 "pools": [
                     {
                         "id": str(pool_a.id),
-                        "name": pool_a.name,
+                        "name": pool_a.reservation.name,
                         "slot": {
                             "date": "2026-06-13",
                             "start": "09:00",
@@ -898,7 +900,7 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
                     },
                     {
                         "id": str(pool_b.id),
-                        "name": pool_b.name,
+                        "name": pool_b.reservation.name,
                         "slot": {
                             "date": "2026-06-13",
                             "start": "13:00",
@@ -913,7 +915,7 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
 
     assert league_id == default_league.id
     assert updated.name == "Renamed Under Draw"
-    assert [pool.name for pool in updated.pools] == ["Pool A", "Pool B"]
+    assert [group.reservation.name for group in updated.groups] == ["Pool A", "Pool B"]
 
 
 async def test_update_event_persists_a_normal_field_edit(
@@ -1037,7 +1039,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [pool.name for pool in row.groups] == ["Pool A"]
+    assert [group.reservation.name for group in row.groups] == ["Pool A"]
 
 
 async def test_update_event_frozen_draw_type_change_is_refused(
