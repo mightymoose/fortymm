@@ -51,7 +51,7 @@ from app.tournament_errors import (
 from app.tournament_event_stages import mint_stages
 from app.tournament_events import create_event, delete_event, update_event
 from app.tournament_queries import stage_ids_for_events
-from app.tournament_reservations import group_read
+from app.tournament_reservations import reservation_read
 from tests._helpers import (
     event_groups,
     make_user,
@@ -95,11 +95,11 @@ def _event_body(**overrides: Any) -> dict[str, Any]:
         # minted for THIS tournament — which a module-level literal cannot know. The
         # reservation round trip has its own section at the foot of this file, built off
         # the tournament's real catalogue.
-        # No ``id`` either: a pool id is a server-minted uuid (ADR 20260801), so the
-        # create shape has no field for one and sending one is a 422.
-        "pools": [
+        # No ``id`` either: a reservation id is a server-minted uuid (ADR 20260801), so
+        # the create shape has no field for one and sending one is a 422.
+        "reservations": [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": [],
             }
@@ -177,10 +177,10 @@ async def test_create_persists_an_event_on_an_owned_tournament(
     assert event.name == "Open Singles"
     # The nested value-objects persisted as plain JSONB.
     assert event.slot == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
-    # The pools persisted as rows of their own, not as a value inside the event, each
-    # with an id the SERVER minted (ADR 20260801) — the payload carried none.
-    assert [group.reservation.name for group in event.groups] == ["Pool A"]
-    assert all(isinstance(pool.id, uuid.UUID) for pool in event.groups)
+    # The reservations persisted as rows of their own, not as a value inside the event,
+    # each with an id the SERVER minted (ADR 20260801) — the payload carried none.
+    assert [group.reservation.name for group in event.groups] == ["Reservation A"]
+    assert all(isinstance(group.id, uuid.UUID) for group in event.groups)
     event_id = event.id
 
     # Persisted, not merely returned.
@@ -239,26 +239,27 @@ async def test_create_on_a_missing_tournament_raises_not_found(
         )
 
 
-# ----- pool positions ------------------------------------------------------
+# ----- reservation positions -------------------------------------------------
 #
-# A pool's ``position`` is the one field on it the client cannot author: it is not on
-# the write shape at all (``ReservationWrite``), and the server stamps it from the pool's index
-# in the list that was sent — on BOTH verbs (ADR 20260801, "Pools carry an explicit
-# ``position``"). So there are two claims here, and they need each other:
+# A group's ``position`` is the one field on it the client cannot author: it is not on
+# the write shape at all (``ReservationWrite``), and the server stamps it from the
+# reservation's index in the list that was sent — on BOTH verbs (ADR 20260801,
+# "Reservations carry an explicit ``position``"). So there are two claims here, and
+# they need each other:
 #
 #   * a payload that CARRIES a position is refused, naming the unknown field, rather
 #     than having it silently overwritten. "Server-assigned" is then a property of the
 #     schema, which a client can read, instead of a sentence in a docstring, which it
 #     cannot; and
 #   * a payload that does not is stored in the *order sent*, and nothing else. Every
-#     pool below is named so that alphabetical order is a DIFFERENT answer from the
-#     order sent, which is what makes these able to fail — asserting "each pool has a
-#     position" would pass against an implementation that assigned all zeros or sorted
-#     by name.
+#     reservation below is named so that alphabetical order is a DIFFERENT answer from
+#     the order sent, which is what makes these able to fail — asserting "each
+#     reservation has a position" would pass against an implementation that assigned
+#     all zeros or sorted by name.
 
 
-def _pool(name: str, **extra: Any) -> dict[str, Any]:
-    """One pool payload, valid but for whatever ``extra`` the caller adds."""
+def _reservation(name: str, **extra: Any) -> dict[str, Any]:
+    """One reservation payload, valid but for whatever ``extra`` the caller adds."""
     return {
         "name": name,
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
@@ -268,34 +269,36 @@ def _pool(name: str, **extra: Any) -> dict[str, Any]:
 
 
 def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
-    """``(name, position)`` per stored pool, read off the ROWS in the relationship's
+    """``(name, position)`` per stored group, read off the ROWS in the relationship's
     order (which is ``position`` ascending).
 
-    Names, not ids, because a pool named "Pool C" sitting at position 0 is the whole
-    claim: it is the pool the director put first, and it is not the alphabetically first
-    one. Read off the rows rather than through ``Pool`` so a default the schema supplies
-    could not stand in for a value the write path failed to store — and the names are
-    what discriminate, since ordering by position cannot itself reveal whether the
-    positions were stamped from the payload's order or from the pools' names.
+    Names, not ids, because a reservation named "Reservation C" sitting at position 0
+    is the whole claim: it is the reservation the director put first, and it is not the
+    alphabetically first one. Read off the rows rather than through ``Reservation`` so a
+    default the schema supplies could not stand in for a value the write path failed to
+    store — and the names are what discriminate, since ordering by position cannot
+    itself reveal whether the positions were stamped from the payload's order or from
+    the reservations' names.
     """
     # The name is the RESERVATION's and the position is the GROUP's — the split the
     # projection reads back, spelled here against the rows.
     return [(group.reservation.name, group.position) for group in event.groups]
 
 
-async def test_create_positions_pools_by_the_order_they_were_sent(
+async def test_create_positions_reservations_by_the_order_they_were_sent(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """Three pools sent as **C, A, B** are stored as positions 0, 1, 2 *in that order*.
+    """Three reservations sent as **C, A, B** are stored as positions 0, 1, 2 *in that
+    order*.
 
-    Sorted by name — or by id, which is how pool order used to be recovered and which is
+    Sorted by name — or by id, which is how the order used to be recovered and which is
     now random — the answer would be C=2, A=0, B=1. Sorted by nothing at all it would
     be three zeros.
-    The event's pool order is the order the director sent, and this is the assertion
-    that distinguishes the three.
+    The event's reservation order is the order the director sent, and this is the
+    assertion that distinguishes the three.
     """
-    owner = await make_user(db_session, "events-create-pool-positions")
+    owner = await make_user(db_session, "events-create-reservation-positions")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
 
     event, _ = await create_event(
@@ -303,16 +306,20 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
         tournament_id=tournament.id,
         actor=owner,
         payload=_event_payload(
-            pools=[
-                _pool("Pool C"),
-                _pool("Pool A"),
-                _pool("Pool B"),
+            reservations=[
+                _reservation("Reservation C"),
+                _reservation("Reservation A"),
+                _reservation("Reservation B"),
             ]
         ),
     )
     event_id = event.id
 
-    assert _named_positions(event) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
+    assert _named_positions(event) == [
+        ("Reservation C", 0),
+        ("Reservation A", 1),
+        ("Reservation B", 2),
+    ]
 
     # Persisted, not merely returned — and read back off the row.
     db_session.expire_all()
@@ -321,19 +328,23 @@ async def test_create_positions_pools_by_the_order_they_were_sent(
             select(TournamentEvent).where(TournamentEvent.id == event_id)
         )
     ).scalar_one()
-    assert _named_positions(row) == [("Pool C", 0), ("Pool A", 1), ("Pool B", 2)]
-    # No two pools of one event share a position.
-    positions = [pool.position for pool in row.groups]
+    assert _named_positions(row) == [
+        ("Reservation C", 0),
+        ("Reservation A", 1),
+        ("Reservation B", 2),
+    ]
+    # No two groups of one event share a position.
+    positions = [group.position for group in row.groups]
     assert len(set(positions)) == len(positions)
 
 
-_POOLS_CLAIMING_A_POSITION = [
-    _pool("Pool C", position=7),
-    _pool("Pool A", position=7),
-    _pool("Pool B", position=7),
+_RESERVATIONS_CLAIMING_A_POSITION = [
+    _reservation("Reservation C", position=7),
+    _reservation("Reservation A", position=7),
+    _reservation("Reservation B", position=7),
 ]
-"""Three pools that each claim position ``7`` — the payload a client writes when it
-mistakes a server-assigned field for one of its own."""
+"""Three reservations that each claim position ``7`` — the payload a client writes when
+it mistakes a server-assigned field for one of its own."""
 
 
 @pytest.mark.parametrize(
@@ -341,21 +352,21 @@ mistakes a server-assigned field for one of its own."""
     [
         pytest.param(
             TournamentEventCreate,
-            _event_body(pools=_POOLS_CLAIMING_A_POSITION),
+            _event_body(reservations=_RESERVATIONS_CLAIMING_A_POSITION),
             id="create",
         ),
         pytest.param(
             TournamentEventUpdate,
-            {"pools": _POOLS_CLAIMING_A_POSITION},
+            {"reservations": _RESERVATIONS_CLAIMING_A_POSITION},
             id="patch",
         ),
     ],
 )
-def test_a_write_payload_carrying_a_pool_position_is_refused(
+def test_a_write_payload_carrying_a_reservation_position_is_refused(
     schema: type[BaseModel], body: dict[str, Any]
 ) -> None:
-    """A ``position`` on a pool a client **sends** is an unknown field, on both verbs —
-    refused by name, not accepted and quietly overwritten.
+    """A ``position`` on a reservation a client **sends** is an unknown field, on both
+    verbs — refused by name, not accepted and quietly overwritten.
 
     ``position`` is not on ``ReservationWrite``, and both write schemas are
     ``extra="forbid"``, so this is the boundary saying "server-assigned" in the one
@@ -366,10 +377,11 @@ def test_a_write_payload_carrying_a_pool_position_is_refused(
 
     Both verbs, because "the patch path is the hole" is this repo's recurring bug: the
     event editor PATCHes the whole form back, so the patch is the verb that would
-    actually carry an echoed position. They share one alias (``EventReservations``) over one
-    pool shape, which is what makes that impossible to get wrong on only one of them.
+    actually carry an echoed position. They share one alias (``EventReservations``) over
+    one reservation shape, which is what makes that impossible to get wrong on only one
+    of them.
 
-    The **loc** is asserted, not just the refusal: a 422 that named ``pools`` and
+    The **loc** is asserted, not just the refusal: a 422 that named ``reservations`` and
     nothing more would leave a client hunting through its own payload for a field it
     was never told about.
     """
@@ -377,17 +389,17 @@ def test_a_write_payload_carrying_a_pool_position_is_refused(
         schema.model_validate(body)
 
     errors = refusal.value.errors()
-    # Every pool that claimed one is named — not merely the first — so the director's
-    # client can strip the field everywhere it put it, in one round trip.
+    # Every reservation that claimed one is named — not merely the first — so the
+    # director's client can strip the field everywhere it put it, in one round trip.
     assert [error["loc"] for error in errors] == [
-        ("pools", 0, "position"),
-        ("pools", 1, "position"),
-        ("pools", 2, "position"),
+        ("reservations", 0, "position"),
+        ("reservations", 1, "position"),
+        ("reservations", 2, "position"),
     ]
     assert {error["type"] for error in errors} == {"extra_forbidden"}
 
 
-async def test_update_repositions_pools_by_the_order_they_were_patched(
+async def test_update_repositions_reservations_by_the_order_they_were_patched(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
@@ -397,20 +409,20 @@ async def test_update_repositions_pools_by_the_order_they_were_patched(
     Guarding only ``create`` would leave the order to rot on the first edit — an event
     born with positions and then patched without them would silently fall back to
     whatever the ids happened to sort as, which is the exact failure the explicit
-    position exists to end. The event is deliberately **un-drawn**, so the pool-set
+    position exists to end. The event is deliberately **un-drawn**, so the group-set
     freeze is not what is being tested here: the same three ids go in, re-ordered.
     """
-    owner = await make_user(db_session, "events-update-pool-positions")
+    owner = await make_user(db_session, "events-update-reservation-positions")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event, _ = await create_event(
         db_session,
         tournament_id=tournament.id,
         actor=owner,
         payload=_event_payload(
-            pools=[
-                _pool("Pool C"),
-                _pool("Pool A"),
-                _pool("Pool B"),
+            reservations=[
+                _reservation("Reservation C"),
+                _reservation("Reservation A"),
+                _reservation("Reservation B"),
             ]
         ),
     )
@@ -423,16 +435,20 @@ async def test_update_repositions_pools_by_the_order_they_were_patched(
         actor=owner,
         updates=TournamentEventUpdate.model_validate(
             {
-                "pools": [
-                    _pool("Pool B"),
-                    _pool("Pool C"),
-                    _pool("Pool A"),
+                "reservations": [
+                    _reservation("Reservation B"),
+                    _reservation("Reservation C"),
+                    _reservation("Reservation A"),
                 ]
             }
         ),
     )
 
-    assert _named_positions(updated) == [("Pool B", 0), ("Pool C", 1), ("Pool A", 2)]
+    assert _named_positions(updated) == [
+        ("Reservation B", 0),
+        ("Reservation C", 1),
+        ("Reservation A", 2),
+    ]
 
     db_session.expire_all()
     row = (
@@ -440,37 +456,45 @@ async def test_update_repositions_pools_by_the_order_they_were_patched(
             select(TournamentEvent).where(TournamentEvent.id == event_id)
         )
     ).scalar_one()
-    assert _named_positions(row) == [("Pool B", 0), ("Pool C", 1), ("Pool A", 2)]
-    positions = [pool.position for pool in row.groups]
+    assert _named_positions(row) == [
+        ("Reservation B", 0),
+        ("Reservation C", 1),
+        ("Reservation A", 2),
+    ]
+    positions = [group.position for group in row.groups]
     assert len(set(positions)) == len(positions)
 
 
-async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
+async def test_an_events_groups_and_reservations_are_rows_of_their_own(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """A created event's pools are **rows in ``tournament_event_pools``**, each carrying
-    the window in the DATE/TIME columns the ADR pins (ADR 20260801, "a pool belongs to
-    its event, not to the event's draw settings") — and, since ADR 20260815, keyed by
-    the event's stage 0 rather than the event directly, one hop the join below walks.
+    """A created event's groups and reservations are **rows in their own tables**, each
+    carrying the window in the DATE/TIME columns the ADR pins (ADR 20260801, "a pool
+    belongs to its event, not to the event's draw settings") — and, since ADR 20260815,
+    keyed by the event's stage 0 rather than the event directly, one hop the join below
+    walks.
 
-    Read with a **column-only** ``SELECT`` against the pools (and stages) table, not off
-    ``event.groups``: the relationship would answer just as happily if the pools were
-    still a JSONB list on the event, and the claim here is precisely that they are not.
+    Read with a **column-only** ``SELECT`` against the group/reservation (and stage)
+    tables, not off ``event.groups``: the relationship would answer just as happily if
+    the reservations were still a JSONB list on the event, and the claim here is
+    precisely that they are not.
 
     The slot columns are asserted as real ``date``/``time`` VALUES rather than as
     strings, which is the same claim from the other side: a ``timestamptz`` column
     (api/CLAUDE.md's default rule, which the ADR deliberately excepts here) would read
     back as a ``datetime``, and this would fail on the type before the value.
     """
-    owner = await make_user(db_session, "events-pools-are-rows")
+    owner = await make_user(db_session, "events-groups-are-rows")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
 
     event, _ = await create_event(
         db_session,
         tournament_id=tournament.id,
         actor=owner,
-        payload=_event_payload(pools=[_pool("Pool A"), _pool("Pool B")]),
+        payload=_event_payload(
+            reservations=[_reservation("Reservation A"), _reservation("Reservation B")]
+        ),
     )
     event_id = event.id
 
@@ -491,8 +515,8 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
                 TournamentEventStage.id == TournamentEventStageGroup.stage_id,
             )
             # The name and the window live on the reservation, the id and the position
-            # on the group: what the wire serves as one pool is these two rows, walked
-            # through the join that maps them.
+            # on the group: what the wire once served as one row is these two rows,
+            # walked through the join that maps them.
             .join(
                 TournamentEventGroupReservation,
                 TournamentEventGroupReservation.group_id
@@ -511,8 +535,8 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
     # is that they exist, are uuids, and are distinct — not their value, which no test
     # could spell.
     assert [(r[0], *r[2:]) for r in rows] == [
-        (event_id, "Pool A", 0, date(2026, 6, 13), time(9, 0), time(12, 30)),
-        (event_id, "Pool B", 1, date(2026, 6, 13), time(9, 0), time(12, 30)),
+        (event_id, "Reservation A", 0, date(2026, 6, 13), time(9, 0), time(12, 30)),
+        (event_id, "Reservation B", 1, date(2026, 6, 13), time(9, 0), time(12, 30)),
     ]
     assert len({r[1] for r in rows}) == 2
     assert all(isinstance(r[1], uuid.UUID) for r in rows)
@@ -531,10 +555,10 @@ async def test_an_events_pools_are_rows_of_its_own_keyed_by_the_event(
     ],
     ids=["unparseable-date", "unparseable-start", "a-time-carrying-seconds"],
 )
-def test_a_pool_window_the_columns_cannot_hold_is_refused(
+def test_a_reservation_window_the_columns_cannot_hold_is_refused(
     slot: dict[str, str], field: str
 ) -> None:
-    """A pool window that is not ``YYYY-MM-DD`` + ``HH:MM`` is a **422 at the
+    """A reservation window that is not ``YYYY-MM-DD`` + ``HH:MM`` is a **422 at the
     boundary**, not a driver error at the INSERT.
 
     The three strings used to sit inside a JSONB blob that accepted anything at all;
@@ -552,11 +576,11 @@ def test_a_pool_window_the_columns_cannot_hold_is_refused(
     """
     with pytest.raises(ValidationError) as refusal:
         TournamentEventCreate.model_validate(
-            _event_body(pools=[_pool("Pool A", slot=slot)])
+            _event_body(reservations=[_reservation("Reservation A", slot=slot)])
         )
 
     (error,) = refusal.value.errors()
-    assert error["loc"] == ("pools", 0, "slot"), field
+    assert error["loc"] == ("reservations", 0, "slot"), field
 
 
 # ----- delete --------------------------------------------------------------
@@ -691,12 +715,12 @@ async def _add_cut_event(
     timezone: str = "America/Chicago",
     scheduled_start: datetime | None = None,
 ) -> TournamentEvent:
-    """An event carrying one pool (named "Pool A") AND a fixture — so ``event_has_draw``
-    is True and the two freezes are live. The fixture optionally carries a
-    ``scheduled_start`` placement, for the timezone-reanchor path.
+    """An event carrying one group (named "Reservation A") AND a fixture — so
+    ``event_has_draw`` is True and the two freezes are live. The fixture optionally
+    carries a ``scheduled_start`` placement, for the timezone-reanchor path.
 
-    The pool's id is minted here (``event_groups``) rather than by the column's default,
-    because the fixture below has to name it before either row is flushed."""
+    The group's id is minted here (``event_groups``) rather than by the column's
+    default, because the fixture below has to name it before either row is flushed."""
     stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -711,10 +735,10 @@ async def _add_cut_event(
         predicates=[],
         stages=stages,
     )
-    pools = event_groups(
+    groups = event_groups(
         [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1", "t2"],
             }
@@ -722,18 +746,18 @@ async def _add_cut_event(
         event=event,
         tournament=tournament,
     )
-    stages[0].groups = pools
+    stages[0].groups = groups
     db.add(event)
     await db.commit()
     # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
     # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
-    # re-reading ``stages[0].id``/``pools[0].id`` afterward would be an async lazy load
+    # re-reading ``stages[0].id``/``groups[0].id`` afterward would be an async lazy load
     # on the now-expired child objects.
-    stage0_id, pool0_id = stages[0].id, pools[0].id
+    stage0_id, group0_id = stages[0].id, groups[0].id
     await db.refresh(event)
     fixture = TournamentFixture(
         stage_id=stage0_id,
-        group_id=pool0_id,
+        group_id=group0_id,
         round=1,
         position=1,
         scheduled_start=scheduled_start,
@@ -743,12 +767,12 @@ async def _add_cut_event(
     return event
 
 
-async def _add_cut_event_with_two_pools(
+async def _add_cut_event_with_two_groups(
     db: AsyncSession, tournament: Tournament
 ) -> TournamentEvent:
-    """An event carrying two pools ("Pool A" at position 0, "Pool B" at position 1),
-    each with a fixture — so ``event_has_draw`` is True and, unlike
-    :func:`_add_cut_event`'s single pool, an *order* actually exists to change."""
+    """An event carrying two groups ("Reservation A" at position 0, "Reservation B" at
+    position 1), each with a fixture — so ``event_has_draw`` is True and, unlike
+    :func:`_add_cut_event`'s single group, an *order* actually exists to change."""
     stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -763,15 +787,15 @@ async def _add_cut_event_with_two_pools(
         predicates=[],
         stages=stages,
     )
-    pools = event_groups(
+    groups = event_groups(
         [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1"],
             },
             {
-                "name": "Pool B",
+                "name": "Reservation B",
                 "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
                 "table_ids": ["t2"],
             },
@@ -779,19 +803,19 @@ async def _add_cut_event_with_two_pools(
         event=event,
         tournament=tournament,
     )
-    stages[0].groups = pools
+    stages[0].groups = groups
     db.add(event)
     await db.commit()
     stage0_id = stages[0].id
-    pool_a_id, pool_b_id = pools[0].id, pools[1].id
+    group_a_id, group_b_id = groups[0].id, groups[1].id
     await db.refresh(event)
     db.add_all(
         [
             TournamentFixture(
-                stage_id=stage0_id, group_id=pool_a_id, round=1, position=1
+                stage_id=stage0_id, group_id=group_a_id, round=1, position=1
             ),
             TournamentFixture(
-                stage_id=stage0_id, group_id=pool_b_id, round=1, position=1
+                stage_id=stage0_id, group_id=group_b_id, round=1, position=1
             ),
         ]
     )
@@ -799,44 +823,49 @@ async def _add_cut_event_with_two_pools(
     return event
 
 
-async def test_update_event_frozen_pool_reorder_is_refused(
+async def test_update_event_frozen_group_reorder_is_refused(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """Once the draw is cut, a ``pools`` payload citing exactly the pools the event
-    already has — the same set, in a **different order** — raises
+    """Once the draw is cut, a ``reservations`` payload citing exactly the reservations
+    the event already has — the same set, in a **different order** — raises
     :class:`GroupSetFrozenError` and writes nothing, exactly as adding or removing one
     does (ADR-0786, extended).
 
-    This is the regression pin for the mutable-``pool_position`` bug: before this guard
-    existed, ``_enforce_pool_set_frozen`` compared only the pool id SET, so a PATCH
-    resending the same ids in a new order sailed through and restamped ``Pool.position``
-    (``apply_event_reservations``) — which is exactly what the qualifier seam labels a finished
-    pool's bracket seats by (``RrThenKoStrategy._qualifier_fills``'s ``pool_position``).
-    Between two pools finishing, that relabelling double-seats one pool's qualifiers and
-    strands another's — see ``tests/test_rr_then_ko.py``'s
-    ``test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct`` for the
+    This is the regression pin for the mutable-``group_position`` bug: before this
+    guard existed, ``_enforce_group_set_frozen`` compared only the group id SET, so a
+    PATCH resending the same ids in a new order sailed through and restamped
+    ``TournamentEventStageGroup.position`` (``apply_event_reservations``) — which is
+    exactly what the qualifier seam labels a finished group's bracket seats by
+    (``RrThenKoStrategy._qualifier_fills``'s ``group_position``). Between two groups
+    finishing, that relabelling double-seats one group's qualifiers and strands
+    another's — see ``tests/test_rr_then_ko.py``'s
+    ``test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct`` for the
     end-to-end demonstration.
+
+    The write payload's ``id`` names the **reservation's** id, not the group's — the
+    wire keys the diff on the reservation now (``apply_event_reservations``) — so this
+    reorder cites ``group_b.reservation.id`` / ``group_a.reservation.id``, swapped.
     """
-    owner = await make_user(db_session, "events-update-poolreorder-owner")
+    owner = await make_user(db_session, "events-update-groupreorder-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    event = await _add_cut_event_with_two_pools(db_session, tournament)
+    event = await _add_cut_event_with_two_groups(db_session, tournament)
     event_id = event.id
-    (pool_a, pool_b) = sorted(event.groups, key=lambda pool: pool.position)
+    (group_a, group_b) = sorted(event.groups, key=lambda group: group.position)
 
     updates = TournamentEventUpdate.model_validate(
         {
             "name": "Should Not Apply",
-            "pools": [
+            "reservations": [
                 {
-                    "id": str(pool_b.id),
-                    "name": pool_b.reservation.name,
+                    "id": str(group_b.reservation.id),
+                    "name": group_b.reservation.name,
                     "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
                     "table_ids": [],
                 },
                 {
-                    "id": str(pool_a.id),
-                    "name": pool_a.reservation.name,
+                    "id": str(group_a.reservation.id),
+                    "name": group_a.reservation.name,
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": [],
                 },
@@ -851,11 +880,11 @@ async def test_update_event_frozen_pool_reorder_is_refused(
             actor=owner,
             updates=updates,
         )
-    assert "order of its pools is frozen" in str(excinfo.value)
+    assert "order of its groups is frozen" in str(excinfo.value)
     assert excinfo.value.removed == []
     assert excinfo.value.added == []
 
-    # Refused before the setattr loop: neither the pools' order nor the name changed.
+    # Refused before the setattr loop: neither the groups' order nor the name changed.
     db_session.expire_all()
     row = (
         await db_session.execute(
@@ -863,21 +892,24 @@ async def test_update_event_frozen_pool_reorder_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [group.reservation.name for group in row.groups] == ["Pool A", "Pool B"]
+    assert [group.reservation.name for group in row.groups] == [
+        "Reservation A",
+        "Reservation B",
+    ]
 
 
-async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
+async def test_update_event_re_sending_the_same_group_order_is_not_frozen(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """Re-sending the pools an event already has, in the order it already has them,
-    changes nothing, so it is NOT refused even with a cut draw — the case the freeze
-    exists to permit, and the sibling of the same-draw-type test above."""
-    owner = await make_user(db_session, "events-update-poolsameorder-owner")
+    """Re-sending the reservations an event already has, in the order it already has
+    them, changes nothing, so it is NOT refused even with a cut draw — the case the
+    freeze exists to permit, and the sibling of the same-draw-type test above."""
+    owner = await make_user(db_session, "events-update-groupsameorder-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    event = await _add_cut_event_with_two_pools(db_session, tournament)
+    event = await _add_cut_event_with_two_groups(db_session, tournament)
     event_id = event.id
-    (pool_a, pool_b) = sorted(event.groups, key=lambda pool: pool.position)
+    (group_a, group_b) = sorted(event.groups, key=lambda group: group.position)
 
     updated, league_id = await update_event(
         db_session,
@@ -887,10 +919,10 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
         updates=TournamentEventUpdate.model_validate(
             {
                 "name": "Renamed Under Draw",
-                "pools": [
+                "reservations": [
                     {
-                        "id": str(pool_a.id),
-                        "name": pool_a.reservation.name,
+                        "id": str(group_a.reservation.id),
+                        "name": group_a.reservation.name,
                         "slot": {
                             "date": "2026-06-13",
                             "start": "09:00",
@@ -899,8 +931,8 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
                         "table_ids": [],
                     },
                     {
-                        "id": str(pool_b.id),
-                        "name": pool_b.reservation.name,
+                        "id": str(group_b.reservation.id),
+                        "name": group_b.reservation.name,
                         "slot": {
                             "date": "2026-06-13",
                             "start": "13:00",
@@ -915,7 +947,10 @@ async def test_update_event_re_sending_the_same_pool_order_is_not_frozen(
 
     assert league_id == default_league.id
     assert updated.name == "Renamed Under Draw"
-    assert [group.reservation.name for group in updated.groups] == ["Pool A", "Pool B"]
+    assert [group.reservation.name for group in updated.groups] == [
+        "Reservation A",
+        "Reservation B",
+    ]
 
 
 async def test_update_event_persists_a_normal_field_edit(
@@ -999,13 +1034,13 @@ async def test_update_event_on_a_missing_event_raises_event_not_found(
         )
 
 
-async def test_update_event_frozen_pool_set_change_is_refused(
+async def test_update_event_frozen_group_set_change_is_refused(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """Once the draw is cut, a ``pools`` payload that changes *which pools* the event
-    has raises :class:`GroupSetFrozenError` and writes nothing (ADR-0786)."""
-    owner = await make_user(db_session, "events-update-poolfreeze-owner")
+    """Once the draw is cut, a ``reservations`` payload that changes *which groups* the
+    event has raises :class:`GroupSetFrozenError` and writes nothing (ADR-0786)."""
+    owner = await make_user(db_session, "events-update-groupfreeze-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _add_cut_event(db_session, tournament)
     event_id = event.id
@@ -1013,9 +1048,9 @@ async def test_update_event_frozen_pool_set_change_is_refused(
     updates = TournamentEventUpdate.model_validate(
         {
             "name": "Should Not Apply",
-            "pools": [
+            "reservations": [
                 {
-                    "name": "Pool B",
+                    "name": "Reservation B",
                     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                     "table_ids": ["t1"],
                 }
@@ -1031,7 +1066,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
             updates=updates,
         )
 
-    # Refused before the setattr loop: neither the pools nor the name were written.
+    # Refused before the setattr loop: neither the groups nor the name were written.
     db_session.expire_all()
     row = (
         await db_session.execute(
@@ -1039,7 +1074,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
         )
     ).scalar_one()
     assert row.name == "Cut Singles"
-    assert [group.reservation.name for group in row.groups] == ["Pool A"]
+    assert [group.reservation.name for group in row.groups] == ["Reservation A"]
 
 
 async def test_update_event_frozen_draw_type_change_is_refused(
@@ -1148,36 +1183,37 @@ async def test_update_event_timezone_change_reanchors_placements(
     )
 
 
-# ----- a pool's table reservations (ADR 20260801) ---------------------------
+# ----- a reservation's table reservations (ADR 20260801) --------------------
 #
-# The tables a pool reserves are rows now — ``tournament_event_pool_tables`` — where
-# they were a JSONB array of strings that could name anything at all. Three claims live
-# down here, and only the first is visible through the wire shape:
+# The tables a reservation reserves are rows now —
+# ``tournament_event_reservation_tables`` — where they were a JSONB array of strings
+# that could name anything at all. Three claims live down here, and only the first is
+# visible through the wire shape:
 #
 #   * a reservation round-trips through rows, in the order it was sent;
-#   * a pool cannot reserve **another tournament's** table, and it is the DATABASE that
-#     says so — the two spellings of that illegal state are refused by two different
-#     legs of the same three-legged key;
+#   * a reservation cannot reserve **another tournament's** table, and it is the
+#     DATABASE that says so — the two spellings of that illegal state are refused by
+#     two different legs of the same three-legged key;
 #   * removing a table takes the reservations that named it, quietly, because a
 #     reservation is a preference and only a placement is a commitment.
 
 #: The leg that catches a reservation naming a table of a tournament other than the one
 #: the row claims to be inside.
-POOL_TABLE_TABLE_CONSTRAINT = (
+RESERVATION_TABLE_TABLE_CONSTRAINT = (
     "fk_tournament_event_reservation_tables_tournament_id_table_id"
 )
-#: The leg that catches a reservation whose claimed tournament is not the one its pool's
+#: The leg that catches a reservation whose claimed tournament is not the one its
 #: event belongs to — the one that looks redundant and is not (see the model).
-POOL_TABLE_EVENT_CONSTRAINT = (
+RESERVATION_TABLE_EVENT_CONSTRAINT = (
     "fk_tournament_event_reservation_tables_tournament_id_event_id"
 )
 
 
 async def _reservation_rows(
     db: AsyncSession, event_id: uuid.UUID
-) -> list[tuple[uuid.UUID, str, str, int]]:
+) -> list[tuple[uuid.UUID, uuid.UUID, str, int]]:
     """``(tournament_id, reservation_id, table_id, position)`` per stored reservation of
-    this event, in pool then position order.
+    this event, in reservation then position order.
 
     A column-only ``SELECT`` so it reads the rows and not the session's opinion of them:
     two of the tests below delete rows out from under loaded ORM instances (that is the
@@ -1204,8 +1240,10 @@ async def _reservation_rows(
     ]
 
 
-def _pool_payload(*table_ids: str, name: str = "Pool A") -> dict[str, Any]:
-    """One pool reserving exactly ``table_ids``, in that order."""
+def _reservation_payload(
+    *table_ids: str, name: str = "Reservation A"
+) -> dict[str, Any]:
+    """One reservation reserving exactly ``table_ids``, in that order."""
     return {
         "name": name,
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
@@ -1213,18 +1251,18 @@ def _pool_payload(*table_ids: str, name: str = "Pool A") -> dict[str, Any]:
     }
 
 
-async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_sent(
+async def test_a_reservations_tables_are_stored_as_rows_in_the_order_they_were_sent(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """A pool reserves its tables through **rows**, not a string array — and the wire
-    shape is unchanged, because ``table_ids`` is composed back from them.
+    """A reservation reserves its tables through **rows**, not a string array — and the
+    wire shape is unchanged, because ``table_ids`` is composed back from them.
 
     The two tables are named in *reverse* catalogue order, which is what makes this able
     to fail: rows have no inherent order, and reading them back by ``table_id`` (a
     random uuid) or by insertion happenstance would give the director's list back
     shuffled. ``position`` is what carries the order the payload stated, exactly as it
-    does for the pools themselves and for the venue catalogue.
+    does for the reservations themselves and for the venue catalogue.
     """
     owner = await make_user(db_session, "events-reservation-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
@@ -1235,7 +1273,7 @@ async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_se
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        payload=_event_payload(pools=[_pool_payload(table_2, table_1)]),
+        payload=_event_payload(reservations=[_reservation_payload(table_2, table_1)]),
     )
     event_id = event.id
     reservation_id = event.groups[0].reservation.id
@@ -1249,12 +1287,12 @@ async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_se
     # And the same order back through the read shape everything above the database uses.
     stored = (
         await db_session.execute(
-            select(TournamentEventStageGroup).where(
-                TournamentEventStageGroup.stage_id.in_(stage_ids_for_events([event_id]))
+            select(TournamentEventReservation).where(
+                TournamentEventReservation.id == reservation_id
             )
         )
     ).scalar_one()
-    assert group_read(stored).table_ids == [table_2, table_1]
+    assert reservation_read(stored).table_ids == [table_2, table_1]
 
 
 async def test_a_reservation_of_another_tournaments_table_never_reaches_the_database(
@@ -1286,7 +1324,9 @@ async def test_a_reservation_of_another_tournaments_table_never_reaches_the_data
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        payload=_event_payload(pools=[_pool_payload(mine, foreign_table)]),
+        payload=_event_payload(
+            reservations=[_reservation_payload(mine, foreign_table)]
+        ),
     )
     event_id = event.id
     reservation_id = event.groups[0].reservation.id
@@ -1297,13 +1337,13 @@ async def test_a_reservation_of_another_tournaments_table_never_reaches_the_data
     ]
 
 
-async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_database(
+async def test_a_reservations_table_across_tournaments_is_refused_by_the_database(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """The claim the composite foreign keys exist to make (ADR 20260801): a pool cannot
-    reserve another tournament's table — and it is the **database** that says so, not
-    the write path above it.
+    """The claim the composite foreign keys exist to make (ADR 20260801): a reservation
+    cannot reserve another tournament's table — and it is the **database** that says so,
+    not the write path above it.
 
     The illegal state has two spellings, and each is caught by a *different* leg of the
     three-legged key, which is why it takes three:
@@ -1317,7 +1357,7 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
       leg the first two are both satisfied and the row goes in, which is exactly the
       reservation this table exists to forbid.
 
-    Both are refused at the INSERT: unlike the fixture's ``(event_id, pool_id)``, none
+    Both are refused at the INSERT: unlike the fixture's ``(event_id, group_id)``, none
     of these constraints is deferred — no delete path needs them to be.
     """
     owner = await make_user(db_session, "events-cross-reservation-owner")
@@ -1330,7 +1370,7 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        payload=_event_payload(pools=[_pool_payload()]),
+        payload=_event_payload(reservations=[_reservation_payload()]),
     )
     event_id = event.id
     reservation_id = event.groups[0].reservation.id
@@ -1345,7 +1385,7 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
-    assert POOL_TABLE_TABLE_CONSTRAINT in str(excinfo.value)
+    assert RESERVATION_TABLE_TABLE_CONSTRAINT in str(excinfo.value)
     await db_session.rollback()
 
     db_session.add(
@@ -1359,7 +1399,7 @@ async def test_a_pool_table_reservation_across_tournaments_is_refused_by_the_dat
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
-    assert POOL_TABLE_EVENT_CONSTRAINT in str(excinfo.value)
+    assert RESERVATION_TABLE_EVENT_CONSTRAINT in str(excinfo.value)
     await db_session.rollback()
 
     # Neither refusal left anything behind.
@@ -1372,9 +1412,9 @@ async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
 ) -> None:
     """The plainer half of the same key: a ``table_id`` naming no table anywhere.
 
-    It was storable for as long as a pool's tables were strings in a JSONB array — the
-    dangling reference ADR-0790 could only shrug at, and the reason "this id names a
-    table" had to be re-derived by every reader. It is a foreign-key violation now."""
+    It was storable for as long as a reservation's tables were strings in a JSONB array
+    — the dangling reference ADR-0790 could only shrug at, and the reason "this id names
+    a table" had to be re-derived by every reader. It is a foreign-key violation now."""
     owner = await make_user(db_session, "events-dangling-reservation-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
@@ -1382,7 +1422,7 @@ async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        payload=_event_payload(pools=[_pool_payload()]),
+        payload=_event_payload(reservations=[_reservation_payload()]),
     )
 
     db_session.add(
@@ -1396,11 +1436,11 @@ async def test_a_reservation_naming_no_table_at_all_is_refused_by_the_database(
     )
     with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
-    assert POOL_TABLE_TABLE_CONSTRAINT in str(excinfo.value)
+    assert RESERVATION_TABLE_TABLE_CONSTRAINT in str(excinfo.value)
     await db_session.rollback()
 
 
-async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
+async def test_removing_a_table_drops_the_reservations_that_named_it(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
@@ -1409,15 +1449,16 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
 
     This is the ADR's asymmetry, from the reservation's side. A fixture *placed* at a
     table blocks the delete (``ON DELETE RESTRICT``) so the director can be asked; a
-    pool that merely *reserves* it is not consulted, because a table breaking or freeing
-    up is ordinary venue traffic and the pool simply reserves one fewer. Under the JSONB
-    array the pool went on listing the dead id forever; the CASCADE is what makes
-    "reserves one fewer" true in the database rather than derived by every reader.
+    reservation that merely *reserves* it is not consulted, because a table breaking or
+    freeing up is ordinary venue traffic and the reservation simply reserves one fewer.
+    Under the JSONB array the reservation went on listing the dead id forever; the
+    CASCADE is what makes "reserves one fewer" true in the database rather than derived
+    by every reader.
 
     Deleted at the row, deliberately, rather than through the tournament-edit verb: this
     is a claim about the constraint, and the verb's own 409/opt-in path is pinned in
     ``test_tournaments.py``. The surviving reservation is asserted too — a cascade that
-    took the whole pool's reservations would satisfy "the dead one is gone".
+    took the whole reservation's tables would satisfy "the dead one is gone".
     """
     owner = await make_user(db_session, "events-table-cascade-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
@@ -1428,7 +1469,7 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
+        payload=_event_payload(reservations=[_reservation_payload(table_1, table_2)]),
     )
     event_id = event.id
     # Two ids, because the row that holds the table and the row a client cites are
@@ -1444,7 +1485,7 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
     assert await _reservation_rows(db_session, event_id) == [
         (tournament_id, reservation_id, table_1, 0)
     ]
-    # The pool itself is untouched — a reservation went, not a pool.
+    # The group itself is untouched — a reservation's table went, not the group.
     assert (
         await db_session.execute(
             select(TournamentEventStageGroup.id).where(
@@ -1454,14 +1495,14 @@ async def test_removing_a_table_drops_the_pool_reservations_that_named_it(
     ).scalars().all() == [group_id]
 
 
-async def test_removing_a_pool_takes_its_table_reservations_with_it(
+async def test_removing_a_reservation_takes_its_table_reservations_with_it(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """A pool dropped from a PATCH takes its reservations with it, through the same
-    ``delete-orphan``/CASCADE pair the pool itself goes by — so no reservation outlives
-    the pool that made it."""
-    owner = await make_user(db_session, "events-pool-cascade-owner")
+    """A reservation dropped from a PATCH takes its table rows with it, through the same
+    ``delete-orphan``/CASCADE pair the reservation itself goes by — so no table row
+    outlives the reservation that made it."""
+    owner = await make_user(db_session, "events-reservation-cascade-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     tournament_id = tournament.id
     table_1, _table_2 = [str(table.id) for table in tournament.tables]
@@ -1469,7 +1510,7 @@ async def test_removing_a_pool_takes_its_table_reservations_with_it(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        payload=_event_payload(pools=[_pool_payload(table_1)]),
+        payload=_event_payload(reservations=[_reservation_payload(table_1)]),
     )
     event_id = event.id
 
@@ -1478,7 +1519,7 @@ async def test_removing_a_pool_takes_its_table_reservations_with_it(
         tournament_id=tournament_id,
         event_id=event_id,
         actor=owner,
-        updates=TournamentEventUpdate.model_validate({"pools": []}),
+        updates=TournamentEventUpdate.model_validate({"reservations": []}),
     )
 
     db_session.expire_all()
@@ -1494,11 +1535,12 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
 
     Both halves matter and they are the same mechanism. A wholesale replace would ask
     the unit of work to INSERT a primary key it is about to DELETE (it emits the inserts
-    first), so re-sending a table the pool already reserves would die on
-    ``pk_tournament_event_pool_tables``. And swapping two reservations moves one onto a
-    ``position`` the other has not vacated yet, which is why the uniqueness on
-    ``(event_id, pool_id, position)`` is ``DEFERRABLE INITIALLY DEFERRED`` — checked
-    immediately it would refuse a transaction whose end state is perfectly unique.
+    first), so re-sending a table the reservation already reserves would die on
+    ``pk_tournament_event_reservation_tables``. And swapping two reservations moves one
+    onto a ``position`` the other has not vacated yet, which is why the uniqueness on
+    ``(event_id, reservation_id, position)`` is ``DEFERRABLE INITIALLY DEFERRED`` —
+    checked immediately it would refuse a transaction whose end state is perfectly
+    unique.
 
     The ``created_at`` of the surviving row is what says its identity was *kept* rather
     than deleted and re-made under the same key: a re-inserted row would carry a fresh
@@ -1512,10 +1554,9 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        payload=_event_payload(pools=[_pool_payload(table_1, table_2)]),
+        payload=_event_payload(reservations=[_reservation_payload(table_1, table_2)]),
     )
     event_id = event.id
-    group_id = event.groups[0].id
     reservation_id = event.groups[0].reservation.id
     created_at = (
         await db_session.execute(
@@ -1532,9 +1573,16 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
         event_id=event_id,
         actor=owner,
         updates=TournamentEventUpdate.model_validate(
-            # The pool is CITED by the id the server minted, so the diff keeps its row —
-            # which is the whole premise of the claim below about its reservations.
-            {"pools": [{**_pool_payload(table_2, table_1), "id": str(group_id)}]}
+            # The reservation is CITED by the id the server minted, so the diff keeps
+            # its row — which is the whole premise of the claim below about its tables.
+            {
+                "reservations": [
+                    {
+                        **_reservation_payload(table_2, table_1),
+                        "id": str(reservation_id),
+                    }
+                ]
+            }
         ),
     )
 
