@@ -1204,9 +1204,20 @@ describe('transitionTournament', () => {
     })
     if (!enterEvent(id, lone).ok) throw new Error('setup failed: could not enter')
 
+    const mixed = refusalDetail(transitionTournament(id, 'live'))!
+
+    // The ORDER first, and deliberately BEFORE the whole-sentence pin below. All three
+    // buckets are non-empty here, so this is the real three-bucket ordering — and put
+    // after the `toBe`, these could never be the failing signal, because the exact-string
+    // assertion already pins the order and would red first. A test whose comment claims
+    // it guards a property it can never report on is worse than no test.
+    expect(mixed.indexOf('“A Undrawable”')).toBeLessThan(mixed.indexOf('“B Uncut”'))
+    expect(mixed.indexOf('“B Uncut”')).toBeLessThan(mixed.indexOf('cut the draw'))
+    expect(mixed.endsWith('then start the tournament.')).toBe(true)
+
     // Undrawable first, mirroring the server: "cut the draw for each event named" must
     // trail only the names a cut would actually fix (#1300 QA).
-    expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
+    expect(mixed).toBe(
       'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool would ' +
         'leave a pool with fewer than 2 entrants, who would have nobody to play. Add ' +
         'entrants, or remove the event. “B Uncut” has no draw yet; and “C Stale” has ' +
@@ -1216,13 +1227,6 @@ describe('transitionTournament', () => {
         'somebody entered or withdrew since it was last cut), then start the ' +
         'tournament.',
     )
-    // Asserted separately from the `toBe` above, because the ORDER is the property the
-    // repair is about and it must fail under its own name when it breaks. All three
-    // buckets are non-empty here, so this really is the three-bucket ordering.
-    const mixed = refusalDetail(transitionTournament(id, 'live'))!
-    expect(mixed.endsWith('then start the tournament.')).toBe(true)
-    expect(mixed.indexOf('“A Undrawable”')).toBeLessThan(mixed.indexOf('“B Uncut”'))
-    expect(mixed.indexOf('“B Uncut”')).toBeLessThan(mixed.indexOf('cut the draw'))
     expect(findTournament(id)!.status).toBe('published')
   })
 

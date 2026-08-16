@@ -89,6 +89,9 @@ const SAY = {
     'A doubles event cannot be given a draw — only singles events can.',
   removeTheEvent: 'Remove the event.',
   addEntrants: 'Add entrants, or remove the event.',
+  /** The instruction that closes the `uncut`/`stale` body — and the anchor the body
+   * ORDER is asserted against, since it must trail only the names a cut can fix. */
+  cutTheDraw: 'cut the draw for each event named',
   /** The freeze reasons, one per frozen control. */
   poolsFrozen: 'a pool can’t be added or removed while the draw stands',
   drawTypeFrozen: 'its draw type is frozen',
@@ -479,6 +482,20 @@ test.describe('Tournaments · going live needs a current draw', () => {
     await expect(pom.lifecycleNotice).toContainText(SAY.noPools)
     await expect(pom.lifecycleNotice).toContainText(SAY.nonSingles)
     await expect(pom.lifecycleNotice).toContainText(SAY.removeTheEvent)
+
+    // …and in the right ORDER, which no `toContainText` above can see. The undrawable
+    // sentences come FIRST, so the `uncut`/`stale` body's closing instruction — "cut the
+    // draw for each event named" — trails only the names a cut would actually fix. With
+    // the bodies the other way round QA read that instruction, clicked Generate draw on
+    // an undrawable event named just below it, and the cut refused (#1300).
+    //
+    // This is also the ONLY assertion in any suite that pins the e2e stub's body order:
+    // every other check here is a fragment match that passes under either order, and
+    // this suite runs with MSW off, so vitest cannot see this stub at all.
+    const notice = (await pom.lifecycleNotice.innerText()).replace(/\s+/g, ' ')
+    expect(notice.indexOf(SAY.nonSingles)).toBeLessThan(notice.indexOf(SAY.cutTheDraw))
+    expect(notice.indexOf(SAY.noPools)).toBeLessThan(notice.indexOf(SAY.cutTheDraw))
+    expect(notice.trimEnd().endsWith('then start the tournament.')).toBe(true)
 
     await pom.expectLifecycle('Published', 'Start tournament')
     expect(store.status).toBe('published')

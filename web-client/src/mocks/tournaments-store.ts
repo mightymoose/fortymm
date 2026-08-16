@@ -2078,18 +2078,24 @@ function uncutStaleBody(uncut: string[], stale: string[]): string {
  * **Two bodies, joined with a space** (#1300), because they answer two different
  * questions:
  *
- * * the `uncut`/`stale` body, for events a cut (or a re-cut) would genuinely fix — the
- *   sentence this refusal has always been; and
  * * the `undrawable` body, one sentence per event, for events no cut could ever fix as
- *   they stand: a field under two entrants, or a non-singles event.
+ *   they stand: a field under two entrants, or a non-singles event; and
+ * * the `uncut`/`stale` body, for events a cut (or a re-cut) would genuinely fix — the
+ *   sentence this refusal has always been.
  *
- * **When every at-fault event is undrawable the first body is absent**, so the refusal
- * never contains the "cut the draw for each event named" instruction. That is the whole
- * defect #1300 closes: telling a director to cut a draw the system will refuse a second
- * time is an instruction they cannot follow, and the only escape the QA pass found was
- * deleting the event.
+ * **`undrawable` is emitted first, and the order is load-bearing.** The `uncut`/`stale`
+ * body ends in "so cut the draw for each event named …, then start the tournament". Put
+ * that body first and the undrawable sentences trail *after* the instruction, so "each
+ * event named" reads as covering them too — and a director who follows it clicks
+ * Generate draw on an event the cut refuses. QA walked exactly that circle.
  *
- * Two lists rather than one appended in place, because the bodies are ordered (uncut/stale
+ * **When every at-fault event is undrawable the `uncut`/`stale` body is absent**, so the
+ * refusal never contains the "cut the draw for each event named" instruction. That is the
+ * whole defect #1300 closes: telling a director to cut a draw the system will refuse a
+ * second time is an instruction they cannot follow, and the only escape the QA pass found
+ * was deleting the event.
+ *
+ * Two lists rather than one appended in place, because the bodies are ordered (undrawable
  * first) while the events inside each keep the tournament's own order — an event listed
  * first can still be reported last. */
 function goLiveRefusal(tournament: StoredTournament): string | null {

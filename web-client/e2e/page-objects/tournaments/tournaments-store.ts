@@ -1021,11 +1021,16 @@ function uncutStaleBody(uncut: string[], stale: string[]): string {
  * can (`_enforce_ready_to_go_live`). **It names the events**, because a refusal a
  * director cannot act on is barely better than a 500.
  *
- * **Two bodies, joined with a space** (#1300): the `uncut`/`stale` body, for events a cut
- * (or a re-cut) would genuinely fix, and the `undrawable` body, one sentence per event,
- * for events no cut could ever fix as they stand. **When every at-fault event is
- * undrawable the first body is absent**, so the refusal never tells the director to cut a
- * draw the server would refuse a second time.
+ * **Two bodies, joined with a space** (#1300): the `undrawable` body, one sentence per
+ * event, for events no cut could ever fix as they stand, followed by the `uncut`/`stale`
+ * body, for events a cut (or a re-cut) would genuinely fix. **When every at-fault event
+ * is undrawable the `uncut`/`stale` body is absent**, so the refusal never tells the
+ * director to cut a draw the server would refuse a second time.
+ *
+ * **`undrawable` goes first, and the order is load-bearing**: the `uncut`/`stale` body
+ * ends in "so cut the draw for each event named …", and undrawable sentences trailing
+ * that instruction read as covered by it — which walked QA's director into a Generate
+ * draw the cut refused.
  *
  * ⚠️ This stub is the twin of `goLiveRefusal` in `src/mocks/tournaments-store.ts`, and
  * the two have to move together. This suite runs with MSW **off** (`web-client/CLAUDE.md`)

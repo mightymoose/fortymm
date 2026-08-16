@@ -1273,10 +1273,19 @@ async def test_mixed_tournament_names_undrawable_uncut_and_stale_each_with_its_f
     assert exc.undrawable == ["A Undrawable"]
     assert exc.uncut == ["B Uncut"]
     assert exc.stale == ["C Stale"]
+    detail = str(exc)
+    # The ORDER first, and deliberately BEFORE the whole-sentence pin below: placed
+    # after it, these could never be the failing signal, because the exact-string
+    # assertion already pins the order and would red first. The instruction is the LAST
+    # thing the refusal says, and every name between it and the start of its own body is
+    # one a cut would actually fix.
+    assert detail.index("“A Undrawable”") < detail.index("“B Uncut”")
+    assert detail.index("“B Uncut”") < detail.index("cut the draw for each event named")
+    assert detail.endswith("then start the tournament.")
     # The undrawable sentence comes FIRST, so "cut the draw for each event named"
     # trails only the names it is true of. The other order sent QA's director to a
     # Generate draw the cut refused (#1300).
-    assert str(exc) == (
+    assert detail == (
         "This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool "
         "would leave a pool with fewer than 2 entrants, who would have nobody to "
         "play. Add entrants, or remove the event. “B Uncut” has no draw yet; and "
@@ -1286,10 +1295,6 @@ async def test_mixed_tournament_names_undrawable_uncut_and_stale_each_with_its_f
         "event named (again, if somebody entered or withdrew since it was last "
         "cut), then start the tournament."
     )
-    # The instruction is the LAST thing the refusal says, and every name between it
-    # and the start of its own body is one a cut would actually fix.
-    assert str(exc).endswith("then start the tournament.")
-    assert str(exc).index("“A Undrawable”") < str(exc).index("“B Uncut”")
 
 
 async def test_all_undrawable_tournament_has_no_cut_instruction(
