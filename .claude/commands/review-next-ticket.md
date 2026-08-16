@@ -1,11 +1,11 @@
 ---
-description: Review a specific In Review ticket, or the top In Review ticket when none is specified. Run the land-the-plane review commands, repair clear findings, leave structured review notes, then post a decision comment on the pull request, move the ticket to Waiting For Sign Off, and stop for a human.
+description: Review one specified In Review ticket. Run the land-the-plane review commands, repair clear findings, leave structured review notes, then post a decision comment on the pull request, move the ticket to Waiting For Sign Off, and stop for a human. Requires the ticket number, which the implement-ticket-end-to-end orchestrator passes.
 model: opus
 ---
 
 # Review Next Ticket
 
-Review exactly one ticket from **In Review**. With a ticket number, use that eligible issue only. With no argument, select the **topmost ticket according to the Project's current ordering** in **In Review**.
+Review exactly one ticket from **In Review**. `$ARGUMENTS` must contain a ticket number; verify that issue is eligible and review it only. If `$ARGUMENTS` is empty, stop and report: this command does not select tickets. `implement-ticket-end-to-end` selects and passes the number.
 
 Read the complete ticket specification, Planning notes, Implementation Notes, linked PR, complete diff, and relevant surrounding code/tests. Do not rely on the implementer's summary as evidence.
 
@@ -128,7 +128,7 @@ The column carries the ask on its own. A ticket in **Waiting For Sign Off** is w
 
 `implement-ticket-end-to-end` re-invokes this command in **targeted mode** when the human comments something other than the release signal. Targeted mode is not a second full review.
 
-A ticket entering targeted mode is in **Waiting For Sign Off**, not **In Review**. Accept it from either column. The eligibility rule at the top of this file governs a fresh review, not a repair round the coordinator asked for by number.
+A ticket entering targeted mode is in **Waiting For Sign Off**, not **In Review**. Accept it from either column. The In Review eligibility rule at the top of this file governs a fresh review, not a repair round the coordinator asked for by number.
 
 Given the named comments:
 
@@ -164,7 +164,7 @@ If a comment asks for something that would change approved scope or acceptance c
 
 ## Hard Rules
 
-- Process exactly one ticket.
+- Process exactly one ticket, and only the ticket number given. Never select from the board.
 - Run the established `land-the-plane` review commands over the actual diff instead of inventing a separate review methodology.
 - Repair clear local findings autonomously and re-run the applicable review commands.
 - Always leave structured Review Notes with explicit `N/A` where appropriate.

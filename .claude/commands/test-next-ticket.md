@@ -1,11 +1,11 @@
 ---
-description: Test a specific In Testing ticket, or the top In Testing ticket when none is specified. Refuses without a human LGTM on the pull request. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge, clean up the run's resources, and move successful work to Done.
+description: Test one specified In Testing ticket. Refuses without a human LGTM on the pull request. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge, clean up the run's resources, and move successful work to Done. Requires the ticket number, which the implement-ticket-end-to-end orchestrator passes.
 model: sonnet
 ---
 
 # Test Next Ticket
 
-Test exactly one ticket from **In Testing**. With a ticket number, use that eligible issue only. With no argument, select the **topmost ticket according to the Project's current ordering** in **In Testing**.
+Test exactly one ticket from **In Testing**. `$ARGUMENTS` must contain a ticket number; verify that issue is eligible and test it only. If `$ARGUMENTS` is empty, stop and report: this command does not select tickets. `implement-ticket-end-to-end` selects and passes the number.
 
 Testing is an adversarial behavioral gate. Its primary testing engine is the existing `qa-review` skill.
 
@@ -190,7 +190,7 @@ Then:
 
 ## Hard Rules
 
-- Process exactly one ticket.
+- Process exactly one ticket, and only the ticket number given. Never select from the board.
 - **Refuse to run without the review gate signal on the pull request.** See `.claude/rules/the-review-gate.md`.
 - Use `qa-review` as the adversarial testing engine, testing behavior against the specification, not implementer expectations.
 - Current-ticket failures must be fixed before Done.

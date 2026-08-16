@@ -1,5 +1,5 @@
 ---
-description: Implement a specific Ready For Implementation ticket, or the top Ready For Implementation ticket when none is specified. Leave structured implementation notes and move successful work to In Review, where the implement-ticket-end-to-end orchestrator dispatches Review.
+description: Implement one specified Ready For Implementation ticket. Claim it, implement, open the PR, leave structured implementation notes, and stop at In Review. Requires the ticket number, which the implement-ticket-end-to-end orchestrator selects and passes.
 model: sonnet
 ---
 
@@ -11,13 +11,11 @@ The ticket has completed Discovery and Planning. Treat the GitHub issue body as 
 
 Implementation owns writing and verifying the code. It does not approve its own work for testing or merge.
 
-## Select the Ticket
+## The Ticket
 
-If `$ARGUMENTS` contains a ticket number, use that issue, verify it is in **Ready For Implementation**, and work on it only.
+`$ARGUMENTS` must contain a ticket number. Verify that issue is in **Ready For Implementation** and work on it only.
 
-If `$ARGUMENTS` is empty, select the **topmost ticket according to the Project's current ordering** in **Ready For Implementation**.
-
-If no eligible ticket exists, report that there is nothing to implement and stop.
+If `$ARGUMENTS` is empty, stop and report: this command does not select tickets. `implement-ticket-end-to-end` selects the next ticket and passes its number here.
 
 ## Claim the Ticket
 
@@ -128,7 +126,7 @@ Run standalone, this command still stops here. Nothing watches an In Review tick
 
 ## Hard Rules
 
-- Process exactly one ticket per invocation.
+- Process exactly one ticket per invocation, and only the ticket number given. Never select from the board.
 - Move the ticket to **In Progress** at selection time, before any other work.
 - Never silently change scope, and never include unrelated user changes.
 - Verify before handing to Review.

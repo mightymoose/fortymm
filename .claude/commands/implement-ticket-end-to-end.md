@@ -23,7 +23,7 @@ If `$ARGUMENTS` is empty, select the **topmost ticket according to the Project's
 
 If no eligible ticket exists, report that there is nothing to implement and stop.
 
-Record the selected ticket number and pass that same explicit number to every downstream stage.
+Record the selected ticket number and pass that same explicit number to every downstream stage. Selection lives here and only here: the stage commands require an explicit ticket number and refuse to pick from the board.
 
 ## Reap Before You Start
 
