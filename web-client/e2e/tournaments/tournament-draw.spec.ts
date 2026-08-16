@@ -81,6 +81,14 @@ const SAY = {
    * reviewed and merely needs to re-cut. */
   noDrawYet: 'no draw yet',
   staleDraw: 'has a draw that no longer matches its entrants',
+  /** The go-live refusal's **undrawable** half (#1300) — an event no cut can ever fix,
+   * carrying its own reason and its own fix instead of the "cut the draw" instruction it
+   * could only fail. A doubles event is the permanent case: entry is refused for it, so
+   * its field can never reach two and removal is the only way out. */
+  nonSingles:
+    'A doubles event cannot be given a draw — only singles events can.',
+  removeTheEvent: 'Remove the event.',
+  addEntrants: 'Add entrants, or remove the event.',
   /** The freeze reasons, one per frozen control. */
   poolsFrozen: 'a pool can’t be added or removed while the draw stands',
   drawTypeFrozen: 'its draw type is frozen',
@@ -458,6 +466,19 @@ test.describe('Tournaments · going live needs a current draw', () => {
     await expect(pom.lifecycleNotice).toContainText(`“${EVENT.JOURNEY}”`)
     await expect(pom.lifecycleNotice).toContainText(`“${EVENT.EMPTY}”`)
     await expect(pom.lifecycleNotice).toContainText(`“${EVENT.DOUBLES}”`)
+
+    // …and each of them is told the truth about ITSELF (#1300). Only `JOURNEY` can
+    // actually be cut; the other two never can — `EMPTY` is a round-robin with no pools
+    // and nobody entered, `DOUBLES` is a doubles event whose field can never reach two —
+    // so they carry their own reason and their own fix rather than the "cut the draw"
+    // instruction, which for them is the dead end this ticket closes.
+    //
+    // These three lines are what pin the stub to the server. Every assertion above them
+    // passes just as happily against the PRE-#1300 refusal, which lumped all three events
+    // under "have no draw yet" and sent the director to cut two draws that can only 409.
+    await expect(pom.lifecycleNotice).toContainText(SAY.noPools)
+    await expect(pom.lifecycleNotice).toContainText(SAY.nonSingles)
+    await expect(pom.lifecycleNotice).toContainText(SAY.removeTheEvent)
 
     await pom.expectLifecycle('Published', 'Start tournament')
     expect(store.status).toBe('published')

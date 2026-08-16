@@ -397,11 +397,18 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
     writing nothing — so it adds no second lock and no window for the field to move
     under it.
 
-    Reads stay batched at **three** statements for the whole tournament, whatever the
-    number of events: the whole-tournament event read, ``draw_currency_by_event``
-    (itself batched), and — only for at-fault **singles** events, since a non-singles
-    event is judged by format alone and never needs a strategy call —
+    Reads stay batched at **three** reads for the whole tournament, whatever the number
+    of events: the whole-tournament event read, ``draw_currency_by_event`` (itself
+    batched), and — only for at-fault **singles** events, since a non-singles event is
+    judged by format alone and never needs a strategy call —
     :func:`~app.tournament_draws.active_draw_entrants_by_event`.
+
+    **Reads, not statements**, and the distinction is the whole point of counting them:
+    each of the three is a fixed number of statements rather than one, so the total is
+    around seven (``draw_currency_by_event`` alone is three, and the event read pulls
+    ``pools`` and ``stages`` through their ``selectin`` loaders). What is constant is
+    that **none of the three grows with the number of events** — which is the property
+    the row lock cares about, and the reason a per-event query is forbidden here.
     """
     events = (
         (

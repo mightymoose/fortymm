@@ -3110,6 +3110,13 @@ async def test_going_live_with_an_event_nobody_entered_is_refused(
     assert response.status_code == 409, response.text
     detail = response.json()["detail"]
     assert "“Under 1200”:" in detail
+    # The classification really MOVED, and did not merely gain a second sentence: the
+    # old "has no draw yet" wording is gone. Without this line the assertion above is
+    # satisfied by the undrawable body and by the uncut one alike, so a regression that
+    # sent this event back to "cut the draw" — the instruction #1300 exists to withhold
+    # from an event no cut can fix — would keep the test green.
+    assert "has no draw yet" not in detail
+    assert "cut the draw for each event named" not in detail
     assert event_id not in detail
     assert await _status_of(client, created["id"]) == "published"
 

@@ -949,23 +949,50 @@ const NOTHING_TO_START =
   'This tournament has no events, so there is nothing to start. Add an event and cut ' +
   'its draw, then start the tournament.'
 
-/** Why this tournament cannot start yet, in the server's own words — or `null` when it
- * can (`_enforce_ready_to_go_live`). **It names the events**, and the two failures are
- * kept apart in the sentence because they are two different jobs: an uncut event needs a
- * first cut, while a stale one has a draw the director may well have reviewed and merely
- * needs to re-cut. */
-function goLiveRefusal(tournament: TournamentDetailRead): string | null {
-  if (tournament.events.length === 0) return NOTHING_TO_START
-
-  const uncut: string[] = []
-  const stale: string[] = []
-  for (const event of tournament.events) {
-    const currency = drawCurrency(event)
-    if (currency === 'uncut') uncut.push(event.name)
-    else if (currency === 'stale') stale.push(event.name)
+/** Why one at-fault event can never be cut as it stands, or `null` when a cut would
+ * actually fix it — this stub's mirror of the go-live **dry run** (#1300,
+ * `_enforce_ready_to_go_live`), and the twin of the MSW store's `undrawableReason`.
+ *
+ * Two judgements, in the server's order:
+ *
+ * 1. **Format first**, before anything is planned — `cut_draw`'s own ordering. A
+ *    doubles/teams event is undrawable on that fact alone, and permanently: entry is
+ *    refused for a non-singles event, so its field can never reach two, and the only fix
+ *    is removing the event. Local rather than a `planEventDraw` result because `planDraw`
+ *    takes no format at all.
+ * 2. **The dry run** — `planEventDraw`, the same planner `cutDraw` uses, planning
+ *    fixtures and throwing them away. Its refusal goes through **verbatim**: only the
+ *    planner knows which degeneracy it hit, and the numbers in that sentence are the
+ *    numbers the director has to change.
+ *
+ * The fix is appended for a field under two entrants and for nothing else, exactly as the
+ * server appends it. */
+function undrawableReason(
+  event: TournamentEventRead,
+): { reason: string; fix: string | null } | null {
+  if (event.format !== 'singles') {
+    return {
+      reason:
+        `A ${event.format} event cannot be given a draw — only singles events can. ` +
+        'A fixture seats one entrant on each side, and there is nowhere to record a ' +
+        'doubles pairing or a team.',
+      fix: 'Remove the event.',
+    }
   }
-  if (uncut.length === 0 && stale.length === 0) return null
+  const plan = planEventDraw(event)
+  if (plan.ok) return null
+  return {
+    reason: plan.detail,
+    fix: event.entrants.length < 2 ? 'Add entrants, or remove the event.' : null,
+  }
+}
 
+/** The "cut the draw" half of the refusal — every `uncut`/`stale` event, plus the
+ * trailing instruction. **Byte-identical to what `goLiveRefusal` produced before
+ * `undrawable` existed.** The two failures are kept apart because they are two different
+ * jobs: an uncut event needs a first cut, while a stale one has a draw the director may
+ * well have reviewed and merely needs to re-cut. */
+function uncutStaleBody(uncut: string[], stale: string[]): string {
   const clauses: string[] = []
   if (uncut.length > 0) {
     clauses.push(
@@ -982,13 +1009,62 @@ function goLiveRefusal(tournament: TournamentDetailRead): string | null {
     )
   }
   return (
-    'This tournament cannot start yet: ' +
     clauses.join('; and ') +
     '. A draw is cut from the field as it stands at the time, and registration stays ' +
     'open right up to the moment a tournament goes live — so cut the draw for each ' +
     'event named (again, if somebody entered or withdrew since it was last cut), then ' +
     'start the tournament.'
   )
+}
+
+/** Why this tournament cannot start yet, in the server's own words — or `null` when it
+ * can (`_enforce_ready_to_go_live`). **It names the events**, because a refusal a
+ * director cannot act on is barely better than a 500.
+ *
+ * **Two bodies, joined with a space** (#1300): the `uncut`/`stale` body, for events a cut
+ * (or a re-cut) would genuinely fix, and the `undrawable` body, one sentence per event,
+ * for events no cut could ever fix as they stand. **When every at-fault event is
+ * undrawable the first body is absent**, so the refusal never tells the director to cut a
+ * draw the server would refuse a second time.
+ *
+ * ⚠️ This stub is the twin of `goLiveRefusal` in `src/mocks/tournaments-store.ts`, and
+ * the two have to move together. This suite runs with MSW **off** (`web-client/CLAUDE.md`)
+ * so vitest cannot see a mismatch here: #1300 shipped the MSW half first, and this half
+ * went on telling the director to cut a draw for `EVENT.EMPTY` and `EVENT.DOUBLES` — two
+ * of the three events in the default seed, and both of them ones the real API now reports
+ * as undrawable. */
+function goLiveRefusal(tournament: TournamentDetailRead): string | null {
+  if (tournament.events.length === 0) return NOTHING_TO_START
+
+  const undrawable: string[] = []
+  const uncut: string[] = []
+  const stale: string[] = []
+  for (const event of tournament.events) {
+    const currency = drawCurrency(event)
+    // A current draw is not at fault, and is never dry-run: the cut it already has is
+    // the proof that one succeeds.
+    if (currency === 'current') continue
+    const undrawableFor = undrawableReason(event)
+    if (undrawableFor !== null) {
+      // The reason already ends in a period, so a fix is joined with a LEADING space —
+      // never a second period, and never a trailing space when there is no fix.
+      undrawable.push(
+        `“${event.name}”: ${undrawableFor.reason}` +
+          (undrawableFor.fix ? ` ${undrawableFor.fix}` : ''),
+      )
+    } else if (currency === 'uncut') uncut.push(event.name)
+    else stale.push(event.name)
+  }
+  if (undrawable.length === 0 && uncut.length === 0 && stale.length === 0) {
+    return null
+  }
+
+  const segments: string[] = []
+  if (uncut.length > 0 || stale.length > 0) {
+    segments.push(uncutStaleBody(uncut, stale))
+  }
+  if (undrawable.length > 0) segments.push(undrawable.join(' '))
+  return 'This tournament cannot start yet: ' + segments.join(' ')
 }
 
 /** The server's sentence for a draw that has been played (`_enforce_draw_unplayed`).
