@@ -1619,8 +1619,9 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
 #   * a throwaway `select(TournamentEvent)` issued purely so a loader option would
 #     populate `event.reservations`, re-reading a row already in the session.
 #
-# Together they cost 7 statements on every reservations PATCH. `app.tournament_reservations`
-# is the one write seam, so one number here covers the whole verb.
+# Together they cost 7 statements on every reservations PATCH.
+# `app.tournament_reservations` is the one write seam, so one number here covers the
+# whole verb.
 #
 # It is not a count that must never move — a real change to what the verb does may move
 # it. It is a count that must never move BY ACCIDENT. If it changes, say why in the
