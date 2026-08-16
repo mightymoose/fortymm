@@ -106,9 +106,9 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [],
-        "pools": [
+        "reservations": [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1"],
             }
@@ -209,7 +209,7 @@ async def test_a_second_event_gets_a_settings_row_of_its_own(
 ) -> None:
     """Rows are never shared between events — a second event with the SAME draw
     type still gets its own row, because the follow-on tickets hang per-event
-    configuration (pools, ``qualifiers_per_group``) off it."""
+    configuration (reservations, ``qualifiers_per_group``) off it."""
     client, _ = authed_client
     tournament_id, first_id = await _create_event(client, draw_type="round-robin")
     second = await client.post(
@@ -638,8 +638,8 @@ async def test_the_qualifier_floor_is_the_unions_now_that_the_column_is_gone(
     with pytest.raises(ValidationError, match="qualifiers_per_group"):
         draw_settings_from_storage(DrawType.rr_then_ko, {})
 
-    # One qualifier per pool IS legal — a two-pool event at K=1 is a single final
-    # between the two pool winners, which the ADR names as a supported shape. So the
+    # One qualifier per group IS legal — a two-group event at K=1 is a single final
+    # between the two group winners, which the ADR names as a supported shape. So the
     # floor is at 1, not at 2, and this is what says the refusals above are the union
     # discriminating rather than rejecting everything.
     assert draw_settings_from_storage(

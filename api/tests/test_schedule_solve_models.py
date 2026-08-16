@@ -98,7 +98,7 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         stages=stages,
     )
     stages[0].groups = event_groups(
-        [{"name": "Pool A", "slot": {}, "table_ids": []}], event=event
+        [{"name": "Reservation A", "slot": {}, "table_ids": []}], event=event
     )
     db_session.add(event)
     await db_session.commit()
@@ -330,15 +330,15 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
     assert fresh.call_notified_count == 2
 
 
-def test_a_reason_stored_before_the_discriminator_reads_as_a_pool() -> None:
+def test_a_reason_stored_before_the_discriminator_reads_as_booked() -> None:
     """The ledger's ``infeasibility_reasons`` is JSONB written at apply, so rows
     recorded before a reason carried ``reservation`` are still on disk and are
-    read back by this same parser. ``"pool"`` is the true value for every one of
-    them: until the event-wide reservation existed the only thing a reason could
-    blame was a pool row (ADR 20260807)."""
+    read back by this same parser. ``"booked"`` is the true value for every one
+    of them: until the event-wide reservation existed the only thing a reason
+    could blame was a director-booked reservation row (ADR 20260807)."""
     (reason,) = parse_infeasibility_reasons(
-        [{"kind": "pool_has_no_tables", "reservation_name": "Pool A"}]
+        [{"kind": "reservation_has_no_tables", "reservation_name": "Reservation A"}]
     )
     assert isinstance(reason, ReservationHasNoTablesRead)
-    assert reason.reservation_name == "Pool A"
-    assert reason.reservation == "pool"
+    assert reason.reservation_name == "Reservation A"
+    assert reason.reservation == "booked"
