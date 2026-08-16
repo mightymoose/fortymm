@@ -1321,7 +1321,7 @@ async def uncut_event_draw(
 # The write is **soft** where ADR-0790 made it soft: the table belongs to the fixture's
 # pool, the time falls inside the pool's window, nothing is double-booked — all three
 # are flags derived on read, NOT invariants, so this route stores an out-of-window time
-# and an off-pool table without complaint. What it does NOT store is a ``table_id`` that
+# and an off-group table without complaint. What it does NOT store is a ``table_id`` that
 # names no table: "the placement names a real table" became an invariant when the
 # catalogue became rows (ADR 20260801), so that is a 422 naming the field. Plus the
 # freeze below.

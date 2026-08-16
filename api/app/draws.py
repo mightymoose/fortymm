@@ -84,7 +84,7 @@ def group_letter(position: int) -> str:
     printing punctuation.
 
     Ported from ``web-client/src/components/tournaments/data/draw-structure.ts``'s
-    ``poolLetter`` (ADR 20260808, "draw-structure derivation runs on both sides and
+    ``groupLetter`` (ADR 20260808, "draw-structure derivation runs on both sides and
     shares its vectors"). The carry is ``n // 26 - 1``, not the naive ``n // 26``: the
     naive form agrees with this one for positions 0 to 25 and disagrees at 26 and every
     position after, because a bijective base-26 digit has no zero — position 26 is
@@ -96,6 +96,17 @@ def group_letter(position: int) -> str:
         letters = chr(65 + (n % 26)) + letters
         n = n // 26 - 1
     return letters
+
+
+def group_label(position: int) -> str:
+    """``Group A``, ``Group B``, … — the director-facing label a group renders as
+    everywhere the app used to print a stored pool name (ADR 20260808).
+
+    A thin wrapper over :func:`group_letter` so every caller that needs the full label
+    (the group-set freeze's 409, the dashboard's ``group_label``, a match call's
+    context) shares one spelling of "Group " + the letter, rather than composing the
+    prefix at each call site."""
+    return f"Group {group_letter(position)}"
 
 
 class DrawError(Exception):

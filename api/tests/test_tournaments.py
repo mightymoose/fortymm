@@ -9271,7 +9271,7 @@ async def test_a_non_owner_cannot_place_a_fixture(
     assert placed["scheduled_start"] is None
 
 
-async def test_an_out_of_window_or_off_pool_placement_still_saves(
+async def test_an_out_of_window_or_off_group_placement_still_saves(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:

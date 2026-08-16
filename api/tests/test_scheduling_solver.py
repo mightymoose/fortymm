@@ -589,7 +589,7 @@ class TestInfeasibility:
 
     def test_no_tables_pool_with_only_a_pinned_fixture_is_not_flagged(self) -> None:
         """Regression: a pool with no tables whose only fixture is *pinned* to a
-        catalogue table owned by another pool (a supported off-pool director
+        catalogue table owned by another pool (a supported off-group director
         placement, ADR-0790) must not fire PoolHasNoTables — that arm is about a
         pool's *unpinned* fixtures having nowhere to go, and this pool has none.
         The pinned fixture is honored on its table and the day solves."""
@@ -604,7 +604,7 @@ class TestInfeasibility:
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 # F1 lives in the no-tables pool A but is pinned onto T1 (pool B's
-                # table) — an off-pool placement the director is allowed to make.
+                # table) — an off-group placement the director is allowed to make.
                 _fixture(1, p1, p2, pool="A", pin=Pin(TableId("T1"), 0)),
                 _fixture(2, p3, p4, pool="B"),  # unpinned, plenty of room
             ),
@@ -616,7 +616,7 @@ class TestInfeasibility:
         assert "pool_has_no_tables" not in by_kind
         assert result.reasons == ()
 
-    def test_off_pool_pin_does_not_push_a_pool_over_capacity(self) -> None:
+    def test_off_group_pin_does_not_push_a_pool_over_capacity(self) -> None:
         """Regression: a pool owning one table with a comfortable window and a
         single unpinned fixture that fits (25 <= 60) must not be reported over
         capacity just because it *also* owns a fixture pinned to an outside table

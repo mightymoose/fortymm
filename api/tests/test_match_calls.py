@@ -1574,7 +1574,7 @@ class TestBrokenPinRepair:
     """Chore 3c: pins are inviolable against optimization, not against
     physics. A pinned fixture whose entrant withdrew is voided (placement
     cleared, the remaining entrant cancelled-notified). Pool membership is a
-    preference, not physics: an off-pool pin on a table still in the catalogue
+    preference, not physics: an off-group pin on a table still in the catalogue
     is the director's legitimate hand and is honored byte-identical.
 
     The catalogue-departure repair this class also covered is gone (chore 2c):
@@ -1592,8 +1592,8 @@ class TestBrokenPinRepair:
     ) -> None:
         """Pool membership is a preference, not physics: a called pin whose
         table left the pool's ``table_ids`` but is STILL in the venue
-        catalogue is the director's legitimate off-pool hand (the manual
-        PATCH allows off-pool soft placements, ADR-0790) — the next solve
+        catalogue is the director's legitimate off-group hand (the manual
+        PATCH allows off-group soft placements, ADR-0790) — the next solve
         honors it byte-identical: no repair, no moved correction, no
         re-notification."""
         tournament_id, event_id = await _make_tournament(
@@ -1616,7 +1616,7 @@ class TestBrokenPinRepair:
 
         await db_session.refresh(fixture)
         assert fixture.table_id == await _table(db_session, event_id, "t1")
-        # ^ the off-pool pin, honored
+        # ^ the off-group pin, honored
         assert fixture.scheduled_start == start
         assert fixture.pinned_at == pin_time  # not refreshed: nothing repaired
         assert fixture.call_notified_count == 1  # told once, never re-told
@@ -1634,7 +1634,7 @@ class TestBrokenPinRepair:
         assert ledger.fixtures_placed == 0
         assert ledger.fixtures_pinned == 1  # echoed verbatim
 
-    async def test_an_off_pool_catalogue_pin_is_honored_and_auto_called(
+    async def test_an_off_group_catalogue_pin_is_honored_and_auto_called(
         self,
         db_session: AsyncSession,
         solver_queue: Queue,
@@ -1666,7 +1666,7 @@ class TestBrokenPinRepair:
 
         await db_session.refresh(fixture)
         assert fixture.table_id == await _table(db_session, event_id, "t2")
-        # ^ the off-pool pin, honored…
+        # ^ the off-group pin, honored…
         assert fixture.scheduled_start == start
         assert fixture.pinned_at == silent_pin_time  # …and not re-pinned
         assert fixture.call_notified_count == 1  # …but finally delivered

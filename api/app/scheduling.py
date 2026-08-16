@@ -987,7 +987,7 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     #
     # Every arm scopes to *unpinned* demand only. Pins and in-progress fixtures
     # are deliberately not constrained to their pool's tables or window (ADR-0790:
-    # an off-pool or out-of-window pin is a supported director action), so
+    # an off-group or out-of-window pin is a supported director action), so
     # counting them against a pool's window×tables would invent false
     # infeasibility. Only unpinned fixtures are constrained to their pool's tables
     # inside its window by construction, so only they can prove a certain
@@ -1049,7 +1049,7 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         if not pool.table_ids:
             # A no-tables pool with ≥1 unpinned fixture: that fixture has nowhere
             # to go. A no-tables pool whose only fixtures are pinned/in-progress
-            # (placed off-pool by the director) is fine — it never reaches here.
+            # (placed off-group by the director) is fine — it never reaches here.
             reasons.append(PoolHasNoTables(pool_id=pool.id))
             continue  # dominates any capacity claim for this pool
         if pool.id in pools_short_window:

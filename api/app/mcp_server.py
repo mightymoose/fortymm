@@ -1959,7 +1959,7 @@ async def place_fixture(
     does not exist is a dangling reference, not a state the director chose.
 
     **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
-    prediction, and the other constraints (table-in-pool, time-in-window, no
+    prediction, and the other constraints (table-in-group, time-in-window, no
     double-booking) are flags derived on read, NOT invariants — so an out-of-window
     time, or a table outside the fixture's pool, is STORED, not rejected. The one hard
     rule about the fixture itself: one whose linked match is ``completed`` or ``voided``

@@ -366,7 +366,7 @@ def test_a_write_payload_carrying_a_pool_position_is_refused(
 
     Both verbs, because "the patch path is the hole" is this repo's recurring bug: the
     event editor PATCHes the whole form back, so the patch is the verb that would
-    actually carry an echoed position. They share one alias (``EventPools``) over one
+    actually carry an echoed position. They share one alias (``EventReservations``) over one
     pool shape, which is what makes that impossible to get wrong on only one of them.
 
     The **loc** is asserted, not just the refusal: a 422 that named ``pools`` and

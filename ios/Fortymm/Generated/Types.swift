@@ -11499,7 +11499,7 @@ internal enum Components {
         /// not a commitment, and three of the placement's four constraints — the table belongs
         /// to the fixture's pool, the time falls inside the pool's window, nothing is
         /// double-booked — are **flags derived on read, not invariants** (ADR-0790). So this
-        /// write does **not** reject an out-of-window time or an off-pool table. They save.
+        /// write does **not** reject an out-of-window time or an off-group table. They save.
         /// Conflict detection is the scheduler's business, not this boundary's.
         ///
         /// The exception is the fourth claim: **the table has to exist**. ``table_id`` names a

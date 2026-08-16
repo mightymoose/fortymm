@@ -83,7 +83,7 @@ detects pins physics broke, so they never reach the solver *as pins*:
 
 Pool membership does **not** break a pin: a director deliberately pinning a
 fixture to a spare catalogue table outside its pool's ``table_ids`` (the manual
-PATCH allows off-pool soft placements, ADR-0790) is a legitimate hand, and pins
+PATCH allows off-group soft placements, ADR-0790) is a legitimate hand, and pins
 are broken by physics, not preferences. Such a pin enters the snapshot as a pin
 like any other — the pure module treats pins as constants and never checks a
 pin's table against the pool (or even the catalogue) — survives every solve
@@ -1081,9 +1081,9 @@ async def _load_solver_inputs(
                     broken_pin_voids.add(fixture.id)
                     continue
                 # Otherwise the pin stands, as-is. Its table is deliberately NOT
-                # re-checked against the pool's ``table_ids`` — an off-pool pin
+                # re-checked against the pool's ``table_ids`` — an off-group pin
                 # on a catalogue table is the director's hand (the manual PATCH
-                # allows off-pool soft placements, ADR-0790), and pins break on
+                # allows off-group soft placements, ADR-0790), and pins break on
                 # physics, not preferences. Nor against the catalogue, which the
                 # foreign key and the tournament PATCH's diff have made an
                 # invariant rather than a thing to defend against here (module

@@ -468,7 +468,7 @@ async def test_an_out_of_window_start_still_saves_as_a_flag(
     fixture_id = fixture.id
     # Table 2 is in the catalogue but NOT in pool ``p-os-1``'s ``table_ids``, and
     # 23:30 is long past the pool's 12:30 end — two flags in one placement.
-    off_pool_table = _table(tournament, 2)
+    off_group_table = _table(tournament, 2)
     out_of_window = datetime(2026, 6, 13, 23, 30)
 
     read = await place_fixture(
@@ -476,10 +476,10 @@ async def test_an_out_of_window_start_still_saves_as_a_flag(
         tournament_id=tournament.id,
         fixture_id=fixture_id,
         actor=owner,
-        placement=_placement(off_pool_table, out_of_window),
+        placement=_placement(off_group_table, out_of_window),
     )
 
-    assert read.table_id == off_pool_table
+    assert read.table_id == off_group_table
     assert read.scheduled_start is not None
 
     db_session.expire_all()
@@ -488,7 +488,7 @@ async def test_an_out_of_window_start_still_saves_as_a_flag(
             select(TournamentFixture).where(TournamentFixture.id == fixture_id)
         )
     ).scalar_one()
-    assert row.table_id == off_pool_table
+    assert row.table_id == off_group_table
     assert row.scheduled_start is not None
     # The venue-anchored instant of 23:30 America/Chicago, stored as it was asked for.
     assert (
