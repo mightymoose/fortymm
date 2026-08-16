@@ -835,10 +835,10 @@ async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
 class ScheduleEventGroup(BaseModel):
     """One event's slice of the schedule projection: the event's identity and its
     draw's fixtures, each carrying its placement (``table_id`` +
-    ``scheduled_start``) and its pool/round/position.
+    ``scheduled_start``) and its group/round/position.
 
     The fixtures are the exact ``TournamentFixtureRead`` the detail BFF composes —
-    same fields, same **pool → round → position** order (``fixtures_by_event``) —
+    same fields, same **group → round → position** order (``fixtures_by_event``) —
     reused whole rather than reshaped, so this agent-facing schedule and the
     detail page cannot disagree about a slot. Empty is the designed state of an
     event whose draw has not been cut (ADR-0786), not an error.
@@ -882,8 +882,8 @@ async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
     narrow, agent-shaped projection, not the whole tournament detail.
 
     Returns each event's draw fixtures with their placement (``table_id`` and the
-    predicted ``scheduled_start``) and pool/round/position — grouped by event, in
-    the same **pool → round → position** order the detail page uses — plus the
+    predicted ``scheduled_start``) and group/round/position — grouped by event, in
+    the same **group → round → position** order the detail page uses — plus the
     tournament's latest schedule solve (its ``status`` and CP-SAT ``verdict``). It
     reuses the exact same shared reads the detail BFF composes (``fixtures_by_event``
     for the placed fixtures, ``latest_solve`` for the ledger's newest row) and the
@@ -911,7 +911,7 @@ async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
         await _require_tournament_view(db, user_id)
         tournament = await _load_visible_tournament(db, user_id, tournament_id)
         # Events in creation order (as the detail read lists them), then their
-        # draws in one batched read (``fixtures_by_event`` — pool → round →
+        # draws in one batched read (``fixtures_by_event`` — group → round →
         # position ordered, every event id keyed so an un-cut event maps to ``[]``)
         # and the ledger's newest row — the same shared reads the detail BFF uses.
         events = list(
@@ -1089,8 +1089,9 @@ async def edit_tournament(
     the SAME edit again with ``unplace_fixtures_on_removed_tables`` set to true: the
     table goes and those matches are unplaced — table, predicted start and call all
     cleared. Do not set it pre-emptively "just in case"; it exists so that losing a
-    director's schedule is something they said yes to. Removing a table that only a POOL
-    reserves is not refused and needs no opt-in — the pool simply reserves one fewer.
+    director's schedule is something they said yes to. Removing a table that only a
+    RESERVATION reserves is not refused and needs no opt-in — the reservation simply
+    reserves one fewer.
 
     ``league_id`` is editable ONLY while the tournament is a ``draft`` — once it is
     published the ladder is settled. ``status`` is not editable here (it moves only
@@ -1410,25 +1411,26 @@ async def update_event(
     validates, so the MCP and HTTP surfaces can never drift on what a valid edit is.
 
     ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; ``predicates``
-    replaces wholesale when sent. ``pools`` is an ID-KEYED DIFF sent in full and in
-    order: an entry carrying an ``id`` keeps that pool (re-worded, re-timed, re-tabled,
-    re-positioned), an entry omitting one adds a pool the server mints an id for, and a
-    pool no entry names is removed — so send back the pools you read, edited. An ``id``
-    this event does not have is refused. Editing an event is OWNER-GATED — only
-    the tournament's creator may (there is no permission on this route). **Once the
-    event's draw is cut, two things freeze** (ADR-0786): a ``pools`` payload that
-    changes *which pools* the event has is refused, and so is a ``draw_type`` change —
-    remove the draw, edit, and cut again. Everything else (name, fee, rules,
-    ``max_players``, a
-    pool's ``table_ids`` / ``slot`` / ``name``) stays editable with a draw standing. A
-    ``timezone`` edit preserves the wall-clock of already-placed fixtures. Returns the
-    updated ``TournamentEventRead`` from the caller's perspective (its entrants, draw
-    and results survive the edit; its ``entry_state`` is the caller's own, recomputed
-    from the event as it now stands).
+    replaces wholesale when sent. ``reservations`` is an ID-KEYED DIFF sent in full and
+    in order: an entry carrying an ``id`` keeps that reservation (re-worded, re-timed,
+    re-tabled, re-positioned), an entry omitting one adds a reservation the server
+    mints an id for, and a reservation no entry names is removed — so send back the
+    reservations you read, edited. The server keeps one ``groups`` entry per
+    reservation in lockstep, server-owned and read-only. An ``id`` this event does not
+    have is refused. Editing an event is OWNER-GATED — only the tournament's creator
+    may (there is no permission on this route). **Once the event's draw is cut, two
+    things freeze** (ADR-0786): a ``reservations`` payload that changes *which groups*
+    the event has is refused, and so is a ``draw_type`` change — remove the draw, edit,
+    and cut again. Everything else (name, fee, rules, ``max_players``, a
+    reservation's ``table_ids`` / ``slot`` / ``name``) stays editable with a draw
+    standing. A ``timezone`` edit preserves the wall-clock of already-placed fixtures.
+    Returns the updated ``TournamentEventRead`` from the caller's perspective (its
+    entrants, draw and results survive the edit; its ``entry_state`` is the caller's
+    own, recomputed from the event as it now stands).
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
     tournament's owner, when no event with that id exists under the tournament, or when
-    the edit would change the frozen pool set or draw type of a cut-draw event.
+    the edit would change the frozen group set or draw type of a cut-draw event.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1814,7 +1816,7 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
       permanent.
     * ``DegenerateDraw``'s message is **domain-authored copy** (the strategy alone knows
       which degeneracy it hit and the numbers the director must change — "5 entrants
-      across 3 pool(s)"), passed through so the agent reads exactly what a director
+      across 3 group(s)"), passed through so the agent reads exactly what a director
       would.
     * The fallback arm is a generic sentence, never a future subclass's own message —
       refusing vaguely is a bug report, leaking internals is a defect. Covered by
@@ -1846,18 +1848,18 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     never drift. You address the event by its globally-unique ``event_id`` alone; the
     owning tournament is resolved from it. Cutting is owner-gated (only the
     tournament's creator may cut), and it is NOT tied to status — a draw may be cut and
-    re-cut freely while a director inspects the pools and the seeding. **Re-cutting
+    re-cut freely while a director inspects the groups and the seeding. **Re-cutting
     replaces the draw wholesale**: the previous fixtures are deleted and a fresh set is
     planned from the event's current active entrants (their ids do not survive).
     Returns the created
-    fixtures in **pool → round → position** order — the same ``TournamentFixtureRead``
+    fixtures in **group → round → position** order — the same ``TournamentFixtureRead``
     the detail page and ``get_schedule`` carry.
 
     Raises a ``ToolError`` when no event has that id, when you are not the owner of the
     event's tournament, when the draw already shows evidence of play (a fixture with a
     recorded winner or a linked match — it can no longer be cut), or when the event
-    cannot produce a draw at all: it is not a singles event, it has no pools configured
-    for a pooled draw type, or its field is too small for its pools (a pool of fewer
+    cannot produce a draw at all: it is not a singles event, it has no groups configured
+    for a grouped draw type, or its field is too small for its groups (a group of fewer
     than two has nobody to play). The message names what to change."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1961,7 +1963,7 @@ async def place_fixture(
     **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
     prediction, and the other constraints (table-in-group, time-in-window, no
     double-booking) are flags derived on read, NOT invariants — so an out-of-window
-    time, or a table outside the fixture's pool, is STORED, not rejected. The one hard
+    time, or a table outside the fixture's group's reservation, is STORED, not rejected. The one hard
     rule about the fixture itself: one whose linked match is ``completed`` or ``voided``
     is history, so its placement can no longer be changed. Owner-gated: only the
     tournament's creator may place its fixtures.
@@ -2097,7 +2099,7 @@ def _map_preview_draw_error(error: DrawError) -> ToolError:
       a transient one to retry. One such event
       *beside* a previewable one refuses nothing now: the builder skips it, previews
       the rest, and the honest-notes strip names it. A *live* solve does place those
-      events, over the event's own window (ADR "a pool restricts scheduling, it does
+      events, over the event's own window (ADR "a group restricts scheduling, it does
       not enable it"), so what the caller is told here is that the draw type cannot be
       **previewed**. **This arm is the reason the mirror is not exact:**
       ``_map_draw_refusal_tool_error`` has no ``UnsupportedDrawType`` arm, because on
@@ -2151,7 +2153,7 @@ async def preview_schedule(
     This is NOT a real solve and it persists NOTHING: no entries, no fixtures, no
     solve-ledger row. It draws a synthetic field (each event auto-filled to its cap,
     or ``overrides``) and runs the SAME CP-SAT engine a live tournament uses over the
-    tournament's real ``table_catalogue`` and pool windows, so "fits / doesn't fit"
+    tournament's real ``table_catalogue`` and reservation windows, so "fits / doesn't fit"
     means exactly what it will at go-live. It answers *"given my tables, time
     windows, formats and games-per-match, would the schedule even fit — and roughly
     how long is the day?"* while there is still time to change the setup.
@@ -2174,7 +2176,7 @@ async def preview_schedule(
     ``archived`` tournament is refused (there is a real field and a real solve to
     look at, or it is over).
 
-    Draw coverage is the POOL STAGE: an event whose draw is decided as it is played
+    Draw coverage is the GROUP STAGE: an event whose draw is decided as it is played
     (today single-elim or swiss) is SKIPPED, and the ``notes`` strip says which event
     was left out and why. Every other event of the tournament is previewed as usual,
     so one bracket no longer costs the day its whole preview. Skipping is the preview's
