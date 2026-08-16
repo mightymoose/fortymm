@@ -136,29 +136,31 @@ and it never holds anything shut — the check above reads comments, and only co
 the wrong column with a real `LGTM` on its pull request has been released. A ticket in
 **Waiting For Sign Off** with no `LGTM` has not.
 
-Post the ask before moving the column. If the move fails, the human still has the ask.
+The ask always exists before the column points at it: Review posts the comment, and the
+coordinator moves the column only after Review reports it. If the move fails, the human still
+has the ask.
 
 ## What each side does with it
 
-- **`review-next-ticket`** posts the decision comment, then moves the ticket to
-  **Waiting For Sign Off**. In targeted mode it moves the ticket to **In Progress** first,
-  because a change request means the work is being done again, and back to
-  **Waiting For Sign Off** when it posts the next round's ask. In a Testing repair round it
-  posts no decision comment and moves no column, because the "ever" window above already
-  carries the human's release. It never sets **In Testing**.
-- **`implement-ticket-end-to-end`** watches for the signal for a bounded 15 minutes after
-  Review stops, over the **since-the-anchor** window. On release it moves the ticket to
+- **`review-next-ticket`** posts the decision comment, reports its timestamp, and stops. It
+  moves no columns, in any mode. In a Testing repair round it posts no decision comment
+  either, because the "ever" window above already carries the human's release.
+- **`implement-ticket-end-to-end`** moves the ticket to **Waiting For Sign Off** after
+  `review-next-ticket` reports its decision comment, then watches for the signal for a
+  bounded 15 minutes over the **since-the-anchor** window. On release it moves the ticket to
   **In Testing** and invokes `test-next-ticket`. On any other comment from `mightymoose` newer
-  than the anchor it re-invokes `review-next-ticket` in targeted mode, and lets that command
-  write both columns. On expiry it stops and reports, leaving the ticket in
+  than the anchor it moves the ticket to **In Progress**, re-invokes `review-next-ticket` in
+  targeted mode, and moves the ticket back to **Waiting For Sign Off** when that round reports
+  its fresh decision comment. On expiry it stops and reports, leaving the ticket in
   **Waiting For Sign Off**.
 - **`test-next-ticket`** re-runs this same check as a **precondition**, over the **ever**
   window, and refuses to run without it. That refusal is the gate's only enforcement outside
   the coordinator, and it is what makes the gate hold when someone runs the stage by hand. A
   rule that lives only in the coordinator's prose is not a gate.
 
-**In Testing** is the coordinator's write. **Waiting For Sign Off** and the **In Progress**
-bounce-back are Review's. One transition, one owner.
+Every gate column is the coordinator's write: **Waiting For Sign Off**, the **In Progress**
+bounce-back, and **In Testing**. Review posts comments and the coordinator moves the ticket.
+One writer for every transition.
 
 The precondition is a check, not a status transition. `test-next-ticket` does not move the
 ticket to satisfy it, and it does not accept a board column as a substitute for the comment.
