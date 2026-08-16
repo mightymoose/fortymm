@@ -60,7 +60,7 @@ class TournamentEventDrawSettings(Base):
 
     Two columns of configuration today: the draw type, and the ``settings`` object
     beside it — the serialized form of the draw type's own settings arm (ADR "a draw
-    type's settings are one NOT NULL JSON object"). The follow-on pools ticket moves
+    type's settings are one NOT NULL JSON object"). The follow-on groups ticket moves
     ``TournamentEvent.groups`` in here.
     """
 

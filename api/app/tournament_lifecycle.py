@@ -335,7 +335,7 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
     kind of guard worse than none.
 
     A ``match`` with ``assert_never``, not an ``if``: a fourth thing that can be true
-    of a draw (a fixture pointing at a pool the event no longer has, say) is a type
+    of a draw (a fixture pointing at a group the event no longer has, say) is a type
     error here until somebody decides whether it may go live, rather than falling
     through to ``current`` — a precondition must never fail in the permissive
     direction.

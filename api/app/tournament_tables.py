@@ -5,7 +5,7 @@ an invariant"), not an entry in ``tournaments.table_catalogue`` JSONB, and its i
 minted by the database. So the two write verbs — ``create_tournament`` and
 ``edit_tournament`` — no longer assign a column; they compose ``VenueTable`` rows, and
 they do it through this module rather than each spelling it out, for the reason
-``stored_pools`` is shared between the event verbs: the shape a catalogue is stored in
+``stored_groups`` is shared between the event verbs: the shape a catalogue is stored in
 must not depend on which verb happened to store it.
 
 The edit path is a **diff**, and the ADR is explicit about why it had to become one:
@@ -79,7 +79,7 @@ class AppliedCatalogue:
 
 def _tables_in_use_detail(labels: list[str], *, placements: int) -> str:
     """The 409 sentence for a catalogue edit that would remove a table matches are
-    placed at — composed in the house style of ``_pool_set_frozen_detail``
+    placed at — composed in the house style of ``_reservation_set_frozen_detail``
     (``app.tournament_events``): **name the things, then name the way out.**
 
     It names the tables **by label**, never by id, for the reason ``named_list`` exists:
@@ -90,7 +90,7 @@ def _tables_in_use_detail(labels: list[str], *, placements: int) -> str:
     between an edit they cannot make and a schedule they did not want to lose: send the
     same edit again with the opt-in and accept the unplacing, or move the matches off
     the table first and keep them. Which of the two is right is theirs to decide — that
-    is the whole content of the ADR's split between a pool (quiet) and a placement
+    is the whole content of the ADR's split between a reservation (quiet) and a placement
     (loud).
     """
     one = len(labels) == 1
@@ -143,8 +143,8 @@ async def _unplace_or_refuse(
     the opt-in, raise :class:`TableInUseError` having written nothing.
 
     This is the ADR's split, in one function. A table that no fixture names is removed
-    with no ceremony whatever any *pool* thinks of it: a pool's ``table_ids`` are a
-    reservation, and the pool simply reserves one fewer. A table a fixture is **placed
+    with no ceremony whatever any *reservation* thinks of it: a reservation's ``table_ids`` are a
+    reservation, and the reservation simply reserves one fewer. A table a fixture is **placed
     at** is a different question, and it is asked of the director rather than answered
     for them.
 
@@ -216,7 +216,7 @@ async def apply_table_catalogue(
       the table it meant to keep.
     * a removal a fixture's **placement** stands in the way of, without
       ``unplace_fixtures`` → :class:`TableInUseError` (the named 409). See
-      :func:`_unplace_or_refuse` for why this one is loud where a pool's reservation is
+      :func:`_unplace_or_refuse` for why this one is loud where a reservation's reservation is
       silent.
     * (two entries citing one id is refused a layer earlier, at the boundary —
       :data:`~app.schemas.tournament.EditedTableCatalogue`.)

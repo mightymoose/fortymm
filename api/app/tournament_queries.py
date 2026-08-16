@@ -265,26 +265,26 @@ async def active_entrants_by_event(
     return entrants
 
 
-def _pool_position() -> ScalarSelect[int | None]:
-    """The ``position`` of a fixture's pool within its own event — the correlated
+def _group_position() -> ScalarSelect[int | None]:
+    """The ``position`` of a fixture's group within its own event — the correlated
     subquery the draw order below sorts on.
 
     A fixture holds its group's **id**, not its index, so "where does this fixture's
     group sit in the director's order?" is a join: find the
-    ``tournament_event_stage_groups`` row this fixture's ``(stage_id, pool_id)`` names —
+    ``tournament_event_stage_groups`` row this fixture's ``(stage_id, group_id)`` names —
     the same pair the composite foreign key matches on (ADR 20260801, parented on the
     stage by ADR 20260815) — and
-    read its ``position`` (:data:`app.schemas.tournament.PoolPosition` — 0-based,
-    stamped by the server from the order the pools were sent in). Scalar by
+    read its ``position`` (:data:`app.schemas.tournament.ReservationPosition` — 0-based,
+    stamped by the server from the order the groups were sent in). Scalar by
     construction, since ``(stage_id, id)`` is unique, rather than by a ``LIMIT``
     papering over duplicates.
 
     It is ``NULL`` in exactly one case now, and that case wants to sort at the end of
-    the pooled group: an **un-pooled** fixture (``pool_id IS NULL`` — single-elim,
+    the grouped group: an **un-grouped** fixture (``group_id IS NULL`` — single-elim,
     swiss, or the KO stage of an rr-then-ko draw) matches no row. It used to have a
-    second — a pool stored before ``position`` existed — which the ``NOT NULL`` column
+    second — a group stored before ``position`` existed — which the ``NOT NULL`` column
     has closed; the id stays on as a secondary sort key below because the *order* still
-    has to be total when this is NULL for every row of an un-pooled draw.
+    has to be total when this is NULL for every row of an un-grouped draw.
 
     Correlated on ``TournamentFixture`` alone. ``stage_id`` comes off the fixture
     directly now — simpler than before this ADR, which correlated on ``event_id``
@@ -295,7 +295,7 @@ def _pool_position() -> ScalarSelect[int | None]:
         select(TournamentEventStageGroup.position)
         .where(
             TournamentEventStageGroup.stage_id == TournamentFixture.stage_id,
-            TournamentEventStageGroup.id == TournamentFixture.pool_id,
+            TournamentEventStageGroup.id == TournamentFixture.group_id,
         )
         .correlate(TournamentFixture)
         .scalar_subquery()
@@ -306,7 +306,7 @@ async def fixtures_by_event(
     db: AsyncSession, event_ids: Sequence[uuid.UUID]
 ) -> dict[uuid.UUID, list[TournamentFixtureRead]]:
     """The draw of every event in ``event_ids`` — its fixtures (ADR-0786) — keyed by
-    event id, each event's in **pool → round → position** order.
+    event id, each event's in **group → round → position** order.
 
     ONE statement for the whole batch (none at all when there are no events), which is
     the whole reason this is a loader and not a ``selectinload`` of the event's
@@ -323,40 +323,40 @@ async def fixtures_by_event(
     here than it does for entrants, because an un-cut draw is the *normal* condition of
     an event (cutting is an explicit act, ADR-0786), not an edge case.
 
-    **The ordering is the query's, not the caller's**, and it is a total order: pool,
-    then round, then position — over columns that ``UNIQUE (event_id, pool_id, round,
+    **The ordering is the query's, not the caller's**, and it is a total order: group,
+    then round, then position — over columns that ``UNIQUE (event_id, group_id, round,
     position)`` already guarantees are unique together, so the sequence is the same on
     every read and a client can render a bracket without sorting it first. A NULL
-    ``pool_id`` sorts LAST, which puts a pools-then-knockout draw type's KO stage
-    after the pools it is fed from (and costs an un-pooled draw nothing — every row is
+    ``group_id`` sorts LAST, which puts a groups-then-knockout draw type's KO stage
+    after the groups it is fed from (and costs an un-grouped draw nothing — every row is
     NULL there, so round and position decide it alone).
 
-    "Pool" here means the pool's **position in the event's own pool order**
-    (:func:`_pool_position`), not its id. The id used to be a client-minted string —
+    "Group" here means the group's **position in the event's own group order**
+    (:func:`_group_position`), not its id. The id used to be a client-minted string —
     ``p-1-…``, ``p-2-…``, ``p-10-…`` — and *lexicographically* ``p-10-`` fell between
-    ``p-1-`` and ``p-2-``, so a ten-pool event rendered its draw as pool 1, pool 10,
-    pool 2. Sorting on the stored ``position`` (ADR 20260801, "Pools carry an explicit
-    ``position``") is also the only key that survives pools becoming rows with random
+    ``p-1-`` and ``p-2-``, so a ten-group event rendered its draw as group 1, group 10,
+    group 2. Sorting on the stored ``position`` (ADR 20260801, "Groups carry an explicit
+    ``position``") is also the only key that survives groups becoming rows with random
     UUID primary keys, under which an id sort is not merely wrong but *arbitrary*.
     The id stays on as a secondary key so the order is still total when the positions
-    cannot decide it — every fixture of an un-pooled draw resolves a ``NULL`` position.
+    cannot decide it — every fixture of an un-grouped draw resolves a ``NULL`` position.
 
     ``TournamentFixture.id`` closes the order out as a final tiebreaker. The unique
-    key the rest of this ordering leans on, ``(stage_id, pool_id, round, position)``,
-    is scoped to one STAGE, not to the event — so two un-pooled fixtures from two
-    *different* stages of one event (a template with more than one un-pooled stage;
+    key the rest of this ordering leans on, ``(stage_id, group_id, round, position)``,
+    is scoped to one STAGE, not to the event — so two un-grouped fixtures from two
+    *different* stages of one event (a template with more than one un-grouped stage;
     none exists today, but nothing here should assume it never will) can tie on every
     key above (``NULL``, ``NULL``, same round, same position) and still be two rows.
     The fixture id is the one column guaranteed unique platform-wide, so appending it
     is what makes this a total order regardless of the template shape.
 
     Sorted in Postgres rather than in Python because a NULL is not comparable to an
-    ``int`` (nor, before it, to a string): ``sorted(key=lambda f: (f.pool_position,
-    ...))`` is a ``TypeError`` the moment an un-pooled fixture meets a pooled one, and
-    the defensive coalesce that usually follows (``f.pool_position or 0``) would
-    quietly sort the KO stage FIRST — in front of the pools that feed it. The position
-    is also not a column on the fixture at all: it lives on the fixture's *pool* row, so
-    resolving it in Python would mean loading every event's pools per read.
+    ``int`` (nor, before it, to a string): ``sorted(key=lambda f: (f.group_position,
+    ...))`` is a ``TypeError`` the moment an un-grouped fixture meets a grouped one, and
+    the defensive coalesce that usually follows (``f.group_position or 0``) would
+    quietly sort the KO stage FIRST — in front of the groups that feed it. The position
+    is also not a column on the fixture at all: it lives on the fixture's *group* row, so
+    resolving it in Python would mean loading every event's groups per read.
 
     A materialized fixture carries its match's **live status** (``match_status``), read
     by LEFT-joining ``matches`` on ``fixture.match_id`` (#788) — still ONE statement,
@@ -413,8 +413,8 @@ async def fixtures_by_event(
             .where(TournamentEventStage.event_id.in_(fixtures.keys()))
             .options(contains_eager(TournamentFixture.stage))
             .order_by(
-                _pool_position().asc().nulls_last(),
-                TournamentFixture.pool_id.asc().nulls_last(),
+                _group_position().asc().nulls_last(),
+                TournamentFixture.group_id.asc().nulls_last(),
                 TournamentFixture.round,
                 TournamentFixture.position,
                 TournamentFixture.id,
@@ -426,7 +426,7 @@ async def fixtures_by_event(
             TournamentFixtureRead(
                 id=fixture.id,
                 stage_id=fixture.stage_id,
-                pool_id=fixture.pool_id,
+                group_id=fixture.group_id,
                 round=fixture.round,
                 position=fixture.position,
                 entry_a_id=fixture.entry_a_id,

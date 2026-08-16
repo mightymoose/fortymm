@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 class TournamentEventReservationTable(Base):
     """One table a **reservation** holds — a row, where it used to be an entry in a
-    pool's ``table_ids`` JSONB array (ADR 20260801, "the tournament-scoping stops at the
+    reservation's ``table_ids`` JSONB array (ADR 20260801, "the tournament-scoping stops at the
     join table").
 
     A reservation is the slice of the venue catalogue its groups draw on: the solver may
@@ -33,8 +33,8 @@ class TournamentEventReservationTable(Base):
     tournament**, and nothing above the database would have said otherwise.
 
     **Three foreign keys, and this row is back where it started.** It was parented on a
-    pool, which ADR 20260815 re-parented onto a stage — dragging this row onto
-    ``(stage_id, pool_id)`` and forcing a *fourth* leg, ``(event_id, stage_id)``, to
+    reservation, which ADR 20260815 re-parented onto a stage — dragging this row onto
+    ``(stage_id, reservation_id)`` and forcing a *fourth* leg, ``(event_id, stage_id)``, to
     close the gap that indirection opened. A reservation hangs off the event directly,
     so the stage drops out of this row entirely and the fourth leg goes with it:
 
@@ -76,7 +76,7 @@ class TournamentEventReservationTable(Base):
         # leads on ``tournament_event_reservations``: every read is "the tables of this
         # reservation", and the key's own index answers that shape, the reservation
         # leg's referential check, and the event-delete cascade's lookup — all three,
-        # which is what the pool-era version needed a second index to do once its pool
+        # which is what the reservation-era version needed a second index to do once its reservation
         # leg pointed at a stage instead.
         PrimaryKeyConstraint(
             "event_id",
@@ -85,7 +85,7 @@ class TournamentEventReservationTable(Base):
             name="pk_tournament_event_reservation_tables",
         ),
         # "My reservation is my own event's reservation" — the leg that replaces the
-        # pool-era ``(stage_id, pool_id)`` one, pointing at the pair a reservation is
+        # reservation-era ``(stage_id, reservation_id)`` one, pointing at the pair a reservation is
         # keyed on.
         ForeignKeyConstraint(
             ["event_id", "reservation_id"],
@@ -114,7 +114,7 @@ class TournamentEventReservationTable(Base):
             ondelete="CASCADE",
         ),
         # Two tables of one reservation never share a place in its order — the guarantee
-        # ``app.tournament_pools`` makes by construction (it stamps ``range(len(...))``)
+        # ``app.tournament_reservations`` makes by construction (it stamps ``range(len(...))``)
         # said here as a constraint.
         #
         # DEFERRABLE INITIALLY DEFERRED for the reason every sibling ``position``
@@ -137,7 +137,7 @@ class TournamentEventReservationTable(Base):
         # table removed. The primary key covers both legs that lead with ``event_id``;
         # this pair leads with ``tournament_id``, which no other index here does.
         #
-        # There is no second ``ix_`` here, unlike the pool-era table: its pool leg led
+        # There is no second ``ix_`` here, unlike the reservation-era table: its reservation leg led
         # with ``stage_id``, which was not a primary-key column at all and so rode no
         # index. This row's reservation leg leads with ``event_id``, a prefix of the
         # primary key, so it rides the key's own index for free again.
@@ -161,7 +161,7 @@ class TournamentEventReservationTable(Base):
     #: unlike ``tournament_id`` (a real value at construction time, since the tournament
     #: this row is inside already exists). At CREATE, the event itself does not have an
     #: id yet — it is a server-minted uuid, unassigned until flush — so
-    #: ``app.tournament_pools`` sets ``.event = event`` on the still-unsaved object
+    #: ``app.tournament_reservations`` sets ``.event = event`` on the still-unsaved object
     #: graph and lets the unit of work populate this column once the event's INSERT
     #: returns, the same mechanism that populates ``reservation_id`` through
     #: :attr:`reservation`. On the UPDATE path the event already has an id, but the same
@@ -216,6 +216,6 @@ class TournamentEventReservationTable(Base):
     #: leg is ``(event_id, reservation_id)``), so SQLAlchemy warns that two
     #: relationships target one column. They cannot disagree: the reservation's
     #: ``event_id`` is this event's id, which the ``(event_id, reservation_id)`` foreign
-    #: key requires. The pool-era version of this row needed no such declaration because
+    #: key requires. The reservation-era version of this row needed no such declaration because
     #: its parent leg led with ``stage_id`` and touched no column this one writes.
     event: Mapped["TournamentEvent"] = relationship(overlaps="reservation,tables")

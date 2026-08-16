@@ -29,14 +29,14 @@ if TYPE_CHECKING:
 class TournamentEventReservation(Base):
     """One **reservation** of an event — a set of tables held for a window of time.
 
-    This is the other half of what ``tournament_event_pools`` used to be. A "pool" said
+    This is the other half of what ``tournament_event_reservations`` used to be. A "reservation" said
     *these entrants play each other* and *they play here, then* in one row; the first
     claim is a
     :class:`~app.models.tournament_event_stage_group.TournamentEventStageGroup` now, and
     this row is the second. A group reaches its reservation through
     :class:`~app.models.tournament_event_group_reservation.TournamentEventGroupReservation`,
-    and the wire's ``pools[]`` array is the two projected back together
-    (:func:`app.tournament_pools.pool_read`).
+    and the wire's ``reservations[]`` array is the two projected back together
+    (:func:`app.tournament_reservations.group_read`).
 
     **The parent is the event, not the stage** — deliberately, and unlike the group.
     Two reasons, and neither is symmetry with the group:
@@ -53,8 +53,8 @@ class TournamentEventReservation(Base):
     **The tables are rows, not a JSONB array** (ADR 20260801, "the tournament-scoping
     stops at the join table") — see
     :class:`~app.models.tournament_event_reservation_table.TournamentEventReservationTable`.
-    They followed this row from the pool it split out of, and returned to the event on
-    the way: ADR 20260815 re-parented them onto a stage because their pool had moved
+    They followed this row from the reservation it split out of, and returned to the event on
+    the way: ADR 20260815 re-parented them onto a stage because their reservation had moved
     there, and a reservation is event-parented, so they come back.
 
     **Its attributes do not freeze with the draw.** The set of *group* identities is
@@ -76,10 +76,10 @@ class TournamentEventReservation(Base):
     timezone-aware instants" — "wall-clock is preserved across a timezone edit"). The
     wire shape is unchanged: the ``Slot`` value-object's ``YYYY-MM-DD`` / ``HH:MM``
     strings compose from and to these columns at the boundary
-    (``app.tournament_pools``).
+    (``app.tournament_reservations``).
 
     ``id`` is a **server-minted uuid** — ``gen_random_uuid()``. It is deliberately NOT
-    on the wire: every pool identifier the API serves is the *group's* id, so a
+    on the wire: every reservation identifier the API serves is the *group's* id, so a
     reservation's own id names nothing a client has ever seen. The one place it surfaces
     at all is inside the solver's opaque namespaced key
     (``app.schedule_solves``), which is what makes that key mean "the reservation this
@@ -124,7 +124,7 @@ class TournamentEventReservation(Base):
         ),
     )
 
-    #: The reservation's identity. Server-minted, and NOT a pool id on the wire — see
+    #: The reservation's identity. Server-minted, and NOT a reservation id on the wire — see
     #: the class docstring.
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -143,12 +143,12 @@ class TournamentEventReservation(Base):
     )
     #: ``Text``, not ``String(255)``: the write boundary floors a name at one character
     #: and puts no ceiling on it, so a column with one would 500 on a payload the schema
-    #: accepted. This is what the wire still calls ``pools[].name``.
+    #: accepted. This is what the wire still calls ``reservations[].name``.
     name: Mapped[str] = mapped_column(Text, nullable=False)
     #: Where this reservation sits in its event's own order: 0-based, contiguous,
     #: assigned by the server from the index of the entry that wrote it.
     #:
-    #: Not what the wire reports. ``pools[].position`` is the *group's* position, which
+    #: Not what the wire reports. ``reservations[].position`` is the *group's* position, which
     #: is the one the snake seeds against and the qualifier seam labels by. This column
     #: exists so a reservation set has a stable, non-arbitrary read order of its own —
     #: ordering by a random uuid would shuffle a director's list on every read — and it
@@ -177,7 +177,7 @@ class TournamentEventReservation(Base):
 
     #: The tables this reservation holds, in the order the director sent them — which is
     #: what ``TournamentEventReservationTable.position`` carries and what the projected
-    #: ``Pool.table_ids`` is composed from.
+    #: ``Reservation.table_ids`` is composed from.
     #:
     #: ``lazy="selectin"`` for the reason every collection on this path is eager: async
     #: SQLAlchemy raises rather than emitting a lazy load, so every reader that reaches

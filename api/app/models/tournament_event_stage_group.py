@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 class TournamentEventStageGroup(Base):
     """One **group** of a stage — an ordered set of entrants who play all-play-all.
 
-    This row is what ``tournament_event_pools`` used to be, with one of its two faces
-    removed. A "pool" said two things at once: *these entrants play each other* and
+    This row is what ``tournament_event_groups`` used to be, with one of its two faces
+    removed. A "group" said two things at once: *these entrants play each other* and
     *they play on these tables, in this window*. Those are different claims about
     different things, and the second one moved out — to
     :class:`~app.models.tournament_event_reservation.TournamentEventReservation`, an
@@ -37,18 +37,18 @@ class TournamentEventStageGroup(Base):
 
     So a group carries no ``name``, no window and no tables. It carries who is in it
     (through the fixtures whose composite foreign key names it) and where it stands in
-    its stage's order. Everything else a reader used to get off a pool now comes from
-    the mapped reservation, which is what :func:`app.tournament_pools.pool_read`
-    composes the unchanged wire ``Pool`` out of.
+    its stage's order. Everything else a reader used to get off a group now comes from
+    the mapped reservation, which is what :func:`app.tournament_reservations.group_read`
+    composes the unchanged wire ``Group`` out of.
 
     **The parent is the stage.** It has to be: a fixture's composite foreign key is
-    ``(stage_id, pool_id) → (stage_id, id)``, and a fixture carries ``stage_id`` and no
+    ``(stage_id, group_id) → (stage_id, id)``, and a fixture carries ``stage_id`` and no
     ``event_id`` at all (ADR 20260815 dropped it). A row a fixture names must share a
-    parent column with that fixture, so the group keeps exactly the parent the pool row
+    parent column with that fixture, so the group keeps exactly the parent the group row
     had. The reservation is free to hang off the event instead, and does, because
     nothing points at a reservation with a composite key through a fixture.
 
-    **A group's identity freezes once a draw exists** (ADR-0786), exactly as the pool
+    **A group's identity freezes once a draw exists** (ADR-0786), exactly as the group
     set froze before it — ``app.tournament_events._enforce_group_set_frozen`` is the
     409, and the composite foreign key underneath is the backstop. The *reservation's*
     attributes do not freeze: a director may re-name, re-table and re-window one
@@ -57,10 +57,10 @@ class TournamentEventStageGroup(Base):
     **The label is derived, not stored.** A group had a ``name`` for as long as it was
     also a reservation and the director typed one. A group's own label is a function of
     its ``position`` — nothing writes it and nothing stores it. What the wire still
-    calls ``pools[].name`` is the mapped reservation's name, projected.
+    calls ``groups[].name`` is the mapped reservation's name, projected.
 
     ``id`` is a **server-minted uuid** — ``gen_random_uuid()`` — inherited unchanged
-    from the pool row this splits, along with ``tournament_fixtures.pool_id``'s type
+    from the group row this splits, along with ``tournament_fixtures.group_id``'s type
     and the composite-foreign-key target below."""
 
     __tablename__ = "tournament_event_stage_groups"
@@ -75,7 +75,7 @@ class TournamentEventStageGroup(Base):
         # group leg. SQL can only reference a unique set of columns, and the *pair* is
         # what carries "my group is my own stage's group". Redundant against the primary
         # key as a uniqueness claim (a uuid id is unique on its own), and that is
-        # exactly what it is for; inherited verbatim from ``tournament_event_pools``,
+        # exactly what it is for; inherited verbatim from ``tournament_event_groups``,
         # whose own ``UNIQUE (stage_id, id)`` said the same thing about the same
         # fixtures. It earns its index twice over anyway: ``stage_id`` leads, so it
         # answers "the groups of this stage" (every read there is), the stage-delete
@@ -85,7 +85,7 @@ class TournamentEventStageGroup(Base):
             "stage_id", "id", name="uq_tournament_event_stage_groups_stage_id_id"
         ),
         # Two groups of one stage never share a place in its order — the guarantee
-        # ``app.tournament_pools`` makes by construction (it stamps ``range(len(...))``)
+        # ``app.tournament_reservations`` makes by construction (it stamps ``range(len(...))``)
         # said here as a constraint.
         #
         # DEFERRABLE INITIALLY DEFERRED, for the reason every sibling ``position``
@@ -104,9 +104,9 @@ class TournamentEventStageGroup(Base):
         ),
     )
 
-    #: The group's identity, and what a fixture's ``pool_id`` holds — a uuid the
-    #: **database** mints. This is the id every pool identifier the API serves carries:
-    #: ``pools[].id``, ``fixture.pool_id`` and ``PoolStandingsRead.pool_id`` are all
+    #: The group's identity, and what a fixture's ``group_id`` holds — a uuid the
+    #: **database** mints. This is the id every group identifier the API serves carries:
+    #: ``groups[].id``, ``fixture.group_id`` and ``GroupStandingsRead.group_id`` are all
     #: this column, projected. The reservation's own id is not on the wire at all.
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -116,7 +116,7 @@ class TournamentEventStageGroup(Base):
     #: A group's parent is its STAGE (ADR 20260815) — the one column it must share with
     #: the fixtures that name it. Always the event's stage at position 0 in practice
     #: (decision 3), but that placement is not this column's job to enforce;
-    #: ``app.tournament_pools.apply_event_pools`` resolves the stage before it writes.
+    #: ``app.tournament_reservations.apply_event_reservations`` resolves the stage before it writes.
     stage_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
@@ -125,11 +125,11 @@ class TournamentEventStageGroup(Base):
     #: Where this group sits in its stage's order: 0-based, contiguous, assigned by the
     #: server from the group's index in the list it was sent in.
     #:
-    #: Load-bearing, not decoration (ADR 20260801, "Pools carry an explicit
+    #: Load-bearing, not decoration (ADR 20260801, "Groups carry an explicit
     #: ``position``"): the snake seeds against this order, so a re-order deals a draw
     #: that still cuts but seeds differently — invisible to the type checker. It is also
     #: what a group's label derives from, and what the projection reports as
-    #: ``pools[].position``.
+    #: ``groups[].position``.
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     # There is deliberately no ``name``, no ``slot_date``/``slot_start``/``slot_end``
     # and no tables relationship. All five moved to ``tournament_event_reservations``,
@@ -156,7 +156,7 @@ class TournamentEventStageGroup(Base):
     #: slice keeps. ``delete-orphan`` is what makes a removed group take its mapping
     #: with it, and ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` covers every
     #: path that does not load the collection first. In this slice the mapping is never
-    #: absent — ``app.tournament_pools`` writes a group and its reservation together on
+    #: absent — ``app.tournament_reservations`` writes a group and its reservation together on
     #: every path — so the ``reservation`` view below is total in practice. The type
     #: stays non-optional to say so.
     reservation_link: Mapped["TournamentEventGroupReservation"] = relationship(
@@ -168,7 +168,7 @@ class TournamentEventStageGroup(Base):
         # It is a ONE-TO-ONE, so a join adds columns and never multiplies group rows —
         # this row and the reservation beyond it both ride along in whatever statement
         # loads the group, for no statement of their own. That is what keeps the split
-        # free: a page costs exactly what it did when a pool was a single row.
+        # free: a page costs exactly what it did when a group was a single row.
         #
         # And a chained ``selectin`` does not survive every path a group is loaded by.
         # ``TournamentEvent.groups`` is a VIEWONLY ``secondary=`` association, and a
@@ -191,7 +191,7 @@ class TournamentEventStageGroup(Base):
         to one row. Every eager load of a group would then walk both chains, doubling
         the statements the reservation side costs on a page of events, and, worse,
         splitting
-        which chain a query has to remember: ``apply_event_pools`` asks for
+        which chain a query has to remember: ``apply_event_reservations`` asks for
         ``reservation_link → reservation → tables``, so a reader coming back through the
         *other* path would find it unloaded and lazy-load it — which is a
         ``MissingGreenlet`` under async, not a slow read.

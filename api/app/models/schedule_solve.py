@@ -135,7 +135,7 @@ class ScheduleSolve(Base):
     wall_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fixtures_placed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fixtures_pinned: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: Whether a **live** day's plan ran past a planned pool window into the
+    #: Whether a **live** day's plan ran past a planned group window into the
     #: overrun (ADR "the solver stops wedging"). ``True`` only on a ``succeeded``
     #: solve whose soft window let unplayed fixtures spill past their planned end
     #: while the tournament is live — a success qualifier, never a failure. Stays
