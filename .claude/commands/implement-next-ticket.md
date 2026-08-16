@@ -19,6 +19,14 @@ If `$ARGUMENTS` is empty, select the **topmost ticket according to the Project's
 
 If no eligible ticket exists, report that there is nothing to implement and stop.
 
+## Claim the Ticket
+
+As soon as the ticket is selected, and before you read the ticket in full or touch any code, move it to **In Progress**.
+
+Move it first so the board shows the work is claimed. Many agent sessions run against this board at once. A ticket that stays in **Ready For Implementation** while an agent works it can be picked up a second time by another run.
+
+If the move fails, stop and report. Do not implement a ticket you could not claim.
+
 ## Prepare
 
 Before editing code:
@@ -135,6 +143,7 @@ When escalating, stop before the unresolved decision, explain what was discovere
 - Process exactly one ticket per invocation.
 - With no argument, use the topmost ticket in **Ready For Implementation**.
 - With a ticket number, use that eligible ticket only.
+- Move the ticket to **In Progress** at selection time, before any other work.
 - Treat acceptance criteria as authoritative and Planning notes as guidance.
 - Never silently change scope.
 - Never include unrelated user changes.

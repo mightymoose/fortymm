@@ -1,5 +1,5 @@
 ---
-description: Review a specific In Review ticket, or the top In Review ticket when none is specified. Run the land-the-plane review commands, repair clear findings, leave structured review notes, then post a decision comment on the pull request and stop for a human. It does not move the ticket.
+description: Review a specific In Review ticket, or the top In Review ticket when none is specified. Run the land-the-plane review commands, repair clear findings, leave structured review notes, then post a decision comment on the pull request, move the ticket to Waiting For Sign Off, and stop for a human.
 model: opus
 ---
 
@@ -39,7 +39,7 @@ If the review commands find a concrete problem and the correct repair is clear:
 2. Add or update tests as appropriate.
 3. Run relevant verification.
 4. Re-run the applicable `simplify`, `code-review`, and `security-review` commands over the amended diff.
-5. Keep the ticket **In Review** while this loop runs.
+5. Keep the ticket **In Review** while this loop runs. The ticket is not waiting on a human yet, so it must not sit in **Waiting For Sign Off**.
 
 Do not erase evidence of findings merely because they were repaired.
 
@@ -97,9 +97,14 @@ Only when the review pass is clean and the implementation satisfies the ticket:
 4. **Make sure a pull request exists and is not a draft.** The human reviews the PR, so the PR is a required output of this stage. If none exists, open one. If it is a draft, mark it ready — CI runs zero Actions on a draft, so a draft PR shows a green board having run nothing.
 5. Wait for CI to go green.
 6. **Post one decision comment on the pull request.**
-7. Stop.
+7. **Move the ticket to Waiting For Sign Off.**
+8. Stop.
 
-**The ticket stays In Review.** This command never moves it. `implement-ticket-end-to-end` moves it on release, because that is where the stage actually ends.
+**Move it in that order, and only after the comment lands.** The column says one thing: this work is waiting on a human. A ticket parked there before the ask exists asks for a decision on a pull request that carries no question.
+
+Post the comment first because the comment is the ask and the column is only its signpost. If the move fails, the human still has the ask.
+
+**Waiting For Sign Off is the only column this command moves a ticket into.** It never sets **In Testing**. Only a human's `LGTM` releases the work to Testing, and `implement-ticket-end-to-end` writes that transition when it reads the signal.
 
 Do not begin Testing here.
 
@@ -117,21 +122,31 @@ Do not repeat the Review Notes. They are already on the ticket, and a reviewer w
 
 ### Running standalone
 
-Run outside `implement-ticket-end-to-end`, this command leaves the ticket **In Review** with no watcher. That is correct, not a failure — but nothing will notice the `LGTM` when it arrives. Say so in the final report, name the PR URL, and give the command that resumes the arc.
+Run outside `implement-ticket-end-to-end`, this command still moves the ticket to **Waiting For Sign Off**, but leaves it there with no watcher. That is correct, not a failure — but nothing will notice the `LGTM` when it arrives. Say so in the final report, name the PR URL, and give the command that resumes the arc.
+
+The column carries the ask on its own. A ticket in **Waiting For Sign Off** is waiting on a human whether or not an agent is watching, so a run that ends here strands nothing.
 
 ## Targeted Mode
 
 `implement-ticket-end-to-end` re-invokes this command in **targeted mode** when the human comments something other than the release signal. Targeted mode is not a second full review.
 
+A ticket entering targeted mode is in **Waiting For Sign Off**, not **In Review**. Accept it from either column. The eligibility rule at the top of this file governs a fresh review, not a repair round the coordinator asked for by number.
+
 Given the named comments:
 
-1. Address **exactly** those comments. Nothing else. A comment is not an invitation to re-review the diff.
-2. Re-run only the verification the change actually touches.
-3. Push to the **same branch**. Do not open a second pull request.
-4. Wait for CI to go green.
-5. Reply on each thread, saying what changed or why it did not.
-6. Post a fresh decision comment.
-7. Stop. The coordinator's watch restarts from here.
+1. **Move the ticket back to In Progress.** The human asked for changes, so the work is being done again and is no longer waiting on anyone. Do this first, before touching code, so the board never shows a ticket asking for a decision that has already been given.
+2. Address **exactly** those comments. Nothing else. A comment is not an invitation to re-review the diff.
+3. Re-run only the verification the change actually touches.
+4. Push to the **same branch**. Do not open a second pull request.
+5. Wait for CI to go green.
+6. Reply on each thread, saying what changed or why it did not.
+7. Post a fresh decision comment.
+8. **Move the ticket back to Waiting For Sign Off.**
+9. Stop. The coordinator's watch restarts from here.
+
+This command owns both writes, in both directions. The coordinator detects the change request and hands off; it does not also move the ticket. Two owners for one transition is how a ticket ends up in a column neither of them chose.
+
+A targeted round that escalates leaves the ticket **In Progress**. That is honest: the work is unfinished, and nobody is waiting on the human.
 
 If a comment asks for something that would change approved scope or acceptance criteria, do not implement it. Escalate.
 
@@ -151,7 +166,8 @@ Do not escalate for understandable failures with clear repairs. Never weaken cri
 - Never silently reinterpret acceptance criteria.
 - Always leave structured Review Notes with explicit `N/A` where appropriate.
 - A non-draft pull request is a required output of this stage.
-- Post exactly one decision comment on the pull request, then stop.
-- **Never move the ticket.** It stays **In Review** until a human releases the gate.
-- In targeted mode, address only the named comments and push to the same branch.
+- Post exactly one decision comment on the pull request, then move the ticket to **Waiting For Sign Off** and stop.
+- Post the decision comment **before** the column move. The comment is the ask; the column is its signpost.
+- **Never set In Testing.** Only a human's `LGTM` releases the work, and the coordinator writes that transition.
+- In targeted mode, move the ticket to **In Progress** first, address only the named comments, push to the same branch, then move it back to **Waiting For Sign Off**.
 - Do not merge or mark Done here.

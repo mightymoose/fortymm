@@ -7,7 +7,9 @@ model: opus
 
 Coordinate exactly one ticket through:
 
-`Ready For Implementation → In Review → [human gate] → In Testing → Done`
+`Ready For Implementation → In Progress → In Review → Waiting For Sign Off → [human gate] → In Testing → Done`
+
+A change request at the gate sends it back: `Waiting For Sign Off → In Progress`, and round the loop again.
 
 Re-invoked on a ticket already mid-arc, it detects where the ticket got to and continues from there.
 
@@ -48,11 +50,13 @@ Do not let the implementation context become its own reviewer/tester merely to s
 
 ## Stage 1 — Implementation
 
-Invoke `implement-next-ticket` for the selected ticket in a fresh context. Success means implementation is on a pushed branch, PR linked, Implementation Notes appended, and ticket **In Review**. If it escalates, stop and surface the escalation unchanged.
+Invoke `implement-next-ticket` for the selected ticket in a fresh context. That stage moves the ticket to **In Progress** when it claims it, so a ticket sitting In Progress with no pull request is an implementation run in flight or a dead one, not an unclaimed ticket. Success means implementation is on a pushed branch, PR linked, Implementation Notes appended, and ticket **In Review**. If it escalates, stop and surface the escalation unchanged.
 
 ## Stage 2 — Review
 
-Invoke `review-next-ticket` for the same ticket in a new fresh context. Success means adversarial review completed, clear findings repaired/re-reviewed, Review Notes appended, a non-draft pull request open with CI green, and a decision comment posted on it. **The ticket stays In Review** — Review no longer moves it, because the stage does not end until a human has decided. If it escalates, stop.
+Invoke `review-next-ticket` for the same ticket in a new fresh context. Success means adversarial review completed, clear findings repaired/re-reviewed, Review Notes appended, a non-draft pull request open with CI green, a decision comment posted on it, and the ticket in **Waiting For Sign Off**. If it escalates, stop.
+
+**Review writes that column, not the coordinator.** The ticket is In Review while the repair loop runs, and moves to Waiting For Sign Off at the moment the ask is posted. Verify it landed there before entering the watch; do not write it yourself to paper over a stage that did not finish.
 
 ## The Human Gate
 
@@ -66,11 +70,13 @@ After Review stops, watch the pull request for **15 minutes**. Poll over REST, n
 
 **Anchor the watch to the decision comment Review just posted.** `review-next-ticket` reports that comment's timestamp; only comments strictly newer than it count. An unanchored watch re-reads its own round and either loops on the same "fix line 40" forever or releases on the previous round's `LGTM`. The rule file has the mechanics.
 
-Three outcomes:
+The ticket sits in **Waiting For Sign Off** for the whole watch. Three outcomes:
 
 1. **The signal arrives.** Move the ticket to **In Testing** and invoke `test-next-ticket`.
-2. **Any other comment from `mightymoose` arrives**, newer than the anchor. Re-invoke `review-next-ticket` in **targeted mode**, naming exactly those comments. When it stops, **the 15-minute watch restarts, re-anchored to that round's new decision comment.** There is no limit on rounds; each one is a fresh context.
+2. **Any other comment from `mightymoose` arrives**, newer than the anchor. Re-invoke `review-next-ticket` in **targeted mode**, naming exactly those comments. That command moves the ticket to **In Progress** itself and back to **Waiting For Sign Off** when it posts its fresh decision comment — do not write either column here. When it stops, **the 15-minute watch restarts, re-anchored to that round's new decision comment.** There is no limit on rounds; each one is a fresh context.
 3. **The budget expires with no comment.** Stop and report. Do not wait longer, do not proceed to Testing, and do not assume silence is consent. An agent must not park on a human for hours.
+
+On expiry the ticket **stays in Waiting For Sign Off**. The watcher went away; the ask did not. That column is what lets a human find the work later without the run's report in front of them.
 
 The expiry report names: the ticket, the PR URL, Review's findings, and **the exact command to resume**. Without that last part every gate is a cliff, and the ticket strands mid-arc with no record of where it got to.
 
@@ -86,12 +92,14 @@ Read all of: the board column, whether the branch exists, whether a PR exists, w
 | --- | --- | --- |
 | 1 | The PR is **merged** | Nothing to run. Set the ticket **Done**, then reap. |
 | 2 | Gate signal present, CI green | Set **In Testing**, invoke `test-next-ticket`. |
-| 3 | A non-draft PR is open with a decision comment on it | Re-enter **the watch**. |
+| 3 | A non-draft PR is open with a decision comment on it | Set **Waiting For Sign Off** if it is not already there, then re-enter **the watch**. |
 | 4 | A PR is open, draft or with no decision comment | Re-invoke `review-next-ticket`. |
 | 5 | A branch exists, no PR | Re-invoke `review-next-ticket`, which opens the PR. |
 | 6 | None of the above | Start at **Stage 1**. |
 
 **Rows 2 and 3 need an anchor, and a resumed run has no memory of one.** Recover it: the anchor is the **newest decision comment on the pull request**. Every round posts one, so the newest marks the start of the round still awaiting a decision. If no decision comment can be identified, fall back to row 4 and let a fresh `review-next-ticket` post one — that is cheaper and safer than releasing on a signal that answered an earlier round. Report which anchor was used.
+
+Row 3 is the one place the coordinator may write **Waiting For Sign Off**. A run that died between posting the ask and moving the column leaves exactly that mismatch, and correcting it is repair, not ownership.
 
 **Git and PR state outrank the board column, always.** The column is written *after* a stage finishes, so it is the stalest signal of the set — a run that died mid-stage leaves it describing a stage that already completed. Use it only to break a tie the rows above cannot, and when it contradicts the PR, correct the column rather than the plan.
 
@@ -155,8 +163,10 @@ Never reinterpret a stage escalation as permission to improvise. Surface it and 
 - Never continue past a stage escalation.
 - Do not duplicate stage prompts inside the coordinator.
 - Preserve every stage's structured retrospective notes.
-- Never move a ticket from **In Review** to **In Testing** without the gate signal.
+- Never move a ticket into **In Testing** without the gate signal.
+- **In Testing** is the coordinator's only gate-related column write. `review-next-ticket` owns **Waiting For Sign Off** and the **In Progress** bounce-back.
 - Hold the gate for a bounded 15 minutes, restarting the watch after every targeted round.
+- On expiry, leave the ticket in **Waiting For Sign Off**.
 - Never repair code in the coordinator. Every repair round is a fresh `review-next-ticket`.
 - On resume, read every state signal and follow the fixed precedence. Git and PR state outrank the board column.
 - Reap worktrees at the **start** of the run and again as its **final act**, from the main checkout.
