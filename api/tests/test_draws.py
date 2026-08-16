@@ -127,9 +127,16 @@ NO_FIELD: tuple[OrderedEntrant, ...] = ()
 )
 def test_group_letter_and_label(position: int, letter: str) -> None:
     """Ported from ``web-client/src/components/tournaments/data/draw-structure.ts``'s
-    ``groupLetter`` (ADR 20260808, "draw-structure derivation runs on
-    both sides and shares its vectors") — the same bijective base-26 vectors, pinned
-    on both sides of the wire."""
+    ``groupLetter`` (ADR 20260808, "draw-structure derivation runs on both sides and
+    shares its vectors") — the same bijective base-26 vectors, pinned on both sides of
+    the wire.
+
+    ⚠️ **This table is asserted on the other side too**:
+    ``web-client/src/components/tournaments/data/draw-structure.test.ts`` pins the
+    identical seven ``(position, label)`` pairs, with a comment pointing back at this
+    file (ticket #1369). Change one table and you must change the other, or the two
+    derivations drift and only a director notices.
+    """
     assert group_letter(position) == letter
     assert group_label(position) == f"Group {letter}"
 
