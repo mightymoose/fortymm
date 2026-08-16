@@ -218,13 +218,13 @@ class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
     """A round-robin event's draw configuration: the draw type, and nothing else.
 
     ``extra="forbid"`` (inherited) is doing real work on this arm — it is what makes
-    ``qualifiers_per_group`` on a round-robin event a **422 at the boundary** rather than
-    a value silently dropped on the way to storage. Since the settings column became one
-    JSON object, this union is the **only** thing that says which settings belong to
-    which draw type: the table's old ``CASE`` constraint went with the column it
-    guarded. A director who names a qualifier count for a format that has no knockout
-    stage has misunderstood something, and the useful answer is to say so, not to run
-    the event they did not ask for.
+    ``qualifiers_per_group`` on a round-robin event a **422 at the boundary** rather
+    than a value silently dropped on the way to storage. Since the settings column
+    became one JSON object, this union is the **only** thing that says which settings
+    belong to which draw type: the table's old ``CASE`` constraint went with the
+    column it guarded. A director who names a qualifier count for a format that has no
+    knockout stage has misunderstood something, and the useful answer is to say so, not
+    to run the event they did not ask for.
     """
 
     draw_type: Literal[DrawType.round_robin] = DrawType.round_robin
@@ -348,8 +348,8 @@ _DRAW_SETTINGS_WRITE: TypeAdapter[DrawSettingsWriteArm] = TypeAdapter(DrawSettin
 def _draw_settings_write(
     draw_type: DrawType, qualifiers_per_group: int | None, rounds: int | None
 ) -> DrawSettingsWriteArm:
-    """Parse a ``(draw_type, qualifiers_per_group, rounds)`` triple into the union arm it
-    names, or raise :class:`ValueError` — a 422 — when it names none.
+    """Parse a ``(draw_type, qualifiers_per_group, rounds)`` triple into the union arm
+    it names, or raise :class:`ValueError` — a 422 — when it names none.
 
     The settings are **flat on the wire** and a union in the interior. Nesting them
     (``draw: {…}``) would express the union in the generated clients too, at the cost of
@@ -420,10 +420,10 @@ def draw_settings_from_storage(
 
 # ----- value-objects (typed JSONB) -----------------------------------------
 
-# ``ValueObjectId`` — the ``Annotated[str, Field(min_length=1)]`` a group's id used to be
-# — is gone, and its deletion is the point of the chore that minted them. It existed
-# only because "groups and tables have no tables of their own, so a group is addressed by
-# a client-supplied string and nothing in the database constrains it" (ADR 20260726,
+# ``ValueObjectId`` — the ``Annotated[str, Field(min_length=1)]`` a group's id used to
+# be — is gone, and its deletion is the point of the chore that minted them. It existed
+# only because "groups and tables have no tables of their own, so a group is addressed
+# by a client-supplied string and nothing in the database constrains it" (ADR 20260726,
 # which scoped its removal). Both halves of that are now false: a group is a row, its id
 # is a ``uuid`` the database mints, and the illegal state the floor was holding off —
 # the empty-string id, which answered "is this fixture grouped?" and the draw-order tie-
@@ -771,9 +771,9 @@ class TournamentTableUpsert(TournamentTableWrite):
     The two cases are exhaustive and mean different things:
 
     * ``id`` **present** — "this is the table you already have, with these words". The
-      row keeps its id (and therefore every reservation's ``table_ids`` entry and every fixture
-      ``table_id`` that names it) and takes the new ``label``/``court``, and its place
-      in the list is its new place in the catalogue's order.
+      row keeps its id (and therefore every reservation's ``table_ids`` entry and every
+      fixture ``table_id`` that names it) and takes the new ``label``/``court``, and its
+      place in the list is its new place in the catalogue's order.
     * ``id`` **omitted** (or ``null``) — "add a table". The server mints its id, exactly
       as on create.
     * a stored table **no entry names** — "remove it". Which is the whole reason this
@@ -809,13 +809,13 @@ class TournamentTable(TournamentTableWrite):
     plus the ``id`` the server minted for it.
 
     Deriving it from :class:`TournamentTableWrite` keeps the two shapes one shape plus
-    a field, exactly as :class:`Reservation` derives from :class:`ReservationWrite`: a column added to
-    the write side is readable without a second edit, and the two can never disagree
-    about what a table *is*.
+    a field, exactly as :class:`Reservation` derives from :class:`ReservationWrite`: a
+    column added to the write side is readable without a second edit, and the two can
+    never disagree about what a table *is*.
 
-    ``id`` is a UUID — the ``tournament_tables`` row's primary key. It is what a reservation's
-    ``table_ids`` and a fixture's ``table_id`` name, and (from the fixture side) what a
-    foreign key will hold.
+    ``id`` is a UUID — the ``tournament_tables`` row's primary key. It is what a
+    reservation's ``table_ids`` and a fixture's ``table_id`` name, and (from the fixture
+    side) what a foreign key will hold.
     """
 
     model_config = ConfigDict(extra="forbid", from_attributes=True)
@@ -828,58 +828,61 @@ ReservationPosition = Annotated[
     Field(
         ge=0,
         description=(
-            "Where this reservation sits in its event's reservation order: 0-based, contiguous, and "
-            "**assigned by the server** from the reservation's index in the `reservations` list it "
-            "arrived in. Read-only, and not merely by convention — it is absent from "
-            "the reservation shape the write verbs take, so sending one is a `422` for an "
-            "unknown field. To reorder an event's reservations, send them in the order you "
-            "want. Two reservations of one event never share a position."
+            "Where this reservation sits in its event's reservation order: 0-based, "
+            "contiguous, and **assigned by the server** from the reservation's index "
+            "in the `reservations` list it arrived in. Read-only, and not merely by "
+            "convention — it is absent from the reservation shape the write verbs "
+            "take, so sending one is a `422` for an unknown field. To reorder an "
+            "event's reservations, send them in the order you want. Two reservations "
+            "of one event never share a position."
         ),
     ),
 ]
-"""A reservation's place in its event's reservation order — 0-based, server-assigned, read-only.
+"""A reservation's place in its event's reservation order — 0-based, server-assigned,
+read-only.
 
-Reservation order is a **fact about the event**, and until this field existed it was carried by
-two things that have now both gone (ADR 20260801, "Reservations carry an explicit
-``position``"): the JSONB array's order, which ended when reservations became rows, and the
-lexicographic sort of the client-minted ``p-1-…``/``p-2-…`` ids, which ends when those
-ids become uuids. Under a random uuid primary key, sorting by id is *arbitrary* — reservations
-would render in a random order and the snake would seed against a random order,
-producing a draw that still cuts but seeds differently. Invisible to the type checker;
-findable only by QA. An explicit ordering column is the only thing that survives the id
-change, which is why it was written first, while the array order was still there to
-derive it from.
+Reservation order is a **fact about the event**, and until this field existed it was
+carried by two things that have now both gone (ADR 20260801, "Reservations carry an
+explicit ``position``"): the JSONB array's order, which ended when reservations became
+rows, and the lexicographic sort of the client-minted ``p-1-…``/``p-2-…`` ids, which
+ends when those ids become uuids. Under a random uuid primary key, sorting by id is
+*arbitrary* — reservations would render in a random order and the snake would seed
+against a random order, producing a draw that still cuts but seeds differently.
+Invisible to the type checker; findable only by QA. An explicit ordering column is the
+only thing that survives the id change, which is why it was written first, while the
+array order was still there to derive it from.
 
 It lives on :class:`Reservation`, the shape a client **reads**, and deliberately not on
 :class:`ReservationWrite`, the shape it **sends**. The server stamps it in
-``app.tournament_reservations`` — the one seam between the two — from the reservation's index in the
-list it was sent, so an event's positions are ``range(len(reservations))`` by construction.
-That is what makes "two reservations of one event share a position" unrepresentable through the
-API, and it is why "server-assigned" is a property of the schema here rather than a
-claim in prose: the field a client cannot send is a field it cannot decide."""
+``app.tournament_reservations`` — the one seam between the two — from the reservation's
+index in the list it was sent, so an event's positions are
+``range(len(reservations))`` by construction. That is what makes "two reservations of
+one event share a position" unrepresentable through the API, and it is why
+"server-assigned" is a property of the schema here rather than a claim in prose: the
+field a client cannot send is a field it cannot decide."""
 
 
 def _slot_is_storable(slot: Slot) -> Slot:
-    """Refuse a reservation window whose strings are not the ``YYYY-MM-DD`` / ``HH:MM`` this
-    shape has always claimed to be (422).
+    """Refuse a reservation window whose strings are not the ``YYYY-MM-DD`` / ``HH:MM``
+    this shape has always claimed to be (422).
 
-    A reservation's window is three real columns now — ``slot_date DATE``, ``slot_start TIME``,
-    ``slot_end TIME`` (ADR 20260801) — where it used to be three strings inside a JSONB
-    blob that accepted literally anything. ``"next Tuesday"`` was a storable reservation window
-    until this line existed; past it, it is a driver error at the INSERT, i.e. a 500 for
-    a payload the boundary waved through. A boundary that admits what the interior
-    cannot hold is not a boundary (:data:`EventMaxPlayers` is the same lesson in a
-    different key).
+    A reservation's window is three real columns now — ``slot_date DATE``,
+    ``slot_start TIME``, ``slot_end TIME`` (ADR 20260801) — where it used to be three
+    strings inside a JSONB blob that accepted literally anything. ``"next Tuesday"`` was
+    a storable reservation window until this line existed; past it, it is a driver error
+    at the INSERT, i.e. a 500 for a payload the boundary waved through. A boundary that
+    admits what the interior cannot hold is not a boundary (:data:`EventMaxPlayers` is
+    the same lesson in a different key).
 
     Seconds are refused rather than truncated. The stored value must compose back into
     the ``HH:MM`` the wire shape promises, and a window silently read back one minute
     from where the director set it is worse than a refusal that says what to send.
 
-    An ``AfterValidator`` on the *reservation's* slot only, not on :class:`Slot` itself: the
-    event's own ``slot`` is still an untyped JSONB value-object with no columns behind
-    it, and tightening it here would be a rule about a field this chore does not move.
-    It contributes nothing to the JSON schema, so the OpenAPI shape of a reservation's ``slot``
-    is the ``Slot`` it always was.
+    An ``AfterValidator`` on the *reservation's* slot only, not on :class:`Slot` itself:
+    the event's own ``slot`` is still an untyped JSONB value-object with no columns
+    behind it, and tightening it here would be a rule about a field this chore does not
+    move. It contributes nothing to the JSON schema, so the OpenAPI shape of a
+    reservation's ``slot`` is the ``Slot`` it always was.
     """
     try:
         date.fromisoformat(slot.date)
@@ -887,20 +890,20 @@ def _slot_is_storable(slot: Slot) -> Slot:
         end = time.fromisoformat(slot.end)
     except ValueError as exc:
         raise ValueError(
-            "A reservation's window is a date and two times: “date” must be YYYY-MM-DD and "
-            f"“start”/“end” must be HH:MM ({exc})."
+            "A reservation's window is a date and two times: “date” must be "
+            f"YYYY-MM-DD and “start”/“end” must be HH:MM ({exc})."
         ) from exc
     if any(t.second or t.microsecond for t in (start, end)):
         raise ValueError(
-            "A reservation's window is stated to the minute: “start” and “end” must be HH:MM, "
-            "with no seconds."
+            "A reservation's window is stated to the minute: “start” and “end” must "
+            "be HH:MM, with no seconds."
         )
     return slot
 
 
 ReservationSlot = Annotated[Slot, AfterValidator(_slot_is_storable)]
-"""A reservation's window — a :class:`Slot` that the reservation's own ``date``/``time`` columns can
-actually hold. See :func:`_slot_is_storable`."""
+"""A reservation's window — a :class:`Slot` that the reservation's own ``date``/``time``
+columns can actually hold. See :func:`_slot_is_storable`."""
 
 
 class ReservationWrite(BaseModel):
@@ -908,17 +911,17 @@ class ReservationWrite(BaseModel):
     **creates** it.
 
     It has **no** ``id``, and that absence is the whole content of the chore that minted
-    them: a reservation's id is a uuid the database mints (ADR 20260801's ``id uuid PRIMARY
-    KEY``), so it is not the client's to author and there is nothing here for it to
-    author. Sending one is a 422 for an unknown field — the same treatment
+    them: a reservation's id is a uuid the database mints (ADR 20260801's ``id uuid
+    PRIMARY KEY``), so it is not the client's to author and there is nothing here for it
+    to author. Sending one is a 422 for an unknown field — the same treatment
     :class:`TournamentTableWrite` gives a venue table's id, and for the same reason. A
     client that *cites* an id it was given is patching, not creating, and the shape for
     that is :class:`ReservationUpsert`.
 
-    Its ``name`` has a floor for the plainer reason: a reservation is *called* something — it
-    is what the director clicks, what the conflict warnings quote, and what a player
-    reads off a wall. ``""`` is not a name, and an event whose reservations list is three blank
-    rows is not a thing anyone could act on.
+    Its ``name`` has a floor for the plainer reason: a reservation is *called*
+    something — it is what the director clicks, what the conflict warnings quote, and
+    what a player reads off a wall. ``""`` is not a name, and an event whose
+    reservations list is three blank rows is not a thing anyone could act on.
 
     ``position`` is absent for the same reason the id is: it is the server's to assign
     (:data:`ReservationPosition`), so it is simply not a field of this model, and
@@ -939,19 +942,19 @@ class ReservationWrite(BaseModel):
 
 
 class ReservationUpsert(ReservationWrite):
-    """One reservation of an event a client **edits** (``PATCH …/events/{id}``): everything
-    :class:`ReservationWrite` carries, plus an **optional** ``id`` naming a reservation the event
-    already has.
+    """One reservation of an event a client **edits** (``PATCH …/events/{id}``):
+    everything :class:`ReservationWrite` carries, plus an **optional** ``id`` naming a
+    reservation the event already has.
 
     The exact twin of :class:`TournamentTableUpsert`, one resource over, and the two
     cases are exhaustive:
 
-    * ``id`` **present** — "this is the reservation you already have, with these words". The
-      row keeps its id, and therefore every fixture drawn into it and every table it
-      reserves, and takes the new ``name``/``slot``/``table_ids``; its place in the list
-      is its new place in the event's reservation order.
-    * ``id`` **omitted** (or ``null``) — "add a reservation". The server mints its id, exactly
-      as on create.
+    * ``id`` **present** — "this is the reservation you already have, with these
+      words". The row keeps its id, and therefore every fixture drawn into it and every
+      table it reserves, and takes the new ``name``/``slot``/``table_ids``; its place in
+      the list is its new place in the event's reservation order.
+    * ``id`` **omitted** (or ``null``) — "add a reservation". The server mints its id,
+      exactly as on create.
     * a stored reservation **no entry names** — "remove it".
 
     ``X | None = None`` and never a non-null default: an optional field on a *write*
@@ -959,12 +962,13 @@ class ReservationUpsert(ReservationWrite):
     client, which would make "omit the id to add a reservation" unsayable there.
 
     An id that names no reservation of *this* event is a 422 on the field
-    (:class:`~app.tournament_errors.ReservationNotInEventError`), not a quietly minted new
-    reservation. Until this chore that arm was an *addition*, because the id was the client's
-    and an id the server had never seen still named the reservation the client meant. It is the
-    server's now, so an id it did not mint names nothing — and minting a fresh one would
-    hand the client back a different id than it asked for while *removing* the reservation it
-    meant to keep, which is the pair of failures a diff must never confuse."""
+    (:class:`~app.tournament_errors.ReservationNotInEventError`), not a quietly minted
+    new reservation. Until this chore that arm was an *addition*, because the id was the
+    client's and an id the server had never seen still named the reservation the client
+    meant. It is the server's now, so an id it did not mint names nothing — and minting
+    a fresh one would hand the client back a different id than it asked for while
+    *removing* the reservation it meant to keep, which is the pair of failures a diff
+    must never confuse."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -972,24 +976,26 @@ class ReservationUpsert(ReservationWrite):
 
 
 class Reservation(ReservationWrite):
-    """A reservation as it is **read back**: everything a client wrote, plus the ``id`` the
-    server minted for it and the ``position`` it stamped on it.
+    """A reservation as it is **read back**: everything a client wrote, plus the ``id``
+    the server minted for it and the ``position`` it stamped on it.
 
-    It is also the model every interior read of an event's reservations arrives through —
-    ``_ordered_reservations``, ``draw_config``, ``event_reservations``, the schedule snapshots — which
-    is why moving reservations from a JSONB array into ``tournament_event_reservations`` rows changed
-    nothing above ``app.tournament_reservations.reservation_read``: the projection composes this same
+    It is also the model every interior read of an event's reservations arrives
+    through — ``_ordered_reservations``, ``draw_config``, ``event_reservations``, the
+    schedule snapshots — which is why moving reservations from a JSONB array into
+    ``tournament_event_reservations`` rows changed nothing above
+    ``app.tournament_reservations.reservation_read``: the projection composes this same
     model out of typed columns where it used to validate it out of untyped dicts.
-    Deriving it from :class:`ReservationWrite` is what keeps the two shapes one shape plus two
-    fields, exactly as :class:`TournamentTable` derives from
+    Deriving it from :class:`ReservationWrite` is what keeps the two shapes one shape
+    plus two fields, exactly as :class:`TournamentTable` derives from
     :class:`TournamentTableWrite`: a column added to the write side is readable without
     a second edit, and the two can never disagree about what a reservation *is*.
 
     ``position`` keeps its ``0`` default even though the column is NOT NULL and every
-    row carries a real one: the default is what lets a **literal** ``Reservation`` be built in
-    a test or a REPL without spelling an order out, and a read boundary that
+    row carries a real one: the default is what lets a **literal** ``Reservation`` be
+    built in a test or a REPL without spelling an order out, and a read boundary that
     hard-required it would gain nothing — the projection always supplies it. ``id`` has
-    no default, because there is no id a literal reservation could sensibly default to."""
+    no default, because there is no id a literal reservation could sensibly default
+    to."""
 
     id: uuid.UUID
     position: ReservationPosition = 0
@@ -997,20 +1003,23 @@ class Reservation(ReservationWrite):
 
 def named_list(names: list[str]) -> str:
     """The things a refusal is about, as a human would say them: ``“Reservation B”``, or
-    ``“Reservation B” and “Reservation C”``, or ``“Reservation B”, “Reservation C” and “Reservation D”``.
+    ``“Reservation B” and “Reservation C”``, or ``“Reservation B”, “Reservation C” and
+    “Reservation D”``.
 
     One formatter for every refusal that names a *set* of things — this module's 422s
-    (a duplicated reservation id) and ``app.tournaments``' 409s (the reservation-set freeze's reservations,
-    the go-live precondition's events) alike — so a director cannot tell, from the
-    punctuation, which layer refused them.
+    (a duplicated reservation id) and ``app.tournaments``' 409s (the reservation-set
+    freeze's reservations, the go-live precondition's events) alike — so a director
+    cannot tell, from the punctuation, which layer refused them.
 
     They are named by **name**, never by id. The ids are what the guards actually
-    compared, but "reservation p-b7f2 cannot be removed" (or "event 3f9c-… has no draw") tells
-    a director looking at a page of named reservations and named events nothing to act on.
+    compared, but "reservation p-b7f2 cannot be removed" (or "event 3f9c-… has no
+    draw") tells a director looking at a page of named reservations and named events
+    nothing to act on.
 
     It lives *here*, at the boundary, because the boundary is the lower layer: a
-    validator on ``EventReservations`` runs before any route does, and ``app.tournaments``
-    already imports this module (the reverse import would be a cycle).
+    validator on ``EventReservations`` runs before any route does, and
+    ``app.tournaments`` already imports this module (the reverse import would be a
+    cycle).
     """
     quoted = [f"“{name}”" for name in names]
     if len(quoted) == 1:
@@ -1018,63 +1027,71 @@ def named_list(names: list[str]) -> str:
     return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
 
 
-def _reservation_ids_are_unique(reservations: list[ReservationUpsert]) -> list[ReservationUpsert]:
-    """Refuse an edited reservation list when two of its entries cite the same reservation ``id``
-    (422).
+def _reservation_ids_are_unique(
+    reservations: list[ReservationUpsert],
+) -> list[ReservationUpsert]:
+    """Refuse an edited reservation list when two of its entries cite the same
+    reservation ``id`` (422).
 
-    A reservation id is an **identity**, and everything downstream is built on the assumption
-    that it identifies one reservation. Nothing enforced it: reservations were JSONB with
-    client-supplied string ids, there was no reservations table and so no unique index, and
-    ``[A, A]`` was stored verbatim (measured: **201**). The bill arrived at
-    the cut, which deals the field across the event's reservation ids and writes a fixture per
-    pairing — two reservations with one id deal onto the same ``(event_id, reservation_id, round,
-    position)``, the fixture table's unique constraint fires, and the director gets a
-    **500** from the driver
-    (``uq_tournament_fixtures_event_id_reservation_id_round_position``, reproduced before this
-    validator existed). A boundary that admits what the interior cannot hold is not a
-    boundary.
+    A reservation id is an **identity**, and everything downstream is built on the
+    assumption that it identifies one reservation. Nothing enforced it: reservations
+    were JSONB with client-supplied string ids, there was no reservations table and so
+    no unique index, and ``[A, A]`` was stored verbatim (measured: **201**). The bill
+    arrived at the cut, which deals the field across the event's reservation ids and
+    writes a fixture per pairing — two reservations with one id deal onto the same
+    ``(event_id, reservation_id, round, position)``, the fixture table's unique
+    constraint fires, and the director gets a **500** from the driver
+    (``uq_tournament_fixtures_event_id_reservation_id_round_position``, reproduced
+    before this validator existed). A boundary that admits what the interior cannot
+    hold is not a boundary.
 
-    Reservations are rows with a uuid primary key now (ADR 20260801), so a duplicate is also a
-    thing the database would refuse — but this validator is still the enforcement worth
-    having, and not only because a 422 naming the ids beats an ``IntegrityError``: the
-    write is an id-keyed diff (``app.tournament_reservations``), and ``[A, A]`` would resolve
-    *both* entries onto the one stored row, so the payload would be accepted as a
-    single-reservation event rather than refused as the two-reservation one it claims to be.
+    Reservations are rows with a uuid primary key now (ADR 20260801), so a duplicate
+    is also a thing the database would refuse — but this validator is still the
+    enforcement worth having, and not only because a 422 naming the ids beats an
+    ``IntegrityError``: the write is an id-keyed diff (``app.tournament_reservations``),
+    and ``[A, A]`` would resolve *both* entries onto the one stored row, so the payload
+    would be accepted as a single-reservation event rather than refused as the
+    two-reservation one it claims to be.
 
     **Entries with no ``id`` are ignored**: those are additions, and any number of new
-    reservations may be added at once — exactly as :func:`_table_ids_are_unique` treats them.
+    reservations may be added at once — exactly as :func:`_table_ids_are_unique` treats
+    them.
 
     It is a rule about the **list**, so it is a validator on the list type
     (:data:`EditedEventReservations`) rather than on an entry — an entry cannot see its
     siblings. It has no create-path twin any more, and does not need one: the create
-    shape (:class:`ReservationWrite`) has no ``id`` at all, so "the patch path is the hole" —
-    the bug that made this a shared rule when both verbs took ids — is not a hole a
-    ``create`` can have. This *is* the patch path, and it was always the worse of the
-    two: the reservation-set freeze that protects a cut draw compares **sets**, so ``[A, A,
-    B]`` against a cut event holding ``{A, B}`` is the same set, the freeze waved it
-    through (measured: **200**) and the next cut died.
+    shape (:class:`ReservationWrite`) has no ``id`` at all, so "the patch path is the
+    hole" — the bug that made this a shared rule when both verbs took ids — is not a
+    hole a ``create`` can have. This *is* the patch path, and it was always the worse
+    of the two: the reservation-set freeze that protects a cut draw compares **sets**,
+    so ``[A, A, B]`` against a cut event holding ``{A, B}`` is the same set, the freeze
+    waved it through (measured: **200**) and the next cut died.
 
-    The duplicated **ids** are named, not the reservations' names: an id is what is duplicated,
-    two reservations sharing one id may well have different names, and the id is what the
-    director must edit. The refusal is a 422 rather than a 409 because this is a
-    malformed payload in any state the event could possibly be in — an event with no
-    draw at all still cannot cite one reservation twice.
+    The duplicated **ids** are named, not the reservations' names: an id is what is
+    duplicated, two reservations sharing one id may well have different names, and the
+    id is what the director must edit. The refusal is a 422 rather than a 409 because
+    this is a malformed payload in any state the event could possibly be in — an event
+    with no draw at all still cannot cite one reservation twice.
     """
-    counted = Counter(reservation.id for reservation in reservations if reservation.id is not None)
-    duplicated = [str(reservation_id) for reservation_id, count in counted.items() if count > 1]
+    counted = Counter(
+        reservation.id for reservation in reservations if reservation.id is not None
+    )
+    duplicated = [
+        str(reservation_id) for reservation_id, count in counted.items() if count > 1
+    ]
     if duplicated:
         raise ValueError(
             f"A reservation id identifies one reservation: {named_list(duplicated)} "
             f"{'is' if len(duplicated) == 1 else 'are'} cited by more than one entry "
-            "of this event's reservations. Cite each reservation you are keeping exactly once, and "
-            "omit the id of a reservation you are adding."
+            "of this event's reservations. Cite each reservation you are keeping "
+            "exactly once, and omit the id of a reservation you are adding."
         )
     return reservations
 
 
 EventReservations = list[ReservationWrite]
-"""An event's reservations **as a client creates them** (``POST …/events``): any number of
-them, none carrying an ``id`` or a ``position`` (:class:`ReservationWrite`).
+"""An event's reservations **as a client creates them** (``POST …/events``): any number
+of them, none carrying an ``id`` or a ``position`` (:class:`ReservationWrite`).
 
 A bare list with no validator, where the patch shape has one: an event being born has no
 reservations to cite, so there are no ids in this payload for two entries to share. The
@@ -1085,28 +1102,32 @@ The list's **order** is the payload's one statement about reservation order:
 ``app.tournament_reservations`` turns it into the stored positions."""
 
 
-EditedEventReservations = Annotated[list[ReservationUpsert], AfterValidator(_reservation_ids_are_unique)]
-"""An event's reservations **as a PATCH sends them**: the reservation list in full and in order, each
-entry either citing the reservation it keeps or omitting an ``id`` to add one
-(:class:`ReservationUpsert`), and no two entries citing the same reservation.
+EditedEventReservations = Annotated[
+    list[ReservationUpsert], AfterValidator(_reservation_ids_are_unique)
+]
+"""An event's reservations **as a PATCH sends them**: the reservation list in full and
+in order, each entry either citing the reservation it keeps or omitting an ``id`` to
+add one (:class:`ReservationUpsert`), and no two entries citing the same reservation.
 
 It is the **whole** list every time, not a list of changes: what a client sends is the
 state it wants, and the verb computes the remove/keep/add from it
-(:func:`~app.tournament_reservations.apply_event_reservations`). That is what makes "a reservation this
-payload does not mention is removed" a statement about the payload rather than about the
-order things happened to be in — and it is what the reservation-set freeze judges, before
-anything is written, when the event's draw is already cut.
+(:func:`~app.tournament_reservations.apply_event_reservations`). That is what makes "a
+reservation this payload does not mention is removed" a statement about the payload
+rather than about the
+order things happened to be in — and it is what the reservation-set freeze judges,
+before anything is written, when the event's draw is already cut.
 
-Re-ordering the entries re-orders the event's reservations, on this verb alone: the create verb
-has only one order to state, and this one can restate it. Only while the event has no
-draw, though — once a draw is cut, the order is frozen along with the id set
-(``app.tournament_events._enforce_group_set_frozen``), because it is what the draw was
-seeded against and what a reservations-then-knockout draw's qualifier seam labels a finished
-reservation's seats by.
+Re-ordering the entries re-orders the event's reservations, on this verb alone: the
+create verb has only one order to state, and this one can restate it. Only while the
+event has no draw, though — once a draw is cut, the order is frozen along with the id
+set (``app.tournament_events._enforce_group_set_frozen``), because it is what the draw
+was seeded against and what a reservations-then-knockout draw's qualifier seam labels a
+finished reservation's seats by.
 
 An ``AfterValidator``, deliberately: it runs on the parsed entries (so it reads
-``reservation.id``, not ``reservation["id"]``) and it contributes **nothing** to the JSON schema, so
-the OpenAPI shape of ``reservations`` is the array it always was — the same arrangement
+``reservation.id``, not ``reservation["id"]``) and it contributes **nothing** to the
+JSON schema, so the OpenAPI shape of ``reservations`` is the array it always was — the
+same arrangement
 :data:`EditedTableCatalogue` uses for the same reason."""
 
 
@@ -1128,9 +1149,9 @@ def _table_ids_are_unique(
     siblings. Entries with no ``id`` are ignored: those are additions, and any number of
     new tables may be added at once.
 
-    The duplicated **ids** are named rather than the labels, exactly as the reservation rule
-    names ids: the id is what is duplicated, two entries citing one id may well carry
-    different labels, and the id is what the client has to fix. A 422, not a 409,
+    The duplicated **ids** are named rather than the labels, exactly as the reservation
+    rule names ids: the id is what is duplicated, two entries citing one id may well
+    carry different labels, and the id is what the client has to fix. A 422, not a 409,
     because it is a malformed payload whatever state the tournament is in.
     """
     counted = Counter(table.id for table in tables if table.id is not None)
@@ -1164,11 +1185,12 @@ so the OpenAPI shape of ``table_catalogue`` stays the array it always was — th
 arrangement :data:`EventReservations` uses for the same reason."""
 
 
-# The composition of the reservations an event stores lives in ``app.tournament_reservations`` now,
-# not here. It used to be ``stored_reservations``, a list of JSONB dicts, because the column
-# was JSONB; a reservation is rows (ADR 20260801), so what a write verb composes is
-# ``TournamentEventStageGroup`` rows and the ``TournamentEventReservation`` rows they
-# map to — models, which a schema module must not import.
+# The composition of the reservations an event stores lives in
+# ``app.tournament_reservations`` now, not here. It used to be ``stored_reservations``,
+# a list of JSONB dicts, because the column was JSONB; a reservation is rows (ADR
+# 20260801), so what a write verb composes is ``TournamentEventStageGroup`` rows and the
+# ``TournamentEventReservation`` rows they map to — models, which a schema module must
+# not import.
 
 
 # ----- read models ----------------------------------------------------------
@@ -1344,12 +1366,12 @@ class TournamentFixtureRead(BaseModel):
     same NOT NULL guarantee the column carries in the database. A client no longer
     infers a fixture's stage from ``group_id`` plus the event's overall ``draw_type``:
     that inference is exactly what once rendered a swiss draw's rounds as a knockout
-    bracket, because both are un-grouped and indistinguishable by ``group_id`` alone. Join
-    this id against the matching entry in ``stages`` to read that stage's own
-    ``draw_type`` — which is always one of the single-stage kinds
-    (``round-robin`` / ``single-elim`` / ``swiss``), never ``rr-then-ko`` (a template
-    name, not a runnable stage's own type) — and that answers "is this un-grouped block a
-    bracket or a set of swiss rounds?" without guessing from the event's shape.
+    bracket, because both are un-grouped and indistinguishable by ``group_id`` alone.
+    Join this id against the matching entry in ``stages`` to read that stage's own
+    ``draw_type`` — which is always one of the single-stage kinds (``round-robin`` /
+    ``single-elim`` / ``swiss``), never ``rr-then-ko`` (a template name, not a runnable
+    stage's own type) — and that answers "is this un-grouped block a bracket or a set of
+    swiss rounds?" without guessing from the event's shape.
 
     **Every ``null`` on this model is a fact, not a missing field**, and a client that
     dropped them would lose the draw's whole point:
@@ -1372,8 +1394,9 @@ class TournamentFixtureRead(BaseModel):
       ``stage_id`` against the event's ``stages`` array for that (ADR 20260815). When
       set, it names a group of **this fixture's own stage**, and it is guaranteed to:
       the column is half of a composite foreign key onto
-      ``tournament_event_stage_groups (stage_id, id)``, so it is neither a dangling ref nor
-      another stage's group (ADR 20260801, re-parented onto the stage by ADR 20260815).
+      ``tournament_event_stage_groups (stage_id, id)``, so it is neither a dangling ref
+      nor another stage's group (ADR 20260801, re-parented onto the stage by ADR
+      20260815).
     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
       tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
@@ -1542,10 +1565,11 @@ class StandingRowRead(BaseModel):
     username behind ``entry_id`` is on the event's ``entrants`` list already, keyed by
     that same id, so a client joins the two rather than reading a copy that could drift.
 
-    ``rank`` is 1-based and distinct per row — the group's order is total (wins → two-way
-    head-to-head → game difference → games won → id), so position 1 is the leader.
-    ``game_difference`` (``games_won - games_lost``) rides along because it is the third
-    tiebreaker and a client shows it in the table; it is a pure function of the two game
+    ``rank`` is 1-based and distinct per row — the group's order is total (wins →
+    two-way head-to-head → game difference → games won → id), so position 1 is the
+    leader. ``game_difference`` (``games_won - games_lost``) rides along because it is
+    the third tiebreaker and a client shows it in the table; it is a pure function of
+    the two game
     counts beside it, computed once on the server so the two cannot disagree."""
 
     entry_id: uuid.UUID
@@ -2269,12 +2293,13 @@ class TournamentEventCreate(BaseModel):
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate] = Field(default_factory=list)
-    # ``EventReservations`` — the CREATE shape (``ReservationWrite``), which carries neither an ``id``
-    # nor a ``position``: both are the server's to assign, so an editor that echoes one
-    # back gets a 422 naming the field rather than a value that quietly decided nothing.
-    # The list's ORDER is what the server reads the group order off (``stored_groups``).
-    # The patch schema takes ``EditedEventReservations`` instead, whose entries may *cite* an
-    # id — the one thing a create has nothing to do.
+    # ``EventReservations`` — the CREATE shape (``ReservationWrite``), which carries
+    # neither an ``id`` nor a ``position``: both are the server's to assign, so an
+    # editor that echoes one back gets a 422 naming the field rather than a value that
+    # quietly decided nothing. The list's ORDER is what the server reads the group order
+    # off (``stored_groups``). The patch schema takes ``EditedEventReservations``
+    # instead, whose entries may *cite* an id — the one thing a create has nothing to
+    # do.
     reservations: EventReservations = Field(default_factory=list)
 
     #: The arm :meth:`_parse_draw_settings` parsed, kept rather than re-derived. Set by
@@ -2360,15 +2385,15 @@ class TournamentEventUpdate(BaseModel):
     slot: Slot | None = None
     match_settings: MatchSettings | None = None
     predicates: list[Predicate] | None = None
-    # ``EditedEventReservations``, not the create shape: this is the verb that can *cite* a
-    # reservation, and citing is what makes the write a diff rather than a replace — a
-    # stored reservation an entry names keeps its row (and its mapped group, and
-    # therefore every fixture drawn into that group). Hence the uniqueness rule lives
-    # here (``_reservation_ids_are_unique``): it is the patch path the group-set freeze
-    # cannot cover, since the freeze compares SETS and ``[A, A, B]`` is the same set as
-    # ``{A, B}``. A reservation's ``position`` is not on this shape either, so an editor
-    # that echoes one back gets a 422 naming the field; the order it sends the list in is
-    # what re-orders the reservations (and, in lockstep, the groups).
+    # ``EditedEventReservations``, not the create shape: this is the verb that can
+    # *cite* a reservation, and citing is what makes the write a diff rather than a
+    # replace — a stored reservation an entry names keeps its row (and its mapped group,
+    # and therefore every fixture drawn into that group). Hence the uniqueness rule
+    # lives here (``_reservation_ids_are_unique``): it is the patch path the group-set
+    # freeze cannot cover, since the freeze compares SETS and ``[A, A, B]`` is the same
+    # set as ``{A, B}``. A reservation's ``position`` is not on this shape either, so an
+    # editor that echoes one back gets a 422 naming the field; the order it sends the
+    # list in is what re-orders the reservations (and, in lockstep, the groups).
     reservations: EditedEventReservations | None = None
 
     @field_validator(
@@ -2486,10 +2511,11 @@ class TournamentFixturePlacementUpdate(BaseModel):
 
     **Soft, deliberately — with one exception.** ``scheduled_start`` is a *prediction*,
     not a commitment, and three of the placement's four constraints — the table belongs
-    to the fixture's group's reservation, the time falls inside that reservation's window, nothing is
-    double-booked — are **flags derived on read, not invariants** (ADR-0790). So this
-    write does **not** reject an out-of-window time or an off-group table. They save.
-    Conflict detection is the scheduler's business, not this boundary's.
+    to the fixture's group's reservation, the time falls inside that reservation's
+    window, nothing is double-booked — are **flags derived on read, not invariants**
+    (ADR-0790). So this write does **not** reject an out-of-window time or an off-group
+    table. They save. Conflict detection is the scheduler's business, not this
+    boundary's.
 
     The exception is the fourth claim: **the table has to exist**. ``table_id`` names a
     ``TournamentTable.id`` in the tournament's ``table_catalogue``, and since the
@@ -2503,10 +2529,10 @@ class TournamentFixturePlacementUpdate(BaseModel):
     is a dangling pointer nothing downstream can render.
 
     The field carries the id's canonical **text** rather than a typed UUID, which is
-    also what a reservation's ``table_ids`` carry — one representation for a table id, moved in
-    one piece rather than a field at a time. A value that is not a well-formed id is
-    therefore refused by the same 422 as an unknown one: there is one question here
-    ("does this name a table of this tournament?") and it gets one answer.
+    also what a reservation's ``table_ids`` carry — one representation for a table id,
+    moved in one piece rather than a field at a time. A value that is not a well-formed
+    id is therefore refused by the same 422 as an unknown one: there is one question
+    here ("does this name a table of this tournament?") and it gets one answer.
 
     The one thing the *route* refuses is moving a fixture whose linked match is
     ``completed`` or ``voided``: its placement is history (409). A fixture with no match

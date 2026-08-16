@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attention import list_attention_kind
+from app.draws import group_label
 from app.match_queries import current_game_number, match_eager_options
 from app.models import (
     Match,
@@ -71,7 +72,6 @@ from app.schemas.tournament import (
     TournamentFixtureRead,
     TournamentTable,
 )
-from app.draws import group_label
 from app.tournament_draws import event_groups
 from app.tournament_queries import (
     active_entrants_by_event,

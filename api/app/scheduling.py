@@ -446,10 +446,10 @@ class ReservationOverCapacity:
 
 @dataclass(frozen=True, slots=True)
 class PlayerOverSubscribed:
-    """One human with more *unpinned* match-time in a reservation than that reservation's
-    window can hold, however the tables are arranged: a pigeonhole over a single
-    person. A player plays one match at a time and their fixtures in a reservation must
-    all run inside that reservation's window, so
+    """One human with more *unpinned* match-time in a reservation than that
+    reservation's window can hold, however the tables are arranged: a pigeonhole over a
+    single person. A player plays one match at a time and their fixtures in a
+    reservation must all run inside that reservation's window, so
 
         ``Σ durations + (match_count − 1) × REST_MIN > playable span``
 
@@ -715,8 +715,8 @@ def _validated(
         missing = [t for t in reservation.table_ids if t not in catalogue]
         if missing:
             raise IncoherentSnapshot(
-                f"Reservation {reservation.id!r} references tables {missing!r} that are not "
-                "in the venue catalogue."
+                f"Reservation {reservation.id!r} references tables {missing!r} that "
+                "are not in the venue catalogue."
             )
         reservations[reservation.id] = reservation
 
@@ -740,7 +740,8 @@ def _validated(
             )
         if fixture.reservation_id not in reservations:
             raise IncoherentSnapshot(
-                f"Fixture {fixture.id!r} references unknown reservation {fixture.reservation_id!r}."
+                f"Fixture {fixture.id!r} references unknown reservation "
+                f"{fixture.reservation_id!r}."
             )
         if fixture.player_a_id == fixture.player_b_id:
             raise IncoherentSnapshot(
@@ -972,29 +973,33 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     #     fixed by "move the date" (ADR "a past day is named, not disguised",
     #     #1101). The most specific pre-live cause, so it dominates the tight-
     #     window / over-capacity arms for the same reservation.
-    #   * ReservationHasNoTables — a reservation with unpinned fixtures but no tables to use,
+    #   * ReservationHasNoTables — a reservation with unpinned fixtures but no tables
+    #     to use,
     #   * WindowTooShortForMatch — a single fixture whose window can't hold it,
-    #   * ReservationOverCapacity — a reservation's unpinned demand exceeds window × tables,
+    #   * ReservationOverCapacity — a reservation's unpinned demand exceeds window ×
+    #     tables,
     # and one about a single human:
     #   * PlayerOverSubscribed — one player's own serial demand (their matches
     #     plus the rest between them) exceeds the reservation's window span.
     # We dedupe to the *most specific* cause per reservation: a past-window, no-tables,
     # or window-too-short reservation is already unplaceable, so we don't also pile on
-    # over-capacity for it. Bucket bounds for the reservations that *do* fit are recorded
-    # on the way, so the window is walked once; they are only consumed when no
-    # reason fires (the clean case populates every unpinned fixture). The window
-    # bounds use the *effective* end — softened while live — so a live day never
-    # wedges here; ``planned_ends`` keeps the *planned* end so :func:`solve` can
-    # tell whether the plan actually overran it.
+    # over-capacity for it. Bucket bounds for the reservations that *do* fit are
+    # recorded on the way, so the window is walked once; they are only consumed when no
+    # reason fires (the clean case populates every unpinned fixture). The window bounds
+    # use the *effective* end — softened while live — so a live day never wedges here;
+    # ``planned_ends`` keeps the *planned* end so :func:`solve` can tell whether the
+    # plan actually overran it.
     #
     # Every arm scopes to *unpinned* demand only. Pins and in-progress fixtures
-    # are deliberately not constrained to their reservation's tables or window (ADR-0790:
-    # an off-group or out-of-window pin is a supported director action), so
+    # are deliberately not constrained to their reservation's tables or window
+    # (ADR-0790: an off-group or out-of-window pin is a supported director action), so
     # counting them against a reservation's window×tables would invent false
-    # infeasibility. Only unpinned fixtures are constrained to their reservation's tables
-    # inside its window by construction, so only they can prove a certain
+    # infeasibility. Only unpinned fixtures are constrained to their reservation's
+    # tables inside its window by construction, so only they can prove a certain
     # structural cause that can never false-fire.
-    unpinned_by_reservation: defaultdict[ReservationId, list[ScheduleFixture]] = defaultdict(list)
+    unpinned_by_reservation: defaultdict[ReservationId, list[ScheduleFixture]] = (
+        defaultdict(list)
+    )
     for fixture in unpinned:
         unpinned_by_reservation[fixture.reservation_id].append(fixture)
 
@@ -1010,14 +1015,17 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     reservations_past_window: set[ReservationId] = set()
     if not is_live:
         for reservation in snapshot.reservations:
-            if reservation.id in unpinned_by_reservation and reservation.window.end_min <= now:
+            if (
+                reservation.id in unpinned_by_reservation
+                and reservation.window.end_min <= now
+            ):
                 reasons.append(PastWindow(reservation_id=reservation.id))
                 reservations_past_window.add(reservation.id)
 
     # Per-fixture: does this unpinned fixture's window hold even one match
     # contiguously? (Pinned fixtures outrank windows, so they never apply here.)
-    # A no-tables reservation is covered by ReservationHasNoTables below, and a past-window reservation
-    # is already named above, so skip both here.
+    # A no-tables reservation is covered by ReservationHasNoTables below, and a
+    # past-window reservation is already named above, so skip both here.
     for fixture in unpinned:
         reservation = reservations[fixture.reservation_id]
         if not reservation.table_ids or reservation.id in reservations_past_window:
@@ -1033,7 +1041,9 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
                     reservation_id=reservation.id,
                     fixture_id=fixture.id,
                     needed_min=needed,
-                    window_span_min=reservation.window.end_min - reservation.window.start_min,
+                    window_span_min=(
+                        reservation.window.end_min - reservation.window.start_min
+                    ),
                 )
             )
             reservations_short_window.add(reservation.id)
@@ -1164,7 +1174,9 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
                         # reason. The sentence stays true either way:
                         # planned_span <= effective_span < required, so
                         # `required > planned_span` too.
-                        window_span_min=reservation.window.end_min - reservation.window.start_min,
+                        window_span_min=(
+                            reservation.window.end_min - reservation.window.start_min
+                        ),
                     )
                 )
 
@@ -1400,8 +1412,8 @@ def solve(
 ) -> SolveResult:
     """Place every active fixture: a called match on its fixed table at the
     promised start or a slid-later one (never earlier), everything else solved
-    onto its reservation's tables inside its reservation's window, on the :data:`BUCKET_MIN`
-    grid, no earlier than ``now_min``.
+    onto its reservation's tables inside its reservation's window, on the
+    :data:`BUCKET_MIN` grid, no earlier than ``now_min``.
 
     Never raises for infeasibility — see :class:`Verdict`. Raises
     :class:`IncoherentSnapshot` for inputs that reference things they do not

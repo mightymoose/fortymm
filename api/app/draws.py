@@ -49,13 +49,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import NewType, Protocol
 
-from app.models.tournament import DrawType, EventFormat
 from app.group_finishing_order import (
     EntryTally,
     MatchOutcome,
     finishing_order,
     swiss_finishing_order,
 )
+from app.models.tournament import DrawType, EventFormat
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
     RoundRobinDrawSettingsWrite,
@@ -70,11 +70,10 @@ EntryId = NewType("EntryId", uuid.UUID)
 FixtureId = NewType("FixtureId", uuid.UUID)
 MatchId = NewType("MatchId", uuid.UUID)
 #: A group is a row (``tournament_event_stage_groups``, ADR 20260801) with a
-#: server-minted uuid
-#: primary key, and a fixture's ``group_id`` is a real composite foreign key onto it — so
-#: this is a ``uuid.UUID``, exactly like the ids above. It was a ``str``, a dangling ref
-#: into ``TournamentEvent.groups`` JSONB, for as long as there was no groups table to
-#: point at and no server to mint one.
+#: server-minted uuid primary key, and a fixture's ``group_id`` is a real composite
+#: foreign key onto it — so this is a ``uuid.UUID``, exactly like the ids above. It was
+#: a ``str``, a dangling ref into ``TournamentEvent.groups`` JSONB, for as long as
+#: there was no groups table to point at and no server to mint one.
 GroupId = NewType("GroupId", uuid.UUID)
 
 
@@ -187,15 +186,16 @@ class MissingFixtureGames(RuntimeError):
     response to it is a loud 500 in the logs. Nothing a director can type causes it and
     there is no input they could correct.
 
-    It exists because the alternative failure is silent and wrong. A groups-then-knockout
-    draw picks its qualifiers with
+    It exists because the alternative failure is silent and wrong. A
+    groups-then-knockout draw picks its qualifiers with
     :func:`~app.group_finishing_order.finishing_order`, whose chain runs wins →
     head-to-head → game difference → games won; handed
     :attr:`FixtureState.games` of ``None`` it would still *produce an order* — one
     computed on wins alone, which silently disagrees with the standings table on screen
     at exactly the moment a director is looking hardest (a multi-way tie for the last
     qualifying spot). Every test in the suite would stay green, because nothing else
-    reads the field. So the strategy refuses to order a group it cannot see the games of.
+    reads the field. So the strategy refuses to order a group it cannot see the games
+    of.
 
     The condition is scoped to "**no** fixture in this input carries games", which is
     precisely "the caller did not load them" and nothing else. A *single* fixture
@@ -341,8 +341,8 @@ class DrawConfig:
     belief that it is authoritative, on an event whose real draw type is the one that
     picked the strategy. Its absence is what makes that unsayable.
 
-    ``group_ids`` are the ids of the event's configured groups, **in the event's own group
-    order** — ascending ``Group.position``, which is what the caller
+    ``group_ids`` are the ids of the event's configured groups, **in the event's own
+    group order** — ascending ``Group.position``, which is what the caller
     (:func:`app.tournament_draws.draw_config`) sorts them by, and which this tuple then
     carries *as* its sequence. That order is what the snake seeds against, so nothing
     downstream may re-sort it: a ``sorted(config.group_ids)`` anywhere below here would
@@ -366,8 +366,8 @@ class PlannedFixture:
     It is *never* ``None`` to mean "bye": a bye is the absence of this object.
     """
 
-    #: ``None`` = the draw is un-grouped — single-elim today, and the knockout stage of a
-    #: groups-then-knockout draw type once #787 adds one.
+    #: ``None`` = the draw is un-grouped — single-elim today, and the knockout stage of
+    #: a groups-then-knockout draw type once #787 adds one.
     group_id: GroupId | None
     #: 1-based.
     round: int
@@ -454,9 +454,9 @@ class FixtureState:
     #: fixture (``group_id is None``) and of a caller that did not resolve the event's
     #: groups at all — a strategy test built straight from :class:`FixtureState`
     #: literals, or :func:`~app.tournament_draws.fixture_state` called with no
-    #: ``group_positions`` map. A group stored before the field existed still resolves to
-    #: a real int here — :func:`~app.tournament_draws.group_order`'s stable sort leaves
-    #: it at its array index. It is deliberately not defaulted to ``0``: a real
+    #: ``group_positions`` map. A group stored before the field existed still resolves
+    #: to a real int here — :func:`~app.tournament_draws.group_order`'s stable sort
+    #: leaves it at its array index. It is deliberately not defaulted to ``0``: a real
     #: position of ``0`` is the *first* group, and "unknown" collapsing onto "first"
     #: would silently promote every unresolved fixture to the head of the draw.
     #: Unknown sorts after every known group instead, where the id tie-break decides it
@@ -515,11 +515,12 @@ class FixtureState:
     #: (:func:`app.tournament_draws.fixture_state`) answers that one question and the
     #: enum stays on its own side of the seam.
     #:
-    #: It is what stops a voided pairing wedging its group: without it the group would sit
-    #: one score short of "every fixture carries a score" forever — never finished, its
-    #: qualifiers never seated — while the standings, which already exclude voided
-    #: pairings from a group's ``fixture_count`` (:class:`app.results.GroupInput`), showed
-    #: that same group ``complete``. Two layers disagreeing about whether a group is over.
+    #: It is what stops a voided pairing wedging its group: without it the group would
+    #: sit one score short of "every fixture carries a score" forever — never finished,
+    #: its qualifiers never seated — while the standings, which already exclude voided
+    #: pairings from a group's ``fixture_count`` (:class:`app.results.GroupInput`),
+    #: showed that same group ``complete``. Two layers disagreeing about whether a
+    #: group is over.
     match_voided: bool = False
 
     @property
@@ -731,16 +732,16 @@ def qualifier_seed_assignment(
       the *same* group — and the block's own geometry closes it, so a conflict-free
       system of distinct representatives always exists. That last step is the one worth
       reading in full, and it is stated where it is relied on
-      (:func:`_assign_block_groups`), because "each admits at least ``P−1`` groups" is not
-      by itself the reason. The search below finds a representative system
+      (:func:`_assign_block_groups`), because "each admits at least ``P−1`` groups" is
+      not by itself the reason. The search below finds a representative system
       deterministically — groups tried in ascending index order, augmenting when stuck —
       so a re-cut reproduces the same bracket, the same promise :func:`order_entrants`
       makes.
 
     The two fixed orderings this replaces cannot work: place-then-group pairs ``C1``
-    against ``C2`` at three groups, and reversing the runners-up fixes three groups while
-    breaking two, because *which* pairs are cross-block depends on ``B − P·K``, which
-    jumps around with ``P``.
+    against ``C2`` at three groups, and reversing the runners-up fixes three groups
+    while breaking two, because *which* pairs are cross-block depends on ``B − P·K``,
+    which jumps around with ``P``.
 
     **One group is an explicit waiver, not a failure.** With ``P = 1`` every qualifier
     shares the one group, so every knockout match is necessarily a rematch — that is
@@ -767,7 +768,9 @@ def qualifier_seed_assignment(
 
     def seat(seed: int, group_index: int) -> QualifierSeat:
         # Place-major: the block a seed sits in *is* its finishing place.
-        return QualifierSeat(group_index=group_index, place=(seed - 1) // group_count + 1)
+        return QualifierSeat(
+            group_index=group_index, place=(seed - 1) // group_count + 1
+        )
 
     if group_count == 1:
         # The waiver. Every qualifier is out of the same group, so there is nothing to
@@ -798,13 +801,13 @@ class RoundRobinStrategy:
     nobody plays twice in the same round.
 
     The cut is two steps. First the ordered entrants are **snaked** across the event's
-    groups — group A takes seeds 1, 2P, 2P+1, …; group B takes 2, 2P−1, … — which spreads
-    the strength evenly and leaves group sizes differing by at most one. Then each group's
-    fixtures are laid out by the **circle method**: fix one entrant, rotate the rest,
-    and every rotation is one round of simultaneous pairings. An odd group rotates
-    against a phantom, and the pairing against it is simply **not emitted** — that is
-    what a bye is here (a row with a ``NULL`` side would mean "TBD", which is a lie
-    about a fixture that will never be played).
+    groups — group A takes seeds 1, 2P, 2P+1, …; group B takes 2, 2P−1, … — which
+    spreads the strength evenly and leaves group sizes differing by at most one. Then
+    each group's fixtures are laid out by the **circle method**: fix one entrant, rotate
+    the rest, and every rotation is one round of simultaneous pairings. An odd group
+    rotates against a phantom, and the pairing against it is simply **not emitted** —
+    that is what a bye is here (a row with a ``NULL`` side would mean "TBD", which is a
+    lie about a fixture that will never be played).
 
     Both sides of every fixture are known at cut time, so this draw has nothing to
     advance *into*: :meth:`advance` fills no sides, and only reports readiness.
@@ -865,10 +868,10 @@ class SingleElimStrategy:
         entrants = list(ordered_entrants)
         size = len(entrants)
         if size < 2:
-            # Mirrors round-robin's per-group floor: a bracket of one has no fixtures and
-            # is not a competition. The message is director-facing copy (the endpoint's
-            # ``_draw_refusal`` passes a ``DegenerateDraw``'s message through),
-            # so it names the fix, not the internals.
+            # Mirrors round-robin's per-group floor: a bracket of one has no fixtures
+            # and is not a competition. The message is director-facing copy (the
+            # endpoint's ``_draw_refusal`` passes a ``DegenerateDraw``'s message
+            # through), so it names the fix, not the internals.
             raise DegenerateDraw(
                 "A single-elimination draw needs at least 2 entrants — a bracket of "
                 "one has nobody to play."
@@ -965,8 +968,8 @@ def _stage_split(
 @dataclass(frozen=True, slots=True)
 class RrThenKoStrategy:
     """Round-robin groups, then a knockout bracket seeded from the group finishers — the
-    top :attr:`qualifiers_per_group` out of each group advance (ADR "rr-then-ko cuts both
-    stages upfront and seeds qualifiers rematch-free").
+    top :attr:`qualifiers_per_group` out of each group advance (ADR "rr-then-ko cuts
+    both stages upfront and seeds qualifiers rematch-free").
 
     **Each stage runs the strategy its own draw type names, and this composite's only
     remaining job is the template plus the inter-stage seam** (ADR 20260815 decision
@@ -996,11 +999,12 @@ class RrThenKoStrategy:
     cuts — and its ``advance`` reuses :meth:`SingleElimStrategy.advance` verbatim for
     the forward seating once the knockout is under way.
 
-    **Qualifiers are seated per-group, as each group finishes.** The seed → (group, place)
-    map (:func:`qualifier_seed_assignment`) depends only on ``P`` and ``K`` — never on a
-    result — so group A's qualifiers take their predetermined slots the moment *A* is
-    decided, with B and C still playing. A knockout fixture simply is not ``ready``
-    until both its sides are seated, which :func:`ready_fixtures` already handles.
+    **Qualifiers are seated per-group, as each group finishes.** The seed → (group,
+    place) map (:func:`qualifier_seed_assignment`) depends only on ``P`` and ``K`` —
+    never on a result — so group A's qualifiers take their predetermined slots the
+    moment *A* is decided, with B and C still playing. A knockout fixture simply is not
+    ``ready`` until both its sides are seated, which :func:`ready_fixtures` already
+    handles.
 
     **A group is finished when every one of its fixtures that can still produce a
     result has a score** — the live-outcome view (:attr:`FixtureState.games`), the
@@ -1049,9 +1053,9 @@ class RrThenKoStrategy:
         smallest = min(len(members) for _, members in groups)
         if self.qualifiers_per_group > smallest:
             raise DegenerateDraw(
-                f"Taking {self.qualifiers_per_group} qualifiers from each group is more "
-                f"than the {smallest} entrants in the smallest group — take fewer "
-                "qualifiers from each group, or add entrants."
+                f"Taking {self.qualifiers_per_group} qualifiers from each group is "
+                f"more than the {smallest} entrants in the smallest group — take "
+                "fewer qualifiers from each group, or add entrants."
             )
         if len(groups) * self.qualifiers_per_group < 2:
             # ``K ≥ 1`` is static and the snake guarantees ``P ≥ 1``, so the *only* way
@@ -1092,9 +1096,9 @@ class RrThenKoStrategy:
                 *self._qualifier_fills(fixtures, grouped, knockout),
                 # The knockout stage, once it is under way, advances exactly as a
                 # single-elim bracket does — so it is advanced *by* single-elim, over
-                # the un-grouped fixtures alone. Passing the group fixtures too would let
-                # a group's ``(round, position)`` collide with the bracket's and seat a
-                # group winner into a knockout slot.
+                # the un-grouped fixtures alone. Passing the group fixtures too would
+                # let a group's ``(round, position)`` collide with the bracket's and
+                # seat a group winner into a knockout slot.
                 *SingleElimStrategy().advance(knockout, ordered_entrants).side_fills,
             ),
             ready_fixture_ids=ready_fixtures(fixtures),
@@ -1115,23 +1119,24 @@ class RrThenKoStrategy:
         """
         _refuse_gameless_group_results(grouped, fixtures)
         # The groups, in the DIRECTOR's own order (ADR 20260815 decision 7's rider):
-        # each group's own ``group_position`` (ADR 20260801), never ``sorted(group_ids)``.
-        # The two used to be conflated — a group's uuid has no relationship to its
-        # position, so "group index 0" silently named a different physical group from
-        # the one the director's own group listing and the snake both call the first
-        # group. Which group is index 0 is still free to *choose* (within a finishing
-        # place groups are not ranked against each other, and relabelling them is a
-        # bijection, so the rematch-free guarantee holds under any labelling) — this
-        # only pins *which* choice, so "group A" means the same group everywhere. A group
-        # whose position was not resolved (a caller that skipped that plumbing) sorts
-        # after every resolved one, by id — :func:`_group_sort_key`, the same fallback
+        # each group's own ``group_position`` (ADR 20260801), never
+        # ``sorted(group_ids)``. The two used to be conflated — a group's uuid has no
+        # relationship to its position, so "group index 0" silently named a different
+        # physical group from the one the director's own group listing and the snake
+        # both call the first group. Which group is index 0 is still free to *choose*
+        # (within a finishing place groups are not ranked against each other, and
+        # relabelling them is a bijection, so the rematch-free guarantee holds under any
+        # labelling) — this only pins *which* choice, so "group A" means the same group
+        # everywhere. A group whose position was not resolved (a caller that skipped
+        # that plumbing) sorts after every resolved one, by id —
+        # :func:`_group_sort_key`, the same fallback
         # :func:`ready_fixtures` uses, so an under-wired caller degrades to the old
         # order rather than crashes and "group A" cannot drift between the two sorts.
         #
         # A dict comprehension is LAST-wins where the old hand-rolled loop was
         # first-wins; the two are equivalent only because every fixture of one group
-        # carries that group's SAME ``group_position`` (it is a fact of the group, not of
-        # the fixture it happens to be read off), so which of a group's many fixtures
+        # carries that group's SAME ``group_position`` (it is a fact of the group, not
+        # of the fixture it happens to be read off), so which of a group's many fixtures
         # "wins" the comprehension never changes the value it contributes.
         group_position_by_id: dict[GroupId, int | None] = {
             fixture.group_id: fixture.group_position
@@ -1140,7 +1145,9 @@ class RrThenKoStrategy:
         }
         group_ids = sorted(
             group_position_by_id,
-            key=lambda group_id: _group_sort_key(group_id, group_position_by_id[group_id]),
+            key=lambda group_id: _group_sort_key(
+                group_id, group_position_by_id[group_id]
+            ),
         )
         if not group_ids:
             return []
@@ -1240,10 +1247,11 @@ class SwissStrategy:
     rank.
 
     Fixtures are **un-grouped** (``group_id=None``): swiss ranks the whole field in one
-    table. That no longer keeps them off the schedule — a live solve places an un-grouped
-    fixture over its event's own window (ADR "a group restricts scheduling, it does not
-    enable it") — but the schedule **preview** still refuses a swiss event exactly as it
-    refuses a bracket, for the reason :mod:`app.schedule_preview` states in full.
+    table. That no longer keeps them off the schedule — a live solve places an
+    un-grouped fixture over its event's own window (ADR "a group restricts scheduling,
+    it does not enable it") — but the schedule **preview** still refuses a swiss event
+    exactly as it refuses a bracket, for the reason :mod:`app.schedule_preview` states
+    in full.
     """
 
     #: How many rounds the event plays. ``R >= 1`` is static — a Pydantic constraint at
@@ -1765,10 +1773,11 @@ def _finished_group_order(
     """This group's finishing order, or ``None`` if the group is **not finished**.
 
     Finished = every fixture in it that can still produce a result carries a score. The
-    order itself is :func:`~app.group_finishing_order.finishing_order` — *the* definition
-    of how a group finished, the same call :class:`~app.results.RoundRobinResults` makes
-    for the standings table — so the qualifiers are exactly the top of the table a
-    director is reading, structurally and not by coincidence.
+    order itself is :func:`~app.group_finishing_order.finishing_order` — *the*
+    definition of how a group finished, the same call
+    :class:`~app.results.RoundRobinResults` makes for the standings table — so the
+    qualifiers are exactly the top of the table a director is reading, structurally and
+    not by coincidence.
 
     Which is why a **voided** fixture is skipped rather than treated as a missing score:
     it can never produce one (the match is terminal, and ``ready_fixtures`` will not
@@ -1888,14 +1897,14 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     **"Group" is the group's** :attr:`~FixtureState.group_position` — its place in the
     event's own group order — **not its id.** It was the id once, back when ids were
     client-minted strings (``p-1-…``, ``p-2-…``, ``p-10-…``) whose lexicographic order
-    was not the director's: ``p-10-`` sorts between ``p-1-`` and ``p-2-``, so a ten-group
-    draw's plan ran group 1, group 10, group 2. A minted uuid is worse still — its order is
-    nobody's at all — which is exactly why the explicit ``position`` column had to land
-    (ADR 20260801) before the ids could move. It is the same key the read path's
-    ``fixtures_by_event`` sorts on and the same one :attr:`DrawConfig.group_ids` is
-    ordered by, so the sequence a director sees, the sequence the snake dealt against,
-    and the sequence matches are created in are one order rather than three that agree
-    by luck.
+    was not the director's: ``p-10-`` sorts between ``p-1-`` and ``p-2-``, so a
+    ten-group draw's plan ran group 1, group 10, group 2. A minted uuid is worse still —
+    its order is nobody's at all — which is exactly why the explicit ``position`` column
+    had to land (ADR 20260801) before the ids could move. It is the same key the read
+    path's ``fixtures_by_event`` sorts on and the same one :attr:`DrawConfig.group_ids`
+    is ordered by, so the sequence a director sees, the sequence the snake dealt
+    against, and the sequence matches are created in are one order rather than three
+    that agree by luck.
 
     The sort key asks three questions, in this order:
 
@@ -1907,18 +1916,20 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
        LAST, behind the groups that feed them — except under swiss, whose draw is
        un-grouped end to end, so there are no groups for it to sort behind and this key
        partitions nothing.
-    2. "Where in the event's group order is its group?" — :func:`_group_sort_key`'s first
+    2. "Where in the event's group order is its group?" — :func:`_group_sort_key`'s
+    first
        two elements: ``group_position``, with an unresolved order sorting after every
        group that has one.
-    3. "Which group?" — :func:`_group_sort_key`'s id tie-break, unobservable once (1) has
+    3. "Which group?" — :func:`_group_sort_key`'s id tie-break, unobservable once (1)
+    has
        already partitioned the un-grouped group off.
 
     (1)'s fallback and (3) can no longer disagree the way an early version of this rule
     could. ``Group.id`` was a bare ``str``, and a fixture drawn into an *empty-id* group
-    answered "grouped" to the fallback while colliding with the un-grouped group's ``""``
-    in the tie-break — one fixture, grouped by one rule and un-grouped by the other. A
-    ``min_length=1`` at the write boundary held that off; a ``uuid`` cannot express it
-    at all, which is the better kind of fix.
+    answered "grouped" to the fallback while colliding with the un-grouped group's
+    ``""`` in the tie-break — one fixture, grouped by one rule and un-grouped by the
+    other. A ``min_length=1`` at the write boundary held that off; a ``uuid`` cannot
+    express it at all, which is the better kind of fix.
     """
     ready = [
         f
@@ -2135,7 +2146,9 @@ def _snake(
     ]
 
 
-def _circle_method(group_id: GroupId, members: Sequence[EntryId]) -> list[PlannedFixture]:
+def _circle_method(
+    group_id: GroupId, members: Sequence[EntryId]
+) -> list[PlannedFixture]:
     """Every pair in this group exactly once, laid out in rounds in which nobody plays
     twice — the circle method: pin the first entrant, rotate the others one seat per
     round, and pair across the circle.
@@ -2380,11 +2393,11 @@ def _assign_block_groups(
 
     **Why the failure arm below is unreachable**, stated the way it is actually true.
     "Each seed forbids at most one group, so each admits at least ``P−1``" is the fact,
-    but it is *not* the reason: a subset ``S`` of the block's seeds sees all ``P`` groups
-    the moment two of its members forbid different groups (or one forbids none), so the
-    only subset that can fail Hall's condition is the whole block — all ``P`` seeds
-    forbidding the **same** group, leaving ``P−1`` groups for ``P`` seeds. Admitting
-    ``P−1`` each is exactly what does not rule that out.
+    but it is *not* the reason: a subset ``S`` of the block's seeds sees all ``P``
+    groups the moment two of its members forbid different groups (or one forbids none),
+    so the only subset that can fail Hall's condition is the whole block — all ``P``
+    seeds forbidding the **same** group, leaving ``P−1`` groups for ``P`` seeds.
+    Admitting ``P−1`` each is exactly what does not rule that out.
 
     What rules it out is the geometry of a block. A block is ``P`` **consecutive**
     seeds; round one pairs ``s`` with ``B+1−s`` (:func:`_seed_slots`, ``B`` the bracket
@@ -2399,12 +2412,12 @@ def _assign_block_groups(
     (Measured over ``P`` 2..64 × ``K`` 1..40 the margin is wider still: no two seeds of
     a block were ever seen to forbid the same group at all.)
 
-    A seed takes the **lowest free group** it is allowed, and only displaces an incumbent
-    when every group it admits is taken — the standard greedy initialization for Kuhn's.
-    Skipping it costs nothing in correctness (an augmenting path repairs any greedy
-    mistake) but a great deal in legibility: without it an *unconstrained* block still
-    shuffles, so a two-group bracket seats group B's winner at seed 1, which reads as a
-    bug to anyone printing the draw.
+    A seed takes the **lowest free group** it is allowed, and only displaces an
+    incumbent when every group it admits is taken — the standard greedy initialization
+    for Kuhn's. Skipping it costs nothing in correctness (an augmenting path repairs any
+    greedy mistake) but a great deal in legibility: without it an *unconstrained* block
+    still shuffles, so a two-group bracket seats group B's winner at seed 1, which reads
+    as a bug to anyone printing the draw.
     """
     seed_by_group: dict[int, int] = {}
     for seed in seeds:

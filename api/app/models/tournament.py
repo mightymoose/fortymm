@@ -364,10 +364,11 @@ class TournamentEvent(Base):
     # The event's GROUPS, in the director's own order — which is what
     # ``TournamentEventStageGroup.position`` carries, and what the snake seeds against.
     #
-    # This relationship was called ``pools`` until one wire-level reservation slot split into a group row and a reservation row. A group is
-    # the half a fixture names; the tables and the window are a reservation, which hangs
-    # off this event directly (``reservations`` below). The wire now serves the two as
-    # separate arrays — :func:`app.tournament_reservations.group_read` projects a group,
+    # This relationship was called ``pools`` until one wire-level reservation slot split
+    # into a group row and a reservation row. A group is the half a fixture names; the
+    # tables and the window are a reservation, which hangs off this event directly
+    # (``reservations`` below). The wire now serves the two as separate arrays —
+    # :func:`app.tournament_reservations.group_read` projects a group,
     # :func:`~app.tournament_reservations.reservation_read` its mapped reservation.
     #
     # VIEWONLY, reachable through the event's stages, not the real parent-child
@@ -375,8 +376,8 @@ class TournamentEvent(Base):
     # on its stage (always stage 0 — decision 3), because
     # ``tournament_fixtures.event_id`` is dropped in the same ADR and a group must share
     # a column with the fixtures whose composite FK targets it. Writes go through
-    # ``app.tournament_reservations``, which resolves the event's first stage and assigns
-    # ``stage.groups`` (the real relationship, declared on
+    # ``app.tournament_reservations``, which resolves the event's first stage and
+    # assigns ``stage.groups`` (the real relationship, declared on
     # :class:`~app.models.tournament_event_stage.TournamentEventStage`) — never this
     # one, which SQLAlchemy refuses to flush from.
     # ``secondary="tournament_event_stages"`` is an unusual use of that argument (the
@@ -407,8 +408,8 @@ class TournamentEvent(Base):
     # event-parented one is what lets an rr-then-ko draw's two stages read one set).
     #
     # A REAL relationship, not a viewonly one, unlike ``groups`` above — this is the
-    # collection ``app.tournament_reservations`` writes, and ``delete-orphan`` is what removes
-    # a reservation when its own entry leaves the payload. The 1:1 with
+    # collection ``app.tournament_reservations`` writes, and ``delete-orphan`` is what
+    # removes a reservation when its own entry leaves the payload. The 1:1 with
     # ``groups`` is maintained by that module on every write path, not by anything here.
     #
     # Deliberately **NOT eager**, unlike almost every other collection on this model,
@@ -421,11 +422,12 @@ class TournamentEvent(Base):
     # counts.
     #
     # The one writer loads it explicitly instead, with ``await
-    # event.awaitable_attrs.reservations`` (``app.tournament_reservations.apply_event_reservations``)
-    # — the async-safe way to populate a lazy collection, and the seam that keeps this
-    # cost on the write path where it belongs. Assigning to an unloaded
-    # ``delete-orphan`` collection would otherwise emit a lazy load mid-assignment,
-    # which under async raises ``MissingGreenlet`` rather than querying.
+    # event.awaitable_attrs.reservations``
+    # (``app.tournament_reservations.apply_event_reservations``) — the async-safe way to
+    # populate a lazy collection, and the seam that keeps this cost on the write path
+    # where it belongs. Assigning to an unloaded ``delete-orphan`` collection would
+    # otherwise emit a lazy load mid-assignment, which under async raises
+    # ``MissingGreenlet`` rather than querying.
     reservations: Mapped[list["TournamentEventReservation"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
@@ -470,8 +472,8 @@ class TournamentEvent(Base):
     # real relationship, one stage at a time; an rr-then-ko event's draw spans BOTH of
     # its stages, unlike ``groups`` above, because both the group stage and the
     # knockout stage hold fixtures. This model carried a VIEWONLY shim spanning both
-    # stages, ordered group → round → position, for the one test that walked it directly; that
-    # test now walks a stage's own ``fixtures`` instead (the same order, declared on
-    # that relationship). Every production read of a draw goes through the batched
-    # ``app.tournament_queries.fixtures_by_event`` loader, never through either
+    # stages, ordered group → round → position, for the one test that walked it
+    # directly; that test now walks a stage's own ``fixtures`` instead (the same order,
+    # declared on that relationship). Every production read of a draw goes through the
+    # batched ``app.tournament_queries.fixtures_by_event`` loader, never through either
     # relationship.

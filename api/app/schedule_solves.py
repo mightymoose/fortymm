@@ -229,10 +229,10 @@ from app.scheduling import (
     PlayerConflict,
     PlayerId,
     PlayerOverSubscribed,
+    PreviousPlacement,
     ReservationHasNoTables,
     ReservationId,
     ReservationOverCapacity,
-    PreviousPlacement,
     RestShadow,
     ScheduleFixture,
     ScheduleReservation,
@@ -252,8 +252,8 @@ from app.schemas.schedule_solve import (
     PlayerConflictRead,
     PlayerOverSubscribedRead,
     ReservationHasNoTablesRead,
-    ReservationOverCapacityRead,
     ReservationKind,
+    ReservationOverCapacityRead,
     ResolvedConflict,
     ResolvedReason,
     TableConflictRead,
@@ -561,10 +561,10 @@ async def latest_solve(
 
 
 #: The suffix that spells an event's **event-wide reservation** in the solver's
-#: namespaced ``{event}:{reservation}`` id space (ADR "a reservation restricts scheduling, it
-#: does not enable it"): the synthetic ``ScheduleReservation`` an ungrouped fixture is
-#: placed in — the event's own ``slot`` for a window, the whole tournament
-#: catalogue for tables.
+#: namespaced ``{event}:{reservation}`` id space (ADR "a reservation restricts
+#: scheduling, it does not enable it"): the synthetic ``ScheduleReservation`` an
+#: ungrouped fixture is placed in — the event's own ``slot`` for a window, the whole
+#: tournament catalogue for tables.
 #:
 #: It cannot collide with a real reservation's key. A real key's suffix is the
 #: text of a ``TournamentEventReservation.id`` — a server-minted ``uuid`` — so
@@ -604,8 +604,8 @@ class _ReservationResolution:
 
     ``reservation`` is what stops a remedy naming a control that does not exist
     (:data:`~app.schemas.schedule_solve.ReservationKind`): "add a table to" and
-    "a smaller reservation" are reservation verbs, and an event-wide reservation already holds
-    every table the tournament has. It is carried beside the name rather than
+    "a smaller reservation" are reservation verbs, and an event-wide reservation already
+    holds every table the tournament has. It is carried beside the name rather than
     inferred from it — a display name is copy, and bending copy to carry a fact
     is how the wrong remedy got rendered in the first place."""
 
@@ -632,8 +632,8 @@ class SolveInputs:
     catalogue; that state stopped being representable under ADR 20260801 and the
     field went with it — see the module docstring.)
 
-    ``reservation_resolutions`` (keyed by the solver's namespaced ``ReservationId`` string
-    ``f"{event.id}:{reservation.id}"``) and ``fixture_best_of`` (keyed by
+    ``reservation_resolutions`` (keyed by the solver's namespaced ``ReservationId``
+    string ``f"{event.id}:{reservation.id}"``) and ``fixture_best_of`` (keyed by
     ``str(fixture.id)``) are the resolution lookups the apply humanizes an
     *infeasible* solve's structured reasons through — reservation id → name+clock,
     fixture id → its event's ``length_games``. They derive from the same
@@ -665,7 +665,9 @@ class SolveInputs:
     reservation_dates: dict[str, date] = field(default_factory=dict)
     broken_pin_voids: frozenset[uuid.UUID] = frozenset()
     withdrawn_entry_ids: frozenset[uuid.UUID] = frozenset()
-    reservation_resolutions: dict[str, _ReservationResolution] = field(default_factory=dict)
+    reservation_resolutions: dict[str, _ReservationResolution] = field(
+        default_factory=dict
+    )
     fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = field(default_factory=dict)
     table_labels: dict[str, str] = field(default_factory=dict)
     player_names: dict[str, str] = field(default_factory=dict)
@@ -868,8 +870,8 @@ async def _load_solver_inputs(
     # boundary validated them with (parse, don't validate). The catalogue is rows now
     # (ADR 20260801), eagerly loaded on the tournament and already in the director's
     # order; the solver's ``TableId`` stays a string, so a table's UUID id crosses into
-    # it as its text — the same text a reservation's ``table_ids`` and a fixture's ``table_id``
-    # hold.
+    # it as its text — the same text a reservation's ``table_ids`` and a fixture's
+    # ``table_id`` hold.
     parsed_tables = [
         TournamentTable.model_validate(table) for table in tournament.tables
     ]
@@ -877,7 +879,9 @@ async def _load_solver_inputs(
     # table_id → catalogue label: the DB-aware resolution a placement conflict's
     # shared table is humanized through (mirrors ``load_copy_ingredients``).
     table_labels = {str(table.id): table.label for table in parsed_tables}
-    parsed_events: list[tuple[TournamentEvent, EventMatchSettings, list[Reservation]]] = [
+    parsed_events: list[
+        tuple[TournamentEvent, EventMatchSettings, list[Reservation]]
+    ] = [
         (
             event,
             EventMatchSettings.model_validate(event.match_settings),
@@ -912,11 +916,11 @@ async def _load_solver_inputs(
     # Reservation ids are per-event value-objects — two events may both hold a
     # "reservation-a" — so the solver's ReservationId is namespaced by the event id.
     # A reservation's ``table_ids`` are intersected with the catalogue here: the
-    # catalogue and the reservations are edited by two separate PATCHes, so a reservation
-    # may momentarily name a table the venue no longer has. The catalogue is
+    # catalogue and the reservations are edited by two separate PATCHes, so a
+    # reservation may momentarily name a table the venue no longer has. The catalogue is
     # the venue's truth — a stale ref is a table the reservation cannot use, not a
-    # reason to refuse the whole snapshot as incoherent (the raw ``table_ids``
-    # still feed the fingerprint, so the edit itself is drift like any other).
+    # reason to refuse the whole snapshot as incoherent (the raw ``table_ids`` still
+    # feed the fingerprint, so the edit itself is drift like any other).
     catalogue_ids = set(catalogue)
     # One pass derives each reservation's key, bounds and usable tables; the
     # ``ScheduleReservation``s are built from these same specs below (only ``base``
@@ -929,10 +933,10 @@ async def _load_solver_inputs(
     # id the pure module carries on its ``PastWindow`` reason.
     reservation_dates: dict[str, date] = {}
     # Resolution lookups the apply humanizes an infeasible solve's reasons
-    # through: solver ``ReservationId`` → the reservation's display name + ``HH:MM`` bounds,
-    # and fixture id → its event's ``length_games`` (``best_of``). Built off the
-    # same parsed inputs the snapshot is, so they resolve exactly the ids the
-    # reasons carry.
+    # through: solver ``ReservationId`` → the reservation's display name + ``HH:MM``
+    # bounds, and fixture id → its event's ``length_games`` (``best_of``). Built off the
+    # same parsed inputs the snapshot is, so they resolve exactly the ids the reasons
+    # carry.
     reservation_resolutions: dict[str, _ReservationResolution] = {}
     fixture_best_of: dict[str, Literal[1, 3, 5, 7]] = {}
     # fixture id → its matchup (the two players' usernames): the DB-aware
@@ -1292,7 +1296,9 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
     until it is handled."""
     match reason:
         case ReservationHasNoTables():
-            no_tables_reservation = inputs.reservation_resolutions[reason.reservation_id]
+            no_tables_reservation = inputs.reservation_resolutions[
+                reason.reservation_id
+            ]
             return ReservationHasNoTablesRead(
                 reservation_name=no_tables_reservation.name,
                 reservation=no_tables_reservation.reservation,
@@ -1342,9 +1348,12 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
             )
         case PastWindow():
             # The offending reservation resolves to the venue-local calendar day it was
-            # dated for (``inputs.reservation_dates`` — from the same fingerprinted read,
-            # so the reservation is present), the actionable "which day to move" fact.
-            return PastWindowReasonRead(date=inputs.reservation_dates[reason.reservation_id])
+            # dated for (``inputs.reservation_dates`` — from the same fingerprinted
+            # read, so the reservation is present), the actionable "which day to move"
+            # fact.
+            return PastWindowReasonRead(
+                date=inputs.reservation_dates[reason.reservation_id]
+            )
         case _:
             assert_never(reason)
 
@@ -1664,8 +1673,9 @@ async def _apply_result(
                 row.verdict = SolverVerdict.infeasible
                 # Each structured, id-and-minute reason (including the pre-live
                 # ``PastWindow`` "a past day is named, not disguised" cause, whose
-                # reservation id resolves to its venue-local date via ``fresh.reservation_dates``)
-                # is humanized against ``fresh``'s maps and stored as JSONB.
+                # reservation id resolves to its venue-local date via
+                # ``fresh.reservation_dates``) is humanized against ``fresh``'s maps and
+                # stored as JSONB.
                 resolved: list[ResolvedReason] = [
                     _resolve_reason(reason, fresh) for reason in result.reasons
                 ]

@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 class TournamentEventGroupReservation(Base):
     """The row that maps one **group** to the **reservation** it plays in.
 
-    Splitting one wire-level reservation slot into two rows left the two halves with no way to find
-    each other. A group is parented on its stage (it must be — a fixture's composite
-    foreign key names it, and a fixture carries ``stage_id`` and nothing else) and a
-    reservation is parented on the event, so the two share no column. This row is the
-    join.
+    Splitting one wire-level reservation slot into two rows left the two halves with no
+    way to find each other. A group is parented on its stage (it must be — a fixture's
+    composite foreign key names it, and a fixture carries ``stage_id`` and nothing else)
+    and a reservation is parented on the event, so the two share no column. This row is
+    the join.
 
     **Three foreign key legs, because two cannot say it.** A composite key can only
     assert a relationship between columns that exist on both sides, and the group side
@@ -65,9 +65,10 @@ class TournamentEventGroupReservation(Base):
     **All three delete rules are CASCADE.** The mapping is not a thing in its own right:
     it exists only while both ends do, so it goes with either of them, and with the
     stage or event above them. Removing the *group* is the path the application takes —
-    a reservation write drops a group and its reservation in one diff, and this row goes with
-    the group — and ``delete-orphan`` on ``TournamentEventStageGroup.reservation_link``
-    handles it through the ORM before the constraint ever has to.
+    a reservation write drops a group and its reservation in one diff, and this row goes
+    with the group — and ``delete-orphan`` on
+    ``TournamentEventStageGroup.reservation_link`` handles it through the ORM before the
+    constraint ever has to.
     """
 
     __tablename__ = "tournament_event_group_reservations"

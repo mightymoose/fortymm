@@ -14,8 +14,8 @@ it reads out.
 
 Like ``app.draws`` this module is **pure**: it holds no session, issues no query, and
 imports no SQLAlchemy construct. Its whole input is small frozen value objects
-(:class:`~app.group_finishing_order.MatchOutcome`, grouped into :class:`GroupInput` for a
-round-robin or :class:`BracketFixture` for a single-elim bracket) that the persistence
+(:class:`~app.group_finishing_order.MatchOutcome`, grouped into :class:`GroupInput` for
+a round-robin or :class:`BracketFixture` for a single-elim bracket) that the persistence
 layer projects from the fixtures' **currently-completed** matches — so nothing here is a
 snapshot, and a corrected or voided match re-derives the results the instant it leaves
 ``completed``, with no bookkeeping to keep in step (ADR-0788, "everything derives from
@@ -45,7 +45,6 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 from app.draws import EntryId, GroupId
-from app.models.tournament import DrawType
 from app.group_finishing_order import (
     EntryTally,
     MatchOutcome,
@@ -53,6 +52,7 @@ from app.group_finishing_order import (
     finishing_order,
     swiss_finishing_order,
 )
+from app.models.tournament import DrawType
 
 __all__ = [
     "BracketFinishes",
@@ -104,12 +104,13 @@ class FieldInput:
     """A **group-less** field's whole input to its standings: every entry in the event,
     how many fixtures it has, and the outcomes of the ones already decided.
 
-    :class:`GroupInput` without the ``group_id``, because swiss has no group to name (ADR
-    "swiss pre-cuts every round and pairs each one on advance") — the whole field stands
-    in one table. The three fields mean exactly what they mean there, and are read the
-    same way: ``entrants`` is the full seated field so an entrant yet to play still has
-    a row of zeros, and ``fixture_count`` counts the pairings that can still yield a
-    result, which for swiss includes the later rounds that are cut but not yet paired.
+    :class:`GroupInput` without the ``group_id``, because swiss has no group to name
+    (ADR "swiss pre-cuts every round and pairs each one on advance") — the whole field
+    stands in one table. The three fields mean exactly what they mean there, and are
+    read the same way: ``entrants`` is the full seated field so an entrant yet to play
+    still has a row of zeros, and ``fixture_count`` counts the pairings that can still
+    yield a result, which for swiss includes the later rounds that are cut but not yet
+    paired.
 
     ``byes`` is the fourth field and the one :class:`GroupInput` will never have: one
     entry id **per bye taken**, derived by :func:`app.draws.swiss_byes` from the rows
@@ -171,14 +172,14 @@ class EventResults:
 
     ``champion`` is the leader of a **complete, single-group** event — a pure
     round-robin's winner. A multi-group round-robin has no single champion without a
-    knockout stage to join its group winners, so ``champion`` is ``None`` there even when
-    the event is complete. ``None`` also while any fixture is still to be played.
+    knockout stage to join its group winners, so ``champion`` is ``None`` there even
+    when the event is complete. ``None`` also while any fixture is still to be played.
 
     That carve-out is unchanged by the arrival of the ``rr-then-ko`` draw type (ADR
-    20260727): a groups-then-knockout event *does* have a knockout stage to join its group
-    winners, and it reads out as :class:`StandingsThenFinishes` — a **different shape**,
-    crowned from its bracket. This one still describes a draw with groups and nothing
-    after them, and for such a draw the claim is as true as it ever was.
+    20260727): a groups-then-knockout event *does* have a knockout stage to join its
+    group winners, and it reads out as :class:`StandingsThenFinishes` — a **different
+    shape**, crowned from its bracket. This one still describes a draw with groups and
+    nothing after them, and for such a draw the claim is as true as it ever was.
     """
 
     groups: tuple[GroupStandings, ...]
@@ -246,14 +247,15 @@ class StandingsThenFinishes:
 
     Both blocks are exactly what the one-stage shapes carry: ``groups`` is
     :class:`EventResults`' standings, ``finishes`` is :class:`BracketFinishes`' ranked
-    rows, each still live and partial — group rows appear before a group has finished, and
-    only *placed* knockout entrants have a finish. Neither is a new reading of a stage;
-    see :class:`RrThenKoResults`.
+    rows, each still live and partial — group rows appear before a group has finished,
+    and only *placed* knockout entrants have a finish. Neither is a new reading of a
+    stage; see :class:`RrThenKoResults`.
 
     ``champion`` is the **knockout final's winner, never a group leader** (CONTEXT.md,
-    "Champion"): the group stage only seeds the bracket, so topping a group wins nothing.
-    It is ``None`` until that final is decided — which, since the final cannot be
-    decided before the groups that seat it, is also the only way it can be non-``None``.
+    "Champion"): the group stage only seeds the bracket, so topping a group wins
+    nothing. It is ``None`` until that final is decided — which, since the final cannot
+    be decided before the groups that seat it, is also the only way it can be
+    non-``None``.
 
     ``complete`` is **both stages decided**, and the two are asserted separately rather
     than one inferred from the other. See :meth:`RrThenKoResults.tabulate`.
@@ -305,8 +307,8 @@ class SwissStandings:
     shape rather than a group-less flavour of that one — a ``groups`` list of length one
     with a made-up id would be a lie about a group that does not exist.
 
-    ``champion`` is the leader of a **complete** event, with no single-group carve-out to
-    make: a swiss event ranks the whole field, so its table's top row is its winner
+    ``champion`` is the leader of a **complete** event, with no single-group carve-out
+    to make: a swiss event ranks the whole field, so its table's top row is its winner
     (CONTEXT.md, "Swiss"). ``None`` while any round is still to be decided.
     """
 
@@ -469,17 +471,18 @@ class RrThenKoResults:
             finishes=knockout_stage.finishes,
             # Both stages, asserted separately. The conjunction's left half is not
             # redundant even though it is implied: nothing is seated into the bracket
-            # until a group finishes, so a decided final entails decided groups. Deriving
-            # ``complete`` from the bracket alone would make this shape's headline claim
-            # depend on an invariant enforced two modules away (``RrThenKoStrategy``'s
-            # seating) rather than on the standings it is handed — and it would read as
-            # complete for any caller that projects the two stages inconsistently.
+            # until a group finishes, so a decided final entails decided groups.
+            # Deriving ``complete`` from the bracket alone would make this shape's
+            # headline claim depend on an invariant enforced two modules away
+            # (``RrThenKoStrategy``'s seating) rather than on the standings it is handed
+            # — and it would read as complete for any caller that projects the two
+            # stages inconsistently.
             complete=group_stage.complete and knockout_stage.complete,
-            # The champion is the **bracket's**. ``group_stage.champion`` is deliberately
-            # dropped, and it is not always ``None``: a legal one-group rr-then-ko (a
-            # league, then a playoff) makes ``RoundRobinResults`` crown its complete
-            # group's leader, who is merely the top *seed* of the knockout here. Taking
-            # it would crown somebody the playoff went on to eliminate.
+            # The champion is the **bracket's**. ``group_stage.champion`` is
+            # deliberately dropped, and it is not always ``None``: a legal one-group
+            # rr-then-ko (a league, then a playoff) makes ``RoundRobinResults`` crown
+            # its complete group's leader, who is merely the top *seed* of the knockout
+            # here. Taking it would crown somebody the playoff went on to eliminate.
             champion=knockout_stage.champion,
         )
 
@@ -489,8 +492,8 @@ class SwissResults:
     """A swiss event's results: one standings table over the whole field (ADR "swiss
     pre-cuts every round and pairs each one on advance").
 
-    Ordered by :func:`~app.group_finishing_order.swiss_finishing_order` — **swiss's own**
-    chain: wins, head-to-head when exactly two are tied *and they met*, then
+    Ordered by :func:`~app.group_finishing_order.swiss_finishing_order` — **swiss's
+    own** chain: wins, head-to-head when exactly two are tied *and they met*, then
     **Buchholz**, then game difference, games won and the entry id (ADR "swiss standings
     add Buchholz, and head-to-head is guarded on having met"). Buchholz sits above game
     difference because swiss pairs by score: two entrants level on wins may have played

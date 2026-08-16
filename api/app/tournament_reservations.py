@@ -92,7 +92,13 @@ from app.models import (
     TournamentEventStage,
     TournamentEventStageGroup,
 )
-from app.schemas.tournament import GroupRead, Reservation, ReservationUpsert, ReservationWrite, Slot
+from app.schemas.tournament import (
+    GroupRead,
+    Reservation,
+    ReservationUpsert,
+    ReservationWrite,
+    Slot,
+)
 from app.tournament_errors import ReservationNotInEventError
 
 __all__ = [
@@ -227,7 +233,9 @@ def _reservation_tables(
 
 
 def stored_groups(
-    event: TournamentEvent, tournament: Tournament, submitted: Sequence[ReservationWrite]
+    event: TournamentEvent,
+    tournament: Tournament,
+    submitted: Sequence[ReservationWrite],
 ) -> list[TournamentEventStageGroup]:
     """Fresh group rows — each already mapped to its own fresh reservation — for an
     event that has none yet, which is the create verb's whole job.
@@ -339,8 +347,9 @@ async def apply_event_reservations(
       ``id``), judged here and before anything is written. The id is the server's, so
       one it did not mint names nothing — and quietly minting a fresh one would hand the
       client back a different id than it asked for while *removing* the reservation it
-      meant to keep. It is the same 422 :func:`~app.tournament_tables.apply_table_catalogue`
-      answers an unknown table id with, for the same reason.
+      meant to keep. It is the same 422
+      :func:`~app.tournament_tables.apply_table_catalogue` answers an unknown table id
+      with, for the same reason.
     * a payload that would add or remove a reservation of an event whose draw is
       **cut** → ``_enforce_group_set_frozen`` (``app.tournament_events``), which runs
       *before* this function, so the 409 wins over the 422 whenever both apply. With no
@@ -399,9 +408,7 @@ async def apply_event_reservations(
     # the group's id ever reached a client; now that both ids are visible, the group's
     # is server-owned and read-only, and the diff has to run against the array a client
     # can actually write.
-    stored = {
-        group.reservation_link.reservation.id: group for group in stage.groups
-    }
+    stored = {group.reservation_link.reservation.id: group for group in stage.groups}
     # Judged first, over the whole payload, for the reason the catalogue's twin is: a
     # reservation list naming a reservation this event does not have is not a
     # reservation list, and every subsequent question (what is kept, and therefore what

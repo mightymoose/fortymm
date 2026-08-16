@@ -271,13 +271,12 @@ def _group_position() -> ScalarSelect[int | None]:
 
     A fixture holds its group's **id**, not its index, so "where does this fixture's
     group sit in the director's order?" is a join: find the
-    ``tournament_event_stage_groups`` row this fixture's ``(stage_id, group_id)`` names —
-    the same pair the composite foreign key matches on (ADR 20260801, parented on the
-    stage by ADR 20260815) — and
-    read its ``position`` (:data:`app.schemas.tournament.ReservationPosition` — 0-based,
-    stamped by the server from the order the groups were sent in). Scalar by
-    construction, since ``(stage_id, id)`` is unique, rather than by a ``LIMIT``
-    papering over duplicates.
+    ``tournament_event_stage_groups`` row this fixture's ``(stage_id, group_id)`` names
+    — the same pair the composite foreign key matches on (ADR 20260801, parented on the
+    stage by ADR 20260815) — and read its ``position``
+    (:data:`app.schemas.tournament.ReservationPosition` — 0-based, stamped by the server
+    from the order the groups were sent in). Scalar by construction, since ``(stage_id,
+    id)`` is unique, rather than by a ``LIMIT`` papering over duplicates.
 
     It is ``NULL`` in exactly one case now, and that case wants to sort at the end of
     the grouped group: an **un-grouped** fixture (``group_id IS NULL`` — single-elim,
@@ -355,8 +354,8 @@ async def fixtures_by_event(
     ...))`` is a ``TypeError`` the moment an un-grouped fixture meets a grouped one, and
     the defensive coalesce that usually follows (``f.group_position or 0``) would
     quietly sort the KO stage FIRST — in front of the groups that feed it. The position
-    is also not a column on the fixture at all: it lives on the fixture's *group* row, so
-    resolving it in Python would mean loading every event's groups per read.
+    is also not a column on the fixture at all: it lives on the fixture's *group* row,
+    so resolving it in Python would mean loading every event's groups per read.
 
     A materialized fixture carries its match's **live status** (``match_status``), read
     by LEFT-joining ``matches`` on ``fixture.match_id`` (#788) — still ONE statement,

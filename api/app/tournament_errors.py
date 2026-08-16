@@ -285,14 +285,14 @@ class TableInUseError(Exception):
     table that matches are placed at**, without the unplace-and-remove opt-in
     (ADR 20260801, "a placement names a real table, and only that is an invariant").
 
-    This is the loud half of the ADR's deliberate split. A **reservation** that merely reserves
-    a removed table is not consulted at all — it quietly reserves one fewer, because a
-    table breaking or freeing up is ordinary venue traffic. A **placement** gets the
-    refusal, because silently clearing one destroys information on an *unrelated* write:
-    the fixture would stop being "placed at a table that vanished" and become
-    indistinguishable from "nobody ever placed this", as an invisible side effect of
-    renaming the venue. The database refuses by default (``ON DELETE RESTRICT``); the
-    director says yes on purpose.
+    This is the loud half of the ADR's deliberate split. A **reservation** that merely
+    reserves a removed table is not consulted at all — it quietly reserves one fewer,
+    because a table breaking or freeing up is ordinary venue traffic. A **placement**
+    gets the refusal, because silently clearing one destroys information on an
+    *unrelated* write: the fixture would stop being "placed at a table that vanished"
+    and become indistinguishable from "nobody ever placed this", as an invisible side
+    effect of renaming the venue. The database refuses by default (``ON DELETE
+    RESTRICT``); the director says yes on purpose.
 
     It is a 409, not a 403 or a 422 (the same reasoning as :class:`GroupSetFrozenError`,
     whose house style its sentence follows): the caller is the owner and the payload is
@@ -321,8 +321,8 @@ class DrawTypeFrozenError(Exception):
     event claiming a shape its fixtures do not have — a corruption the go-live currency
     check cannot catch (re-labelling moves neither the entrants nor the fixtures).
 
-    Sibling of :class:`GroupSetFrozenError`, and a 409 for the same reason: the caller is
-    the owner and the payload is well-formed; it is the resource that is in the wrong
+    Sibling of :class:`GroupSetFrozenError`, and a 409 for the same reason: the caller
+    is the owner and the payload is well-formed; it is the resource that is in the wrong
     state, and the same request becomes legal the moment the draw is removed. Carries
     the exact sentence the HTTP handler composed inline (rebuilt verbatim with
     ``str(exc)``) plus the current ``draw_type`` value. Never an ``HTTPException``."""

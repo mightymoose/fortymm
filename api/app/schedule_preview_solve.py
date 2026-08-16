@@ -143,9 +143,10 @@ class _PreviewReservationResolution:
     act on: its display ``name``, the ``HH:MM`` clock bounds of its window (already
     strings on the reservation's ``Slot``), and the venue-local calendar ``date`` a
     ``past_window`` reason names ("which day to move"). Built in the enqueue verb,
-    where the tournament's reservations are loaded, and carried to the (DB-blind) job — the
-    pure snapshot speaks only namespaced ids and minute offsets, so the names cannot
-    be re-derived worker-side. Mirrors ``app.schedule_solves._ReservationResolution`` (plus
+    where the tournament's reservations are loaded, and carried to the (DB-blind) job —
+    the pure snapshot speaks only namespaced ids and minute offsets, so the names cannot
+    be re-derived worker-side. Mirrors ``app.schedule_solves._ReservationResolution``
+    (plus
     ``reservation_dates``)."""
 
     name: str
@@ -183,9 +184,9 @@ class PreviewJobInputs:
     the pure :class:`~app.scheduling.ScheduleSnapshot` to solve, the ``base`` (an
     aware instant its minute frame is offset from, ``None`` when the tournament has
     no real windows — no wall-clock finish can be projected then), the
-    ``tournament_id`` the preview was enqueued **for**, the per-reservation resolutions the
-    job humanizes an infeasible verdict through, and the per-event meta the breakdown
-    + honest-notes are built from.
+    ``tournament_id`` the preview was enqueued **for**, the per-reservation resolutions
+    the job humanizes an infeasible verdict through, and the per-event meta the
+    breakdown + honest-notes are built from.
 
     ``tournament_id`` is the bind that scopes an otherwise tournament-blind Redis job
     to its owner's tournament: the poll/cancel paths (:func:`preview_job_state`,
@@ -270,16 +271,20 @@ async def ensure_preview_access(
     _gate_owned_pre_live(tournament, actor)
 
 
-def _reservation_resolutions(tournament: Tournament) -> dict[str, _PreviewReservationResolution]:
+def _reservation_resolutions(
+    tournament: Tournament,
+) -> dict[str, _PreviewReservationResolution]:
     """The namespaced-reservation-id → name + ``HH:MM`` map an infeasible preview is
     humanized through, keyed by the solver's ``f"{event.id}:{reservation.id}"`` spelling
     (the same one :func:`app.schedule_preview.build_preview_snapshot` stamps on the
-    snapshot's reservations). Parsed through :class:`~app.schemas.tournament.Reservation`, not
+    snapshot's reservations). Parsed through
+    :class:`~app.schemas.tournament.Reservation`, not
     indexed off raw JSONB (parse, don't validate)."""
     resolutions: dict[str, _PreviewReservationResolution] = {}
     for event in tournament.events:
         for reservation in event_reservations(event):
-            resolutions[preview_reservation_key(event.id, reservation.id)] = _PreviewReservationResolution(
+            key = preview_reservation_key(event.id, reservation.id)
+            resolutions[key] = _PreviewReservationResolution(
                 name=reservation.name,
                 window_start=reservation.slot.start,
                 window_end=reservation.slot.end,
@@ -337,8 +342,9 @@ async def request_schedule_preview(
     # events, so a miss would be a builder bug — fall back to the raw id, since a
     # preview is advisory).
     event_names = {str(event.id): event.name for event in tournament.events}
-    # namespaced reservation id → its resolution (name + HH:MM), built once and reused for
-    # both the job's infeasibility humanization and each drawn fixture's reservation_name.
+    # namespaced reservation id → its resolution (name + HH:MM), built once and reused
+    # for both the job's infeasibility humanization and each drawn fixture's
+    # reservation_name.
     resolutions = _reservation_resolutions(tournament)
     inputs = PreviewJobInputs(
         snapshot=preview.snapshot,
@@ -387,10 +393,10 @@ async def request_schedule_preview(
                 fixture_id=fixture.id,
                 event_id=fixture.event_id,
                 reservation_id=fixture.reservation_id,
-                # The human reservation label, off the same resolution map the job humanizes
-                # infeasibility through. Every drawn fixture's reservation is one the builder
-                # drew over, so a direct lookup is total (a miss would be a builder
-                # bug, not stale input).
+                # The human reservation label, off the same resolution map the job
+                # humanizes infeasibility through. Every drawn fixture's reservation is
+                # one the builder drew over, so a direct lookup is total (a miss would
+                # be a builder bug, not stale input).
                 reservation_name=resolutions[fixture.reservation_id].name,
                 player_a_id=fixture.player_a_id,
                 player_b_id=fixture.player_b_id,
@@ -431,8 +437,9 @@ def project_preview_result(
     ``base`` is known. Match and bye counts are read off the (instant) draw, so they are
     present on every verdict; peak concurrent tables, utilization and per-event
     durations need a plan, so they are zero / ``None`` on an infeasible or unknown
-    result. Infeasibility reasons are humanized through ``inputs.reservation_resolutions``
-    (+ a ``best_of`` map derived from the snapshot) into the *same* resolved union
+    result. Infeasibility reasons are humanized through
+    ``inputs.reservation_resolutions`` (+ a ``best_of`` map derived from the snapshot)
+    into the *same* resolved union
     a real infeasible solve records."""
     snapshot = inputs.snapshot
     fixtures_by_event = _fixtures_by_event(snapshot)
@@ -495,9 +502,9 @@ def _fixtures_by_event(snapshot: ScheduleSnapshot) -> dict[str, list[str]]:
 def _byes_by_event(snapshot: ScheduleSnapshot) -> dict[str, int]:
     """event id → its bye count. A round-robin over an **odd** reservation of ``P``
     players gives one bye per round and runs ``P`` rounds — every player byes
-    exactly once — so an odd reservation contributes ``P`` byes and an even reservation ``0``.
-    A reservation's player set is recovered from its fixtures (in a round-robin every
-    player meets every other, so each appears), keeping this pure over the
+    exactly once — so an odd reservation contributes ``P`` byes and an even reservation
+    ``0``. A reservation's player set is recovered from its fixtures (in a round-robin
+    every player meets every other, so each appears), keeping this pure over the
     snapshot with no separate field-size input."""
     players_by_reservation: dict[str, set[str]] = {}
     reservation_event: dict[str, str] = {}
@@ -511,7 +518,8 @@ def _byes_by_event(snapshot: ScheduleSnapshot) -> dict[str, int]:
     for reservation, members in players_by_reservation.items():
         count = len(members)
         if count % 2 == 1:
-            byes[reservation_event[reservation]] = byes.get(reservation_event[reservation], 0) + count
+            event_id = reservation_event[reservation]
+            byes[event_id] = byes.get(event_id, 0) + count
     return byes
 
 
@@ -569,16 +577,17 @@ def _resolve_reasons(
 ) -> list[ResolvedReason]:
     """Humanize a preview's infeasibility reasons into the *same* resolved union a
     real infeasible solve records (:data:`app.schemas.schedule_solve.ResolvedReason`)
-    — reusing the resolved-reason machinery rather than forking it. The reservation name +
-    ``HH:MM`` come from ``inputs.reservation_resolutions``; ``best_of`` from a
-    fixture-id → ``length_games`` map derived from the snapshot's events (a preview
-    has no DB to read it from); a blamed *player* from their own synthetic id
-    (``placeholder-7`` → ``Placeholder 7``), since a preview's entrants are
-    stand-ins with no name to look up. Exhaustive ``match`` with an
+    — reusing the resolved-reason machinery rather than forking it. The reservation name
+    + ``HH:MM`` come from ``inputs.reservation_resolutions``; ``best_of`` from a
+    fixture-id → ``length_games`` map derived from the snapshot's events (a preview has
+    no DB to read it from); a blamed *player* from their own synthetic id
+    (``placeholder-7`` → ``Placeholder 7``), since a preview's entrants are stand-ins
+    with no name to look up. Exhaustive ``match`` with an
     ``assert_never`` floor, like ``app.schedule_solves._resolve_reason``."""
     best_of = _fixture_best_of(inputs.snapshot)
     return [
-        _resolve_reason(reason, inputs.reservation_resolutions, best_of) for reason in reasons
+        _resolve_reason(reason, inputs.reservation_resolutions, best_of)
+        for reason in reasons
     ]
 
 
@@ -614,7 +623,8 @@ def _resolve_reason(
     match reason:
         case ReservationHasNoTables():
             return ReservationHasNoTablesRead(
-                reservation_name=reservation_resolutions[reason.reservation_id].name, reservation="booked"
+                reservation_name=reservation_resolutions[reason.reservation_id].name,
+                reservation="booked",
             )
         case WindowTooShortForMatch():
             reservation = reservation_resolutions[reason.reservation_id]
@@ -665,10 +675,12 @@ def _resolve_reason(
             # default on an event now a day old, #1101): genuinely reachable because
             # the builder stamps a real ``now_min`` (``now``'s offset from the frame
             # origin), so a wholly-past window trips the solver's past-window guard
-            # exactly as a live pre-solve would. Resolve the offending reservation to its
-            # venue-local calendar day — the same ``past_window`` read a real
+            # exactly as a live pre-solve would. Resolve the offending reservation to
+            # its venue-local calendar day — the same ``past_window`` read a real
             # infeasible solve records, so the client says which day to move.
-            return PastWindowReasonRead(date=reservation_resolutions[reason.reservation_id].date)
+            return PastWindowReasonRead(
+                date=reservation_resolutions[reason.reservation_id].date
+            )
         case _:
             assert_never(reason)
 
@@ -706,14 +718,14 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
 
     The knockout line is what stops the strip lying by omission about an
     **rr-then-ko** event: the preview plans that event's whole draw but schedules only
-    its reservation stage (ADR 20260727 — a bracket is placeable only incrementally, as the
-    reservations that feed it resolve), so without a note the director reads a
-    schedule that silently covers part of their event. The *live* solve does place
-    that bracket, incrementally (ADR "a reservation restricts scheduling, it does not enable
+    its reservation stage (ADR 20260727 — a bracket is placeable only incrementally, as
+    the reservations that feed it resolve), so without a note the director reads a
+    schedule that silently covers part of their event. The *live* solve does place that
+    bracket, incrementally (ADR "a reservation restricts scheduling, it does not enable
     it"); a preview run before anyone has registered has nothing to resolve it from,
-    which is why the note stays. It is emitted off the count of
-    fixtures actually dropped, so a tournament of plain round-robins — which drops none
-    — gets the strip it always had, unchanged.
+    which is why the note stays. It is emitted off the count of fixtures actually
+    dropped, so a tournament of plain round-robins — which drops none — gets the strip
+    it always had, unchanged.
 
     A skipped event earns **no** "Assumed N entrants" line: no field was synthesized
     for it, so claiming one would contradict the line above it."""

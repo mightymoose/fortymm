@@ -90,8 +90,8 @@ def _tables_in_use_detail(labels: list[str], *, placements: int) -> str:
     between an edit they cannot make and a schedule they did not want to lose: send the
     same edit again with the opt-in and accept the unplacing, or move the matches off
     the table first and keep them. Which of the two is right is theirs to decide — that
-    is the whole content of the ADR's split between a reservation (quiet) and a placement
-    (loud).
+    is the whole content of the ADR's split between a reservation (quiet) and a
+    placement (loud).
     """
     one = len(labels) == 1
     has, it, the_table = ("has", "it", "the table") if one else ("have", "them", "them")
@@ -143,10 +143,10 @@ async def _unplace_or_refuse(
     the opt-in, raise :class:`TableInUseError` having written nothing.
 
     This is the ADR's split, in one function. A table that no fixture names is removed
-    with no ceremony whatever any *reservation* thinks of it: a reservation's ``table_ids`` are a
-    reservation, and the reservation simply reserves one fewer. A table a fixture is **placed
-    at** is a different question, and it is asked of the director rather than answered
-    for them.
+    with no ceremony whatever any *reservation* thinks of it: a reservation's
+    ``table_ids`` are a reservation, and the reservation simply reserves one fewer. A
+    table a fixture is **placed at** is a different question, and it is asked of the
+    director rather than answered for them.
 
     Under the opt-in the three placement columns go together — ``table_id``,
     ``scheduled_start`` and ``pinned_at`` — because two of them are meaningless without
@@ -216,8 +216,8 @@ async def apply_table_catalogue(
       the table it meant to keep.
     * a removal a fixture's **placement** stands in the way of, without
       ``unplace_fixtures`` → :class:`TableInUseError` (the named 409). See
-      :func:`_unplace_or_refuse` for why this one is loud where a reservation's reservation is
-      silent.
+      :func:`_unplace_or_refuse` for why this one is loud where a group's reservation
+      is silent.
     * (two entries citing one id is refused a layer earlier, at the boundary —
       :data:`~app.schemas.tournament.EditedTableCatalogue`.)
 

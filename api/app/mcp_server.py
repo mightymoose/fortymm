@@ -155,6 +155,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     FixtureNotFoundError,
     FixturePlacementFrozenError,
+    GroupSetFrozenError,
     IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
@@ -167,7 +168,6 @@ from app.tournament_errors import (
     PlacementTableNotFoundError,
     PlayerNotFoundError,
     ReservationNotInEventError,
-    GroupSetFrozenError,
     ScheduleQueueUnavailableError,
     TableInUseError,
     TableNotInCatalogueError,
@@ -1963,10 +1963,10 @@ async def place_fixture(
     **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
     prediction, and the other constraints (table-in-group, time-in-window, no
     double-booking) are flags derived on read, NOT invariants — so an out-of-window
-    time, or a table outside the fixture's group's reservation, is STORED, not rejected. The one hard
-    rule about the fixture itself: one whose linked match is ``completed`` or ``voided``
-    is history, so its placement can no longer be changed. Owner-gated: only the
-    tournament's creator may place its fixtures.
+    time, or a table outside the fixture's group's reservation, is STORED, not rejected.
+    The one hard rule about the fixture itself: one whose linked match is ``completed``
+    or ``voided`` is history, so its placement can no longer be changed. Owner-gated:
+    only the tournament's creator may place its fixtures.
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
     tournament's owner, when no fixture with that id belongs to the tournament, when the
@@ -2153,10 +2153,10 @@ async def preview_schedule(
     This is NOT a real solve and it persists NOTHING: no entries, no fixtures, no
     solve-ledger row. It draws a synthetic field (each event auto-filled to its cap,
     or ``overrides``) and runs the SAME CP-SAT engine a live tournament uses over the
-    tournament's real ``table_catalogue`` and reservation windows, so "fits / doesn't fit"
-    means exactly what it will at go-live. It answers *"given my tables, time
-    windows, formats and games-per-match, would the schedule even fit — and roughly
-    how long is the day?"* while there is still time to change the setup.
+    tournament's real ``table_catalogue`` and reservation windows, so "fits / doesn't
+    fit" means exactly what it will at go-live. It answers *"given my tables, time
+    windows, formats and games-per-match, would the schedule even fit — and roughly how
+    long is the day?"* while there is still time to change the setup.
 
     Unlike ``request_schedule_solve`` (async — it returns a queued ledger row you
     poll later), this tool is **SYNCHRONOUS**: it enqueues the ephemeral preview,

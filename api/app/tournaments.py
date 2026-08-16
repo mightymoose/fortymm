@@ -67,6 +67,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     FixtureNotFoundError,
     FixturePlacementFrozenError,
+    GroupSetFrozenError,
     IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
@@ -79,7 +80,6 @@ from app.tournament_errors import (
     PlacementTableNotFoundError,
     PlayerNotFoundError,
     ReservationNotInEventError,
-    GroupSetFrozenError,
     ScheduleQueueUnavailableError,
     TableInUseError,
     TableNotInCatalogueError,
@@ -555,11 +555,11 @@ async def update_tournament(
         )
     except TableInUseError as exc:
         # The catalogue's named refusal: removing a table matches are placed at, with no
-        # opt-in. Bare prose, like the group-set freeze and the league state rule on this
-        # same route — it carries the exact domain-authored sentence, rebuilt verbatim
-        # with ``str``. Nothing was written (the verb raises before the diff touches a
-        # row and long before the commit), so the same request with the opt-in is safe
-        # to send straight back.
+        # opt-in. Bare prose, like the group-set freeze and the league state rule on
+        # this same route — it carries the exact domain-authored sentence, rebuilt
+        # verbatim with ``str``. Nothing was written (the verb raises before the diff
+        # touches a row and long before the commit), so the same request with the opt-in
+        # is safe to send straight back.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except TableNotInCatalogueError as exc:
         # A catalogue entry cited an id this tournament does not have: a field refusal,
@@ -736,7 +736,9 @@ async def create_event(
     )
 
 
-def _reservation_not_in_event(exc: ReservationNotInEventError) -> RequestValidationError:
+def _reservation_not_in_event(
+    exc: ReservationNotInEventError,
+) -> RequestValidationError:
     """The 422 for a ``reservations`` entry citing an id this event does not have
     (ADR 20260801) — as a **validation error on that entry's field**, not a hand-rolled
     body.
@@ -1325,8 +1327,8 @@ async def uncut_event_draw(
 # group's reservation, the time falls inside that reservation's window, nothing is
 # double-booked — all three
 # are flags derived on read, NOT invariants, so this route stores an out-of-window time
-# and an off-group table without complaint. What it does NOT store is a ``table_id`` that
-# names no table: "the placement names a real table" became an invariant when the
+# and an off-group table without complaint. What it does NOT store is a ``table_id``
+# that names no table: "the placement names a real table" became an invariant when the
 # catalogue became rows (ADR 20260801), so that is a 422 naming the field. Plus the
 # freeze below.
 #

@@ -29,7 +29,8 @@ if TYPE_CHECKING:
 class TournamentEventReservation(Base):
     """One **reservation** of an event — a set of tables held for a window of time.
 
-    This is the other half of what ``tournament_event_reservations`` used to be. A "reservation" said
+    This is the other half of what ``tournament_event_reservations`` used to be. A
+    "reservation" said
     *these entrants play each other* and *they play here, then* in one row; the first
     claim is a
     :class:`~app.models.tournament_event_stage_group.TournamentEventStageGroup` now, and
@@ -53,9 +54,9 @@ class TournamentEventReservation(Base):
     **The tables are rows, not a JSONB array** (ADR 20260801, "the tournament-scoping
     stops at the join table") — see
     :class:`~app.models.tournament_event_reservation_table.TournamentEventReservationTable`.
-    They followed this row from the reservation it split out of, and returned to the event on
-    the way: ADR 20260815 re-parented them onto a stage because their reservation had moved
-    there, and a reservation is event-parented, so they come back.
+    They followed this row from the reservation it split out of, and returned to the
+    event on the way: ADR 20260815 re-parented them onto a stage because their
+    reservation had moved there, and a reservation is event-parented, so they come back.
 
     **Its attributes do not freeze with the draw.** The set of *group* identities is
     frozen once a draw is cut (ADR-0786), because a fixture names a group. Nothing
@@ -124,8 +125,8 @@ class TournamentEventReservation(Base):
         ),
     )
 
-    #: The reservation's identity. Server-minted, and NOT a reservation id on the wire — see
-    #: the class docstring.
+    #: The reservation's identity. Server-minted, and NOT a reservation id on the wire
+    #: — see the class docstring.
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -148,9 +149,10 @@ class TournamentEventReservation(Base):
     #: Where this reservation sits in its event's own order: 0-based, contiguous,
     #: assigned by the server from the index of the entry that wrote it.
     #:
-    #: Not what the wire reports. ``reservations[].position`` is the *group's* position, which
-    #: is the one the snake seeds against and the qualifier seam labels by. This column
-    #: exists so a reservation set has a stable, non-arbitrary read order of its own —
+    #: Not what the wire reports. ``reservations[].position`` is the *group's*
+    #: position, which is the one the snake seeds against and the qualifier seam
+    #: labels by. This column exists so a reservation set has a stable, non-arbitrary
+    #: read order of its own —
     #: ordering by a random uuid would shuffle a director's list on every read — and it
     #: happens to equal the group's position under this slice's 1:1 lockstep.
     position: Mapped[int] = mapped_column(Integer, nullable=False)

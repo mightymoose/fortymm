@@ -52,7 +52,7 @@ from app.tournament_draw_settings import (
     draw_settings_row,
     store_draw_settings,
 )
-from app.tournament_draws import event_has_draw, event_groups, event_reservations
+from app.tournament_draws import event_groups, event_has_draw, event_reservations
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
@@ -111,8 +111,8 @@ async def create_event(
     Then it writes the event exactly as the HTTP handler did inline — the nested
     value-objects (``slot``, ``match_settings``, ``predicates``) persist as plain JSONB
     via ``model_dump``, and the ``groups`` as child **rows** through
-    :func:`app.tournament_reservations.stored_groups`, which composes them and stamps the
-    server-assigned ``position`` the write shape has no field for. Commits
+    :func:`app.tournament_reservations.stored_groups`, which composes them and stamps
+    the server-assigned ``position`` the write shape has no field for. Commits
     and refreshes before returning. Never raises ``HTTPException`` — the caller adapts
     each domain exception to its transport and shapes the read (a just-created event has
     no entrants, draw or results, so those are all empty without a query).
@@ -218,16 +218,16 @@ def _group_set_frozen_detail(removed: list[str], added: list[str]) -> str:
     compose it inline, so :class:`GroupSetFrozenError` carries the byte-identical body.
 
     Both halves are named, because a payload can move both at once and the director has
-    to be told which of their groups went missing: a **removed** group leaves its fixtures
-    pointing at a group that no longer exists (which the composite foreign key would
-    refuse too, but only at COMMIT and only as a driver error), and an **added** group
-    arrives with **no fixtures**, because the draw was dealt across the groups the event
-    had at the cut. The sentence ends with the way out (remove the draw, change the
-    groups, cut again) and with what is still allowed, so a director who has to move a
-    broken table is never left with nowhere to go.
+    to be told which of their groups went missing: a **removed** group leaves its
+    fixtures pointing at a group that no longer exists (which the composite foreign key
+    would refuse too, but only at COMMIT and only as a driver error), and an **added**
+    group arrives with **no fixtures**, because the draw was dealt across the groups the
+    event had at the cut. The sentence ends with the way out (remove the draw, change
+    the groups, cut again) and with what is still allowed, so a director who has to move
+    a broken table is never left with nowhere to go.
 
-    It no longer offers "re-identify" as a third thing to do: a group id is minted by the
-    server (ADR 20260801), so re-identifying one is not a payload a client can send.
+    It no longer offers "re-identify" as a third thing to do: a group id is minted by
+    the server (ADR 20260801), so re-identifying one is not a payload a client can send.
     """
     clauses = []
     if removed:
@@ -309,9 +309,9 @@ def _qualifiers_per_group_frozen_detail(
 
     It is not hypothetical and it is not cosmetic. The knockout bracket is cut
     **upfront** from ``P × K``, and the qualifiers are seated into predetermined slots
-    as each group finishes: a bracket cut at ``K = 2`` and then advanced at ``K = 3`` has
-    three groups' worth of thirds with nowhere to sit. So the count is frozen exactly as
-    the type is, and the way out is the same one.
+    as each group finishes: a bracket cut at ``K = 2`` and then advanced at ``K = 3``
+    has three groups' worth of thirds with nowhere to sit. So the count is frozen
+    exactly as the type is, and the way out is the same one.
 
     This is the **first** line of defence, not the only one: past it,
     :meth:`app.draws.RrThenKoStrategy.advance` raises
@@ -601,10 +601,10 @@ async def _reanchor_placements_for_timezone_change(
     A director who placed a fixture at 18:00 in ``America/Chicago`` and then corrects
     the event to ``America/Denver`` means "the match is at 6 PM local; I just fixed
     which local" — so the fixture must still read **18:00**, its stored instant moving
-    by the offset delta while its local reading stays put. The group ``Slot`` windows get
-    this for free (wall-clock ``{date,start,end}`` components, untouched by the edit);
-    ``scheduled_start`` is a ``timestamptz`` **instant**, so it is recomposed here or it
-    would silently shift.
+    by the offset delta while its local reading stays put. The group ``Slot`` windows
+    get this for free (wall-clock ``{date,start,end}`` components, untouched by the
+    edit); ``scheduled_start`` is a ``timestamptz`` **instant**, so it is recomposed
+    here or it would silently shift.
 
     Only ``scheduled_start`` is recomposed — never ``pinned_at``. ``scheduled_start`` is
     a wall-clock *intent* ("the match is at 6 PM local"), so correcting which local
@@ -682,8 +682,8 @@ async def update_event(
     value-objects to plain dicts/lists, so one ``setattr`` loop covers the JSONB and
     scalar columns alike — with ``groups`` taken out of it and applied as an id-keyed
     diff over the event's group **rows**,
-    :func:`app.tournament_reservations.apply_event_reservations`), with three side effects — the first
-    new, the other two preserved exactly from the router:
+    :func:`app.tournament_reservations.apply_event_reservations`), with three side
+    effects — the first new, the other two preserved exactly from the router:
 
     * a **draw-configuration** edit (the draw type and, for ``rr-then-ko``, its
       qualifier count) is applied to the event's ``draw_settings`` row, the only place
@@ -810,8 +810,8 @@ async def update_event(
         await _reanchor_placements_for_timezone_change(
             db, event.id, old_timezone=old_timezone, new_timezone=event.timezone
         )
-    # Flushed before the facts are re-read, because one of them is a group's ``id`` and a
-    # group this payload ADDED does not have one until the INSERT runs: the id is the
+    # Flushed before the facts are re-read, because one of them is a group's ``id`` and
+    # a group this payload ADDED does not have one until the INSERT runs: the id is the
     # database's (``gen_random_uuid()``), not the client's, so an unflushed row would
     # project as ``id=None`` and the read boundary (``Group``) would refuse it. Flushing
     # is safe here for the same reason the diff is: both position constraints and the

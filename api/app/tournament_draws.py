@@ -44,9 +44,9 @@ from app.draws import (
     FixtureId,
     FixtureStage,
     FixtureState,
+    GroupId,
     MatchId,
     NonSinglesDraw,
-    GroupId,
     order_entrants,
     strategy_for,
     unseated_entrant_allowance,
@@ -64,8 +64,8 @@ from app.models import (
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_settings import draw_settings_of
-from app.tournament_reservations import group_read, reservation_read
 from app.tournament_queries import stage_ids_for_events
+from app.tournament_reservations import group_read, reservation_read
 
 
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
@@ -104,7 +104,8 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
 
 def group_order(event: TournamentEvent) -> dict[GroupId, int]:
     """Each of this event's group ids mapped to its **0-based place in the event's group
-    order** — the lookup :func:`fixture_state` resolves a fixture's ``group_id`` through.
+    order** — the lookup :func:`fixture_state` resolves a fixture's ``group_id``
+    through.
 
     Computed once per event rather than per fixture: a fixture carries its group's *id*,
     not its index, so somebody has to do the join and a 200-fixture round-robin should
@@ -116,7 +117,9 @@ def group_order(event: TournamentEvent) -> dict[GroupId, int]:
     agreeing — including on an event whose groups predate the field, where every stored
     position is ``0`` and the stable sort leaves the array order standing.
     """
-    return {GroupId(group.id): index for index, group in enumerate(_ordered_groups(event))}
+    return {
+        GroupId(group.id): index for index, group in enumerate(_ordered_groups(event))
+    }
 
 
 def _ordered_groups(event: TournamentEvent) -> list[GroupRead]:
@@ -279,10 +282,10 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     domain is never ``""``.
 
     Every configured group is passed, whatever the draw type. An un-grouped strategy
-    (single-elim, #785, and swiss) ignores them and writes ``NULL`` group refs; a grouped
-    one deals the field across exactly these ids — which is what makes a fixture's
-    ``group_id`` a string ref that resolves against the event the client is already
-    holding.
+    (single-elim, #785, and swiss) ignores them and writes ``NULL`` group refs; a
+    grouped one deals the field across exactly these ids — which is what makes a
+    fixture's ``group_id`` a string ref that resolves against the event the client is
+    already holding.
 
     The order is read off each group's ``position`` (ADR 20260801, "Groups carry an
     explicit ``position``") rather than taken from the JSONB array's incidental
@@ -293,7 +296,9 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     them in. A ``sorted`` is stable, so groups stored before the field existed (every
     ``position`` defaulting to ``0``) keep the array order they have always had.
     """
-    return DrawConfig(group_ids=tuple(GroupId(group.id) for group in _ordered_groups(event)))
+    return DrawConfig(
+        group_ids=tuple(GroupId(group.id) for group in _ordered_groups(event))
+    )
 
 
 def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
@@ -653,9 +658,9 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     placement is frozen at the cut (ADR-0786), so the fixtures of the *previous* draw
     are not something to be patched into agreement with the new field — they are a plan
     that was made against a field that no longer exists, and every one of them may have
-    moved. Matching on ``(group, round, position)`` and updating the sides in place would
-    keep the old rows' ids while silently changing who they seat, which is the same
-    thing with a worse audit trail.
+    moved. Matching on ``(group, round, position)`` and updating the sides in place
+    would keep the old rows' ids while silently changing who they seat, which is the
+    same thing with a worse audit trail.
 
     One transaction is what makes "wholesale" true rather than aspirational: the DELETE
     and the INSERTs commit together, so there is no instant in which the event holds

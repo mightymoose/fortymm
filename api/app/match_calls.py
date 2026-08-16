@@ -117,6 +117,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import db as db_module
 from app import queue as queue_module
+from app.draws import group_label
 from app.models import (
     Match,
     MatchGame,
@@ -148,7 +149,6 @@ from app.realtime import EventKind, publish_event
 from app.rq_async import run_async_db_job
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import TournamentTable
-from app.draws import group_label
 from app.tournament_draws import event_groups
 from app.tournament_queries import stage_ids_for_tournament
 from app.venue_time import anchor_wallclock, venue_local
@@ -983,10 +983,10 @@ class CopyIngredients:
     table_labels: dict[str, str]
     #: Per event, its groups' id → display label — ``group_label(position)``, derived,
     #: never a stored name (ADR 20260808: a group renders as "Group A" everywhere the
-    #: app used to print a stored reservation name). Both keys are uuids: the outer one is
-    #: the event's, the inner one the group's own ``tournament_event_stage_groups``
-    #: primary key (ADR 20260801), which is exactly what a fixture's ``group_id``
-    #: holds.
+    #: app used to print a stored reservation name). Both keys are uuids: the outer
+    #: one is the event's, the inner one the group's own
+    #: ``tournament_event_stage_groups`` primary key (ADR 20260801), which is exactly
+    #: what a fixture's ``group_id`` holds.
     group_labels: dict[uuid.UUID, dict[uuid.UUID, str]]
 
     def user_for_entry(self, entry_id: uuid.UUID | None) -> User | None:

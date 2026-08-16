@@ -39,9 +39,9 @@ from app.results import (
     EventResults,
     FieldInput,
     FinishRow,
-    MatchOutcome,
     GroupInput,
     GroupStandings,
+    MatchOutcome,
     RoundRobinResults,
     RrThenKoResults,
     SingleElimResults,
@@ -83,7 +83,6 @@ from app.tournament_eligibility import (
     evaluate_rating_eligibility,
     event_is_full,
 )
-from app.tournament_reservations import group_read, reservation_read
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -91,6 +90,7 @@ from app.tournament_queries import (
     fixtures_by_event,
     game_counts_by_match,
 )
+from app.tournament_reservations import group_read, reservation_read
 
 # Public shared surface: the serializers both the HTTP router (``tournaments.py``)
 # and the MCP adapter import. ``_serialize_event`` is public too because the
@@ -258,16 +258,16 @@ def event_results(
     one an rr-then-ko event's edit page silently mis-projects.
 
     It is **not** true that ``round_robin`` never reads the map: every arm here that
-    calls ``_group_inputs`` (``round_robin`` and ``rr_then_ko``'s group half alike) reads
-    it, because that is where a fixture's own group-stage-ness is decided now (ADR
+    calls ``_group_inputs`` (``round_robin`` and ``rr_then_ko``'s group half alike)
+    reads it, because that is where a fixture's own group-stage-ness is decided now (ADR
     20260815). It is a no-op for ``round_robin`` only in the sense that every one of a
     round-robin event's fixtures shares the one stage the map already has to name —
     ``single_elim`` is the arm that truly never reads it at all (``_bracket_fixtures``
     takes no ``stage_draw_types`` argument), and ``swiss`` never has a knockout half to
-    split out either. The map is required precisely because it is read for every
-    grouped shape: an unknown ``stage_id`` is a loud failure (a fixture and the map it
-    is projected against were built off two different stage sets), never a fixture
-    quietly dropped from the table.
+    split out either. The map is required precisely because it is read for every grouped
+    shape: an unknown ``stage_id`` is a loud failure (a fixture and the map it is
+    projected against were built off two different stage sets), never a fixture quietly
+    dropped from the table.
 
     ``None`` in exactly one case, meaning "no results here" rather than an empty table:
     an event whose draw has not been cut (no fixtures to stand). There used to be a
@@ -291,7 +291,9 @@ def event_results(
     match strategy:
         case RoundRobinResults():
             return _serialize_standings(
-                strategy.tabulate(_group_inputs(fixtures, game_counts, stage_draw_types))
+                strategy.tabulate(
+                    _group_inputs(fixtures, game_counts, stage_draw_types)
+                )
             )
         case SingleElimResults():
             return _serialize_finishes(
@@ -398,7 +400,9 @@ def _group_inputs(
                 # short of ``fixture_count`` forever: permanently un-``complete``, no
                 # champion — the opposite of ADR-0788's live-standings guarantee.
                 fixture_count=sum(
-                    1 for f in group_fixtures if f.match_status is not MatchStatus.voided
+                    1
+                    for f in group_fixtures
+                    if f.match_status is not MatchStatus.voided
                 ),
                 outcomes=tuple(outcomes),
             )
@@ -415,10 +419,10 @@ def _field_input(
     :func:`_group_inputs`, with nothing to group by.
 
     The field is the event's **active entrants**, not the entries its fixtures seat.
-    That difference is the whole reason this takes an argument :func:`_group_inputs` does
-    not: a swiss entrant with a **bye** has no fixture that round (a bye is the absence
-    of a row, ADR-0786), and every later round is cut with both sides unknown, so a
-    seven-player draw derived from fixtures alone would stand a six-player table.
+    That difference is the whole reason this takes an argument :func:`_group_inputs`
+    does not: a swiss entrant with a **bye** has no fixture that round (a bye is the
+    absence of a row, ADR-0786), and every later round is cut with both sides unknown,
+    so a seven-player draw derived from fixtures alone would stand a six-player table.
 
     The entries seated in fixtures are **unioned in** rather than assumed to be a
     subset, for the **rows** only. A player who withdraws after the draw is cut leaves
@@ -583,7 +587,8 @@ def _fixture_outcome(
 
 def _group_standings_read(groups: Sequence[GroupStandings]) -> list[GroupStandingsRead]:
     """The per-group standings block, shared by the two shapes that carry one — the
-    round-robin arm and the group stage of the rr-then-ko arm — so a table means the same
+    round-robin arm and the group stage of the rr-then-ko arm — so a table means the
+    same
     thing whichever event it is read off."""
     return [
         GroupStandingsRead(

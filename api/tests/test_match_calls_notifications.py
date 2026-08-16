@@ -27,7 +27,7 @@ from tests._helpers import start_session
 _CONTEXT = MatchCallContext(
     tournament_name="Spring Open",
     event_name="Men's Singles",
-    reservation_name="Group B",
+    group_label="Group B",
 )
 
 
@@ -201,7 +201,7 @@ def test_messages_fit_the_notification_columns():
         context=MatchCallContext(
             tournament_name="The 2026 Metropolitan Autumn Invitational",
             event_name="Mixed Doubles Consolation",
-            reservation_name="Group F",
+            group_label="Group F",
         ),
     )
     assert len(msg.title) <= 200

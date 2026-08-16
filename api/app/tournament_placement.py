@@ -197,8 +197,8 @@ async def place_fixture(
     * **422** — the hard rule about the body: the ``table_id`` must name a table in
       this tournament's catalogue (:func:`_enforce_table_exists`, raising
       :class:`PlacementTableNotFoundError`, ADR 20260801). Everything else still saves
-      — an out-of-window time, a table outside the fixture's group's reservation and a double-booking
-      are flags derived on read, not refusals (ADR-0790).
+      — an out-of-window time, a table outside the fixture's group's reservation and a
+      double-booking are flags derived on read, not refusals (ADR-0790).
 
     Then the whole pin/notify transition runs through
     :func:`app.match_calls.apply_manual_placement` on this open transaction (a

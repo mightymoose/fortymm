@@ -290,9 +290,9 @@ async def _fixtures_with_match_statuses(
             # has no guarantee even between two runs against unchanged data, and the
             # rows go on to be projected into the outcomes a draw type ranks its field
             # by. Nothing downstream may depend on that order — the tiebreak chain is
-            # sums and counts (``app.group_finishing_order``), and a plan's ready list is
-            # sorted by ``app.draws.ready_fixtures`` — but "no caller depends on it" is
-            # cheaper to keep true when the order is fixed.
+            # sums and counts (``app.group_finishing_order``), and a plan's ready list
+            # is sorted by ``app.draws.ready_fixtures`` — but "no caller depends on it"
+            # is cheaper to keep true when the order is fixed.
             #
             # ``(group_id, round, position)`` is total within one event: it is the
             # fixture's identity there, declared NULLS NOT DISTINCT so the un-grouped

@@ -27,11 +27,12 @@ class VenueTable(Base):
 
     The catalogue used to be ``tournaments.table_catalogue``: a JSONB list of
     ``{id, label, court}`` objects whose ``id`` was a **client-supplied string**. That
-    left nothing for a placement or a reservation to foreign-key, which is the only reason
-    ADR-0790 could say a ``table_id`` naming no table is stored rather than refused.
-    A table is a row now, so "this id names a table" becomes something the database can
-    answer — and the id is the database's to mint (``gen_random_uuid()``), never the
-    client's to author, exactly as a reservation's ``position`` became the server's to assign.
+    left nothing for a placement or a reservation to foreign-key, which is the only
+    reason ADR-0790 could say a ``table_id`` naming no table is stored rather than
+    refused. A table is a row now, so "this id names a table" becomes something the
+    database can answer — and the id is the database's to mint (``gen_random_uuid()``),
+    never the client's to author, exactly as a reservation's ``position`` became the
+    server's to assign.
 
     Named ``VenueTable`` rather than ``TournamentTable`` only because the *schema* of
     that name — the wire shape in ``app.schemas.tournament`` — already holds it; the
@@ -52,8 +53,8 @@ class VenueTable(Base):
             "position",
         ),
         # Two tables of one tournament never share a place in its order — the same
-        # guarantee ``Reservation.position`` makes by construction, said here as a constraint
-        # because these are rows and a constraint is available.
+        # guarantee ``Reservation.position`` makes by construction, said here as a
+        # constraint because these are rows and a constraint is available.
         #
         # DEFERRABLE INITIALLY DEFERRED, because the catalogue's write is an id-keyed
         # diff and a diff **re-orders**: dragging table B above table A moves B onto a
@@ -76,8 +77,8 @@ class VenueTable(Base):
         # table_id)`` and thereby say "the table this reservation reserves is my own
         # tournament's" (ADR 20260801). The same trick, one level down, as
         # ``tournament_event_reservations``' ``(event_id, id)`` primary key — which is
-        # that table's key rather than an extra constraint only because a reservation id is
-        # per-event and a table id is not.
+        # that table's key rather than an extra constraint only because a reservation id
+        # is per-event and a table id is not.
         UniqueConstraint(
             "tournament_id", "id", name="uq_tournament_tables_tournament_id_id"
         ),

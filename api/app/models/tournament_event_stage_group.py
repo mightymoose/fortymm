@@ -85,8 +85,8 @@ class TournamentEventStageGroup(Base):
             "stage_id", "id", name="uq_tournament_event_stage_groups_stage_id_id"
         ),
         # Two groups of one stage never share a place in its order — the guarantee
-        # ``app.tournament_reservations`` makes by construction (it stamps ``range(len(...))``)
-        # said here as a constraint.
+        # ``app.tournament_reservations`` makes by construction (it stamps
+        # ``range(len(...))``) said here as a constraint.
         #
         # DEFERRABLE INITIALLY DEFERRED, for the reason every sibling ``position``
         # constraint is: the groups of a stage are written as an id-keyed diff, and a
@@ -116,7 +116,8 @@ class TournamentEventStageGroup(Base):
     #: A group's parent is its STAGE (ADR 20260815) — the one column it must share with
     #: the fixtures that name it. Always the event's stage at position 0 in practice
     #: (decision 3), but that placement is not this column's job to enforce;
-    #: ``app.tournament_reservations.apply_event_reservations`` resolves the stage before it writes.
+    #: ``app.tournament_reservations.apply_event_reservations`` resolves the stage
+    #: before it writes.
     stage_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
@@ -156,9 +157,9 @@ class TournamentEventStageGroup(Base):
     #: slice keeps. ``delete-orphan`` is what makes a removed group take its mapping
     #: with it, and ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` covers every
     #: path that does not load the collection first. In this slice the mapping is never
-    #: absent — ``app.tournament_reservations`` writes a group and its reservation together on
-    #: every path — so the ``reservation`` view below is total in practice. The type
-    #: stays non-optional to say so.
+    #: absent — ``app.tournament_reservations`` writes a group and its reservation
+    #: together on every path — so the ``reservation`` view below is total in
+    #: practice. The type stays non-optional to say so.
     reservation_link: Mapped["TournamentEventGroupReservation"] = relationship(
         back_populates="group",
         cascade="all, delete-orphan",

@@ -42,8 +42,8 @@ production's own ``cut_draw`` uses:
 * **round-robin** — the whole draw is planned and previewed;
 * **rr-then-ko** — the whole draw is planned, and only its **reservation stage** is
   previewed: the knockout fixtures (``reservation_id IS NULL``) are dropped in the
-  conversion pass below, because they are TBD-sided until the reservations that feed them
-  are played. A live solve does schedule that bracket, incrementally, as those
+  conversion pass below, because they are TBD-sided until the reservations that feed
+  them are played. A live solve does schedule that bracket, incrementally, as those
   reservations resolve; a preview has nothing to resolve it from;
 * **single-elim** — the **event** is skipped, and the skip is reported. Its
   bracket *has* a draw strategy (#785) and a live solve places it, but a preview
@@ -158,22 +158,22 @@ def placeholder_label(player_id: str) -> str:
 
 
 def preview_reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> str:
-    """The one namespaced ``event:reservation`` spelling every preview site keys a reservation by
-    — the ``ScheduleReservation`` id, a fixture's ``reservation_id`` ref, and the enqueue verb's
-    infeasibility-resolution map all pass through here, so the string contract lives
-    in exactly one place and cannot drift between them.
+    """The one namespaced ``event:reservation`` spelling every preview site keys a
+    reservation by — the ``ScheduleReservation`` id, a fixture's ``reservation_id``
+    ref, and the enqueue verb's infeasibility-resolution map all pass through here, so
+    the string contract lives in exactly one place and cannot drift between them.
 
     **The namespace is no longer needed for uniqueness, and is kept anyway.** It was
-    minted because a reservation id was a per-event string and two events of one tournament
-    could each hold a "reservation-a"; a reservation id is a globally unique uuid now (ADR 20260801),
-    so the ``event:`` prefix disambiguates nothing. It stays because the *key* is a wire
-    value, not an implementation detail: it is what
-    :class:`~app.schemas.schedule_preview.SchedulePreviewFixtureRead.reservation_id` carries,
-    what a stored solve's plan is keyed by, and what an infeasibility reason names — so
-    dropping it would be a wire change with client follow-ups, and it would leave every
-    solve row already in a database keyed in a space nothing computes any more. It also
-    still earns its keep as a *label*: a solver reservation id that says which event it belongs
-    to is one a human reading a plan or a reason can place."""
+    minted because a reservation id was a per-event string and two events of one
+    tournament could each hold a "reservation-a"; a reservation id is a globally unique
+    uuid now (ADR 20260801), so the ``event:`` prefix disambiguates nothing. It stays
+    because the *key* is a wire value, not an implementation detail: it is what
+    :class:`~app.schemas.schedule_preview.SchedulePreviewFixtureRead.reservation_id`
+    carries, what a stored solve's plan is keyed by, and what an infeasibility reason
+    names — so dropping it would be a wire change with client follow-ups, and it would
+    leave every solve row already in a database keyed in a space nothing computes any
+    more. It also still earns its keep as a *label*: a solver reservation id that says
+    which event it belongs to is one a human reading a plan or a reason can place."""
     return f"{event_id}:{reservation_id}"
 
 
@@ -194,9 +194,9 @@ class UnpreviewableDrawType:
 @dataclass(frozen=True, slots=True)
 class DegenerateConfiguration:
     """This event is out of the preview because its **configuration cannot be cut** —
-    the draw strategy refused it with :class:`~app.draws.DegenerateDraw` (a reservation that
-    would hold one entrant, a knockout stage that would hold one qualifier, an event
-    with no reservations at all).
+    the draw strategy refused it with :class:`~app.draws.DegenerateDraw` (a reservation
+    that would hold one entrant, a knockout stage that would hold one qualifier, an
+    event with no reservations at all).
 
     Carries the strategy's message **verbatim**, and that is the whole point: a
     ``DegenerateDraw``'s message is domain-authored copy naming the numbers the
@@ -274,12 +274,13 @@ class PreviewSnapshot:
     it synthesized a field for (in the tournament's own event order).
 
     ``base`` is the **timezone-aware instant** origin of the snapshot's minute frame
-    — the earliest reservation window start across every event (each anchored to its event's
-    venue ``timezone``), the anchor the snapshot's ``now_min`` is offset from — or
-    ``None`` when no event has a reservation (no window to anchor on), in which case a caller
-    reports a duration in minutes but no wall-clock finish. It is aware (not naive) so
-    the downstream ``estimated_finish`` it seeds is aware too (api/CLAUDE.md — a
-    response schema must not emit a naïve datetime). The builder already computes it to
+    — the earliest reservation window start across every event (each anchored to its
+    event's venue ``timezone``), the anchor the snapshot's ``now_min`` is offset from —
+    or ``None`` when no event has a reservation (no window to anchor on), in which case
+    a caller reports a duration in minutes but no wall-clock finish. It is aware (not
+    naive) so the downstream ``estimated_finish`` it seeds is aware too (api/CLAUDE.md —
+    a response schema must not emit a naïve datetime). The builder already computes it
+    to
     set the frame, so it is handed back rather than re-derived downstream."""
 
     snapshot: ScheduleSnapshot
@@ -301,10 +302,11 @@ def _field_size(event: TournamentEvent, override: int | None) -> int:
 def _slot_bounds(
     date: str, start: str, end: str, timezone: str
 ) -> tuple[datetime, datetime]:
-    """A reservation ``Slot``'s window as timezone-aware **instants**, its ``{date, start,
-    end}`` wall-clock components anchored by the event's venue ``timezone`` (ADR
-    "tournament times are timezone-aware instants"). Anchoring is what puts every
-    event's window on **one real-instant axis** — the same one the real solve's
+    """A reservation ``Slot``'s window as timezone-aware **instants**, its
+    ``{date, start, end}`` wall-clock components anchored by the event's venue
+    ``timezone`` (ADR "tournament times are timezone-aware instants"). Anchoring is
+    what puts every event's window on **one real-instant axis** — the same one the
+    real solve's
     ``schedule_solves._slot_bounds`` uses — so a multi-timezone tournament's
     preview verdict/duration/finish agree with production instead of mis-comparing
     two venues' naive wall-clocks. Reuses the #1152 ``venue_time`` primitive rather
@@ -340,10 +342,10 @@ class _SkippedEvent:
     is why — its draw type, or a configuration the draw refused.
 
     A sibling of :class:`_EventPlan` rather than a flag on it, so a skipped event
-    cannot carry a field size, a reservation window or a fixture it never had: it keeps its
-    place in the tournament's event order (the second pass walks both kinds in one
-    list) and contributes only its summary, which the caller turns into the honest
-    note naming it. One kind of skipped event, whatever the reason, so a degenerate
+    cannot carry a field size, a reservation window or a fixture it never had: it keeps
+    its place in the tournament's event order (the second pass walks both kinds in one
+    list) and contributes only its summary, which the caller turns into the honest note
+    naming it. One kind of skipped event, whatever the reason, so a degenerate
     configuration inherits every one of those guarantees rather than getting a second,
     weaker path to the same place."""
 
@@ -399,8 +401,8 @@ def build_preview_snapshot(
     Every other event of the tournament is previewed as usual, which is the point:
     this builder is per-tournament, so a refusal raised for one event takes every
     event beside it with it. An **rr-then-ko** event is not skipped for its draw type
-    at all — its reservation stage places exactly as a round-robin's does and is previewed,
-    and only its knockout fixtures are dropped (ADR 20260727).
+    at all — its reservation stage places exactly as a round-robin's does and is
+    previewed, and only its knockout fixtures are dropped (ADR 20260727).
 
     Raises only when **no** event of the tournament is previewable, and raises the
     **first** skipped event's own reason (:func:`skip_refusal`): there is nothing left
@@ -439,13 +441,14 @@ def build_preview_snapshot(
             case DrawType.round_robin | DrawType.rr_then_ko:
                 # The real draw, dispatched exactly as production's ``cut_draw`` does.
                 #
-                # ``rr-then-ko`` is planned in FULL and previewed in part: its reservations
-                # schedule exactly as a round-robin's do, and its knockout fixtures are
-                # dropped in the conversion pass below (ADR 20260727). Planning the
-                # whole draw rather than cutting a round-robin in its place is what
-                # keeps the previewed reservations the ones production would deal — the same
-                # snake, and the same cut-time refusals (``DegenerateDraw`` when K
-                # exceeds the smallest reservation) a director would meet for real.
+                # ``rr-then-ko`` is planned in FULL and previewed in part: its
+                # reservations schedule exactly as a round-robin's do, and its knockout
+                # fixtures are dropped in the conversion pass below (ADR 20260727).
+                # Planning the whole draw rather than cutting a round-robin in its place
+                # is what keeps the previewed reservations the ones production would
+                # deal — the same snake, and the same cut-time refusals
+                # (``DegenerateDraw`` when K exceeds the smallest reservation) a
+                # director would meet for real.
                 field_size = _field_size(event, overrides.get(event.id))
                 ordered_entrants = [
                     OrderedEntrant(
@@ -466,15 +469,15 @@ def build_preview_snapshot(
                     )
                 except DegenerateDraw as refusal:
                     # The draw refusing a configuration that would not be a
-                    # competition — a reservation of one, a knockout stage of one qualifier,
-                    # no reservations at all. The refusal is right and is left alone; only its
-                    # reach is fixed. It is raised per event, but this loop builds one
-                    # TOURNAMENT, so letting it propagate blanked the preview of every
-                    # healthy event beside it (exactly the defect a skipped draw type
-                    # was already fixed for). The strategy's message rides along
-                    # verbatim: it names the numbers the director has to change, and
-                    # recomposing it here would be a second copy of a rule this module
-                    # does not own.
+                    # competition — a reservation of one, a knockout stage of one
+                    # qualifier, no reservations at all. The refusal is right and is
+                    # left alone; only its reach is fixed. It is raised per event, but
+                    # this loop builds one TOURNAMENT, so letting it propagate blanked
+                    # the preview of every healthy event beside it (exactly the defect a
+                    # skipped draw type was already fixed for). The strategy's message
+                    # rides along verbatim: it names the numbers the director has to
+                    # change, and recomposing it here would be a second copy of a rule
+                    # this module does not own.
                     plans.append(
                         _SkippedEvent(
                             event=event,
@@ -489,11 +492,11 @@ def build_preview_snapshot(
                 plans.append(planned)
             case DrawType.single_elim | DrawType.swiss:
                 # Skipped, not refused — and skipped for a reason that is no longer
-                # about reservations. A live solve does place both of these, over the event's
-                # own window (ADR "a reservation restricts scheduling, it does not enable
-                # it"); what a PREVIEW cannot do is lay out a draw that is decided as
-                # it is played, since it runs before anyone has registered. Refusing
-                # here would be per-event in name only: this loop builds one
+                # about reservations. A live solve does place both of these, over the
+                # event's own window (ADR "a reservation restricts scheduling, it does
+                # not enable it"); what a PREVIEW cannot do is lay out a draw that is
+                # decided as it is played, since it runs before anyone has registered.
+                # Refusing here would be per-event in name only: this loop builds one
                 # tournament, so it would take the preview of every round-robin event
                 # beside it (the same reasoning ADR 20260727 applied to rr-then-ko's
                 # knockout stage). Swiss shares the arm for single-elim's reason (ADR
@@ -520,9 +523,9 @@ def build_preview_snapshot(
 
     # The minute frame's origin: the earliest reservation window start across every
     # previewable event — the same anchor ``_load_solver_inputs`` uses, so ``now_min``
-    # and the windows share one frame. A skipped event's reservations are deliberately absent:
-    # nothing of that event is placed, so a window it reserves must neither move the
-    # frame nor reach the solver, where an empty or past-dated one would report an
+    # and the windows share one frame. A skipped event's reservations are deliberately
+    # absent: nothing of that event is placed, so a window it reserves must neither move
+    # the frame nor reach the solver, where an empty or past-dated one would report an
     # infeasibility against an event that was never drawn.
     windows: dict[str, tuple[datetime, datetime]] = {}
     for plan in plans:
@@ -534,7 +537,10 @@ def build_preview_snapshot(
             # windows to instants, so two events in different zones land on one
             # axis — exactly as ``_load_solver_inputs`` anchors the real solve.
             windows[key] = _slot_bounds(
-                reservation.slot.date, reservation.slot.start, reservation.slot.end, plan.event.timezone
+                reservation.slot.date,
+                reservation.slot.start,
+                reservation.slot.end,
+                plan.event.timezone,
             )
     # ``base`` is ``None`` when no event has a reservation (nothing to anchor on); the
     # minute frame then falls back to ``datetime.min`` (no window uses it anyway).
@@ -618,13 +624,14 @@ def build_preview_snapshot(
                 # rr-then-ko plan's only ungrouped fixtures are its knockout stage's),
                 # so there is no swiss/knockout ambiguity for a real stage row to
                 # resolve. Dropped here rather than refused, and the drop is still
-                # right for a reason that is no longer about reservations: a preview runs
-                # before anyone has registered, so no reservation has been played, so both
-                # sides of every one of these fixtures are unknown — and a TBD-sided
-                # fixture is unplaceable in this engine and in the live one alike. A
-                # live solve does schedule the bracket (ADR "a group restricts
-                # scheduling, it does not enable it"), incrementally, as the reservations
-                # feeding it resolve; a preview has nothing to resolve it from.
+                # right for a reason that is no longer about reservations: a preview
+                # runs before anyone has registered, so no reservation has been played,
+                # so both sides of every one of these fixtures are unknown — and a
+                # TBD-sided fixture is unplaceable in this engine and in the live one
+                # alike. A live solve does schedule the bracket (ADR "a group restricts
+                # scheduling, it does not enable it"), incrementally, as the
+                # reservations feeding it resolve; a preview has nothing to resolve it
+                # from.
                 knockout_fixtures += 1
                 continue
             schedule_fixtures.append(
@@ -661,11 +668,11 @@ def _schedule_fixture(
     """Map one synthetic :class:`~app.draws.PlannedFixture` onto the solver's
     :class:`~app.scheduling.ScheduleFixture`.
 
-    A previewable fixture is always grouped and both-sides-known — a **reservation-stage**
-    fixture, of a round-robin draw or of the reservation stage of an rr-then-ko one, the
-    caller having already dropped the ungrouped knockout fixtures — so ``group_id``
-    and both entrant ids are non-``None``. An ungrouped or TBD fixture reaching
-    here would be a bug in the caller's filter, so we let the ``None`` surface
+    A previewable fixture is always grouped and both-sides-known — a
+    **reservation-stage** fixture, of a round-robin draw or of the reservation stage of
+    an rr-then-ko one, the caller having already dropped the ungrouped knockout fixtures
+    — so ``group_id`` and both entrant ids are non-``None``. An ungrouped or TBD fixture
+    reaching here would be a bug in the caller's filter, so we let the ``None`` surface
     loudly rather than inventing a placeholder.
 
     ``fixture.group_id`` is a GROUP id, resolved through ``group_reservation_ids``
@@ -688,8 +695,8 @@ def _schedule_fixture(
     assert fixture.group_id is not None
     assert fixture.entry_a_id is not None
     assert fixture.entry_b_id is not None
-    # One namespaced reservation ref, used for both the fixture id and its reservation_id so
-    # the ``event:reservation`` spelling cannot drift between them.
+    # One namespaced reservation ref, used for both the fixture id and its
+    # reservation_id so the ``event:reservation`` spelling cannot drift between them.
     reservation_ref = preview_reservation_key(
         event_uuid, group_reservation_ids[fixture.group_id]
     )

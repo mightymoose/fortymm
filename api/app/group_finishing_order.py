@@ -54,8 +54,8 @@ id. The swiss chain is that tail with one value in front of it.
 chains, and that is a property of the step rather than a swiss carve-out. A round-robin
 group cannot reach the guard once it is played out — everyone meets everyone, once — so
 it costs that format nothing, while a swiss pair tied on wins may never have been drawn
-against each other and there is simply no result to read. (A part-played group reaches it
-too, which is why the guard predates swiss.) Swiss adds the second way through it: a
+against each other and there is simply no result to read. (A part-played group reaches
+it too, which is why the guard predates swiss.) Swiss adds the second way through it: a
 pair who met **twice** and took one each are level between themselves, so the step has
 no answer there either.
 """
@@ -382,12 +382,12 @@ def _break_tie(
     meetings evenly all fall through to ``scalar_key``.
 
     "When the pair have a result between them" is the guard, and it belongs to the step
-    rather than to either format. A part-played round-robin group reaches it, and a swiss
-    field reaches it at the end of a completed event too: swiss pairs by score and never
-    claims to have drawn every pair together, so two entrants can finish level on wins
-    having never played each other — or, after a last-resort rematch, having beaten each
-    other once apiece. Without the guard the step would have to read a result that does
-    not exist, or pick one of two that disagree.
+    rather than to either format. A part-played round-robin group reaches it, and a
+    swiss field reaches it at the end of a completed event too: swiss pairs by score and
+    never claims to have drawn every pair together, so two entrants can finish level on
+    wins having never played each other — or, after a last-resort rematch, having beaten
+    each other once apiece. Without the guard the step would have to read a result that
+    does not exist, or pick one of two that disagree.
     """
     if len(group) == 2:
         decided = _head_to_head(group[0], group[1], outcomes)
@@ -447,8 +447,8 @@ def _swiss_scalar_key(
 
     Prepending is what puts Buchholz *above* game difference: the key is compared
     left-to-right, so a Buchholz that separates the pair settles them before the game
-    counts are ever read. The rest of the tuple is the group's own key, not a copy of it,
-    so the tail of the two chains is one definition.
+    counts are ever read. The rest of the tuple is the group's own key, not a copy of
+    it, so the tail of the two chains is one definition.
     """
 
     def key(tally: EntryTally) -> tuple[int, ...]:

@@ -40,22 +40,22 @@ class TournamentFixture(Base):
     things, and the "is this side unknown, or is it a bye?" question would have to be
     answered by reading a second column.
 
-    ``group_id`` names a **group** — a row in ``tournament_event_stage_groups``, the half
-    of the old group row that says *these entrants play each other*. The other half, the
-    tables and the window, is a reservation the group maps to, and a fixture reaches it
-    through that mapping rather than by naming it. **The column keeps the name
-    ``group_id``** deliberately: it is what the wire calls the field, and renaming the
-    column and the wire field is one move that belongs to one change, not two.
+    ``group_id`` names a **group** — a row in ``tournament_event_stage_groups``, the
+    half of the old group row that says *these entrants play each other*. The other
+    half, the tables and the window, is a reservation the group maps to, and a fixture
+    reaches it through that mapping rather than by naming it. **The column keeps the
+    name ``group_id``** deliberately: it is what the wire calls the field, and renaming
+    the column and the wire field is one move that belongs to one change, not two.
 
     It is a **foreign key**, and a *composite* one: ``(stage_id, group_id) →
     tournament_event_stage_groups (stage_id, id)``. Groups are rows (ADR 20260801 "a
-    group belongs to its event, not to the event's draw settings"), parented on the stage
-    by ADR 20260815, and the composite form is what makes the reference say the thing
-    that actually matters — not merely "this group exists" but "this group is **my own
-    stage's**". A plain FK to ``tournament_event_stage_groups.id`` would happily seat
-    one stage's fixture in another stage's group, and that is the illegal state the ADR
-    is about; it is unrepresentable here because the two tables share ``stage_id`` and
-    the constraint requires it to agree. ``NULL`` means the draw is un-grouped —
+    group belongs to its event, not to the event's draw settings"), parented on the
+    stage by ADR 20260815, and the composite form is what makes the reference say the
+    thing that actually matters — not merely "this group exists" but "this group is **my
+    own stage's**". A plain FK to ``tournament_event_stage_groups.id`` would happily
+    seat one stage's fixture in another stage's group, and that is the illegal state the
+    ADR is about; it is unrepresentable here because the two tables share ``stage_id``
+    and the constraint requires it to agree. ``NULL`` means the draw is un-grouped —
     single-elim, and the knockout stage of an rr-then-ko draw. (A composite FK with one
     NULL member is satisfied vacuously under the SQL default MATCH SIMPLE, which is
     exactly right: an un-grouped fixture names no group to check.)
@@ -157,7 +157,9 @@ class TournamentFixture(Base):
     #: it points at is what moved. A ``uuid``, matching
     #: :attr:`~app.models.tournament_event_stage_group.TournamentEventStageGroup.id` —
     #: the column it references, and therefore the column whose type it *is*.
-    group_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     #: 1-based.
     round: Mapped[int] = mapped_column(Integer, nullable=False)
     #: 1-based within its round (and group, when grouped).
@@ -219,10 +221,11 @@ class TournamentFixture(Base):
     #: fixture is unplaced (ADR-0790).
     #:
     #: This is the one placement claim that is an **invariant** rather than a flag. The
-    #: other three — the table belongs to the fixture's group, the start falls inside the
-    #: group's window, nothing is double-booked — are statements about a *relationship*
-    #: between things that each legitimately move while the other stands, so they stay
-    #: derived on read (ADR-0790, undisturbed). "This id names a table" is not that: it
+    #: other three — the table belongs to the fixture's group, the start falls inside
+    #: the group's window, nothing is double-booked — are statements about a
+    #: *relationship* between things that each legitimately move while the other
+    #: stands, so they stay derived on read (ADR-0790, undisturbed). "This id names a
+    #: table" is not that: it
     #: is whether the reference resolves at all, and a placement whose table does not
     #: exist is not a state the director chose but a dangling pointer nothing downstream
     #: can render. It was soft only because there was no table to point at.
@@ -233,8 +236,8 @@ class TournamentFixture(Base):
     #: indistinguishable from "nobody ever placed this", as an invisible side effect of
     #: editing the venue. The database refuses by default and the director says yes on
     #: purpose, through the tournament-edit verb's named 409 and its unplace-and-remove
-    #: opt-in. (A *group* that merely reserves a table gets the quiet treatment instead —
-    #: the table drops out of its ``table_ids``.)
+    #: opt-in. (A *group* that merely reserves a table gets the quiet treatment
+    #: instead — the table drops out of its ``table_ids``.)
     #:
     #: **The Python/wire type stays ``str``** while the column is a real ``uuid``
     #: (``as_uuid=False``): a table id crosses this codebase as its canonical text in

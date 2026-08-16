@@ -99,26 +99,27 @@ class TournamentEventStage(Base):
     # queries, never through that relationship, so nothing here needs its own strategy.
     event: Mapped["TournamentEvent"] = relationship(back_populates="stages")
 
-    # A stage's GROUPS, as rows — what this relationship called ``groups`` held until the
-    # group row split in two. The half that stayed here is the group (ADR 20260815,
-    # "Sequencing with #1338": "the group's group face therefore re-parents to the
+    # A stage's GROUPS, as rows — what this relationship called ``groups`` held until
+    # the group row split in two. The half that stayed here is the group (ADR 20260815,
+    # "Sequencing with #1338": "the pool's group face therefore re-parents to the
     # stage"); the half that carries the tables and the window is a reservation, and it
     # hangs off the event instead (``TournamentEvent.reservations``). In practice this
     # is only ever populated on the stage at position 0 (a director's groups always hang
     # off stage 1, decision 3), but nothing on this relationship enforces that placement
-    # — ``app.tournament_reservations`` does, by resolving the event's first stage before it
-    # writes. Deliberately **not** eager, unlike the VIEWONLY ``TournamentEvent.groups``
-    # (``lazy="selectin"``, declared on that model), which is the one mechanism every
-    # ordinary reader goes through. Making BOTH eager would double-load: any statement
-    # that also eager-loads ``TournamentEvent.stages`` (the detail read's stage-serving
-    # option) would chain THIS collection's own selectin load off of it, on top of the
-    # one ``TournamentEvent.groups`` already issues, costing a redundant statement
-    # nobody asked for. The one direct reader of ``stage.groups`` —
-    # ``app.tournament_reservations.apply_event_reservations``, which needs the CURRENT rows to diff
-    # against — asks for it explicitly (``selectinload(TournamentEventStage.groups)`` on
-    # its own query) rather than leaning on a default here. ``delete-orphan`` still
-    # applies regardless of load strategy: a group dropped from a diff is removed by
-    # taking it out of whatever collection is in hand, loaded or not.
+    # — ``app.tournament_reservations`` does, by resolving the event's first stage
+    # before it writes. Deliberately **not** eager, unlike the VIEWONLY
+    # ``TournamentEvent.groups`` (``lazy="selectin"``, declared on that model), which is
+    # the one mechanism every ordinary reader goes through. Making BOTH eager would
+    # double-load: any statement that also eager-loads ``TournamentEvent.stages`` (the
+    # detail read's stage-serving option) would chain THIS collection's own selectin
+    # load off of it, on top of the one ``TournamentEvent.groups`` already issues,
+    # costing a redundant statement nobody asked for. The one direct reader of
+    # ``stage.groups`` — ``app.tournament_reservations.apply_event_reservations``, which
+    # needs the CURRENT rows to diff against — asks for it explicitly
+    # (``selectinload(TournamentEventStage.groups)`` on its own query) rather than
+    # leaning on a default here. ``delete-orphan`` still applies regardless of load
+    # strategy: a group dropped from a diff is removed by taking it out of whatever
+    # collection is in hand, loaded or not.
     groups: Mapped[list["TournamentEventStageGroup"]] = relationship(
         back_populates="stage",
         cascade="all, delete-orphan",
@@ -127,8 +128,8 @@ class TournamentEventStage(Base):
     )
 
     # A stage's fixtures — re-parented here from ``TournamentEvent.fixtures`` (ADR
-    # 20260815 decision 5: "a fixture names its stage"). Unlike groups, BOTH stages of an
-    # rr-then-ko event hold fixtures (the group stage's round-robin fixtures, the
+    # 20260815 decision 5: "a fixture names its stage"). Unlike groups, BOTH stages of
+    # an rr-then-ko event hold fixtures (the group stage's round-robin fixtures, the
     # position-1 stage's knockout bracket) — see ``app.tournament_draws.cut_draw``, the
     # one write seam that decides a fixture's ``stage_id``.
     #
