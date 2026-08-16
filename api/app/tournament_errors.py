@@ -207,21 +207,21 @@ class EventNotFoundError(Exception):
     adapts it to its transport."""
 
 
-class PoolSetFrozenError(Exception):
-    """Raised by the update-event verb when a ``pools`` payload would change *which
-    pools* an event with a **cut draw** has (ADR-0786). A fixture names its pool by a
-    string ref into the event's own ``pools`` JSONB and there is no pools table to
-    foreign-key, so removing (or re-``id``'ing) a pool orphans every fixture drawn into
-    it and adding one arrives with no fixtures — integrity the database cannot enforce,
-    so the freeze does.
+class GroupSetFrozenError(Exception):
+    """Raised by the update-event verb when a ``reservations`` payload would change
+    *which groups* an event with a **cut draw** has (ADR-0786). A fixture names its
+    group by a foreign key onto the event's own groups, and adding or removing a
+    reservation adds or removes its mapped group in lockstep — so removing one orphans
+    every fixture drawn into it and adding one arrives with no fixtures — integrity the
+    database cannot enforce, so the freeze does.
 
     It is a 409, not a 403 (ADR-0017): the caller is the owner and the payload is
     well-formed — it is the *resource* that is in the wrong state, and the same request
     becomes legal the moment the draw is removed. Carries the exact, domain-authored
     sentence the HTTP handler used to compose inline (rebuilt verbatim with
-    ``str(exc)``) plus the structured ``removed`` / ``added`` pool names for any adapter
-    that wants to reshape rather than echo. Never an ``HTTPException`` — the caller
-    adapts it to its transport."""
+    ``str(exc)``) plus the structured ``removed`` / ``added`` group labels for any
+    adapter that wants to reshape rather than echo. Never an ``HTTPException`` — the
+    caller adapts it to its transport."""
 
     def __init__(self, message: str, *, removed: list[str], added: list[str]) -> None:
         super().__init__(message)
@@ -229,33 +229,33 @@ class PoolSetFrozenError(Exception):
         self.added = added
 
 
-class PoolNotInEventError(Exception):
-    """Raised by the update-event verb when an entry of a submitted ``pools`` list cites
-    an ``id`` that names no pool of **this** event (ADR 20260801).
+class ReservationNotInEventError(Exception):
+    """Raised by the update-event verb when an entry of a submitted ``reservations``
+    list cites an ``id`` that names no reservation of **this** event (ADR 20260801).
 
     The exact twin of :class:`TableNotInCatalogueError`, one resource over. It could not
-    exist while a pool id was the client's to author — an id the server had never seen
-    still named the pool the client meant, so a new id was an *addition*. The id is a
-    server-minted uuid now, so one the server did not mint names nothing, and minting a
-    fresh pool for it would hand the client back a different id than it asked for while
-    quietly *removing* the pool it meant to keep: the two failures a diff must never
-    confuse.
+    exist while a reservation id was the client's to author — an id the server had never
+    seen still named the reservation the client meant, so a new id was an *addition*.
+    The id is a server-minted uuid now, so one the server did not mint names nothing,
+    and minting a fresh reservation for it would hand the client back a different id
+    than it asked for while quietly *removing* the reservation it meant to keep: the two
+    failures a diff must never confuse.
 
-    It is judged **after** the pool-set freeze, so an event whose draw is cut answers
-    the 409 that names its pools rather than this 422 — the freeze is the refusal a
-    director
-    can act on, and a cited-but-unknown id is an addition as far as a standing draw is
-    concerned.
+    It is judged **after** the group-set freeze, so an event whose draw is cut answers
+    the 409 that names its groups rather than this 422 — the freeze is the refusal a
+    director can act on, and a cited-but-unknown id is an addition as far as a standing
+    draw is concerned.
 
-    Carries the ``index`` of the offending entry as well as the id, because the pools
-    are a list and a refusal a client cannot attribute to a row is a refusal it cannot
-    render: the HTTP adapter names ``loc: ["body", "pools", index, "id"]``, the same
-    shape the schema's own 422s on this field have. Never an ``HTTPException``."""
+    Carries the ``index`` of the offending entry as well as the id, because the
+    reservations are a list and a refusal a client cannot attribute to a row is a
+    refusal it cannot render: the HTTP adapter names
+    ``loc: ["body", "reservations", index, "id"]``, the same shape the schema's own
+    422s on this field have. Never an ``HTTPException``."""
 
-    def __init__(self, index: int, pool_id: str) -> None:
-        super().__init__("This event has no pool with that id.")
+    def __init__(self, index: int, reservation_id: str) -> None:
+        super().__init__("This event has no reservation with that id.")
         self.index = index
-        self.pool_id = pool_id
+        self.reservation_id = reservation_id
 
 
 class TableNotInCatalogueError(Exception):
@@ -285,7 +285,7 @@ class TableInUseError(Exception):
     table that matches are placed at**, without the unplace-and-remove opt-in
     (ADR 20260801, "a placement names a real table, and only that is an invariant").
 
-    This is the loud half of the ADR's deliberate split. A **pool** that merely reserves
+    This is the loud half of the ADR's deliberate split. A **reservation** that merely reserves
     a removed table is not consulted at all — it quietly reserves one fewer, because a
     table breaking or freeing up is ordinary venue traffic. A **placement** gets the
     refusal, because silently clearing one destroys information on an *unrelated* write:
@@ -294,7 +294,7 @@ class TableInUseError(Exception):
     renaming the venue. The database refuses by default (``ON DELETE RESTRICT``); the
     director says yes on purpose.
 
-    It is a 409, not a 403 or a 422 (the same reasoning as :class:`PoolSetFrozenError`,
+    It is a 409, not a 403 or a 422 (the same reasoning as :class:`GroupSetFrozenError`,
     whose house style its sentence follows): the caller is the owner and the payload is
     well-formed — it is the *state of the world* that forbids the edit, and the
     identical request succeeds the moment the matches are moved off the table, or the
@@ -321,7 +321,7 @@ class DrawTypeFrozenError(Exception):
     event claiming a shape its fixtures do not have — a corruption the go-live currency
     check cannot catch (re-labelling moves neither the entrants nor the fixtures).
 
-    Sibling of :class:`PoolSetFrozenError`, and a 409 for the same reason: the caller is
+    Sibling of :class:`GroupSetFrozenError`, and a 409 for the same reason: the caller is
     the owner and the payload is well-formed; it is the resource that is in the wrong
     state, and the same request becomes legal the moment the draw is removed. Carries
     the exact sentence the HTTP handler composed inline (rebuilt verbatim with
@@ -498,7 +498,7 @@ class PlacementTableNotFoundError(Exception):
     422s have, so a client needs no second parser for it.
 
     Everything else about a placement stays soft (ADR-0790, undisturbed): an
-    out-of-window start, a table outside the fixture's pool, and a double-booking all
+    out-of-window start, a table outside the fixture's group, and a double-booking all
     still SAVE and surface as flags derived on read. Only "does this reference resolve
     at all" is hard, because a placement whose table does not exist is not a state the
     director chose — it is a dangling pointer nothing downstream can render.

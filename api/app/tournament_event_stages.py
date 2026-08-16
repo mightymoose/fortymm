@@ -34,7 +34,7 @@ this PATCH. That gate is what protects the one case the freeze's own early retur
 not cover — a PATCH that resends the event's *current* draw settings unchanged (same
 draw type, same or different other settings), which the freeze waves through (nothing
 about the *type* moved) even when a draw already exists. A settings-only edit
-(``qualifiers_per_pool``, ``rounds``) on an unchanged type also fails this gate, which
+(``qualifiers_per_group``, ``rounds``) on an unchanged type also fails this gate, which
 is correct: the template :func:`stage_template` mints depends only on ``draw_type``, so
 a re-mint has nothing to do when it has not moved. And whenever the type genuinely HAS
 moved, the freeze above has already proven the event has no draw — it would have raised

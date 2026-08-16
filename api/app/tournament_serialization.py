@@ -771,7 +771,7 @@ def serialize_event(
             # from this line assuming it. **Flat beside ``draw_type`` on the wire**,
             # exactly as before: the settings object is a storage shape, not a wire one
             # (ADR "a draw type's settings are one NOT NULL JSON object").
-            "qualifiers_per_pool": draw_settings.qualifiers_per_pool,
+            "qualifiers_per_group": draw_settings.qualifiers_per_group,
             # And **R**, the swiss round count, off the same parsed arm and by the same
             # rule: a property on the arms that have no round count, so this line asks
             # every arm one question rather than deciding which draw types have one.

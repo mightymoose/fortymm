@@ -1,15 +1,15 @@
 """How a **field finished** — the one definition of the tiebreak chains that order a
-round-robin pool's entrants and a swiss event's, shared by the draw layer and the
+round-robin group's entrants and a swiss event's, shared by the draw layer and the
 results layer.
 
 Two layers need this answer and they must never disagree about it. ``app.results``
-reads it out as a pool's **standings** table, the thing a director is looking at on
+reads it out as a group's **standings** table, the thing a director is looking at on
 screen; ``app.draws`` needs the same order to decide which entrants *qualify* out of a
-pool into a knockout stage. If each computed its own, "the qualifiers" and "the top of
+group into a knockout stage. If each computed its own, "the qualifiers" and "the top of
 the table" could differ at precisely the moment somebody is looking hardest — a
 three-way tie for the last qualifying spot. One function, imported by both, makes them
 the same order **structurally**, not by two implementations happening to agree (ADR
-20260727, "the pool finishing order moves to a shared pure module").
+20260727, "the group finishing order moves to a shared pure module").
 
 It lives in its own module rather than in either caller because ``app.results`` already
 imports ``app.draws``: putting the order in ``app.results`` would make the draw layer's
@@ -19,7 +19,7 @@ use of it an import cycle. For the same reason this module imports **nothing** f
 the draw layer can import this module freely.
 
 Like ``app.draws`` and ``app.results``, this module is **pure**: no session, no query,
-no SQLAlchemy or FastAPI construct. Its whole input is the pool's seated entrants plus
+no SQLAlchemy or FastAPI construct. Its whole input is the group's seated entrants plus
 the :class:`MatchOutcome`\\ s of its **currently-completed** matches, so nothing here is
 a snapshot — a corrected or voided match re-derives the order the instant it leaves
 ``completed``.
@@ -28,7 +28,7 @@ There are **two** chains, one per format, and they live side by side on purpose:
 share every step but one, and a reader has to be able to see both at once to keep them
 in step (ADR "swiss standings add Buchholz, and head-to-head is guarded on having met").
 
-:func:`finishing_order` — a **round-robin pool**:
+:func:`finishing_order` — a **round-robin group**:
 
 1. **wins** — most match wins first;
 2. **head-to-head**, *only when exactly two entries are tied* on wins **and one of them
@@ -40,7 +40,7 @@ in step (ADR "swiss standings add Buchholz, and head-to-head is guarded on havin
    tiebreakers rather than a recursive mini-league;
 3. **game difference** — games won minus games lost;
 4. **games won**;
-5. the **entry id** — a total, deterministic fallback, so a pool in which two entries
+5. the **entry id** — a total, deterministic fallback, so a group in which two entries
    are genuinely level on every count still orders the same way on every read.
 
 :func:`swiss_finishing_order` — a **swiss field**: the same chain with **Buchholz**
@@ -52,9 +52,9 @@ id. The swiss chain is that tail with one value in front of it.
 
 **The head-to-head step is guarded on the pair having a result between them**, in *both*
 chains, and that is a property of the step rather than a swiss carve-out. A round-robin
-pool cannot reach the guard once it is played out — everyone meets everyone, once — so
+group cannot reach the guard once it is played out — everyone meets everyone, once — so
 it costs that format nothing, while a swiss pair tied on wins may never have been drawn
-against each other and there is simply no result to read. (A part-played pool reaches it
+against each other and there is simply no result to read. (A part-played group reaches it
 too, which is why the guard predates swiss.) Swiss adds the second way through it: a
 pair who met **twice** and took one each are level between themselves, so the step has
 no answer there either.
@@ -82,7 +82,7 @@ if TYPE_CHECKING:
     # fail with that baffling ``NameError`` far from this line. If you need one of
     # these on a wire surface, mirror it as a Pydantic model there; the fix is *not*
     # to un-guard this import, which re-creates the cycle
-    # ``tests/test_pool_finishing_order.py`` pins.
+    # ``tests/test_group_finishing_order.py`` pins.
     from app.draws import EntryId
 
 
@@ -128,7 +128,7 @@ class MatchOutcome:
 
 @dataclass(slots=True)
 class EntryTally:
-    """A mutable per-entry accumulator — what one entry has done in its pool so far.
+    """A mutable per-entry accumulator — what one entry has done in its group so far.
 
     Built and mutated inside :func:`_tallies`, which both orders start from; callers
     only ever see the finished list. Every entrant seated in the field gets one,
@@ -155,7 +155,7 @@ class SwissTally:
 
     Composed rather than a subclass of :class:`EntryTally`, so there is exactly one
     definition of "wins" and one of "game difference" — the divergence this module
-    exists to prevent — and so a pool's row cannot acquire a Buchholz of ``0`` that
+    exists to prevent — and so a group's row cannot acquire a Buchholz of ``0`` that
     really means "never computed".
 
     ``buchholz`` rides on the row rather than staying inside the sort, because a
@@ -183,11 +183,11 @@ def finishing_order(
     entrants: Iterable[EntryId],
     outcomes: Sequence[MatchOutcome],
 ) -> list[EntryTally]:
-    """The pool's finishing order: its ``entrants`` tallied from ``outcomes``, then
+    """The group's finishing order: its ``entrants`` tallied from ``outcomes``, then
     ordered by the round-robin chain in this module's docstring.
 
     ``entrants`` is the full seated field — not just the entries that have played — so
-    the returned list always covers the whole pool. First place is index ``0``.
+    the returned list always covers the whole group. First place is index ``0``.
 
     ``outcomes`` may only name entries that are in ``entrants``: the tallies are keyed
     by entrant, so a stranger is a ``KeyError`` rather than a row appearing from
@@ -356,7 +356,7 @@ def _order(
     """Group by wins (descending), then break each tie.
 
     ``scalar_key`` is the *only* thing that differs between the two formats' chains —
-    :func:`_scalar_key` for a pool, :func:`_swiss_scalar_key`'s closure for a swiss
+    :func:`_scalar_key` for a group, :func:`_swiss_scalar_key`'s closure for a swiss
     field — so the first two links, wins and the guarded head-to-head, are shared
     structurally rather than written twice and kept in step by hand.
     """
@@ -382,7 +382,7 @@ def _break_tie(
     meetings evenly all fall through to ``scalar_key``.
 
     "When the pair have a result between them" is the guard, and it belongs to the step
-    rather than to either format. A part-played round-robin pool reaches it, and a swiss
+    rather than to either format. A part-played round-robin group reaches it, and a swiss
     field reaches it at the end of a completed event too: swiss pairs by score and never
     claims to have drawn every pair together, so two entrants can finish level on wins
     having never played each other — or, after a last-resort rematch, having beaten each
@@ -447,7 +447,7 @@ def _swiss_scalar_key(
 
     Prepending is what puts Buchholz *above* game difference: the key is compared
     left-to-right, so a Buchholz that separates the pair settles them before the game
-    counts are ever read. The rest of the tuple is the pool's own key, not a copy of it,
+    counts are ever read. The rest of the tuple is the group's own key, not a copy of it,
     so the tail of the two chains is one definition.
     """
 

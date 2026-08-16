@@ -107,7 +107,7 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "name": "Open Singles",
         "format": "singles",
         "draw_type": RR_THEN_KO,
-        "qualifiers_per_pool": 2,
+        "qualifiers_per_group": 2,
         "max_players": 64,
         "entry_fee": 0,
         "timezone": "America/Chicago",
@@ -230,10 +230,10 @@ def _stored_qualifiers(event: TournamentEvent) -> int | None:
     row's JSON object (ADR "a draw type's settings are one NOT NULL JSON object").
 
     Read through the storage boundary rather than off a column, because there is no
-    column any more: ``{"qualifiers_per_pool": K}`` is the whole of an ``rr-then-ko``
+    column any more: ``{"qualifiers_per_group": K}`` is the whole of an ``rr-then-ko``
     row's settings, and ``None`` is what the arms with no knockout stage answer.
     """
-    return draw_settings_of(event.draw_settings).qualifiers_per_pool
+    return draw_settings_of(event.draw_settings).qualifiers_per_group
 
 
 async def _settings_of(db: AsyncSession, event_id: str) -> TournamentEvent:
@@ -340,7 +340,7 @@ async def test_creating_an_rr_then_ko_event_persists_its_qualifier_count(
     client, _ = authed_client
     tournament_id = await _tournament(client)
 
-    created = await _create_event(client, tournament_id, qualifiers_per_pool=3)
+    created = await _create_event(client, tournament_id, qualifiers_per_group=3)
 
     assert created.status_code == 201, created.text
     event = await _settings_of(db_session, created.json()["id"])
@@ -367,11 +367,11 @@ async def test_a_qualifier_count_on_another_draw_type_is_422(
     tournament_id = await _tournament(client)
 
     response = await _create_event(
-        client, tournament_id, draw_type=draw_type, qualifiers_per_pool=2, pools=[]
+        client, tournament_id, draw_type=draw_type, qualifiers_per_group=2, pools=[]
     )
 
     assert response.status_code == 422, response.text
-    assert "qualifiers_per_pool" in response.text
+    assert "qualifiers_per_group" in response.text
     # Refused at the boundary means refused before persistence.
     events = (
         await db_session.execute(
@@ -392,14 +392,14 @@ async def test_an_rr_then_ko_event_without_a_qualifier_count_is_422(
     client, _ = authed_client
     tournament_id = await _tournament(client)
     payload = _event_payload()
-    del payload["qualifiers_per_pool"]
+    del payload["qualifiers_per_group"]
 
     response = await client.post(
         f"/v1/tournaments/{tournament_id}/events", json=payload
     )
 
     assert response.status_code == 422, response.text
-    assert "qualifiers_per_pool" in response.text
+    assert "qualifiers_per_group" in response.text
 
 
 @pytest.mark.parametrize("count", [0, -1])
@@ -413,10 +413,10 @@ async def test_a_qualifier_count_below_one_is_422(
     client, _ = authed_client
     tournament_id = await _tournament(client)
 
-    response = await _create_event(client, tournament_id, qualifiers_per_pool=count)
+    response = await _create_event(client, tournament_id, qualifiers_per_group=count)
 
     assert response.status_code == 422, response.text
-    assert "qualifiers_per_pool" in response.text
+    assert "qualifiers_per_group" in response.text
 
 
 # The other end of the same static bound. ``INT32_OVERFLOW`` is the number that made
@@ -443,10 +443,10 @@ async def test_a_qualifier_count_above_the_ceiling_is_422(
     client, _ = authed_client
     tournament_id = await _tournament(client)
 
-    response = await _create_event(client, tournament_id, qualifiers_per_pool=count)
+    response = await _create_event(client, tournament_id, qualifiers_per_group=count)
 
     assert response.status_code == 422, response.text
-    assert "qualifiers_per_pool" in response.text
+    assert "qualifiers_per_group" in response.text
     # Refused at the boundary means refused before persistence.
     events = (
         await db_session.execute(
@@ -471,7 +471,7 @@ async def test_a_qualifier_count_at_the_ceiling_is_accepted(
     tournament_id = await _tournament(client)
 
     created = await _create_event(
-        client, tournament_id, qualifiers_per_pool=MAX_QUALIFIERS_PER_POOL
+        client, tournament_id, qualifiers_per_group=MAX_QUALIFIERS_PER_POOL
     )
 
     assert created.status_code == 201, created.text
@@ -493,11 +493,11 @@ async def test_patching_a_qualifier_count_above_the_ceiling_is_422(
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": count},
+        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": count},
     )
 
     assert response.status_code == 422, response.text
-    assert "qualifiers_per_pool" in response.text
+    assert "qualifiers_per_group" in response.text
     event = await _settings_of(db_session, event_id)
     assert _stored_qualifiers(event) == 2, "a refusal wrote nothing"
 
@@ -516,7 +516,7 @@ async def test_patching_a_qualifier_count_at_the_ceiling_is_accepted(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
         json={
             "draw_type": RR_THEN_KO,
-            "qualifiers_per_pool": MAX_QUALIFIERS_PER_POOL,
+            "qualifiers_per_group": MAX_QUALIFIERS_PER_POOL,
         },
     )
 
@@ -541,7 +541,7 @@ async def test_patching_a_qualifier_count_without_its_draw_type_is_422(
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"qualifiers_per_pool": 3},
+        json={"qualifiers_per_group": 3},
     )
 
     assert response.status_code == 422, response.text
@@ -561,7 +561,7 @@ async def test_the_qualifier_count_is_editable_while_no_draw_exists(
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": 3},
+        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 3},
     )
 
     assert response.status_code == 200, response.text
@@ -594,7 +594,7 @@ async def test_patching_away_from_rr_then_ko_clears_the_qualifier_count(
 
 # ----- the read: the stored qualifier count comes back ------------------------------
 #
-# The event read carries ``qualifiers_per_pool`` beside ``draw_type`` because the
+# The event read carries ``qualifiers_per_group`` beside ``draw_type`` because the
 # configuration is edited as a PAIR: the editor always sends the draw type, and the
 # server parses ``(draw_type, K)`` together with K required and no default. A client
 # that cannot read K back has to supply one on every PATCH — which pre-draw silently
@@ -616,11 +616,11 @@ async def test_an_rr_then_ko_events_qualifier_count_reads_back(
     client, _ = authed_client
     tournament_id = await _tournament(client)
 
-    created = await _create_event(client, tournament_id, qualifiers_per_pool=3)
+    created = await _create_event(client, tournament_id, qualifiers_per_group=3)
 
     assert created.status_code == 201, created.text
-    assert created.json()["qualifiers_per_pool"] == 3
-    assert (await _event_read(client, tournament_id))["qualifiers_per_pool"] == 3
+    assert created.json()["qualifiers_per_group"] == 3
+    assert (await _event_read(client, tournament_id))["qualifiers_per_group"] == 3
     event = await _settings_of(db_session, created.json()["id"])
     assert _stored_qualifiers(event) == 3
 
@@ -647,16 +647,16 @@ async def test_a_draw_type_with_no_knockout_stage_reads_back_no_qualifier_count(
     client, _ = authed_client
     tournament_id = await _tournament(client)
     payload = _event_payload(draw_type=draw_type, pools=[])
-    del payload["qualifiers_per_pool"]
+    del payload["qualifiers_per_group"]
 
     created = await client.post(f"/v1/tournaments/{tournament_id}/events", json=payload)
 
     assert created.status_code == 201, created.text
-    assert "qualifiers_per_pool" in created.json()
-    assert created.json()["qualifiers_per_pool"] is None
+    assert "qualifiers_per_group" in created.json()
+    assert created.json()["qualifiers_per_group"] is None
     read = await _event_read(client, tournament_id)
-    assert "qualifiers_per_pool" in read
-    assert read["qualifiers_per_pool"] is None
+    assert "qualifiers_per_group" in read
+    assert read["qualifiers_per_group"] is None
 
 
 async def test_editing_the_qualifier_count_reads_the_edited_value_back(
@@ -675,12 +675,12 @@ async def test_editing_the_qualifier_count_reads_the_edited_value_back(
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": 4},
+        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 4},
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["qualifiers_per_pool"] == 4
-    assert (await _event_read(client, tournament_id))["qualifiers_per_pool"] == 4
+    assert response.json()["qualifiers_per_group"] == 4
+    assert (await _event_read(client, tournament_id))["qualifiers_per_group"] == 4
 
 
 async def test_patching_away_from_rr_then_ko_reads_back_no_qualifier_count(
@@ -700,8 +700,8 @@ async def test_patching_away_from_rr_then_ko_reads_back_no_qualifier_count(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["qualifiers_per_pool"] is None
-    assert (await _event_read(client, tournament_id))["qualifiers_per_pool"] is None
+    assert response.json()["qualifiers_per_group"] is None
+    assert (await _event_read(client, tournament_id))["qualifiers_per_group"] is None
 
 
 # ----- the cut: both stages in one stroke -------------------------------------------
@@ -858,7 +858,7 @@ async def test_cutting_for_more_qualifiers_than_the_smallest_pool_holds_is_refus
     client, _ = authed_client
     tournament_id = await _tournament(client)
     event_id = (
-        await _create_event(client, tournament_id, qualifiers_per_pool=5)
+        await _create_event(client, tournament_id, qualifiers_per_group=5)
     ).json()["id"]
     for n in range(1, 13):
         await _enter(
@@ -901,10 +901,10 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
     url = f"/v1/tournaments/{tournament_id}/events/{event_id}"
 
     unchanged = await client.patch(
-        url, json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": 2}
+        url, json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 2}
     )
     refused = await client.patch(
-        url, json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": 3}
+        url, json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 3}
     )
 
     assert unchanged.status_code == 200, unchanged.text
@@ -942,7 +942,7 @@ async def test_a_patch_response_still_splits_pools_from_the_bracket(
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_pool": 2},
+        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 2},
     )
 
     assert response.status_code == 200, response.text
@@ -1158,7 +1158,7 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
     ):
         tournament_id = await _tournament(client)
         event_id = (
-            await _create_event(client, tournament_id, qualifiers_per_pool=2)
+            await _create_event(client, tournament_id, qualifiers_per_group=2)
         ).json()["id"]
         # Seeds 1, 6, 7 snake into pool A; 2, 5, 8 into pool B; 3, 4, 9 into pool C.
         players = {1: owner, 6: user_6, 2: user_2, 5: user_5}

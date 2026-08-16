@@ -104,7 +104,7 @@ async def _add_event(
     tournament: Tournament,
     *,
     draw_type: DrawType = DrawType.round_robin,
-    qualifiers_per_pool: int | None = None,
+    qualifiers_per_group: int | None = None,
     rounds: int | None = None,
     max_players: int | None = 6,
     pools: list[dict[str, object]] | None = None,
@@ -118,7 +118,7 @@ async def _add_event(
         name=name,
         format=EventFormat.singles,
         draw_settings=event_draw_settings(
-            draw_type, qualifiers_per_pool=qualifiers_per_pool, rounds=rounds
+            draw_type, qualifiers_per_group=qualifiers_per_group, rounds=rounds
         ),
         max_players=max_players,
         entry_fee=Decimal("0"),
@@ -548,7 +548,7 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
         db_session,
         tournament,
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=2,
+        qualifiers_per_group=2,
         max_players=6,
     )
     loaded = await _load(db_session, tournament.id)
@@ -597,7 +597,7 @@ async def test_an_rr_then_ko_event_does_not_abort_the_tournaments_whole_preview(
         tournament,
         name="Second Singles",
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=2,
+        qualifiers_per_group=2,
         max_players=6,
         pools=[_one_pool(["t2"])],
     )
@@ -655,7 +655,7 @@ async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
         draw_type=DrawType.rr_then_ko,
         # One pool taking one qualifier: the knockout stage would hold a single
         # player with nobody to play, so ``RrThenKoStrategy.plan_initial`` refuses.
-        qualifiers_per_pool=1,
+        qualifiers_per_group=1,
         max_players=6,
         pools=[_one_pool(["t2"])],
     )
@@ -729,7 +729,7 @@ async def test_a_tournament_whose_only_event_is_degenerate_is_still_refused(
         tournament,
         name="Championship",
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=1,
+        qualifiers_per_group=1,
         max_players=6,
     )
     loaded = await _load(db_session, tournament.id)
@@ -762,7 +762,7 @@ async def test_a_wholly_unpreviewable_tournament_speaks_its_first_events_reason(
             tournament,
             name="Championship",
             draw_type=DrawType.rr_then_ko,
-            qualifiers_per_pool=1,
+            qualifiers_per_group=1,
             max_players=6,
             pools=[_one_pool(["t2"])],
         )

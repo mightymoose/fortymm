@@ -160,7 +160,7 @@ async def _add_event(
     name: str = "Open Singles",
     timezone: str = "America/Los_Angeles",
     draw_type: DrawType = DrawType.round_robin,
-    qualifiers_per_pool: int | None = None,
+    qualifiers_per_group: int | None = None,
 ) -> TournamentEvent:
     stages = mint_stages(draw_type)
     event = TournamentEvent(
@@ -168,7 +168,7 @@ async def _add_event(
         name=name,
         format=EventFormat.singles,
         draw_settings=event_draw_settings(
-            draw_type, qualifiers_per_pool=qualifiers_per_pool
+            draw_type, qualifiers_per_group=qualifiers_per_group
         ),
         max_players=max_players,
         entry_fee=Decimal("0"),
@@ -409,7 +409,7 @@ async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_sche
         max_players=6,
         pools=_TWO_POOLS,
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=2,
+        qualifiers_per_group=2,
     )
 
     await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)
@@ -567,7 +567,7 @@ async def test_preview_notes_carry_a_degenerate_events_own_refusal(
         draw_type=DrawType.rr_then_ko,
         # One pool taking one qualifier: the knockout stage would hold a single
         # player with nobody to play, so the strategy refuses the cut.
-        qualifiers_per_pool=1,
+        qualifiers_per_group=1,
     )
 
     enqueued = await request_schedule_preview(

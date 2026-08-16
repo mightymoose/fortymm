@@ -951,7 +951,7 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
                 POOL_A,
                 POOL_B,
                 draw_type="rr-then-ko",
-                qualifiers_per_pool=1,
+                qualifiers_per_group=1,
                 match_settings={"rated": False, "length_games": 3},
                 predicates=[],
             ),

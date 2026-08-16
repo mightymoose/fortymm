@@ -121,13 +121,13 @@ EventEntryFee = Annotated[
 
 # ----- the draw configuration, as a union tagged by the draw type -----------
 
-MAX_QUALIFIERS_PER_POOL = 1000
+MAX_QUALIFIERS_PER_GROUP = 1000
 """The ceiling on **K** — the same 1000 the web client's event form enforces.
 
-It is not the domain rule. K can never exceed the smallest pool's size in a real event,
+It is not the domain rule. K can never exceed the smallest group's size in a real event,
 and the cut already refuses that with a message naming both numbers
 (``DegenerateDraw``). This is the *boundary* refusing counts that are nonsense on their
-face and would otherwise reach the column: 1000 is far above any pool a table-tennis
+face and would otherwise reach the column: 1000 is far above any group a table-tennis
 event will ever have, and far below the ``Integer`` column's 2,147,483,647.
 
 The number that matters is the one past the column, not the one past 1000. A K of
@@ -137,11 +137,11 @@ which was false. A K of 999,999,999 was worse in the quieter way: ``201 Created`
 an event whose draw can never be cut. Both are a 422 now, under the field, where the
 organizer can see which number they meant."""
 
-QualifiersPerPool = Annotated[int, Field(ge=1, le=MAX_QUALIFIERS_PER_POOL)]
-"""**K** — how many of each pool's finishers advance into an ``rr-then-ko`` draw's
+QualifiersPerGroup = Annotated[int, Field(ge=1, le=MAX_QUALIFIERS_PER_GROUP)]
+"""**K** — how many of each group's finishers advance into an ``rr-then-ko`` draw's
 knockout stage.
 
-``1 <= K <= MAX_QUALIFIERS_PER_POOL`` is the **static** half of the ADR's legal
+``1 <= K <= MAX_QUALIFIERS_PER_GROUP`` is the **static** half of the ADR's legal
 configuration space ("rr-then-ko cuts both stages upfront and seeds qualifiers
 rematch-free"): zero advances nobody, a negative count is not a count, and a count in
 the billions is not a qualifier count at all, whatever the field looks like. It is
@@ -152,12 +152,12 @@ The two bounds that **move with the entrant count** — ``P × K >= 2`` and
 ``K <= ⌊N/P⌋`` — are deliberately *not* here. They are refused at the cut as
 ``DegenerateDraw``, because a configuration that was legal when it was written must not
 become unwritable when a player withdraws (the same split ``_snake`` already uses for
-its own pool floor)."""
+its own group floor)."""
 
 MAX_SWISS_ROUNDS = 32
 """The ceiling on **R** — how many rounds a swiss event plays.
 
-The same kind of bound as ``MAX_QUALIFIERS_PER_POOL``, and not the domain rule either.
+The same kind of bound as ``MAX_QUALIFIERS_PER_GROUP``, and not the domain rule either.
 The rule that matters moves with the field: ``R <= N - 1 + N % 2``, the number of rounds
 ``N`` entrants can play with nobody meeting twice — ``N - 1`` for an even field, and
 ``N`` for an odd one, whose per-round bye lets everybody play ``N - 1`` matches and sit
@@ -178,7 +178,7 @@ count whatever the field looks like. Stated once and shared by the create schema
 patch schema and the union arm below, so the three cannot drift.
 
 The bound that **moves with the entrant count** — ``R <= N - 1 + N % 2`` — is
-deliberately not here, for the reason ``QualifiersPerPool`` gives: ``N`` is not known
+deliberately not here, for the reason ``QualifiersPerGroup`` gives: ``N`` is not known
 when the setting is written, and a configuration that was legal when it was written must
 not become
 unwritable when a player withdraws."""
@@ -218,7 +218,7 @@ class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
     """A round-robin event's draw configuration: the draw type, and nothing else.
 
     ``extra="forbid"`` (inherited) is doing real work on this arm — it is what makes
-    ``qualifiers_per_pool`` on a round-robin event a **422 at the boundary** rather than
+    ``qualifiers_per_group`` on a round-robin event a **422 at the boundary** rather than
     a value silently dropped on the way to storage. Since the settings column became one
     JSON object, this union is the **only** thing that says which settings belong to
     which draw type: the table's old ``CASE`` constraint went with the column it
@@ -230,7 +230,7 @@ class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
     draw_type: Literal[DrawType.round_robin] = DrawType.round_robin
 
     @property
-    def qualifiers_per_pool(self) -> int | None:
+    def qualifiers_per_group(self) -> int | None:
         """``None`` — this draw type has no knockout stage to qualify for.
 
         A read-side **property**, not a field: the field's absence is what refuses the
@@ -242,7 +242,7 @@ class RoundRobinDrawSettingsWrite(DrawSettingsWriteBase):
     def rounds(self) -> int | None:
         """``None`` — a round-robin's round count is dealt by the circle method, not
         chosen. Only ``swiss`` carries one, and for the reason
-        :meth:`qualifiers_per_pool` is a property here: every arm answers the same
+        :meth:`qualifiers_per_group` is a property here: every arm answers the same
         question, and the field's absence is what refuses the key on the wire."""
         return None
 
@@ -255,8 +255,8 @@ class SingleElimDrawSettingsWrite(DrawSettingsWriteBase):
     draw_type: Literal[DrawType.single_elim] = DrawType.single_elim
 
     @property
-    def qualifiers_per_pool(self) -> int | None:
-        """``None`` — a bracket has no pools to qualify out of."""
+    def qualifiers_per_group(self) -> int | None:
+        """``None`` — a bracket has no groups to qualify out of."""
         return None
 
     @property
@@ -269,18 +269,18 @@ class RrThenKoDrawSettingsWrite(DrawSettingsWriteBase):
     """A round-robin-then-knockout event's draw configuration: the draw type **and** its
     qualifier count (ADR 20260727).
 
-    ``qualifiers_per_pool`` is **required** here, with no default. There is no
+    ``qualifiers_per_group`` is **required** here, with no default. There is no
     defensible number to assume — "2" is a convention, not a fact about the event — and
     a draw silently cut for a K the director never chose is the worst of the available
     failures: it looks like it worked."""
 
     draw_type: Literal[DrawType.rr_then_ko] = DrawType.rr_then_ko
-    qualifiers_per_pool: QualifiersPerPool
+    qualifiers_per_group: QualifiersPerGroup
 
     @property
     def rounds(self) -> int | None:
         """``None`` — neither of this draw type's two stages has a chosen round count:
-        the pools are dealt by the circle method and the bracket's depth follows from
+        the groups are dealt by the circle method and the bracket's depth follows from
         the qualifier count."""
         return None
 
@@ -301,8 +301,8 @@ class SwissDrawSettingsWrite(DrawSettingsWriteBase):
     rounds: SwissRounds
 
     @property
-    def qualifiers_per_pool(self) -> int | None:
-        """``None`` — swiss is pool-less and eliminates nobody, so there is nothing to
+    def qualifiers_per_group(self) -> int | None:
+        """``None`` — swiss is group-less and eliminates nobody, so there is nothing to
         qualify out of or into."""
         return None
 
@@ -329,7 +329,7 @@ here).
 
 One arm per :class:`DrawType`, carrying exactly the configuration that draw type has —
 which for two of the three is nothing at all. That is the whole point: "a round-robin
-event with 2 qualifiers per pool" is not a payload this type can hold, so it cannot be
+event with 2 qualifiers per group" is not a payload this type can hold, so it cannot be
 half-honoured. This union is now the **sole** enforcement of that pairing: the settings
 table's ``CASE`` ``CHECK`` was dropped with the column it named (ADR "a draw type's
 settings are one NOT NULL JSON object"), so nothing underneath catches a pair this type
@@ -346,9 +346,9 @@ _DRAW_SETTINGS_WRITE: TypeAdapter[DrawSettingsWriteArm] = TypeAdapter(DrawSettin
 
 
 def _draw_settings_write(
-    draw_type: DrawType, qualifiers_per_pool: int | None, rounds: int | None
+    draw_type: DrawType, qualifiers_per_group: int | None, rounds: int | None
 ) -> DrawSettingsWriteArm:
-    """Parse a ``(draw_type, qualifiers_per_pool, rounds)`` triple into the union arm it
+    """Parse a ``(draw_type, qualifiers_per_group, rounds)`` triple into the union arm it
     names, or raise :class:`ValueError` — a 422 — when it names none.
 
     The settings are **flat on the wire** and a union in the interior. Nesting them
@@ -371,8 +371,8 @@ def _draw_settings_write(
     second statement of a rule the arms already make, and the two would drift.
     """
     payload: dict[str, object] = {"draw_type": draw_type}
-    if qualifiers_per_pool is not None:
-        payload["qualifiers_per_pool"] = qualifiers_per_pool
+    if qualifiers_per_group is not None:
+        payload["qualifiers_per_group"] = qualifiers_per_group
     if rounds is not None:
         payload["rounds"] = rounds
     try:
@@ -420,13 +420,13 @@ def draw_settings_from_storage(
 
 # ----- value-objects (typed JSONB) -----------------------------------------
 
-# ``ValueObjectId`` — the ``Annotated[str, Field(min_length=1)]`` a pool's id used to be
+# ``ValueObjectId`` — the ``Annotated[str, Field(min_length=1)]`` a group's id used to be
 # — is gone, and its deletion is the point of the chore that minted them. It existed
-# only because "pools and tables have no tables of their own, so a pool is addressed by
+# only because "groups and tables have no tables of their own, so a group is addressed by
 # a client-supplied string and nothing in the database constrains it" (ADR 20260726,
-# which scoped its removal). Both halves of that are now false: a pool is a row, its id
+# which scoped its removal). Both halves of that are now false: a group is a row, its id
 # is a ``uuid`` the database mints, and the illegal state the floor was holding off —
-# the empty-string id, which answered "is this fixture pooled?" and the draw-order tie-
+# the empty-string id, which answered "is this fixture grouped?" and the draw-order tie-
 # break inconsistently — is not expressible in a ``uuid`` at all. A type that cannot
 # hold the bad value beats a validator that refuses it (api/CLAUDE.md, "make illegal
 # states unrepresentable").
@@ -1791,7 +1791,7 @@ class TournamentEventRead(BaseModel):
     # even a rename, has to carry a K. Without this field the client would have to guess
     # one, which pre-draw silently overwrites the director's number and post-draw trips
     # the freeze with a 409 for an edit nobody made.
-    qualifiers_per_pool: int | None
+    qualifiers_per_group: int | None
     # **R** — how many rounds a swiss event plays — read back flat beside its draw type
     # for exactly the reasons the qualifier count above is: it is the other setting the
     # editor has to send back on every PATCH of a swiss event, because the arm requires
@@ -2117,7 +2117,7 @@ class TournamentUpdate(BaseModel):
         refused (:class:`~app.tournament_errors.TableInUseError`).
 
         A read-side ``property`` rather than a validator that coerces the field, for the
-        reason :meth:`RoundRobinDrawSettingsWrite.qualifiers_per_pool` is one: the
+        reason :meth:`RoundRobinDrawSettingsWrite.qualifiers_per_group` is one: the
         field's declared type is what shapes the wire (and here, what keeps the key
         omittable), while this is what the interior holds. Callers take this and never
         the field, so ``unplace_fixtures`` stays a total ``bool``.
@@ -2207,12 +2207,12 @@ class TournamentEventCreate(BaseModel):
     # ``draw_type`` on the wire and a *union* in the interior: the pair is parsed into
     # ``DrawSettingsWrite`` by the validator below, so a qualifier count on a
     # round-robin, single-elim or swiss event is a 422 here and never a value
-    # quietly dropped (ADR 20260727). ``QualifiersPerPool`` is the same
+    # quietly dropped (ADR 20260727). ``QualifiersPerGroup`` is the same
     # ``1 <= K <= 1000`` alias the union arm carries, restated on the field so both
     # bounds reach the generated clients too.
-    qualifiers_per_pool: QualifiersPerPool | None = None
+    qualifiers_per_group: QualifiersPerGroup | None = None
     # **R**, and only for the one draw type that has one — the same flat-beside-the-type
-    # shape ``qualifiers_per_pool`` takes, parsed into the same union by the validator
+    # shape ``qualifiers_per_group`` takes, parsed into the same union by the validator
     # below, so a round count on a round-robin event is a 422 here and a *missing* one
     # on a swiss event is a 422 too (``SwissDrawSettingsWrite.rounds`` is required).
     # ``SwissRounds`` restates the ``1 <= R <= 32`` bound the arm carries so both reach
@@ -2249,7 +2249,7 @@ class TournamentEventCreate(BaseModel):
     #: The arm :meth:`_parse_draw_settings` parsed, kept rather than re-derived. Set by
     #: that validator and by nothing else; it cannot fall out of step with the two
     #: fields it was parsed from because a request model is **read-only after
-    #: validation** — nothing assigns to ``draw_type``/``qualifiers_per_pool`` and
+    #: validation** — nothing assigns to ``draw_type``/``qualifiers_per_group`` and
     #: nothing ``model_copy(update=…)``s one, which are the two gestures that would
     #: move a field without re-running the validator. It has no default because a model
     #: that exists has run the validator, and reading it on one that has not is a
@@ -2272,7 +2272,7 @@ class TournamentEventCreate(BaseModel):
 
     @model_validator(mode="after")
     def _parse_draw_settings(self) -> "TournamentEventCreate":
-        """Parse at the boundary: an illegal ``(draw_type, qualifiers_per_pool)`` pair
+        """Parse at the boundary: an illegal ``(draw_type, qualifiers_per_group)`` pair
         is a 422 on the create. This is now the **only** guard on that pairing — the
         settings table's ``CASE`` ``CHECK`` went away with the column it named (ADR "a
         draw type's settings are one NOT NULL JSON object"), so there is no longer a
@@ -2280,7 +2280,7 @@ class TournamentEventCreate(BaseModel):
         (:attr:`_draw_settings`) rather than discarded — parse once, at the boundary,
         and carry the parsed value inward."""
         self._draw_settings = _draw_settings_write(
-            self.draw_type, self.qualifiers_per_pool, self.rounds
+            self.draw_type, self.qualifiers_per_group, self.rounds
         )
         return self
 
@@ -2315,7 +2315,7 @@ class TournamentEventUpdate(BaseModel):
     # below. An explicit ``null`` is meaningful here and means the same as absent from
     # the pair's point of view ("this draw type takes no qualifier count"), which is why
     # it is not in the ``_reject_explicit_null`` list.
-    qualifiers_per_pool: QualifiersPerPool | None = None
+    qualifiers_per_group: QualifiersPerGroup | None = None
     # **R**, patched with its draw type and never alone, exactly as the qualifier count
     # is — and ``null`` means the same thing here as absent does ("this draw type takes
     # no round count"), which is what patching a swiss event back to a round-robin says.
@@ -2355,7 +2355,7 @@ class TournamentEventUpdate(BaseModel):
     def _reject_explicit_null(cls, value: Any) -> Any:
         # ``max_players`` is deliberately absent here: it is a nullable column and
         # an explicit ``null`` is meaningful — it clears the cap (ADR-0935). So is
-        # ``qualifiers_per_pool``, for the same reason in a different key: ``null``
+        # ``qualifiers_per_group``, for the same reason in a different key: ``null``
         # there says "this draw type takes no qualifier count", which is exactly what
         # patching an ``rr-then-ko`` event back to a round-robin means.
         if value is None:
@@ -2381,7 +2381,7 @@ class TournamentEventUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _parse_draw_settings(self) -> "TournamentEventUpdate":
-        """The draw configuration is patched **as a unit**: a ``qualifiers_per_pool``
+        """The draw configuration is patched **as a unit**: a ``qualifiers_per_group``
         without a ``draw_type`` beside it is a 422.
 
         Not pedantry — it is what keeps the pairing rule *at the boundary*. Which draw
@@ -2393,9 +2393,9 @@ class TournamentEventUpdate(BaseModel):
 
         The arm it parses is **kept** (:attr:`_draw_settings`) rather than discarded, so
         the freeze guard and the write that follows it read one parse between them."""
-        if self.draw_type is None and self.qualifiers_per_pool is not None:
+        if self.draw_type is None and self.qualifiers_per_group is not None:
             raise ValueError(
-                "qualifiers_per_pool is part of an event's draw configuration and is "
+                "qualifiers_per_group is part of an event's draw configuration and is "
                 "patched with it: send draw_type alongside it."
             )
         if self.draw_type is None and self.rounds is not None:
@@ -2405,7 +2405,7 @@ class TournamentEventUpdate(BaseModel):
             )
         if self.draw_type is not None:
             self._draw_settings = _draw_settings_write(
-                self.draw_type, self.qualifiers_per_pool, self.rounds
+                self.draw_type, self.qualifiers_per_group, self.rounds
             )
         return self
 

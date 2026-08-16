@@ -267,7 +267,7 @@ def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
         entry_b_id=None,
     )
 
-    plan = RrThenKoStrategy(qualifiers_per_pool=2).advance(
+    plan = RrThenKoStrategy(qualifiers_per_group=2).advance(
         [pool_fixture, knockout_fixture], ()
     )
 
@@ -330,7 +330,7 @@ async def test_create_event_mints_two_stages_for_rr_then_ko(
         tournament_id=tournament.id,
         actor=owner,
         payload=TournamentEventCreate.model_validate(
-            _pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+            _pooled(draw_type="rr-then-ko", qualifiers_per_group=2)
         ),
     )
 
@@ -372,7 +372,7 @@ async def test_update_event_remint_grows_one_stage_to_two_preserving_stage_zero(
         updates=TournamentEventUpdate.model_validate(
             {
                 "draw_type": "rr-then-ko",
-                "qualifiers_per_pool": 2,
+                "qualifiers_per_group": 2,
                 "pools": [
                     {
                         "name": "Pool A",
@@ -413,7 +413,7 @@ async def test_update_event_remint_shrinks_two_stages_to_one_preserving_stage_ze
         tournament_id=tournament.id,
         actor=owner,
         payload=TournamentEventCreate.model_validate(
-            _pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+            _pooled(draw_type="rr-then-ko", qualifiers_per_group=2)
         ),
     )
     before = await _stages(db_session, event.id)
@@ -472,7 +472,7 @@ async def test_remint_retypes_every_retained_position_not_just_stage_zero(
         tournament_id=tournament.id,
         actor=owner,
         payload=TournamentEventCreate.model_validate(
-            _pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+            _pooled(draw_type="rr-then-ko", qualifiers_per_group=2)
         ),
     )
     before = await _stages(db_session, event.id)
@@ -714,7 +714,7 @@ async def test_the_tournament_detail_serves_an_rr_then_ko_events_two_stages_in_o
     worth pinning here."""
     client, _ = authed_client
     tournament_id, event_id = await _tournament_with_event(
-        client, **_pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+        client, **_pooled(draw_type="rr-then-ko", qualifiers_per_group=2)
     )
 
     event = await _event_of(client, tournament_id, event_id)

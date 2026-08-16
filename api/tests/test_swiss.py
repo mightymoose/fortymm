@@ -279,7 +279,7 @@ async def test_a_round_count_on_another_draw_type_is_422(
         tournament_id,
         draw_type=draw_type,
         rounds=3,
-        **({"qualifiers_per_pool": 2} if draw_type == "rr-then-ko" else {}),
+        **({"qualifiers_per_group": 2} if draw_type == "rr-then-ko" else {}),
     )
 
     assert response.status_code == 422, response.text
@@ -330,7 +330,7 @@ async def test_the_round_count_reads_back_flat_beside_the_draw_type(
     created = await _create_event(client, tournament_id, rounds=4)
 
     assert created.json()["rounds"] == 4
-    assert created.json()["qualifiers_per_pool"] is None
+    assert created.json()["qualifiers_per_group"] is None
     read = await _event_read(client, tournament_id)
     assert read["rounds"] == 4
     assert read["draw_type"] == SWISS

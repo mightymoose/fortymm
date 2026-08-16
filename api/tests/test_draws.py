@@ -73,7 +73,7 @@ def _settings(draw_type: DrawType) -> DrawSettingsWriteArm:
     rather than resolving to a strategy configured by omission.
     """
     required: dict[DrawType, dict[str, int]] = {
-        DrawType.rr_then_ko: {"qualifiers_per_pool": 2},
+        DrawType.rr_then_ko: {"qualifiers_per_group": 2},
         DrawType.swiss: {"rounds": 3},
     }
     return draw_settings_from_storage(draw_type, required.get(draw_type, {}))
@@ -301,19 +301,19 @@ class TestStrategyRegistry:
         the qualifier count is not a detail of the dispatch, it is what the strategy
         cuts with, so it is asserted to have arrived rather than merely to have been
         accepted."""
-        strategy = strategy_for(RrThenKoDrawSettingsWrite(qualifiers_per_pool=3))
+        strategy = strategy_for(RrThenKoDrawSettingsWrite(qualifiers_per_group=3))
 
-        assert strategy == RrThenKoStrategy(qualifiers_per_pool=3)
+        assert strategy == RrThenKoStrategy(qualifiers_per_group=3)
 
     def test_an_rr_then_ko_arm_cannot_be_built_without_a_qualifier_count(self) -> None:
-        """The old "``strategy_for`` refuses ``qualifiers_per_pool=None``" test, moved
+        """The old "``strategy_for`` refuses ``qualifiers_per_group=None``" test, moved
         one layer out and made stronger.
 
         ``strategy_for`` now takes the **arm**, so a configuration with no count is not
         a value it can be handed at all: the count is a required field, and the refusal
         happens where the arm would be built (ADR "a draw type's settings are one NOT
         NULL JSON object"). A K nobody chose is unrepresentable rather than caught."""
-        with pytest.raises(ValidationError, match="qualifiers_per_pool"):
+        with pytest.raises(ValidationError, match="qualifiers_per_group"):
             RrThenKoDrawSettingsWrite()  # type: ignore[call-arg]  # the point of the test
 
     def test_every_draw_type_resolves_to_a_strategy_and_none_refuses(self) -> None:
@@ -1592,8 +1592,8 @@ CYCLIC_POOL_RESULTS: dict[frozenset[int], tuple[int, int, int]] = {
 CYCLIC_POOL_FINISHING_ORDER = [2, 1, 3, 4]
 
 
-def _rr_then_ko(qualifiers_per_pool: int) -> RrThenKoStrategy:
-    return RrThenKoStrategy(qualifiers_per_pool=qualifiers_per_pool)
+def _rr_then_ko(qualifiers_per_group: int) -> RrThenKoStrategy:
+    return RrThenKoStrategy(qualifiers_per_group=qualifiers_per_group)
 
 
 def _knockout(fixtures: Sequence[PlannedFixture]) -> list[PlannedFixture]:
@@ -1897,8 +1897,8 @@ class TestRrThenKoCut:
         # A *programmer* error, not a director one — K ≥ 1 is a static constraint at the
         # request boundary — so it is a ValueError, and the illegal strategy cannot even
         # be built.
-        with pytest.raises(ValueError, match="qualifiers_per_pool must be at least 1"):
-            RrThenKoStrategy(qualifiers_per_pool=0)
+        with pytest.raises(ValueError, match="qualifiers_per_group must be at least 1"):
+            RrThenKoStrategy(qualifiers_per_group=0)
 
 
 class TestRrThenKoAdvance:

@@ -159,7 +159,7 @@ def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
 def event_draw_settings(
     draw_type: DrawType,
     *,
-    qualifiers_per_pool: int | None = None,
+    qualifiers_per_group: int | None = None,
     rounds: int | None = None,
 ) -> TournamentEventDrawSettings:
     """The draw-settings row for an event a test seeds straight through the ORM, built
@@ -177,8 +177,8 @@ def event_draw_settings(
     Both ``None`` is "this draw type takes no configuration", and it stores ``{}``.
     """
     settings: dict[str, int] = {}
-    if qualifiers_per_pool is not None:
-        settings["qualifiers_per_pool"] = qualifiers_per_pool
+    if qualifiers_per_group is not None:
+        settings["qualifiers_per_group"] = qualifiers_per_group
     if rounds is not None:
         settings["rounds"] = rounds
     return draw_settings_row(draw_settings_from_storage(draw_type, settings))

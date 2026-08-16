@@ -165,7 +165,7 @@ async def _make_tournament(
     length_games: int = 3,
     slot_date: str = DATE,
     draw_type: DrawType = DrawType.round_robin,
-    qualifiers_per_pool: int | None = None,
+    qualifiers_per_group: int | None = None,
     rounds: int | None = None,
     pools: Sequence[Mapping[str, Any]] | None = None,
     materialize: bool = False,
@@ -183,7 +183,7 @@ async def _make_tournament(
     the event gets one pool spanning every table for the whole event window,
     which is what most of this module's tests want.
 
-    ``qualifiers_per_pool`` is the one setting ``rr-then-ko`` carries — how many
+    ``qualifiers_per_group`` is the one setting ``rr-then-ko`` carries — how many
     of each pool's finishers reach the bracket — and ``rounds`` is the one
     ``swiss`` carries. Both go through the same parse the request boundary uses
     (``tests._helpers.event_draw_settings``), so a setting named for a draw type
@@ -243,7 +243,7 @@ async def _make_tournament(
         name="Open Singles",
         format=EventFormat.singles,
         draw_settings=event_draw_settings(
-            draw_type, qualifiers_per_pool=qualifiers_per_pool, rounds=rounds
+            draw_type, qualifiers_per_group=qualifiers_per_group, rounds=rounds
         ),
         max_players=None,
         entry_fee=Decimal("0.00"),
@@ -2248,7 +2248,7 @@ class TestEventWideReservation:
             db_session,
             entrants=6,
             draw_type=DrawType.rr_then_ko,
-            qualifiers_per_pool=2,
+            qualifiers_per_group=2,
         )
 
         fixtures = await _fixtures_of(db_session, event_id)
@@ -2358,7 +2358,7 @@ async def _make_pools_then_knockout_tournament(
         tables=("t1", "t2"),
         window=("08:00", "19:00"),
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=2,
+        qualifiers_per_group=2,
         pools=[
             {
                 "name": "Pool A",

@@ -299,10 +299,10 @@ def _draw_type_frozen_detail(current: DrawType) -> str:
     )
 
 
-def _qualifiers_per_pool_frozen_detail(
+def _qualifiers_per_group_frozen_detail(
     current: DrawType, qualifiers: int | None
 ) -> str:
-    """The 409 sentence for a ``qualifiers_per_pool`` change on an event whose draw is
+    """The 409 sentence for a ``qualifiers_per_group`` change on an event whose draw is
     already cut — the same freeze as the draw type's, about the other half of the same
     configuration (ADR 20260727).
 
@@ -354,8 +354,8 @@ def _draw_settings_frozen_detail(stored: DrawSettingsWriteArm) -> str:
     type error here until it says how a change to it reads."""
     match stored:
         case RrThenKoDrawSettingsWrite():
-            return _qualifiers_per_pool_frozen_detail(
-                stored.draw_type, stored.qualifiers_per_pool
+            return _qualifiers_per_group_frozen_detail(
+                stored.draw_type, stored.qualifiers_per_group
             )
         case SwissDrawSettingsWrite():
             return _rounds_frozen_detail(stored.rounds)
@@ -496,11 +496,11 @@ async def _enforce_draw_settings_frozen(
     cannot catch it (currency compares the seated entrant set against the active
     entrants, and re-labelling moves neither), which is why this guard has to exist.
 
-    ``qualifiers_per_pool`` is frozen by the **same** guard rather than a parallel one,
+    ``qualifiers_per_group`` is frozen by the **same** guard rather than a parallel one,
     because it is the same fact wearing a second column: an ``rr-then-ko`` draw's
     bracket is cut upfront for ``P × K``, so a K the fixtures were not cut for is
     exactly as contradictory as a type they were not dealt by — and quieter (see
-    :func:`_qualifiers_per_pool_frozen_detail`). Swiss's ``rounds`` is frozen by that
+    :func:`_qualifiers_per_group_frozen_detail`). Swiss's ``rounds`` is frozen by that
     same guard for that same reason: all ``R`` rounds are cut at once, so an R the
     fixtures were not cut for leaves the draw with rounds it has no fixtures for (see
     :func:`_rounds_frozen_detail`). One comparison over the whole configuration is also
@@ -521,7 +521,7 @@ async def _enforce_draw_settings_frozen(
     out of.
     """
     # ``None`` is "this patch does not touch the draw configuration": the schema refuses
-    # an explicit ``null`` on ``draw_type`` (422) and refuses a ``qualifiers_per_pool``
+    # an explicit ``null`` on ``draw_type`` (422) and refuses a ``qualifiers_per_group``
     # with no ``draw_type`` beside it, so an absent draw type means an absent pair.
     incoming = updates.draw_settings
     if incoming is None:
@@ -725,7 +725,7 @@ async def update_event(
     # never persists — the edit would be silently accepted and silently dropped. Popping
     # them leaves the loop below touching mapped columns only.
     changes.pop("draw_type", None)
-    changes.pop("qualifiers_per_pool", None)
+    changes.pop("qualifiers_per_group", None)
     # The swiss round count is the same kind of key for the same reason: it lives in the
     # settings row's JSON object, not on the event, so the loop would bind an unmapped
     # attribute and drop the edit silently.
@@ -771,7 +771,7 @@ async def update_event(
         # Re-apply the stage template IN PLACE (ADR 20260815 decision 3) — but only when
         # the draw TYPE itself moved. The stage template ``stage_template`` mints
         # depends only on ``draw_type`` (never on the settings beside it, e.g.
-        # ``qualifiers_per_pool``), so a settings-only edit on an unchanged type has
+        # ``qualifiers_per_group``), so a settings-only edit on an unchanged type has
         # nothing for a re-mint to do. This also covers the one case
         # ``_enforce_draw_settings_frozen`` waves through even under a standing draw — a
         # PATCH that resends the event's current draw settings unchanged — because that
