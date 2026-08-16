@@ -124,6 +124,8 @@ Only after implementation and relevant verification succeed:
 
 The second reason is the ordinary one: a reviewer that just wrote the code is not a reviewer. Fresh context is what makes the review a review.
 
+**If this session has no mechanism to dispatch a fresh context, do not run Review inline.** Stop at **In Review** and report that Review still needs to run. `implement-ticket-end-to-end` invokes Review itself in exactly that case, and a manual `review-next-ticket` picks it up outside the coordinator.
+
 The human's touch point is the **Waiting For Sign Off** column, not this handoff. A ticket parked in **In Review** is waiting on nothing: no cron, no GitHub Action and no hook starts Review, so it sits there until a person notices. That wait is what this handoff removes.
 
 **Do not wait for CI before invoking it.** `review-next-ticket` waits for green itself, as a step of its own, and it is the stage that owns that wait. Waiting here would only duplicate it — and a red build is Review's finding to report, not a reason for this command to sit on a finished implementation.
@@ -142,38 +144,17 @@ Do not begin Testing in this command.
 
 ## Escalation Contract
 
-Work autonomously when the path forward is clear.
-
-Stop and involve the user when continuing requires judgment rather than execution, including when:
-
-- acceptance criteria are materially ambiguous or contradictory;
-- a Discovery or Planning assumption is materially wrong;
-- satisfying the ticket requires changing approved scope or behavior;
-- multiple materially different product, UX, data-model, or architectural choices have no clear approved answer;
-- proceeding requires an unexpectedly destructive, irreversible, security-sensitive, or otherwise high-risk action;
-- required credentials, services, environments, or external dependencies are unavailable;
-- repository state makes it unsafe to determine which changes belong to the ticket;
-- an autonomous repair loop has failed twice for the same underlying problem;
-- the stage cannot be completed honestly.
-
-Do not escalate merely because implementation is harder than expected, understandable tests fail, or ordinary tooling checks fail for a clear reason.
-
-When escalating, stop before the unresolved decision, explain what was discovered and why it blocks safe progress, and present the smallest useful set of choices or specific question. Never weaken acceptance criteria, skip a required stage, or redefine success.
+`.claude/rules/escalation.md` is the contract — when to stop, when not to, and how.
 
 ## Hard Rules
 
 - Process exactly one ticket per invocation.
-- With no argument, use the topmost ticket in **Ready For Implementation**.
-- With a ticket number, use that eligible ticket only.
 - Move the ticket to **In Progress** at selection time, before any other work.
-- Treat acceptance criteria as authoritative and Planning notes as guidance.
-- Never silently change scope.
-- Never include unrelated user changes.
+- Never silently change scope, and never include unrelated user changes.
 - Verify before handing to Review.
 - Always leave structured Implementation Notes with explicit `N/A` where appropriate.
 - Move successful implementation to **In Review**, then invoke `review-next-ticket` for it by number, in a fresh context/subagent so its `model: opus` pin still applies.
-- Do not stop at **In Review**. The run ends at **Waiting For Sign Off**, or at an escalation.
+- The run ends at **Waiting For Sign Off**, at an escalation, or at the no-fresh-context stop above. Never review inline.
 - Do not wait for CI before handing off. Review owns that wait.
-- Do not conduct the review yourself in place of invoking `review-next-ticket`.
 - Never set **In Testing**, and never post the release signal on your own pull request. A human releases Review to Testing (`.claude/rules/the-review-gate.md`).
 - Do not test or merge in this command.

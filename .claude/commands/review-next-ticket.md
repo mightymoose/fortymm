@@ -100,9 +100,7 @@ Only when the review pass is clean and the implementation satisfies the ticket:
 7. **Move the ticket to Waiting For Sign Off.**
 8. Stop.
 
-**Move it in that order, and only after the comment lands.** The column says one thing: this work is waiting on a human. A ticket parked there before the ask exists asks for a decision on a pull request that carries no question.
-
-Post the comment first because the comment is the ask and the column is only its signpost. If the move fails, the human still has the ask.
+**Post the comment first, then move the column.** The comment is the ask and the column is only its signpost: a ticket parked in Waiting For Sign Off before the ask exists points at a pull request that carries no question, and if the move fails after the comment, the human still has the ask.
 
 **Waiting For Sign Off is the only column this command moves a ticket into.** It never sets **In Testing**. Only a human's `LGTM` releases the work to Testing, and `implement-ticket-end-to-end` writes that transition when it reads the signal.
 
@@ -150,24 +148,29 @@ A targeted round that escalates leaves the ticket **In Progress**. That is hones
 
 If a comment asks for something that would change approved scope or acceptance criteria, do not implement it. Escalate.
 
+## Testing Repair Rounds
+
+`test-next-ticket` invokes this command in a fresh context when Testing repairs a current-ticket failure. The scope is the repair diff, not a second full review, and the ticket is in **In Testing**, which is where it stays.
+
+1. Run the applicable review commands over the repair diff.
+2. Repair clear findings, as in the Repair Loop.
+3. Report the outcome to the caller. Fold what was found into the ticket's Testing Notes rather than posting fresh Review Notes.
+
+**Post no decision comment and move no column.** The human already released this work, and the gate's precondition window is "ever" by design (`.claude/rules/the-review-gate.md`) — a second ask on a released ticket is noise, and a column move would say the work waits on a human while Testing still owns it.
+
 ## Escalation Contract
 
-Work autonomously when the path is clear. Stop and involve the user for materially ambiguous/contradictory criteria, invalid upstream assumptions, required scope changes, materially different unresolved product/UX/data/architecture choices, unexpectedly destructive/high-risk actions, unavailable required credentials/services/environments, unsafe repository state, two failed repair attempts for the same problem, or inability to complete the stage honestly.
-
-Do not escalate for understandable failures with clear repairs. Never weaken criteria, skip stages, or redefine success.
+`.claude/rules/escalation.md` is the contract — when to stop, when not to, and how.
 
 ## Hard Rules
 
 - Process exactly one ticket.
-- No argument means top of **In Review**; an argument means that eligible ticket only.
-- Run the established `land-the-plane` review commands instead of inventing a separate review methodology.
-- Review the actual diff.
+- Run the established `land-the-plane` review commands over the actual diff instead of inventing a separate review methodology.
 - Repair clear local findings autonomously and re-run the applicable review commands.
-- Never silently reinterpret acceptance criteria.
 - Always leave structured Review Notes with explicit `N/A` where appropriate.
 - A non-draft pull request is a required output of this stage.
-- Post exactly one decision comment on the pull request, then move the ticket to **Waiting For Sign Off** and stop.
-- Post the decision comment **before** the column move. The comment is the ask; the column is its signpost.
+- Post exactly one decision comment on the pull request — before the column move — then move the ticket to **Waiting For Sign Off** and stop.
 - **Never set In Testing.** Only a human's `LGTM` releases the work, and the coordinator writes that transition.
 - In targeted mode, move the ticket to **In Progress** first, address only the named comments, push to the same branch, then move it back to **Waiting For Sign Off**.
+- In a Testing repair round, review the repair diff only: no decision comment, no column writes.
 - Do not merge or mark Done here.

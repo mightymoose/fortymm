@@ -40,23 +40,27 @@ The script is dry-run by default and only ever reaps a worktree whose PR has **m
 
 ## Independence Requirement
 
-Run each stage in a **fresh context/subagent** whenever Claude Code provides a mechanism to do so:
-
-1. `implement-next-ticket <ticket-number>`
-2. `review-next-ticket <ticket-number>`
-3. `test-next-ticket <ticket-number>`
+Run each stage — `implement-next-ticket`, `review-next-ticket`, `test-next-ticket` — in a **fresh context/subagent** whenever Claude Code provides a mechanism to do so, passing the explicit ticket number.
 
 Do not let the implementation context become its own reviewer/tester merely to save time. Handoff through durable artifacts: ticket specification, Planning notes, stage notes, code, PR, tests, and repository state — not private reasoning transcripts.
 
-## Stage 1 — Implementation
+## Stage 1 — Implementation, Which Hands Off to Review Itself
 
-Invoke `implement-next-ticket` for the selected ticket in a fresh context. That stage moves the ticket to **In Progress** when it claims it, so a ticket sitting In Progress with no pull request is an implementation run in flight or a dead one, not an unclaimed ticket. Success means implementation is on a pushed branch, PR linked, Implementation Notes appended, and ticket **In Review**. If it escalates, stop and surface the escalation unchanged.
+Invoke `implement-next-ticket` for the selected ticket in a fresh context. That stage moves the ticket to **In Progress** when it claims it, so a ticket sitting In Progress with no pull request is an implementation run in flight or a dead one, not an unclaimed ticket.
 
-## Stage 2 — Review
+The stage does not stop at implementation: it dispatches `review-next-ticket` in its own fresh context and runs to Review's stop. So one dispatch normally carries the ticket through **both** stages, and success means: implementation on a pushed branch, PR linked, Implementation Notes and Review Notes appended, a non-draft PR with CI green, a decision comment posted, and the ticket in **Waiting For Sign Off**.
 
-Invoke `review-next-ticket` for the same ticket in a new fresh context. Success means adversarial review completed, clear findings repaired/re-reviewed, Review Notes appended, a non-draft pull request open with CI green, a decision comment posted on it, and the ticket in **Waiting For Sign Off**. If it escalates, stop.
+**Recover the decision comment's timestamp from the stage report.** It is the watch anchor.
 
-**Review writes that column, not the coordinator.** The ticket is In Review while the repair loop runs, and moves to Waiting For Sign Off at the moment the ask is posted. Verify it landed there before entering the watch; do not write it yourself to paper over a stage that did not finish.
+If the stage escalates, stop and surface the escalation unchanged.
+
+## Stage 2 — Review, Only When Stage 1 Could Not Run It
+
+`implement-next-ticket` stops at **In Review** when it has no mechanism to dispatch Review in a fresh context. Only then invoke `review-next-ticket` for the same ticket in a new fresh context. Success means the same Review outputs as above, ending in **Waiting For Sign Off**.
+
+**Do not run Review a second time when Stage 1 already ran it.** A second pass costs a full review and posts a second decision comment, which resets the anchor for nothing.
+
+**Review writes the Waiting For Sign Off column, not the coordinator.** The ticket is In Review while the repair loop runs, and moves to Waiting For Sign Off at the moment the ask is posted. Verify it landed there before entering the watch; do not write it yourself to paper over a stage that did not finish.
 
 ## The Human Gate
 
@@ -107,7 +111,7 @@ Report which row matched and why before acting on it.
 
 ## Stage 3 — Testing
 
-Invoke `test-next-ticket` for the same ticket in another fresh context. Testing may temporarily route repairs back through Review. Allow `In Testing → repair → In Review → In Testing`, but Testing owns that loop. Final success means Testing passed, notes appended, unrelated discoveries are at the top of **To Do**, PR merged, and ticket **Done**. If it escalates, stop.
+Invoke `test-next-ticket` for the same ticket in another fresh context. Testing routes its repairs through fresh `review-next-ticket` **Testing repair rounds**; the ticket stays **In Testing** and Testing owns that loop — a repair round posts no new ask and does not re-open the gate, because the human already released this work (the gate's "ever" window). Final success means Testing passed, notes appended, unrelated discoveries are at the top of **To Do**, PR merged, and ticket **Done**. If it escalates, stop.
 
 ## Reap Last, From Outside
 
@@ -123,10 +127,6 @@ The order is the whole point. `reap-worktrees.sh` never removes the worktree the
 The coordinator does **not** clean up after a merge it delegated. `test-next-ticket` merged, so `test-next-ticket` tore down the QA stack and the branch. Doing it twice here would race a teardown that already ran.
 
 `docker system prune -a` and `docker volume prune` are forbidden anywhere in this arc. They destroy `fortymm-uat_postgres-data` and the k3d `tailscale-state` Secrets silently.
-
-## Coordinator Responsibilities
-
-Choose exactly one ticket; preserve its identity; ensure stages happen in order and independent contexts; verify expected project status after each stage; stop on escalation/failure; do not duplicate stage logic.
 
 ## Feedback Loop Preservation
 
@@ -148,20 +148,15 @@ The coordinator succeeds only when the selected ticket reaches **Done** through 
 
 ## Escalation Contract
 
-Work autonomously when the path is clear. Stop and involve the user when continuing requires judgment rather than execution: materially ambiguous/contradictory criteria, invalid upstream assumptions, required scope changes, unresolved materially different product/UX/data/architecture choices, unexpectedly destructive/high-risk actions, unavailable required credentials/services/environments, unsafe repository state, repeated failed repair loops, or inability to complete a required stage honestly.
-
-Never reinterpret a stage escalation as permission to improvise. Surface it and stop.
+`.claude/rules/escalation.md` is the contract — when to stop, when not to, and how. One addition for the coordinator: never reinterpret a stage escalation as permission to improvise. Surface it and stop.
 
 ## Hard Rules
 
-- Coordinate exactly one ticket.
-- With no argument, select the **topmost ticket in Ready For Implementation**.
-- With a ticket number, use that eligible ticket only.
-- Pass the explicit selected ticket number to every stage.
+- Coordinate exactly one ticket, and pass its explicit number to every stage.
 - Use fresh contexts/subagents between stages whenever possible.
 - Never merge before Review and Testing pass.
 - Never continue past a stage escalation.
-- Do not duplicate stage prompts inside the coordinator.
+- Do not duplicate stage prompts inside the coordinator, and do not re-run Review when Stage 1 already ran it.
 - Preserve every stage's structured retrospective notes.
 - Never move a ticket into **In Testing** without the gate signal.
 - **In Testing** is the coordinator's only gate-related column write. `review-next-ticket` owns **Waiting For Sign Off** and the **In Progress** bounce-back.
