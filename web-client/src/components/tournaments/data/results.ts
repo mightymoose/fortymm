@@ -2,9 +2,9 @@
 // being bytes off the wire and become a typed domain value.
 //
 // An event's results are a **discriminated union tagged by shape** — `standings` (a table
-// per pool) for round-robin, `finishes` (a placement list) for single-elimination,
+// per group) for round-robin, `finishes` (a placement list) for single-elimination,
 // `standings_then_finishes` (one of each, ADR 20260727) for round-robin-then-knockout, and
-// `swiss_standings` (one table over the whole field, no pools) for swiss —
+// `swiss_standings` (one table over the whole field, no groups) for swiss —
 // plus whether the whole event is decided and its champion, all derived *live* on the server
 // from the fixtures' currently-completed matches (never a snapshot). This is the runtime
 // parse that guards them, the twin of `./fixtures` for the draw. The parse switches on
@@ -30,7 +30,7 @@ import { z } from 'zod'
 import type {
   EventResults,
   FinishRow,
-  PoolStandings,
+  GroupStandings,
   StandingRow,
   SwissStandingRow,
 } from './types'
@@ -72,7 +72,7 @@ const toStandingRow = (r: z.output<typeof standingRowWireSchema>): StandingRow =
 
 const standingRowSchema = standingRowWireSchema.transform(toStandingRow)
 
-/** The wire shape (`SwissStandingRowRead`): a pool's row **plus `buchholz`** — the sum of
+/** The wire shape (`SwissStandingRowRead`): a group's row **plus `buchholz`** — the sum of
  * this entrant's opponents' win counts, and the tiebreak that sits above game difference in
  * swiss (ADR "swiss standings add Buchholz, and head-to-head is guarded on having met").
  *
@@ -94,32 +94,32 @@ const swissStandingRowSchema = swissStandingRowWireSchema.transform(
   (r): SwissStandingRow => ({ ...toStandingRow(r), buchholz: r.buchholz }),
 )
 
-/** The wire shape (`PoolStandingsRead`): a pool's rows **in the server's finishing order**
+/** The wire shape (`GroupStandingsRead`): a group's rows **in the server's finishing order**
  * plus whether every one of its fixtures is decided. The order is untrusted like any other
  * data, but it is NOT re-sorted here (ADR-0788 — the order *is* the result); it is parsed
  * as given and carried inward unchanged. */
-const poolStandingsWireSchema = z.object({
-  pool_id: z.string(),
+const groupStandingsWireSchema = z.object({
+  group_id: z.string(),
   rows: z.array(standingRowSchema),
   complete: z.boolean(),
 })
 
-const poolStandingsSchema = poolStandingsWireSchema.transform(
-  (p): PoolStandings => ({
-    poolId: p.pool_id,
+const groupStandingsSchema = groupStandingsWireSchema.transform(
+  (p): GroupStandings => ({
+    groupId: p.group_id,
     rows: p.rows,
     complete: p.complete,
   }),
 )
 
 /** The wire shape (`StandingsResultsRead`): the round-robin arm, tagged `kind: "standings"`
- * — the pools, whether the whole event is decided, and its champion (an **entry id**, or
+ * — the groups, whether the whole event is decided, and its champion (an **entry id**, or
  * `null`). */
 const standingsResultsWireSchema = z.object({
   kind: z.literal('standings'),
-  pools: z.array(poolStandingsSchema),
+  groups: z.array(groupStandingsSchema),
   complete: z.boolean(),
-  /** `null` while any fixture is unplayed, and for a multi-pool event, which has no single
+  /** `null` while any fixture is unplayed, and for a multi-group event, which has no single
    * champion without a knockout stage (a later slice). */
   champion: z.string().nullable(),
 })
@@ -158,18 +158,18 @@ const finishesResultsWireSchema = z.object({
 
 /** The wire shape (`StandingsThenFinishesResultsRead`): the round-robin-then-knockout arm,
  * tagged `kind: "standings_then_finishes"` — **one block per stage**, and each is the very
- * model its own arm sends: `pools` are the `PoolStandingsRead`s a round-robin reads out,
+ * model its own arm sends: `groups` are the `GroupStandingsRead`s a round-robin reads out,
  * `finishes` the `FinishRowRead`s a single-elimination reads out. Reusing the two row
  * parsers here is the point: the two-stage shape cannot drift from the shapes it composes,
  * and a malformed row fails at the same boundary whichever arm carried it.
  *
  * `complete` is **both** stages decided; `champion` is the **bracket final's** winner (never
- * a pool leader — the pool stage only seeds), `null` until that final lands. A mid-flight
- * event is the ordinary case: complete pools, a `finishes` list holding only the entrants
+ * a group leader — the group stage only seeds), `null` until that final lands. A mid-flight
+ * event is the ordinary case: complete groups, a `finishes` list holding only the entrants
  * the bracket has placed so far. */
 const standingsThenFinishesResultsWireSchema = z.object({
   kind: z.literal('standings_then_finishes'),
-  pools: z.array(poolStandingsSchema),
+  groups: z.array(groupStandingsSchema),
   finishes: z.array(finishRowSchema),
   complete: z.boolean(),
   champion: z.string().nullable(),
@@ -179,10 +179,10 @@ const standingsThenFinishesResultsWireSchema = z.object({
  * `kind: "swiss_standings"` — **one list of rows over the whole field**, whether every round
  * is decided, and the leader once it is.
  *
- * The rows are `swissStandingRowSchema` — the very parser a pool's standings use, extended
+ * The rows are `swissStandingRowSchema` — the very parser a group's standings use, extended
  * by the one field swiss adds — so the two tables cannot drift on the eight they share and
  * a malformed row fails at the same boundary whichever arm carried it. The two structural
- * differences are both facts about the format: no pool to group under (swiss ranks the whole
+ * differences are both facts about the format: no group to group under (swiss ranks the whole
  * field in one table, ADR "swiss pre-cuts every round and pairs each one on advance") and
  * the `buchholz` figure that ordered each row. */
 const swissStandingsResultsWireSchema = z.object({
@@ -210,7 +210,7 @@ function toDomain(r: EventResultsWire): EventResults {
     case 'standings':
       return {
         kind: 'standings',
-        pools: r.pools,
+        groups: r.groups,
         complete: r.complete,
         champion: r.champion,
       }
@@ -224,7 +224,7 @@ function toDomain(r: EventResultsWire): EventResults {
     case 'standings_then_finishes':
       return {
         kind: 'standings_then_finishes',
-        pools: r.pools,
+        groups: r.groups,
         finishes: r.finishes,
         complete: r.complete,
         champion: r.champion,
@@ -244,7 +244,7 @@ function toDomain(r: EventResultsWire): EventResults {
 }
 
 /** The results union, **discriminated on `kind`**: Zod picks the arm by the tag and rejects
- * any other shape (a missing/unknown `kind`, or a `finishes` block carrying `pools`) HERE,
+ * any other shape (a missing/unknown `kind`, or a `finishes` block carrying `groups`) HERE,
  * at the boundary. The transform switches on the same tag to hand the app a domain value
  * that still carries `kind`, so every consumer narrows the union exhaustively.
  *

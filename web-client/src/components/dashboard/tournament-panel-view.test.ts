@@ -498,26 +498,26 @@ describe('projectTournamentPanelView', () => {
       expect(view.tabs[0].path.map((row) => row.key)).toEqual(['e-4-0', 'e-4-1'])
     })
 
-    it('names the pool and its size beneath the heading', () => {
+    it('names the group and its size beneath the heading', () => {
       const view = project(
         buildDashboardTournament({
           events: [
             buildDashboardTournamentEvent({
-              pool_label: 'Pool B',
+              group_label: 'Group B',
               field_size: 4,
             }),
           ],
         }),
       )
 
-      expect(view.tabs[0].pathSubheading).toBe('Pool B · 4 players')
+      expect(view.tabs[0].pathSubheading).toBe('Group B · 4 players')
       expect(view.tabs[0].pathHeading).toBe('Your matches')
     })
 
-    it('has no subheading for an un-pooled draw', () => {
+    it('has no subheading for an ungrouped draw', () => {
       const view = project(
         buildDashboardTournament({
-          events: [buildDashboardTournamentEvent({ pool_label: null })],
+          events: [buildDashboardTournamentEvent({ group_label: null })],
         }),
       )
 

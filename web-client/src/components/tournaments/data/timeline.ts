@@ -18,7 +18,7 @@
 
 import type { MatchStatus } from '@/api/matches'
 
-import { TBD_LABEL, WITHDRAWN_LABEL } from './draw'
+import { fixtureReservation, groupLabel, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
 import type {
   Entrant,
   Fixture,
@@ -285,8 +285,10 @@ const MIN_BAR_DURATION_MIN = 1
 export interface TimelineBarData {
   fixtureId: string
   eventName: string
-  /** The pool's name, or `null` for an un-pooled (knockout) fixture. */
-  poolName: string | null
+  /** The fixture's group, position-derived (`Group A`, `Group B`, …, `groupLabel`,
+   * `./draw`), or `null` for an un-grouped (knockout) fixture. Never a reservation's
+   * director-typed name (ticket #1369: a group carries none). */
+  groupLabel: string | null
   /** The pairing — `player.1 vs player.4`, with the draw's own words for an
    * unknown side (`TBD` / `Withdrawn`), never a blank. */
   label: string
@@ -297,9 +299,9 @@ export interface TimelineBarData {
   /** The table's catalogue label, or its raw id when the catalogue no longer
    * lists it (shown, never dropped — the `./schedule.ts` stance). */
   tableLabel: string
-  /** The placement's **venue** date (`YYYY-MM-DD`), from the fixture's pool/event
-   * Slot — the day the venue is open, not whatever calendar day the UTC instant
-   * happens to land on. */
+  /** The placement's **venue** date (`YYYY-MM-DD`), from the fixture's group's
+   * reservation Slot, or the event's when un-grouped — the day the venue is open, not
+   * whatever calendar day the UTC instant happens to land on. */
   date: string
   startMin: number
   /** Where the bar ends. For a **decided** fixture (`completed`/`voided`) with a
@@ -365,7 +367,7 @@ export interface TimelinePlayerRow {
 export interface UnscheduledFixture {
   fixtureId: string
   eventName: string
-  poolName: string | null
+  groupLabel: string | null
   label: string
   /** The half-placement's table label, when it has a table but no time. */
   tableLabel: string | null
@@ -383,7 +385,7 @@ export interface UnscheduledFixture {
  */
 export interface TimelineBoard {
   /** The **venue** date the earliest bar falls on (`YYYY-MM-DD`) — the day the
-   * board reads as, from that bar's pool/event Slot. */
+   * board reads as, from that bar's group's reservation/event Slot. */
   originDate: string
   startMin: number
   endMin: number
@@ -444,8 +446,8 @@ export function buildTimelineBoard(
   // and cannot join an instant axis without timezone math, so they no longer size
   // the board — it is only drawn once at least one bar exists (`hasBars`).
   const venueDateOf = (ef: EventFixture): string => {
-    const pool = ef.event.pools.find((p) => p.id === ef.fixture.poolId) ?? null
-    return (pool?.slot ?? ef.event.slot).date
+    const { reservation } = fixtureReservation(ef.event, ef.fixture)
+    return (reservation?.slot ?? ef.event.slot).date
   }
 
   let originMs = Number.POSITIVE_INFINITY
@@ -502,7 +504,7 @@ export function buildTimelineBoard(
       }
     }
     const endMin = startMin + durationMin
-    const pool = event.pools.find((p) => p.id === fixture.poolId) ?? null
+    const { group, reservation } = fixtureReservation(event, fixture)
     const a = sideOf(fixture.entryAId, entrantById)
     const b = sideOf(fixture.entryBId, entrantById)
     // The end reads in the bar's OWN venue frame: a decided fixture's real
@@ -515,13 +517,13 @@ export function buildTimelineBoard(
     barByFixture.set(fixture.id, {
       fixtureId: fixture.id,
       eventName: event.name,
-      poolName: pool?.name ?? null,
+      groupLabel: group !== null ? groupLabel(group) : null,
       label: `${a} vs ${b}`,
       a,
       b,
       tableId: fixture.tableId,
       tableLabel: tableById.get(fixture.tableId)?.label ?? fixture.tableId,
-      date: (pool?.slot ?? event.slot).date,
+      date: (reservation?.slot ?? event.slot).date,
       startMin,
       endMin,
       durationMin,
@@ -600,11 +602,11 @@ export function buildTimelineBoard(
   const unscheduled: UnscheduledFixture[] = []
   for (const { fixture, event, entrantById } of all) {
     if (fixture.tableId !== null && fixture.scheduledStart !== null) continue
-    const pool = event.pools.find((p) => p.id === fixture.poolId) ?? null
+    const { group } = fixtureReservation(event, fixture)
     unscheduled.push({
       fixtureId: fixture.id,
       eventName: event.name,
-      poolName: pool?.name ?? null,
+      groupLabel: group !== null ? groupLabel(group) : null,
       label: `${sideOf(fixture.entryAId, entrantById)} vs ${sideOf(fixture.entryBId, entrantById)}`,
       tableLabel:
         fixture.tableId !== null

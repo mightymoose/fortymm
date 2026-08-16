@@ -1,6 +1,6 @@
 // What a **swiss** event's results look like to a reader (ADR "swiss pre-cuts every round
 // and pairs each one on advance") — the pure derivation behind the Events tab's swiss
-// standings block, and the pool-less sibling of `./standings`.
+// standings block, and the group-less sibling of `./standings`.
 //
 // The wire gives us the `swiss_standings` arm of `EventResults` (parsed at the boundary by
 // `./results`): **one list of rows over the whole field**, keyed by entry id, plus whether
@@ -11,10 +11,11 @@
 // happens here, once. Copying the username onto the row would carry a field and its own
 // derivation, and the two would drift the moment a player is renamed.
 //
-// **It makes ONE join, not two.** A pool's standings also resolve a `poolId` to a pool
-// name; swiss has no pool to resolve, because it ranks the whole field in one table. That
+// **It makes ONE join, not two.** A group's standings also resolve a `groupId` to a
+// position-derived label; swiss has no group to resolve, because it ranks the whole field
+// in one table. That
 // absence is the only thing that distinguishes this module from `./standings` — the rows
-// themselves are a pool's `StandingRow` plus the `buchholz` column, joined by the very same
+// themselves are a group's `StandingRow` plus the `buchholz` column, joined by the very same
 // `nameOf`, so the withdrawn-entrant label and every number cannot fork into a second
 // implementation.
 //
@@ -46,21 +47,21 @@ import type {
 export interface SwissStandingLine extends SwissStandingRow {
   /** The entrant's username (bare, no `@` — `web-client/CLAUDE.md`), or `WITHDRAWN_LABEL`
    * when the row names an entry the event no longer lists — the same join, and the same
-   * word, a pool's table makes. */
+   * word, a group's table makes. */
   name: string
 }
 
 /** A swiss event's standings, shaped for the reader: the whole field as one named table,
  * whether every round is decided, and the leader's *name* (joined) once it is. */
 export interface SwissStandingsView {
-  /** Every entrant, in the server's finishing order — **one list, no pools**, rendered
+  /** Every entrant, in the server's finishing order — **one list, no groups**, rendered
    * untouched. */
   rows: SwissStandingLine[]
   /** True when **every round** is decided, the later ones included. */
   complete: boolean
   /** The leader's username once the event is complete, else `null` — the server's own
    * `champion`, joined to a name. A swiss ranks its whole field, so unlike the round-robin
-   * block there is no multi-pool carve-out that leaves a complete event uncrowned. */
+   * block there is no multi-group carve-out that leaves a complete event uncrowned. */
   champion: string | null
 }
 

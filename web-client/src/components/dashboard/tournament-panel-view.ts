@@ -94,8 +94,8 @@ export interface TournamentTabView {
   /** `Your matches` — the path list's heading, in the draw type's vocabulary. */
   pathHeading: string
   path: TournamentPathRowView[]
-  /** Names the pool the path belongs to, e.g. `Pool A · 4 players`. `null` for
-   * an un-pooled draw or before the viewer has been drawn into one. */
+  /** Names the group the path belongs to, e.g. `Group A · 4 players`. `null` for
+   * an ungrouped draw or before the viewer has been drawn into one. */
   pathSubheading: string | null
 }
 
@@ -287,11 +287,11 @@ function projectTab(
       youWon: fixture.you_won,
     })),
     pathSubheading:
-      event.pool_label === null
+      event.group_label === null
         ? null
         : event.field_size > 0
-          ? `${event.pool_label} · ${event.field_size} players`
-          : event.pool_label,
+          ? `${event.group_label} · ${event.field_size} players`
+          : event.group_label,
   }
 }
 

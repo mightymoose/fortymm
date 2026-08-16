@@ -19,7 +19,7 @@ type FinishesResultsRead = components['schemas']['FinishesResultsRead']
 type StandingsThenFinishesResultsRead =
   components['schemas']['StandingsThenFinishesResultsRead']
 type FinishRowRead = components['schemas']['FinishRowRead']
-type PoolStandingsRead = components['schemas']['PoolStandingsRead']
+type GroupStandingsRead = components['schemas']['GroupStandingsRead']
 type StandingRowRead = components['schemas']['StandingRowRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 type FixtureTimeRead = components['schemas']['FixtureTimeRead']
@@ -111,13 +111,13 @@ export function mintStageReads(drawType: DrawType): EventStageRead[] {
   }
 }
 
-/** One fixture of a cut draw (ADR-0786) — round 1, position 1 of an un-pooled draw,
+/** One fixture of a cut draw (ADR-0786) — round 1, position 1 of an ungrouped draw,
  * both sides known, undecided and not yet materialized.
  *
  * Every `null` here is a **fact**, and a fixture asks for each one explicitly: a null
  * side is **TBD** (never a bye — a bye is the absence of a fixture row), a null
  * `winner_entry_id` is undecided, a null `match_id` is un-materialized, and a null
- * `pool_id` is an un-pooled draw. The defaults are the ordinary case a director sees
+ * `group_id` is an ungrouped draw. The defaults are the ordinary case a director sees
  * the morning of: a planned pairing, both players known, nothing played — so
  * `match_status` is `null` too, moving in lockstep with `match_id`. Its **placement**
  * (ADR-0790) starts empty: `table_id` null is unassigned, `scheduled_start` null is
@@ -162,7 +162,7 @@ export function buildTournamentFixtureRead(
     // multi-stage event's second stage (an `rr-then-ko` bracket) overrides this to
     // `'s-2'`, matching `mintStageReads`'s own numbering.
     stage_id: 's-1',
-    pool_id: null,
+    group_id: null,
     round: 1,
     position: 1,
     entry_a_id: 'entry-1',
@@ -394,74 +394,74 @@ export function buildAdminSolveLedgerSeed(): AdminScheduleSolveRead[] {
   return runs
 }
 
-/** The **snake** (`api/app/draws.py`): which entrants each pool is dealt, row by row
- * across the pools and reversing every other row, so the top seeds land one per pool and
- * pool sizes differ by at most one. Returns one member list per pool, in `poolIds` order,
- * each preserving draw order.
+/** The **snake** (`api/app/draws.py`): which entrants each group is dealt, row by row
+ * across the groups and reversing every other row, so the top seeds land one per group
+ * and group sizes differ by at most one. Returns one member list per group, in
+ * `groupIds` order, each preserving draw order.
  *
  * ONE declaration of the arithmetic, because two callers want two different things from
  * it and used to compute it twice: `planRoundRobinFixtures` below wants the *members* to
  * pair, and `planDraw`'s round-robin refusal wants the *sizes* — and that refusal is
- * asked of the pools the snake actually produced, never of arithmetic on N and P, because
- * it is the dealt pool that would have a lone entrant in it. */
-function snakedPools(
+ * asked of the groups the snake actually produced, never of arithmetic on N and P,
+ * because it is the dealt group that would have a lone entrant in it. */
+function snakedGroups(
   entryIds: readonly string[],
-  poolCount: number,
+  groupCount: number,
 ): string[][] {
-  const pools: string[][] = Array.from({ length: poolCount }, () => [])
+  const groups: string[][] = Array.from({ length: groupCount }, () => [])
   entryIds.forEach((entryId, index) => {
-    const row = Math.floor(index / poolCount)
-    const offset = index % poolCount
-    const column = row % 2 === 0 ? offset : poolCount - 1 - offset
-    pools[column].push(entryId)
+    const row = Math.floor(index / groupCount)
+    const offset = index % groupCount
+    const column = row % 2 === 0 ? offset : groupCount - 1 - offset
+    groups[column].push(entryId)
   })
-  return pools
+  return groups
 }
 
 /**
  * Plan a **round-robin** draw the way the API plans one (`api/app/draws.py`): snake the
- * ordered entrants across the pools, then pair each pool by the circle method — every
+ * ordered entrants across the groups, then pair each group by the circle method — every
  * pair meets once, nobody plays twice in a round.
  *
  * The mock's planner is faithful rather than convenient on purpose. A stub that dealt
- * the field into pools any old way would still *look* like a draw on screen, and the
+ * the field into groups any old way would still *look* like a draw on screen, and the
  * page built against it would be a page built against a shape the server never sends —
  * the fixture count, the rounds, and which two names share a row would all be fiction.
  * The rules it mirrors, each of which is visible on the card:
  *
- * - **Snake, not blocks** — pool A takes seeds 1, 2P, 2P+1, …; pool B takes 2, 2P−1, …
- *   — so the top seeds land one per pool and pool sizes differ by at most one.
- * - **A bye is the ABSENCE of a fixture.** An odd pool gets a phantom seat; whoever
+ * - **Snake, not blocks** — group A takes seeds 1, 2P, 2P+1, …; group B takes 2, 2P−1, …
+ *   — so the top seeds land one per group and group sizes differ by at most one.
+ * - **A bye is the ABSENCE of a fixture.** An odd group gets a phantom seat; whoever
  *   draws it that round simply has no fixture. There is no `is_bye`, and no null side.
- * - **`position` is contiguous within a (pool, round)** — 1..k — because the phantom's
+ * - **`position` is contiguous within a (group, round)** — 1..k — because the phantom's
  *   pairing is never emitted.
  *
- * Returns fixtures in pool → round → position order, as the wire does.
+ * Returns fixtures in group → round → position order, as the wire does.
  *
- * ⚠️ It does **not** enforce the API's refusals (no pools, a pool of fewer than two).
+ * ⚠️ It does **not** enforce the API's refusals (no groups, a group of fewer than two).
  * Those are the *store's* to refuse (`cutDraw`, `tournaments-store.ts`), because they
  * are answers to a request, not shapes of a payload. Handed a degenerate field this
  * plans what it is asked for — which is why nothing but the store should call it.
  */
 export function planRoundRobinFixtures(
   entryIds: readonly string[],
-  poolIds: readonly string[],
-  /** The pool stage's own id (ADR 20260815) — `'s-1'` by default, `mintStageReads`'s id
-   * for a round-robin event's one stage, and the pool stage's own id (position 0) of an
+  groupIds: readonly string[],
+  /** The group stage's own id (ADR 20260815) — `'s-1'` by default, `mintStageReads`'s id
+   * for a round-robin event's one stage, and the group stage's own id (position 0) of an
    * `rr-then-ko` event's two. */
   stageId = 's-1',
 ): TournamentFixtureRead[] {
   const fixtures: TournamentFixtureRead[] = []
   let counter = 0
-  const dealt = snakedPools(entryIds, poolIds.length)
+  const dealt = snakedGroups(entryIds, groupIds.length)
 
-  for (const [poolIndex, poolId] of poolIds.entries()) {
-    // The snake (`snakedPools` above): row-by-row across the pools, reversing every
+  for (const [groupIndex, groupId] of groupIds.entries()) {
+    // The snake (`snakedGroups` above): row-by-row across the groups, reversing every
     // other row.
-    const members = dealt[poolIndex]
+    const members = dealt[groupIndex]
 
     // The circle method: pin the first seat, rotate the rest one step per round, and
-    // pair across the circle. An odd pool gets a phantom (`null`) seat — the entrant
+    // pair across the circle. An odd group gets a phantom (`null`) seat — the entrant
     // drawn against it sits that round out, and no fixture is emitted for them.
     const circle: (string | null)[] = [...members]
     if (circle.length % 2 === 1) circle.push(null)
@@ -477,9 +477,9 @@ export function planRoundRobinFixtures(
         counter += 1
         fixtures.push(
           buildTournamentFixtureRead({
-            id: `fx-${poolId}-${counter}`,
+            id: `fx-${groupId}-${counter}`,
             stage_id: stageId,
-            pool_id: poolId,
+            group_id: groupId,
             round,
             position,
             entry_a_id: home,
@@ -581,7 +581,7 @@ function knockoutSeats(fieldSize: number): Map<number, KnockoutSeat> {
 }
 
 /**
- * The whole un-pooled bracket for `fieldSize` seeds, with each seed's entry taken from
+ * The whole ungrouped bracket for `fieldSize` seeds, with each seed's entry taken from
  * `entryForSeed` — **or left TBD for every seed the map does not name**
  * (`_knockout_fixtures`, `api/app/draws.py`).
  *
@@ -589,10 +589,10 @@ function knockoutSeats(fieldSize: number): Map<number, KnockoutSeat> {
  * passes the full seed → entry map, because a single-elim cut knows its field;
  * `planDraw`'s `rr-then-ko` arm passes an **empty** one, because its qualifiers have not
  * played yet — and gets the identical shape with every side `null`. That the shape is a
- * pure function of `fieldSize` is exactly why a pools-then-knockout bracket can be cut in
- * the same stroke as its pools (ADR "rr-then-ko cuts both stages upfront"): the qualifier
- * count `P × K` is known at cut time, so *which* slots exist and *which* seeds bye is
- * settled before anybody has played.
+ * pure function of `fieldSize` is exactly why a groups-then-knockout bracket can be cut
+ * in the same stroke as its groups (ADR "rr-then-ko cuts both stages upfront"): the
+ * qualifier count `P × K` is known at cut time, so *which* slots exist and *which* seeds
+ * bye is settled before anybody has played.
  *
  * The rules it mirrors, each visible on the bracket:
  *
@@ -608,17 +608,17 @@ function knockoutSeats(fieldSize: number): Map<number, KnockoutSeat> {
  * - **`position` is the FULL-bracket slot index**, 1-based, never a contiguous
  *   renumbering of the surviving matches: it is what makes the successor arithmetic feed
  *   the right next-round slot, and a byed round-1 slot simply leaves a gap in it.
- * - **`pool_id` is null throughout** — a bracket is un-pooled; the event's pools (if any)
- *   are irrelevant to it, exactly as on the server. For an `rr-then-ko` draw that is not
- *   cosmetic: `pool_id IS NULL` **is** the knockout stage, and it is what routes these
- *   fixtures to the bracket view rather than into a pool's list.
+ * - **`group_id` is null throughout** — a bracket is ungrouped; the event's groups (if
+ *   any) are irrelevant to it, exactly as on the server. For an `rr-then-ko` draw that is
+ *   not cosmetic: `group_id IS NULL` **is** the knockout stage, and it is what routes
+ *   these fixtures to the bracket view rather than into a group's list.
  * - **Rounds are numbered from 1 for both callers.** For a knockout stage that is a
- *   *restart*, not a continuation of the pool rounds (ADR): pools may differ in size, so
- *   "the round after the pools" is ill-defined, and restarting is what lets the client's
- *   bracket — which names rounds relative to the maximum it is handed — say "Final /
- *   Semifinals" with no change at all.
+ *   *restart*, not a continuation of the group rounds (ADR): groups may differ in size,
+ *   so "the round after the groups" is ill-defined, and restarting is what lets the
+ *   client's bracket — which names rounds relative to the maximum it is handed — say
+ *   "Final / Semifinals" with no change at all.
  *
- * `idPrefix` distinguishes the two callers' fixture ids, so a mixed event's pool and
+ * `idPrefix` distinguishes the two callers' fixture ids, so a mixed event's group and
  * knockout rows never collide. Returns fixtures in round → position order, as the wire
  * does.
  */
@@ -653,7 +653,7 @@ function planKnockoutFixtures(
     buildTournamentFixtureRead({
       id: `${idPrefix}-r${round}-p${position}`,
       stage_id: stageId,
-      pool_id: null,
+      group_id: null,
       round,
       position,
       entry_a_id: sideOf(round, position, 'a'),
@@ -737,7 +737,7 @@ function maxRematchFreeRounds(size: number): number {
  * *sides* are unknown, which is the one thing `advance()` has always handled. So the mock
  * cuts exactly what the server cuts, including the empty rounds a director will see.
  *
- * Fixtures are **un-pooled** (`pool_id: null`): swiss ranks the whole field in one table.
+ * Fixtures are **ungrouped** (`group_id: null`): swiss ranks the whole field in one table.
  * An odd field byes the **lowest**-ranked entrant, who simply has no fixture — a bye is the
  * absence of a row (ADR-0786), never a row with a null side.
  *
@@ -761,7 +761,7 @@ export function planSwissFixtures(
         buildTournamentFixtureRead({
           id: `fx-sw-r${round}-p${position}`,
           stage_id: stageId,
-          pool_id: null,
+          group_id: null,
           round,
           position,
           // Round 1 alone is paired at the cut: draw-order index `i` meets index
@@ -784,27 +784,28 @@ export type DrawPlan =
   | { ok: true; fixtures: TournamentFixtureRead[] }
   | { ok: false; detail: string }
 
-/** Why the **pool stage** cannot be dealt as the event stands, or `null` — the two
+/** Why the **group stage** cannot be dealt as the event stands, or `null` — the two
  * refusals `_snake` itself raises (`api/app/draws.py`), in its own words.
  *
- * Shared by both pooled arms of `planDraw` below because on the server they are literally
- * the same call: `RrThenKoStrategy.plan_initial` runs `_snake` before it does anything
- * else, so an `rr-then-ko` event with no pools is refused with the sentence about a
- * *round-robin* draw. That reads oddly and is nonetheless right — the pool stage of an
- * rr-then-ko draw **is** a round-robin — and inventing a second wording here would put a
- * sentence in the server's mouth it never says.
+ * Shared by both grouped arms of `planDraw` below because on the server they are
+ * literally the same call: `RrThenKoStrategy.plan_initial` runs `_snake` before it does
+ * anything else, so an `rr-then-ko` event with no groups is refused with the sentence
+ * about a *round-robin* draw. That reads oddly and is nonetheless right — the group
+ * stage of an rr-then-ko draw **is** a round-robin — and inventing a second wording here
+ * would put a sentence in the server's mouth it never says.
  *
- * Asked of the DEALT pools, not of arithmetic on N and P: the refusal is about the pools
- * the snake actually produced, and it names the numbers the director must change. */
+ * Asked of the DEALT groups, not of arithmetic on N and P: the refusal is about the
+ * groups the snake actually produced, and it names the numbers the director must
+ * change. */
 function snakeRefusal(
   entryIds: readonly string[],
-  poolIds: readonly string[],
+  groupIds: readonly string[],
 ): string | null {
-  if (poolIds.length === 0) return 'A round-robin draw needs at least one pool.'
-  if (snakedPools(entryIds, poolIds.length).some((pool) => pool.length < 2)) {
+  if (groupIds.length === 0) return 'A round-robin draw needs at least one group.'
+  if (snakedGroups(entryIds, groupIds.length).some((group) => group.length < 2)) {
     return (
-      `${entryIds.length} entrants across ${poolIds.length} pool(s) would leave ` +
-      'a pool with fewer than 2 entrants, who would have nobody to play.'
+      `${entryIds.length} entrants across ${groupIds.length} group(s) would leave ` +
+      'a group with fewer than 2 entrants, who would have nobody to play.'
     )
   }
   return null
@@ -826,8 +827,8 @@ function snakeRefusal(
  * `entryIds` arrive in **draw order** — seed ascending where one is set, then
  * registration order (ADR-0786) — because that is the list the API's planner is handed.
  *
- * **`qualifiersPerPool` has no default**, on purpose. It is a real column
- * (`tournament_event_draw_settings.qualifiers_per_pool`) that rides both write bodies and
+ * **`qualifiersPerGroup` has no default**, on purpose. It is a real column
+ * (`tournament_event_draw_settings.qualifiers_per_group`) that rides both write bodies and
  * comes back on `TournamentEventRead`, so every caller genuinely has an answer: a stored
  * event's own value, or `null` for the three draw types that take no count. A default here
  * would let one be omitted by accident, and that is the quietest possible mock/server
@@ -845,14 +846,14 @@ function snakeRefusal(
 export function planDraw(
   drawType: DrawType,
   entryIds: readonly string[],
-  poolIds: readonly string[],
-  /** **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's
+  groupIds: readonly string[],
+  /** **K** — how many of each group's finishers advance into an `rr-then-ko` draw's
    * knockout stage. `null` for the three draw types that have no knockout stage to qualify
    * for, which is what their settings row holds and what their callers pass out loud. */
-  qualifiersPerPool: number | null,
+  qualifiersPerGroup: number | null,
   /** **R** — how many rounds a `swiss` draw plays. `null` for the three draw types whose
    * round count nobody chooses, which is what their settings row holds and what their
-   * callers pass out loud. Same discipline as `qualifiersPerPool` above: no default, so
+   * callers pass out loud. Same discipline as `qualifiersPerGroup` above: no default, so
    * every caller has to answer where R comes from. */
   rounds: number | null,
   /** This event's own **stages** (ADR 20260815) — `event.stages` itself, id and
@@ -864,7 +865,7 @@ export function planDraw(
    * draw type, so the many call sites that plan a draw without an event to read stages off
    * of (this module's own tests among them) still cut a self-consistent shape. A
    * single-stage draw type reads only the position-0 stage; `rr-then-ko` reads both — the
-   * pool stage at position 0 and the knockout stage at position 1. */
+   * group stage at position 0 and the knockout stage at position 1. */
   stages: readonly { id: string; position: number }[] = mintStageReads(drawType),
 ): DrawPlan {
   const orderedStages = [...stages].sort((a, b) => a.position - b.position)
@@ -872,9 +873,9 @@ export function planDraw(
   if (!firstStage) {
     throw new Error('planDraw: no stages to cut this draw against.')
   }
-  // The position-0 stage: a round-robin/rr-then-ko draw's pool stage, or the ONE stage a
-  // single-elim/swiss draw has (which is a "pool" stage in name only — those draw types
-  // have no pools).
+  // The position-0 stage: a round-robin/rr-then-ko draw's group stage, or the ONE stage a
+  // single-elim/swiss draw has (which is a "group" stage in name only — those draw types
+  // have no groups).
   const firstStageId = firstStage.id
   // The position-1 stage: only `rr-then-ko` has one, and only its own arm below reads
   // this. The `?? firstStageId` fallback just keeps the value defined for the other three
@@ -883,17 +884,17 @@ export function planDraw(
   const knockoutStageId = orderedStages[1]?.id ?? firstStageId
   switch (drawType) {
     case 'round-robin': {
-      const refusal = snakeRefusal(entryIds, poolIds)
+      const refusal = snakeRefusal(entryIds, groupIds)
       if (refusal !== null) return { ok: false, detail: refusal }
       return {
         ok: true,
-        fixtures: planRoundRobinFixtures(entryIds, poolIds, firstStageId),
+        fixtures: planRoundRobinFixtures(entryIds, groupIds, firstStageId),
       }
     }
     case 'single-elim': {
-      // Round-robin's per-pool floor, one level up: a bracket of one has no fixtures and
-      // is not a competition. The event's POOLS are not consulted at all — a bracket is
-      // un-pooled, so a single-elim event with pools cuts perfectly well and a
+      // Round-robin's per-group floor, one level up: a bracket of one has no fixtures and
+      // is not a competition. The event's GROUPS are not consulted at all — a bracket is
+      // ungrouped, so a single-elim event with groups cuts perfectly well and a
       // single-elim event with none is not refused, exactly as on the server.
       if (entryIds.length < 2) {
         return {
@@ -904,74 +905,74 @@ export function planDraw(
         }
       }
       // A single-elim event's ONE stage is `firstStageId` — a plain bracket event has no
-      // pool stage at all, and its one stage still mints at `mintStageReads`'s `'s-1'`.
+      // group stage at all, and its one stage still mints at `mintStageReads`'s `'s-1'`.
       return { ok: true, fixtures: planSingleElimFixtures(entryIds, firstStageId) }
     }
     case 'rr-then-ko': {
       // BOTH STAGES IN ONE STROKE (ADR "rr-then-ko cuts both stages upfront and seeds
-      // qualifiers rematch-free"): the pool fixtures *and* the whole bracket, the latter
+      // qualifiers rematch-free"): the group fixtures *and* the whole bracket, the latter
       // entirely TBD-sided. Not a convenience — `advance()` can only ever FILL a side of
       // an existing fixture, never create one, so a bracket that did not exist at the cut
       // could never come into being.
       //
       // The refusals, in the server's order (`RrThenKoStrategy.plan_initial`): the
-      // snake's two first, because the pool stage is dealt before the qualifier count is
+      // snake's two first, because the group stage is dealt before the qualifier count is
       // consulted at all.
-      const refusal = snakeRefusal(entryIds, poolIds)
+      const refusal = snakeRefusal(entryIds, groupIds)
       if (refusal !== null) return { ok: false, detail: refusal }
-      if (qualifiersPerPool === null) {
+      if (qualifiersPerGroup === null) {
         // NOT a refusal, and NOT a default: an `rr-then-ko` event without a count is not
         // a state the server can be in — the write boundary requires one with no default
         // (`RrThenKoDrawSettingsWrite`), so the column is never NULL for this draw type.
         // A stub reaching here has been seeded or patched into a shape the API cannot
         // hold, and says so instead of quietly cutting a `P × 1` bracket.
         throw new Error(
-          'planDraw: an “rr-then-ko” draw has no qualifiers_per_pool. The count is ' +
+          'planDraw: an “rr-then-ko” draw has no qualifiers_per_group. The count is ' +
             'required at the write boundary, so a stored event always has one — pass ' +
             'the event’s own value, never a fallback.',
         )
       }
-      const dealt = snakedPools(entryIds, poolIds.length)
-      // The snake has already refused a pool of fewer than two, so `smallest` is at
+      const dealt = snakedGroups(entryIds, groupIds.length)
+      // The snake has already refused a group of fewer than two, so `smallest` is at
       // least 2 and the noun below never needs inflecting.
-      const smallest = Math.min(...dealt.map((pool) => pool.length))
-      if (qualifiersPerPool > smallest) {
+      const smallest = Math.min(...dealt.map((group) => group.length))
+      if (qualifiersPerGroup > smallest) {
         return {
           ok: false,
           detail:
-            `Taking ${qualifiersPerPool} qualifiers from each pool is more than the ` +
-            `${smallest} entrants in the smallest pool — take fewer qualifiers from ` +
-            'each pool, or add entrants.',
+            `Taking ${qualifiersPerGroup} qualifiers from each group is more than the ` +
+            `${smallest} entrants in the smallest group — take fewer qualifiers from ` +
+            'each group, or add entrants.',
         }
       }
-      if (poolIds.length * qualifiersPerPool < 2) {
+      if (groupIds.length * qualifiersPerGroup < 2) {
         // `K ≥ 1` is a bound at the request boundary and the snake guarantees `P ≥ 1`,
-        // so the ONLY way to arrive here is one pool taking one qualifier: the sentence
+        // so the ONLY way to arrive here is one group taking one qualifier: the sentence
         // is fully determined, and interpolating the counts would add branches no input
         // can reach.
         return {
           ok: false,
           detail:
-            'Taking 1 qualifier from a single pool leaves one player in the knockout ' +
+            'Taking 1 qualifier from a single group leaves one player in the knockout ' +
             'stage, who would have nobody to play — take more qualifiers from each ' +
-            'pool, or configure more pools.',
+            'group, or configure more groups.',
         }
       }
       return {
         ok: true,
         fixtures: [
-          // The pool stage IS round-robin's — the same call, not a second copy of the
-          // snake and the circle — so "the pools of an rr-then-ko draw are laid out
+          // The group stage IS round-robin's — the same call, not a second copy of the
+          // snake and the circle — so "the groups of an rr-then-ko draw are laid out
           // exactly as a round-robin draw's" is structural rather than two
           // implementations agreeing. Its own stage id, `firstStageId` (`mintStageReads`'s
           // position-0 stage).
-          ...planRoundRobinFixtures(entryIds, poolIds, firstStageId),
+          ...planRoundRobinFixtures(entryIds, groupIds, firstStageId),
           // …and the knockout stage is single-elim's bracket, sized `P × K` (derived,
           // never configured, so it cannot contradict the qualifier count) with an EMPTY
           // seed map: nobody has qualified, so every side is TBD. Its own stage id,
           // `knockoutStageId` (`mintStageReads`'s position-1 stage).
           ...planKnockoutFixtures(
-            poolIds.length * qualifiersPerPool,
+            groupIds.length * qualifiersPerGroup,
             new Map(),
             'fx-ko',
             knockoutStageId,
@@ -992,10 +993,10 @@ export function planDraw(
             'never a fallback.',
         )
       }
-      // Round-robin's per-pool floor, one level up and pool-less, exactly as single-elim's
-      // is. The event's POOLS are not consulted at all: swiss ranks the whole field in one
-      // table, so a swiss event with pools cuts perfectly well and one with none is not
-      // refused. The two sentences below are the SERVER's, verbatim
+      // Round-robin's per-group floor, one level up and group-less, exactly as
+      // single-elim's is. The event's GROUPS are not consulted at all: swiss ranks the
+      // whole field in one table, so a swiss event with groups cuts perfectly well and
+      // one with none is not refused. The two sentences below are the SERVER's, verbatim
       // (`SwissStrategy.plan_initial`), because for a refusal the sentence *is* the answer.
       if (entryIds.length < 2) {
         return {
@@ -1021,8 +1022,8 @@ export function planDraw(
             'rematch — play fewer rounds, or add entrants.',
         }
       }
-      // A swiss event's ONE stage is `firstStageId` — a swiss event has no pool stage, and
-      // its one stage still mints at `mintStageReads`'s `'s-1'`.
+      // A swiss event's ONE stage is `firstStageId` — a swiss event has no group stage,
+      // and its one stage still mints at `mintStageReads`'s `'s-1'`.
       return { ok: true, fixtures: planSwissFixtures(entryIds, rounds, firstStageId) }
     }
   }
@@ -1047,14 +1048,14 @@ export function buildStandingRowRead(
   }
 }
 
-/** One wire pool's standings (`PoolStandingsRead`): a complete three-player pool in the
- * server's finishing order — `entry-1` (2–0) over `entry-4` (1–1) over `entry-5` (0–2). In
- * order, which the client renders untouched (ADR-0788). */
-export function buildPoolStandingsRead(
-  overrides: Partial<PoolStandingsRead> = {},
-): PoolStandingsRead {
+/** One wire group's standings (`GroupStandingsRead`): a complete three-player group in
+ * the server's finishing order — `entry-1` (2–0) over `entry-4` (1–1) over `entry-5`
+ * (0–2). In order, which the client renders untouched (ADR-0788). */
+export function buildGroupStandingsRead(
+  overrides: Partial<GroupStandingsRead> = {},
+): GroupStandingsRead {
   return {
-    pool_id: 'p-a',
+    group_id: 'grp-a',
     complete: true,
     rows: [
       buildStandingRowRead({
@@ -1090,16 +1091,16 @@ export function buildPoolStandingsRead(
 }
 
 /** A wire event's `standings` results (`StandingsResultsRead`, ADR-0788): the round-robin arm
- * of the results union, tagged `kind: "standings"` — one complete single pool with a champion
- * (`entry-1`, who won it). Single-pool so `champion` is meaningful — a multi-pool event has no
- * single champion without a knockout stage yet (pass extra `pools` + `champion: null` for
+ * of the results union, tagged `kind: "standings"` — one complete single group with a champion
+ * (`entry-1`, who won it). Single-group so `champion` is meaningful — a multi-group event has no
+ * single champion without a knockout stage yet (pass extra `groups` + `champion: null` for
  * that). */
 export function buildEventResultsRead(
   overrides: Partial<StandingsResultsRead> = {},
 ): StandingsResultsRead {
   return {
     kind: 'standings',
-    pools: [buildPoolStandingsRead()],
+    groups: [buildGroupStandingsRead()],
     complete: true,
     champion: 'entry-1',
     ...overrides,
@@ -1138,18 +1139,18 @@ export function buildFinishesResultsRead(
  * ADR 20260727): the round-robin-then-knockout arm — **both stages at once**, each block the
  * very model its own arm carries.
  *
- * Built for a **six-entrant, two-pool** event, and the pool memberships are the ones the
- * snake actually deals (`snakedPools` above: `p-a` takes entries 1, 4, 5; `p-b` takes 2, 3,
- * 6) — not a tidier split, because a results fixture that stood over pools its own draw
+ * Built for a **six-entrant, two-group** event, and the group memberships are the ones the
+ * snake actually deals (`snakedGroups` above: `grp-a` takes entries 1, 4, 5; `grp-b` takes 2,
+ * 3, 6) — not a tidier split, because a results fixture that stood over groups its own draw
  * never dealt is a payload the server could not send.
  *
- * The champion is **`entry-4`, who tops neither pool.** The pool winners are `entry-1` and
- * `entry-2`; `entry-4` qualifies second out of `p-a` and wins the bracket, beating `entry-1`
- * in the final. That is the format working as designed — the pool stage only *seeds* — and
+ * The champion is **`entry-4`, who tops neither group.** The group winners are `entry-1` and
+ * `entry-2`; `entry-4` qualifies second out of `grp-a` and wins the bracket, beating `entry-1`
+ * in the final. That is the format working as designed — the group stage only *seeds* — and
  * it is what lets a test tell a client reading the bracket from one reading the top of a
- * standings table. A fixture whose champion also led a pool could not.
+ * standings table. A fixture whose champion also led a group could not.
  *
- * A **mid-flight** event — pools decided, final unplayed — is
+ * A **mid-flight** event — groups decided, final unplayed — is
  * `buildStandingsThenFinishesResultsRead({ complete: false, champion: null, finishes: [only
  * the placed entrants] })`. */
 export function buildStandingsThenFinishesResultsRead(
@@ -1163,9 +1164,9 @@ export function buildStandingsThenFinishesResultsRead(
   })
   return {
     kind: 'standings_then_finishes',
-    pools: [
-      buildPoolStandingsRead({
-        pool_id: 'p-a',
+    groups: [
+      buildGroupStandingsRead({
+        group_id: 'grp-a',
         complete: true,
         rows: [
           buildStandingRowRead({ entry_id: 'entry-1', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 }),
@@ -1173,8 +1174,8 @@ export function buildStandingsThenFinishesResultsRead(
           buildStandingRowRead({ entry_id: 'entry-5', rank: 3, played: 2, wins: 0, losses: 2, games_won: 1, games_lost: 4, game_difference: -3 }),
         ],
       }),
-      buildPoolStandingsRead({
-        pool_id: 'p-b',
+      buildGroupStandingsRead({
+        group_id: 'grp-b',
         complete: true,
         rows: [
           buildStandingRowRead({ entry_id: 'entry-2', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 0, game_difference: 4 }),
@@ -1186,7 +1187,7 @@ export function buildStandingsThenFinishesResultsRead(
     finishes: [
       finish({ entry_id: 'entry-4', position: 1, eliminated_in_round: null }),
       finish({ entry_id: 'entry-1', position: 2, eliminated_in_round: 2 }),
-      // The two beaten semifinalists — one of them the OTHER pool's winner — tied 3rd.
+      // The two beaten semifinalists — one of them the OTHER group's winner — tied 3rd.
       finish({ entry_id: 'entry-2', position: 3, eliminated_in_round: 1 }),
       finish({ entry_id: 'entry-3', position: 3, eliminated_in_round: 1 }),
     ],
@@ -1225,7 +1226,7 @@ export function entryStateFor(
 }
 
 /**
- * A rated Bo5 "Open Singles" event with one morning pool, as returned by the
+ * A rated Bo5 "Open Singles" event with one morning group, as returned by the
  * tournament detail/list endpoints. Defaults are internally consistent so a
  * bare call is a meaningful row.
  *
@@ -1241,7 +1242,7 @@ export function entryStateFor(
  * `fixtures` defaults to **`[]` — an event with NO DRAW CUT** (ADR-0786), which is the
  * state every event is born in and stays in until a director cuts one. It is an
  * override, not a derivation: a draw is an explicit act against a field, not a function
- * of the entrants (the same 9 players make a different draw across 2 pools than across
+ * of the entrants (the same 9 players make a different draw across 2 groups than across
  * 3), so a factory that quietly cut one would be inventing a decision nobody made.
  * `planRoundRobinFixtures` above builds a real one for the fixtures that want a *drawn*
  * event.
@@ -1254,10 +1255,10 @@ export function buildTournamentEventRead(
     tournament_id: 'bay-area-open-2026',
     name: 'Open Singles',
     format: 'singles',
-    // Round-robin, and pooled to match: `DrawType` holds only the two types the server
-    // can actually plan (ADR 20260726), and a pooled event is what this fixture's single
-    // `Pool` describes. A fixture typed as something the API 422s is a fixture that
-    // proves nothing.
+    // Round-robin, and grouped to match: `DrawType` holds only the two types the server
+    // can actually plan (ADR 20260726), and a grouped event is what this fixture's single
+    // `Group`/`Reservation` pair describes. A fixture typed as something the API 422s is
+    // a fixture that proves nothing.
     draw_type: 'round-robin',
     max_players: 64,
     entry_fee: 45,
@@ -1268,18 +1269,31 @@ export function buildTournamentEventRead(
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
     match_settings: { rated: true, length_games: 5 },
     predicates: [],
-    pools: [
+    // A group maps 1:1 to a reservation (ticket #1369 keeps that lockstep): the server
+    // mints exactly one `GroupRead` per `Reservation`, at the same `position`. A fixture
+    // with several reservations numbers them 0, 1, 2 … — nothing orders either array by
+    // id (see `Reservation.position` / `Group.position`, `data/types`).
+    reservations: [
       {
-        id: 'p-os-1',
-        name: 'Pool A',
+        id: 'res-os-1',
+        name: 'Reservation A',
         slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
         table_ids: ['t1', 't2', 't3', 't4'],
-        // The pool's place in the event, 0-based — on the READ shape only. The server
-        // assigns it from the index of the pool in the list a write body sent, and
-        // `PoolWrite` forbids the key outright, so an override here is describing what
-        // came back, never what was asked for. A fixture with several pools numbers them
-        // 0, 1, 2 …: nothing orders pools by id (see `Pool.position`, `data/types`).
+        // The reservation's place in the event, 0-based — on the READ shape only. The
+        // server assigns it from the index of the reservation in the list a write body
+        // sent, and `ReservationWrite`/`ReservationUpsert` forbid the key outright, so an
+        // override here is describing what came back, never what was asked for.
         position: 0,
+      },
+    ],
+    groups: [
+      {
+        id: 'grp-os-1',
+        position: 0,
+        // Server-owned and read-only: the group's own id names the reservation it plays
+        // under. Not a `ReservationWrite`/`ReservationUpsert` field — a client never
+        // authors a group directly (`GroupRead`, ticket #1369).
+        reservation_id: 'res-os-1',
       },
     ],
     // NO RESULTS (ADR-0788) — `null` is the designed state of an event with no draw (and of
@@ -1295,7 +1309,7 @@ export function buildTournamentEventRead(
     // spread because the field is required-and-nullable on the read shape (`number |
     // null`, no `?`) while `Partial<…>` admits an explicit `undefined` — so the spread
     // alone would widen it to a type the wire cannot hold.
-    qualifiers_per_pool: overrides.qualifiers_per_pool ?? null,
+    qualifiers_per_group: overrides.qualifiers_per_group ?? null,
     // **No chosen round count** (the swiss ADR): a round-robin's rounds come off the circle
     // method, so `null` is the only value its settings arm admits. Stated AFTER the spread
     // for the reason the qualifier count is — the field is required-and-nullable on the read
@@ -1339,10 +1353,10 @@ export const DRAW_TYPE_CATALOGUE: DrawTypeRead[] = [
     key: 'round-robin',
     name: 'Round robin',
     description:
-      'Everyone in a pool plays everyone else in that pool. Every entrant is ' +
+      'Everyone in a group plays everyone else in that group. Every entrant is ' +
       'guaranteed the same number of matches and the final standings rank the ' +
       'whole field, so it is the fairest read on form — but the match count ' +
-      'climbs quickly with pool size, and the event needs at least one pool.',
+      'climbs quickly with group size, and the event needs at least one group.',
     display_order: 1,
   },
   {
@@ -1362,7 +1376,7 @@ export const DRAW_TYPE_CATALOGUE: DrawTypeRead[] = [
     // re-copy here.
     name: 'Round-robin then knockout',
     description:
-      'Pools play all-play-all, then the top finishers from each pool meet in a ' +
+      'Groups play all-play-all, then the top finishers from each group meet in a ' +
       'knockout bracket.',
     display_order: 3,
   },

@@ -16,7 +16,7 @@ type PreviewFixture = components['schemas']['PreviewFixture']
 type PreviewResult = components['schemas']['PreviewResult']
 type PreviewEventBreakdown = components['schemas']['PreviewEventBreakdown']
 type PreviewJobState = components['schemas']['PreviewJobState']
-type PoolHasNoTablesRead = components['schemas']['PoolHasNoTablesRead']
+type ReservationHasNoTablesRead = components['schemas']['ReservationHasNoTablesRead']
 
 /** One event's synthetic field size on the wire. */
 export function buildPreviewFieldSummary(
@@ -25,7 +25,7 @@ export function buildPreviewFieldSummary(
   return { event_id: 'ev-1', field_size: 4, ...overrides }
 }
 
-/** One drawn synthetic pairing on the wire — both sides always known (the pool
+/** One drawn synthetic pairing on the wire — both sides always known (the group
  * stage of a round-robin draw). */
 export function buildPreviewFixture(
   overrides: Partial<PreviewFixture> = {},
@@ -33,29 +33,29 @@ export function buildPreviewFixture(
   return {
     fixture_id: 'pfx-1',
     event_id: 'ev-1',
-    // The namespaced `{event_id}:{pool_id}` composite the solver keys by, plus the
-    // human `pool_name` the grid actually heads a column with.
-    pool_id: 'ev-1:pool-1',
-    pool_name: 'Pool A',
+    // The namespaced `{event_id}:{reservation_id}` composite the solver keys by, plus
+    // the human `reservation_name` the grid actually heads a column with.
+    reservation_id: 'ev-1:res-1',
+    reservation_name: 'Reservation A',
     player_a_id: 'placeholder-1',
     player_b_id: 'placeholder-2',
     ...overrides,
   }
 }
 
-/** The round-robin fixtures of a single pool of `n` synthetic players (every
+/** The round-robin fixtures of a single group of `n` synthetic players (every
  * pairing once — `n·(n-1)/2` of them), so a factory can hand the enqueue body a
  * grid skeleton whose match count matches its field size. */
 export function buildRoundRobinFixtures(
   n: number,
-  opts: { eventId?: string; poolId?: string; poolName?: string } = {},
+  opts: { eventId?: string; reservationId?: string; reservationName?: string } = {},
 ): PreviewFixture[] {
   const eventId = opts.eventId ?? 'ev-1'
-  // The solver's namespaced composite (`{event_id}:{pool_id}`), plus the human
-  // pool name the grid heads its column with — a realistic pair so a card renders
-  // "Pool A", never the raw composite.
-  const poolId = opts.poolId ?? `${eventId}:pool-1`
-  const poolName = opts.poolName ?? 'Pool A'
+  // The solver's namespaced composite (`{event_id}:{reservation_id}`), plus the human
+  // reservation name the grid heads its column with — a realistic pair so a card
+  // renders "Reservation A", never the raw composite.
+  const reservationId = opts.reservationId ?? `${eventId}:res-1`
+  const reservationName = opts.reservationName ?? 'Reservation A'
   const fixtures: PreviewFixture[] = []
   for (let a = 1; a <= n; a += 1) {
     for (let b = a + 1; b <= n; b += 1) {
@@ -63,8 +63,8 @@ export function buildRoundRobinFixtures(
         buildPreviewFixture({
           fixture_id: `pfx-${eventId}-${a}-${b}`,
           event_id: eventId,
-          pool_id: poolId,
-          pool_name: poolName,
+          reservation_id: reservationId,
+          reservation_name: reservationName,
           player_a_id: `placeholder-${a}`,
           player_b_id: `placeholder-${b}`,
         }),
@@ -102,17 +102,18 @@ export function buildPreviewEventBreakdown(
   }
 }
 
-/** An infeasibility reason on the wire — the `pool_has_no_tables` arm, the
+/** An infeasibility reason on the wire — the `reservation_has_no_tables` arm, the
  * simplest resolved cause, for the infeasible-preview case. */
-export function buildPoolHasNoTablesRead(
-  overrides: Partial<PoolHasNoTablesRead> = {},
-): PoolHasNoTablesRead {
-  // A real pool by default (`reservation: 'pool'`) — the un-pooled case is the
-  // event-wide reservation, which a caller opts into with `reservation: 'event'`.
+export function buildReservationHasNoTablesRead(
+  overrides: Partial<ReservationHasNoTablesRead> = {},
+): ReservationHasNoTablesRead {
+  // A real booked reservation by default (`reservation: 'booked'`) — the ungrouped
+  // case is the event-wide reservation, which a caller opts into with
+  // `reservation: 'event'`.
   return {
-    kind: 'pool_has_no_tables',
-    pool_name: 'Pool A',
-    reservation: 'pool',
+    kind: 'reservation_has_no_tables',
+    reservation_name: 'Reservation A',
+    reservation: 'booked',
     ...overrides,
   }
 }
@@ -155,7 +156,7 @@ export function buildInfeasiblePreviewResult(
     fits: false,
     estimated_duration_min: null,
     estimated_finish: null,
-    infeasibility_reasons: [buildPoolHasNoTablesRead()],
+    infeasibility_reasons: [buildReservationHasNoTablesRead()],
     events: [buildPreviewEventBreakdown({ duration_min: null })],
     ...overrides,
   })

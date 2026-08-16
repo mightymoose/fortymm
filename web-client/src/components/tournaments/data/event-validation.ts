@@ -20,8 +20,8 @@
 //   |               | `le=512`, `default=None`              | cap; when present, 1 … 512  |
 //   | `entry_fee`   | `EventEntryFee`: `ge=0`, `le=999…99`, | required; 0 … 999,999.99,   |
 //   |               | whole cents                           | in whole cents              |
-//   | `qualifiers   | `QualifiersPerPool`: `ge=1`, `le=1000`,| required and 1 … 1,000 **for|
-//   |  _per_pool`   | required on the `rr-then-ko` union arm, | `rr-then-ko` only** — the   |
+//   | `qualifiers   | `QualifiersPerGroup`: `ge=1`, `le=1000`,| required and 1 … 1,000 **for|
+//   |  _per_group`  | required on the `rr-then-ko` union arm, | `rr-then-ko` only** — the   |
 //   |               | refused outright on the other three     | pair, not the field         |
 //   | `rounds`      | `SwissRounds`: `ge=1`, `le=32`,       | required and 1 … 32 **for   |
 //   |               | required on the `swiss` union arm,      | `swiss` only** — again the  |
@@ -70,8 +70,8 @@
 
 import { z } from 'zod'
 
-import { poolEntryKey } from './pool-entries'
-import type { PoolEntry } from './types'
+import { reservationEntryKey } from './reservation-entries'
+import type { ReservationEntry } from './types'
 
 /** `tournament_events.name` is `VARCHAR(255)`, `NOT NULL` — the same column
  * constraint `NewTournamentModal` mirrors for the tournament's own name, and the
@@ -118,45 +118,46 @@ export const nameSchema = z
   .max(NAME_MAX, { error: `Name must be ${NAME_MAX} characters or fewer.` })
 
 /**
- * A **pool's** name: present. The same floor the server now states
- * (`Pool.name: str = Field(min_length=1)`, `api/app/schemas/tournament.py`), and the
- * same words as the event's own name — because to the organizer clearing a box it is
- * the same news, and a second wording for one fact is a second thing to drift.
+ * A **reservation's** name: present. The same floor the server now states
+ * (`ReservationWrite.name: str = Field(min_length=1)`, `api/app/schemas/tournament.py`),
+ * and the same words as the event's own name — because to the organizer clearing a box
+ * it is the same news, and a second wording for one fact is a second thing to drift.
  *
- * The pools editor *mints* a pool's default name ("Pool A"), so the happy
- * path could never author a blank one — but the name **box is live**, and an emptied
- * box was a save the form allowed and the server refused, with Pydantic's own prose
- * ("String should have at least 1 character") arriving in the editor's banner. That is
- * the hole `nameSchema` closed for the event a release ago, still open one tab over:
- * the whole point of the house rule (web-client `CLAUDE.md`, `## Forms`) is that a rule
- * the client can express is a rule met **under the field**, not in a 422.
+ * The reservations editor *mints* a reservation's default name ("Reservation A"), so the
+ * happy path could never author a blank one — but the name **box is live**, and an
+ * emptied box was a save the form allowed and the server refused, with Pydantic's own
+ * prose ("String should have at least 1 character") arriving in the editor's banner.
+ * That is the hole `nameSchema` closed for the event a release ago, still open one tab
+ * over: the whole point of the house rule (web-client `CLAUDE.md`, `## Forms`) is that a
+ * rule the client can express is a rule met **under the field**, not in a 422.
  *
- * ⚠️ **No ceiling**, deliberately: `Pool.name` has `min_length=1` and no `max_length`
- * (unlike the event's `VARCHAR(255)` — a pool lives in JSONB, which has no column to
- * overflow). Mirroring a bound the API does not have would be inventing one, and a save
- * refused here is a save nothing on the server would ever have refused.
+ * ⚠️ **No ceiling**, deliberately: `ReservationWrite.name` has `min_length=1` and no
+ * `max_length` (unlike the event's `VARCHAR(255)` — a reservation lives in its own row,
+ * ADR 20260801, but the column carries no upper bound). Mirroring a bound the API does
+ * not have would be inventing one, and a save refused here is a save nothing on the
+ * server would ever have refused.
  *
- * A pool's **id** is not mirrored at all, and since ADR 20260801 there is nothing left
- * to mirror: the id is the SERVER's uuid, a new pool is sent with none, and this form
- * cannot author one (`PoolEntry`, `./types`). Even when the client did mint them, an
- * error about an id was one no organizer could act on or even *see* — there is no box —
- * and an unfixable red is worse than the impossible 422 it guards. The same goes for a
- * table's id.
+ * A reservation's **id** is not mirrored at all, and since ADR 20260801 there is nothing
+ * left to mirror: the id is the SERVER's uuid, a new reservation is sent with none, and
+ * this form cannot author one (`ReservationEntry`, `./types`). Even when the client did
+ * mint them, an error about an id was one no organizer could act on or even *see* —
+ * there is no box — and an unfixable red is worse than the impossible 422 it guards. The
+ * same goes for a table's id.
  */
-export const poolNameSchema = z
+export const reservationNameSchema = z
   .string()
   .trim()
   .min(1, { error: 'Name is required.' })
 
 /**
- * What is wrong with each pool's **name**, keyed by `poolEntryKey` — `poolNameSchema`
- * read a second way, for the second reader.
+ * What is wrong with each reservation's **name**, keyed by `reservationEntryKey` —
+ * `reservationNameSchema` read a second way, for the second reader.
  *
- * Keyed off the ENTRY rather than off an id, because half the pools in a live edit have
- * no id: one the director added a moment ago is waiting for the server to mint it
- * (ADR 20260801), and it still has a name box that can still be emptied. `poolEntryKey`
- * is the same key the cards are keyed on, so the red lands under the box it is about
- * whichever arm the entry is.
+ * Keyed off the ENTRY rather than off an id, because half the reservations in a live
+ * edit have no id: one the director added a moment ago is waiting for the server to
+ * mint it (ADR 20260801), and it still has a name box that can still be emptied.
+ * `reservationEntryKey` is the same key the cards are keyed on, so the red lands under
+ * the box it is about whichever arm the entry is.
  *
  * The resolver's verdict on the array (`eventSchema`) is what refuses the *save*; this
  * is what puts the red under the *box*, and the two are the same rule and the same
@@ -164,23 +165,23 @@ export const poolNameSchema = z
  * (`eligibilityIssues` is the same shape for the same reason: one rule, two readers of
  * it — never two rules.)
  *
- * A second reader is needed at all because RHF's `useFieldArray.update()` — how a pool
- * card writes an edit back — deliberately does **not** re-run the resolver (it sets no
- * `_actioned` flag, unlike append/remove: `useFieldArray`, RHF 7.81). So the resolver's
- * `errors.pools` is the verdict of the last *submit* and would sit there, in red, under
- * a name the organizer has already fixed. Computed from live form values instead, it
- * stops complaining the moment they type — which is what the event's own name box does
- * one tab over, and the organizer cannot be expected to know which of the two is backed
- * by which mechanism.
+ * A second reader is needed at all because RHF's `useFieldArray.update()` — how a
+ * reservation card writes an edit back — deliberately does **not** re-run the resolver
+ * (it sets no `_actioned` flag, unlike append/remove: `useFieldArray`, RHF 7.81). So the
+ * resolver's `errors.reservations` is the verdict of the last *submit* and would sit
+ * there, in red, under a name the organizer has already fixed. Computed from live form
+ * values instead, it stops complaining the moment they type — which is what the event's
+ * own name box does one tab over, and the organizer cannot be expected to know which of
+ * the two is backed by which mechanism.
  */
-export function poolNameIssues(
-  pools: readonly PoolEntry[],
+export function reservationNameIssues(
+  reservations: readonly ReservationEntry[],
 ): Record<string, string> {
   const issues: Record<string, string> = {}
-  for (const pool of pools) {
-    const result = poolNameSchema.safeParse(pool.name)
+  for (const reservation of reservations) {
+    const result = reservationNameSchema.safeParse(reservation.name)
     if (!result.success) {
-      issues[poolEntryKey(pool)] = result.error.issues[0].message
+      issues[reservationEntryKey(reservation)] = result.error.issues[0].message
     }
   }
   return issues
@@ -249,23 +250,23 @@ export const entryFeeSchema = z
     }
   })
 
-/** The floor on **K** — the server's `QualifiersPerPool = Annotated[int, Field(ge=1)]`,
+/** The floor on **K** — the server's `QualifiersPerGroup = Annotated[int, Field(ge=1)]`,
  * stated once there and mirrored once here. Zero advances nobody into the knockout
  * stage, and a negative count is not a count. */
-export const QUALIFIERS_PER_POOL_MIN = 1
+export const QUALIFIERS_PER_GROUP_MIN = 1
 
-/** The ceiling on **K** — the server's `QualifiersPerPool = Annotated[int, Field(le=1000)]`,
+/** The ceiling on **K** — the server's `QualifiersPerGroup = Annotated[int, Field(le=1000)]`,
  * the same number, stated in both layers on purpose.
  *
- * ⚠️ **This is the player limit's bug, one field over** (#1231 QA). `qualifiers_per_pool`
+ * ⚠️ **This is the player limit's bug, one field over** (#1231 QA). `qualifiers_per_group`
  * is an `Integer` column, so `2147483648` satisfied every rule either layer stated, hit
  * Postgres, and came back a **500** — reported to the director as "Something went wrong on
  * our end. Nothing you did caused it", which was false: they typed a number into a box.
  * `999999999` was worse, because it *worked*: it saved an event whose knockout stage could
  * never be cut.
  *
- * 1,000 is a bound with a reason, the way 512 is for the player limit: a pool of more than
- * a thousand finishers is not a pool, and the column's own 2,147,483,647 is not a *limit*,
+ * 1,000 is a bound with a reason, the way 512 is for the player limit: a group of more than
+ * a thousand finishers is not a group, and the column's own 2,147,483,647 is not a *limit*,
  * it is the absence of one.
  *
  * It is **not** the same kind of bound as the server's two entrant-dependent ones
@@ -275,10 +276,10 @@ export const QUALIFIERS_PER_POOL_MIN = 1
  * The cut's own refusal says which number to change, in the server's words
  * (`drawRefusalNotice`, `data/draw`). This one is fixed, known at write time, and refused
  * by the API at the request boundary, so the form states it too. */
-export const QUALIFIERS_PER_POOL_MAX = 1000
+export const QUALIFIERS_PER_GROUP_MAX = 1000
 
 /**
- * **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's knockout
+ * **K** — how many of each group's finishers advance into an `rr-then-ko` draw's knockout
  * stage (ADR 20260727).
  *
  * NOT `.nullable()`, unlike the player limit, and the difference is the point: a blank
@@ -298,17 +299,17 @@ export const QUALIFIERS_PER_POOL_MAX = 1000
  * a round-robin event the box is not rendered at all (the draw type has no knockout
  * stage), so its error would be a save refused for a reason nobody can see or fix.
  */
-export const qualifiersPerPoolSchema = z
-  .number({ error: 'Say how many players advance from each pool.' })
-  .int({ error: 'Qualifiers per pool must be a whole number.' })
-  .min(QUALIFIERS_PER_POOL_MIN, {
-    error: `At least ${QUALIFIERS_PER_POOL_MIN} player must advance from each pool.`,
+export const qualifiersPerGroupSchema = z
+  .number({ error: 'Say how many players advance from each group.' })
+  .int({ error: 'Qualifiers per group must be a whole number.' })
+  .min(QUALIFIERS_PER_GROUP_MIN, {
+    error: `At least ${QUALIFIERS_PER_GROUP_MIN} player must advance from each group.`,
   })
   // The floor's sentence, turned over — one bound, two directions, one voice. Stated as
   // a number the director can act on ("at most 1,000"), not as "invalid": the value they
   // typed is the only thing they can change.
-  .max(QUALIFIERS_PER_POOL_MAX, {
-    error: `At most ${QUALIFIERS_PER_POOL_MAX.toLocaleString('en-US')} players can advance from each pool.`,
+  .max(QUALIFIERS_PER_GROUP_MAX, {
+    error: `At most ${QUALIFIERS_PER_GROUP_MAX.toLocaleString('en-US')} players can advance from each group.`,
   })
 
 /** The floor on **R** — the server's `SwissRounds = Annotated[int, Field(ge=1, …)]`,
@@ -319,7 +320,7 @@ export const SWISS_ROUNDS_MIN = 1
 /** The ceiling on **R** — the server's `MAX_SWISS_ROUNDS`, the same number, stated in both
  * layers on purpose.
  *
- * The same kind of bound as `QUALIFIERS_PER_POOL_MAX`, and for the same reason: an
+ * The same kind of bound as `QUALIFIERS_PER_GROUP_MAX`, and for the same reason: an
  * `Integer` column behind an unbounded box is a **500** reported to the director as
  * "something went wrong on our end", which is false — they typed a number. 32 is a bound
  * with a reason: the largest field this API will hold (512) is conventionally paired out in
@@ -339,7 +340,7 @@ export const SWISS_ROUNDS_MAX = 32
  * **R** — how many rounds a `swiss` event plays (ADR "swiss pre-cuts every round and pairs
  * each one on advance").
  *
- * NOT `.nullable()`, exactly like `qualifiersPerPoolSchema` and for the identical reason: a
+ * NOT `.nullable()`, exactly like `qualifiersPerGroupSchema` and for the identical reason: a
  * blank round count on a swiss event is **missing**, not a state. The server's `swiss` arm
  * requires the field with no default precisely because there is no defensible number to
  * assume — `ceil(log2 n)` is the convention, and a derived default would move as entrants
@@ -371,4 +372,4 @@ export const swissRoundsSchema = z
  * comes off closed pickers). A sum type rather than a `string`, so "which tab do I
  * open?" is answered from a closed set the editor's `TabsContent` values are checked
  * against. */
-export type EventSection = 'basics' | 'eligibility' | 'pools'
+export type EventSection = 'basics' | 'eligibility' | 'reservations'

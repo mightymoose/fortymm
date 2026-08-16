@@ -7,7 +7,7 @@
 // Three rules keep it transcribable:
 //
 // 1. **Every vector states all eight inputs.** No defaults builder, no shared base object.
-//    A hidden `poolCountMode: 'automatic'` is a guess the Python author would have to
+//    A hidden `groupCountMode: 'automatic'` is a guess the Python author would have to
 //    make, and DRY is worth less here than being readable as a spec.
 // 2. **Every vector states the whole result**, including all three source sentences. One
 //    `toEqual` per vector. That is what pins the copy — a sentence asserted nowhere is a
@@ -23,19 +23,19 @@
 // under. So the Python table asserts a subset of each `expected`, and the split is not
 // something a reader should have to infer:
 //
-// - **Shared, and must match exactly:** `poolCount`, `poolSizes`, `qualifiersPerPool`,
-//   `totalQualifiers`, `knockoutBracketSize`, `firstRoundByes`, `poolMatchCount`, the
+// - **Shared, and must match exactly:** `groupCount`, `groupSizes`, `qualifiersPerGroup`,
+//   `totalQualifiers`, `knockoutBracketSize`, `firstRoundByes`, `groupMatchCount`, the
 //   numbers on `disagreement`, and the `kind` of each entry in `impossibleProblems`.
 //   Those are the derivation, and a difference in any of them is drift.
 // - **Client-only, and deliberately not ported:** `sources` in full (there are no rows on
 //   the server), `unevenDistribution` (a notice, not a refusal — the API does not object
-//   to unequal pools), and the `title` / `body` on each impossible problem.
+//   to unequal groups), and the `title` / `body` on each impossible problem.
 //
 // The `input` side crosses whole: all eight numbers, unchanged.
 
 import {
   deriveDrawStructure,
-  poolLetter,
+  groupLetter,
   type DrawStructure,
   type DrawStructureOptions,
 } from './draw-structure'
@@ -54,36 +54,36 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   // ---------------------------------------------------------------------------------
 
   {
-    // The reference's "Nothing set" screen. One pool per reservation row — today's
+    // The reference's "Nothing set" screen. One group per reservation row — today's
     // behaviour, kept as the automatic answer.
-    name: 'nothing set: 32 players across 4 pool reservations',
+    name: 'nothing set: 32 players across 4 reservations',
     input: {
       previewFieldSize: 32,
-      poolReservationCount: 4,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 4,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 4,
-      poolSizes: [8, 8, 8, 8],
-      qualifiersPerPool: 2,
+      groupCount: 4,
+      groupSizes: [8, 8, 8, 8],
+      qualifiersPerGroup: 2,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      poolMatchCount: 112,
+      groupMatchCount: 112,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'automatic',
-          sentence: "4 pool reservations · today's behaviour",
+          sentence: "4 reservations · today's behaviour",
         },
-        poolSize: { ownership: 'automatic', sentence: '32 players ÷ 4 pools' },
+        groupSize: { ownership: 'automatic', sentence: '32 players ÷ 4 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 4 pools.',
+          sentence: 'Aiming at an 8-player knockout across 4 groups.',
         },
       },
       disagreement: null,
@@ -93,42 +93,42 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
-    // Pool count is the director's, pool size is ours: the balanced split, remainder to
-    // the EARLIEST pools.
-    name: 'manual pool count only: 40 players across 6 pools',
+    // Group count is the director's, group size is ours: the balanced split, remainder to
+    // the EARLIEST groups.
+    name: 'manual group count only: 40 players across 6 groups',
     input: {
       previewFieldSize: 40,
-      poolReservationCount: 4,
-      poolCountMode: 'manual',
-      manualPoolCount: 6,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 4,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 6,
-      poolSizes: [7, 7, 7, 7, 6, 6],
-      qualifiersPerPool: 2,
+      groupCount: 6,
+      groupSizes: [7, 7, 7, 7, 6, 6],
+      qualifiersPerGroup: 2,
       totalQualifiers: 12,
       knockoutBracketSize: 12,
       firstRoundByes: 4,
-      poolMatchCount: 114,
+      groupMatchCount: 114,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each pool also gets a reservation.',
+          sentence: 'You set this. Each group also gets a reservation.',
         },
-        poolSize: { ownership: 'automatic', sentence: '40 players ÷ 6 pools' },
+        groupSize: { ownership: 'automatic', sentence: '40 players ÷ 6 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 6 pools.',
+          sentence: 'Aiming at an 8-player knockout across 6 groups.',
         },
       },
       disagreement: null,
       unevenDistribution: [
-        { pools: 4, size: 7 },
-        { pools: 2, size: 6 },
+        { groups: 4, size: 7 },
+        { groups: 2, size: 6 },
       ],
       impossibleProblems: [],
     },
@@ -137,34 +137,34 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   {
     // The other way round: the director's target size derives the count, and 40 divides
     // exactly, so nothing is left over.
-    name: 'manual pool size only: 40 players in pools of 5',
+    name: 'manual group size only: 40 players in groups of 5',
     input: {
       previewFieldSize: 40,
-      poolReservationCount: 4,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'manual',
-      manualPoolSize: 5,
+      reservationCount: 4,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'manual',
+      manualGroupSize: 5,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 8,
-      poolSizes: [5, 5, 5, 5, 5, 5, 5, 5],
-      qualifiersPerPool: 1,
+      groupCount: 8,
+      groupSizes: [5, 5, 5, 5, 5, 5, 5, 5],
+      qualifiersPerGroup: 1,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      poolMatchCount: 80,
+      groupMatchCount: 80,
       sources: {
-        poolCount: { ownership: 'automatic', sentence: '40 players ÷ about 5 per pool' },
-        poolSize: {
+        groupCount: { ownership: 'automatic', sentence: '40 players ÷ about 5 per group' },
+        groupSize: {
           ownership: 'manual',
-          sentence: 'You set the target. We derived the pool count.',
+          sentence: 'You set the target. We derived the group count.',
         },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 8 pools.',
+          sentence: 'Aiming at an 8-player knockout across 8 groups.',
         },
       },
       disagreement: null,
@@ -177,39 +177,39 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     // The reference's "Numbers disagree" screen. BOTH numbers stand — the sizes stay at
     // the six fives the director asked for, and the ten players with nowhere to go are
     // reported rather than seated by moving somebody's number.
-    name: 'both manual and disagreeing: 6 pools of 5 seat 30 of a 40 field',
+    name: 'both manual and disagreeing: 6 groups of 5 seat 30 of a 40 field',
     input: {
       previewFieldSize: 40,
-      poolReservationCount: 6,
-      poolCountMode: 'manual',
-      manualPoolCount: 6,
-      poolSizeMode: 'manual',
-      manualPoolSize: 5,
+      reservationCount: 6,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
+      groupSizeMode: 'manual',
+      manualGroupSize: 5,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 6,
-      poolSizes: [5, 5, 5, 5, 5, 5],
-      qualifiersPerPool: 2,
+      groupCount: 6,
+      groupSizes: [5, 5, 5, 5, 5, 5],
+      qualifiersPerGroup: 2,
       totalQualifiers: 12,
       knockoutBracketSize: 12,
       firstRoundByes: 4,
-      poolMatchCount: 60,
+      groupMatchCount: 60,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each pool also gets a reservation.',
+          sentence: 'You set this. Each group also gets a reservation.',
         },
-        poolSize: { ownership: 'manual', sentence: 'You set this.' },
+        groupSize: { ownership: 'manual', sentence: 'You set this.' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 6 pools.',
+          sentence: 'Aiming at an 8-player knockout across 6 groups.',
         },
       },
       disagreement: {
-        poolCount: 6,
-        poolSize: 5,
+        groupCount: 6,
+        groupSize: 5,
         seats: 30,
         fieldSize: 40,
         direction: 'unseated',
@@ -217,46 +217,46 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       },
       unevenDistribution: null,
       // A disagreement is a call for the director, NOT an impossible competition. Every
-      // pool here is playable.
+      // group here is playable.
       impossibleProblems: [],
     },
   },
 
   {
     // The disagreement running the other way: more seats than players.
-    name: 'both manual, seats to spare: 8 pools of 5 seat 40 of a 30 field',
+    name: 'both manual, seats to spare: 8 groups of 5 seat 40 of a 30 field',
     input: {
       previewFieldSize: 30,
-      poolReservationCount: 8,
-      poolCountMode: 'manual',
-      manualPoolCount: 8,
-      poolSizeMode: 'manual',
-      manualPoolSize: 5,
+      reservationCount: 8,
+      groupCountMode: 'manual',
+      manualGroupCount: 8,
+      groupSizeMode: 'manual',
+      manualGroupSize: 5,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 8,
-      poolSizes: [5, 5, 5, 5, 5, 5, 5, 5],
-      qualifiersPerPool: 1,
+      groupCount: 8,
+      groupSizes: [5, 5, 5, 5, 5, 5, 5, 5],
+      qualifiersPerGroup: 1,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      poolMatchCount: 80,
+      groupMatchCount: 80,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each pool also gets a reservation.',
+          sentence: 'You set this. Each group also gets a reservation.',
         },
-        poolSize: { ownership: 'manual', sentence: 'You set this.' },
+        groupSize: { ownership: 'manual', sentence: 'You set this.' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 8 pools.',
+          sentence: 'Aiming at an 8-player knockout across 8 groups.',
         },
       },
       disagreement: {
-        poolCount: 8,
-        poolSize: 5,
+        groupCount: 8,
+        groupSize: 5,
         seats: 40,
         fieldSize: 30,
         direction: 'empty-seats',
@@ -268,42 +268,42 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
-    // The reference's "Uneven field" screen. Legal, and said out loud — the bigger pools
+    // The reference's "Uneven field" screen. Legal, and said out loud — the bigger groups
     // play more matches, and nothing has been silently reshaped.
-    name: 'uneven but legal: 22 players across 4 pools',
+    name: 'uneven but legal: 22 players across 4 groups',
     input: {
       previewFieldSize: 22,
-      poolReservationCount: 4,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 4,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 4,
-      poolSizes: [6, 6, 5, 5],
-      qualifiersPerPool: 2,
+      groupCount: 4,
+      groupSizes: [6, 6, 5, 5],
+      qualifiersPerGroup: 2,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      poolMatchCount: 50,
+      groupMatchCount: 50,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'automatic',
-          sentence: "4 pool reservations · today's behaviour",
+          sentence: "4 reservations · today's behaviour",
         },
-        poolSize: { ownership: 'automatic', sentence: '22 players ÷ 4 pools' },
+        groupSize: { ownership: 'automatic', sentence: '22 players ÷ 4 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 4 pools.',
+          sentence: 'Aiming at an 8-player knockout across 4 groups.',
         },
       },
       disagreement: null,
       unevenDistribution: [
-        { pools: 2, size: 6 },
-        { pools: 2, size: 5 },
+        { groups: 2, size: 6 },
+        { groups: 2, size: 5 },
       ],
       impossibleProblems: [],
     },
@@ -314,85 +314,85 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   // ---------------------------------------------------------------------------------
 
   {
-    // The reference's "Field too small" screen — and the ORDERING case. Four pools of one
-    // means the pool rule fires, and the automatic two qualifiers out of a pool of one
-    // means the qualifier rule would fire too. Only the pool problem is reported: it is
+    // The reference's "Field too small" screen — and the ORDERING case. Four groups of one
+    // means the group rule fires, and the automatic two qualifiers out of a group of one
+    // means the qualifier rule would fire too. Only the group problem is reported: it is
     // the one the director can act on, and the other is its echo.
-    name: 'field too small: 8 players across 6 pools reports the pool, not the qualifier',
+    name: 'field too small: 8 players across 6 groups reports the group, not the qualifier',
     input: {
       previewFieldSize: 8,
-      poolReservationCount: 6,
-      poolCountMode: 'manual',
-      manualPoolCount: 6,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 6,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 6,
-      poolSizes: [2, 2, 1, 1, 1, 1],
-      qualifiersPerPool: 2,
+      groupCount: 6,
+      groupSizes: [2, 2, 1, 1, 1, 1],
+      qualifiersPerGroup: 2,
       totalQualifiers: 12,
       knockoutBracketSize: 12,
       firstRoundByes: 4,
-      poolMatchCount: 2,
+      groupMatchCount: 2,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each pool also gets a reservation.',
+          sentence: 'You set this. Each group also gets a reservation.',
         },
-        poolSize: { ownership: 'automatic', sentence: '8 players ÷ 6 pools' },
+        groupSize: { ownership: 'automatic', sentence: '8 players ÷ 6 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 6 pools.',
+          sentence: 'Aiming at an 8-player knockout across 6 groups.',
         },
       },
       disagreement: null,
       unevenDistribution: [
-        { pools: 2, size: 2 },
-        { pools: 4, size: 1 },
+        { groups: 2, size: 2 },
+        { groups: 4, size: 1 },
       ],
-      // Pool C, because C is the FIRST pool under two — not the last, and not "four pools".
+      // Group C, because C is the FIRST group under two — not the last, and not "four groups".
       impossibleProblems: [
         {
-          kind: 'pool',
-          title: 'Pool C would have one player',
-          body: 'They would have nobody to play. Use fewer pools or raise the player limit.',
+          kind: 'group',
+          title: 'Group C would have one player',
+          body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
         },
       ],
     },
   },
 
   {
-    // One pool taking one qualifier. The pools are fine, so the BRACKET rule is the one
+    // One group taking one qualifier. The groups are fine, so the BRACKET rule is the one
     // that fires — and this is the only vector that catches a missing `max(2, …)` in the
     // byes formula: `2 ^ ceil(log2(max(2, 1))) - 1` is one bye, not none.
-    name: 'one-player knockout: 1 pool taking its top 1',
+    name: 'one-player knockout: 1 group taking its top 1',
     input: {
       previewFieldSize: 8,
-      poolReservationCount: 1,
-      poolCountMode: 'manual',
-      manualPoolCount: 1,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 1,
+      groupCountMode: 'manual',
+      manualGroupCount: 1,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'manual',
       manualQualifiers: 1,
     },
     expected: {
-      poolCount: 1,
-      poolSizes: [8],
-      qualifiersPerPool: 1,
+      groupCount: 1,
+      groupSizes: [8],
+      qualifiersPerGroup: 1,
       totalQualifiers: 1,
       knockoutBracketSize: 1,
       firstRoundByes: 1,
-      poolMatchCount: 28,
+      groupMatchCount: 28,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each pool also gets a reservation.',
+          sentence: 'You set this. Each group also gets a reservation.',
         },
-        poolSize: { ownership: 'automatic', sentence: '8 players ÷ 1 pools' },
+        groupSize: { ownership: 'automatic', sentence: '8 players ÷ 1 groups' },
         qualifiers: { ownership: 'manual', sentence: 'You set this.' },
       },
       disagreement: null,
@@ -401,51 +401,51 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
         {
           kind: 'bracket',
           title: 'The knockout would have one player',
-          body: 'One player has nobody to play. Take more qualifiers or run more pools.',
+          body: 'One player has nobody to play. Take more qualifiers or run more groups.',
         },
       ],
     },
   },
 
   {
-    // Three through from a pool that only holds two.
-    name: 'too many qualifiers: top 3 from a pool of 2',
+    // Three through from a group that only holds two.
+    name: 'too many qualifiers: top 3 from a group of 2',
     input: {
       previewFieldSize: 10,
-      poolReservationCount: 4,
-      poolCountMode: 'manual',
-      manualPoolCount: 4,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 4,
+      groupCountMode: 'manual',
+      manualGroupCount: 4,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'manual',
       manualQualifiers: 3,
     },
     expected: {
-      poolCount: 4,
-      poolSizes: [3, 3, 2, 2],
-      qualifiersPerPool: 3,
+      groupCount: 4,
+      groupSizes: [3, 3, 2, 2],
+      qualifiersPerGroup: 3,
       totalQualifiers: 12,
       knockoutBracketSize: 12,
       firstRoundByes: 4,
-      poolMatchCount: 8,
+      groupMatchCount: 8,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each pool also gets a reservation.',
+          sentence: 'You set this. Each group also gets a reservation.',
         },
-        poolSize: { ownership: 'automatic', sentence: '10 players ÷ 4 pools' },
+        groupSize: { ownership: 'automatic', sentence: '10 players ÷ 4 groups' },
         qualifiers: { ownership: 'manual', sentence: 'You set this.' },
       },
       disagreement: null,
       unevenDistribution: [
-        { pools: 2, size: 3 },
-        { pools: 2, size: 2 },
+        { groups: 2, size: 3 },
+        { groups: 2, size: 2 },
       ],
       impossibleProblems: [
         {
           kind: 'qualifier',
-          title: "You can't take 3 qualifiers from a pool of 2",
-          body: 'Take 2 or fewer, or make the smallest pool bigger.',
+          title: "You can't take 3 qualifiers from a group of 2",
+          body: 'Take 2 or fewer, or make the smallest group bigger.',
         },
       ],
     },
@@ -453,94 +453,94 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
 
   {
     // The SECOND ordering case, and the complete set with the one above: a field of one
-    // trips the pool rule and the bracket rule at once, and the pool wins. (There is no
-    // reachable bracket-over-qualifier case: `bracket < 2` forces one pool taking one,
-    // and one qualifier can only exceed a pool of zero, which trips the pool rule first.)
-    name: 'ordering: a field of one is a pool problem, not a bracket problem',
+    // trips the group rule and the bracket rule at once, and the group wins. (There is no
+    // reachable bracket-over-qualifier case: `bracket < 2` forces one group taking one,
+    // and one qualifier can only exceed a group of zero, which trips the group rule first.)
+    name: 'ordering: a field of one is a group problem, not a bracket problem',
     input: {
       previewFieldSize: 1,
-      poolReservationCount: 1,
-      poolCountMode: 'manual',
-      manualPoolCount: 1,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 1,
+      groupCountMode: 'manual',
+      manualGroupCount: 1,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'manual',
       manualQualifiers: 1,
     },
     expected: {
-      poolCount: 1,
-      poolSizes: [1],
-      qualifiersPerPool: 1,
+      groupCount: 1,
+      groupSizes: [1],
+      qualifiersPerGroup: 1,
       totalQualifiers: 1,
       knockoutBracketSize: 1,
       firstRoundByes: 1,
-      poolMatchCount: 0,
+      groupMatchCount: 0,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each pool also gets a reservation.',
+          sentence: 'You set this. Each group also gets a reservation.',
         },
-        poolSize: { ownership: 'automatic', sentence: '1 players ÷ 1 pools' },
+        groupSize: { ownership: 'automatic', sentence: '1 players ÷ 1 groups' },
         qualifiers: { ownership: 'manual', sentence: 'You set this.' },
       },
       disagreement: null,
       unevenDistribution: null,
       impossibleProblems: [
         {
-          kind: 'pool',
-          title: 'Pool A would have one player',
-          body: 'They would have nobody to play. Use fewer pools or raise the player limit.',
+          kind: 'group',
+          title: 'Group A would have one player',
+          body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
         },
       ],
     },
   },
 
   {
-    // THE GREEDY EDGE. Nine pools, the ninth holding the one player 41 does not divide
+    // THE GREEDY EDGE. Nine groups, the ninth holding the one player 41 does not divide
     // into eight fives. A balanced split would give `5,5,5,5,5,5,5,4,4` and hide the
     // problem by editing a number the director typed — so the fill stays greedy and the
-    // pool of one is reported.
-    name: 'greedy fill: 41 players in pools of 5 leaves a pool of one',
+    // group of one is reported.
+    name: 'greedy fill: 41 players in groups of 5 leaves a group of one',
     input: {
       previewFieldSize: 41,
-      poolReservationCount: 4,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'manual',
-      manualPoolSize: 5,
+      reservationCount: 4,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'manual',
+      manualGroupSize: 5,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 9,
-      poolSizes: [5, 5, 5, 5, 5, 5, 5, 5, 1],
-      qualifiersPerPool: 1,
+      groupCount: 9,
+      groupSizes: [5, 5, 5, 5, 5, 5, 5, 5, 1],
+      qualifiersPerGroup: 1,
       totalQualifiers: 9,
       knockoutBracketSize: 9,
       firstRoundByes: 7,
-      poolMatchCount: 80,
+      groupMatchCount: 80,
       sources: {
-        poolCount: { ownership: 'automatic', sentence: '41 players ÷ about 5 per pool' },
-        poolSize: {
+        groupCount: { ownership: 'automatic', sentence: '41 players ÷ about 5 per group' },
+        groupSize: {
           ownership: 'manual',
-          sentence: 'You set the target. We derived the pool count.',
+          sentence: 'You set the target. We derived the group count.',
         },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 9 pools.',
+          sentence: 'Aiming at an 8-player knockout across 9 groups.',
         },
       },
       disagreement: null,
       unevenDistribution: [
-        { pools: 8, size: 5 },
-        { pools: 1, size: 1 },
+        { groups: 8, size: 5 },
+        { groups: 1, size: 1 },
       ],
-      // The ninth pool, so Pool I — past the single-letter cases the earlier vectors pin.
+      // The ninth group, so Group I — past the single-letter cases the earlier vectors pin.
       impossibleProblems: [
         {
-          kind: 'pool',
-          title: 'Pool I would have one player',
-          body: 'They would have nobody to play. Use fewer pools or raise the player limit.',
+          kind: 'group',
+          title: 'Group I would have one player',
+          body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
         },
       ],
     },
@@ -553,35 +553,35 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   {
     // An event with NO cap previews against 16 players. The derivation just takes the
     // number — the honest "16 players because this event has no cap" basis label is the
-    // renderer's job — and the pool-size sentence is where the 16 shows up.
+    // renderer's job — and the group-size sentence is where the 16 shows up.
     name: 'no cap: the uncapped preview field of 16 players',
     input: {
       previewFieldSize: 16,
-      poolReservationCount: 4,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 4,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 4,
-      poolSizes: [4, 4, 4, 4],
-      qualifiersPerPool: 2,
+      groupCount: 4,
+      groupSizes: [4, 4, 4, 4],
+      qualifiersPerGroup: 2,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      poolMatchCount: 24,
+      groupMatchCount: 24,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'automatic',
-          sentence: "4 pool reservations · today's behaviour",
+          sentence: "4 reservations · today's behaviour",
         },
-        poolSize: { ownership: 'automatic', sentence: '16 players ÷ 4 pools' },
+        groupSize: { ownership: 'automatic', sentence: '16 players ÷ 4 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 4 pools.',
+          sentence: 'Aiming at an 8-player knockout across 4 groups.',
         },
       },
       disagreement: null,
@@ -591,37 +591,37 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
-    // An event with no pool rows yet. The count clamps to one, and the sentence reports
-    // the number the derivation USED — `1 pool reservations`, unpluralised, because the
+    // An event with no group rows yet. The count clamps to one, and the sentence reports
+    // the number the derivation USED — `1 reservations`, unpluralised, because the
     // sentence explains the division that happened and the reference does not pluralise.
-    name: 'no pool reservations yet: the count clamps to one and the sentence says so',
+    name: 'no reservations yet: the count clamps to one and the sentence says so',
     input: {
       previewFieldSize: 16,
-      poolReservationCount: 0,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 0,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 1,
-      poolSizes: [16],
-      qualifiersPerPool: 8,
+      groupCount: 1,
+      groupSizes: [16],
+      qualifiersPerGroup: 8,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      poolMatchCount: 120,
+      groupMatchCount: 120,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'automatic',
-          sentence: "1 pool reservations · today's behaviour",
+          sentence: "1 reservations · today's behaviour",
         },
-        poolSize: { ownership: 'automatic', sentence: '16 players ÷ 1 pools' },
+        groupSize: { ownership: 'automatic', sentence: '16 players ÷ 1 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 1 pools.',
+          sentence: 'Aiming at an 8-player knockout across 1 groups.',
         },
       },
       disagreement: null,
@@ -631,46 +631,46 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
-    // A director typing a zero into the pool-size box. It clamps to one, and — the same
+    // A director typing a zero into the group-size box. It clamps to one, and — the same
     // rule as the reservation sentence above — the copy reports the clamped value, not
     // the zero, because that is the division that was actually done.
-    name: 'a manual pool size of zero clamps to one, in the maths and in the copy',
+    name: 'a manual group size of zero clamps to one, in the maths and in the copy',
     input: {
       previewFieldSize: 3,
-      poolReservationCount: 4,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'manual',
-      manualPoolSize: 0,
+      reservationCount: 4,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'manual',
+      manualGroupSize: 0,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 3,
-      poolSizes: [1, 1, 1],
-      qualifiersPerPool: 3,
+      groupCount: 3,
+      groupSizes: [1, 1, 1],
+      qualifiersPerGroup: 3,
       totalQualifiers: 9,
       knockoutBracketSize: 9,
       firstRoundByes: 7,
-      poolMatchCount: 0,
+      groupMatchCount: 0,
       sources: {
-        poolCount: { ownership: 'automatic', sentence: '3 players ÷ about 1 per pool' },
-        poolSize: {
+        groupCount: { ownership: 'automatic', sentence: '3 players ÷ about 1 per group' },
+        groupSize: {
           ownership: 'manual',
-          sentence: 'You set the target. We derived the pool count.',
+          sentence: 'You set the target. We derived the group count.',
         },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 3 pools.',
+          sentence: 'Aiming at an 8-player knockout across 3 groups.',
         },
       },
       disagreement: null,
       unevenDistribution: null,
       impossibleProblems: [
         {
-          kind: 'pool',
-          title: 'Pool A would have one player',
-          body: 'They would have nobody to play. Use fewer pools or raise the player limit.',
+          kind: 'group',
+          title: 'Group A would have one player',
+          body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
         },
       ],
     },
@@ -678,44 +678,44 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
 
   {
     // A field of nobody — the state a brand-new event with a zero cap would preview. The
-    // pool refusal has a second sentence for it: `no players`, not `one player`.
-    name: 'an empty field: the pools have no players at all',
+    // group refusal has a second sentence for it: `no players`, not `one player`.
+    name: 'an empty field: the groups have no players at all',
     input: {
       previewFieldSize: 0,
-      poolReservationCount: 3,
-      poolCountMode: 'automatic',
-      manualPoolCount: null,
-      poolSizeMode: 'automatic',
-      manualPoolSize: null,
+      reservationCount: 3,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 3,
-      poolSizes: [0, 0, 0],
-      qualifiersPerPool: 3,
+      groupCount: 3,
+      groupSizes: [0, 0, 0],
+      qualifiersPerGroup: 3,
       totalQualifiers: 9,
       knockoutBracketSize: 9,
       firstRoundByes: 7,
-      poolMatchCount: 0,
+      groupMatchCount: 0,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'automatic',
-          sentence: "3 pool reservations · today's behaviour",
+          sentence: "3 reservations · today's behaviour",
         },
-        poolSize: { ownership: 'automatic', sentence: '0 players ÷ 3 pools' },
+        groupSize: { ownership: 'automatic', sentence: '0 players ÷ 3 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 3 pools.',
+          sentence: 'Aiming at an 8-player knockout across 3 groups.',
         },
       },
       disagreement: null,
       unevenDistribution: null,
       impossibleProblems: [
         {
-          kind: 'pool',
-          title: 'Pool A would have no players',
-          body: 'They would have nobody to play. Use fewer pools or raise the player limit.',
+          kind: 'group',
+          title: 'Group A would have no players',
+          body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
         },
       ],
     },
@@ -729,31 +729,31 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'a manual mode with no number is automatic, badge and all',
     input: {
       previewFieldSize: 32,
-      poolReservationCount: 4,
-      poolCountMode: 'manual',
-      manualPoolCount: null,
-      poolSizeMode: 'manual',
-      manualPoolSize: null,
+      reservationCount: 4,
+      groupCountMode: 'manual',
+      manualGroupCount: null,
+      groupSizeMode: 'manual',
+      manualGroupSize: null,
       qualifiersMode: 'manual',
       manualQualifiers: null,
     },
     expected: {
-      poolCount: 4,
-      poolSizes: [8, 8, 8, 8],
-      qualifiersPerPool: 2,
+      groupCount: 4,
+      groupSizes: [8, 8, 8, 8],
+      qualifiersPerGroup: 2,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      poolMatchCount: 112,
+      groupMatchCount: 112,
       sources: {
-        poolCount: {
+        groupCount: {
           ownership: 'automatic',
-          sentence: "4 pool reservations · today's behaviour",
+          sentence: "4 reservations · today's behaviour",
         },
-        poolSize: { ownership: 'automatic', sentence: '32 players ÷ 4 pools' },
+        groupSize: { ownership: 'automatic', sentence: '32 players ÷ 4 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 4 pools.',
+          sentence: 'Aiming at an 8-player knockout across 4 groups.',
         },
       },
       disagreement: null,
@@ -769,14 +769,19 @@ describe('deriveDrawStructure', () => {
   })
 })
 
-describe('poolLetter', () => {
-  // The naming the pool refusal and the preview cards both read off. Past Z it keeps
-  // naming pools instead of printing punctuation — `String.fromCharCode(65 + 26)` is `[`.
-  it('names pools A onwards, and keeps going past Z', () => {
-    expect([0, 2, 8, 25, 26, 27, 51, 52].map(poolLetter)).toEqual([
+describe('groupLetter', () => {
+  // The naming the group refusal and the preview cards both read off. Past Z it keeps
+  // naming groups instead of printing punctuation — `String.fromCharCode(65 + 26)` is `[`.
+  //
+  // ⚠️ **This table is asserted on the other side too**: `api/tests/test_draws.py` pins
+  // the identical seven `(position, label)` pairs, with a comment pointing back at this
+  // file (ticket #1369). Positions 26 and 52 are the mandatory ones — the carry is
+  // `n // 26 - 1`, and a naive `n // 26` agrees for 0–25 then silently diverges, so a
+  // vector that stopped at `Z` would pass a broken carry.
+  it('names groups A onwards, and keeps going past Z', () => {
+    expect([0, 1, 25, 26, 27, 51, 52].map(groupLetter)).toEqual([
       'A',
-      'C',
-      'I',
+      'B',
       'Z',
       'AA',
       'AB',

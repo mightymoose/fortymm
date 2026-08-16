@@ -1,8 +1,8 @@
 // The **fixtures** boundary (ADR-0786): where an event's draw stops being bytes off
 // the wire and becomes a typed domain value.
 //
-// A fixture is one planned pairing of a draw — a round and a position (plus a pool,
-// when the draw is pooled) — whose sides may still be TBD. It is NOT a match; it
+// A fixture is one planned pairing of a draw — a round and a position (plus a group,
+// when the draw is grouped) — whose sides may still be TBD. It is NOT a match; it
 // materializes into one later (#788), and until then its `matchId` is `null`.
 //
 // Why a Zod parse and not just the generated types: `schema.d.ts` is a *compile-time*
@@ -10,7 +10,7 @@
 // JSON to it without looking. The network is untrusted
 // (`.claude/rules/parse-at-boundaries.md`), so the fixtures are **parsed** here, at the
 // fetch boundary, and only the parsed value travels inward. A fixture missing its
-// `round`, or carrying a `pool_id` that is a number, fails HERE — loudly, in the
+// `round`, or carrying a `group_id` that is a number, fails HERE — loudly, in the
 // queryFn, before it can prime the cache — rather than surfacing three components
 // later as a `undefined` in a bracket header.
 //
@@ -70,17 +70,21 @@ const fixtureWireSchema = z.object({
   /** The **stage** (`EventStageRead`, ADR 20260815 decision 5) this fixture belongs to
    * — `NOT NULL`, never inferred. A string ref into the event's own `stages`. Join it
    * against that array to read the stage's own `draw_type`, which is what
-   * `shapeForStage` (`./draw`) routes an un-pooled block's view on — never `pool_id`
+   * `shapeForStage` (`./draw`) routes an un-grouped block's view on — never `group_id`
    * plus the event's overall `drawType`, the inference that once rendered a swiss
-   * draw's rounds as a knockout bracket because both are un-pooled and
-   * indistinguishable by `pool_id` alone. */
+   * draw's rounds as a knockout bracket because both are un-grouped and
+   * indistinguishable by `group_id` alone. */
   stage_id: z.string(),
-  /** `null` = this fixture belongs to no pool: the draw is un-pooled (single-elim,
+  /** `null` = this fixture belongs to no group: the draw is un-grouped (single-elim,
    * swiss), or this is the knockout stage of an `rr-then-ko` one. Which one is
    * `stage_id`'s business to say, not this field's. When set it is a **string ref**
-   * into **this fixture's own stage's** pools (`event.pools`) — not a foreign key,
-   * because pools are JSONB value-objects (ADR-0786). */
-  pool_id: z.string().nullable(),
+   * into **this fixture's own stage's** groups (`event.groups`) — and, unlike an
+   * unknown `groups[].reservation_id` on the event itself, an unknown `group_id` here
+   * is NOT a parse failure: the domain genuinely allows a fixture that names no group
+   * (a knockout fixture), so it is carried through as-is and `drawState` (`./draw`)
+   * renders it in the ungrouped block rather than dropping it or refusing the whole
+   * payload. */
+  group_id: z.string().nullable(),
   round: z.number().int(),
   position: z.number().int(),
   /** `null` = **TBD**, never a bye. */
@@ -125,7 +129,7 @@ export const fixtureSchema = fixtureWireSchema.transform(
   (f): Fixture => ({
     id: f.id,
     stageId: f.stage_id,
-    poolId: f.pool_id,
+    groupId: f.group_id,
     round: f.round,
     position: f.position,
     entryAId: f.entry_a_id,

@@ -79,18 +79,18 @@ export type SolverVerdict = z.infer<typeof solverVerdictSchema>
 // client switches on, so — like `status`/`trigger`/`verdict` — an arm this
 // client has no words for must FAIL the parse here, in the queryFn, not fall
 // out of a `switch` two components later as a blank row (`z.discriminatedUnion`
-// rejects an unknown discriminator). Names + numbers are data (a `pool_name` is
+// rejects an unknown discriminator). Names + numbers are data (a `reservation_name` is
 // like a username); the *sentence* is still the client's, minted in
 // `infeasibilityReasonCopy` below, so "raw API strings never reach the UI" holds.
 
 /**
- * **Which kind of reservation** a reason blames (ADR 20260807, "a pool restricts
+ * **Which kind of reservation** a reason blames (ADR 20260807, "a reservation restricts
  * scheduling, it does not enable it") — the same two words `ScheduleMatch.reservation`
  * uses for the same fact, deliberately:
  *
- * - `pool` — a pool the director created, and can rename, re-table, re-window or
- *   delete. Every pool verb is available to a remedy.
- * - `event` — the **event-wide reservation**: the synthetic one an un-pooled fixture
+ * - `booked` — a reservation the director created, and can rename, re-table,
+ *   re-window or delete. Every reservation verb is available to a remedy.
+ * - `event` — the **event-wide reservation**: the synthetic one an un-grouped fixture
  *   (a bracket, a swiss round, a knockout stage) is placed against, carrying the
  *   **event's own window** over **every table in the tournament**. There is no row
  *   behind it, so a director cannot add a table to it, shrink it, or widen *its*
@@ -101,19 +101,19 @@ export type SolverVerdict = z.infer<typeof solverVerdictSchema>
  * name is copy (`Open Singles (whole venue)`), and reading copy to decide what a
  * remedy may offer is exactly how a director gets told to do the impossible.
  */
-export type ReservationKind = 'pool' | 'event'
+export type ReservationKind = 'booked' | 'event'
 
 /** The wire's `reservation` discriminator. Required, never defaulted: guessing
- * `pool` for a payload that did not say so is how the wrong remedy gets printed,
+ * `booked` for a payload that did not say so is how the wrong remedy gets printed,
  * so an absent or unknown value must fail the parse here. */
-export const reservationKindSchema = z.enum(['pool', 'event'])
+export const reservationKindSchema = z.enum(['booked', 'event'])
 
-type PoolHasNoTablesWire =
-  components['schemas']['PoolHasNoTablesRead']
+type ReservationHasNoTablesWire =
+  components['schemas']['ReservationHasNoTablesRead']
 type WindowTooShortForMatchWire =
   components['schemas']['WindowTooShortForMatchRead']
-type PoolOverCapacityWire =
-  components['schemas']['PoolOverCapacityRead']
+type ReservationOverCapacityWire =
+  components['schemas']['ReservationOverCapacityRead']
 type PlayerOverSubscribedWire =
   components['schemas']['PlayerOverSubscribedRead']
 type NoSingleCauseWire =
@@ -130,33 +130,33 @@ type PastWindowReasonWire =
  * like the rest of this module.
  *
  * The four arms that name a reservation also carry **which kind** it is
- * (`ReservationKind`), because a pool and the event-wide reservation offer a
+ * (`ReservationKind`), because a booked reservation and the event-wide reservation offer a
  * director different controls — see `infeasibilityReasonCopy`.
  *
- * - **`pool_has_no_tables`** — a pool with fixtures but nowhere to place them.
- * - **`window_too_short_for_match`** — a single match cannot fit its pool window
+ * - **`reservation_has_no_tables`** — a reservation with fixtures but nowhere to place them.
+ * - **`window_too_short_for_match`** — a single match cannot fit its reservation window
  *   contiguously, whatever the table count.
- * - **`pool_over_capacity`** — a pool's aggregate match-time exceeds what its
+ * - **`reservation_over_capacity`** — a reservation's aggregate match-time exceeds what its
  *   window × tables can hold (a *certain* pre-check, not a CP-SAT guess).
- * - **`player_over_subscribed`** — ONE human is in more matches inside a pool's
+ * - **`player_over_subscribed`** — ONE human is in more matches inside a reservation's
  *   window than that window can hold, counting the rest owed between them: a
  *   pigeonhole over a single person (CONTEXT.md, "Over-subscribed"), so it is the
- *   one structural cause that names a *person* rather than a pool or fixture —
+ *   one structural cause that names a *person* rather than a reservation or fixture —
  *   and the one where adding tables is provably useless (extra tables let *other*
  *   people play in parallel, never this one).
  * - **`no_single_cause`** — CP-SAT proved infeasible but arms 1–4 all passed: a
  *   *timing* conflict, never a raw-capacity shortfall (so: don't add tables).
- * - **`past_window`** — a pool's ENTIRE planned window is already a day behind
+ * - **`past_window`** — a reservation's ENTIRE planned window is already a day behind
  *   now (ADR "a past day is named, not disguised"), fixed by moving the date, not
  *   by adding tables/time. Carries the offending venue-local `date` (`YYYY-MM-DD`,
  *   resolved server-side in the event's own timezone frame, so the client does no
  *   tz math of its own).
  */
 export type InfeasibilityReason =
-  | { kind: 'pool_has_no_tables'; poolName: string; reservation: ReservationKind }
+  | { kind: 'reservation_has_no_tables'; reservationName: string; reservation: ReservationKind }
   | {
       kind: 'window_too_short_for_match'
-      poolName: string
+      reservationName: string
       reservation: ReservationKind
       windowStart: string
       windowEnd: string
@@ -165,8 +165,8 @@ export type InfeasibilityReason =
       windowSpanMin: number
     }
   | {
-      kind: 'pool_over_capacity'
-      poolName: string
+      kind: 'reservation_over_capacity'
+      reservationName: string
       reservation: ReservationKind
       windowStart: string
       windowEnd: string
@@ -177,7 +177,7 @@ export type InfeasibilityReason =
   | {
       kind: 'player_over_subscribed'
       playerName: string
-      poolName: string
+      reservationName: string
       reservation: ReservationKind
       windowStart: string
       windowEnd: string
@@ -192,15 +192,15 @@ export type InfeasibilityReason =
  * union below can discriminate on it. `satisfies` each against the generated
  * schema so a field renamed in the API is a compile error here, not a silent
  * `undefined` at render. */
-const poolHasNoTablesWireSchema = z.object({
-  kind: z.literal('pool_has_no_tables'),
-  pool_name: z.string(),
+const reservationHasNoTablesWireSchema = z.object({
+  kind: z.literal('reservation_has_no_tables'),
+  reservation_name: z.string(),
   reservation: reservationKindSchema,
-}) satisfies z.ZodType<PoolHasNoTablesWire>
+}) satisfies z.ZodType<ReservationHasNoTablesWire>
 
 const windowTooShortForMatchWireSchema = z.object({
   kind: z.literal('window_too_short_for_match'),
-  pool_name: z.string(),
+  reservation_name: z.string(),
   reservation: reservationKindSchema,
   window_start: z.string(),
   window_end: z.string(),
@@ -209,21 +209,21 @@ const windowTooShortForMatchWireSchema = z.object({
   window_span_min: z.number().int(),
 }) satisfies z.ZodType<WindowTooShortForMatchWire>
 
-const poolOverCapacityWireSchema = z.object({
-  kind: z.literal('pool_over_capacity'),
-  pool_name: z.string(),
+const reservationOverCapacityWireSchema = z.object({
+  kind: z.literal('reservation_over_capacity'),
+  reservation_name: z.string(),
   reservation: reservationKindSchema,
   window_start: z.string(),
   window_end: z.string(),
   required_min: z.number().int(),
   capacity_min: z.number().int(),
   table_count: z.number().int(),
-}) satisfies z.ZodType<PoolOverCapacityWire>
+}) satisfies z.ZodType<ReservationOverCapacityWire>
 
 const playerOverSubscribedWireSchema = z.object({
   kind: z.literal('player_over_subscribed'),
   player_name: z.string(),
-  pool_name: z.string(),
+  reservation_name: z.string(),
   reservation: reservationKindSchema,
   window_start: z.string(),
   window_end: z.string(),
@@ -247,9 +247,9 @@ const pastWindowReasonWireSchema = z.object({
  * has no arm and throws, which is exactly the boundary rule: a reason this
  * client cannot render must fail the parse, not blank the row. */
 export const infeasibilityReasonWireSchema = z.discriminatedUnion('kind', [
-  poolHasNoTablesWireSchema,
+  reservationHasNoTablesWireSchema,
   windowTooShortForMatchWireSchema,
-  poolOverCapacityWireSchema,
+  reservationOverCapacityWireSchema,
   playerOverSubscribedWireSchema,
   noSingleCauseWireSchema,
   pastWindowReasonWireSchema,
@@ -263,12 +263,12 @@ export function infeasibilityReasonFromWire(
   r: z.infer<typeof infeasibilityReasonWireSchema>,
 ): InfeasibilityReason {
   switch (r.kind) {
-    case 'pool_has_no_tables':
-      return { kind: r.kind, poolName: r.pool_name, reservation: r.reservation }
+    case 'reservation_has_no_tables':
+      return { kind: r.kind, reservationName: r.reservation_name, reservation: r.reservation }
     case 'window_too_short_for_match':
       return {
         kind: r.kind,
-        poolName: r.pool_name,
+        reservationName: r.reservation_name,
         reservation: r.reservation,
         windowStart: r.window_start,
         windowEnd: r.window_end,
@@ -276,10 +276,10 @@ export function infeasibilityReasonFromWire(
         neededMin: r.needed_min,
         windowSpanMin: r.window_span_min,
       }
-    case 'pool_over_capacity':
+    case 'reservation_over_capacity':
       return {
         kind: r.kind,
-        poolName: r.pool_name,
+        reservationName: r.reservation_name,
         reservation: r.reservation,
         windowStart: r.window_start,
         windowEnd: r.window_end,
@@ -291,7 +291,7 @@ export function infeasibilityReasonFromWire(
       return {
         kind: r.kind,
         playerName: r.player_name,
-        poolName: r.pool_name,
+        reservationName: r.reservation_name,
         reservation: r.reservation,
         windowStart: r.window_start,
         windowEnd: r.window_end,
@@ -441,7 +441,7 @@ export const placementConflictSchema =
  * finishes; `error` is set only on a `failed` run.
  *
  * `overrunning` is a *success qualifier*, not a stage: `true` only on a
- * `succeeded` run whose plan ran a fixture past its pool's **planned** window
+ * `succeeded` run whose plan ran a fixture past its reservation's **planned** window
  * end while the tournament is **live** (the window went soft so the day keeps
  * being scheduled into the overrun instead of wedging "doesn't fit", ADR
  * "the solver stops wedging"). Always `false` pre-live and on any run that
@@ -565,7 +565,7 @@ export type SolveStripState =
        * `succeeded` row whose verdict is missing degrades to `feasible` — the
        * modest claim — rather than inventing optimality or refusing to render. */
       verdict: 'optimal' | 'feasible'
-      /** The plan ran a fixture past its pool's planned window while the
+      /** The plan ran a fixture past its reservation's planned window while the
        * tournament is live — the soft-window overrun (ADR "the solver stops
        * wedging"). The strip surfaces this as a calm "overrunning" badge, NOT a
        * "doesn't fit" error: the day is still being scheduled, just past plan.
@@ -683,7 +683,7 @@ export function fmtWallTime(ms: number | null): string | null {
 // `infeasibilityReasonCopy` and render the SAME `sentence` + `remedy`, so the two
 // surfaces cannot drift on how a reason reads. Pure functions, unit-tested here.
 
-/** A pool's table-time, human-sized in the *prose*' spirit of `fmtWallTime`:
+/** A reservation's table-time, human-sized in the *prose*' spirit of `fmtWallTime`:
  * a bare `8h` / `1.3h` / `45 min`, WITHOUT a leading "about" — the sentences
  * below own that word ("… need about {…}"), so the formatter must not double it.
  * Hours to one decimal when not whole (`75 min → 1.3h`), a whole number when it
@@ -715,17 +715,17 @@ export interface InfeasibilityReasonCopy {
  * **A remedy must name a control the director actually has**, so the four
  * reservation-naming arms branch on `reservation` (ADR 20260807):
  *
- * - a **pool** is a row the director made, so every pool verb is fair game — add a
- *   table to it, widen its window, make it a smaller pool. This copy is unchanged,
- *   byte for byte, and pinned by a test.
- * - the **event-wide reservation** is not a pool. It already holds every table in
+ * - a **booked** reservation is a row the director made, so every reservation verb is
+ *   fair game — add a table to it, widen its window, make it a smaller reservation.
+ *   This copy is pinned by a test.
+ * - the **event-wide reservation** is not a booked one. It already holds every table in
  *   the tournament, so there is no table to add *to it*; it has no row to rename or
  *   shrink; and its window is the **event's** own. Its remedies therefore point at
  *   the tournament's table list, the event's window, the match format and the field
  *   — and never at the reservation itself, whose name (`… (whole venue)`) is copy
  *   rather than a control.
  *
- * `pool_over_capacity`'s *sentence* branches too: its figures are honest either way,
+ * `reservation_over_capacity`'s *sentence* branches too: its figures are honest either way,
  * but "its window on N tables" claims an ownership an event-wide reservation does
  * not have.
  *
@@ -737,46 +737,46 @@ export interface InfeasibilityReasonCopy {
  * - `player_over_subscribed`, because a table is parallelism and this is a
  *   pigeonhole over ONE human — a second table lets somebody *else* play, never
  *   this person twice at once. Its remedies are fewer matches for them in that
- *   pool, or a longer window (ADR "the conflict core is a second, max-placed
+ *   reservation, or a longer window (ADR "the conflict core is a second, max-placed
  *   solve", decision 1).
  */
 export function infeasibilityReasonCopy(
   reason: InfeasibilityReason,
 ): InfeasibilityReasonCopy {
   switch (reason.kind) {
-    case 'pool_has_no_tables':
+    case 'reservation_has_no_tables':
       return {
-        sentence: `${reason.poolName} has no tables assigned.`,
+        sentence: `${reason.reservationName} has no tables assigned.`,
         // The event-wide reservation covers every table the tournament has, so
         // "no tables" means the tournament itself has none — and the table list
         // is where the director fixes it, not an assignment they cannot make.
         remedy:
-          reason.reservation === 'pool'
-            ? `Assign at least one table to ${reason.poolName}, then run the scheduler again.`
+          reason.reservation === 'booked'
+            ? `Assign at least one table to ${reason.reservationName}, then run the scheduler again.`
             : `Add at least one table to this tournament, then run the scheduler again.`,
       }
     case 'window_too_short_for_match':
       return {
-        sentence: `${reason.poolName}'s ${reason.windowStart}–${reason.windowEnd} window is too short for a best-of-${reason.bestOf} match — it needs ${reason.neededMin} min but the window is only ${reason.windowSpanMin}.`,
-        // The window under an un-pooled fixture is the EVENT's own, edited on the
-        // event rather than on a pool that does not exist.
+        sentence: `${reason.reservationName}'s ${reason.windowStart}–${reason.windowEnd} window is too short for a best-of-${reason.bestOf} match — it needs ${reason.neededMin} min but the window is only ${reason.windowSpanMin}.`,
+        // The window under an un-grouped fixture is the EVENT's own, edited on the
+        // event rather than on a reservation that does not exist.
         remedy:
-          reason.reservation === 'pool'
-            ? `Widen ${reason.poolName}'s window, or use a shorter match format.`
+          reason.reservation === 'booked'
+            ? `Widen ${reason.reservationName}'s window, or use a shorter match format.`
             : `Widen the event's window, or use a shorter match format.`,
       }
-    case 'pool_over_capacity':
+    case 'reservation_over_capacity':
       return {
         sentence:
-          reason.reservation === 'pool'
-            ? `${reason.poolName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but its ${reason.windowStart}–${reason.windowEnd} window on ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`
+          reason.reservation === 'booked'
+            ? `${reason.reservationName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but its ${reason.windowStart}–${reason.windowEnd} window on ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`
             : // Same figures, honestly attributed: the window is the event's and
               // the tables are the tournament's — neither belongs to the
-              // reservation the way a pool's do.
-              `${reason.poolName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but the event's ${reason.windowStart}–${reason.windowEnd} window on the tournament's ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`,
+              // reservation the way a booked one's do.
+              `${reason.reservationName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but the event's ${reason.windowStart}–${reason.windowEnd} window on the tournament's ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`,
         remedy:
-          reason.reservation === 'pool'
-            ? `Add a table to ${reason.poolName}, widen its window, or trim the field.`
+          reason.reservation === 'booked'
+            ? `Add a table to ${reason.reservationName}, widen its window, or trim the field.`
             : `Add a table to this tournament, widen the event's window, or trim the field.`,
       }
     case 'player_over_subscribed':
@@ -787,17 +787,17 @@ export function infeasibilityReasonCopy(
       // is `window_too_short_for_match`'s finding, so the API never emits this arm
       // with one match and the plural is safe.
       return {
-        sentence: `${reason.playerName} is in ${reason.matchCount} matches inside ${reason.poolName}'s ${reason.windowStart}–${reason.windowEnd} window — playing one at a time, with a rest between, they need about ${fmtTableTime(reason.requiredMin)}, but the window is only ${fmtTableTime(reason.windowSpanMin)} long.`,
+        sentence: `${reason.playerName} is in ${reason.matchCount} matches inside ${reason.reservationName}'s ${reason.windowStart}–${reason.windowEnd} window — playing one at a time, with a rest between, they need about ${fmtTableTime(reason.requiredMin)}, but the window is only ${fmtTableTime(reason.windowSpanMin)} long.`,
         // NOT "add tables": a table is parallelism, and one human cannot play two
         // matches at once, so a second table would relieve nothing here (the same
         // trap `no_single_cause`'s remedy avoids, for a different reason).
         //
-        // "A smaller pool" is a control only a pool has. For an un-pooled fixture
+        // "A smaller reservation" is a control only a booked reservation has. For an un-grouped fixture
         // the field is the event's, and the window is the event's — and the
         // reservation's name is not something the director can type into.
         remedy:
-          reason.reservation === 'pool'
-            ? `Give ${reason.playerName} fewer matches in ${reason.poolName} — a smaller pool, or a shorter match format — or widen its window; adding tables won't help one player.`
+          reason.reservation === 'booked'
+            ? `Give ${reason.playerName} fewer matches in ${reason.reservationName} — a smaller reservation, or a shorter match format — or widen its window; adding tables won't help one player.`
             : `Give ${reason.playerName} fewer matches in this event — a smaller field, or a shorter match format — or widen the event's window; adding tables won't help one player.`,
       }
     case 'no_single_cause':
@@ -809,7 +809,7 @@ export function infeasibilityReasonCopy(
       // and "adding tables won't help" is then the opposite of the truth.
       return reason.requiredMin > reason.availableMin
         ? {
-            sentence: `This tournament's matches need about ${fmtTableTime(reason.requiredMin)} of table-time, but the venue only offers about ${fmtTableTime(reason.availableMin)} across every reserved window — and no single pool or event is over its own capacity, so nothing here is wrong on its own.`,
+            sentence: `This tournament's matches need about ${fmtTableTime(reason.requiredMin)} of table-time, but the venue only offers about ${fmtTableTime(reason.availableMin)} across every reserved window — and no single reservation or event is over its own capacity, so nothing here is wrong on its own.`,
             remedy: `Add a table, widen a window, trim a field, or split the event across days.`,
           }
         : {
@@ -831,13 +831,13 @@ export function infeasibilityReasonCopy(
   }
 }
 
-/** A stable-enough React key for one infeasibility reason: its `kind`, the pool
+/** A stable-enough React key for one infeasibility reason: its `kind`, the reservation
  * it names when it has one, and the list index (two `no_single_cause`s never
  * coexist, but the index keeps the key total). Shared so every surface that
  * lists the reasons keys them the same way by import, not by convention. */
 export function infeasibilityReasonKey(reason: InfeasibilityReason, i: number): string {
-  return 'poolName' in reason
-    ? `${reason.kind}:${reason.poolName}:${i}`
+  return 'reservationName' in reason
+    ? `${reason.kind}:${reason.reservationName}:${i}`
     : `${reason.kind}:${i}`
 }
 
