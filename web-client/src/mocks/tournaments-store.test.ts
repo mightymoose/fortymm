@@ -21,6 +21,7 @@ import {
   createEvent,
   createTournament,
   cutDraw,
+  deleteEvent,
   enterEvent,
   findTournament,
   listTournaments,
@@ -1036,6 +1037,207 @@ describe('transitionTournament', () => {
     expect(findTournament(id)!.status).toBe('live')
   })
 
+  // ----- the undrawable half of the refusal (#1300) -------------------------
+  //
+  // The dead end this closes: an event nobody can cut a draw for — a field under two
+  // entrants, or a doubles/teams event — was reported as merely "has no draw yet", and
+  // the refusal told the director to go and cut it. The cut then refused, and the only
+  // escape the QA pass found was deleting the event.
+  //
+  // ⚠️ THESE FOUR ARE MIRROR ASSERTIONS. Each string below is the API's composed
+  // refusal, copied verbatim from the now-passing API tests, asserted with `toBe` and
+  // never `toContain`. Nothing here may be imported from the store: a test that read the
+  // copy out of the code it is testing would pass whatever the copy became, and the whole
+  // point of the mock is that a page built against it is built against words the server
+  // really says. A `toContain` would be almost as bad — the load-bearing property of the
+  // all-undrawable case is a sentence that is ABSENT.
+
+  /** A pool to add, in a create body's own shape: no `id`, because a pool id is the
+   * server's to mint (ADR 20260801). */
+  const poolNamed = (name: string) => ({ name, slot: SLOT, table_ids: [] })
+
+  /** One event on a tournament that already exists, with the shape these cases turn on
+   * (format, draw type, pools) and boring defaults for everything else. */
+  function addEvent(
+    tournamentId: string,
+    body: Partial<Parameters<typeof createEvent>[1]> &
+      Pick<Parameters<typeof createEvent>[1], 'name' | 'format' | 'draw_type'>,
+  ): string {
+    const created = createEvent(tournamentId, {
+      max_players: 16,
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+      ...body,
+    })
+    if (!created.ok) throw new Error(`setup failed: could not add ${body.name}`)
+    return created.event.id
+  }
+
+  it('reports a ZERO-entrant round-robin event as undrawable, in the planner’s own words', () => {
+    // Zero entrants is the same dead end as one: every floor tests `< 2`. The counts are
+    // what the director has to change, so the planner's counted sentence goes through
+    // verbatim — and it is the sentence the mock used to get WRONG ("0 entrants across 1
+    // pool(s)"), which nothing caught while it lived only behind the cut's 422.
+    const id = announcedEmptyTournament()
+    addEvent(id, {
+      name: 'Empty Event',
+      format: 'singles',
+      draw_type: 'round-robin',
+      pools: [poolNamed('Pool A')],
+    })
+
+    expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
+      'This tournament cannot start yet: “Empty Event”: 0 entrants across 1 pool ' +
+        'would leave a pool with fewer than 2 entrants, who would have nobody to play. ' +
+        'Add entrants, or remove the event.',
+    )
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  it('appends NO fix to a degenerate message that already names its own', () => {
+    // The other arm of the fix rule, and the one every case above is blind to: the fix is
+    // appended for a field under two entrants and for NOTHING else. "A round-robin draw
+    // needs at least one pool" already tells the director what to do, and this event has
+    // 52 entrants — "Add entrants, or remove the event" would be advice against the facts.
+    const id = PUBLISHED
+    for (const gone of [EMPTY_SINGLES, FULL_SINGLES, INELIGIBLE_SINGLES, DOUBLES]) {
+      if (!deleteEvent(id, gone).ok) throw new Error(`setup failed: ${gone}`)
+    }
+    // 52 entrants, and the pools taken away — the one refusal that is about the pools.
+    if (!updateEvent(id, FULLISH_SINGLES, { pools: [] }).ok) {
+      throw new Error('setup failed: could not empty the pools')
+    }
+
+    // No trailing fix, and no trailing space — which is why this is a `toBe`.
+    expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
+      'This tournament cannot start yet: “Open Singles”: A round-robin draw needs at ' +
+        'least one pool.',
+    )
+  })
+
+  it('reports a NON-SINGLES event as undrawable, and names removal as the only fix', () => {
+    // The worst instance of the dead end, because it is permanent: entry is refused for
+    // every non-singles event, so its field can never reach two and "add entrants" would
+    // be an instruction nobody can follow. Judged on format alone — no draw is planned.
+    const id = announcedEmptyTournament()
+    addEvent(id, {
+      name: 'Doubles Event',
+      format: 'doubles',
+      draw_type: 'single-elim',
+    })
+
+    expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
+      'This tournament cannot start yet: “Doubles Event”: A doubles event cannot be ' +
+        'given a draw — only singles events can. A fixture seats one entrant on each ' +
+        'side, and there is nowhere to record a doubles pairing or a team. Remove the ' +
+        'event.',
+    )
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  it('says NOTHING about cutting a draw when every at-fault event is undrawable', () => {
+    // The acceptance criterion of #1300, and the reason the sentence is built as two
+    // independent bodies rather than one with an extra clause. Each event carries its own
+    // reason and its own fix; neither fix is "cut the draw", because for these two events
+    // that click can only fail.
+    const id = announcedEmptyTournament()
+    addEvent(id, {
+      name: 'Doubles Event',
+      format: 'doubles',
+      draw_type: 'single-elim',
+    })
+    const lone = addEvent(id, {
+      name: 'Lone Event',
+      format: 'singles',
+      draw_type: 'single-elim',
+    })
+    if (!enterEvent(id, lone).ok) throw new Error('setup failed: could not enter')
+
+    const detail = refusalDetail(transitionTournament(id, 'live'))
+
+    expect(detail).toBe(
+      'This tournament cannot start yet: “Doubles Event”: A doubles event cannot be ' +
+        'given a draw — only singles events can. A fixture seats one entrant on each ' +
+        'side, and there is nowhere to record a doubles pairing or a team. Remove the ' +
+        'event. “Lone Event”: A single-elimination draw needs at least 2 entrants — a ' +
+        'bracket of one has nobody to play. Add entrants, or remove the event.',
+    )
+    // Asserted separately from the `toBe` above, because this is the property the ticket
+    // is about and it must fail with its own name when it breaks.
+    expect(detail).not.toContain('cut the draw')
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  it('reports an undrawable, an uncut and a stale event side by side, undrawable first', () => {
+    // The mixed tournament: all three at-fault kinds at once. The cut instruction is
+    // still there — two of these events really are one click from ready — and it now
+    // names only the events it is true of. The undrawable body is reported FIRST so that
+    // instruction, which closes the uncut/stale body, trails only those two names; with
+    // the bodies the other way round QA read "cut the draw for each event named" and
+    // clicked Generate draw on the undrawable event, which the cut refuses (#1300).
+    const id = PUBLISHED
+    // Down to the two seeded events with a real field. (The seed's other three are an
+    // empty pool-less round-robin, a doubles event and the drawn U1200 — each a case
+    // above, and each noise here.)
+    for (const gone of [EMPTY_SINGLES, INELIGIBLE_SINGLES, DOUBLES]) {
+      if (!deleteEvent(id, gone).ok) throw new Error(`setup failed: ${gone}`)
+    }
+    // “C Stale”: 52 entrants, drawn — and then a 53rd enters, so the draw seats a field
+    // that is no longer the field. A re-cut fixes it, so it stays in the stale bucket.
+    if (!cutDraw(id, FULLISH_SINGLES).ok) throw new Error('setup failed: cut')
+    if (!enterEvent(id, FULLISH_SINGLES).ok) throw new Error('setup failed: enter')
+    if (!updateEvent(id, FULLISH_SINGLES, { name: 'C Stale' }).ok) {
+      throw new Error('setup failed: rename')
+    }
+    // “B Uncut”: 16 entrants, never cut — one click from ready.
+    if (!updateEvent(id, FULL_SINGLES, { name: 'B Uncut' }).ok) {
+      throw new Error('setup failed: rename')
+    }
+    // “A Undrawable”: one pool, one entrant — the headline repro of #1300.
+    const lone = addEvent(id, {
+      name: 'A Undrawable',
+      format: 'singles',
+      draw_type: 'round-robin',
+      pools: [poolNamed('Pool A')],
+    })
+    if (!enterEvent(id, lone).ok) throw new Error('setup failed: could not enter')
+
+    const mixed = refusalDetail(transitionTournament(id, 'live'))!
+
+    // The ORDER first, and deliberately BEFORE the whole-sentence pin below. All three
+    // buckets are non-empty here, so this is the real three-bucket ordering — and put
+    // after the `toBe`, these could never be the failing signal, because the exact-string
+    // assertion already pins the order and would red first. A test whose comment claims
+    // it guards a property it can never report on is worse than no test.
+    expect(mixed.indexOf('“A Undrawable”')).toBeLessThan(mixed.indexOf('“B Uncut”'))
+    expect(mixed.indexOf('“B Uncut”')).toBeLessThan(mixed.indexOf('cut the draw'))
+    expect(mixed.endsWith('then start the tournament.')).toBe(true)
+
+    // Undrawable first, mirroring the server: "cut the draw for each event named" must
+    // trail only the names a cut would actually fix (#1300 QA).
+    expect(mixed).toBe(
+      'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool would ' +
+        'leave a pool with fewer than 2 entrants, who would have nobody to play. Add ' +
+        'entrants, or remove the event. “B Uncut” has no draw yet; and “C Stale” has ' +
+        'a draw that no longer matches its entrants. A draw is cut from the field as ' +
+        'it stands at the time, and registration stays open right up to the moment a ' +
+        'tournament goes live — so cut the draw for each event named (again, if ' +
+        'somebody entered or withdrew since it was last cut), then start the ' +
+        'tournament.',
+    )
+    expect(findTournament(id)!.status).toBe('published')
+  })
+
+  // ⚠️ NOT covered here, and not for want of trying: "a draw that is stale AND whose
+  // field has dropped below two is reported as undrawable, not as stale". The store
+  // cannot reach that state through its own routes — only the dev user can enter, and
+  // `withdrawEntry` 403s on anybody else's entry, so a field that was cuttable (≥ 2) can
+  // never shrink below two here. The API's own tests cover it; the arm that would answer
+  // it in this store is the same one the mixed case above exercises, since the dry run
+  // runs over `uncut` and `stale` alike.
+
   // The load-bearing half of ADR-0017: with `status` gone from `TournamentUpdate`,
   // editing a tournament's fields cannot move its lifecycle. The transitions
   // resource is the only door.
@@ -1236,7 +1438,14 @@ describe('cutting and un-cutting a draw', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.status).toBe(422)
-    expect(result.status === 422 && result.detail).toContain('fewer than 2 entrants')
+    // The WHOLE sentence, not a fragment: the counts are the message, and both nouns are
+    // inflected exactly as `_snake` inflects them ("1 entrant", "3 pools"). The mock used
+    // to say "1 entrants across 3 pool(s)" — a sentence the API has never said, invisible
+    // for as long as every assertion on it was a `toContain` of the tail.
+    expect(result.status === 422 && result.detail).toBe(
+      '1 entrant across 3 pools would leave a pool with fewer than 2 entrants, who ' +
+        'would have nobody to play.',
+    )
   })
 
   // The play guard — the ONE reason a cut or an un-cut is refused, and it is not the

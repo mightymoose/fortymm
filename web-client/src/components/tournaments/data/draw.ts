@@ -641,7 +641,7 @@ export type DrawNotice = Notice
  * - the **draw type and its settings** (`drawConfig`), for "a single-elim draw cannot be
  *   cut yet", "take fewer qualifiers from each pool", "play fewer rounds";
  * - the **pools**, for "a round-robin draw needs at least one pool";
- * - the **seating** (`drawSeating`), for "5 entrants across 3 pool(s) would leave a pool
+ * - the **seating** (`drawSeating`), for "5 entrants across 3 pools would leave a pool
  *   with fewer than 2", and for the 409's evidence of play.
  *
  * That list is the whole design, and getting it short is how the mechanism fails: a
@@ -782,7 +782,7 @@ export function undrawnLead(drawType: DrawType): string {
  *
  * **The 409 and the 422 carry the server's own sentence, verbatim.** They are the two
  * refusals a director actually meets, and for both of them the sentence is the *point*:
- * it names the thing they have to change ("5 entrants across 3 pool(s) would leave a
+ * it names the thing they have to change ("5 entrants across 3 pools would leave a
  * pool with fewer than 2 entrants…", "A round-robin draw needs at least one pool."). It is authored
  * for them, on the server, where the numbers are; replacing it with a generic string of
  * ours would throw away the only actionable half of the refusal and leave the director

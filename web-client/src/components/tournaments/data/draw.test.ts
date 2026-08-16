@@ -612,7 +612,7 @@ describe('drawRefusalNotice', () => {
 
   it('shows the server’s sentence under a 422 — the numbers it names are the point', () => {
     const detail =
-      '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants, ' +
+      '5 entrants across 3 pools would leave a pool with fewer than 2 entrants, ' +
       'who would have nobody to play.'
 
     const notice = drawRefusalNotice(

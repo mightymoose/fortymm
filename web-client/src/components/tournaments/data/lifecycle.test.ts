@@ -17,6 +17,7 @@ import {
   buildEvent,
   buildFullEvent,
   buildIneligibleEvent,
+  buildPool,
   buildScheduleSolve,
   buildTournament,
   UNROUNDED_RATING,
@@ -469,6 +470,75 @@ describe('lifecycleRefusalScope', () => {
     expect(lifecycleRefusalScope(buildTournament({ status: 'draft' }))).toBe(
       lifecycleRefusalScope(buildTournament({ status: 'published' })),
     )
+  })
+
+  // ----- the moves the UNDRAWABLE refusal asks for (#1300) ------------------
+  //
+  // Since #1300 the go-live refusal quotes the *planner's* sentences — "A doubles event
+  // cannot be given a draw", "1 entrant across 1 pool would leave a pool with fewer than
+  // 2 entrants", "play fewer rounds" — so the header's scope has to read every fact those
+  // sentences name, which is exactly `drawRefusalScope`'s set. Each test below is one of
+  // the four moves the acceptance criteria name, and each is something a director does
+  // *because* the sentence told them to. A move the scope cannot see is #1123 shipping
+  // again inside a new sentence, so these are asserted one move at a time rather than as
+  // a single "the scope is wide" test.
+  //
+  // (Adding an entrant is the fifth, and it is already covered above — "moves when
+  // somebody enters" — because the seating half of the scope predates this ticket.)
+
+  it('moves when a pool is added — the fix for "a round-robin draw needs at least one pool"', () => {
+    const before = buildTournament({
+      events: [buildEvent({ id: 'ev-1', pools: [] })],
+    })
+    const after = buildTournament({
+      events: [buildEvent({ id: 'ev-1', pools: [buildPool({ id: 'p-new' })] })],
+    })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
+  })
+
+  // Swiss deliberately: `drawConfig` reads `rounds` only for a swiss event, because only
+  // a swiss draw has a round count to refuse over. The same edit on a round-robin event
+  // must NOT move the scope, and the pair is asserted together so neither half can drift
+  // into being vacuous.
+  it('moves when a swiss round count is lowered — the fix for "play fewer rounds"', () => {
+    const atSeven = buildTournament({
+      events: [buildEvent({ id: 'ev-1', drawType: 'swiss', rounds: 7 })],
+    })
+    const atThree = buildTournament({
+      events: [buildEvent({ id: 'ev-1', drawType: 'swiss', rounds: 3 })],
+    })
+
+    expect(lifecycleRefusalScope(atSeven)).not.toBe(
+      lifecycleRefusalScope(atThree),
+    )
+  })
+
+  it('moves when the event’s FORMAT changes — the fix a doubles refusal names is removal', () => {
+    // Not a move a director can make on the tournament page today, and read anyway: the
+    // sentence "A doubles event cannot be given a draw" is *about* the format, so a scope
+    // blind to it would be blind to the fact the refusal turns on.
+    const doubles = buildTournament({
+      events: [buildEvent({ id: 'ev-1', format: 'doubles' })],
+    })
+    const singles = buildTournament({
+      events: [buildEvent({ id: 'ev-1', format: 'singles' })],
+    })
+
+    expect(lifecycleRefusalScope(doubles)).not.toBe(
+      lifecycleRefusalScope(singles),
+    )
+  })
+
+  it('moves when the named event is REMOVED — the fix every undrawable refusal offers', () => {
+    // "Remove the event" is the *only* fix a non-singles event has, and one of the two a
+    // short field has, so the notice must not survive it.
+    const before = buildTournament({
+      events: [buildEvent({ id: 'ev-1' }), buildEvent({ id: 'ev-2' })],
+    })
+    const after = buildTournament({ events: [buildEvent({ id: 'ev-1' })] })
+
+    expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
   })
 
   /**

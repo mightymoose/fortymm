@@ -102,6 +102,50 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
     ]
 
 
+async def active_draw_entrants_by_event(
+    db: AsyncSession, event_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[Entrant]]:
+    """The batched sibling of :func:`active_draw_entrants`: every id in ``event_ids``'
+    active field, keyed by event id, in ONE statement whatever the number of events.
+
+    Exists for the ``published → live`` dry run (``app.tournament_lifecycle``), which
+    plans a cut ahead of time for every at-fault event to learn whether it would
+    succeed — reading one event's field at a time there would turn a batched
+    precondition back into a per-event query, growing the time the tournament's row
+    lock is held with the tournament's size. Same query shape as the single-event
+    version (the three columns ``order_entrants`` reads, filtered to active entries),
+    widened to an ``IN``.
+
+    Every id in ``event_ids`` is a key in the result, even one with no active entrants
+    (an empty list) — mirroring :func:`draw_currency_by_event`'s pre-seeded dict, so a
+    caller never has to guard a missing key with ``.get``.
+
+    Empty input returns ``{}`` without a query, same as :func:`draw_currency_by_event` —
+    an ``IN ()`` is never worth asking the database.
+    """
+    if not event_ids:
+        return {}
+    entrants: dict[uuid.UUID, list[Entrant]] = {event_id: [] for event_id in event_ids}
+    rows = (
+        await db.execute(
+            select(
+                TournamentEntry.event_id,
+                TournamentEntry.id,
+                TournamentEntry.seed,
+                TournamentEntry.created_at,
+            ).where(
+                TournamentEntry.event_id.in_(event_ids),
+                TournamentEntry.status == TournamentEntryStatus.entered,
+            )
+        )
+    ).all()
+    for event_id, entry_id, seed, created_at in rows:
+        entrants[event_id].append(
+            Entrant(entry_id=EntryId(entry_id), seed=seed, created_at=created_at)
+        )
+    return entrants
+
+
 def pool_order(event: TournamentEvent) -> dict[PoolId, int]:
     """Each of this event's pool ids mapped to its **0-based place in the event's pool
     order** — the lookup :func:`fixture_state` resolves a fixture's ``pool_id`` through.

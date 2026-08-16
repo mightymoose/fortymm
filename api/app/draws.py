@@ -145,6 +145,52 @@ class NonSinglesDraw(DrawError):
         )
 
 
+def draw_error_detail(error: DrawError) -> str:
+    """The director-facing sentence for a ``DrawError`` — the one mapper every caller
+    that turns a refused cut into words for a director goes through, so the copy for
+    "why can't this be cut" is written once.
+
+    A ``match`` over the error, not ``str(error)`` over whatever arrives:
+
+    * ``NonSinglesDraw`` carries its ``event_format`` **structurally**, so the sentence
+      is composed here from the fact rather than parsed out of a message written for a
+      developer.
+    * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**,
+      and it is passed through verbatim: only the strategy knows *which* degeneracy it
+      hit, and the numbers in that sentence are the numbers the director has to change.
+    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
+      reason ``NonSinglesDraw`` does.
+    * The fallback arm is a **generic** sentence, never the exception's own — a
+      ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
+      message nobody wrote for a human.
+
+    Shared by the cut/schedule-preview HTTP mapper (``app.tournaments._draw_refusal``)
+    and the ``published → live`` dry run (``app.tournament_lifecycle``), so the two
+    call sites' copy cannot drift apart — see each caller for what it does with the
+    string.
+    """
+    match error:
+        case NonSinglesDraw():
+            detail = (
+                f"A {error.event_format.value} event cannot be given a draw — only "
+                "singles events can. A fixture seats one entrant on each side, and "
+                "there is nowhere to record a doubles pairing or a team."
+            )
+        case DegenerateDraw():
+            detail = str(error)
+        case UnsupportedDrawType():
+            detail = (
+                f"A {error.draw_type.value} draw cannot be previewed, and this "
+                "tournament has no other event to preview. A draw of that kind is "
+                "decided round by round as it is played, so before anyone has "
+                "entered there is nothing to lay out. The scheduler does place it "
+                "once the tournament is live."
+            )
+        case _:
+            detail = "This event's draw cannot be cut as the event stands."
+    return detail
+
+
 class MissingFixtureGames(RuntimeError):
     """A draw was advanced with decided pool fixtures but **no game counts anywhere** —
     the caller never loaded them.
