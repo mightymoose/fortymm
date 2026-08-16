@@ -127,7 +127,7 @@ NO_FIELD: tuple[OrderedEntrant, ...] = ()
 )
 def test_group_letter_and_label(position: int, letter: str) -> None:
     """Ported from ``web-client/src/components/tournaments/data/draw-structure.ts``'s
-    ``groupLetter``/``poolLetter`` (ADR 20260808, "draw-structure derivation runs on
+    ``groupLetter`` (ADR 20260808, "draw-structure derivation runs on
     both sides and shares its vectors") — the same bijective base-26 vectors, pinned
     on both sides of the wire."""
     assert group_letter(position) == letter

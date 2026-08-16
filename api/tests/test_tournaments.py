@@ -6573,7 +6573,7 @@ async def _cut_two_group_event(
             id="window",
         ),
         pytest.param(
-            lambda _tables: {"name": "Morning Pool"},
+            lambda _tables: {"name": "Morning Session"},
             "the director renames it",
             id="name",
         ),
@@ -6595,9 +6595,9 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
     every placement — to move a table, and would simply stop using the app on the day.
 
     The rename is the subtle one. A name is identity-*adjacent* and it is not identity:
-    "Reservation A" becoming "Morning Pool" keeps the ``id`` the fixtures actually hold
-    (through their group), so every one of them still resolves. It is a display change,
-    and it is allowed.
+    "Reservation A" becoming "Morning Session" keeps the ``id`` the fixtures actually
+    hold (through their group), so every one of them still resolves. It is a display
+    change, and it is allowed.
 
     The fixtures are asserted **untouched** (``_snapshot``, every column of every row)
     and not merely present: an edit that quietly re-cut the draw to "keep it consistent"

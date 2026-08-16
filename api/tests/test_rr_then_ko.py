@@ -126,7 +126,7 @@ async def _group_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.
     server's (ADR 20260801).
 
     The name lives on the reservation and the id on the group, so this walks the join:
-    the two halves of what the wire once called one pool."""
+    the two halves the wire once served under a single name."""
     return (
         await db_session.execute(
             select(TournamentEventStageGroup.id)
@@ -1283,7 +1283,8 @@ async def test_a_reservations_patch_before_any_draw_is_cut_is_accepted(
     reached, so this path was never observable through that guard.
 
     **This was an `xfail(strict=True)` until the group/reservation split, and it pinned
-    a real 500.** ANY PATCH whose body carried a `pools` key returned 500, reordered or
+    a real 500.** ANY PATCH whose body carried the reservations key returned 500,
+    reordered or
     resent unchanged: `update_event` ends with `await db.refresh(event)`, which left the
     venue side of each group expired rather than eagerly reloaded, and `group_read`
     then touched it during response serialization — a lazy load, which under async

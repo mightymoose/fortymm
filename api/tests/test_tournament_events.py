@@ -470,8 +470,8 @@ async def test_an_events_groups_and_reservations_are_rows_of_their_own(
     default_league: League,
 ) -> None:
     """A created event's groups and reservations are **rows in their own tables**, each
-    carrying the window in the DATE/TIME columns the ADR pins (ADR 20260801, "a pool
-    belongs to its event, not to the event's draw settings") — and, since ADR 20260815,
+    carrying the window in the DATE/TIME columns the ADR pins (ADR 20260801, on what
+    belongs to an event rather than to its draw settings) — and, since ADR 20260815,
     keyed by the event's stage 0 rather than the event directly, one hop the join below
     walks.
 

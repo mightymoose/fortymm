@@ -217,7 +217,7 @@ def upgrade() -> None:
         # stores the empty object and never NULL, so no reader has to test for
         # absence before it reads.
         #
-        # It replaces a nullable ``qualifiers_per_pool`` integer column and the
+        # It replaces a nullable ``qualifiers_per_group`` integer column and the
         # CASE constraint that paired it with its draw type. Which settings a
         # draw type has is a union, and a union modelled as a wide row of
         # nullable columns is what forced that constraint to exist: each new
@@ -492,7 +492,7 @@ def upgrade() -> None:
         # NOT NULL JSONB list of ``{id, name, slot, table_ids}`` objects keyed by
         # client-supplied strings; they are the ``tournament_event_stage_groups`` and
         # ``tournament_event_reservations`` tables created below (ADR
-        # 20260801 "a pool belongs to its event, not to the event's draw settings"), so
+        # 20260801, on what belongs to an event rather than to its draw settings), so
         # a fixture can foreign-key the group it names — and specifically one of its OWN
         # event's groups. Edited out of this migration in place, per the pre-deploy
         # convention in api/CLAUDE.md — revision ids and the ``down_revision`` chain
@@ -610,8 +610,8 @@ def upgrade() -> None:
     # referential-integrity check never runs a query the ``uq_..._event_id_id``
     # constraint's own (``event_id``-leading) index does not already serve.
 
-    # A stage's GROUPS, as rows. This table is what ``tournament_event_pools`` was until
-    # the pool row split into the two things it had always meant at once: a **group** is
+    # A stage's GROUPS, as rows. This table carried both faces under one name until
+    # that row split into the two things it had always meant at once: a **group** is
     # an ordered set of entrants who play all-play-all, and a **reservation** (created
     # below) is a set of tables held for a window of time. The five columns that
     # described the venue side — ``name``, ``slot_date``, ``slot_start``, ``slot_end``
@@ -619,8 +619,8 @@ def upgrade() -> None:
     # identity and order. Renamed and re-shaped in place per the pre-deploy convention,
     # not as a chained ALTER.
     #
-    # The parent stays the STAGE (ADR 20260815, "Sequencing with #1338" consequence:
-    # "the pool's group face therefore re-parents to the stage"), and it has to: a
+    # The parent stays the STAGE (ADR 20260815, "Sequencing with #1338", whose
+    # consequence re-parents the group face onto the stage), and it has to: a
     # fixture's composite foreign key names this row, and a fixture carries ``stage_id``
     # and no ``event_id`` at all. A director's groups always hang off the event's stage 0
     # (decision 3) — this migration does not enforce that placement itself,
@@ -651,7 +651,7 @@ def upgrade() -> None:
         ),
         # Where the group sits in its stage's order: 0-based, contiguous, server-assigned
         # from the order the reservations were sent in. The snake seeds against this
-        # order (ADR 20260801, "Pools carry an explicit ``position``"), and this is what
+        # order (ADR 20260801, on carrying an explicit ``position``), and this is what
         # the wire's ``groups[].position`` reports, and what a group's derived label
         # (``group_label`` — "Group A", "Group B", …) is a function of.
         sa.Column("position", sa.Integer(), nullable=False),
@@ -701,7 +701,7 @@ def upgrade() -> None:
         ),
     )
 
-    # An event's RESERVATIONS — the other half of the old pool row: a set of tables held
+    # An event's RESERVATIONS — the other half of that split row: a set of tables held
     # for a window of time, carrying the ``name``, ``position``, ``slot_date``,
     # ``slot_start`` and ``slot_end`` that used to sit beside a group's identity.
     #
@@ -778,8 +778,8 @@ def upgrade() -> None:
     )
 
     # The tables a reservation holds, as rows (ADR 20260801, "the tournament-scoping
-    # stops at the join table"). This is ``tournament_event_pool_tables``, re-pointed:
-    # its pool leg becomes a reservation leg, and because a reservation hangs off the
+    # stops at the join table"). This is the old per-slot table join, re-pointed: its
+    # first leg becomes a reservation leg, and because a reservation hangs off the
     # event directly, the ``stage_id`` column and the FOURTH leg ADR 20260815 needed to
     # close the stage indirection's gap both disappear. Three legs again, as before that
     # ADR.

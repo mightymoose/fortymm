@@ -204,8 +204,8 @@ class TournamentEvent(Base):
     rules, schedule slot, and groups/reservations. The value-objects (``slot``,
     ``match_settings``, ``predicates``) are typed JSONB decoded to Pydantic models at
     the API boundary; the groups and reservations are **not** — they are real child
-    tables, ``groups`` and ``reservations`` below (ADR 20260801 "a pool belongs to its
-    event")."""
+    tables, ``groups`` and ``reservations`` below (ADR 20260801, on what belongs to an
+    event rather than to its draw settings)."""
 
     __tablename__ = "tournament_events"
     __table_args__ = (
@@ -300,12 +300,12 @@ class TournamentEvent(Base):
     predicates: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    # There is deliberately no ``pools`` JSONB column. An event's groups and their
+    # There is deliberately no JSONB column for either. An event's groups and their
     # reservations were once a NOT NULL JSONB list of ``{id, name, slot, table_ids}``
     # value-objects keyed by client-supplied strings; they are the ``groups`` and
     # ``reservations`` relationships below now, so a fixture can foreign-key the group
-    # it names — and name one of its OWN event's groups (ADR 20260801 "a pool belongs
-    # to its event").
+    # it names — and name one of its OWN event's groups (ADR 20260801, on what belongs
+    # to an event rather than to its draw settings).
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -364,7 +364,7 @@ class TournamentEvent(Base):
     # The event's GROUPS, in the director's own order — which is what
     # ``TournamentEventStageGroup.position`` carries, and what the snake seeds against.
     #
-    # This relationship was called ``pools`` until one wire-level reservation slot split
+    # This relationship carried one combined name until a single wire-level slot split
     # into a group row and a reservation row. A group is the half a fixture names; the
     # tables and the window are a reservation, which hangs off this event directly
     # (``reservations`` below). The wire now serves the two as separate arrays —

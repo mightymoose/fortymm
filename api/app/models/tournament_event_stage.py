@@ -99,10 +99,10 @@ class TournamentEventStage(Base):
     # queries, never through that relationship, so nothing here needs its own strategy.
     event: Mapped["TournamentEvent"] = relationship(back_populates="stages")
 
-    # A stage's GROUPS, as rows — what this relationship called ``groups`` held until
-    # the group row split in two. The half that stayed here is the group (ADR 20260815,
-    # "Sequencing with #1338": "the pool's group face therefore re-parents to the
-    # stage"); the half that carries the tables and the window is a reservation, and it
+    # A stage's GROUPS, as rows — what this relationship held before the row split in
+    # two. The half that stayed here is the group (ADR 20260815, "Sequencing with
+    # #1338", which re-parents the group face onto the stage); the half that carries
+    # the tables and the window is a reservation, and it
     # hangs off the event instead (``TournamentEvent.reservations``). In practice this
     # is only ever populated on the stage at position 0 (a director's groups always hang
     # off stage 1, decision 3), but nothing on this relationship enforces that placement
