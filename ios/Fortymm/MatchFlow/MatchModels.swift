@@ -177,6 +177,19 @@ struct ScoreDiffEntry: Identifiable {
     var id: Int { gameNumber }
 }
 
+/// What this match did to the viewer's own rating — two kinds, told apart on
+/// purpose (mirrors the web's `RatingRowView` change union,
+/// `web-client/.../ratings-query.ts`). A player who was already rated MOVED:
+/// `before → after` with a signed `delta`. A player whose FIRST rated match
+/// this is was ESTABLISHED by it: they were Unrated going in (no `before`, no
+/// `delta` — nothing moved, a rating came into existence) and came out at
+/// `after`. Never render the seeded 1500 as a `before` for an established
+/// outcome (#952) — the case has none to render.
+enum MatchRatingOutcome {
+    case established(after: Int)
+    case moved(before: Int, after: Int, delta: Int)
+}
+
 /// The negotiation state the detail/list screens act on: which phase the
 /// viewer is in (the lenient DTO enum, used directly like `APIMatchStatus`),
 /// the standing proposal's id (the acceptance / supersedes token), its board
@@ -204,7 +217,7 @@ struct FinalMatch: Identifiable {
     let rated: Bool
     let setsWon: SetScore
     let win: Bool
-    let ratingDelta: Int?
+    let ratingOutcome: MatchRatingOutcome?
     let when: String
     let context: String
     // --- server-backed extras (defaulted so the seed/local builders still

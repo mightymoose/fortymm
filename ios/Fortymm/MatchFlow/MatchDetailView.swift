@@ -37,7 +37,14 @@ struct MatchDetailView: View {
                         whatChangedSection(diff)
                     }
                     if !match.games.isEmpty { gamesSection }
-                    if match.rated, let delta = match.ratingDelta { ratingSection(delta) }
+                    // No `match.rated` check: `MatchService` only ever builds a
+                    // non-nil `ratingOutcome` under `rated && decided &&
+                    // viewerIsParticipant`, so the presence of an outcome
+                    // already carries all three. Re-checking one of the three
+                    // here would imply this view is a second gate, and it is
+                    // not — the participant term, the one that actually
+                    // prevents a leak, lives in the service.
+                    if let outcome = match.ratingOutcome { ratingSection(outcome) }
                     infoSection
                     if let h2h = match.h2h, !match.solo { headToHeadSection(h2h) }
                 }
@@ -344,31 +351,94 @@ struct MatchDetailView: View {
 
     // MARK: Rating
 
-    private func ratingSection(_ delta: Int) -> some View {
+    /// Two states, told apart on purpose (mirrors the web's `RatingRow`,
+    /// `rating-row.tsx`): a rating this match ESTABLISHED (the viewer's first
+    /// rated match — `Unrated → after`, no delta chip, no color, no
+    /// sparkline, and never the seeded 1500 masquerading as a real prior
+    /// rating, #952), or a rating this match MOVED (`before → after` with a
+    /// signed delta and the trend line, unchanged from before #1180).
+    @ViewBuilder
+    private func ratingSection(_ outcome: MatchRatingOutcome) -> some View {
         Section_("Your rating") {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(match.you.rating + delta)")
-                            .font(FMFont.mono(28, weight: .bold))
-                            .foregroundStyle(FMColor.fg1)
-                        Text("\(delta >= 0 ? "+" : "")\(delta)")
-                            .font(FMFont.mono(15, weight: .bold))
-                            .foregroundStyle(delta >= 0 ? FMColor.serve500 : FMColor.loss)
-                    }
-                    Text("was \(match.you.rating)")
-                        .font(FMFont.ui(11, weight: .medium))
-                        .foregroundStyle(FMColor.fgMuted)
-                }
-                Spacer()
-                Sparkline(up: delta >= 0, color: delta >= 0 ? FMColor.serve500 : FMColor.loss)
-                    .frame(width: 112, height: 30)
+            switch outcome {
+            case let .established(after):
+                establishedRatingCard(after: after)
+            case let .moved(before, _, delta):
+                // Deliberately `before + delta`, not `after`: the two should
+                // always agree, but the write-side arithmetic (`app.domain
+                // .rating.rating_delta`) is the source of truth for what
+                // actually got stored, and this is the same expression the
+                // screen has always displayed — keeping it means the moved
+                // state's pixels don't move as a side effect of this fix.
+                movedRatingCard(before: before, delta: delta)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 16)
-            .background(FMColor.ink900)
-            .fmRoundedBorder(radius: FMRadius.lg, color: FMColor.borderSubtle)
         }
+    }
+
+    /// `Unrated → after`: no delta, no win/loss color, no sparkline. A single,
+    /// non-decomposed accessibility element so VoiceOver reads one coherent
+    /// sentence rather than "Unrated, arrow right, 1268" — mirrors the web's
+    /// `aria-label` on the established row (`ratings-query.ts`).
+    private func establishedRatingCard(after: Int) -> some View {
+        HStack {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Unrated")
+                    .font(FMFont.ui(15, weight: .semibold))
+                    .foregroundStyle(FMColor.fgMuted)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(FMColor.fgMuted)
+                Text("\(after)")
+                    .font(FMFont.mono(28, weight: .bold))
+                    .foregroundStyle(FMColor.fg1)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(FMColor.ink900)
+        .fmRoundedBorder(radius: FMRadius.lg, color: FMColor.borderSubtle)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Unrated before this match, now rated \(after)")
+        .accessibilityIdentifier("matchDetail.rating.established")
+    }
+
+    /// `before → before + delta`, signed delta chip + trend line — the
+    /// pre-#1180 rendering, byte-for-byte.
+    private func movedRatingCard(before: Int, delta: Int) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(before + delta)")
+                        .font(FMFont.mono(28, weight: .bold))
+                        .foregroundStyle(FMColor.fg1)
+                    Text("\(delta >= 0 ? "+" : "")\(delta)")
+                        .font(FMFont.mono(15, weight: .bold))
+                        .foregroundStyle(delta >= 0 ? FMColor.serve500 : FMColor.loss)
+                        .accessibilityIdentifier("matchDetail.rating.delta")
+                }
+                Text("was \(before)")
+                    .font(FMFont.ui(11, weight: .medium))
+                    .foregroundStyle(FMColor.fgMuted)
+                    // The moved card's queryable marker. It goes on this
+                    // `Text` rather than the card's container because the
+                    // container is not an accessibility element — unlike
+                    // `establishedRatingCard`, it deliberately does NOT
+                    // combine its children (that would change what VoiceOver
+                    // reads on the moved path, which #1180 requires stay as
+                    // it was), so an identifier there could never be matched
+                    // by any XCUITest query. The "was …" line renders on this
+                    // path and only this path.
+                    .accessibilityIdentifier("matchDetail.rating.moved.was")
+            }
+            Spacer()
+            Sparkline(up: delta >= 0, color: delta >= 0 ? FMColor.serve500 : FMColor.loss)
+                .frame(width: 112, height: 30)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(FMColor.ink900)
+        .fmRoundedBorder(radius: FMRadius.lg, color: FMColor.borderSubtle)
     }
 
     // MARK: Info
@@ -556,6 +626,7 @@ struct MatchDetailView: View {
             footerButton("Accept result", showArrow: false, disabled: actioning) {
                 Task { await accept() }
             }
+            .accessibilityIdentifier("matchDetail.footer.acceptResult")
             if let ctx = match.correctionContext {
                 secondaryFooterButton(
                     negotiationState == .corrected ? "Counter" : "Suggest correction"

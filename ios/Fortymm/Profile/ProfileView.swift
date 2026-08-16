@@ -105,6 +105,12 @@ struct ProfileView: View {
                     .font(FMFont.ui(18, weight: .bold))
                     .foregroundStyle(FMColor.fg1)
                     .lineLimit(1)
+                    // Distinct from the "Username" settings row below, which
+                    // renders the same "@username" text — a label query would
+                    // ambiguously match both. Tagged for the #1180 XCUITest,
+                    // which reads the freshly-minted guest's own username off
+                    // this screen.
+                    .accessibilityIdentifier("profile.identity.username")
                 statusBadge(user.emailStatus)
             }
             Spacer()

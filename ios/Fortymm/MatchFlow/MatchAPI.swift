@@ -118,10 +118,21 @@ struct MatchPlayerDTO: Decodable {
     let isCurrentUser: Bool
 }
 
+/// Mirror of `app.schemas.rating.RatingChange` (also `Generated/Types.swift`'s
+/// `Components.Schemas.RatingChange`, which already has `delta: Double?` —
+/// this hand-written DTO must stay at least as optional). Two distinct nulls
+/// reach the client and they mean different things: a null `RatingChangeDTO?`
+/// on `MatchSideDTO` is "this match moved no rating at all" (unrated,
+/// undecided, or voided); a null `delta` *inside* a present change is "this is
+/// the rating you got, and there was nothing before it to measure from" — a
+/// player's first rated match ESTABLISHES a rating rather than MOVING one
+/// (#952). `before` is null for the same reason. Decoding `delta` as
+/// non-optional throws for the *entire* match-detail response on exactly that
+/// payload (#1180) — the bug this DTO shape now guards against.
 struct RatingChangeDTO: Decodable {
     let before: Double?
     let after: Double
-    let delta: Double
+    let delta: Double?
 }
 
 struct MatchSideDTO: Decodable {
