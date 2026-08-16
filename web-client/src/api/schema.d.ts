@@ -5246,18 +5246,6 @@ export interface components {
          *     tournament is ``live``, every ready fixture becomes a real ``in_progress`` match and
          *     gains a ``match_id``. Until then ``match_id`` (and ``match_status``) is ``null``.
          *
-         *     ``stage_id`` names the **stage** (``EventStageRead``, on the event's ``stages``
-         *     array) this fixture belongs to (ADR 20260815 decision 5) — **never** ``null``, the
-         *     same NOT NULL guarantee the column carries in the database. A client no longer
-         *     infers a fixture's stage from ``pool_id`` plus the event's overall ``draw_type``:
-         *     that inference is exactly what once rendered a swiss draw's rounds as a knockout
-         *     bracket, because both are un-pooled and indistinguishable by ``pool_id`` alone. Join
-         *     this id against the matching entry in ``stages`` to read that stage's own
-         *     ``draw_type`` — which is always one of the single-stage kinds
-         *     (``round-robin`` / ``single-elim`` / ``swiss``), never ``rr-then-ko`` (a template
-         *     name, not a runnable stage's own type) — and that answers "is this un-pooled block a
-         *     bracket or a set of swiss rounds?" without guessing from the event's shape.
-         *
          *     **Every ``null`` on this model is a fact, not a missing field**, and a client that
          *     dropped them would lose the draw's whole point:
          *
@@ -5274,13 +5262,11 @@ export interface components {
          *       fixture has not materialized. It rides on the fixture so a bracket shows a slot's
          *       state without a per-slot round-trip; it is the match's *current* status, read
          *       live, not a copy frozen at go-live.
-         *     * ``pool_id`` — ``null`` means this fixture belongs to no pool: **which stage
-         *       leaves fixtures un-pooled is no longer this field's business to say** — read
-         *       ``stage_id`` against the event's ``stages`` array for that (ADR 20260815). When
-         *       set, it names a pool of **this fixture's own stage**, and it is guaranteed to:
-         *       the column is half of a composite foreign key onto
-         *       ``tournament_event_pools (stage_id, id)``, so it is neither a dangling ref nor
-         *       another stage's pool (ADR 20260801, re-parented onto the stage by ADR 20260815).
+         *     * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
+         *       un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
+         *       set, it names a pool of **this same event**, and it is guaranteed to: the column
+         *       is half of a composite foreign key onto ``tournament_event_pools (event_id, id)``,
+         *       so it is neither a dangling ref nor another event's pool (ADR 20260801).
          *     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
          *       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
          *       tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
@@ -5320,11 +5306,6 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /**
-             * Stage Id
-             * Format: uuid
-             */
-            stage_id: string;
             /** Pool Id */
             pool_id: string | null;
             /** Round */
