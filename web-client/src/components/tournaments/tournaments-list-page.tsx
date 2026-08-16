@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Plus, Search, Trophy } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -9,7 +10,12 @@ import { ConfirmDeleteDialog } from './confirm-delete-dialog'
 import { EmptyState } from './empty-state'
 import { NearMeControl } from './near-me-control'
 import { NewTournamentModal } from './new-tournament-modal'
-import { STATUS_FILTER_OPTIONS } from './data/options'
+import {
+  STATUS_FILTER_OPTIONS,
+  parseStatusFilter,
+  type StatusFilter,
+} from './data/options'
+import { tournamentsSearchSchema, type TournamentsSearch } from './data/search'
 import type { TournamentsNearMe } from './data/api'
 import type { Tournament } from './data/types'
 import { PageHeading } from './page-heading'
@@ -28,12 +34,23 @@ export interface TournamentsListPageProps {
    * where the list query is called so the query re-runs — the filtering is
    * server-side, layered on top of the client-side name/status filters below. */
   onNearMeChange: (nearMe: TournamentsNearMe | undefined) => void
+  /** Whether the "Near me" filter is currently narrowing the list.
+   *
+   * It has to be told, not derived: near me filters **server-side**, so it shrinks
+   * `tournaments` itself rather than `filtered` below. Without this flag a near-me
+   * filter that matches nothing is indistinguishable from owning no tournaments, and
+   * a user with six tournaments fifty miles away gets told to create their first
+   * (#970). The route passes `nearMe !== undefined`. */
+  nearMeActive: boolean
 }
 
-type StatusFilter = (typeof STATUS_FILTER_OPTIONS)[number]['value']
-
 /** The tournament-admin list: search + status filter, a responsive grid of
- * cards, the "New tournament" modal, and a delete confirmation. */
+ * cards, the "New tournament" modal, and a delete confirmation.
+ *
+ * The status tab and the search text live in **the URL**, so a filtered list is
+ * shareable and survives a reload. It reads them through `useSearch({ strict: false })`
+ * rather than through the Route object, which keeps it from importing the route module
+ * and closing a route → page → route cycle — the arrangement `MatchList` uses. */
 export const TournamentsListPage = ({
   tournaments,
   onOpen,
@@ -41,33 +58,86 @@ export const TournamentsListPage = ({
   onDelete,
   canCreate,
   onNearMeChange,
+  nearMeActive,
 }: TournamentsListPageProps) => {
-  const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<StatusFilter>('all')
+  // `strict: false` reads the active location's validated search without binding to a
+  // route id, so this renders under both the real route and a test harness.
+  const urlSearch = useSearch({ strict: false }) as TournamentsSearch
+  const navigate = useNavigate()
+
+  const status: StatusFilter = urlSearch.status ?? 'all'
+
+  // The search box holds its OWN raw text, seeded from the URL. It must not bind to
+  // the parsed value: the schema's `.trim()` is a transform, not a check, so a bound
+  // input drops the trailing space of "Bay " on every keystroke and a two-word search
+  // becomes untypeable. The URL still gets every keystroke, below.
+  const [queryText, setQueryText] = useState(urlSearch.q ?? '')
   const [createOpen, setCreateOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Tournament | null>(null)
+
+  // `replace: true` — a search is one intent, not one history entry per keystroke.
+  // A default is written as `undefined` so it drops out of the URL entirely.
+  const setSearch = useCallback(
+    (patch: Partial<TournamentsSearch>) => {
+      void navigate({
+        to: '/tournaments',
+        replace: true,
+        // The write goes through the same schema as the read, so the URL can only ever
+        // hold a value the page can parse back. Whitespace-only `q` collapses to
+        // `undefined` here rather than persisting as a `?q=%20%20%20` the user can
+        // neither see nor clear, and a default drops out of the URL entirely.
+        //
+        // `prev` is the router's union across every route's search params, so it is
+        // deliberately not annotated — the parse is what narrows it.
+        search: (prev) => tournamentsSearchSchema.parse({ ...prev, ...patch }),
+      })
+    },
+    [navigate],
+  )
+
+  const changeStatus = useCallback(
+    (raw: string) => {
+      const next = parseStatusFilter(raw)
+      setSearch({ status: next === 'all' ? undefined : next })
+    },
+    [setSearch],
+  )
+
+  const changeQuery = useCallback(
+    (next: string) => {
+      setQueryText(next)
+      setSearch({ q: next || undefined })
+    },
+    [setSearch],
+  )
+
+  const query = queryText.trim()
 
   const filtered = useMemo(
     () =>
       tournaments.filter((t) => {
-        if (filter !== 'all' && t.status !== filter) return false
+        if (status !== 'all' && t.status !== status) return false
         if (query && !t.name.toLowerCase().includes(query.toLowerCase()))
           return false
         return true
       }),
-    [tournaments, filter, query],
+    [tournaments, status, query],
   )
 
-  const activeCount = tournaments.filter(
-    (t) => t.status === 'published' || t.status === 'live',
-  ).length
+  // Only `live`, not `published || live`. The subtitle now names the status it counts,
+  // so "3 total · 0 live" is a normal, correct reading of a board nobody has started.
+  const liveCount = tournaments.filter((t) => t.status === 'live').length
+
+  // Whether anything is narrowing the list — which of the two empty states to show.
+  // Near me is in here because the server, not the client, removed those rows.
+  const isFiltered = query.length > 0 || status !== 'all' || nearMeActive
 
   return (
     <div className="mx-auto w-full max-w-[1320px] px-12 pt-11 pb-20">
       <PageHeading
         breadcrumb={[{ label: 'Manage' }, { label: 'Tournaments' }]}
         title="Tournaments"
-        subtitle={`${tournaments.length} total · ${activeCount} active. Create draws, schedule pools, publish to players.`}
+        subtitle={`${tournaments.length} total · ${liveCount} live. Create draws, schedule pools, publish to players.`}
         action={
           canCreate ? (
             <Button size="lg" onClick={() => setCreateOpen(true)}>
@@ -86,13 +156,13 @@ export const TournamentsListPage = ({
           />
           <Input
             aria-label="Search tournaments by name"
-            value={query}
+            value={queryText}
             placeholder="Search by name…"
             className="h-9 pl-9"
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => changeQuery(e.target.value)}
           />
         </div>
-        <Tabs value={filter} onValueChange={(v) => setFilter(v as StatusFilter)}>
+        <Tabs value={status} onValueChange={changeStatus}>
           <TabsList>
             {STATUS_FILTER_OPTIONS.map((o) => (
               <TabsTrigger key={o.value} value={o.value}>
@@ -109,10 +179,17 @@ export const TournamentsListPage = ({
       </div>
 
       {filtered.length === 0 ? (
+        /* Two different facts, two different messages. Telling a brand-new user with
+           nothing on the board to "adjust the filters" names filters they never set
+           (#970), so the copy branches on whether anything is actually narrowing. */
         <EmptyState
           icon={<Trophy size={28} />}
-          title="No tournaments match"
-          hint="Adjust the filters or create a new one."
+          title={isFiltered ? 'No tournaments match' : 'No tournaments yet'}
+          hint={
+            isFiltered
+              ? 'Adjust the filters or create a new one.'
+              : 'Tournaments will appear here once one is created.'
+          }
           action={
             canCreate ? (
               <Button onClick={() => setCreateOpen(true)}>

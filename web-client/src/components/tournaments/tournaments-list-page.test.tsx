@@ -1,11 +1,21 @@
 import userEvent from '@testing-library/user-event'
+import { waitFor } from '@testing-library/react'
 
 import { buildTournament } from './data/seed.factory'
 import { tournamentsListPagePage } from './tournaments-list-page.page'
 
+/** The page reads and writes URL state, so it mounts under a memory router that
+ * resolves asynchronously — every test starts by awaiting the first paint. */
+const renderList = async (
+  ...args: Parameters<typeof tournamentsListPagePage.render>
+) => {
+  tournamentsListPagePage.render(...args)
+  await tournamentsListPagePage.findSearch()
+}
+
 describe('TournamentsListPage', () => {
   it('filters the grid by search query', async () => {
-    tournamentsListPagePage.render()
+    await renderList()
     expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
 
     await userEvent.type(tournamentsListPagePage.getSearch(), 'Winter')
@@ -15,7 +25,7 @@ describe('TournamentsListPage', () => {
   })
 
   it('filters the grid by status tab', async () => {
-    tournamentsListPagePage.render()
+    await renderList()
     await userEvent.click(tournamentsListPagePage.getStatusTab('Drafts'))
 
     expect(tournamentsListPagePage.queryCard('Bay Area Open 2026')).toBeNull()
@@ -24,7 +34,7 @@ describe('TournamentsListPage', () => {
 
   it('opens a tournament when its card is clicked', async () => {
     const onOpen = vi.fn()
-    tournamentsListPagePage.render({
+    await renderList({
       tournaments: [buildTournament({ id: 'bay', name: 'Bay Area Open 2026' })],
       onOpen,
     })
@@ -35,7 +45,7 @@ describe('TournamentsListPage', () => {
 
   it('confirms then deletes from the card delete control', async () => {
     const onDelete = vi.fn()
-    tournamentsListPagePage.render({
+    await renderList({
       tournaments: [buildTournament({ id: 'bay', name: 'Bay Area Open 2026' })],
       onDelete,
     })
@@ -45,13 +55,224 @@ describe('TournamentsListPage', () => {
     expect(onDelete).toHaveBeenCalledWith('bay')
   })
 
-  it('shows the New tournament action when the caller can create', () => {
-    tournamentsListPagePage.render({ canCreate: true })
+  it('shows the New tournament action when the caller can create', async () => {
+    await renderList({ canCreate: true })
     expect(tournamentsListPagePage.queryNewButtons().length).toBeGreaterThan(0)
   })
 
-  it('hides every New tournament action when the caller cannot create', () => {
-    tournamentsListPagePage.render({ canCreate: false })
+  it('hides every New tournament action when the caller cannot create', async () => {
+    await renderList({ canCreate: false })
     expect(tournamentsListPagePage.queryNewButtons()).toHaveLength(0)
+  })
+
+  describe('the status tabs', () => {
+    // The tab strip is derived from `TournamentStatus` via a `Record`, so this
+    // asserts the whole strip rather than one tab: a status that loses its tab (the
+    // #970 defect, where `live` had none) shows up here as a missing entry.
+    it('renders one tab per status, plus All, in order', async () => {
+      await renderList()
+
+      expect(
+        tournamentsListPagePage.getStatusTabs().map((t) => t.textContent),
+      ).toEqual(['All', 'Drafts', 'Published', 'Live', 'Archived'])
+    })
+
+    it('the Live tab shows every live tournament and nothing else', async () => {
+      await renderList()
+
+      await userEvent.click(tournamentsListPagePage.getStatusTab('Live'))
+
+      expect(tournamentsListPagePage.getCard('Autumn Cup 2026')).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryCard('Bay Area Open 2026')).toBeNull()
+      expect(tournamentsListPagePage.queryCard('Summer Slam 2026')).toBeNull()
+      expect(tournamentsListPagePage.queryCard('Winter Classic 2025')).toBeNull()
+    })
+
+    // The bug as Quinn found it: one live tournament, and Published reported
+    // "0 results — No tournaments match" while the subtitle counted it as active.
+    it('the Published tab excludes live tournaments', async () => {
+      await renderList()
+
+      await userEvent.click(tournamentsListPagePage.getStatusTab('Published'))
+
+      expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryCard('Autumn Cup 2026')).toBeNull()
+    })
+  })
+
+  describe('the subtitle', () => {
+    it('counts only live tournaments, and says so', async () => {
+      await renderList()
+
+      // Four rows, exactly one of them live.
+      expect(tournamentsListPagePage.getSubtitle()).toHaveTextContent('4 total · 1 live')
+    })
+
+    it('reads 0 live when nothing has started', async () => {
+      await renderList({
+        tournaments: [
+          buildTournament({ id: 'a', name: 'A Open', status: 'published' }),
+          buildTournament({ id: 'b', name: 'B Open', status: 'published' }),
+        ],
+      })
+
+      expect(tournamentsListPagePage.getSubtitle()).toHaveTextContent('2 total · 0 live')
+    })
+  })
+
+  describe('the URL', () => {
+    it('writes the selected status and drops it again on All', async () => {
+      await renderList()
+
+      await userEvent.click(tournamentsListPagePage.getStatusTab('Live'))
+      await waitFor(() =>
+        expect(tournamentsListPagePage.currentUrl()).toContain('status=live'),
+      )
+
+      await userEvent.click(tournamentsListPagePage.getStatusTab('All'))
+      await waitFor(() =>
+        expect(tournamentsListPagePage.currentUrl()).not.toContain('status'),
+      )
+    })
+
+    it('writes the search text and drops it again when cleared', async () => {
+      await renderList()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'Winter')
+      await waitFor(() =>
+        expect(tournamentsListPagePage.currentUrl()).toContain('q=Winter'),
+      )
+
+      await userEvent.clear(tournamentsListPagePage.getSearch())
+      await waitFor(() =>
+        expect(tournamentsListPagePage.currentUrl()).not.toContain('q='),
+      )
+    })
+
+    it('keeps whitespace-only search out of the URL', async () => {
+      await renderList()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), '   ')
+
+      // It filters nothing, and it never becomes a `?q=%20%20%20` the user cannot see
+      // or clear.
+      await waitFor(() =>
+        expect(tournamentsListPagePage.currentUrl()).not.toContain('q='),
+      )
+      expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
+    })
+
+    // One search is one intent. Without `replace: true` a six-letter query buries the
+    // page the user arrived from under six history entries.
+    it('replaces the history entry rather than stacking one per keystroke', async () => {
+      await renderList()
+      const before = tournamentsListPagePage.historyLength()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'Winter')
+      await waitFor(() =>
+        expect(tournamentsListPagePage.currentUrl()).toContain('q=Winter'),
+      )
+
+      expect(tournamentsListPagePage.historyLength()).toBe(before)
+    })
+
+    it('restores both controls from a URL carrying status and q', async () => {
+      await renderList({}, '/tournaments?status=published&q=Bay')
+
+      expect(tournamentsListPagePage.getSearch()).toHaveValue('Bay')
+      expect(tournamentsListPagePage.getStatusTab('Published')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
+    })
+
+    // A bookmark that predates a status rename must not 500 the page.
+    it('falls back to All on an unrecognized status, without throwing', async () => {
+      await renderList({}, '/tournaments?status=someoldvalue')
+
+      expect(tournamentsListPagePage.getStatusTab('All')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      // Nothing is filtered out — the whole list renders.
+      expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
+      expect(tournamentsListPagePage.getCard('Autumn Cup 2026')).toBeInTheDocument()
+    })
+
+    // The schema's `.trim()` is a transform, so binding the input to the parsed value
+    // would eat the trailing space and make a two-word search untypeable.
+    it('lets a two-word search be typed', async () => {
+      await renderList()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'Bay Area')
+
+      expect(tournamentsListPagePage.getSearch()).toHaveValue('Bay Area')
+      expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
+    })
+  })
+
+  describe('the empty states', () => {
+    it('tells a user with nothing that there is nothing yet, without mentioning filters', async () => {
+      await renderList({ tournaments: [] })
+
+      expect(
+        tournamentsListPagePage.queryEmptyTitle('No tournaments yet'),
+      ).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryEmptyTitle(/Adjust the filters/)).toBeNull()
+    })
+
+    it('still offers the create action in the true-empty state', async () => {
+      await renderList({ tournaments: [], canCreate: true })
+
+      expect(tournamentsListPagePage.queryNewButtons().length).toBeGreaterThan(0)
+    })
+
+    it('offers no create action in the true-empty state without the permission', async () => {
+      await renderList({ tournaments: [], canCreate: false })
+
+      expect(
+        tournamentsListPagePage.queryEmptyTitle('No tournaments yet'),
+      ).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryNewButtons()).toHaveLength(0)
+    })
+
+    it('tells a user whose search matched nothing to adjust the filters', async () => {
+      await renderList()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'Nothing matches this')
+
+      expect(
+        tournamentsListPagePage.queryEmptyTitle('No tournaments match'),
+      ).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryEmptyTitle('No tournaments yet')).toBeNull()
+    })
+
+    it('tells a user whose status tab matched nothing to adjust the filters', async () => {
+      await renderList({
+        tournaments: [
+          buildTournament({ id: 'bay', name: 'Bay Area Open 2026', status: 'published' }),
+        ],
+      })
+
+      await userEvent.click(tournamentsListPagePage.getStatusTab('Live'))
+
+      expect(
+        tournamentsListPagePage.queryEmptyTitle('No tournaments match'),
+      ).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryEmptyTitle('No tournaments yet')).toBeNull()
+    })
+
+    // Near me filters SERVER-side, so it empties `tournaments` itself. Without the
+    // flag this case is indistinguishable from owning nothing, and a user with six
+    // tournaments fifty miles away is told to create their first.
+    it('shows the adjust-the-filters state when Near me is on and matched nothing', async () => {
+      await renderList({ tournaments: [], nearMeActive: true })
+
+      expect(
+        tournamentsListPagePage.queryEmptyTitle('No tournaments match'),
+      ).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryEmptyTitle('No tournaments yet')).toBeNull()
+    })
   })
 })
