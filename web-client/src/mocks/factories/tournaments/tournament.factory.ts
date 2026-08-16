@@ -7,6 +7,7 @@ import {
 } from '@/mocks/factories/tournaments/tournament-ids'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
+type DrawType = components['schemas']['DrawType']
 type DrawTypeRead = components['schemas']['DrawTypeRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
@@ -92,9 +93,7 @@ export function buildEventStageRead(
  * type, or a component test built off one and an api-layer test built off the other
  * would disagree about which id an `rr-then-ko` event's knockout fixtures name.
  */
-export function mintStageReads(
-  drawType: components['schemas']['DrawType'],
-): EventStageRead[] {
+export function mintStageReads(drawType: DrawType): EventStageRead[] {
   switch (drawType) {
     case 'round-robin':
     case 'single-elim':
@@ -844,7 +843,7 @@ function snakeRefusal(
  * which is the other reason there is one of these now.
  */
 export function planDraw(
-  drawType: components['schemas']['DrawType'],
+  drawType: DrawType,
   entryIds: readonly string[],
   poolIds: readonly string[],
   /** **K** — how many of each pool's finishers advance into an `rr-then-ko` draw's
@@ -856,23 +855,39 @@ export function planDraw(
    * callers pass out loud. Same discipline as `qualifiersPerPool` above: no default, so
    * every caller has to answer where R comes from. */
   rounds: number | null,
-  /** This event's own **stage ids** (ADR 20260815), in `position` order — the ids
-   * `mintStageReads` minted for it, so the fixtures this cuts name the SAME stage the
-   * event's `stages` array holds. Defaults to `mintStageReads`'s own convention
-   * (`['s-1', 's-2']`) so the many call sites that plan a draw without an event to read
-   * ids off of (this module's own tests among them) still cut a self-consistent shape.
-   * A single-stage draw type reads only `stageIds[0]`; `rr-then-ko` reads both — the
-   * pool stage's `stageIds[0]` and the knockout stage's `stageIds[1]`. */
-  stageIds: readonly [string, string] = ['s-1', 's-2'],
+  /** This event's own **stages** (ADR 20260815) — `event.stages` itself, id and
+   * `position` (the wire's `EventStageRead` satisfies this structurally, extra fields
+   * and all), so the fixtures this cuts name the SAME stage rows the event holds. Indexed
+   * internally by `position` rather than taken as a fixed-arity tuple, so a caller with an
+   * actual event just hands its `stages` array through — no synthesizing a second slot for
+   * a single-stage event. Defaults to `mintStageReads(drawType)`, the template for THIS
+   * draw type, so the many call sites that plan a draw without an event to read stages off
+   * of (this module's own tests among them) still cut a self-consistent shape. A
+   * single-stage draw type reads only the position-0 stage; `rr-then-ko` reads both — the
+   * pool stage at position 0 and the knockout stage at position 1. */
+  stages: readonly { id: string; position: number }[] = mintStageReads(drawType),
 ): DrawPlan {
-  const [poolStageId, knockoutStageId] = stageIds
+  const orderedStages = [...stages].sort((a, b) => a.position - b.position)
+  const firstStage = orderedStages[0]
+  if (!firstStage) {
+    throw new Error('planDraw: no stages to cut this draw against.')
+  }
+  // The position-0 stage: a round-robin/rr-then-ko draw's pool stage, or the ONE stage a
+  // single-elim/swiss draw has (which is a "pool" stage in name only — those draw types
+  // have no pools).
+  const firstStageId = firstStage.id
+  // The position-1 stage: only `rr-then-ko` has one, and only its own arm below reads
+  // this. The `?? firstStageId` fallback just keeps the value defined for the other three
+  // arms, which never read it — no real `rr-then-ko` event can reach here with fewer than
+  // two stages (`mintStageReads('rr-then-ko')` always mints both).
+  const knockoutStageId = orderedStages[1]?.id ?? firstStageId
   switch (drawType) {
     case 'round-robin': {
       const refusal = snakeRefusal(entryIds, poolIds)
       if (refusal !== null) return { ok: false, detail: refusal }
       return {
         ok: true,
-        fixtures: planRoundRobinFixtures(entryIds, poolIds, poolStageId),
+        fixtures: planRoundRobinFixtures(entryIds, poolIds, firstStageId),
       }
     }
     case 'single-elim': {
@@ -888,10 +903,9 @@ export function planDraw(
             'one has nobody to play.',
         }
       }
-      // A single-elim event's ONE stage is stage 1 — `poolStageId`'s name is about the
-      // OTHER caller (`rr-then-ko`'s pool stage); a plain bracket event has no pool
-      // stage at all, and its one stage still mints at `mintStageReads`'s `'s-1'`.
-      return { ok: true, fixtures: planSingleElimFixtures(entryIds, poolStageId) }
+      // A single-elim event's ONE stage is `firstStageId` — a plain bracket event has no
+      // pool stage at all, and its one stage still mints at `mintStageReads`'s `'s-1'`.
+      return { ok: true, fixtures: planSingleElimFixtures(entryIds, firstStageId) }
     }
     case 'rr-then-ko': {
       // BOTH STAGES IN ONE STROKE (ADR "rr-then-ko cuts both stages upfront and seeds
@@ -949,9 +963,9 @@ export function planDraw(
           // The pool stage IS round-robin's — the same call, not a second copy of the
           // snake and the circle — so "the pools of an rr-then-ko draw are laid out
           // exactly as a round-robin draw's" is structural rather than two
-          // implementations agreeing. Its own stage id, `poolStageId` (`mintStageReads`'s
+          // implementations agreeing. Its own stage id, `firstStageId` (`mintStageReads`'s
           // position-0 stage).
-          ...planRoundRobinFixtures(entryIds, poolIds, poolStageId),
+          ...planRoundRobinFixtures(entryIds, poolIds, firstStageId),
           // …and the knockout stage is single-elim's bracket, sized `P × K` (derived,
           // never configured, so it cannot contradict the qualifier count) with an EMPTY
           // seed map: nobody has qualified, so every side is TBD. Its own stage id,
@@ -1007,10 +1021,9 @@ export function planDraw(
             'rematch — play fewer rounds, or add entrants.',
         }
       }
-      // A swiss event's ONE stage is stage 1 — `poolStageId` is the parameter's name for
-      // `rr-then-ko`'s pool half; a swiss event has no pool stage, and its one stage
-      // still mints at `mintStageReads`'s `'s-1'`.
-      return { ok: true, fixtures: planSwissFixtures(entryIds, rounds, poolStageId) }
+      // A swiss event's ONE stage is `firstStageId` — a swiss event has no pool stage, and
+      // its one stage still mints at `mintStageReads`'s `'s-1'`.
+      return { ok: true, fixtures: planSwissFixtures(entryIds, rounds, firstStageId) }
     }
   }
 }

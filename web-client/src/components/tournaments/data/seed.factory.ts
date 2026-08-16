@@ -3,11 +3,15 @@
 // consistent default (a published two-day open, an Open Singles event, etc.)
 // that callers tweak via overrides.
 
-import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  DRAW_TYPE_CATALOGUE,
+  mintStageReads,
+} from '@/mocks/factories/tournaments/tournament.factory'
 
 import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
 import { keepPools } from './pool-entries'
+import { parseStages } from './stages'
 import type {
   Address,
   DrawType,
@@ -95,27 +99,18 @@ export function buildStage(overrides: Partial<Stage> = {}): Stage {
  * `position` 0 and 1, matching what the server always cuts an `rr-then-ko` bracket
  * from (`buildRrThenKoEvent`'s doc, and `planKnockoutFixtures` in the MSW factory).
  *
+ * Derived, not re-implemented: `mintStageReads` (the MSW factory's wire-shape mirror)
+ * already carries this switch, so this is just that same template read through the
+ * domain's own parser (`parseStages`, `./stages`) — one switch, not two kept in sync by
+ * a comment. A test that wants the wire shape directly still has `mintStageReads`.
+ *
  * `buildEvent` calls this for its own default, so a fixture that only overrides
  * `drawType` gets stages that agree with it for free — the trap this factory exists to
  * avoid is a fixture whose EVENT says `swiss` while its STAGE still says `round-robin`,
  * which is exactly the disagreement `unpooledShapeOf` (`./draw`) now reads through.
  */
 function mintStages(drawType: DrawType): Stage[] {
-  switch (drawType) {
-    case 'round-robin':
-    case 'single-elim':
-    case 'swiss':
-      return [buildStage({ drawType })]
-    case 'rr-then-ko':
-      return [
-        buildStage({ id: 's-1', position: 0, drawType: 'round-robin' }),
-        buildStage({ id: 's-2', position: 1, drawType: 'single-elim' }),
-      ]
-    default: {
-      const exhaustive: never = drawType
-      return exhaustive
-    }
-  }
+  return parseStages(mintStageReads(drawType))
 }
 
 /** A four-table morning pool, **first** in its event (`position: 0`).

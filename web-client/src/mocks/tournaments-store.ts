@@ -2595,24 +2595,11 @@ function planEventDraw(event: StoredEvent): DrawPlan {
     // for exactly the reasons the qualifier count above is. Only the `swiss` arm reads it,
     // and a swiss event always has one, so that arm never meets the null.
     event.rounds,
-    // **The event's own stage ids** (ADR 20260815), in `position` order — never
-    // `planDraw`'s `['s-1', 's-2']` default, which is for a caller with no event to read
-    // ids off of. A fixture this cuts must name a stage `event.stages` actually holds.
-    eventStageIds(event),
+    // **The event's own stages** (ADR 20260815) — never `planDraw`'s
+    // `mintStageReads(drawType)` default, which is for a caller with no event to read
+    // stages off of. A fixture this cuts must name a stage `event.stages` actually holds.
+    event.stages,
   )
-}
-
-/** An event's stage ids, in `position` order, as the two-slot tuple `planDraw` takes
- * (ADR 20260815). A single-stage event has one stage; its slot-1 fallback is simply its
- * own (only) stage id, which is harmless because every arm but `rr-then-ko`'s ignores
- * the second slot entirely. */
-function eventStageIds(event: StoredEvent): readonly [string, string] {
-  const ordered = [...event.stages].sort((a, b) => a.position - b.position)
-  const first = ordered[0]
-  if (!first) {
-    throw new Error(`planEventDraw: event ${event.id} has no stages to cut against.`)
-  }
-  return [first.id, ordered[1]?.id ?? first.id]
 }
 
 /** `POST …/events/{event_id}/draw` — cut (or re-cut) an event's draw.
