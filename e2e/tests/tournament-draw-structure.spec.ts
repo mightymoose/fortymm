@@ -70,9 +70,9 @@ const EQUATION = `${FIELD_CAP} players ÷ ${GROUP_COUNT} groups = ${GROUP_SIZE} 
  *
  * Confirmed against `web-client/src/components/tournaments/data/draw-structure.ts`'s own
  * in-flight rename (#1369, not yet landed at the component layer that renders it): the
- * old `${poolCount} pool reservations · today's behaviour` term drops the word "pool"
- * outright rather than becoming "Reservations" — `${groupCount} reservations · today's
- * behaviour`, lowercase, no capitalization change. */
+ * old venue-facing term is dropped outright rather than becoming "Reservations" —
+ * `${groupCount} reservations · today's behaviour`, lowercase, no capitalization
+ * change. */
 const GROUP_COUNT_SOURCE = `${GROUP_COUNT} reservations · today's behaviour`
 
 /** Where the preview field came from. `{n}-player cap` for a capped event — the honest
