@@ -14,7 +14,7 @@ Four things live here and nowhere else.
 
 **The projection.** :func:`group_read` and :func:`reservation_read` are the two reads:
 a group's own ``id``, ``position`` and ``reservation_id``; a reservation's own ``id``,
-``position``, ``name``, ``slot`` and ``table_ids``. Slice 1's single joined ``Pool``
+``position``, ``name``, ``slot`` and ``table_ids``. Slice 1's single joined reservation
 projection is gone — the wire no longer hides which row an id belongs to.
 
 **The 1:1.** A reservation write creates, updates and removes a reservation *and* its

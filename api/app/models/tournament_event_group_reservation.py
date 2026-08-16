@@ -22,12 +22,11 @@ if TYPE_CHECKING:
 class TournamentEventGroupReservation(Base):
     """The row that maps one **group** to the **reservation** it plays in.
 
-    Splitting ``tournament_event_pools`` in two left the two halves with no way to find
+    Splitting one wire-level reservation slot into two rows left the two halves with no way to find
     each other. A group is parented on its stage (it must be — a fixture's composite
     foreign key names it, and a fixture carries ``stage_id`` and nothing else) and a
     reservation is parented on the event, so the two share no column. This row is the
-    join, and it is where the wire's ``pools[]`` array is put back together
-    (:func:`app.tournament_pools.pool_read`).
+    join.
 
     **Three foreign key legs, because two cannot say it.** A composite key can only
     assert a relationship between columns that exist on both sides, and the group side
@@ -57,8 +56,8 @@ class TournamentEventGroupReservation(Base):
     starts producing it — a group count that creates groups without booking a venue —
     and it needs the column already free of a constraint that would have refused it.
 
-    ``reservation_id`` is ``NOT NULL``. Under the unchanged wire one pool entry writes a
-    group and a reservation together, so a reservation-less group is unreachable here
+    ``reservation_id`` is ``NOT NULL``. Every write path mints a group and a reservation
+    together, so a reservation-less group is unreachable here
     and the column states what is true rather than what a later slice will allow. #1370
     relaxes it by editing the revision in place, because no environment holds data worth
     keeping.
@@ -66,7 +65,7 @@ class TournamentEventGroupReservation(Base):
     **All three delete rules are CASCADE.** The mapping is not a thing in its own right:
     it exists only while both ends do, so it goes with either of them, and with the
     stage or event above them. Removing the *group* is the path the application takes —
-    a pool write drops a group and its reservation in one diff, and this row goes with
+    a reservation write drops a group and its reservation in one diff, and this row goes with
     the group — and ``delete-orphan`` on ``TournamentEventStageGroup.reservation_link``
     handles it through the ORM before the constraint ever has to.
     """
@@ -166,5 +165,5 @@ class TournamentEventGroupReservation(Base):
     #: stay ``selectin``, where a join WOULD fan the parent rows out.)
     #:
     #: Eager either way, because async SQLAlchemy raises rather than emitting a lazy
-    #: load, and every reader of a projected pool goes through here.
+    #: load, and every reader of a group's reservation goes through here.
     reservation: Mapped["TournamentEventReservation"] = relationship(lazy="joined")

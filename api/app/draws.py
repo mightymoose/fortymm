@@ -100,7 +100,7 @@ def group_letter(position: int) -> str:
 
 def group_label(position: int) -> str:
     """``Group A``, ``Group B``, … — the director-facing label a group renders as
-    everywhere the app used to print a stored pool name (ADR 20260808).
+    everywhere the app used to print a stored reservation name (ADR 20260808).
 
     A thin wrapper over :func:`group_letter` so every caller that needs the full label
     (the group-set freeze's 409, the dashboard's ``group_label``, a match call's
