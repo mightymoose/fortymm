@@ -10,11 +10,12 @@ import { eventToCreateBody, eventToUpdateBody } from '../data/api'
 import {
   buildEvent,
   buildFixture,
-  buildPool,
+  buildReservation,
   buildPredicate,
   buildRrThenKoEvent,
   buildSwissEvent,
   buildTournament,
+  groupIdFor,
 } from '../data/seed.factory'
 import { eventEditorPage } from './event-editor.page'
 
@@ -60,7 +61,7 @@ describe('EventEditor', () => {
 
       // The label is the SERVER's (`draw_type_catalogue`), not a string this client keeps.
       await eventEditorPage.chooseDrawType('Round-robin then knockout')
-      expect(await screen.findByLabelText(/Qualifiers per pool/)).toBeInTheDocument()
+      expect(await screen.findByLabelText(/Qualifiers per group/)).toBeInTheDocument()
 
       await eventEditorPage.chooseDrawType('Round robin')
       await waitFor(() =>
@@ -74,7 +75,7 @@ describe('EventEditor', () => {
     it('SENDS the configured count — the value reaches the request body', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerPool: 1 }),
+        event: buildRrThenKoEvent({ qualifiersPerGroup: 1 }),
         onSave,
       })
 
@@ -84,7 +85,7 @@ describe('EventEditor', () => {
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      expect(eventToUpdateBody(onSave.mock.calls[0][0]).qualifiers_per_pool).toBe(2)
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).qualifiers_per_group).toBe(2)
     })
 
     // The stale-value case, and the reason the mapper keys off the draw type rather than
@@ -95,7 +96,7 @@ describe('EventEditor', () => {
     it('drops the count from the body when the director switches away from rr-then-ko', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }),
         onSave,
       })
 
@@ -105,21 +106,21 @@ describe('EventEditor', () => {
       await waitFor(() => expect(onSave).toHaveBeenCalled())
       const body = eventToUpdateBody(onSave.mock.calls[0][0])
       expect(body.draw_type).toBe('round-robin')
-      expect('qualifiers_per_pool' in body).toBe(false)
+      expect('qualifiers_per_group' in body).toBe(false)
     })
 
     // Refused HERE, so nothing was sent — `onSave` not called at all is the assertion
     // that separates "told the director" from "asked the server and read the answer out".
     it.each([
-      ['0', 'At least 1 player must advance from each pool.'],
-      ['-1', 'At least 1 player must advance from each pool.'],
-      ['', 'Say how many players advance from each pool.'],
+      ['0', 'At least 1 player must advance from each group.'],
+      ['-1', 'At least 1 player must advance from each group.'],
+      ['', 'Say how many players advance from each group.'],
     ])(
       'refuses %s inline and sends NOTHING',
       async (typed, message) => {
         const onSave = vi.fn()
         eventEditorPage.render({
-          event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+          event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }),
           onSave,
         })
 
@@ -139,7 +140,7 @@ describe('EventEditor', () => {
     // control opens on. Without this the editor could show a default while the event ran
     // at a different K — the quiet failure the whole server-side detour was to prevent.
     it('opens on the count the server sent back', () => {
-      eventEditorPage.render({ event: buildRrThenKoEvent({ qualifiersPerPool: 3 }) })
+      eventEditorPage.render({ event: buildRrThenKoEvent({ qualifiersPerGroup: 3 }) })
 
       expect(eventEditorPage.getQualifiersInput()).toHaveValue(3)
     })
@@ -147,7 +148,7 @@ describe('EventEditor', () => {
 
   /**
    * **The Draw structure tab is conditional** (ADR 20260808, #1320). Only `rr-then-ko`
-   * has a pool stage feeding a knockout, so only `rr-then-ko` has a structure to set:
+   * has a group stage feeding a knockout, so only `rr-then-ko` has a structure to set:
    * for the other three formats the tab is *absent*, not empty and not disabled.
    *
    * The section's own tests pin what the tab says. These pin the three things only the
@@ -163,14 +164,14 @@ describe('EventEditor', () => {
         'Basics',
         'Eligibility',
         'Match settings',
-        'Table pools',
+        'Reservations',
         'Draw structure',
       ])
     })
 
     it.each([
       ['round-robin', () => buildEvent({ drawType: 'round-robin' })],
-      ['single-elim', () => buildEvent({ drawType: 'single-elim', pools: [] })],
+      ['single-elim', () => buildEvent({ drawType: 'single-elim', reservations: [] })],
       ['swiss', () => buildSwissEvent()],
     ] as const)('is absent for %s', (_drawType, build) => {
       eventEditorPage.render({ event: build() })
@@ -183,9 +184,9 @@ describe('EventEditor', () => {
       eventEditorPage.render({
         event: buildRrThenKoEvent({
           maxPlayers: 32,
-          pools: [
-            buildPool({ id: 'p-a', name: 'Pool A', position: 0 }),
-            buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
+          reservations: [
+            buildReservation({ id: 'res-a', name: 'Reservation A', position: 0 }),
+            buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
           ],
         }),
       })
@@ -194,14 +195,14 @@ describe('EventEditor', () => {
 
       // Wiring only: every value and sentence is pinned by the section's own tests.
       expect(eventEditorPage.drawStructure.getSettingNames()).toEqual([
-        'Pool count',
-        'Pool size',
+        'Group count',
+        'Group size',
         'Membership',
-        'Qualifiers per pool',
+        'Qualifiers per group',
       ])
       expect(
-        eventEditorPage.drawStructure.setting('Pool size').getSource(),
-      ).toHaveTextContent('32 players ÷ 2 pools')
+        eventEditorPage.drawStructure.setting('Group size').getSource(),
+      ).toHaveTextContent('32 players ÷ 2 groups')
     })
 
     // The draft is what the tab is keyed on, so the picker reveals and hides it live —
@@ -509,37 +510,38 @@ describe('EventEditor', () => {
    * The same lesson, one tab over — and the last field in this editor that could still
    * author a 422 (#786).
    *
-   * The pools editor **mints** a pool's id and its default name ("Pool A"), so the happy
-   * path could never make a blank one. But the name **box is live**, and an emptied box
-   * was a save the form allowed and the server refused — with Pydantic's own prose
-   * ("String should have at least 1 character") arriving in the editor's banner, naming
-   * no field, in the wire's vocabulary. The API now states the floor (`Pool.name`,
-   * `min_length=1`), and this is what means the organizer never meets it.
+   * The reservations editor **mints** a reservation's id and its default name
+   * ("Reservation A"), so the happy path could never make a blank one. But the name
+   * **box is live**, and an emptied box was a save the form allowed and the server
+   * refused — with Pydantic's own prose ("String should have at least 1 character")
+   * arriving in the editor's banner, naming no field, in the wire's vocabulary. The API
+   * now states the floor (`Reservation.name`, `min_length=1`), and this is what means
+   * the organizer never meets it.
    *
    * ⚠️ The assertion that discriminates is **`onSave`**, not the red. A form that
    * rendered the message and fired the request anyway would sail through a test that
    * only looked for the message — and the 422 would come back and land in the banner
    * exactly as before. Nothing may be *sent*.
    */
-  describe('a pool the server would refuse', () => {
-    it('refuses a BLANK pool name in the form, and sends nothing', async () => {
+  describe('a reservation the server would refuse', () => {
+    it('refuses a BLANK reservation name in the form, and sends nothing', async () => {
       const onSave = vi.fn()
       eventEditorPage.render({
-        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        event: buildEvent({ reservations: [buildReservation({ name: 'Reservation A' })] }),
         onSave,
       })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      await userEvent.clear(eventEditorPage.getPoolNameInput())
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.clear(eventEditorPage.getReservationNameInput())
       await userEvent.click(eventEditorPage.getSaveButton())
 
       // Nothing left the room — so the 422 that would have come back never existed.
       expect(onSave).not.toHaveBeenCalled()
-      expect(eventEditorPage.getPoolNameInput()).toHaveAttribute(
+      expect(eventEditorPage.getReservationNameInput()).toHaveAttribute(
         'aria-invalid',
         'true',
       )
-      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
+      expect(eventEditorPage.getReservationNameErrors()).toEqual(['Name is required.'])
       // And no banner: a banner reports a refusal that came back from somewhere.
       expect(eventEditorPage.queryFailure()).toBeNull()
     })
@@ -547,35 +549,35 @@ describe('EventEditor', () => {
     // A space is not a name, and the server agrees — Pydantic's `min_length` counts the
     // characters it was *sent*, so a client that trimmed only on display would post
     // `" "` and be refused. The schema trims first, exactly as the event's name does.
-    it('refuses a WHITESPACE-ONLY pool name, and sends nothing', async () => {
+    it('refuses a WHITESPACE-ONLY reservation name, and sends nothing', async () => {
       const onSave = vi.fn()
       eventEditorPage.render({
-        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        event: buildEvent({ reservations: [buildReservation({ name: 'Reservation A' })] }),
         onSave,
       })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      await userEvent.clear(eventEditorPage.getPoolNameInput())
-      await userEvent.type(eventEditorPage.getPoolNameInput(), '   ')
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.clear(eventEditorPage.getReservationNameInput())
+      await userEvent.type(eventEditorPage.getReservationNameInput(), '   ')
       await userEvent.click(eventEditorPage.getSaveButton())
 
       expect(onSave).not.toHaveBeenCalled()
-      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
+      expect(eventEditorPage.getReservationNameErrors()).toEqual(['Name is required.'])
     })
 
-    it('takes the organizer to TABLE POOLS, where the broken pool is', async () => {
+    it('takes the organizer to RESERVATIONS, where the broken reservation is', async () => {
       // A message on a tab you cannot see is indistinguishable from a button that does
       // nothing — the rule builder's lesson, and the name box's, applied to the fourth
       // tab. The editor opens on Basics, so this proves it really moves them.
       const onSave = vi.fn()
       eventEditorPage.render({
-        event: buildEvent({ pools: [buildPool({ name: '' })] }),
+        event: buildEvent({ reservations: [buildReservation({ name: '' })] }),
         onSave,
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
 
-      expect(eventEditorPage.getSectionTab('Table pools')).toHaveAttribute(
+      expect(eventEditorPage.getSectionTab('Reservations')).toHaveAttribute(
         'aria-selected',
         'true',
       )
@@ -583,73 +585,73 @@ describe('EventEditor', () => {
     })
 
     // Per ROW, not per section: the red belongs under the box that is empty. A section
-    // that raised one error for the whole list would point a director with six pools at
-    // all six.
-    it('reds the pool that is blank, and leaves the one that is not alone', async () => {
+    // that raised one error for the whole list would point a director with six
+    // reservations at all six.
+    it('reds the reservation that is blank, and leaves the one that is not alone', async () => {
       eventEditorPage.render({
         event: buildEvent({
-          pools: [
-            buildPool({ id: 'p-a', name: '' }),
-            buildPool({ id: 'p-b', name: 'Pool B' }),
+          reservations: [
+            buildReservation({ id: 'res-a', name: '' }),
+            buildReservation({ id: 'res-b', name: 'Reservation B' }),
           ],
         }),
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
 
-      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
-      const [blank, named] = eventEditorPage.getPoolNameInputs()
+      expect(eventEditorPage.getReservationNameErrors()).toEqual(['Name is required.'])
+      const [blank, named] = eventEditorPage.getReservationNameInputs()
       expect(blank).toHaveAttribute('aria-invalid', 'true')
       expect(named).not.toHaveAttribute('aria-invalid', 'true')
     })
 
     it('says nothing in red until the organizer actually tries to save', async () => {
       eventEditorPage.render({
-        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        event: buildEvent({ reservations: [buildReservation({ name: 'Reservation A' })] }),
       })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      await userEvent.clear(eventEditorPage.getPoolNameInput())
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.clear(eventEditorPage.getReservationNameInput())
 
       // A box they are halfway through re-typing is not yet wrong.
-      expect(eventEditorPage.getPoolNameErrors()).toEqual([])
+      expect(eventEditorPage.getReservationNameErrors()).toEqual([])
     })
 
     it('clears the message the moment the name is typed, and then saves', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildEvent({ pools: [buildPool({ name: '' })] }),
+        event: buildEvent({ reservations: [buildReservation({ name: '' })] }),
         onSave,
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
-      expect(eventEditorPage.getPoolNameErrors()).toEqual(['Name is required.'])
+      expect(eventEditorPage.getReservationNameErrors()).toEqual(['Name is required.'])
 
-      await userEvent.type(eventEditorPage.getPoolNameInput(), 'Championship')
+      await userEvent.type(eventEditorPage.getReservationNameInput(), 'Championship')
 
-      await waitFor(() => expect(eventEditorPage.getPoolNameErrors()).toEqual([]))
+      await waitFor(() => expect(eventEditorPage.getReservationNameErrors()).toEqual([]))
       await userEvent.click(eventEditorPage.getSaveButton())
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      expect(onSave.mock.calls.at(-1)?.[0].pools[0].name).toBe('Championship')
+      expect(onSave.mock.calls.at(-1)?.[0].reservations[0].name).toBe('Championship')
     })
 
     // The name is trimmed on the way out, so what is saved is the name that will be
     // read off a wall — and what is *counted* by the server's `min_length` is the same
     // string the client judged.
-    it('saves the pool name trimmed', async () => {
+    it('saves the reservation name trimmed', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        event: buildEvent({ reservations: [buildReservation({ name: 'Reservation A' })] }),
         onSave,
       })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      await userEvent.clear(eventEditorPage.getPoolNameInput())
-      await userEvent.type(eventEditorPage.getPoolNameInput(), '  Championship  ')
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.clear(eventEditorPage.getReservationNameInput())
+      await userEvent.type(eventEditorPage.getReservationNameInput(), '  Championship  ')
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      expect(onSave.mock.calls.at(-1)?.[0].pools[0].name).toBe('Championship')
+      expect(onSave.mock.calls.at(-1)?.[0].reservations[0].name).toBe('Championship')
     })
   })
 
@@ -801,36 +803,36 @@ describe('EventEditor', () => {
       expect(eventEditorPage.queryFailure()).toBeNull()
     })
 
-    // **The race.** The editor disables the add/remove-pool controls of an event whose
-    // draw is cut (ADR-0786) — but "is the draw cut?" was answered when the page loaded.
-    // A director with two tabs open, or a co-director across the hall, can cut one after
-    // that, and this sheet's live-looking Add button becomes a change the server will
-    // refuse. So the 409 has to land somewhere designed, and it does: the same inline
-    // banner, with the SERVER's sentence, which is the only copy that knows which pool
+    // **The race.** The editor disables the add/remove-reservation controls of an event
+    // whose draw is cut (ADR-0786) — but "is the draw cut?" was answered when the page
+    // loaded. A director with two tabs open, or a co-director across the hall, can cut one
+    // after that, and this sheet's live-looking Add button becomes a change the server
+    // will refuse. So the 409 has to land somewhere designed, and it does: the same inline
+    // banner, with the SERVER's sentence, which is the only copy that knows which group
     // went missing and that the way out is to delete the draw.
     //
     // That sentence survives *because* `saveFailure` classifies a 409 as `refused` (prose
     // the API wrote for a human) rather than as `invalid` (a validator's machine words,
     // which are never shown). This test is what stops a future tidy-up from collapsing
     // the two.
-    it('surfaces a pool-set 409 with the server’s own sentence — the cut-draw race', async () => {
-      // The server's sentence, byte for byte (`_pool_set_frozen_detail`,
+    it('surfaces a group-set 409 with the server’s own sentence — the cut-draw race', async () => {
+      // The server's sentence, byte for byte (`_group_set_frozen_detail`,
       // `api/app/tournament_events.py`), because that is what this test is standing in
-      // for. It stopped offering "re-identify" as a third thing to do when the pool ids
-      // moved server-side (ADR 20260801): re-identifying a pool is no longer a payload a
+      // for. It stopped offering "re-identify" as a third thing to do when the group ids
+      // moved server-side (ADR 20260801): re-identifying a group is no longer a payload a
       // client can send, so it is no longer a refusal a client can meet.
       const refusal =
-        "This event's draw is already cut, so its set of pools is frozen: “Pool B” " +
+        "This event's draw is already cut, so its set of groups is frozen: “Group B” " +
         'already has fixtures drawn into it, which this change would leave pointing at ' +
-        "a pool that no longer exists. A pool's tables, its time and its name can all " +
-        'still be changed. To add or remove a pool, remove the draw first, then cut it ' +
-        'again.'
+        "a group that no longer exists. A reservation's tables, its time and its name " +
+        'can all still be changed. To add or remove a reservation, remove the draw ' +
+        'first, then cut it again.'
       const onSave = rejectWith(
         new ApiError(409, refusal, 'update event', { detail: refusal }),
       )
       const onOpenChange = vi.fn()
       eventEditorPage.render({
-        event: buildEvent({ id: 'ev-1', pools: [buildPool()] }),
+        event: buildEvent({ id: 'ev-1', reservations: [buildReservation()] }),
         onSave,
         onOpenChange,
       })
@@ -851,7 +853,7 @@ describe('EventEditor', () => {
   })
 
   /**
-   * **Who owns a pool id, from the card to the request body** (ADR 20260801).
+   * **Who owns a reservation id, from the card to the request body** (ADR 20260801).
    *
    * The section's own tests prove the form holds the right *entries*; these prove the
    * thing only the editor can, and the thing that 422s if it is wrong: what
@@ -860,64 +862,65 @@ describe('EventEditor', () => {
    * wire — and a test that stopped at form state would pass just as happily against a
    * mapper that put the ids back.
    *
-   * The two failures are opposite and both silent. An id on a NEW pool is a 422
-   * (`extra_forbidden` on `body.pools[i].id`) — the whole save refused, for a key the
-   * director never typed. A missing id on a STORED pool is worse than a refusal: the
-   * PATCH is an id-keyed diff, so an uncited pool is REMOVED, and the fixtures dealt into
-   * it go with it.
+   * The two failures are opposite and both silent. An id on a NEW reservation is a 422
+   * (`extra_forbidden` on `body.reservations[i].id`) — the whole save refused, for a key
+   * the director never typed. A missing id on a STORED reservation is worse than a
+   * refusal: the PATCH is an id-keyed diff, so an uncited reservation is REMOVED, and its
+   * mapped group's fixtures go with it.
    */
-  describe('the pools a save puts on the wire', () => {
-    const addAPool = async () => {
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      await userEvent.click(screen.getByRole('button', { name: 'Add pool' }))
+  describe('the reservations a save puts on the wire', () => {
+    const addAReservation = async () => {
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.click(screen.getByRole('button', { name: 'Add reservation' }))
     }
 
-    it('sends an added pool with NO id, and still cites the stored one', async () => {
+    it('sends an added reservation with NO id, and still cites the stored one', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildEvent({ id: 'ev-1', pools: [buildPool({ id: 'p-1' })] }),
+        event: buildEvent({ id: 'ev-1', reservations: [buildReservation({ id: 'res-1' })] }),
         onSave,
       })
 
-      await addAPool()
+      await addAReservation()
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      const pools = eventToUpdateBody(onSave.mock.calls[0][0]).pools ?? []
-      expect(pools).toHaveLength(2)
-      // The pool the event already has, cited — which is what keeps it (and its draw).
-      expect(pools[0]).toMatchObject({ id: 'p-1', name: 'Pool A' })
+      const reservations = eventToUpdateBody(onSave.mock.calls[0][0]).reservations ?? []
+      expect(reservations).toHaveLength(2)
+      // The reservation the event already has, cited — which keeps it (and its draw).
+      expect(reservations[0]).toMatchObject({ id: 'res-1', name: 'Reservation A' })
       // …and the new one, with no id key at all for the server to trip over.
-      expect('id' in pools[1]).toBe(false)
-      expect(pools[1].name).toBe('Pool B')
+      expect('id' in reservations[1]).toBe(false)
+      expect(reservations[1].name).toBe('Reservation B')
     })
 
     // A rename is the case a mapper is most likely to get wrong, because it is the one
-    // where the pool's words all change: it must still cite the id, or the director's
-    // "Pool A → Morning Pool" arrives as one removal and one insertion.
-    it('keeps citing a stored pool the director has just renamed', async () => {
+    // where the reservation's words all change: it must still cite the id, or the
+    // director's "Reservation A → Morning Reservation" arrives as one removal and one
+    // insertion.
+    it('keeps citing a stored reservation the director has just renamed', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildEvent({ id: 'ev-1', pools: [buildPool({ id: 'p-1' })] }),
+        event: buildEvent({ id: 'ev-1', reservations: [buildReservation({ id: 'res-1' })] }),
         onSave,
       })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      fireEvent.change(screen.getByLabelText('Pool name'), {
-        target: { value: 'Morning Pool' },
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('Reservation name'), {
+        target: { value: 'Morning Reservation' },
       })
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      expect(eventToUpdateBody(onSave.mock.calls[0][0]).pools).toEqual([
-        expect.objectContaining({ id: 'p-1', name: 'Morning Pool' }),
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).reservations).toEqual([
+        expect.objectContaining({ id: 'res-1', name: 'Morning Reservation' }),
       ])
     })
 
-    // The create verb has no id arm at ALL (`PoolWrite`), so a brand-new event's pools
-    // carry none — the server mints one apiece and hands them back on the response the
-    // page then renders.
-    it('creates an event whose pools carry no ids whatsoever', async () => {
+    // The create verb has no id arm at ALL (`ReservationWrite`), so a brand-new event's
+    // reservations carry none — the server mints one apiece and hands them back on the
+    // response the page then renders.
+    it('creates an event whose reservations carry no ids whatsoever', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       // Named, because a blank name is refused in the form and nothing would be sent —
       // the resolver is doing its job, and this test is about a different one.
@@ -926,16 +929,16 @@ describe('EventEditor', () => {
         onSave,
       })
 
-      await addAPool()
-      await addAPool()
+      await addAReservation()
+      await addAReservation()
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      const pools = eventToCreateBody(onSave.mock.calls[0][0]).pools ?? []
-      expect(pools).toHaveLength(2)
-      for (const pool of pools) {
-        expect('id' in pool).toBe(false)
-        expect('position' in pool).toBe(false)
+      const reservations = eventToCreateBody(onSave.mock.calls[0][0]).reservations ?? []
+      expect(reservations).toHaveLength(2)
+      for (const reservation of reservations) {
+        expect('id' in reservation).toBe(false)
+        expect('position' in reservation).toBe(false)
       }
     })
   })
@@ -949,11 +952,11 @@ describe('EventEditor', () => {
       buildEvent({
         id: 'ev-1',
         drawType: 'round-robin',
-        pools: [buildPool()],
-        fixtures: [buildFixture({ poolId: 'p-1' })],
+        reservations: [buildReservation()],
+        fixtures: [buildFixture({ groupId: groupIdFor('res-1') })],
       })
 
-    it('freezes the draw type on Basics and the pool set on Table pools', async () => {
+    it('freezes the draw type on Basics and the group set on Reservations', async () => {
       eventEditorPage.render({ event: drawn() })
 
       // Basics is the tab it opens on.
@@ -963,28 +966,28 @@ describe('EventEditor', () => {
       // …while the format beside it — which no fixture depends on — stays live.
       expect(screen.getByRole('combobox', { name: 'Format' })).toBeEnabled()
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      expect(screen.getByRole('button', { name: 'Add pool' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: 'Remove pool' })).toBeDisabled()
-      expect(screen.getByTestId('pools-frozen-notice')).toHaveTextContent(
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      expect(screen.getByRole('button', { name: 'Add reservation' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Remove reservation' })).toBeDisabled()
+      expect(screen.getByTestId('reservations-frozen-notice')).toHaveTextContent(
         'Delete the draw',
       )
       // The venue attributes the freeze exists to protect are still editable.
-      expect(screen.getByLabelText('Pool name')).toBeEnabled()
+      expect(screen.getByLabelText('Reservation name')).toBeEnabled()
       expect(screen.getByRole('button', { name: 'T1' })).toBeEnabled()
     })
 
     it('freezes nothing when no draw is cut', async () => {
       eventEditorPage.render({
-        event: buildEvent({ id: 'ev-1', pools: [buildPool()] }),
+        event: buildEvent({ id: 'ev-1', reservations: [buildReservation()] }),
       })
 
       expect(screen.getByRole('combobox', { name: 'Draw type' })).toBeEnabled()
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      expect(screen.getByRole('button', { name: 'Add pool' })).toBeEnabled()
-      expect(screen.getByRole('button', { name: 'Remove pool' })).toBeEnabled()
-      expect(screen.queryByTestId('pools-frozen-notice')).toBeNull()
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      expect(screen.getByRole('button', { name: 'Add reservation' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Remove reservation' })).toBeEnabled()
+      expect(screen.queryByTestId('reservations-frozen-notice')).toBeNull()
     })
   })
 
@@ -1161,7 +1164,7 @@ describe('EventEditor', () => {
     })
   })
 
-  // The nested-array sub-forms (Eligibility, Table pools) drive the one
+  // The nested-array sub-forms (Eligibility, Reservations) drive the one
   // React-Hook-Form via `useFieldArray` (chore 1e), so add / edit / remove is
   // form state that rides out on Save with the rest of the event — proved here
   // end to end through `onSave`, not just in form state.
@@ -1186,52 +1189,52 @@ describe('EventEditor', () => {
       expect(savePayload(onSave).predicates).toHaveLength(1)
     })
 
-    it('carries an added table pool into the saved event', async () => {
+    it('carries an added reservation into the saved event', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
-      eventEditorPage.render({ event: buildEvent({ pools: [] }), onSave })
+      eventEditorPage.render({ event: buildEvent({ reservations: [] }), onSave })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      // Both the header "Add pool" and the empty-state "Add first pool" are
-      // present; the exact name pins the header action.
-      await userEvent.click(screen.getByRole('button', { name: 'Add pool' }))
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      // Both the header "Add reservation" and the empty-state "Add first
+      // reservation" are present; the exact name pins the header action.
+      await userEvent.click(screen.getByRole('button', { name: 'Add reservation' }))
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      expect(savePayload(onSave).pools).toHaveLength(1)
+      expect(savePayload(onSave).reservations).toHaveLength(1)
     })
 
-    it('drops a removed table pool from the saved event', async () => {
+    it('drops a removed reservation from the saved event', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
-      // The seeded event carries one pool; removing it must save an empty list.
+      // The seeded event carries one reservation; removing it must save an empty list.
       eventEditorPage.render({ event: buildEvent(), onSave })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      await userEvent.click(screen.getByRole('button', { name: 'Remove pool' }))
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.click(screen.getByRole('button', { name: 'Remove reservation' }))
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      expect(savePayload(onSave).pools).toHaveLength(0)
+      expect(savePayload(onSave).reservations).toHaveLength(0)
     })
 
     // A multi-character edit is the discriminating case for the `useFieldArray`
     // wiring: an in-place `update` that remounted the row would drop focus after
     // the first keystroke, and only the first character would land. Keying the
     // row on the stable domain id keeps it mounted, so the whole name persists.
-    it('carries a multi-character pool rename into the saved event', async () => {
+    it('carries a multi-character reservation rename into the saved event', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildEvent({ pools: [buildPool({ name: 'Pool A' })] }),
+        event: buildEvent({ reservations: [buildReservation({ name: 'Reservation A' })] }),
         onSave,
       })
 
-      await userEvent.click(eventEditorPage.getSectionTab('Table pools'))
-      const nameInput = screen.getByLabelText('Pool name')
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      const nameInput = screen.getByLabelText('Reservation name')
       await userEvent.clear(nameInput)
       await userEvent.type(nameInput, 'Championship')
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
-      expect(savePayload(onSave).pools[0].name).toBe('Championship')
+      expect(savePayload(onSave).reservations[0].name).toBe('Championship')
     })
   })
 

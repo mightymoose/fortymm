@@ -191,8 +191,8 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
             ) : (
               <>
                 The matches can't all fit inside their windows on the tables
-                available. Add tables, widen a pool window, or trim an event's
-                field — then run the scheduler again.
+                available. Add tables, widen a reservation's window, or trim an
+                event's field — then run the scheduler again.
               </>
             )}
           </Line>

@@ -38,7 +38,6 @@ const buildScheduledEvent = () =>
     fixtures: [
       buildFixture({
         id: 'fx-a-1',
-        poolId: 'p-a',
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -50,7 +49,6 @@ const buildScheduledEvent = () =>
       }),
       buildFixture({
         id: 'fx-a-2',
-        poolId: 'p-a',
         round: 2,
         position: 1,
         entryAId: 'entry-1',
@@ -66,7 +64,7 @@ describe('ScheduleTab', () => {
       tables: buildTables(),
     })
 
-    // The placed match sits in its table's column, named — not a mock pool window.
+    // The placed match sits in its table's column, named — not a mock reservation window.
     const t1 = page.getTableColumn('t1')
     expect(page.matchIdsIn(t1)).toEqual(['fx-a-1'])
     expect(within(t1).getByTestId('schedule-match-fx-a-1')).toHaveTextContent(
@@ -80,7 +78,7 @@ describe('ScheduleTab', () => {
     expect(page.matchIdsIn(awaiting)).toEqual(['fx-a-2'])
   })
 
-  it('keeps the reserved pool windows visible as context', () => {
+  it('keeps the reserved windows visible as context', () => {
     page.render({
       tournament: buildTournament({ events: [buildScheduledEvent()] }),
       tables: buildTables(),
@@ -122,7 +120,7 @@ describe('ScheduleTab', () => {
     // The editor closes on success — the placement re-renders from the refetched
     // tournament, not from a local write.
     await waitFor(() => expect(page.queryPlaceEditor('fx-a-2')).not.toBeInTheDocument())
-    // The naive timestamp is composed from the pool window's DATE + the chosen time
+    // The naive timestamp is composed from the reservation window's DATE + the chosen time
     // (ADR-0790) — no timezone, no Date coercion.
     expect(sent).toMatchObject({ scheduled_start: '2026-06-13T10:30:00' })
   })
@@ -154,28 +152,29 @@ describe('ScheduleTab', () => {
     // not a malformed timestamp the server rejects and the panel silently swallows.
     await waitFor(() => expect(page.queryPlaceEditor('fx-a-2')).not.toBeInTheDocument())
     // The mutation carries an explicit null time — the fixture is placed on the table
-    // (its pool's first suggested table, `t1`) with no prediction, never a composed
+    // (its reservation's first suggested table, `t1`) with no prediction, never a composed
     // `YYYY-MM-DDT:00`.
     expect(sent).toMatchObject({ table_id: 't1', scheduled_start: null })
   })
 
-  // ----- an UN-POOLED match on the schedule tab (ADR 20260807, "a pool restricts
-  // scheduling, it does not enable it"). A bracket, a swiss round and a knockout
-  // stage carry no pool, so they are placed against their EVENT's own window over
-  // the WHOLE tournament's tables. The pooled behaviour underneath must not move:
-  // a pool must still restrict. -----------------------------------------------
+  // ----- an EVENT-WIDE match on the schedule tab (ADR 20260807, "a reservation
+  // restricts scheduling, it does not enable it"). A bracket, a swiss round and a
+  // knockout stage carry no reservation (they are ungrouped), so they are placed
+  // against their EVENT's own window over the WHOLE tournament's tables. The
+  // booked-reservation behaviour underneath must not move: a reservation must still
+  // restrict. -----------------------------------------------
 
-  /** A single-elim bracket (`pools: []`, every fixture `poolId: null`) whose event
-   * window is the tournament's SECOND day. The date is deliberately not the pool
-   * default (`2026-06-13`, which `buildPool` and `buildEvent` share): a bracket left
-   * on it could not tell "composed from the event window" from "composed from some
-   * pool's window". */
-  const buildUnpooledEvent = () =>
+  /** A single-elim bracket (`groups: []`, every fixture `groupId: null`) whose event
+   * window is the tournament's SECOND day. The date is deliberately not the reservation
+   * default (`2026-06-13`, which `buildReservation` and `buildEvent` share): a bracket
+   * left on it could not tell "composed from the event window" from "composed from some
+   * reservation's window". */
+  const buildUngroupedEvent = () =>
     buildBracketDrawnEvent({
       slot: { date: '2026-06-14', start: '10:00', end: '16:00' },
     })
 
-  it('places an UN-POOLED match against its EVENT window’s date, on a tournament table', async () => {
+  it('places an EVENT-WIDE match against its EVENT window’s date, on a tournament table', async () => {
     let sent: unknown = null
     mockFixturePlacementEndpoint(server, async ({ request }) => {
       sent = await request.json()
@@ -195,7 +194,7 @@ describe('ScheduleTab', () => {
       // tournament's own tables" from "fell back to the first table that exists".
       tournament: buildTournament({
         tableIds: ['t3', 't4', 't5'],
-        events: [buildUnpooledEvent()],
+        events: [buildUngroupedEvent()],
       }),
       tables: buildTables(),
     })
@@ -208,46 +207,46 @@ describe('ScheduleTab', () => {
       expect(page.queryPlaceEditor('fx-se-r1-p1')).not.toBeInTheDocument(),
     )
     // The DATE is the event window's, and the TABLE is the tournament's first reserved
-    // one — an un-pooled match is offered the event-wide reservation, not nothing.
+    // one — an event-wide match is offered the event-wide reservation, not nothing.
     expect(sent).toMatchObject({
       table_id: 't3',
       scheduled_start: '2026-06-14T14:00:00',
     })
   })
 
-  it('marks a POOLED match’s own pool tables, and marks nothing on an un-pooled one', () => {
+  it('marks a BOOKED-RESERVATION match’s own reservation tables, and marks nothing on an event-wide one', () => {
     // Both kinds in ONE tournament, so the mark is proven to discriminate rather
     // than to be on or off everywhere.
     page.render({
       tournament: buildTournament({
-        events: [buildScheduledEvent(), buildUnpooledEvent()],
+        events: [buildScheduledEvent(), buildUngroupedEvent()],
       }),
       tables: buildTables(),
     })
 
-    // Pool A reserves t1…t4, so the chosen table wears the mark — unchanged.
+    // Reservation A reserves t1…t4, so the chosen table wears the mark — unchanged.
     page.openPlacement('fx-a-2')
-    expect(page.getPlaceTable('fx-a-2')).toHaveTextContent('T1 · pool table')
+    expect(page.getPlaceTable('fx-a-2')).toHaveTextContent('T1 · reservation table')
 
-    // The bracket match names no pool. Every table in the tournament is fair game,
-    // so a mark on all of them would say nothing — and would claim a pool that does
-    // not exist.
+    // The bracket match names no reservation. Every table in the tournament is fair
+    // game, so a mark on all of them would say nothing — and would claim a reservation
+    // that does not exist.
     page.openPlacement('fx-se-r1-p1')
     expect(page.getPlaceTable('fx-se-r1-p1')).toHaveTextContent('T1')
-    expect(page.getPlaceTable('fx-se-r1-p1')).not.toHaveTextContent('pool table')
+    expect(page.getPlaceTable('fx-se-r1-p1')).not.toHaveTextContent('reservation table')
   })
 
-  it('tells the director where a placement’s date comes from — for a pooled match AND an un-pooled one', () => {
+  it('tells the director where a placement’s date comes from — for a booked-reservation match AND an event-wide one', () => {
     page.render({
       tournament: buildTournament({ events: [buildScheduledEvent()] }),
       tables: buildTables(),
     })
     expect(page.getTab()).toHaveTextContent(
-      'the date comes from its pool window, or from its event window when it has no pool',
+      'the date comes from its reservation window, or from its event window when it has no reservation',
     )
   })
 
-  it('leaves the non-owner’s subtitle alone — it never claimed a pool', () => {
+  it('leaves the non-owner’s subtitle alone — it never claimed a reservation', () => {
     page.render({
       tournament: buildTournament({
         canEdit: false,
@@ -258,7 +257,7 @@ describe('ScheduleTab', () => {
     expect(page.getTab()).toHaveTextContent(
       'Every match, by table, with its predicted start time.',
     )
-    expect(page.getTab()).not.toHaveTextContent('pool window')
+    expect(page.getTab()).not.toHaveTextContent('reservation window')
   })
 
   // ----- the consequence gate on the placement submit path (ADR "the schedule
@@ -374,7 +373,6 @@ describe('ScheduleTab', () => {
           fixtures: [
             buildFixture({
               id: 'fx-told',
-              poolId: 'p-a',
               entryAId: 'entry-1',
               entryBId: 'entry-4',
               tableId: 't1',
@@ -477,7 +475,6 @@ describe('ScheduleTab', () => {
               // Placed pre-live (an estimate — count 0), tournament now live.
               buildFixture({
                 id: 'fx-a-1',
-                poolId: 'p-a',
                 entryAId: 'entry-1',
                 entryBId: 'entry-4',
                 tableId: 't1',
@@ -505,7 +502,6 @@ describe('ScheduleTab', () => {
             fixtures: [
               buildFixture({
                 id: 'fx-done',
-                poolId: 'p-a',
                 entryAId: 'entry-1',
                 entryBId: 'entry-4',
                 matchId: 'm-done',
@@ -579,7 +575,6 @@ describe('ScheduleTab', () => {
       fixtures: [
         buildFixture({
           id: 'fx-est',
-          poolId: 'p-a',
           entryAId: 'entry-1',
           entryBId: 'entry-4',
           tableId: 't1',
@@ -587,7 +582,6 @@ describe('ScheduleTab', () => {
         }),
         buildFixture({
           id: 'fx-called',
-          poolId: 'p-a',
           round: 2,
           entryAId: 'entry-1',
           entryBId: 'entry-5',
@@ -598,7 +592,6 @@ describe('ScheduleTab', () => {
         }),
         buildFixture({
           id: 'fx-live',
-          poolId: 'p-a',
           round: 3,
           entryAId: 'entry-4',
           entryBId: 'entry-5',
@@ -658,7 +651,6 @@ describe('ScheduleTab', () => {
             fixtures: [
               buildFixture({
                 id: 'fx-done',
-                poolId: 'p-a',
                 entryAId: 'entry-1',
                 entryBId: 'entry-4',
                 matchId: 'm-done',
@@ -687,7 +679,6 @@ describe('ScheduleTab', () => {
             fixtures: [
               buildFixture({
                 id: 'fx-pin-live',
-                poolId: 'p-a',
                 entryAId: 'entry-1',
                 entryBId: 'entry-4',
                 matchId: 'm-pin-live',
@@ -720,7 +711,6 @@ describe('ScheduleTab', () => {
             fixtures: [
               buildFixture({
                 id: 'fx-silent-pin',
-                poolId: 'p-a',
                 entryAId: 'entry-1',
                 entryBId: 'entry-4',
                 tableId: 't1',
@@ -750,7 +740,6 @@ describe('ScheduleTab', () => {
             fixtures: [
               buildFixture({
                 id: 'fx-called-once',
-                poolId: 'p-a',
                 entryAId: 'entry-1',
                 entryBId: 'entry-4',
                 tableId: 't1',

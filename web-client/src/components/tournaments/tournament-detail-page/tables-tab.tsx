@@ -112,7 +112,7 @@ export const TablesTab = ({
 
   const usage = catalogue.map((table) => {
     const usingEvents = tournament.events
-      .filter((ev) => ev.pools.some((p) => p.tableIds.includes(table.id)))
+      .filter((ev) => ev.reservations.some((r) => r.tableIds.includes(table.id)))
       .map((ev) => ev.name)
     return { table, usingEvents }
   })

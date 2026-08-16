@@ -67,12 +67,12 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
       // The resolved causes the day doesn't fit — three arms, so the expansion
       // proves it renders each reason's sentence + remedy (the same list the
       // Schedule-tab strip shows), including the one that names a *human*
-      // (`player_over_subscribed`) rather than a pool or a fixture.
+      // (`player_over_subscribed`) rather than a reservation or a fixture.
       infeasibility_reasons: [
         {
           kind: 'window_too_short_for_match',
-          pool_name: 'Pool A',
-          reservation: 'pool',
+          reservation_name: 'Reservation A',
+          reservation: 'booked',
           window_start: '09:00',
           window_end: '10:00',
           best_of: 5,
@@ -82,8 +82,8 @@ export function buildLedgerVariety(): AdminScheduleSolveRead[] {
         {
           kind: 'player_over_subscribed',
           player_name: 'spiked-frigatebird',
-          pool_name: 'Pool A',
-          reservation: 'pool',
+          reservation_name: 'Reservation A',
+          reservation: 'booked',
           window_start: '09:00',
           window_end: '10:30',
           match_count: 4,

@@ -4,7 +4,7 @@ import type {
   SwissByes,
 } from '../../../data/draw'
 import type { Entrant } from '../../../data/types'
-// `FixtureLine` is shared with `RoundList` (the pooled renderer) and `Bracket`; its owner
+// `FixtureLine` is shared with `RoundList` (the grouped renderer) and `Bracket`; its owner
 // is the `round-list/` subtree today. Reached across rather than duplicating the three-way
 // `FixtureSide` switch — the same call `Bracket` makes, and for the same reason. It is now
 // the third importer, so per the supremum rule it wants floating up to `draw-panel/`; left
@@ -12,7 +12,7 @@ import type { Entrant } from '../../../data/types'
 import { FixtureLine } from './round-list/fixture-line'
 
 export interface SwissRoundsProps {
-  /** The event's un-pooled fixtures, already grouped and ordered into rounds by
+  /** The event's ungrouped fixtures, already grouped and ordered into rounds by
    * `drawState` (`../../../data/draw`) — round 1 first. A swiss draw's rounds are **all**
    * of them: the cut writes `R × ⌊n/2⌋` fixtures up front. */
   rounds: DrawRound[]
@@ -85,7 +85,7 @@ const ByeLine = ({ round, sittingOut }: { round: number; sittingOut: Entrant[] }
  *
  * ## Why not the bracket
  *
- * A swiss draw is un-pooled, exactly as a single-elimination bracket is, and until this
+ * A swiss draw is ungrouped, exactly as a single-elimination bracket is, and until this
  * component existed it was routed to `Bracket` on that resemblance alone. It is the wrong
  * view, not merely a plain one: a bracket's columns are named back from the **Final**
  * ("Semifinals", "Quarterfinals") and its whole read is that a winner reappears one column

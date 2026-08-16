@@ -59,7 +59,7 @@ const TierIcon = ({ bar }: { bar: TimelineBarData }) => {
  * rides on color alone.
  */
 export const TimelineBar = ({ bar, title, originMin }: TimelineBarProps) => {
-  const where = `${bar.eventName}${bar.poolName ? ` · ${bar.poolName}` : ''}`
+  const where = `${bar.eventName}${bar.groupLabel ? ` · ${bar.groupLabel}` : ''}`
   // The bar's clock always names its timezone (ADR "a schedule surface always labels
   // the timezone"): a tournament-wide board can hold events in different venue zones,
   // so `9:00 AM–9:35 AM CDT` never lets two same-column bars imply the same instant.

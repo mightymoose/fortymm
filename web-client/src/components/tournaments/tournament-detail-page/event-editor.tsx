@@ -15,8 +15,8 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import { drawTypeFreeze, poolSetFreeze, type EditFreeze } from '../data/draw'
-import { poolNameIssues } from '../data/event-validation'
+import { drawTypeFreeze, groupSetFreeze, type EditFreeze } from '../data/draw'
+import { reservationNameIssues } from '../data/event-validation'
 import { eligibilityIssues } from '../data/predicate-validation'
 import {
   EVENT_SAVE_TARGET,
@@ -34,7 +34,7 @@ import { BasicsSection } from './event-editor/basics-section'
 import { DrawStructureSection } from './event-editor/draw-structure-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
 import { MatchSection } from './event-editor/match-section'
-import { PoolsSection } from './event-editor/pools-section'
+import { ReservationsSection } from './event-editor/reservations-section'
 import {
   eventSchema,
   eventToFormValues,
@@ -47,7 +47,7 @@ export interface EventEditorProps {
   onOpenChange: (open: boolean) => void
   /** The event to edit. A new event has an id beginning `new-`. */
   event: TournamentEvent | null
-  /** The tables available to this tournament (for the pools tab). */
+  /** The tables available to this tournament (for the reservations tab). */
   tables: TournamentTable[]
   /** The draw formats the server offers, off the tournament payload (ADR 20260726) —
    * handed to the Basics tab's picker, and to `drawTypeFreeze`, whose frozen reason
@@ -57,10 +57,10 @@ export interface EventEditorProps {
   /** When false (a non-creator), the Save and Delete actions are hidden and the
    * editor becomes a read-only view of the event. */
   canEdit: boolean
-  /** Persist the edited event — an `EditedEvent`, whose pools are the organizer's
-   * **diff** (`PoolEntry`) rather than rows read back: each one either cites the id the
-   * server minted or carries none at all, and a stored pool no entry cites is a removal
-   * (ADR 20260801). **May be async — and the editor awaits it**: it
+  /** Persist the edited event — an `EditedEvent`, whose reservations are the organizer's
+   * **diff** (`ReservationEntry`) rather than rows read back: each one either cites the id
+   * the server minted or carries none at all, and a stored reservation no entry cites is a
+   * removal (ADR 20260801). **May be async — and the editor awaits it**: it
    * closes itself only when the promise RESOLVES, and a rejection keeps the sheet
    * open, with the work intact and the failure on screen. A caller that fires the
    * mutation and closes regardless turns every server refusal into a silently
@@ -92,19 +92,19 @@ const SECTIONS = [
   { value: 'basics', label: 'Basics' },
   { value: 'eligibility', label: 'Eligibility' },
   { value: 'match', label: 'Match settings' },
-  { value: 'pools', label: 'Table pools' },
+  { value: 'reservations', label: 'Reservations' },
 ]
 
 /** The fifth tab, and the only **conditional** one: a draw structure is the shape of a
- * pool stage feeding a knockout, and only `rr-then-ko` has both (ADR 20260808 — "the
+ * group stage feeding a knockout, and only `rr-then-ko` has both (ADR 20260808 — "the
  * Draw structure tab is conditional"). A round-robin has no bracket to aim at, a
- * single-elimination has no pools to split, and swiss has neither, so for those three
+ * single-elimination has no groups to split, and swiss has neither, so for those three
  * the tab is *absent* rather than empty: a tab that opened onto settings the format
  * cannot hold would invite a director to configure a draw their event will never cut. */
 const DRAW_STRUCTURE_SECTION = { value: 'draw-structure', label: 'Draw structure' }
 
 /** The slide-in event editor — a side sheet with four sections (Basics,
- * Eligibility, Match settings, Table pools) over ONE React-Hook-Form draft. The form
+ * Eligibility, Match settings, Reservations) over ONE React-Hook-Form draft. The form
  * is the single source of truth: the scalar Basics/Match fields write back through
  * `applyChange`, the nested-array sections drive the same form through
  * `useFieldArray`, and every field of it is resolved against `eventSchema`.
@@ -115,7 +115,7 @@ const DRAW_STRUCTURE_SECTION = { value: 'draw-structure', label: 'Draw structure
  * - It *checks the draft first* (`eventSchema`, `./event-form`) and refuses to send
  *   one the server would 422 — a blank or 256-character name, a cap of `0` or of ten
  *   billion, a missing entry fee, a rule with no value, a `between` with one bound or
- *   an inverted pair, **a pool whose name has been cleared** — pointing the organizer
+ *   an inverted pair, **a reservation whose name has been cleared** — pointing the organizer
  *   at the tab holding the offending field instead. That is a Zod schema mirroring the
  *   server's constraints, which is the house rule for a form (`CLAUDE.md`, `## Forms`).
  *
@@ -176,7 +176,7 @@ export const EventEditor = ({
   // the event, with every editable field taken from live form state. Editing a
   // scalar section writes back through `applyChange`, so the form stays
   // authoritative. `useWatch` (not `form.watch()`) subscribes reactively and is
-  // memoizable. The nested-array sections (Eligibility, Table pools) instead drive
+  // memoizable. The nested-array sections (Eligibility, Reservations) instead drive
   // the same form directly via `useFieldArray` off `form.control` — their
   // add/edit/remove is form state, not a bridged draft (chore 1e).
   const values = useWatch({ control: form.control })
@@ -201,16 +201,16 @@ export const EventEditor = ({
   const watchedPredicates = useWatch({ control: form.control, name: 'predicates' })
   const ruleIssues = eligibilityIssues(watchedPredicates ?? [])
 
-  // …and the same arrangement for the POOLS, for the same two reasons and one more of
-  // its own. The resolver refuses the save (`poolNameSchema` inside `eventSchema`); this
-  // is what puts the red under the box that is empty. It is computed from live form
-  // values rather than read off `errors.pools` because a pool card writes its edits back
-  // through `useFieldArray`'s `update()`, which — unlike append/remove — does NOT re-run
-  // the resolver (RHF 7.81). Read off the errors, the red would outlive the fix: it
-  // would sit under a name the organizer had already re-typed, until they pressed Save
-  // again to find out they were done.
-  const watchedPools = useWatch({ control: form.control, name: 'pools' })
-  const poolIssues = poolNameIssues(watchedPools ?? [])
+  // …and the same arrangement for the RESERVATIONS, for the same two reasons and one
+  // more of its own. The resolver refuses the save (`reservationNameSchema` inside
+  // `eventSchema`); this is what puts the red under the box that is empty. It is
+  // computed from live form values rather than read off `errors.reservations` because a
+  // reservation card writes its edits back through `useFieldArray`'s `update()`, which —
+  // unlike append/remove — does NOT re-run the resolver (RHF 7.81). Read off the errors,
+  // the red would outlive the fix: it would sit under a name the organizer had already
+  // re-typed, until they pressed Save again to find out they were done.
+  const watchedReservations = useWatch({ control: form.control, name: 'reservations' })
+  const reservationIssues = reservationNameIssues(watchedReservations ?? [])
 
   const applyChange = (next: TournamentEvent) => {
     // Don't validate until the user has tried to save once — otherwise a new
@@ -224,7 +224,7 @@ export const EventEditor = ({
     // Written back beside the draw type, because the resolver judges the two as one pair
     // (ADR 20260727): a draw type set without its count would be validated against a
     // stale K, and a count without its type against a stale arm.
-    form.setValue('qualifiersPerPool', next.qualifiersPerPool, opts)
+    form.setValue('qualifiersPerGroup', next.qualifiersPerGroup, opts)
     // …and the round count with them, for the identical reason (the swiss ADR): the
     // resolver judges `(drawType, rounds)` as one pair too, so a draw type set without its
     // round count would be validated against a stale R.
@@ -240,10 +240,10 @@ export const EventEditor = ({
     async (formValues) => {
       if (!event) return
       // The event that was opened, with every editable field taken from the form —
-      // `pools` included, which is why this is an `EditedEvent` and not a
-      // `TournamentEvent`: the form holds entries, and an entry is not a pool. Handing
-      // the read model's pools back instead would re-send the ids on a create (a 422) and
-      // lose the added/kept distinction on a patch.
+      // `reservations` included, which is why this is an `EditedEvent` and not a
+      // `TournamentEvent`: the form holds entries, and an entry is not a reservation.
+      // Handing the read model's reservations back instead would re-send the ids on a
+      // create (a 422) and lose the added/kept distinction on a patch.
       const saved: EditedEvent = { ...event, ...formValues }
       setFailure(null)
       try {
@@ -269,7 +269,7 @@ export const EventEditor = ({
 
   const basicsErrors = {
     name: errors.name?.message,
-    qualifiersPerPool: errors.qualifiersPerPool?.message,
+    qualifiersPerGroup: errors.qualifiersPerGroup?.message,
     rounds: errors.rounds?.message,
     maxPlayers: errors.maxPlayers?.message,
     entryFee: errors.entryFee?.message,
@@ -283,11 +283,12 @@ export const EventEditor = ({
   // entered to deal.
   //
   // Two freezes, two controls, two different tabs — so they are two values, not one
-  // `frozen: boolean` handed to both. The pools section may not add or remove a pool;
-  // the Basics tab may not re-label the draw type. Everything else on both tabs stays
-  // live, including — pointedly — a pool's tables, window and name.
+  // `frozen: boolean` handed to both. The reservations section may not add or remove a
+  // reservation (which would add or remove the group it mints, 1:1); the Basics tab may
+  // not re-label the draw type. Everything else on both tabs stays live, including —
+  // pointedly — a reservation's tables, window and name.
   const OPEN: EditFreeze = { kind: 'open' }
-  const poolsFreeze = event ? poolSetFreeze(event) : OPEN
+  const reservationsFreeze = event ? groupSetFreeze(event) : OPEN
   const drawTypeLock = event ? drawTypeFreeze(event, drawTypes) : OPEN
 
   // ⚠️ Keyed off the **draft's** draw type, not the saved event's. The Basics picker
@@ -343,7 +344,7 @@ export const EventEditor = ({
             <Tabs value={activeSection} onValueChange={setSection}>
               {/* The scroll wrapper is the FIFTH tab's doing. Every trigger is
                   `whitespace-nowrap`, so the list cannot shrink below its own min-content
-                  width — and "Basics · Eligibility · Match settings · Table pools · Draw
+                  width — and "Basics · Eligibility · Match settings · Reservations · Draw
                   structure" is wider than a 375px phone. Left to overflow it would widen
                   the sheet's scroll container instead, which is the sideways-hiding bug
                   this editor has already shipped twice (`expectNoHorizontalScroll`, the
@@ -386,19 +387,19 @@ export const EventEditor = ({
                   onChange={applyChange}
                 />
               </TabsContent>
-              <TabsContent value="pools">
-                <PoolsSection
+              <TabsContent value="reservations">
+                <ReservationsSection
                   control={form.control}
                   tables={tables}
                   canEdit={canEdit}
-                  freeze={poolsFreeze}
-                  nameIssues={isSubmitted ? poolIssues : undefined}
+                  freeze={reservationsFreeze}
+                  nameIssues={isSubmitted ? reservationIssues : undefined}
                 />
               </TabsContent>
               {/* Rendered only alongside its trigger, so the panel and the tab appear
                   and vanish together — Radix keeps no content for a tab that is not on
                   the list. Fed the DRAFT, so the structure recomputes as the director
-                  edits the player limit on Basics or adds a pool on Table pools. */}
+                  edits the player limit on Basics or adds a reservation on Reservations. */}
               {hasDrawStructure && (
                 <TabsContent value="draw-structure">
                   <DrawStructureSection

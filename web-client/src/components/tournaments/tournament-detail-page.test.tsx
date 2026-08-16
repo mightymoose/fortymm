@@ -507,7 +507,6 @@ describe('TournamentDetailPage', () => {
         fixtures: [
           buildFixture({
             id: 'fx-a-1',
-            poolId: 'p-a',
             round: 1,
             position: 1,
             entryAId: 'entry-1',
@@ -517,7 +516,6 @@ describe('TournamentDetailPage', () => {
           }),
           buildFixture({
             id: 'fx-a-2',
-            poolId: 'p-a',
             round: 2,
             position: 1,
             entryAId: 'entry-1',

@@ -106,7 +106,7 @@ export type FieldProps = FieldBase & (FieldReadable | FieldEditorOnly)
  * ```
  *
  * (Controls that aren't a "label + one control + one value" row — a `Switch`, a
- * `ToggleGroup`, the pool table chips — don't come through `Field`; the guard
+ * `ToggleGroup`, the reservation table chips — don't come through `Field`; the guard
  * test in rule 6 is what covers those.) */
 export const Field = ({
   label,

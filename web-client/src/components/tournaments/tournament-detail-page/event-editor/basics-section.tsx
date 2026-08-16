@@ -4,8 +4,8 @@ import type { EditFreeze } from '../../data/draw'
 import {
   ENTRY_FEE_MAX,
   PLAYERS_MAX,
-  QUALIFIERS_PER_POOL_MAX,
-  QUALIFIERS_PER_POOL_MIN,
+  QUALIFIERS_PER_GROUP_MAX,
+  QUALIFIERS_PER_GROUP_MIN,
   SWISS_ROUNDS_MAX,
   SWISS_ROUNDS_MIN,
 } from '../../data/event-validation'
@@ -31,7 +31,7 @@ export interface BasicsFieldErrors {
   /** The qualifier count's inline red — only ever present for an `rr-then-ko` event,
    * since that is the only draw type the resolver asks the question of (and the only one
    * whose control is on screen). */
-  qualifiersPerPool?: string
+  qualifiersPerGroup?: string
   /** The round count's inline red — only ever present for a `swiss` event, since that is
    * the only draw type the resolver asks the question of (and the only one whose control
    * is on screen). */
@@ -91,7 +91,7 @@ const numericValue = (n: number | null): number | null =>
 
 /**
  * One **draw setting** the director types a number into — `rr-then-ko`'s qualifiers per
- * pool (K) and swiss's round count (R) are the same row, twice.
+ * group (K) and swiss's round count (R) are the same row, twice.
  *
  * They are the same row because they are the same *kind of fact*: a number the chosen draw
  * type asks for, that the planner deals the fixtures by, and that the server freezes the
@@ -281,8 +281,8 @@ export const BasicsSection = ({
           {/* The trigger POINTS at the reason (`aria-describedby`), it does not merely
               sit above it. A disabled trigger is not focusable and carries no tooltip,
               so the description is the only channel it has left — and one it had, in
-              fact, been leaving empty (`aria-describedby: null`) while the pools section
-              one tab over wired the identical freeze correctly. */}
+              fact, been leaving empty (`aria-describedby: null`) while the reservations
+              section one tab over wired the identical freeze correctly. */}
           {(_id, hintId) => (
             <OptionSelect
               ariaLabel="Draw type"
@@ -306,15 +306,15 @@ export const BasicsSection = ({
             `DrawSettingField`'s — this row says only what is true of K. */}
         {event.drawType === 'rr-then-ko' && (
           <DrawSettingField
-            label="Qualifiers per pool"
-            value={event.qualifiersPerPool}
-            min={QUALIFIERS_PER_POOL_MIN}
-            max={QUALIFIERS_PER_POOL_MAX}
-            hint="How many of each pool’s finishers advance to the knockout stage."
-            error={errors.qualifiersPerPool}
+            label="Qualifiers per group"
+            value={event.qualifiersPerGroup}
+            min={QUALIFIERS_PER_GROUP_MIN}
+            max={QUALIFIERS_PER_GROUP_MAX}
+            hint="How many of each group’s finishers advance to the knockout stage."
+            error={errors.qualifiersPerGroup}
             freeze={drawTypeFreeze}
             readOnly={readOnly}
-            onChange={(qualifiersPerPool) => set({ qualifiersPerPool })}
+            onChange={(qualifiersPerGroup) => set({ qualifiersPerGroup })}
           />
         )}
         {/* **R**, and only for the one draw type whose round count anybody chooses (ADR

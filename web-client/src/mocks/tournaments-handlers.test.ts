@@ -159,7 +159,7 @@ describe('GET /v1/tournaments — the near-me filter', () => {
  *
  * WHY THIS IS TESTED AT ALL. The rule lives on the server as a discriminated union
  * (`api/app/schemas/tournament.py`): `RrThenKoDrawSettingsWrite` requires
- * `qualifiers_per_pool` with `ge=1` and no default, the `round-robin`/`single-elim` arms
+ * `qualifiers_per_group` with `ge=1` and no default, the `round-robin`/`single-elim` arms
  * declare no such field and are `extra="forbid"`, and `TournamentEventUpdate`'s
  * `_parse_draw_settings` refuses a count arriving without a `draw_type` beside it. The
  * mock restates that by hand, and a hand-maintained mirror drifts **both** ways with a
@@ -228,7 +228,7 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
   ) {
     expect(result.status).toBe(422)
     const { detail } = result.body as { detail: string }
-    expect(detail).toContain('qualifiers_per_pool')
+    expect(detail).toContain('qualifiers_per_group')
     expect(detail).toBe(rule)
   }
 
@@ -246,25 +246,25 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
       // Zero advances nobody into the knockout stage; a negative count is not a count.
       const rule = DRAW_SETTINGS_REFUSALS.countTooSmall
       expectRefusal(
-        await createEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: bad }),
+        await createEvent({ draw_type: 'rr-then-ko', qualifiers_per_group: bad }),
         rule,
       )
       expectRefusal(
-        await patchEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: bad }),
+        await patchEvent({ draw_type: 'rr-then-ko', qualifiers_per_group: bad }),
         rule,
       )
     })
 
     it('is refused with a count over 1000 — the same ceiling the server enforces', async () => {
       // A mock more permissive than the server here is exactly how a client ships a
-      // body the API 422s: the server's `qualifiers_per_pool` field is `le=1000`.
+      // body the API 422s: the server's `qualifiers_per_group` field is `le=1000`.
       const rule = DRAW_SETTINGS_REFUSALS.countTooLarge
       expectRefusal(
-        await createEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: 1001 }),
+        await createEvent({ draw_type: 'rr-then-ko', qualifiers_per_group: 1001 }),
         rule,
       )
       expectRefusal(
-        await patchEvent({ draw_type: 'rr-then-ko', qualifiers_per_pool: 1001 }),
+        await patchEvent({ draw_type: 'rr-then-ko', qualifiers_per_group: 1001 }),
         rule,
       )
     })
@@ -274,20 +274,20 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     it('ACCEPTS a count of 1 or more, and stores it', async () => {
       const created = await createEvent({
         draw_type: 'rr-then-ko',
-        qualifiers_per_pool: 2,
+        qualifiers_per_group: 2,
       })
 
       expect(created.status).toBe(201)
       // Round-tripped, not merely accepted: the value comes back on the read shape,
       // which is what the next cut sizes its bracket from.
-      expect((created.body as TournamentEventRead).qualifiers_per_pool).toBe(2)
+      expect((created.body as TournamentEventRead).qualifiers_per_group).toBe(2)
 
       const patched = await patchEvent({
         draw_type: 'rr-then-ko',
-        qualifiers_per_pool: 1,
+        qualifiers_per_group: 1,
       })
       expect(patched.status).toBe(200)
-      expect((patched.body as TournamentEventRead).qualifiers_per_pool).toBe(1)
+      expect((patched.body as TournamentEventRead).qualifiers_per_group).toBe(1)
     })
   })
 
@@ -301,11 +301,11 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
         // knockout stage has misunderstood something worth being told about.
         const rule = DRAW_SETTINGS_REFUSALS.countForbidden(drawType)
         expectRefusal(
-          await createEvent({ draw_type: drawType, qualifiers_per_pool: 2 }),
+          await createEvent({ draw_type: drawType, qualifiers_per_group: 2 }),
           rule,
         )
         expectRefusal(
-          await patchEvent({ draw_type: drawType, qualifiers_per_pool: 2 }),
+          await patchEvent({ draw_type: drawType, qualifiers_per_group: 2 }),
           rule,
         )
       },
@@ -321,14 +321,14 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
         const created = await createEvent({ draw_type: drawType })
 
         expect(created.status).toBe(201)
-        expect((created.body as TournamentEventRead).qualifiers_per_pool).toBeNull()
+        expect((created.body as TournamentEventRead).qualifiers_per_group).toBeNull()
 
         const withNull = await createEvent({
           draw_type: drawType,
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
         })
         expect(withNull.status).toBe(201)
-        expect((withNull.body as TournamentEventRead).qualifiers_per_pool).toBeNull()
+        expect((withNull.body as TournamentEventRead).qualifiers_per_group).toBeNull()
       },
     )
   })
@@ -340,7 +340,7 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     // edge (`_parse_draw_settings`). The editor always sends both: it PATCHes the whole
     // form it rendered.
     expectRefusal(
-      await patchEvent({ qualifiers_per_pool: 2 }),
+      await patchEvent({ qualifiers_per_group: 2 }),
       DRAW_SETTINGS_REFUSALS.countUnpaired,
     )
   })
@@ -356,7 +356,7 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     expect((body as TournamentEventRead).name).toBe('Renamed Singles')
     // …and the stored configuration is untouched by an edit that never mentioned it.
     expect((body as TournamentEventRead).draw_type).toBe('round-robin')
-    expect((body as TournamentEventRead).qualifiers_per_pool).toBeNull()
+    expect((body as TournamentEventRead).qualifiers_per_group).toBeNull()
   })
 })
 
@@ -402,7 +402,7 @@ describe('the tournament write boundary — the venue catalogue (ADR 20260801)',
       court: tbl.court,
     }))
 
-  /** Place Summer Slam's first pool fixture on its first table, over the wire. */
+  /** Place Summer Slam's first group fixture on its first table, over the wire. */
   async function placeAFixture(): Promise<{ fixtureId: string; tableId: string }> {
     const { body } = await getTournament(SLAM)
     const tableId = body.table_catalogue[0].id

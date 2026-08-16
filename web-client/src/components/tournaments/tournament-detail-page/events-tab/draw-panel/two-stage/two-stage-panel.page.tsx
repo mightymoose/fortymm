@@ -12,7 +12,7 @@ const scoped = (container: Container) => ({
     return container.getByTestId(`two-stage-panel-${eventId}`)
   },
 
-  /** The **pool stage**, rendered by the shared `StandingsPanel` — addressed by that
+  /** The **group stage**, rendered by the shared `StandingsPanel` — addressed by that
    * panel's own testid, which is the proof it is the shared component and not a fork. */
   queryStandingsPanel(eventId: string) {
     return container.queryByTestId(`standings-panel-${eventId}`)
@@ -36,7 +36,7 @@ const scoped = (container: Container) => ({
   },
 
   /** The block's stage headings **in rendered order** — `['Standings', 'Finishes']` when
-   * the pools sit above the bracket they seeded. Reading the DOM order is the only way to
+   * the groups sit above the bracket they seeded. Reading the DOM order is the only way to
    * assert "above": both sections render either way round. */
   getStageHeadings() {
     return container
@@ -44,9 +44,9 @@ const scoped = (container: Container) => ({
       .map((h: HTMLElement) => (h.textContent ?? '').trim())
   },
 
-  /** One pool table's player names, top to bottom (the rendered order). */
-  getPoolRowNames(poolName: string) {
-    return within(container.getByRole('table', { name: `Standings for ${poolName}` }))
+  /** One group table's player names, top to bottom (the rendered order). */
+  getGroupRowNames(groupLabel: string) {
+    return within(container.getByRole('table', { name: `Standings for ${groupLabel}` }))
       .getAllByRole('row')
       .slice(1)
       .map((row) => (within(row).getAllByRole('cell')[1].textContent ?? '').trim())

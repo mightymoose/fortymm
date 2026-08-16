@@ -117,7 +117,10 @@ export const TournamentDetailPage = ({
   const range = effectiveDateRange(tournament)
   const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
-  const pools = tournament.events.reduce((s, e) => s + e.pools.length, 0)
+  const reservations = tournament.events.reduce(
+    (s, e) => s + e.reservations.length,
+    0,
+  )
   // `null` when the tournament has NO VENUE at all — a first-class state
   // (CONTEXT.md, "Venue"), and the reason the map below is gated on the address
   // itself and not only on the line: there are no coordinates to pin.
@@ -242,7 +245,11 @@ export const TournamentDetailPage = ({
           <HeroStat label="Events" value={tournament.events.length} icon={<Trophy size={16} />} />
           <HeroStat label="Entries" value={entries} icon={<Users size={16} />} />
           <HeroStat label="Tables" value={tournament.tableIds.length} icon={<Table2 size={16} />} />
-          <HeroStat label="Pools" value={pools} icon={<Layers size={16} />} />
+          <HeroStat
+            label="Reservations"
+            value={reservations}
+            icon={<Layers size={16} />}
+          />
           <HeroStat
             label="Days"
             value={range.start ? days : EM_DASH}

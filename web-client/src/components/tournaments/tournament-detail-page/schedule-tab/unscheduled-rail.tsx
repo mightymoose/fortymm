@@ -39,7 +39,7 @@ export const UnscheduledRail = ({ items }: UnscheduledRailProps) => {
               <span className="text-[color:var(--fg-1)]">{item.label}</span>
               <span className="text-[11px] text-[color:var(--fg-3)]">
                 {item.eventName}
-                {item.poolName ? ` · ${item.poolName}` : ''}
+                {item.groupLabel ? ` · ${item.groupLabel}` : ''}
                 {/* A half-placement: it has a table but no predicted time yet. */}
                 {item.tableLabel ? ` · ${item.tableLabel}, no time yet` : ''}
               </span>
