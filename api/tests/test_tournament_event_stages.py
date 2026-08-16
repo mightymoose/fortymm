@@ -520,7 +520,7 @@ async def test_update_event_remint_mints_fresh_when_no_stage_rows_exist(
         slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=[],
+        groups=[],
     )
     db_session.add(event)
     await db_session.commit()

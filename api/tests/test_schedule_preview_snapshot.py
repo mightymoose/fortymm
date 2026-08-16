@@ -556,12 +556,17 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
     preview = build_preview_snapshot(loaded)
 
     assert len(preview.snapshot.fixtures) == 15
-    # The solver's key is still ``{event}:{pool}`` (see
+    # The PREVIEW's key is ``{event}:{group}`` (see
     # ``app.schedule_preview.preview_pool_key`` for why the namespace stayed once the
-    # pool ids became globally unique uuids); the pool half is looked up, not spelled.
-    (pool,) = loaded.events[0].pools
+    # pool ids became globally unique uuids); the group half is looked up, not spelled.
+    #
+    # Deliberately the GROUP id here, unlike the live solve, which keys on the
+    # reservation: the preview builds both its pool list and its fixture refs from the
+    # projected ``Pool``, whose ``id`` is the group's, so it is internally consistent in
+    # the id space the wire already serves.
+    (group,) = loaded.events[0].groups
     assert {f.pool_id for f in preview.snapshot.fixtures} == {
-        scheduling.PoolId(f"{loaded.events[0].id}:{pool.id}")
+        scheduling.PoolId(f"{loaded.events[0].id}:{group.id}")
     }
     assert preview.field_summaries[0].field_size == 6
     # What was dropped is *counted*, not silently discarded: the top 2 of the single

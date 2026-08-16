@@ -163,7 +163,20 @@ class TournamentEventStageGroup(Base):
         back_populates="group",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        lazy="selectin",
+        # ``joined``, NOT ``selectin``, for two reasons that happen to agree.
+        #
+        # It is a ONE-TO-ONE, so a join adds columns and never multiplies group rows —
+        # this row and the reservation beyond it both ride along in whatever statement
+        # loads the group, for no statement of their own. That is what keeps the split
+        # free: a page costs exactly what it did when a pool was a single row.
+        #
+        # And a chained ``selectin`` does not survive every path a group is loaded by.
+        # ``TournamentEvent.groups`` is a VIEWONLY ``secondary=`` association, and a
+        # group reached through it came back with a ``selectin`` child still unloaded —
+        # so the ``reservation`` property below lazy-loaded, which under async is a
+        # ``MissingGreenlet`` rather than a slow read. A joined load is part of the
+        # parent's own SELECT, so no load path can leave it behind.
+        lazy="joined",
         uselist=False,
     )
 
