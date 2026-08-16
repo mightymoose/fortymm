@@ -68,10 +68,12 @@ const EQUATION = `${FIELD_CAP} players ÷ ${GROUP_COUNT} groups = ${GROUP_SIZE} 
  * right-single-quote rule, which the design README states at the top and this string
  * exists to pin. A test that normalises either way is a test that stops noticing.
  *
- * ⚠️ **Assumed copy** — the ticket for #1369 names the fact line's term "now reads
- * `Reservations`", replacing the old venue-facing word; see the e2e-agent report for the
- * exact wording to confirm against what web-client actually renders. */
-const GROUP_COUNT_SOURCE = `${GROUP_COUNT} Reservations · today's behaviour`
+ * Confirmed against `web-client/src/components/tournaments/data/draw-structure.ts`'s own
+ * in-flight rename (#1369, not yet landed at the component layer that renders it): the
+ * old `${poolCount} pool reservations · today's behaviour` term drops the word "pool"
+ * outright rather than becoming "Reservations" — `${groupCount} reservations · today's
+ * behaviour`, lowercase, no capitalization change. */
+const GROUP_COUNT_SOURCE = `${GROUP_COUNT} reservations · today's behaviour`
 
 /** Where the preview field came from. `{n}-player cap` for a capped event — the honest
  * label an uncapped one gets instead is `preview-field.ts`'s deviation from the reference
