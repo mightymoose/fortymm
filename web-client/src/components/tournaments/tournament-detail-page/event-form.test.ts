@@ -1,4 +1,4 @@
-import { buildEvent, buildPool, buildPredicate } from '../data/seed.factory'
+import { buildEvent, buildReservation, buildPredicate } from '../data/seed.factory'
 import {
   eventSchema,
   eventToFormValues,
@@ -45,17 +45,17 @@ describe('eventSchema', () => {
    * under a control that is not even rendered.
    */
   describe('the qualifier count', () => {
-    const twoStage = (qualifiersPerPool: number | null) =>
-      formFor({ drawType: 'rr-then-ko', qualifiersPerPool })
+    const twoStage = (qualifiersPerGroup: number | null) =>
+      formFor({ drawType: 'rr-then-ko', qualifiersPerGroup })
 
     it('requires a count for rr-then-ko, and blames the field by name', () => {
-      expect(rejectedFields(twoStage(null))).toEqual(['qualifiersPerPool'])
+      expect(rejectedFields(twoStage(null))).toEqual(['qualifiersPerGroup'])
     })
 
-    // `ge=1` on the server (`QualifiersPerPool`). Zero advances nobody into the
+    // `ge=1` on the server (`QualifiersPerGroup`). Zero advances nobody into the
     // knockout stage, and a negative count is not a count.
     it.each([0, -1, 1.5])('refuses %s', (bad) => {
-      expect(rejectedFields(twoStage(bad))).toEqual(['qualifiersPerPool'])
+      expect(rejectedFields(twoStage(bad))).toEqual(['qualifiersPerGroup'])
     })
 
     it('accepts the smallest legal count, and a larger one', () => {
@@ -71,14 +71,14 @@ describe('eventSchema', () => {
      * only thing the director can change.
      */
     it.each([1001, 999_999_999, 2_147_483_648])('refuses %s', (tooMany) => {
-      expect(rejectedFields(twoStage(tooMany))).toEqual(['qualifiersPerPool'])
+      expect(rejectedFields(twoStage(tooMany))).toEqual(['qualifiersPerGroup'])
     })
 
     it('speaks the schema’s own sentence about the ceiling', () => {
       const result = eventSchema.safeParse(twoStage(1001))
       expect(result.success).toBe(false)
       expect(result.error?.issues[0].message).toBe(
-        'At most 1,000 players can advance from each pool.',
+        'At most 1,000 players can advance from each group.',
       )
     })
 
@@ -94,7 +94,7 @@ describe('eventSchema', () => {
     it.each(['round-robin', 'single-elim'] as const)(
       'asks nothing of %s, whose count is null',
       (drawType) => {
-        expect(rejectedFields(formFor({ drawType, qualifiersPerPool: null }))).toEqual([])
+        expect(rejectedFields(formFor({ drawType, qualifiersPerGroup: null }))).toEqual([])
       },
     )
 
@@ -104,7 +104,7 @@ describe('eventSchema', () => {
     // over a number that is never sent.
     it('ignores a leftover count once the draw type no longer has a knockout stage', () => {
       expect(
-        rejectedFields(formFor({ drawType: 'round-robin', qualifiersPerPool: 2 })),
+        rejectedFields(formFor({ drawType: 'round-robin', qualifiersPerGroup: 2 })),
       ).toEqual([])
     })
   })
@@ -196,12 +196,12 @@ describe('eventSchema', () => {
     it('asks a swiss event for no qualifier count, and a two-stage one for no rounds', () => {
       expect(
         rejectedFields(
-          formFor({ drawType: 'swiss', rounds: 3, qualifiersPerPool: null }),
+          formFor({ drawType: 'swiss', rounds: 3, qualifiersPerGroup: null }),
         ),
       ).toEqual([])
       expect(
         rejectedFields(
-          formFor({ drawType: 'rr-then-ko', qualifiersPerPool: 2, rounds: null }),
+          formFor({ drawType: 'rr-then-ko', qualifiersPerGroup: 2, rounds: null }),
         ),
       ).toEqual([])
     })
@@ -235,39 +235,43 @@ describe('eventSchema', () => {
     ).toEqual([])
   })
 
-  /** A pool is *called* something — the server says so (`Pool.name`, `min_length=1`),
-   * and so, now, does the resolver. The editor mints the id and the default name, so
-   * the only way to author a blank one is to clear the box; this is what stops the
-   * result being sent. */
-  it('refuses a pool with no name — blank, or a space', () => {
-    expect(rejectedFields(formFor({ pools: [buildPool({ name: '' })] }))).toEqual([
-      'pools',
-    ])
-    expect(rejectedFields(formFor({ pools: [buildPool({ name: '   ' })] }))).toEqual([
-      'pools',
-    ])
-    expect(rejectedFields(formFor({ pools: [buildPool({ name: 'Pool A' })] }))).toEqual(
-      [],
-    )
+  /** A reservation is *called* something — the server says so (`Reservation.name`,
+   * `min_length=1`), and so, now, does the resolver. The editor mints the id and the
+   * default name, so the only way to author a blank one is to clear the box; this is
+   * what stops the result being sent. */
+  it('refuses a reservation with no name — blank, or a space', () => {
+    expect(
+      rejectedFields(formFor({ reservations: [buildReservation({ name: '' })] })),
+    ).toEqual(['reservations'])
+    expect(
+      rejectedFields(formFor({ reservations: [buildReservation({ name: '   ' })] })),
+    ).toEqual(['reservations'])
+    expect(
+      rejectedFields(
+        formFor({ reservations: [buildReservation({ name: 'Reservation A' })] }),
+      ),
+    ).toEqual([])
   })
 
-  /** ⚠️ No ceiling: `Pool.name` has `min_length=1` and **no** `max_length` (a pool lives
-   * in JSONB — there is no column to overflow, unlike the event's `VARCHAR(255)`).
-   * Mirroring a bound the API does not have would refuse a save nothing on the server
-   * would ever have refused. */
+  /** ⚠️ No ceiling: `Reservation.name` has `min_length=1` and **no** `max_length` (a
+   * reservation lives in JSONB — there is no column to overflow, unlike the event's
+   * `VARCHAR(255)`). Mirroring a bound the API does not have would refuse a save
+   * nothing on the server would ever have refused. */
   it('does NOT invent a ceiling the server has no column for', () => {
     expect(
-      rejectedFields(formFor({ pools: [buildPool({ name: 'A'.repeat(300) })] })),
+      rejectedFields(
+        formFor({ reservations: [buildReservation({ name: 'A'.repeat(300) })] }),
+      ),
     ).toEqual([])
   })
 
   /** The name that is *sent* is the name that was judged: trimmed, so the server's
    * `min_length` counts the same characters this schema did. */
-  it('trims the pool name it lets through', () => {
+  it('trims the reservation name it lets through', () => {
     const parsed = eventSchema.parse(
-      formFor({ pools: [buildPool({ name: '  Championship  ' })] }),
+      formFor({ reservations: [buildReservation({ name: '  Championship  ' })] }),
     )
-    expect(parsed.pools[0].name).toBe('Championship')
+    expect(parsed.reservations[0].name).toBe('Championship')
   })
 
   /** The timezone anchors the windows and is `NOT NULL` on the server (ADR 20260719),
@@ -318,7 +322,7 @@ describe('firstInvalidSection', () => {
   // and a save refused on a tab you cannot see is indistinguishable from a dead button.
   it('sends a broken qualifier count to Basics', () => {
     expect(
-      firstInvalidSection({ qualifiersPerPool: { type: 'custom', message: 'x' } }),
+      firstInvalidSection({ qualifiersPerGroup: { type: 'custom', message: 'x' } }),
     ).toBe('basics')
   })
 
@@ -341,10 +345,10 @@ describe('firstInvalidSection', () => {
     ).toBe('eligibility')
   })
 
-  it('sends a broken pool name to Table pools', () => {
-    expect(firstInvalidSection({ pools: { type: 'custom', message: 'x' } })).toBe(
-      'pools',
-    )
+  it('sends a broken reservation name to Reservations', () => {
+    expect(
+      firstInvalidSection({ reservations: { type: 'custom', message: 'x' } }),
+    ).toBe('reservations')
   })
 
   // With both broken, the name is the field they are most likely to have simply not

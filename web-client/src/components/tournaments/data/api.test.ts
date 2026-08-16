@@ -20,7 +20,7 @@ import {
   tournamentToUpdateBody,
 } from './api'
 import { blankAddress } from './helpers'
-import { addedPool, keepPools } from './pool-entries'
+import { addedReservation, keepReservations } from './reservation-entries'
 import { asEditedEvent } from './seed.factory'
 import { addTable, keepTables } from './table-catalogue'
 import type { Tournament, TournamentEvent } from './types'
@@ -116,28 +116,28 @@ describe('apiToEvent', () => {
     expect(event.entered).toBe(0)
   })
 
-  it('maps a pool, renaming table_ids to tableIds and carrying its position', () => {
+  it('maps a reservation, renaming table_ids to tableIds and carrying its position', () => {
     const event = apiToEvent(
       buildTournamentEventRead({
-        pools: [
+        reservations: [
           {
-            id: 'p-1',
-            name: 'Pool A',
+            id: 'res-1',
+            name: 'Reservation A',
             slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
             table_ids: ['t1', 't2'],
             // Not 0: the server's number, carried across as sent. A mapper that
-            // recomputed it from the array index would look right on a first pool and be
-            // wrong on every event whose pools arrived in any other order.
+            // recomputed it from the array index would look right on a first reservation
+            // and be wrong on every event whose reservations arrived in any other order.
             position: 3,
           },
         ],
       }),
     )
 
-    expect(event.pools).toEqual([
+    expect(event.reservations).toEqual([
       {
-        id: 'p-1',
-        name: 'Pool A',
+        id: 'res-1',
+        name: 'Reservation A',
         slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
         tableIds: ['t1', 't2'],
         position: 3,
@@ -180,7 +180,7 @@ describe('apiToEvent — the draw', () => {
         fixtures: [
           buildTournamentFixtureRead({
             id: 'fx-1',
-            pool_id: 'p-1',
+            group_id: 'p-1',
             round: 1,
             position: 1,
             entry_a_id: 'entry-1',
@@ -188,7 +188,7 @@ describe('apiToEvent — the draw', () => {
           }),
           buildTournamentFixtureRead({
             id: 'fx-2',
-            pool_id: 'p-1',
+            group_id: 'p-1',
             round: 1,
             position: 2,
             entry_a_id: 'entry-3',
@@ -202,7 +202,7 @@ describe('apiToEvent — the draw', () => {
       {
         id: 'fx-1',
         stageId: 's-1',
-        poolId: 'p-1',
+        groupId: 'p-1',
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -219,7 +219,7 @@ describe('apiToEvent — the draw', () => {
       {
         id: 'fx-2',
         stageId: 's-1',
-        poolId: 'p-1',
+        groupId: 'p-1',
         round: 1,
         position: 2,
         entryAId: 'entry-3',
@@ -238,15 +238,15 @@ describe('apiToEvent — the draw', () => {
 
   // Every null on a fixture is a FACT (ADR-0786), and a mapper that coalesced any of
   // them would erase the thing the draw exists to say: a null side is TBD, a null
-  // winner is undecided, a null match (and null status) is un-materialized, a null pool
-  // is un-pooled.
-  it('carries every null through — TBD sides, undecided, un-materialized, un-pooled', () => {
+  // winner is undecided, a null match (and null status) is un-materialized, a null group
+  // is ungrouped.
+  it('carries every null through — TBD sides, undecided, un-materialized, ungrouped', () => {
     const event = apiToEvent(
       buildTournamentEventRead({
         fixtures: [
           buildTournamentFixtureRead({
             id: 'fx-final',
-            pool_id: null,
+            group_id: null,
             round: 3,
             position: 1,
             entry_a_id: null,
@@ -259,7 +259,7 @@ describe('apiToEvent — the draw', () => {
     expect(event.fixtures[0]).toEqual({
       id: 'fx-final',
       stageId: 's-1',
-      poolId: null,
+      groupId: null,
       round: 3,
       position: 1,
       entryAId: null,
@@ -308,7 +308,7 @@ describe('apiToEvent — the draw', () => {
       what: 'a fixture missing its round',
       fixture: malformedFixture({
         id: 'fx-1',
-        pool_id: 'p-1',
+        group_id: 'p-1',
         position: 1,
         entry_a_id: 'entry-1',
         entry_b_id: 'entry-2',
@@ -317,10 +317,10 @@ describe('apiToEvent — the draw', () => {
       }),
     },
     {
-      what: 'a pool_id of the wrong type',
+      what: 'a group_id of the wrong type',
       fixture: malformedFixture({
         ...buildTournamentFixtureRead(),
-        pool_id: 7,
+        group_id: 7,
       }),
     },
     {
@@ -338,7 +338,7 @@ describe('apiToEvent — the draw', () => {
       what: 'an absent side (absent is not the same as TBD)',
       fixture: malformedFixture({
         id: 'fx-1',
-        pool_id: null,
+        group_id: null,
         round: 1,
         position: 1,
         entry_b_id: 'entry-2',
@@ -427,7 +427,7 @@ describe('apiToTournament', () => {
           {
             key: 'round-robin',
             name: 'Round robin',
-            description: 'Everyone in a pool plays everyone else.',
+            description: 'Everyone in a group plays everyone else.',
             display_order: 1,
           },
         ],
@@ -517,7 +517,7 @@ describe('apiToTournament', () => {
         events: [
           buildTournamentEventRead({
             id: 'ev-drawn',
-            fixtures: [buildTournamentFixtureRead({ id: 'fx-1', pool_id: 'p-1' })],
+            fixtures: [buildTournamentFixtureRead({ id: 'fx-1', group_id: 'p-1' })],
           }),
           buildTournamentEventRead({ id: 'ev-undrawn', fixtures: [] }),
         ],
@@ -525,7 +525,7 @@ describe('apiToTournament', () => {
     )
 
     expect(tournament.events[0].fixtures.map((f) => f.id)).toEqual(['fx-1'])
-    expect(tournament.events[0].fixtures[0].poolId).toBe('p-1')
+    expect(tournament.events[0].fixtures[0].groupId).toBe('p-1')
     // The undrawn event is not a lesser drawn one: it is empty, and that is a state.
     expect(tournament.events[1].fixtures).toEqual([])
   })
@@ -818,7 +818,7 @@ const event: TournamentEvent = {
   // count (ADR 20260727). `null` is the only value its draw settings admit — and the
   // write bodies below must OMIT the key entirely rather than send this `null`, because
   // that arm of the server's draw-settings union is `extra="forbid"`.
-  qualifiersPerPool: null,
+  qualifiersPerGroup: null,
   // …and its rounds come off the circle method rather than a setting, so it carries NO
   // round count either (the swiss ADR). Same rule as the qualifier count above: the write
   // bodies must OMIT the key, not send this `null`.
@@ -843,10 +843,10 @@ const event: TournamentEvent = {
   slot: { date: '2026-06-14', start: '09:00', end: '16:00' },
   predicates: [{ id: 'pr-2', field: 'rating', op: '<', value: 1500 }],
   match: { rated: true, lengthGames: 3 },
-  pools: [
+  reservations: [
     {
-      id: 'p-1',
-      name: 'Pool A',
+      id: 'res-1',
+      name: 'Reservation A',
       slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
       tableIds: ['t1', 't2'],
       // The server's number, held on the read model. The write bodies below must NOT
@@ -856,6 +856,10 @@ const event: TournamentEvent = {
       position: 0,
     },
   ],
+  // Server-owned and read-only, minted 1:1 with `reservations` above (ticket #1369) —
+  // never authored by the editor, and absent from every write body (`eventToApiFields`
+  // is allow-list, same as `stages` below).
+  groups: [{ id: 'grp-res-1', position: 0, reservationId: 'res-1' }],
   // A round-robin event's single, system-minted stage (ADR 20260815) — never authored
   // by the editor, and absent from every write body (`eventToApiFields` is allow-list).
   stages: [{ id: 's-1', position: 0, drawType: 'round-robin' }],
@@ -866,10 +870,10 @@ const event: TournamentEvent = {
   results: null,
 }
 
-/** The event as the **editor** hands it back with its pools untouched: each one cited by
- * the id the server minted (`asEditedEvent` → `keepPools`). This is what the write
- * mappers take — a read event no longer is one, which is the compile-time half of ADR
- * 20260801. */
+/** The event as the **editor** hands it back with its reservations untouched: each one
+ * cited by the id the server minted (`asEditedEvent` → `keepReservations`). This is what
+ * the write mappers take — a read event no longer is one, which is the compile-time half
+ * of ADR 20260801. */
 const edited = asEditedEvent(event)
 
 describe('eventToCreateBody', () => {
@@ -883,39 +887,39 @@ describe('eventToCreateBody', () => {
     // body, `NOT NULL` on the server.
     expect(body.timezone).toBe('America/Chicago')
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
-    // NO `id` — a created event's pools are all new, and a pool's id is the server's to
-    // mint (`PoolWrite` has no such field, and `extra="forbid"` makes a supplied one a
-    // 422 on `body.pools[0].id`).
-    expect(body.pools).toEqual([
+    // NO `id` — a created event's reservations are all new, and a reservation's id is
+    // the server's to mint (`ReservationWrite` has no such field, and `extra="forbid"`
+    // makes a supplied one a 422 on `body.reservations[0].id`).
+    expect(body.reservations).toEqual([
       {
-        name: 'Pool A',
+        name: 'Reservation A',
         slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
         table_ids: ['t1', 't2'],
       },
     ])
   })
 
-  /** ⚠️ The discriminating one. `toEqual` above would pass a body whose pool carried an
-   * `id: undefined` key — and JSON.stringify would drop it, so even the bytes would look
-   * right — but it would NOT pass one carrying a real id, which is what the editor used
-   * to send. Asked as a key question so the claim is about the shape, not about a value
-   * that happens to be absent. */
-  it('sends each pool with NO id key at all — the server mints it', () => {
+  /** ⚠️ The discriminating one. `toEqual` above would pass a body whose reservation
+   * carried an `id: undefined` key — and JSON.stringify would drop it, so even the bytes
+   * would look right — but it would NOT pass one carrying a real id, which is what the
+   * editor used to send. Asked as a key question so the claim is about the shape, not
+   * about a value that happens to be absent. */
+  it('sends each reservation with NO id key at all — the server mints it', () => {
     const body = eventToCreateBody(
       asEditedEvent(event, [
-        ...keepPools(event.pools),
-        addedPool({
-          name: 'Pool B',
+        ...keepReservations(event.reservations),
+        addedReservation({
+          name: 'Reservation B',
           slot: { date: '2026-06-14', start: '13:00', end: '16:00' },
           tableIds: ['t3'],
         }),
       ]),
     )
 
-    expect(body.pools).toHaveLength(2)
-    for (const pool of body.pools ?? []) {
-      expect('id' in pool).toBe(false)
-      expect('position' in pool).toBe(false)
+    expect(body.reservations).toHaveLength(2)
+    for (const reservation of body.reservations ?? []) {
+      expect('id' in reservation).toBe(false)
+      expect('position' in reservation).toBe(false)
     }
   })
 
@@ -933,20 +937,29 @@ describe('eventToCreateBody', () => {
       // eventToCreateBody always populates these, but they're typed optional on
       // the *create* body — coalesce so the value satisfies the *read* shape.
       predicates: wire.predicates ?? [],
-      // The create body carries neither an `id` nor a `position` (`PoolWrite` forbids
-      // both), and the read shape requires both — so the round trip has to close the gap
-      // the way the SERVER closes it: the id is MINTED, and the position is the pool's
-      // index in the list that was sent. Carrying either through from the write body
-      // instead would make the round trip pass while the app and the API disagreed about
-      // who owns a pool's identity — and on the position, about which pool is first.
-      pools: (wire.pools ?? []).map((pool, index) => ({
-        ...pool,
-        id: event.pools[index].id,
+      // The create body carries neither an `id` nor a `position` (`ReservationWrite`
+      // forbids both), and the read shape requires both — so the round trip has to close
+      // the gap the way the SERVER closes it: the id is MINTED, and the position is the
+      // reservation's index in the list that was sent. Carrying either through from the
+      // write body instead would make the round trip pass while the app and the API
+      // disagreed about who owns a reservation's identity — and on the position, about
+      // which reservation is first.
+      reservations: (wire.reservations ?? []).map((reservation, index) => ({
+        ...reservation,
+        id: event.reservations[index].id,
         position: index,
       })),
+      // Minted 1:1 with the reservations above (ticket #1369), also server-owned and
+      // absent from every write body — supply the WIRE shape of the read event's own
+      // groups so the round trip lands back on `event`.
+      groups: event.groups.map((g) => ({
+        id: g.id,
+        position: g.position,
+        reservation_id: g.reservationId,
+      })),
       // The stage is system-minted (ADR 20260815) and absent from every write body,
-      // same as the pools' server-owned fields above — supply the read shape's row so
-      // the round trip lands back on `event`.
+      // same as the reservations' server-owned fields above — supply the read shape's
+      // row so the round trip lands back on `event`.
       stages: [{ id: 's-1', position: 0, draw_type: 'round-robin' }],
       // `max_players` is optional on the create body (`null`/absent = no cap,
       // ADR-0935); the read shape is `number | null`.
@@ -956,7 +969,7 @@ describe('eventToCreateBody', () => {
       // explicit `null`. Supplying it here is what makes the round trip land back on
       // `event` — and the assertion below is therefore also the proof that the omission
       // and the `null` mean the same thing.
-      qualifiers_per_pool: null,
+      qualifiers_per_group: null,
       // …and the round count the same way, for the same reason: omitted on the way out for
       // a round-robin event, an explicit `null` on the way back.
       rounds: null,
@@ -1016,13 +1029,14 @@ describe('eventToUpdateBody', () => {
     expect(body.entry_fee).toBe(30)
     expect(body.timezone).toBe('America/Chicago')
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
-    // A PATCH is the id-keyed diff (ADR 20260801), so a pool the event already has is
-    // CITED — that is what keeps its id, and every fixture drawn into it. Unlike the
-    // create body one describe up, which carries no id at all.
-    expect(body.pools).toEqual([
+    // A PATCH is the id-keyed diff (ADR 20260801), so a reservation the event already
+    // has is CITED — that is what keeps its id, and every group (and therefore every
+    // fixture) mapped to it. Unlike the create body one describe up, which carries no
+    // id at all.
+    expect(body.reservations).toEqual([
       {
-        id: 'p-1',
-        name: 'Pool A',
+        id: 'res-1',
+        name: 'Reservation A',
         slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
         table_ids: ['t1', 't2'],
       },
@@ -1030,49 +1044,57 @@ describe('eventToUpdateBody', () => {
   })
 
   /**
-   * The three statements a pools diff can make, in one body: keep this one, add that one,
-   * and — by saying nothing about it — remove the third.
+   * The three statements a reservations diff can make, in one body: keep this one, add
+   * that one, and — by saying nothing about it — remove the third.
    *
-   * The renamed `kept` entry is the load-bearing half: it proves a re-worded pool still
-   * cites its id, rather than arriving as an add (which would mint a second pool and
-   * delete the one holding the fixtures).
+   * ⚠️ **The id here is the RESERVATION's, never the mapped group's** — this has bitten
+   * the API's own test suite twice. `res-1` and `grp-res-1` are visibly different
+   * strings on purpose, so a mapper that leaked the group's id instead would fail this
+   * assertion rather than pass it by coincidence.
+   *
+   * The renamed `kept` entry is the load-bearing half: it proves a re-worded reservation
+   * still cites its id, rather than arriving as an add (which would mint a second
+   * reservation, and the group mapped to it, deleting the one holding the fixtures).
    */
-  it('expresses a pools edit as the id-keyed diff: cite, add, and omit', () => {
+  it('expresses a reservations edit as the id-keyed diff: cite, add, and omit', () => {
     const stored = [
-      event.pools[0],
-      { ...event.pools[0], id: 'p-2', name: 'Pool B', position: 1 },
+      event.reservations[0],
+      { ...event.reservations[0], id: 'res-2', name: 'Reservation B', position: 1 },
     ]
     const body = eventToUpdateBody(
-      asEditedEvent({ ...event, pools: stored }, [
-        // Pool A, renamed — still cited, so it keeps its id.
-        { ...keepPools([stored[0]])[0], name: 'Morning Pool' },
+      asEditedEvent({ ...event, reservations: stored }, [
+        // Reservation A, renamed — still cited, so it keeps its id.
+        { ...keepReservations([stored[0]])[0], name: 'Morning Reservation' },
         // …a brand-new one, with no id for the server to mint against.
-        addedPool({
-          name: 'Pool C',
+        addedReservation({
+          name: 'Reservation C',
           slot: { date: '2026-06-14', start: '13:00', end: '16:00' },
           tableIds: ['t3'],
         }),
-        // …and Pool B is simply not here. An uncited stored pool is a removal.
+        // …and Reservation B is simply not here. An uncited stored reservation is a
+        // removal.
       ]),
     )
 
-    expect(body.pools).toEqual([
+    expect(body.reservations).toEqual([
       {
-        id: 'p-1',
-        name: 'Morning Pool',
+        id: 'res-1',
+        name: 'Morning Reservation',
         slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
         table_ids: ['t1', 't2'],
       },
       {
-        name: 'Pool C',
+        name: 'Reservation C',
         slot: { date: '2026-06-14', start: '13:00', end: '16:00' },
         table_ids: ['t3'],
       },
     ])
+    // The id sent is the RESERVATION's — never the mapped group's.
+    expect(body.reservations?.[0]?.id).toBe('res-1')
     // The added entry omits the KEY rather than sending `id: null`: both are accepted,
     // but a payload a reader can eyeball and see "this entry cites nothing, so it is an
     // insert" is the whole readability of a diff.
-    expect('id' in (body.pools ?? [])[1]).toBe(false)
+    expect('id' in (body.reservations ?? [])[1]).toBe(false)
   })
 
   // Clearing the cap sends an explicit `null` — the PATCH handler distinguishes
@@ -1092,12 +1114,12 @@ describe('eventToUpdateBody', () => {
     const twoStage: TournamentEvent = {
       ...event,
       drawType: 'rr-then-ko',
-      qualifiersPerPool: 2,
+      qualifiersPerGroup: 2,
     }
 
     it('SENDS the qualifier count for rr-then-ko, on both verbs', () => {
-      expect(eventToCreateBody(asEditedEvent(twoStage)).qualifiers_per_pool).toBe(2)
-      expect(eventToUpdateBody(asEditedEvent(twoStage)).qualifiers_per_pool).toBe(2)
+      expect(eventToCreateBody(asEditedEvent(twoStage)).qualifiers_per_group).toBe(2)
+      expect(eventToUpdateBody(asEditedEvent(twoStage)).qualifiers_per_group).toBe(2)
     })
 
     it('sends the DIRECTOR’s count, never a default', () => {
@@ -1105,13 +1127,13 @@ describe('eventToUpdateBody', () => {
       // of 1 could not tell "threaded through" from "fell back". Three is neither the
       // fallback nor the convention.
       const body = eventToUpdateBody(
-        asEditedEvent({ ...twoStage, qualifiersPerPool: 3 }),
+        asEditedEvent({ ...twoStage, qualifiersPerGroup: 3 }),
       )
-      expect(body.qualifiers_per_pool).toBe(3)
+      expect(body.qualifiers_per_group).toBe(3)
     })
 
     // The two count-less arms of the server's draw-settings union are `extra="forbid"`
-    // and declare no `qualifiers_per_pool` field at all, so the key is a **422** there —
+    // and declare no `qualifiers_per_group` field at all, so the key is a **422** there —
     // not a `null` politely ignored. Omission is therefore the only correct spelling, and
     // `toBeNull()` would pass against the payload that gets refused.
     it.each(['round-robin', 'single-elim'] as const)(
@@ -1120,35 +1142,35 @@ describe('eventToUpdateBody', () => {
         const create = eventToCreateBody(asEditedEvent({ ...event, drawType }))
         const update = eventToUpdateBody(asEditedEvent({ ...event, drawType }))
 
-        expect('qualifiers_per_pool' in create).toBe(false)
-        expect('qualifiers_per_pool' in update).toBe(false)
+        expect('qualifiers_per_group' in create).toBe(false)
+        expect('qualifiers_per_group' in update).toBe(false)
       },
     )
 
-    // The far half of the round trip the read shape's `qualifiers_per_pool` was added
+    // The far half of the round trip the read shape's `qualifiers_per_group` was added
     // for: what the server stored comes back, and reaches the control.
     it('reads the stored count back off the wire', () => {
       const read = apiToEvent(
-        buildTournamentEventRead({ draw_type: 'rr-then-ko', qualifiers_per_pool: 4 }),
+        buildTournamentEventRead({ draw_type: 'rr-then-ko', qualifiers_per_group: 4 }),
       )
 
-      expect(read.qualifiersPerPool).toBe(4)
+      expect(read.qualifiersPerGroup).toBe(4)
     })
 
     it('reads a count-less draw type back as null, never as a number', () => {
       const read = apiToEvent(buildTournamentEventRead({ draw_type: 'round-robin' }))
 
-      expect(read.qualifiersPerPool).toBeNull()
+      expect(read.qualifiersPerGroup).toBeNull()
     })
 
     it('round-trips a two-stage event: configure 2, send 2, read 2 back', () => {
       const sent = eventToUpdateBody(asEditedEvent(twoStage))
       const stored = buildTournamentEventRead({
         draw_type: 'rr-then-ko',
-        qualifiers_per_pool: sent.qualifiers_per_pool,
+        qualifiers_per_group: sent.qualifiers_per_group,
       })
 
-      expect(apiToEvent(stored).qualifiersPerPool).toBe(2)
+      expect(apiToEvent(stored).qualifiersPerGroup).toBe(2)
     })
   })
 
@@ -1161,7 +1183,7 @@ describe('eventToUpdateBody', () => {
     const twoStage: TournamentEvent = {
       ...event,
       drawType: 'rr-then-ko',
-      qualifiersPerPool: 2,
+      qualifiersPerGroup: 2,
     }
 
     it('SENDS the round count for swiss, on both verbs', () => {
@@ -1192,11 +1214,11 @@ describe('eventToUpdateBody', () => {
     )
 
     // The two settings are on OPPOSITE arms, so each body carries exactly one of them. A
-    // swiss body with a `qualifiers_per_pool` is a 422 naming the field, and vice versa —
+    // swiss body with a `qualifiers_per_group` is a 422 naming the field, and vice versa —
     // which a mapper that merely added a key rather than choosing an arm would author.
     it('sends only its own arm’s setting, never both', () => {
       const swissBody = eventToUpdateBody(asEditedEvent(swiss))
-      expect('qualifiers_per_pool' in swissBody).toBe(false)
+      expect('qualifiers_per_group' in swissBody).toBe(false)
 
       const twoStageBody = eventToUpdateBody(asEditedEvent(twoStage))
       expect('rounds' in twoStageBody).toBe(false)
@@ -1248,7 +1270,7 @@ describe('eventToUpdateBody', () => {
         {
           id: 'fx-1',
           stageId: 's-1',
-          poolId: 'p-1',
+          groupId: 'p-1',
           round: 1,
           position: 1,
           entryAId: 'entry-1',

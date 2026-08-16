@@ -7,17 +7,17 @@ import {
   NAME_MAX,
   nameSchema,
   PLAYERS_MAX,
-  poolNameIssues,
-  poolNameSchema,
-  QUALIFIERS_PER_POOL_MAX,
-  QUALIFIERS_PER_POOL_MIN,
-  qualifiersPerPoolSchema,
+  reservationNameIssues,
+  reservationNameSchema,
+  QUALIFIERS_PER_GROUP_MAX,
+  QUALIFIERS_PER_GROUP_MIN,
+  qualifiersPerGroupSchema,
 } from './event-validation'
-import { addedPool, keepPool, poolEntryKey } from './pool-entries'
-import { buildPool } from './seed.factory'
-import type { PoolEntry, Slot } from './types'
+import { addedReservation, keepReservation, reservationEntryKey } from './reservation-entries'
+import { buildReservation } from './seed.factory'
+import type { ReservationEntry, Slot } from './types'
 
-/** Any window at all — the pool-name rules care about the name and nothing else. */
+/** Any window at all — the reservation-name rules care about the name and nothing else. */
 const SLOT: Slot = { date: '2026-06-13', start: '09:00', end: '12:30' }
 
 /** Longer than `tournament_events.name` (`VARCHAR(255)`) — the 422 the organizer used
@@ -108,27 +108,27 @@ describe('the player limit (`EventMaxPlayers | None`, ADR-0935)', () => {
 })
 
 /**
- * **K** — the qualifier count (`QualifiersPerPool`: `ge=1`, `le=1000`).
+ * **K** — the qualifier count (`QualifiersPerGroup`: `ge=1`, `le=1000`).
  *
  * The floor and its three messages already shipped; what #1231's QA pass found was the
  * OTHER end, open. The bound is asserted here as a message, not as "it failed", because
  * the number is the only thing the director can act on.
  */
-describe('the qualifier count (`QualifiersPerPool`, #1231 QA)', () => {
+describe('the qualifier count (`QualifiersPerGroup`, #1231 QA)', () => {
   /** The messages that already worked, pinned so the new ceiling cannot quietly take one
    * of their places: three different faults, three different sentences. */
   it('keeps the three messages the floor already gave', () => {
-    expect(messageFor(qualifiersPerPoolSchema, null)).toBe(
-      'Say how many players advance from each pool.',
+    expect(messageFor(qualifiersPerGroupSchema, null)).toBe(
+      'Say how many players advance from each group.',
     )
-    expect(messageFor(qualifiersPerPoolSchema, 0)).toBe(
-      'At least 1 player must advance from each pool.',
+    expect(messageFor(qualifiersPerGroupSchema, 0)).toBe(
+      'At least 1 player must advance from each group.',
     )
-    expect(messageFor(qualifiersPerPoolSchema, -1)).toBe(
-      'At least 1 player must advance from each pool.',
+    expect(messageFor(qualifiersPerGroupSchema, -1)).toBe(
+      'At least 1 player must advance from each group.',
     )
-    expect(messageFor(qualifiersPerPoolSchema, 1.5)).toBe(
-      'Qualifiers per pool must be a whole number.',
+    expect(messageFor(qualifiersPerGroupSchema, 1.5)).toBe(
+      'Qualifiers per group must be a whole number.',
     )
   })
 
@@ -140,35 +140,35 @@ describe('the qualifier count (`QualifiersPerPool`, #1231 QA)', () => {
    * typed a number into a box, and the box had no ceiling.
    */
   it('refuses the count that 500’d the server, in words that name the limit', () => {
-    expect(messageFor(qualifiersPerPoolSchema, 2_147_483_648)).toBe(
-      'At most 1,000 players can advance from each pool.',
+    expect(messageFor(qualifiersPerGroupSchema, 2_147_483_648)).toBe(
+      'At most 1,000 players can advance from each group.',
     )
   })
 
   /** The quieter half of the same fault, and the worse one: `999999999` was **accepted**.
    * No error anywhere — just an event whose knockout stage could never be cut. */
   it('refuses a count that saves and then cannot be drawn', () => {
-    expect(messageFor(qualifiersPerPoolSchema, 999_999_999)).toBe(
-      'At most 1,000 players can advance from each pool.',
+    expect(messageFor(qualifiersPerGroupSchema, 999_999_999)).toBe(
+      'At most 1,000 players can advance from each group.',
     )
   })
 
   it('refuses one player past the bound, and accepts the bound itself', () => {
-    expect(messageFor(qualifiersPerPoolSchema, QUALIFIERS_PER_POOL_MAX + 1)).toBe(
-      'At most 1,000 players can advance from each pool.',
+    expect(messageFor(qualifiersPerGroupSchema, QUALIFIERS_PER_GROUP_MAX + 1)).toBe(
+      'At most 1,000 players can advance from each group.',
     )
     // ⚠️ The boundary is the server's, inclusive (`le=1000`) — so it must SAVE. A form
     // that refused 1,000 would refuse a save the API accepts, which is the mirror image
     // of the bug and just as wrong.
-    expect(messageFor(qualifiersPerPoolSchema, QUALIFIERS_PER_POOL_MAX)).toBeUndefined()
-    expect(messageFor(qualifiersPerPoolSchema, QUALIFIERS_PER_POOL_MIN)).toBeUndefined()
+    expect(messageFor(qualifiersPerGroupSchema, QUALIFIERS_PER_GROUP_MAX)).toBeUndefined()
+    expect(messageFor(qualifiersPerGroupSchema, QUALIFIERS_PER_GROUP_MIN)).toBeUndefined()
   })
 
   /** The number itself, not just the behaviour: the client's bound and the server's
    * `le=1000` are the same value stated twice, and a drift either way is a refusal one
    * layer makes and the other does not. */
   it('mirrors the server’s number exactly', () => {
-    expect(QUALIFIERS_PER_POOL_MAX).toBe(1000)
+    expect(QUALIFIERS_PER_GROUP_MAX).toBe(1000)
   })
 })
 
@@ -212,71 +212,71 @@ describe('the entry fee (`EventEntryFee`: required, `ge=0`, whole cents)', () =>
 })
 
 /**
- * A **pool's** name — the last field in this editor that could still author a 422 (#786).
+ * A **reservation's** name — the last field in this editor that could still author a 422 (#786).
  *
- * The editor mints a pool's id and its default name ("Pool A"), so the happy path could
+ * The editor mints a reservation's id and its default name ("Reservation A"), so the happy path could
  * never make a blank one. The box, however, is live: an emptied one was a save the form
  * allowed and the server refused, in Pydantic's words ("String should have at least 1
  * character"), in a banner naming no field.
  */
-describe('poolNameSchema', () => {
+describe('reservationNameSchema', () => {
   it('requires a name — in the same words the event’s own name uses', () => {
     // The same sentence, because to the organizer clearing a box it is the same news.
-    expect(messageFor(poolNameSchema, '')).toBe('Name is required.')
-    expect(messageFor(poolNameSchema, '   ')).toBe('Name is required.')
-    expect(messageFor(poolNameSchema, 'Pool A')).toBeUndefined()
+    expect(messageFor(reservationNameSchema, '')).toBe('Name is required.')
+    expect(messageFor(reservationNameSchema, '   ')).toBe('Name is required.')
+    expect(messageFor(reservationNameSchema, 'Reservation A')).toBeUndefined()
   })
 
-  /** ⚠️ **No ceiling.** `Pool.name` is `min_length=1` with no `max_length`: a pool lives
-   * in JSONB, and there is no column for it to overflow (unlike the event's
+  /** ⚠️ **No ceiling.** `Reservation.name` is `min_length=1` with no `max_length`: a
+   * reservation lives in JSONB, and there is no column for it to overflow (unlike the event's
    * `VARCHAR(255)`). A bound here would be a rule the API does not have — and a save
    * refused by nothing but us. */
   it('invents no ceiling the server does not have', () => {
-    expect(messageFor(poolNameSchema, 'A'.repeat(NAME_MAX + 1))).toBeUndefined()
+    expect(messageFor(reservationNameSchema, 'A'.repeat(NAME_MAX + 1))).toBeUndefined()
   })
 })
 
-describe('poolNameIssues', () => {
-  /** A pool the server already holds, cited by its id (`keepPool`). */
-  const pool = (id: string, name: string): PoolEntry =>
-    keepPool(buildPool({ id, name }))
+describe('reservationNameIssues', () => {
+  /** A reservation the server already holds, cited by its id (`keepReservation`). */
+  const reservationEntry = (id: string, name: string): ReservationEntry =>
+    keepReservation(buildReservation({ id, name }))
 
-  /** Keyed by pool id, so the red lands under the box that is empty. A director with six
-   * pools and one blank name must not be pointed at all six. */
-  it('blames only the pool that is blank', () => {
+  /** Keyed by reservation id, so the red lands under the box that is empty. A director with six
+   * reservations and one blank name must not be pointed at all six. */
+  it('blames only the reservation that is blank', () => {
     expect(
-      poolNameIssues([pool('p-a', ''), pool('p-b', 'Pool B'), pool('p-c', '  ')]),
-    ).toEqual({ 'p-a': 'Name is required.', 'p-c': 'Name is required.' })
+      reservationNameIssues([reservationEntry('res-a', ''), reservationEntry('res-b', 'Reservation B'), reservationEntry('res-c', '  ')]),
+    ).toEqual({ 'res-a': 'Name is required.', 'res-c': 'Name is required.' })
   })
 
   /**
-   * ⚠️ **A pool the director added a moment ago has no id at all** (ADR 20260801: the
+   * ⚠️ **A reservation the director added a moment ago has no id at all** (ADR 20260801: the
    * server mints it), and it still has a name box they can still empty. Keyed off the id
-   * alone, every added pool would collide on `undefined` — one red under the wrong card,
-   * and none under the others — so the key is `poolEntryKey`, which is also what the
+   * alone, every added reservation would collide on `undefined` — one red under the wrong card,
+   * and none under the others — so the key is `reservationEntryKey`, which is also what the
    * cards are keyed on.
    */
-  it('blames an ADDED pool too, by the key its card is rendered under', () => {
-    const blank = addedPool({ name: ' ', slot: SLOT, tableIds: [] })
-    const named = addedPool({ name: 'Pool B', slot: SLOT, tableIds: [] })
+  it('blames an ADDED reservation too, by the key its card is rendered under', () => {
+    const blank = addedReservation({ name: ' ', slot: SLOT, tableIds: [] })
+    const named = addedReservation({ name: 'Reservation B', slot: SLOT, tableIds: [] })
 
-    const issues = poolNameIssues([blank, named])
+    const issues = reservationNameIssues([blank, named])
 
-    expect(issues).toEqual({ [poolEntryKey(blank)]: 'Name is required.' })
-    expect(poolEntryKey(blank)).not.toBe(poolEntryKey(named))
+    expect(issues).toEqual({ [reservationEntryKey(blank)]: 'Name is required.' })
+    expect(reservationEntryKey(blank)).not.toBe(reservationEntryKey(named))
   })
 
-  it('says nothing about a list of named pools', () => {
-    expect(poolNameIssues([pool('p-a', 'Pool A')])).toEqual({})
-    expect(poolNameIssues([])).toEqual({})
+  it('says nothing about a list of named reservations', () => {
+    expect(reservationNameIssues([reservationEntry('res-a', 'Reservation A')])).toEqual({})
+    expect(reservationNameIssues([])).toEqual({})
   })
 
   /** The message is the SCHEMA's, read off it rather than re-typed beside it: the
    * resolver refuses the save and this puts the red under the box, and the two must not
    * be able to say different things about the same field. */
   it('speaks the schema’s own words', () => {
-    expect(poolNameIssues([pool('p-a', '')])['p-a']).toBe(
-      messageFor(poolNameSchema, ''),
+    expect(reservationNameIssues([reservationEntry('res-a', '')])['res-a']).toBe(
+      messageFor(reservationNameSchema, ''),
     )
   })
 })

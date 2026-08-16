@@ -14,14 +14,14 @@ import {
   formatPredicate,
   hasVenue,
   predicateSentence,
-  findPoolConflicts,
+  findReservationConflicts,
   isUnrated,
   myEntrant,
 } from './helpers'
 import {
   buildAddress,
   buildEntrant,
-  buildPool,
+  buildReservation,
   buildTournament,
   buildEvent,
 } from './seed.factory'
@@ -300,35 +300,37 @@ describe('formatPredicate', () => {
   })
 })
 
-describe('findPoolConflicts', () => {
-  it('flags a table shared by two overlapping same-day pools', () => {
-    const conflicts = findPoolConflicts([
-      buildPool({
-        name: 'Pool A',
+describe('findReservationConflicts', () => {
+  it('flags a table shared by two overlapping same-day reservations', () => {
+    const conflicts = findReservationConflicts([
+      buildReservation({
+        name: 'Reservation A',
         slot: { date: '2026-06-13', start: '09:00', end: '12:00' },
         tableIds: ['t1', 't2'],
       }),
-      buildPool({
-        name: 'Pool B',
+      buildReservation({
+        name: 'Reservation B',
         slot: { date: '2026-06-13', start: '11:00', end: '14:00' },
         tableIds: ['t2', 't3'],
       }),
     ])
-    expect(conflicts).toEqual([{ table: 'T2', poolA: 'Pool A', poolB: 'Pool B' }])
+    expect(conflicts).toEqual([
+      { table: 'T2', reservationA: 'Reservation A', reservationB: 'Reservation B' },
+    ])
   })
 
-  it('ignores pools that do not overlap in time', () => {
-    const conflicts = findPoolConflicts([
-      buildPool({ slot: { date: '2026-06-13', start: '09:00', end: '11:00' }, tableIds: ['t1'] }),
-      buildPool({ slot: { date: '2026-06-13', start: '11:00', end: '13:00' }, tableIds: ['t1'] }),
+  it('ignores reservations that do not overlap in time', () => {
+    const conflicts = findReservationConflicts([
+      buildReservation({ slot: { date: '2026-06-13', start: '09:00', end: '11:00' }, tableIds: ['t1'] }),
+      buildReservation({ slot: { date: '2026-06-13', start: '11:00', end: '13:00' }, tableIds: ['t1'] }),
     ])
     expect(conflicts).toEqual([])
   })
 
-  it('ignores pools on different days', () => {
-    const conflicts = findPoolConflicts([
-      buildPool({ slot: { date: '2026-06-13', start: '09:00', end: '12:00' }, tableIds: ['t1'] }),
-      buildPool({ slot: { date: '2026-06-14', start: '09:00', end: '12:00' }, tableIds: ['t1'] }),
+  it('ignores reservations on different days', () => {
+    const conflicts = findReservationConflicts([
+      buildReservation({ slot: { date: '2026-06-13', start: '09:00', end: '12:00' }, tableIds: ['t1'] }),
+      buildReservation({ slot: { date: '2026-06-14', start: '09:00', end: '12:00' }, tableIds: ['t1'] }),
     ])
     expect(conflicts).toEqual([])
   })

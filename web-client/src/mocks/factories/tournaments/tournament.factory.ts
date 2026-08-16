@@ -1,6 +1,6 @@
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
-import { simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
+import { groupIdFor, simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
 import {
   BAY_AREA_OPEN_ID,
   SUMMER_SLAM_ID,
@@ -1286,16 +1286,11 @@ export function buildTournamentEventRead(
         position: 0,
       },
     ],
-    groups: [
-      {
-        id: 'grp-os-1',
-        position: 0,
-        // Server-owned and read-only: the group's own id names the reservation it plays
-        // under. Not a `ReservationWrite`/`ReservationUpsert` field — a client never
-        // authors a group directly (`GroupRead`, ticket #1369).
-        reservation_id: 'res-os-1',
-      },
-    ],
+    // `groups` is NOT stated here — it is minted 1:1 from `reservations` AFTER the
+    // spread below (`groupIdFor`), so a fixture overriding `reservations` alone still
+    // gets a `groups` array that resolves against them. Server-owned and read-only in
+    // either case: the group's own id names the reservation it plays under, and a
+    // client never authors one directly (`GroupRead`, ticket #1369).
     // NO RESULTS (ADR-0788) — `null` is the designed state of an event with no draw (and of
     // any non-round-robin event); standings only appear once a draw is cut and matches
     // land. A fixture that wants a table passes a `buildEventResultsRead()` override.
@@ -1319,6 +1314,24 @@ export function buildTournamentEventRead(
     // 3), stated AFTER the spread so it reads the `draw_type` the caller actually asked
     // for. An explicit `stages` override wins outright.
     stages: overrides.stages ?? mintStageReads(overrides.draw_type ?? 'round-robin'),
+    // **Minted 1:1 with the event's own (post-override) reservations** (ticket #1369),
+    // stated AFTER the spread for the same reason `stages` is: a fixture overriding
+    // `reservations` alone gets a `groups` array that actually resolves against them,
+    // rather than the base literal's — which is exactly what `groups.ts`'s boundary
+    // parser would otherwise refuse as an orphaned group. An explicit `groups` override
+    // wins outright, for the one fixture that wants a group naming no reservation.
+    groups:
+      overrides.groups ??
+      (overrides.reservations ?? [
+        {
+          id: 'res-os-1',
+          name: 'Reservation A',
+          slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
+          table_ids: ['t1', 't2', 't3', 't4'],
+          position: 0,
+        },
+      ]
+      ).map((r, position) => ({ id: groupIdFor(r.id), position, reservation_id: r.id })),
   } satisfies Omit<TournamentEventRead, 'entered'>
   return {
     ...event,
