@@ -5,10 +5,10 @@ import {
 import { unscheduledRailPage as page } from './unscheduled-rail.page'
 
 describe('UnscheduledRail', () => {
-  it('lists an unplaced fixture with its pairing and event · pool', () => {
+  it('lists an unplaced fixture with its pairing and event · group', () => {
     page.render()
     expect(page.getItemTexts()).toEqual([
-      'player.2 vs player.3U1200 Singles · Pool B',
+      'player.2 vs player.3U1200 Singles · Group B',
     ])
   })
 

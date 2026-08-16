@@ -2,7 +2,7 @@ import type { DrawRound } from '../../../data/draw'
 import type { RoundListProps } from './round-list'
 import { buildFixtureLineView } from './round-list/fixture-line.factory'
 
-/** One round holding one fixture — the shape an ODD round-robin pool's rounds have (the
+/** One round holding one fixture — the shape an ODD round-robin group's rounds have (the
  * third player sits out), and the smallest thing worth rendering. */
 export function buildDrawRound(overrides: Partial<DrawRound> = {}): DrawRound {
   return {
@@ -13,10 +13,10 @@ export function buildDrawRound(overrides: Partial<DrawRound> = {}): DrawRound {
 }
 
 /**
- * The three rounds of an odd (three-player) round-robin pool: `player.1`, `player.4`,
+ * The three rounds of an odd (three-player) round-robin group: `player.1`, `player.4`,
  * `player.5` playing each other once, one fixture a round.
  *
- * Deliberately the odd case — an even pool's rounds all hold the same number of
+ * Deliberately the odd case — an even group's rounds all hold the same number of
  * fixtures, so a renderer that quietly invented a "bye" row would look identical.
  */
 export function buildDrawRounds(): DrawRound[] {
@@ -54,9 +54,9 @@ export function buildDrawRounds(): DrawRound[] {
   ]
 }
 
-/** Props for `RoundList` — the odd pool's three rounds, in Pool A. */
+/** Props for `RoundList` — the odd group's three rounds, in Group A. */
 export function buildRoundListProps(
   overrides: Partial<RoundListProps> = {},
 ): RoundListProps {
-  return { rounds: buildDrawRounds(), groupName: 'Pool A', ...overrides }
+  return { rounds: buildDrawRounds(), groupName: 'Group A', ...overrides }
 }

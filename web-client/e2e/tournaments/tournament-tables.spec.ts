@@ -135,7 +135,7 @@ test.describe('the Tables tab · removing a table matches are placed at', () => 
     expect(store.patchBodies).toHaveLength(1)
   })
 
-  // The quiet half of the ADR's split: a pool's `table_ids` are a RESERVATION, not a
+  // The quiet half of the ADR's split: a reservation's `table_ids` are a HOLD, not a
   // placement, so removing a table nothing stands on needs no ceremony at all.
   test('a table nothing is placed at goes without a confirm', async ({ page }) => {
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {

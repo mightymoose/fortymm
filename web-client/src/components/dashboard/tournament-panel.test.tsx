@@ -83,12 +83,12 @@ describe('TournamentPanel', () => {
           buildTournamentTabView({
             eventId: 'e-1',
             name: 'Open Singles',
-            pathSubheading: 'Pool A · 4 players',
+            pathSubheading: 'Group A · 4 players',
           }),
           buildTournamentTabView({
             eventId: 'e-2',
             name: 'U1500',
-            pathSubheading: 'Pool B · 6 players',
+            pathSubheading: 'Group B · 6 players',
           }),
         ],
       }),
@@ -96,13 +96,13 @@ describe('TournamentPanel', () => {
 
     await tournamentPanelPage.findHeading('Riverside Summer Slam')
     expect(tournamentPanelPage.getActivePanel()).toHaveTextContent(
-      'Pool A · 4 players',
+      'Group A · 4 players',
     )
 
     await userEvent.click(tournamentPanelPage.getTab(/u1500/i))
 
     expect(tournamentPanelPage.getActivePanel()).toHaveTextContent(
-      'Pool B · 6 players',
+      'Group B · 6 players',
     )
   })
 

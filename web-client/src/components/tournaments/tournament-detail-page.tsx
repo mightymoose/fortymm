@@ -34,7 +34,7 @@ import { TablesTab } from './tournament-detail-page/tables-tab'
 
 export interface TournamentDetailPageProps {
   tournament: Tournament
-  /** This tournament's table catalogue (for the Tables tab and pool editor). */
+  /** This tournament's table catalogue (for the Tables tab and reservations editor). */
   allTables: TournamentTable[]
   onUpdate: (tournament: Tournament) => void
   /** Persist an edited table catalogue (add/remove from the Tables tab) as the

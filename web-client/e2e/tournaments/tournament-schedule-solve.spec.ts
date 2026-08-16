@@ -33,7 +33,7 @@ import { expectAxeClean } from '../support/axe'
 /** A tournament the solver has something to place in: both drawable events drawn.
  * (`READY_TO_START` re-typed inline would drift; but that constant is about
  * go-live — this seed is the same shape for the solver's reason: fixtures exist.) */
-const DRAWN_SEED = { drawable: true, drawn: [EVENT.JOURNEY, EVENT.POOLS] } as const
+const DRAWN_SEED = { drawable: true, drawn: [EVENT.JOURNEY, EVENT.GROUPS] } as const
 
 test.describe('Tournaments · schedule solve strip', () => {
   test('shows a seeded succeeded solve — verdict, wall time and trigger in our copy, never the wire’s', async ({
@@ -134,10 +134,10 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expect(pom.solveStripState('succeeded')).toBeVisible({ timeout: 15_000 })
     expect(store.latestSolve?.status).toBe('succeeded')
 
-    // The solve placed the draw: the server now holds a table on every pooled
+    // The solve placed the draw: the server now holds a table on every grouped
     // fixture it dealt (assert the STORE, not markup — the schedule grid is the
     // placement slice's spec, not this one's).
-    const fixtures = store.fixturesOf(EVENT.POOLS)
+    const fixtures = store.fixturesOf(EVENT.GROUPS)
     expect(fixtures.length).toBeGreaterThan(0)
     expect(fixtures.every((f) => f.table_id !== null)).toBe(true)
   })
@@ -188,7 +188,7 @@ test.describe('Tournaments · schedule solve strip', () => {
     const state = pom.solveStripState('infeasible')
     await expect(state).toBeVisible()
     await expect(state).toContainText("The day doesn't fit")
-    await expect(state).toContainText('Add tables, widen a pool window')
+    await expect(state).toContainText("Add tables, widen a reservation's window")
     // Designed, not an error: no refusal notice, no toast, and the wire's word
     // for it appears nowhere.
     await expect(pom.runSchedulerNotice).not.toBeVisible()
@@ -232,7 +232,7 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expect(state).toContainText('dated in the past')
     await expect(state).toContainText('Move the event to a future date')
     // …INSTEAD of the generic "doesn't fit" body — the whole point of naming it.
-    await expect(state).not.toContainText('Add tables, widen a pool window')
+    await expect(state).not.toContainText("Add tables, widen a reservation's window")
     // Still a designed state, not an error: nothing red rings, and the raw wire
     // code never reaches the UI.
     await expect(pom.runSchedulerNotice).not.toBeVisible()
@@ -262,9 +262,9 @@ test.describe('Tournaments · schedule solve strip', () => {
           {
             kind: 'player_over_subscribed',
             player_name: 'spiked-frigatebird',
-            pool_name: 'Pool A',
-            // A real pool, so the remedy may offer the pool verbs.
-            reservation: 'pool',
+            reservation_name: 'Reservation A',
+            // A real booked reservation, so the remedy may offer the reservation verbs.
+            reservation: 'booked',
             window_start: '09:00',
             window_end: '10:30',
             match_count: 4,
@@ -280,14 +280,14 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expect(state).toBeVisible()
     // WHO, in HOW MANY matches, in WHICH window — the ticket's headline.
     await expect(state).toContainText('spiked-frigatebird is in 4 matches')
-    await expect(state).toContainText("Pool A's 09:00–10:30 window")
+    await expect(state).toContainText("Reservation A's 09:00–10:30 window")
     await expect(state).toContainText('they need about 2.5h')
     // The remedies that work for one human — and NOT the add-tables trap: extra
     // tables let somebody ELSE play in parallel, never this person twice at once.
-    await expect(state).toContainText('fewer matches in Pool A')
+    await expect(state).toContainText('fewer matches in Reservation A')
     await expect(state).toContainText("adding tables won't help one player")
-    await expect(state).not.toContainText('Add a table to Pool A')
-    await expect(state).not.toContainText('Add tables, widen a pool window')
+    await expect(state).not.toContainText('Add a table to Reservation A')
+    await expect(state).not.toContainText("Add tables, widen a reservation's window")
     // Still a designed state, not an error, and the raw wire code stays off screen.
     await expect(pom.runSchedulerNotice).not.toBeVisible()
     await expect(pom.toasts).toHaveCount(0)
@@ -300,15 +300,15 @@ test.describe('Tournaments · schedule solve strip', () => {
     )
   })
 
-  test('blames the EVENT-WIDE reservation with remedies a director can actually carry out — never a pool control the event does not have', async ({
+  test('blames the EVENT-WIDE reservation with remedies a director can actually carry out — never a reservation control the event does not have', async ({
     page,
   }) => {
-    // The same arm, `reservation: 'event'` — an un-pooled fixture (a bracket, a
+    // The same arm, `reservation: 'event'` — an ungrouped fixture (a bracket, a
     // swiss round, a knockout stage) is placed against the event's own window over
-    // every table in the tournament (ADR 20260807). There is no pool row behind
-    // that reservation, so the remedy must name the event and its field, not a pool
-    // to shrink or a pool window to widen. MSW is off: this stub IS the API, so the
-    // discriminator crosses the real wire and the real Zod parse.
+    // every table in the tournament (ADR 20260807). There is no reservation row
+    // behind this arm, so the remedy must name the event and its field, not a
+    // reservation to shrink or a reservation window to widen. MSW is off: this stub
+    // IS the API, so the discriminator crosses the real wire and the real Zod parse.
     const { pom } = await TournamentDetailPage.navigateTo(page, {
       ...DRAWN_SEED,
       latestSolve: buildScheduleSolveRead({
@@ -321,7 +321,7 @@ test.describe('Tournaments · schedule solve strip', () => {
           {
             kind: 'player_over_subscribed',
             player_name: 'spiked-frigatebird',
-            pool_name: 'Open Singles (whole venue)',
+            reservation_name: 'Open Singles (whole venue)',
             reservation: 'event',
             window_start: '09:00',
             window_end: '10:30',
@@ -339,12 +339,13 @@ test.describe('Tournaments · schedule solve strip', () => {
     // The same honest figures…
     await expect(state).toContainText('spiked-frigatebird is in 4 matches')
     await expect(state).toContainText('they need about 2.5h')
-    // …and a remedy whose every control exists for an un-pooled fixture.
+    // …and a remedy whose every control exists for an ungrouped fixture.
     await expect(state).toContainText('fewer matches in this event')
     await expect(state).toContainText('a smaller field')
     await expect(state).toContainText("widen the event's window")
-    // NOT the pool controls: the event has no pool to shrink, and no pool window.
-    await expect(state).not.toContainText('a smaller pool')
+    // NOT the reservation controls: the event has no reservation to shrink, and no
+    // reservation window.
+    await expect(state).not.toContainText('a smaller reservation')
     await expect(state).not.toContainText('widen its window')
     // Still a designed state, and the raw wire words stay off screen.
     await expect(pom.runSchedulerNotice).not.toBeVisible()

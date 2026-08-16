@@ -111,8 +111,8 @@ export interface Group {
 }
 
 /** A slice of tables reserved for a window of time within an event — the **venue**
- * face of what used to be one "pool" (ticket #1369) — **as it is read back**: the
- * words a client wrote, plus the two fields the server owns.
+ * face of what used to be one overloaded concept (ticket #1369) — **as it is read
+ * back**: the words a client wrote, plus the two fields the server owns.
  *
  * This is the READ shape. What goes *out* is `ReservationDraft` below — the same
  * distinction `TournamentTable`/`TournamentTableEntry` draw one resource over, and for

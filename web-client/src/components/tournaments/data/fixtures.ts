@@ -99,7 +99,7 @@ const fixtureWireSchema = z.object({
   match_status: matchStatusSchema.nullable(),
   /** The fixture's **placement** table (ADR-0790): `null` = **unassigned**. When
    * set it is a **string ref** into the tournament's `table_catalogue` — not a
-   * foreign key, the same pattern as `pool_id`. */
+   * foreign key, the same pattern as `group_id`. */
   table_id: z.string().nullable(),
   /** The placement's **predicted** start (ADR "tournament times are timezone-aware
    * instants"): `null` = **unscheduled**. When set, a `FixtureTimeRead` — a venue-local

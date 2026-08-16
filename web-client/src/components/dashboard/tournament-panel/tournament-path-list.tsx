@@ -6,7 +6,7 @@ import { TournamentPathRow } from './tournament-path-list/tournament-path-row'
 export interface TournamentPathListProps {
   /** `Your matches` — what this event calls the viewer's own run through it. */
   heading: string
-  /** `Pool A · 4 players`, or null for an un-pooled draw. */
+  /** `Group A · 4 players`, or null for an ungrouped draw. */
   subheading: string | null
   rows: TournamentPathRowView[]
 }

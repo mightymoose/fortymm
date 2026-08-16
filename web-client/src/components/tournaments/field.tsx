@@ -38,7 +38,7 @@ type FieldReadable = {
   valueClassName?: string
   /** The control, for an editor. Not called in the read-only branch — and a row
    * that is *only* ever a view (one inside a subtree the editor never renders,
-   * like a read-only pool card) has no control to give.
+   * like a read-only reservation card) has no control to give.
    *
    * The second argument is the **hint's id** (`undefined` when the row shows no
    * hint) — see `FieldControl`. */

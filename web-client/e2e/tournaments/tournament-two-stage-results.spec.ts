@@ -1,7 +1,7 @@
 /**
  * A **two-stage** (`rr-then-ko`) event's results (ADR 20260727) through the real browser:
- * the pool standings above the bracket finishes, under a single champion banner naming the
- * **bracket's** winner.
+ * the group standings above the bracket finishes, under a single champion banner naming
+ * the **bracket's** winner.
  *
  * What only a browser proves here, and why the vitest suite could not:
  *
@@ -17,7 +17,7 @@
  *      would pass a weaker check.
  *
  *   3. **The champion is the bracket's, and there is exactly one banner.** `player.4` wins
- *      the final; `player.1` and `player.2` win the pools. A banner reading the top of a
+ *      the final; `player.1` and `player.2` win the groups. A banner reading the top of a
  *      standings table would still *look* like a champion — so the assertion is the name,
  *      and the count.
  *
@@ -28,8 +28,8 @@ import { expect, test } from '@playwright/test'
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
 import { EVENT } from '../page-objects/tournaments/tournaments-store'
 
-/** The two-stage seed with its draw cut and its bracket played out: six entrants, two pools,
- * two qualifying from each, a final decided. */
+/** The two-stage seed with its draw cut and its bracket played out: six entrants, two
+ * groups, two qualifying from each, a final decided. */
 const PLAYED_OUT = {
   drawable: true,
   twoStage: true,
@@ -38,7 +38,7 @@ const PLAYED_OUT = {
 } as const
 
 test.describe('Tournaments · a two-stage (rr-then-ko) event’s results', () => {
-  test('shows both pools’ standings above the bracket’s finishes, with one champion — the bracket’s', async ({
+  test('shows both groups’ standings above the bracket’s finishes, with one champion — the bracket’s', async ({
     page,
   }) => {
     const { pom, store } = await TournamentDetailPage.navigateTo(page, PLAYED_OUT)
@@ -48,21 +48,22 @@ test.describe('Tournaments · a two-stage (rr-then-ko) event’s results', () =>
     await expect(pom.standingsPanel(event)).toBeVisible()
     await expect(pom.finishesPanel(event)).toBeVisible()
 
-    // The pool stage: each pool named, its rows joined to usernames, in the server's
-    // finishing order. The memberships are the ones the snake dealt (p-a: 1, 4, 5).
-    await expect(pom.standingsRowNames(event, 'Pool A')).toHaveText([
+    // The group stage: each group named, its rows joined to usernames, in the server's
+    // finishing order. The memberships are the ones the snake dealt (groupIdFor('res-a'):
+    // 1, 4, 5).
+    await expect(pom.standingsRowNames(event, 'Group A')).toHaveText([
       'player.1',
       'player.4',
       'player.5',
     ])
-    await expect(pom.standingsRowNames(event, 'Pool B')).toHaveText([
+    await expect(pom.standingsRowNames(event, 'Group B')).toHaveText([
       'player.2',
       'player.3',
       'player.6',
     ])
 
     // The knockout stage: single-elimination's own placement shape, ties and all — the two
-    // beaten semifinalists share 3rd, one of them a pool winner.
+    // beaten semifinalists share 3rd, one of them a group winner.
     await expect(pom.finishesRows(event)).toHaveText([
       /1st\s*player\.4/,
       /2nd\s*player\.1/,
@@ -70,7 +71,7 @@ test.describe('Tournaments · a two-stage (rr-then-ko) event’s results', () =>
       /T3\s*player\.3/,
     ])
 
-    // ONE champion callout, and it names the FINAL's winner. `player.4` topped no pool —
+    // ONE champion callout, and it names the FINAL's winner. `player.4` topped no group —
     // `player.1` and `player.2` did — so a banner reading the standings would say a
     // different name here and still look perfectly plausible.
     await expect(pom.twoStageChampion(event)).toBeVisible()
@@ -84,16 +85,17 @@ test.describe('Tournaments · a two-stage (rr-then-ko) event’s results', () =>
   test('a MID-FLIGHT two-stage event shows its stages and crowns nobody', async ({
     page,
   }) => {
-    // Pools decided, the final seated and unplayed. Both stages still render — the standings
-    // in full, the finishes holding only the two entrants the bracket has placed, starting at
-    // position 3 — and no banner appears, because nobody has won it yet.
+    // Groups decided, the final seated and unplayed. Both stages still render — the
+    // standings in full, the finishes holding only the two entrants the bracket has
+    // placed, starting at position 3 — and no banner appears, because nobody has won it
+    // yet.
     const { pom } = await TournamentDetailPage.navigateTo(page, {
       ...PLAYED_OUT,
       twoStageResults: 'mid-flight',
     })
     const event = EVENT.TWO_STAGE
 
-    await expect(pom.standingsRowNames(event, 'Pool A')).toHaveText([
+    await expect(pom.standingsRowNames(event, 'Group A')).toHaveText([
       'player.1',
       'player.4',
       'player.5',

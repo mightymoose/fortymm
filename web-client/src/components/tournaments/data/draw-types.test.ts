@@ -13,7 +13,7 @@ import {
 const row = (over: Partial<Record<string, unknown>> = {}) => ({
   key: 'round-robin',
   name: 'Round robin',
-  description: 'Everyone in a pool plays everyone else in that pool.',
+  description: 'Everyone in a group plays everyone else in that group.',
   display_order: 1,
   ...over,
 })

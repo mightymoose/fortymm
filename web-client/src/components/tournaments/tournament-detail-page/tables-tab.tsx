@@ -188,13 +188,13 @@ export const TablesTab = ({
     <div data-testid="tables-tab">
       <SectionHeader
         title="Tables"
-        // "Add them to pools when configuring events" is an imperative only the
+        // "Add them to reservations when configuring events" is an imperative only the
         // organizer can act on — a reader who cannot edit is told to do
         // something they have no control to do (ADR 0015, rule 5). The
         // descriptive first sentence is true for both voices, so it stays.
         subtitle={
           canEdit
-            ? 'The physical tables available at this venue. Add them to pools when configuring events.'
+            ? 'The physical tables available at this venue. Add them to reservations when configuring events.'
             : 'The physical tables available at this venue.'
         }
       />

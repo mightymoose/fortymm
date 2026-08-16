@@ -13,12 +13,12 @@ function wire(overrides: Record<string, unknown> = {}): unknown {
 }
 
 describe('parseFixtures — the happy path', () => {
-  it('parses a pooled fixture into the camelCase domain shape', () => {
+  it('parses a grouped fixture into the camelCase domain shape', () => {
     expect(
       parseFixtures([
         wire({
           id: 'fx-9',
-          pool_id: 'p-a',
+          group_id: 'grp-a',
           round: 2,
           position: 3,
           entry_a_id: 'entry-5',
@@ -29,7 +29,7 @@ describe('parseFixtures — the happy path', () => {
       {
         id: 'fx-9',
         stageId: 's-1',
-        poolId: 'p-a',
+        groupId: 'grp-a',
         round: 2,
         position: 3,
         entryAId: 'entry-5',
@@ -54,11 +54,11 @@ describe('parseFixtures — the happy path', () => {
     expect(parseFixtures([])).toEqual([])
   })
 
-  it('keeps the order it was given (the wire sends pool → round → position)', () => {
+  it('keeps the order it was given (the wire sends group → round → position)', () => {
     const parsed = parseFixtures([
-      wire({ id: 'fx-1', pool_id: 'p-a', round: 1, position: 1 }),
-      wire({ id: 'fx-2', pool_id: 'p-a', round: 1, position: 2 }),
-      wire({ id: 'fx-3', pool_id: 'p-b', round: 1, position: 1 }),
+      wire({ id: 'fx-1', group_id: 'grp-a', round: 1, position: 1 }),
+      wire({ id: 'fx-2', group_id: 'grp-a', round: 1, position: 2 }),
+      wire({ id: 'fx-3', group_id: 'grp-b', round: 1, position: 1 }),
     ])
 
     expect(parsed.map((f) => f.id)).toEqual(['fx-1', 'fx-2', 'fx-3'])
@@ -139,7 +139,7 @@ describe('parseFixtures — the boundary', () => {
     { what: 'a round that is a string', payload: [wire({ round: '2' })] },
     { what: 'a fractional round', payload: [wire({ round: 1.5 })] },
     { what: 'a missing position', payload: [{ ...(wire() as object), position: undefined }] },
-    { what: 'a pool_id of the wrong type', payload: [wire({ pool_id: 7 })] },
+    { what: 'a group_id of the wrong type', payload: [wire({ group_id: 7 })] },
     { what: 'an id of the wrong type', payload: [wire({ id: 42 })] },
     { what: 'a winner_entry_id of the wrong type', payload: [wire({ winner_entry_id: 3 })] },
     // Absent is NOT null. Null is a fact — "TBD" — and reading an absent key as one

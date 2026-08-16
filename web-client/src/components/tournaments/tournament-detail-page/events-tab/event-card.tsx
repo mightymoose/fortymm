@@ -44,7 +44,7 @@ export interface EventCardProps {
    */
   action?: ReactNode
   /**
-   * The event's **draw** (`DrawPanel`) — the pools it was cut across, and the
+   * The event's **draw** (`DrawPanel`) — the groups it was cut across, and the
    * director's cut / re-cut / delete verbs (ADR-0786). A slot, like `action`, and
    * for the same reason: it reads the session and owns two mutations, and this
    * card is a pure view over its props.
@@ -58,7 +58,7 @@ export interface EventCardProps {
 }
 
 /** A row card for one event on the tournament's Events tab: title with rated /
- * best-of badges, eligibility chips, the time slot, pool/table counts, the
+ * best-of badges, eligibility chips, the time slot, reservation/table counts, the
  * entries the event holds against its cap (with how many places that leaves), and
  * the roster of entrants those numbers count. The whole card opens the editor.
  *

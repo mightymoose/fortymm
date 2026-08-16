@@ -24,7 +24,7 @@ const scoped = (container: Container) => ({
   /** **K** — the qualifier-count box, which exists only for an `rr-then-ko` event
    * (ADR 20260727). `get` for the case that expects it. */
   getQualifiersInput() {
-    return container.getByLabelText(/Qualifiers per pool/)
+    return container.getByLabelText(/Qualifiers per group/)
   },
   /** …and the `query` twin, because "this control is NOT on screen" is the claim for
    * every other draw type: a qualifier count is not a blank field a round-robin event
@@ -32,12 +32,12 @@ const scoped = (container: Container) => ({
    * `getFormElements().length`, so it discriminates "the row is absent" from "some other
    * row went missing too". */
   queryQualifiersInput() {
-    return container.queryByLabelText(/Qualifiers per pool/)
+    return container.queryByLabelText(/Qualifiers per group/)
   },
   /** The qualifier count as a **reader** sees it — the `Field` read-only branch's value
    * under its label (ADR 0015). Use `queryQualifiersInput` for the "row absent" claim. */
   getQualifiersValue() {
-    return fieldPage.within(container).getFieldValue('Qualifiers per pool')
+    return fieldPage.within(container).getFieldValue('Qualifiers per group')
   },
   /** **R** — the round-count box, which exists only for a `swiss` event (the swiss ADR).
    * `get` for the case that expects it. */

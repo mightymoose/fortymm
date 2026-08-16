@@ -232,7 +232,7 @@ const SolveState = ({ solve, canEdit }: { solve: ScheduleSolve | null; canEdit: 
  * with a caution*, deliberately distinct from the `infeasible` "nothing placed"
  * banner: the board is fine, but two live matches contradict each other on a
  * table or a human, and only the director can fix it. A warn-toned `Alert` (the
- * pools double-booked precedent), rendered only when the (always-present) list is
+ * reservations double-booked precedent), rendered only when the (always-present) list is
  * non-empty. Orthogonal to the solve's state, so it renders under whatever the
  * `SolveState` line above says.
  */

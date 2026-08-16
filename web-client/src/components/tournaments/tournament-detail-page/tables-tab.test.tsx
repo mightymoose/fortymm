@@ -207,7 +207,7 @@ describe('TablesTab', () => {
     tablesTabPage.render({ catalogue: buildTables(3), canEdit: true })
 
     expect(document.body).toHaveTextContent(
-      'The physical tables available at this venue. Add them to pools when configuring events.',
+      'The physical tables available at this venue. Add them to reservations when configuring events.',
     )
   })
 
@@ -217,7 +217,7 @@ describe('TablesTab', () => {
     expect(document.body).toHaveTextContent(
       'The physical tables available at this venue.',
     )
-    expect(document.body).not.toHaveTextContent('Add them to pools')
+    expect(document.body).not.toHaveTextContent('Add them to reservations')
   })
 })
 

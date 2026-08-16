@@ -1,7 +1,7 @@
-// The **groups + reservations** boundary (ticket #1369, "the wire and both clients say
-// group and reservation, and 'pool' retires"): where an event's two arrays — the
-// competitive face and the venue face of what used to be one "pool" — stop being bytes
-// off the wire and become typed domain values.
+// The **groups + reservations** boundary (ticket #1369: the wire and both clients now
+// say group and reservation, where they once shared a single, overloaded name): where
+// an event's two arrays — the competitive face and the venue face of what used to be
+// one concept — stop being bytes off the wire and become typed domain values.
 //
 // Parsed TOGETHER, deliberately, rather than as two independent arrays: the one
 // invariant that matters crosses both. Every group's `reservation_id` must name an
