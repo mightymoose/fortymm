@@ -166,8 +166,8 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
-    PoolNotInEventError,
-    PoolSetFrozenError,
+    ReservationNotInEventError,
+    GroupSetFrozenError,
     ScheduleQueueUnavailableError,
     TableInUseError,
     TableNotInCatalogueError,
@@ -1450,12 +1450,12 @@ async def update_event(
                 event_id=event_id,
                 owner_denial="edit events of",
             ) from exc
-        except (PoolSetFrozenError, DrawTypeFrozenError) as exc:
+        except (GroupSetFrozenError, DrawTypeFrozenError) as exc:
             # Both freezes carry the exact, domain-authored 409 sentence — surfaced as
             # the ``ToolError`` prose verbatim, so the agent is told how to get unstuck
             # (remove the draw, edit, cut again).
             raise ToolError(str(exc)) from exc
-        except PoolNotInEventError as exc:
+        except ReservationNotInEventError as exc:
             # The HTTP surface answers this on the field; an agent reads prose, so the
             # offending id rides in the sentence rather than in a ``loc`` — the same
             # treatment the catalogue's ``TableNotInCatalogueError`` gets above.
