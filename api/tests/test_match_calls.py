@@ -69,7 +69,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events, stage_ids_for_tournament
 from tests._helpers import (
-    event_pools,
+    event_groups,
     hijack_solve,
     make_user,
     venue_tables,
@@ -151,7 +151,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
                 "name": "Pool A",
@@ -948,7 +948,7 @@ async def _hold_user_in_second_event(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
                 "name": "Pool B",

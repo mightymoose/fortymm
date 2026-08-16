@@ -39,7 +39,7 @@ from app.models import (
 )
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import fixtures_by_event
-from tests._helpers import event_pools, make_user
+from tests._helpers import event_groups, make_user
 
 #: How many pools the events below carry. Ten is the smallest field that used to tell an
 #: id sort from a position sort under the old client-minted ids (``p-10-`` sorts between
@@ -117,7 +117,7 @@ async def _make_event(
         match_settings={"rated": True, "length_games": 5},
         stages=stages,
     )
-    stages[0].groups = event_pools(pools, event=event)
+    stages[0].groups = event_groups(pools, event=event)
     db_session.add(event)
     await db_session.commit()
     # Both ``pools`` (VIEWONLY) and ``stages`` (not eager) are populated on refresh, not

@@ -47,7 +47,7 @@ from app.tournament_errors import (
 from app.tournament_event_stages import mint_stages
 from app.tournament_solve_service import request_schedule_solve
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -118,7 +118,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
                 "name": "Pool A",

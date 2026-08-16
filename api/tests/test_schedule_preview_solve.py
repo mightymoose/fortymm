@@ -256,7 +256,7 @@ async def test_preview_solve_enqueues_on_the_preview_queue_and_yields_a_result(
     assert [s.field_size for s in enqueued.field_summaries] == [4]
     assert len(enqueued.fixtures) == 6
     # Each drawn fixture carries its human pool label off the event's pool config.
-    assert {f.pool_name for f in enqueued.fixtures} == {"Pool A"}
+    assert {f.reservation_name for f in enqueued.fixtures} == {"Pool A"}
 
     # The job landed on the PREVIEW queue with the right timeout, and running it
     # yields the full PreviewResult.
@@ -740,7 +740,7 @@ async def test_preview_solve_infeasible_resolves_its_reasons(
     assert result.infeasibility_reasons
     reason = result.infeasibility_reasons[0]
     assert isinstance(reason, WindowTooShortForMatchRead)
-    assert reason.pool_name == "Pool A"
+    assert reason.reservation_name == "Pool A"
     assert reason.window_start == "09:00"
     assert reason.best_of == 5
     # A preview schedules pooled fixtures only — it drops an rr-then-ko draw's
@@ -790,7 +790,7 @@ async def test_preview_over_subscribed_placeholder_resolves_to_its_label(
         f"Placeholder {k}" for k in (1, 2, 3, 4)
     }
     first = over_subscribed[0]
-    assert first.pool_name == "Pool A"
+    assert first.reservation_name == "Pool A"
     assert first.window_start == "09:00"
     assert first.window_end == "11:00"
     assert first.match_count == 3

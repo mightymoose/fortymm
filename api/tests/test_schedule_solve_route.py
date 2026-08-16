@@ -55,7 +55,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournaments import NO_DRAWN_EVENTS_CODE, TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
-    event_pools,
+    event_groups,
     grant_permissions,
     make_client,
     make_user,
@@ -170,7 +170,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
                 "name": "Pool A",
@@ -433,10 +433,10 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
         verdict=SolverVerdict.infeasible,
         requested_at=datetime(2030, 1, 1, 9, 0, tzinfo=UTC),
         infeasibility_reasons=[
-            {"kind": "pool_has_no_tables", "pool_name": "Pool A"},
+            {"kind": "pool_has_no_tables", "reservation_name": "Pool A"},
             {
                 "kind": "pool_over_capacity",
-                "pool_name": "Pool A",
+                "reservation_name": "Pool A",
                 "window_start": "09:00",
                 "window_end": "17:00",
                 "required_min": 600,
@@ -460,9 +460,9 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
         "pool_has_no_tables",
         "pool_over_capacity",
     ]
-    assert reasons[0]["pool_name"] == "Pool A"
+    assert reasons[0]["reservation_name"] == "Pool A"
     over_capacity = reasons[1]
-    assert over_capacity["pool_name"] == "Pool A"
+    assert over_capacity["reservation_name"] == "Pool A"
     assert over_capacity["window_start"] == "09:00"
     assert over_capacity["window_end"] == "17:00"
     assert over_capacity["required_min"] == 600

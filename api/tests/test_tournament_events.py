@@ -45,15 +45,15 @@ from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
     NotTournamentOwnerError,
-    PoolSetFrozenError,
+    GroupSetFrozenError,
     TournamentNotFoundError,
 )
 from app.tournament_event_stages import mint_stages
 from app.tournament_events import create_event, delete_event, update_event
-from app.tournament_pools import pool_read
+from app.tournament_reservations import group_read
 from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -242,7 +242,7 @@ async def test_create_on_a_missing_tournament_raises_not_found(
 # ----- pool positions ------------------------------------------------------
 #
 # A pool's ``position`` is the one field on it the client cannot author: it is not on
-# the write shape at all (``PoolWrite``), and the server stamps it from the pool's index
+# the write shape at all (``ReservationWrite``), and the server stamps it from the pool's index
 # in the list that was sent — on BOTH verbs (ADR 20260801, "Pools carry an explicit
 # ``position``"). So there are two claims here, and they need each other:
 #
@@ -357,7 +357,7 @@ def test_a_write_payload_carrying_a_pool_position_is_refused(
     """A ``position`` on a pool a client **sends** is an unknown field, on both verbs —
     refused by name, not accepted and quietly overwritten.
 
-    ``position`` is not on ``PoolWrite``, and both write schemas are
+    ``position`` is not on ``ReservationWrite``, and both write schemas are
     ``extra="forbid"``, so this is the boundary saying "server-assigned" in the one
     register a client can actually read: the field is unsendable, so a client cannot
     believe it decided the order. The alternative — take it and ignore it — is the
@@ -695,7 +695,7 @@ async def _add_cut_event(
     is True and the two freezes are live. The fixture optionally carries a
     ``scheduled_start`` placement, for the timezone-reanchor path.
 
-    The pool's id is minted here (``event_pools``) rather than by the column's default,
+    The pool's id is minted here (``event_groups``) rather than by the column's default,
     because the fixture below has to name it before either row is flushed."""
     stages = mint_stages(draw_type)
     event = TournamentEvent(
@@ -711,7 +711,7 @@ async def _add_cut_event(
         predicates=[],
         stages=stages,
     )
-    pools = event_pools(
+    pools = event_groups(
         [
             {
                 "name": "Pool A",
@@ -763,7 +763,7 @@ async def _add_cut_event_with_two_pools(
         predicates=[],
         stages=stages,
     )
-    pools = event_pools(
+    pools = event_groups(
         [
             {
                 "name": "Pool A",
@@ -805,13 +805,13 @@ async def test_update_event_frozen_pool_reorder_is_refused(
 ) -> None:
     """Once the draw is cut, a ``pools`` payload citing exactly the pools the event
     already has — the same set, in a **different order** — raises
-    :class:`PoolSetFrozenError` and writes nothing, exactly as adding or removing one
+    :class:`GroupSetFrozenError` and writes nothing, exactly as adding or removing one
     does (ADR-0786, extended).
 
     This is the regression pin for the mutable-``pool_position`` bug: before this guard
     existed, ``_enforce_pool_set_frozen`` compared only the pool id SET, so a PATCH
     resending the same ids in a new order sailed through and restamped ``Pool.position``
-    (``apply_event_pools``) — which is exactly what the qualifier seam labels a finished
+    (``apply_event_reservations``) — which is exactly what the qualifier seam labels a finished
     pool's bracket seats by (``RrThenKoStrategy._qualifier_fills``'s ``pool_position``).
     Between two pools finishing, that relabelling double-seats one pool's qualifiers and
     strands another's — see ``tests/test_rr_then_ko.py``'s
@@ -843,7 +843,7 @@ async def test_update_event_frozen_pool_reorder_is_refused(
             ],
         }
     )
-    with pytest.raises(PoolSetFrozenError) as excinfo:
+    with pytest.raises(GroupSetFrozenError) as excinfo:
         await update_event(
             db_session,
             tournament_id=tournament.id,
@@ -1004,7 +1004,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
     default_league: League,
 ) -> None:
     """Once the draw is cut, a ``pools`` payload that changes *which pools* the event
-    has raises :class:`PoolSetFrozenError` and writes nothing (ADR-0786)."""
+    has raises :class:`GroupSetFrozenError` and writes nothing (ADR-0786)."""
     owner = await make_user(db_session, "events-update-poolfreeze-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _add_cut_event(db_session, tournament)
@@ -1022,7 +1022,7 @@ async def test_update_event_frozen_pool_set_change_is_refused(
             ],
         }
     )
-    with pytest.raises(PoolSetFrozenError):
+    with pytest.raises(GroupSetFrozenError):
         await update_event(
             db_session,
             tournament_id=tournament.id,
@@ -1254,7 +1254,7 @@ async def test_a_pools_reservations_are_stored_as_rows_in_the_order_they_were_se
             )
         )
     ).scalar_one()
-    assert pool_read(stored).table_ids == [table_2, table_1]
+    assert group_read(stored).table_ids == [table_2, table_1]
 
 
 async def test_a_reservation_of_another_tournaments_table_never_reaches_the_database(

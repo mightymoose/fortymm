@@ -92,9 +92,9 @@ from app.scheduling import (
     PlacedFixture,
     PlayerId,
     PlayerOverSubscribed,
-    PoolHasNoTables,
+    ReservationHasNoTables,
     PoolId,
-    PoolOverCapacity,
+    ReservationOverCapacity,
     ScheduleSnapshot,
     SolveResult,
     SolveStats,
@@ -107,8 +107,8 @@ from app.schemas.schedule_solve import (
     PastWindowReasonRead,
     PlayerConflictRead,
     PlayerOverSubscribedRead,
-    PoolHasNoTablesRead,
-    PoolOverCapacityRead,
+    ReservationHasNoTablesRead,
+    ReservationOverCapacityRead,
     TableConflictRead,
     parse_infeasibility_reasons,
     parse_placement_conflicts,
@@ -121,7 +121,7 @@ from app.tournament_materialization import materialize_event
 from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     event_draw_settings,
-    event_pools,
+    event_groups,
     hijack_solve,
     make_user,
     table_ids_of,
@@ -178,7 +178,7 @@ async def _make_tournament(
     a sync lazy-load (``MissingGreenlet``).
 
     ``pools`` is the event's pools in the ``{name, slot, table_ids}`` dict shape
-    ``tests._helpers.event_pools`` speaks, naming tables by the positional
+    ``tests._helpers.event_groups`` speaks, naming tables by the positional
     aliases (``"t1"``, ``"t2"``, …) of this tournament's own catalogue. Left out,
     the event gets one pool spanning every table for the whole event window,
     which is what most of this module's tests want.
@@ -252,7 +252,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": length_games},
         stages=stages,
     )
-    stages[0].groups = event_pools(pool_specs, event=event, tournament=tournament)
+    stages[0].groups = event_groups(pool_specs, event=event, tournament=tournament)
     db.add(event)
     await db.flush()
     # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
@@ -260,7 +260,7 @@ async def _make_tournament(
     # declared ``lazy="selectin"`` fires as part of any SELECT that returns
     # ``TournamentEvent`` rows) but NOT by construction the way the old direct
     # relationship was. ``cut_draw`` below reads ``event.groups`` synchronously
-    # (``app.tournament_draws.event_pools``/``draw_config``), so this object — built
+    # (``app.tournament_draws.event_groups``/``draw_config``), so this object — built
     # and flushed, never queried — needs an explicit refresh or that read is an async
     # lazy load and raises ``MissingGreenlet``. A production caller never hits this:
     # every route loads its event through a query first.
@@ -1425,8 +1425,8 @@ class TestSolveJob:
                 placements=(),
                 stats=SolveStats(wall_time_ms=77, objective=None),
                 reasons=(
-                    PoolHasNoTables(reservation_id=pool_id),
-                    PoolOverCapacity(
+                    ReservationHasNoTables(reservation_id=pool_id),
+                    ReservationOverCapacity(
                         reservation_id=pool_id,
                         required_min=600,
                         capacity_min=480,
@@ -1445,15 +1445,15 @@ class TestSolveJob:
 
         reasons = parse_infeasibility_reasons(ledger.infeasibility_reasons)
         no_tables, over_capacity = reasons
-        assert isinstance(no_tables, PoolHasNoTablesRead)
+        assert isinstance(no_tables, ReservationHasNoTablesRead)
         # The DISPLAY name, never the namespaced ``{event_id}:pool-a`` id.
-        assert no_tables.pool_name == "Pool A"
+        assert no_tables.reservation_name == "Pool A"
         # Blamed reservation: a real pool, so a remedy may name a pool control
         # ("add a table to Pool A"). It survives the JSONB round-trip.
         assert no_tables.reservation == "pool"
 
-        assert isinstance(over_capacity, PoolOverCapacityRead)
-        assert over_capacity.pool_name == "Pool A"
+        assert isinstance(over_capacity, ReservationOverCapacityRead)
+        assert over_capacity.reservation_name == "Pool A"
         assert over_capacity.reservation == "pool"
         assert over_capacity.window_start == "09:00"
         assert over_capacity.window_end == "17:00"
@@ -1523,7 +1523,7 @@ class TestSolveJob:
         (reason,) = parse_infeasibility_reasons(ledger.infeasibility_reasons)
         assert isinstance(reason, PlayerOverSubscribedRead)
         assert reason.player_name == username
-        assert reason.pool_name == "Pool A"
+        assert reason.reservation_name == "Pool A"
         assert reason.window_start == "09:00"
         assert reason.window_end == "17:00"
         assert reason.match_count == 3
@@ -2123,7 +2123,7 @@ class TestEventWideReservation:
         self, db_session: AsyncSession
     ) -> None:
         """A bracket at a venue with no tables is infeasible for the reason it
-        always was — ``PoolHasNoTables`` — now fired against the event-wide
+        always was — ``ReservationHasNoTables`` — now fired against the event-wide
         reservation, and resolved to something a director can read rather than
         to the namespaced solver id."""
         tournament_id, _event_id = await _make_tournament(
@@ -2137,14 +2137,14 @@ class TestEventWideReservation:
         result = scheduling.solve(inputs.snapshot)
 
         assert result.verdict is Verdict.infeasible
-        (reason,) = [r for r in result.reasons if isinstance(r, PoolHasNoTables)]
+        (reason,) = [r for r in result.reasons if isinstance(r, ReservationHasNoTables)]
         resolved = schedule_solves._resolve_reason(reason, inputs)
-        assert isinstance(resolved, PoolHasNoTablesRead)
+        assert isinstance(resolved, ReservationHasNoTablesRead)
         # The event a director knows, plus what is actually reserved. Not the
         # namespaced id, and not the bare event name (which would send them
         # looking for a table control an event does not have).
-        assert resolved.pool_name == "Open Singles (whole venue)"
-        assert str(reason.pool_id) not in resolved.pool_name
+        assert resolved.reservation_name == "Open Singles (whole venue)"
+        assert str(reason.pool_id) not in resolved.reservation_name
 
     async def test_a_past_event_window_resolves_to_its_venue_local_date(
         self, db_session: AsyncSession
@@ -2204,14 +2204,14 @@ class TestEventWideReservation:
         key = schedule_solves.event_wide_pool_key(event_id)
         fixture = inputs.snapshot.fixtures[0]
         reasons: tuple[InfeasibilityReason, ...] = (
-            PoolHasNoTables(reservation_id=key),
+            ReservationHasNoTables(reservation_id=key),
             WindowTooShortForMatch(
                 reservation_id=key,
                 fixture_id=fixture.id,
                 needed_min=25,
                 window_span_min=10,
             ),
-            PoolOverCapacity(
+            ReservationOverCapacity(
                 reservation_id=key, required_min=600, capacity_min=480, table_count=2
             ),
             PlayerOverSubscribed(
@@ -2230,7 +2230,7 @@ class TestEventWideReservation:
                 resolved, (NoSingleCauseRead, PastWindowReasonRead)
             ), resolved
             assert resolved.reservation == "event"
-            assert resolved.pool_name == "Open Singles (whole venue)"
+            assert resolved.reservation_name == "Open Singles (whole venue)"
 
     async def test_an_rr_then_ko_event_counts_its_venue_once(
         self, db_session: AsyncSession

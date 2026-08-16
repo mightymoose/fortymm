@@ -50,7 +50,7 @@ from app.models import (
 )
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
-from tests._helpers import event_pools, make_user
+from tests._helpers import event_groups, make_user
 
 FIXTURE_IDENTITY_CONSTRAINT = "uq_tournament_fixtures_stage_id_pool_id_round_position"
 #: The composite foreign key that says a fixture's pool is its own stage's pool
@@ -102,13 +102,13 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         match_settings={"rated": True, "length_games": 5},
         stages=stages,
     )
-    # Two pools, whose ids the seed mints up front (``event_pools``) because a fixture
+    # Two pools, whose ids the seed mints up front (``event_groups``) because a fixture
     # below has to name one before the rows are flushed — and because a pool id is a
     # server-minted uuid now (ADR 20260801), not a string a literal can spell. A pool's
     # real parent is its stage now (ADR 20260815), so they hang off ``stages[0]``, not
     # the event directly; ``_pool_a`` / ``_pool_b`` read them back off the event's
     # (VIEWONLY) ``pools`` association.
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {"name": "Pool A", "slot": {}, "table_ids": []},
             {"name": "Pool B", "slot": {}, "table_ids": []},

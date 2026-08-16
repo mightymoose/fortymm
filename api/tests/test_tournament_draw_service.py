@@ -41,7 +41,7 @@ from app.tournament_errors import (
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -113,7 +113,7 @@ async def _make_event(
         predicates=[],
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [POOL_A, POOL_B] if pools is None else pools, event=event, tournament=tournament
     )
     db.add(event)

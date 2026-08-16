@@ -94,7 +94,7 @@ from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
-    event_pools,
+    event_groups,
     grant_permissions,
     make_user,
     stage_id_at,
@@ -2293,7 +2293,7 @@ async def _seed_drawable_tournament(
     await db_session.commit()
     # ``pools`` explicitly: a caller may hand this event straight to ``cut_draw``,
     # which reads ``event.groups`` synchronously (``app.tournament_draws
-    # .event_pools``/``draw_config``) — a plain refresh leaves that VIEWONLY
+    # .event_groups``/``draw_config``) — a plain refresh leaves that VIEWONLY
     # association unloaded (ADR 20260815), and the read would be an async lazy load.
     await db_session.refresh(event, attribute_names=["groups"])
     db_session.add_all(
@@ -3727,7 +3727,7 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
         predicates=[],
         stages=stages,
     )
-    pools = event_pools(
+    pools = event_groups(
         [
             {
                 "name": "Pool A",

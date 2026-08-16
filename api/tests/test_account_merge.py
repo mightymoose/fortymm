@@ -49,7 +49,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
-    event_pools,
+    event_groups,
     start_session,
     venue_tables,
 )
@@ -1001,7 +1001,7 @@ async def _make_rr_event(
         predicates=[],
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [{"name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
         event=event,
         tournament=tournament,

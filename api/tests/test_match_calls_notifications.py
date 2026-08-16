@@ -27,7 +27,7 @@ from tests._helpers import start_session
 _CONTEXT = MatchCallContext(
     tournament_name="Spring Open",
     event_name="Men's Singles",
-    pool_name="Group B",
+    reservation_name="Group B",
 )
 
 
@@ -174,8 +174,8 @@ def test_match_call_cancelled_message_for_a_schedule_change():
     )
 
 
-def test_context_without_a_pool_omits_the_pool_segment():
-    """Un-pooled draws (single-elim) have no pool name — the context label
+def test_context_without_a_group_omits_the_group_segment():
+    """Ungrouped draws (single-elim) have no group label — the context label
     degrades to tournament · event with no dangling separator."""
     msg = match_called_message(
         table_label="Table 1",
@@ -201,7 +201,7 @@ def test_messages_fit_the_notification_columns():
         context=MatchCallContext(
             tournament_name="The 2026 Metropolitan Autumn Invitational",
             event_name="Mixed Doubles Consolation",
-            pool_name="Group F",
+            reservation_name="Group F",
         ),
     )
     assert len(msg.title) <= 200

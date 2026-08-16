@@ -66,7 +66,7 @@ from app.tournament_lifecycle import transition_tournament
 from app.tournament_placement import place_fixture
 from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     table_ids_of,
     venue_tables,
@@ -197,7 +197,7 @@ async def _seed_field(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
                 "name": "Pool A",

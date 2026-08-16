@@ -225,7 +225,7 @@ async def test_owner_enqueues_a_preview_and_gets_a_token_and_structure(
     assert len(body["fixtures"]) == 6
     # Each drawn fixture carries the human pool label (not just the namespaced
     # composite) so the grid can head its column "Pool A".
-    assert {f["pool_name"] for f in body["fixtures"]} == {"Pool A"}
+    assert {f["reservation_name"] for f in body["fixtures"]} == {"Pool A"}
 
     (job,) = preview_queue.jobs
     assert job.func_name == RUN_SCHEDULE_PREVIEW_JOB

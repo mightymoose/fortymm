@@ -91,7 +91,7 @@ async def test_a_live_tournament_the_caller_is_entered_in_becomes_a_panel(
     assert event["is_live"] is True
     assert event["draw_type"] == "round-robin"
     assert event["stage_label"] == "Group play"
-    assert event["pool_label"] == "Pool A", (
+    assert event["group_label"] == "Pool A", (
         "the pool the caller was drawn into, by name — not its 'p-a' string ref"
     )
 
@@ -530,7 +530,7 @@ async def test_an_event_with_no_draw_cut_stands_the_player_nowhere(
     assert panel_event["field_size"] == 0
     assert panel_event["match"] is None, "no fixtures, so there is no match to show"
     assert panel_event["fixtures"] == []
-    assert panel_event["pool_label"] is None, (
+    assert panel_event["group_label"] is None, (
         "the caller has no fixture yet, so no pool has been dealt to them"
     )
 

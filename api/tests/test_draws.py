@@ -789,7 +789,7 @@ def _persisted(
     ``pool_position``/``stage`` come back unresolved (``None``), exactly as before this
     helper absorbed what used to be a near-duplicate ``_persisted_rr_then_ko``.
 
-    ``pool_ids``: ``app.tournament_draws.pool_order`` resolves each pool's place in the
+    ``pool_ids``: ``app.tournament_draws.group_order`` resolves each pool's place in the
     event's own pool order — the same sequence ``DrawConfig.pool_ids`` carries.
     Omitted (the default, ``()``) leaves every pool's position unresolved — the shape a
     caller that skipped that plumbing hands the strategy, and the fallback the

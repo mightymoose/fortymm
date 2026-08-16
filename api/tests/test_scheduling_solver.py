@@ -31,13 +31,13 @@ from app.scheduling import (
     PlayerConflict,
     PlayerId,
     PlayerOverSubscribed,
-    PoolHasNoTables,
+    ReservationHasNoTables,
     PoolId,
-    PoolOverCapacity,
+    ReservationOverCapacity,
     PreviousPlacement,
     RestShadow,
     ScheduleFixture,
-    SchedulePool,
+    ScheduleReservation,
     ScheduleSnapshot,
     SolveResult,
     TableConflict,
@@ -101,7 +101,7 @@ def _one_pool_snapshot(
     table_ids = _tables(tables)
     return ScheduleSnapshot(
         table_ids=table_ids,
-        pools=(SchedulePool(PoolId("A"), table_ids, Window(*window)),),
+        pools=(ScheduleReservation(PoolId("A"), table_ids, Window(*window)),),
         events=(EventSettings(EventId("E1"), length_games),),
         fixtures=fixtures,
         now_min=now_min,
@@ -126,15 +126,15 @@ def _random_snapshot(
     table_ids = _tables(n_tables)
     if two_pools:
         pools = (
-            SchedulePool(PoolId("A"), table_ids[:2], Window(0, 480)),
-            SchedulePool(PoolId("B"), table_ids[2:], Window(60, 540)),
+            ScheduleReservation(PoolId("A"), table_ids[:2], Window(0, 480)),
+            ScheduleReservation(PoolId("B"), table_ids[2:], Window(60, 540)),
         )
         events = (
             EventSettings(EventId("E1"), 3),
             EventSettings(EventId("E2"), 5),
         )
     else:
-        pools = (SchedulePool(PoolId("A"), table_ids, Window(0, 480)),)
+        pools = (ScheduleReservation(PoolId("A"), table_ids, Window(0, 480)),)
         events = (EventSettings(EventId("E1"), 3),)
     fixtures = []
     for n in range(1, n_fixtures + 1):
@@ -329,7 +329,7 @@ class TestPinsArePromises:
             dataclasses.replace(
                 pinned_snap,
                 table_ids=shrunk_tables,
-                pools=(SchedulePool(PoolId("A"), shrunk_tables, Window(0, 480)),),
+                pools=(ScheduleReservation(PoolId("A"), shrunk_tables, Window(0, 480)),),
             ),
             dataclasses.replace(pinned_snap, now_min=45),
         ]
@@ -555,7 +555,7 @@ class TestInfeasibility:
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
         assert result.reasons == (
-            PoolOverCapacity(
+            ReservationOverCapacity(
                 reservation_id=PoolId("A"),
                 required_min=75,  # 3 * 25
                 capacity_min=60,  # 60-minute window * 1 table
@@ -571,14 +571,14 @@ class TestInfeasibility:
         though pinned + unpinned would exceed it. This is the completeness
         trade-off: with a single shared table the pin's occupancy genuinely does
         leave no room, so CP-SAT proves it infeasible and it surfaces as the
-        honest NoSingleCause residual, never a false PoolOverCapacity."""
+        honest NoSingleCause residual, never a false ReservationOverCapacity."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
             _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),  # 25 min pinned [0,25]
             _fixture(2, p3, p4),  # 25 min unpinned
         )
         # One table, a 45-minute window. Unpinned alone (25) fits 45, so no
-        # PoolOverCapacity — but with the pin holding T1 for [0,25] the unpinned
+        # ReservationOverCapacity — but with the pin holding T1 for [0,25] the unpinned
         # 25-min match can't also fit before 45, so CP-SAT proves infeasibility.
         snapshot = _one_pool_snapshot(fixtures, tables=1, window=(0, 45))
         result = solve(snapshot, time_cap_s=CAP)
@@ -590,7 +590,7 @@ class TestInfeasibility:
     def test_no_tables_pool_with_only_a_pinned_fixture_is_not_flagged(self) -> None:
         """Regression: a pool with no tables whose only fixture is *pinned* to a
         catalogue table owned by another pool (a supported off-group director
-        placement, ADR-0790) must not fire PoolHasNoTables — that arm is about a
+        placement, ADR-0790) must not fire ReservationHasNoTables — that arm is about a
         pool's *unpinned* fixtures having nowhere to go, and this pool has none.
         The pinned fixture is honored on its table and the day solves."""
         p1, p2, p3, p4 = _players(4)
@@ -598,8 +598,8 @@ class TestInfeasibility:
         snapshot = ScheduleSnapshot(
             table_ids=catalogue,
             pools=(
-                SchedulePool(PoolId("A"), (), Window(0, 480)),  # no tables
-                SchedulePool(PoolId("B"), catalogue, Window(0, 480)),
+                ScheduleReservation(PoolId("A"), (), Window(0, 480)),  # no tables
+                ScheduleReservation(PoolId("B"), catalogue, Window(0, 480)),
             ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
@@ -627,7 +627,7 @@ class TestInfeasibility:
         catalogue = _tables(2)  # T1 is pool A's; T2 is the outside table
         snapshot = ScheduleSnapshot(
             table_ids=catalogue,
-            pools=(SchedulePool(PoolId("A"), (TableId("T1"),), Window(0, 60)),),
+            pools=(ScheduleReservation(PoolId("A"), (TableId("T1"),), Window(0, 60)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2, pool="A"),  # 25 min unpinned, fits T1 in [0,60]
@@ -660,8 +660,8 @@ class TestInfeasibility:
         snapshot = ScheduleSnapshot(
             table_ids=table_ids,
             pools=(
-                SchedulePool(PoolId("A"), (TableId("T1"),), Window(0, 30)),
-                SchedulePool(PoolId("B"), (TableId("T2"),), Window(0, 30)),
+                ScheduleReservation(PoolId("A"), (TableId("T1"),), Window(0, 30)),
+                ScheduleReservation(PoolId("B"), (TableId("T2"),), Window(0, 30)),
             ),
             events=(EventSettings(EventId("E1"), 3),),
             # P1 plays once in each pool: one match per (pool, player), so the
@@ -704,8 +704,8 @@ class TestInfeasibility:
         snapshot = ScheduleSnapshot(
             table_ids=table_ids,
             pools=(
-                SchedulePool(pool_key, table_ids, Window(0, 50)),
-                SchedulePool(event_wide_key, table_ids, Window(0, 50)),
+                ScheduleReservation(pool_key, table_ids, Window(0, 50)),
+                ScheduleReservation(event_wide_key, table_ids, Window(0, 50)),
             ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
@@ -722,7 +722,7 @@ class TestInfeasibility:
         p1, p2 = _players(2)
         snapshot = ScheduleSnapshot(
             table_ids=(),
-            pools=(SchedulePool(PoolId("A"), (), Window(0, 480)),),
+            pools=(ScheduleReservation(PoolId("A"), (), Window(0, 480)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(_fixture(1, p1, p2),),
             now_min=0,
@@ -730,21 +730,21 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
-        assert result.reasons == (PoolHasNoTables(reservation_id=PoolId("A")),)
+        assert result.reasons == (ReservationHasNoTables(reservation_id=PoolId("A")),)
 
     def test_no_tables_dominates_over_capacity_for_the_same_pool(self) -> None:
         """A no-tables pool is trivially over capacity too (capacity 0), but the
-        more specific PoolHasNoTables wins — a pool reports exactly one cause."""
+        more specific ReservationHasNoTables wins — a pool reports exactly one cause."""
         p1, p2 = _players(2)
         snapshot = ScheduleSnapshot(
             table_ids=(),
-            pools=(SchedulePool(PoolId("A"), (), Window(0, 480)),),
+            pools=(ScheduleReservation(PoolId("A"), (), Window(0, 480)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(_fixture(1, p1, p2),),
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PoolHasNoTables(reservation_id=PoolId("A")),)
+        assert result.reasons == (ReservationHasNoTables(reservation_id=PoolId("A")),)
 
     def test_all_structural_causes_are_collected_at_once(self) -> None:
         """Two independently-broken pools: one has no tables, the other is over
@@ -755,8 +755,8 @@ class TestInfeasibility:
         snapshot = ScheduleSnapshot(
             table_ids=table_ids,
             pools=(
-                SchedulePool(PoolId("A"), (), Window(0, 480)),  # no tables
-                SchedulePool(PoolId("B"), table_ids, Window(0, 40)),  # over cap
+                ScheduleReservation(PoolId("A"), (), Window(0, 480)),  # no tables
+                ScheduleReservation(PoolId("B"), table_ids, Window(0, 40)),  # over cap
             ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
@@ -771,9 +771,9 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
-        assert by_kind["pool_has_no_tables"] == [PoolHasNoTables(reservation_id=PoolId("A"))]
+        assert by_kind["pool_has_no_tables"] == [ReservationHasNoTables(reservation_id=PoolId("A"))]
         assert by_kind["pool_over_capacity"] == [
-            PoolOverCapacity(
+            ReservationOverCapacity(
                 reservation_id=PoolId("B"),
                 required_min=50,
                 capacity_min=40,
@@ -1022,7 +1022,7 @@ class TestPlayerOverSubscribed:
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
         assert by_kind["pool_over_capacity"] == [
-            PoolOverCapacity(
+            ReservationOverCapacity(
                 reservation_id=PoolId("A"),
                 required_min=75,
                 capacity_min=60,
@@ -1062,11 +1062,11 @@ class TestPlayerOverSubscribed:
         """The pool-level *unplaceable* causes dominate: a pool with no tables is
         already unrunnable, so piling a per-player claim on top of it would be
         noise. P1 is in three matches of a 60-minute no-tables pool and only
-        :class:`PoolHasNoTables` is reported."""
+        :class:`ReservationHasNoTables` is reported."""
         p1, p2, p3, p4 = _players(4)
         snapshot = ScheduleSnapshot(
             table_ids=(),
-            pools=(SchedulePool(PoolId("A"), (), Window(0, 60)),),
+            pools=(ScheduleReservation(PoolId("A"), (), Window(0, 60)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2),
@@ -1076,7 +1076,7 @@ class TestPlayerOverSubscribed:
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PoolHasNoTables(reservation_id=PoolId("A")),)
+        assert result.reasons == (ReservationHasNoTables(reservation_id=PoolId("A")),)
 
     def test_a_past_window_pool_reports_only_that(self) -> None:
         """The second of the three domination guards this arm shares with the
@@ -1109,7 +1109,7 @@ class TestPlayerOverSubscribed:
         :class:`WindowTooShortForMatch` findings are reported.
 
         Drop the ``pools_short_window`` ``continue`` and this test reds twice
-        over: a PoolOverCapacity (75 > 20 * 3) and a PlayerOverSubscribed(P1,
+        over: a ReservationOverCapacity (75 > 20 * 3) and a PlayerOverSubscribed(P1,
         95 > 20) get piled onto a pool that already explained itself."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
@@ -1406,7 +1406,7 @@ class TestInProgressConflicts:
         tables = _tables(2)
         snapshot = ScheduleSnapshot(
             table_ids=tables,
-            pools=(SchedulePool(PoolId("A"), tables, Window(0, 480)),),
+            pools=(ScheduleReservation(PoolId("A"), tables, Window(0, 480)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2),  # in-progress on T1 → occupancy [0, 25)
@@ -1437,7 +1437,7 @@ class TestInProgressConflicts:
         tables = _tables(3)
         snapshot = ScheduleSnapshot(
             table_ids=tables,
-            pools=(SchedulePool(PoolId("A"), tables, Window(0, 480)),),
+            pools=(ScheduleReservation(PoolId("A"), tables, Window(0, 480)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2),  # in-progress on T1, human P1

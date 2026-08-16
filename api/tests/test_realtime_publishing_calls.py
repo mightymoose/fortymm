@@ -52,7 +52,7 @@ from app.models import (
 from app.realtime import EventKind, RealtimeBroker
 from app.tournament_event_stages import mint_stages
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -137,7 +137,7 @@ async def _stage(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    pools = event_pools(
+    pools = event_groups(
         [
             {
                 "name": "Pool A",

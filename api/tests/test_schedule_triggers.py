@@ -54,7 +54,7 @@ from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
-    event_pools,
+    event_groups,
     grant_permissions,
     make_user,
     opponent_session,
@@ -124,7 +124,7 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
                 "name": "Pool A",
@@ -870,7 +870,7 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
         match_settings={"rated": False, "length_games": 3},
         stages=second_stages,
     )
-    second_stages[0].groups = event_pools(
+    second_stages[0].groups = event_groups(
         [
             {
                 "name": "Pool B",

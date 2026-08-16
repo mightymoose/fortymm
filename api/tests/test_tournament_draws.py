@@ -37,7 +37,7 @@ from app.models import (
     User,
 )
 from app.models.tournament import DrawType, EventFormat
-from app.tournament_draws import draw_config, fixture_state, pool_order
+from app.tournament_draws import draw_config, fixture_state, group_order
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import (
     completed_match_ids,
@@ -45,7 +45,7 @@ from app.tournament_queries import (
     game_counts_by_match,
 )
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -103,7 +103,7 @@ async def _make_event(
         predicates=[],
         stages=stages,
     )
-    pools = event_pools([POOL_A], event=event, tournament=tournament)
+    pools = event_groups([POOL_A], event=event, tournament=tournament)
     stages[0].groups = pools
     db.add(event)
     await db.flush()
@@ -325,7 +325,7 @@ async def test_a_match_that_has_not_completed_projects_no_games(
 
 # --- the event's pool ORDER --------------------------------------------------------
 #
-# ``draw_config`` seeds the snake against it, ``pool_order`` is what a persisted
+# ``draw_config`` seeds the snake against it, ``group_order`` is what a persisted
 # fixture's ``pool_position`` is resolved through, and both read it off
 # ``Pool.position`` (ADR 20260801) rather than off the pool id. The ids below are
 # server-minted uuids, whose order is *random* — which is exactly why the position had
@@ -339,12 +339,12 @@ def _pools() -> list[TournamentEventStageGroup]:
     index, which is what the write boundary stamps, and a minted id, with its
     reservation mapped alongside.
 
-    ``event_pools`` requires an ``event`` (a group's real parent is its stage, ADR
+    ``event_groups`` requires an ``event`` (a group's real parent is its stage, ADR
     20260815, and a reservation's is the event), but every pool below has empty
     ``table_ids``, so the event is never actually read — a throwaway, never-persisted
     :class:`TournamentEvent` satisfies the signature with nothing behind it to be wrong.
     """
-    return event_pools(
+    return event_groups(
         [
             {
                 "name": f"Pool {index + 1}",
@@ -385,7 +385,7 @@ def test_pool_order_ranks_every_pool_id_by_the_events_order() -> None:
     stored = _pools()
     event = TournamentEvent(groups=list(reversed(stored)))
 
-    assert pool_order(event) == {pool.id: index for index, pool in enumerate(stored)}
+    assert group_order(event) == {pool.id: index for index, pool in enumerate(stored)}
 
 
 def test_fixture_state_projects_its_pools_place_in_the_event_order() -> None:
@@ -404,7 +404,7 @@ def test_fixture_state_projects_its_pools_place_in_the_event_order() -> None:
     )
 
     assert (
-        fixture_state(fixture, None, frozenset(), pool_order(event)).pool_position == 9
+        fixture_state(fixture, None, frozenset(), group_order(event)).pool_position == 9
     )
 
 
@@ -427,7 +427,7 @@ def test_fixture_state_projects_no_pool_position_when_there_is_no_pool() -> None
     )
 
     assert (
-        fixture_state(un_pooled, None, frozenset(), pool_order(event)).pool_position
+        fixture_state(un_pooled, None, frozenset(), group_order(event)).pool_position
         is None
     )
     assert fixture_state(pooled).pool_position is None

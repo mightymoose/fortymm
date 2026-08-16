@@ -46,7 +46,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.schemas.tournament import MAX_QUALIFIERS_PER_POOL
+from app.schemas.tournament import MAX_QUALIFIERS_PER_GROUP
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
@@ -423,12 +423,12 @@ async def test_a_qualifier_count_below_one_is_422(
 # this a defect rather than a nicety: it is one past what the ``Integer`` column holds,
 # so before the ceiling it reached the driver and came back a **500** — and the client's
 # generic error copy then told the organizer "nothing you did caused it", which was
-# false. ``MAX_QUALIFIERS_PER_POOL + 1`` is the quieter half: storable, so it answered
+# false. ``MAX_QUALIFIERS_PER_GROUP + 1`` is the quieter half: storable, so it answered
 # ``201 Created`` and left an event whose draw could never be cut.
 INT32_OVERFLOW = 2_147_483_648
 
 
-@pytest.mark.parametrize("count", [MAX_QUALIFIERS_PER_POOL + 1, INT32_OVERFLOW])
+@pytest.mark.parametrize("count", [MAX_QUALIFIERS_PER_GROUP + 1, INT32_OVERFLOW])
 async def test_a_qualifier_count_above_the_ceiling_is_422(
     authed_client: tuple[AsyncClient, User], count: int, db_session: AsyncSession
 ) -> None:
@@ -471,15 +471,15 @@ async def test_a_qualifier_count_at_the_ceiling_is_accepted(
     tournament_id = await _tournament(client)
 
     created = await _create_event(
-        client, tournament_id, qualifiers_per_group=MAX_QUALIFIERS_PER_POOL
+        client, tournament_id, qualifiers_per_group=MAX_QUALIFIERS_PER_GROUP
     )
 
     assert created.status_code == 201, created.text
     event = await _settings_of(db_session, created.json()["id"])
-    assert _stored_qualifiers(event) == MAX_QUALIFIERS_PER_POOL
+    assert _stored_qualifiers(event) == MAX_QUALIFIERS_PER_GROUP
 
 
-@pytest.mark.parametrize("count", [MAX_QUALIFIERS_PER_POOL + 1, INT32_OVERFLOW])
+@pytest.mark.parametrize("count", [MAX_QUALIFIERS_PER_GROUP + 1, INT32_OVERFLOW])
 async def test_patching_a_qualifier_count_above_the_ceiling_is_422(
     authed_client: tuple[AsyncClient, User], count: int, db_session: AsyncSession
 ) -> None:
@@ -516,13 +516,13 @@ async def test_patching_a_qualifier_count_at_the_ceiling_is_accepted(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
         json={
             "draw_type": RR_THEN_KO,
-            "qualifiers_per_group": MAX_QUALIFIERS_PER_POOL,
+            "qualifiers_per_group": MAX_QUALIFIERS_PER_GROUP,
         },
     )
 
     assert response.status_code == 200, response.text
     event = await _settings_of(db_session, event_id)
-    assert _stored_qualifiers(event) == MAX_QUALIFIERS_PER_POOL
+    assert _stored_qualifiers(event) == MAX_QUALIFIERS_PER_GROUP
 
 
 async def test_patching_a_qualifier_count_without_its_draw_type_is_422(
@@ -1091,10 +1091,10 @@ def _pool_payload(group: TournamentEventStageGroup) -> dict[str, Any]:
     ``name``, ``slot`` and ``table_ids`` too.
 
     The id is the **group's** and the rest is its **reservation's** — the same split
-    ``app.tournament_pools.pool_read`` projects, spelled here against the rows.
+    ``app.tournament_reservations.group_read`` projects, spelled here against the rows.
     ``table_ids`` is sent empty rather than round-tripped — a table this test's
     tournament does not have is dropped silently
-    (``app.tournament_pools._reservation_tables``) — so the emptiness itself asserts
+    (``app.tournament_reservations._reservation_tables``) — so the emptiness itself asserts
     nothing either way."""
     reservation = group.reservation
     return {
@@ -1138,16 +1138,16 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
     same-set, different-order payload is treated as unchanged) and this test's own
     ``assert reorder.status_code == 409`` reds — confirmed directly, along with
     ``tests/test_tournament_events.py::test_update_event_frozen_pool_reorder_is_refused``,
-    which reds with ``DID NOT RAISE PoolSetFrozenError`` against the same revert.
+    which reds with ``DID NOT RAISE GroupSetFrozenError`` against the same revert.
     Past that assertion the reorder DOES restamp each pool's ``position`` exactly as
-    documented (``apply_event_pools``'s "re-positioned as this payload says"), which is
+    documented (``apply_event_reservations``'s "re-positioned as this payload says"), which is
     what ``tests/test_draws.py::test_rr_then_ko_labels_pools_by_the_directors_position_
     not_sorted_ids`` pins at the pure-strategy layer: a position swap alone flips which
     physical pool a knockout seed is labelled against. This test does not press further
     into that HTTP round trip past the 409 — a reorder that reaches the response
     serializer is a path the guard makes permanently unreachable, and a previous probe
     of it (with the guard removed) hit an unrelated lazy-load crash in
-    ``app.tournament_pools.pool_read``, not a clean 200 to build a strand/double-seat
+    ``app.tournament_reservations.group_read``, not a clean 200 to build a strand/double-seat
     assertion on. The mechanism is proven at the two layers above instead.
     """
     client, owner = authed_client
@@ -1182,11 +1182,11 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
             entries[5].id: client_5,
         }
 
-        async def _play_pool(pool_name: str, seeds: tuple[int, int, int]) -> None:
+        async def _play_pool(reservation_name: str, seeds: tuple[int, int, int]) -> None:
             """Play one pool of three out in full — the LOWER seed always wins, 2-0 —
             so its finishing order (and therefore its qualifiers) is simply its two
             lowest seeds, with no tiebreak needed and no third client."""
-            pool_id = await _pool_id(db_session, event_id, pool_name)
+            pool_id = await _pool_id(db_session, event_id, reservation_name)
             fixtures = [
                 f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_id
             ]
@@ -1268,7 +1268,7 @@ async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
     **This was an `xfail(strict=True)` until the group/reservation split, and it pinned
     a real 500.** ANY PATCH whose body carried a `pools` key returned 500, reordered or
     resent unchanged: `update_event` ends with `await db.refresh(event)`, which left the
-    venue side of each pool expired rather than eagerly reloaded, and `pool_read` then
+    venue side of each pool expired rather than eagerly reloaded, and `group_read` then
     touched it during response serialization — a lazy load, which under async raises
     `MissingGreenlet`. No test exercised a `pools` PATCH over HTTP before this one, so
     it had never been caught.

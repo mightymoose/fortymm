@@ -63,7 +63,7 @@ from tests._helpers import (
     CountingGeocoder,
     assert_tournament_address_is_sql_null,
     blank_addresses,
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -634,7 +634,7 @@ async def _make_tournament_at(
     status: TournamentStatus,
     with_event: bool = False,
 ) -> Tournament:
-    """A tournament owned by ``owner`` at ``status``, optionally with one pooled,
+    """A tournament owned by ``owner`` at ``status``, optionally with one grouped,
     unrated, round-robin singles event (no entrants, no draw yet — the caller cuts
     it)."""
     tournament = Tournament(
@@ -663,10 +663,10 @@ async def _make_tournament_at(
             match_settings={"rated": False, "length_games": 3},
             stages=stages,
         )
-        stages[0].groups = event_pools(
+        stages[0].groups = event_groups(
             [
                 {
-                    "name": "Pool A",
+                    "name": "Reservation A",
                     "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": ["t1", "t2"],
                 }

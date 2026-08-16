@@ -41,12 +41,12 @@ from app.models import (
     VenueTable,
 )
 from app.schemas.schedule_solve import (
-    PoolHasNoTablesRead,
+    ReservationHasNoTablesRead,
     parse_infeasibility_reasons,
 )
 from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_event_stages import mint_stages
-from tests._helpers import event_pools, make_user, venue_tables
+from tests._helpers import event_groups, make_user, venue_tables
 
 
 async def _make_tournament(db_session: AsyncSession) -> Tournament:
@@ -97,7 +97,7 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         match_settings={"rated": True, "length_games": 5},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [{"name": "Pool A", "slot": {}, "table_ids": []}], event=event
     )
     db_session.add(event)
@@ -337,8 +337,8 @@ def test_a_reason_stored_before_the_discriminator_reads_as_a_pool() -> None:
     them: until the event-wide reservation existed the only thing a reason could
     blame was a pool row (ADR 20260807)."""
     (reason,) = parse_infeasibility_reasons(
-        [{"kind": "pool_has_no_tables", "pool_name": "Pool A"}]
+        [{"kind": "pool_has_no_tables", "reservation_name": "Pool A"}]
     )
-    assert isinstance(reason, PoolHasNoTablesRead)
-    assert reason.pool_name == "Pool A"
+    assert isinstance(reason, ReservationHasNoTablesRead)
+    assert reason.reservation_name == "Pool A"
     assert reason.reservation == "pool"

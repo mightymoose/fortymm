@@ -1696,7 +1696,7 @@ async def _ensure_pool(
         )
     ).scalar_one()
     # A pool is two rows and a mapping, so seeding one directly means seeding all three
-    # — the same graph ``app.tournament_pools.stored_pools`` builds. Seeding only the
+    # — the same graph ``app.tournament_reservations.stored_groups`` builds. Seeding only the
     # group would leave it reservation-less, which no write path produces and which the
     # projection would then trip over.
     group = TournamentEventStageGroup(
@@ -7181,7 +7181,7 @@ async def test_creating_a_tournament_that_sends_a_table_id_is_refused(
     not a field of the write shape and ``extra="forbid"`` turns sending one into a 422
     that names it.
 
-    Refused rather than ignored, for the reason ``PoolWrite`` refuses a ``position``: a
+    Refused rather than ignored, for the reason ``ReservationWrite`` refuses a ``position``: a
     client cannot tell from the schema that the id it sent decided nothing, and a
     boundary that silently discards half a payload has to be documented to be
     understood."""

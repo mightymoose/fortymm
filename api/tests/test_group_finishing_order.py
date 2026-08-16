@@ -33,7 +33,7 @@ import sys
 import uuid
 from pathlib import Path
 
-import app.pool_finishing_order
+import app.group_finishing_order
 from app.draws import (
     EntryId,
     FixtureGames,
@@ -43,7 +43,7 @@ from app.draws import (
     PoolId,
     _swiss_standings_order,
 )
-from app.pool_finishing_order import (
+from app.group_finishing_order import (
     EntryTally,
     MatchOutcome,
     finishing_order,
@@ -59,7 +59,7 @@ _API_ROOT = Path(__file__).resolve().parent.parent
 _PURITY_PROBE = """
 import sys
 
-import app.pool_finishing_order as module
+import app.group_finishing_order as module
 
 forbidden = ("app.draws", "app.results", "sqlalchemy", "fastapi")
 print(module.__name__)
@@ -186,7 +186,7 @@ def _fixture(
 def test_the_shared_module_imports_no_layer_that_imports_it() -> None:
     """The no-cycle property, guarded.
 
-    ``app.pool_finishing_order`` exists so that **both** ``app.results`` and
+    ``app.group_finishing_order`` exists so that **both** ``app.results`` and
     ``app.draws`` can reach one definition of how a pool finished. ``app.results``
     already imports ``app.draws``, so the moment this module imports either of them
     at runtime the draw layer's use of it becomes an import cycle — and the
@@ -209,9 +209,9 @@ def test_the_shared_module_imports_no_layer_that_imports_it() -> None:
     imported_name, imported_file, leaked = probe.stdout.splitlines()
     # Provenance: the subprocess imported *this* worktree's module, not some other
     # copy on the path — otherwise a green result is about the wrong artifact.
-    assert imported_name == "app.pool_finishing_order"
-    assert imported_file == app.pool_finishing_order.__file__
-    assert leaked == "", f"pool_finishing_order pulled in {leaked} at import time"
+    assert imported_name == "app.group_finishing_order"
+    assert imported_file == app.group_finishing_order.__file__
+    assert leaked == "", f"group_finishing_order pulled in {leaked} at import time"
 
 
 def test_game_difference_outranks_games_won() -> None:
