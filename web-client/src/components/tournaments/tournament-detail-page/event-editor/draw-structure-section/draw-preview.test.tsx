@@ -222,7 +222,7 @@ describe('DrawPreview', () => {
 
   /**
    * ⚠️ The ADR's departure from the reference
-   * (`20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-count-is-a-projection`).
+   * (ADR 20260808, the group-count-is-group-rows decision).
    * The reference renders this fact as `max(reservations, derived)`, which for this very
    * state would print `8` and hide the gap. Both halves are asserted together, because
    * the gap — not either number — is the thing being reported.

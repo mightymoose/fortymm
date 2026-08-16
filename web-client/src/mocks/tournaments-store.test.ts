@@ -1054,12 +1054,12 @@ describe('transitionTournament', () => {
   // really says. A `toContain` would be almost as bad — the load-bearing property of the
   // all-undrawable case is a sentence that is ABSENT.
 
-  /** A pool to add, in a create body's own shape: no `id`, because a pool id is the
+  /** A reservation to add, in a create body's own shape: no `id`, because its id is the
    * server's to mint (ADR 20260801). */
-  const poolNamed = (name: string) => ({ name, slot: SLOT, table_ids: [] })
+  const reservationNamed = (name: string) => ({ name, slot: SLOT, table_ids: [] })
 
   /** One event on a tournament that already exists, with the shape these cases turn on
-   * (format, draw type, pools) and boring defaults for everything else. */
+   * (format, draw type, reservations) and boring defaults for everything else. */
   function addEvent(
     tournamentId: string,
     body: Partial<Parameters<typeof createEvent>[1]> &
@@ -1081,18 +1081,18 @@ describe('transitionTournament', () => {
     // Zero entrants is the same dead end as one: every floor tests `< 2`. The counts are
     // what the director has to change, so the planner's counted sentence goes through
     // verbatim — and it is the sentence the mock used to get WRONG ("0 entrants across 1
-    // pool(s)"), which nothing caught while it lived only behind the cut's 422.
+    // group(s)"), which nothing caught while it lived only behind the cut's 422.
     const id = announcedEmptyTournament()
     addEvent(id, {
       name: 'Empty Event',
       format: 'singles',
       draw_type: 'round-robin',
-      pools: [poolNamed('Pool A')],
+      reservations: [reservationNamed('Reservation A')],
     })
 
     expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
-      'This tournament cannot start yet: “Empty Event”: 0 entrants across 1 pool ' +
-        'would leave a pool with fewer than 2 entrants, who would have nobody to play. ' +
+      'This tournament cannot start yet: “Empty Event”: 0 entrants across 1 group ' +
+        'would leave a group with fewer than 2 entrants, who would have nobody to play. ' +
         'Add entrants, or remove the event.',
     )
     expect(findTournament(id)!.status).toBe('published')
@@ -1101,21 +1101,21 @@ describe('transitionTournament', () => {
   it('appends NO fix to a degenerate message that already names its own', () => {
     // The other arm of the fix rule, and the one every case above is blind to: the fix is
     // appended for a field under two entrants and for NOTHING else. "A round-robin draw
-    // needs at least one pool" already tells the director what to do, and this event has
+    // needs at least one group" already tells the director what to do, and this event has
     // 52 entrants — "Add entrants, or remove the event" would be advice against the facts.
     const id = PUBLISHED
     for (const gone of [EMPTY_SINGLES, FULL_SINGLES, INELIGIBLE_SINGLES, DOUBLES]) {
       if (!deleteEvent(id, gone).ok) throw new Error(`setup failed: ${gone}`)
     }
-    // 52 entrants, and the pools taken away — the one refusal that is about the pools.
-    if (!updateEvent(id, FULLISH_SINGLES, { pools: [] }).ok) {
-      throw new Error('setup failed: could not empty the pools')
+    // 52 entrants, and the groups taken away — the one refusal that is about the groups.
+    if (!updateEvent(id, FULLISH_SINGLES, { reservations: [] }).ok) {
+      throw new Error('setup failed: could not empty the reservations')
     }
 
     // No trailing fix, and no trailing space — which is why this is a `toBe`.
     expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
       'This tournament cannot start yet: “Open Singles”: A round-robin draw needs at ' +
-        'least one pool.',
+        'least one group.',
     )
   })
 
@@ -1181,7 +1181,7 @@ describe('transitionTournament', () => {
     // clicked Generate draw on the undrawable event, which the cut refuses (#1300).
     const id = PUBLISHED
     // Down to the two seeded events with a real field. (The seed's other three are an
-    // empty pool-less round-robin, a doubles event and the drawn U1200 — each a case
+    // empty group-less round-robin, a doubles event and the drawn U1200 — each a case
     // above, and each noise here.)
     for (const gone of [EMPTY_SINGLES, INELIGIBLE_SINGLES, DOUBLES]) {
       if (!deleteEvent(id, gone).ok) throw new Error(`setup failed: ${gone}`)
@@ -1197,12 +1197,12 @@ describe('transitionTournament', () => {
     if (!updateEvent(id, FULL_SINGLES, { name: 'B Uncut' }).ok) {
       throw new Error('setup failed: rename')
     }
-    // “A Undrawable”: one pool, one entrant — the headline repro of #1300.
+    // “A Undrawable”: one group, one entrant — the headline repro of #1300.
     const lone = addEvent(id, {
       name: 'A Undrawable',
       format: 'singles',
       draw_type: 'round-robin',
-      pools: [poolNamed('Pool A')],
+      reservations: [reservationNamed('Reservation A')],
     })
     if (!enterEvent(id, lone).ok) throw new Error('setup failed: could not enter')
 
@@ -1220,8 +1220,8 @@ describe('transitionTournament', () => {
     // Undrawable first, mirroring the server: "cut the draw for each event named" must
     // trail only the names a cut would actually fix (#1300 QA).
     expect(mixed).toBe(
-      'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool would ' +
-        'leave a pool with fewer than 2 entrants, who would have nobody to play. Add ' +
+      'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 group would ' +
+        'leave a group with fewer than 2 entrants, who would have nobody to play. Add ' +
         'entrants, or remove the event. “B Uncut” has no draw yet; and “C Stale” has ' +
         'a draw that no longer matches its entrants. A draw is cut from the field as ' +
         'it stands at the time, and registration stays open right up to the moment a ' +
@@ -1446,11 +1446,11 @@ describe('cutting and un-cutting a draw', () => {
     if (result.ok) return
     expect(result.status).toBe(422)
     // The WHOLE sentence, not a fragment: the counts are the message, and both nouns are
-    // inflected exactly as `_snake` inflects them ("1 entrant", "3 pools"). The mock used
-    // to say "1 entrants across 3 pool(s)" — a sentence the API has never said, invisible
+    // inflected exactly as `_snake` inflects them ("1 entrant", "3 groups"). The mock used
+    // to say "1 entrants across 3 group(s)" — a sentence the API has never said, invisible
     // for as long as every assertion on it was a `toContain` of the tail.
     expect(result.status === 422 && result.detail).toBe(
-      '1 entrant across 3 pools would leave a pool with fewer than 2 entrants, who ' +
+      '1 entrant across 3 groups would leave a group with fewer than 2 entrants, who ' +
         'would have nobody to play.',
     )
   })

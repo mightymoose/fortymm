@@ -17,7 +17,7 @@ import {
   buildEvent,
   buildFullEvent,
   buildIneligibleEvent,
-  buildPool,
+  buildReservation,
   buildScheduleSolve,
   buildTournament,
   UNROUNDED_RATING,
@@ -475,7 +475,7 @@ describe('lifecycleRefusalScope', () => {
   // ----- the moves the UNDRAWABLE refusal asks for (#1300) ------------------
   //
   // Since #1300 the go-live refusal quotes the *planner's* sentences — "A doubles event
-  // cannot be given a draw", "1 entrant across 1 pool would leave a pool with fewer than
+  // cannot be given a draw", "1 entrant across 1 group would leave a group with fewer than
   // 2 entrants", "play fewer rounds" — so the header's scope has to read every fact those
   // sentences name, which is exactly `drawRefusalScope`'s set. Each test below is one of
   // the four moves the acceptance criteria name, and each is something a director does
@@ -486,12 +486,12 @@ describe('lifecycleRefusalScope', () => {
   // (Adding an entrant is the fifth, and it is already covered above — "moves when
   // somebody enters" — because the seating half of the scope predates this ticket.)
 
-  it('moves when a pool is added — the fix for "a round-robin draw needs at least one pool"', () => {
+  it('moves when a reservation is added — the fix for "a round-robin draw needs at least one group"', () => {
     const before = buildTournament({
-      events: [buildEvent({ id: 'ev-1', pools: [] })],
+      events: [buildEvent({ id: 'ev-1', reservations: [] })],
     })
     const after = buildTournament({
-      events: [buildEvent({ id: 'ev-1', pools: [buildPool({ id: 'p-new' })] })],
+      events: [buildEvent({ id: 'ev-1', reservations: [buildReservation({ id: 'p-new' })] })],
     })
 
     expect(lifecycleRefusalScope(before)).not.toBe(lifecycleRefusalScope(after))
