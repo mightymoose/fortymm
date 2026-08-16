@@ -6,11 +6,11 @@ are tested from literals in ``test_draws.py`` / ``test_results.py``. What this f
 tests is everything *between* them and a director: the request boundary that admits a
 qualifier count for exactly one draw type, the settings row it lands on, the freeze that
 holds it still once a draw exists, the cut that emits both stages, the seam that seats a
-finished pool's qualifiers into the bracket, and the results block the tournament-detail
-page reads back.
+finished group's qualifiers into the bracket, and the results block the
+tournament-detail page reads back.
 
 The load-bearing one is
-``test_a_finished_pool_seats_its_qualifiers_into_the_bracket``. Qualification is
+``test_a_finished_group_seats_its_qualifiers_into_the_bracket``. Qualification is
 decided by the same tiebreak chain the standings are ordered by, which means the seam
 has to hand ``advance()`` the fixtures' **game counts**; the projection
 did not load them, so every fixture arrived with ``games=None`` and the strategy refused
@@ -59,12 +59,12 @@ from tests._helpers import (
 
 RR_THEN_KO = DrawType.rr_then_ko.value
 
-#: Three pools, sent with **no ``id``** — a pool id is a server-minted uuid
-#: (ADR 20260801) and the create shape has no field for one. The tests that need to name
-#: a pool look its id up by name (:func:`_pool_id`).
-POOLS: list[dict[str, Any]] = [
+#: Three reservations, sent with **no ``id``** — a reservation id is a server-minted
+#: uuid (ADR 20260801) and the create shape has no field for one. The tests that need
+#: to name a group look its id up by its reservation's name (:func:`_group_id`).
+RESERVATIONS: list[dict[str, Any]] = [
     {
-        "name": f"Pool {letter.upper()}",
+        "name": f"Reservation {letter.upper()}",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
         "table_ids": ["t1"],
     }
@@ -83,7 +83,7 @@ async def authed_client(
 
 def _tournament_payload() -> dict[str, Any]:
     return {
-        "name": "Pools then Bracket Open",
+        "name": "Groups then Bracket Open",
         "address": {
             "venue": "Berkeley TT Club",
             "street": "2727 Milvia St",
@@ -97,10 +97,10 @@ def _tournament_payload() -> dict[str, Any]:
 
 
 def _event_payload(**overrides: Any) -> dict[str, Any]:
-    """An ``rr-then-ko`` event over three pools, taking the top 2 out of each.
+    """An ``rr-then-ko`` event over three groups, taking the top 2 out of each.
 
     Best-of-3 and **unrated** by default: an unrated match self-accepts on the
-    proposal, so playing a pool out needs one request per match instead of two, and
+    proposal, so playing a group out needs one request per match instead of two, and
     nothing here is about the rating pipeline.
     """
     payload: dict[str, Any] = {
@@ -114,19 +114,19 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": False, "length_games": 3},
         "predicates": [],
-        "pools": list(POOLS),
+        "reservations": list(RESERVATIONS),
     }
     payload.update(overrides)
     return payload
 
 
-async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.UUID:
+async def _group_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.UUID:
     """The id of the **group** whose reservation is named ``name`` — the lookup every
-    assertion about a fixture's ``pool_id`` goes through, since the id is the server's
-    (ADR 20260801).
+    assertion about a fixture's ``group_id`` goes through, since the id is the
+    server's (ADR 20260801).
 
     The name lives on the reservation and the id on the group, so this walks the join:
-    the two halves of what the wire calls one pool."""
+    the two halves of what the wire once called one pool."""
     return (
         await db_session.execute(
             select(TournamentEventStageGroup.id)
@@ -150,8 +150,8 @@ async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.U
     ).scalar_one()
 
 
-async def _pool_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
-    """The event's pool ids in its own pool order."""
+async def _group_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
+    """The event's group ids in its own group order."""
     return list(
         (
             await db_session.execute(
@@ -214,7 +214,7 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
                     )
                 )
                 .order_by(
-                    TournamentFixture.pool_id.asc().nulls_last(),
+                    TournamentFixture.group_id.asc().nulls_last(),
                     TournamentFixture.round,
                     TournamentFixture.position,
                 )
@@ -354,8 +354,8 @@ async def test_a_qualifier_count_on_another_draw_type_is_422(
 ) -> None:
     """**Refused at the boundary, never silently dropped.**
 
-    "The top 2 from each pool advance" is meaningless for a round-robin (there is no
-    cut to size) and for a single-elim (there are no pools to cut from). Accepting the
+    "The top 2 from each group advance" is meaningless for a round-robin (there is no
+    cut to size) and for a single-elim (there are no groups to cut from). Accepting the
     number and dropping it would run an event the director did not ask for and show
     them nothing. This 422 is now the ONLY thing standing there: the settings table's
     ``CASE`` ``CHECK`` was dropped with the column it named, so a blob carrying a
@@ -367,7 +367,11 @@ async def test_a_qualifier_count_on_another_draw_type_is_422(
     tournament_id = await _tournament(client)
 
     response = await _create_event(
-        client, tournament_id, draw_type=draw_type, qualifiers_per_group=2, pools=[]
+        client,
+        tournament_id,
+        draw_type=draw_type,
+        qualifiers_per_group=2,
+        reservations=[],
     )
 
     assert response.status_code == 422, response.text
@@ -435,7 +439,7 @@ async def test_a_qualifier_count_above_the_ceiling_is_422(
     """**422, and specifically not 500.** The status is the whole assertion: an
     unbounded K let a form value walk past the boundary into the column.
 
-    The ceiling is not the domain rule — K can never exceed the smallest pool's size in
+    The ceiling is not the domain rule — K can never exceed the smallest group's size in
     a real event, and the cut already refuses that by name (``DegenerateDraw``). This is
     the boundary refusing counts that are nonsense on their face, and it belongs here
     because the alternative was a crash the organizer was told they had not caused.
@@ -464,7 +468,7 @@ async def test_a_qualifier_count_at_the_ceiling_is_accepted(
     """The bound is **inclusive**, and it is pinned so the refusal above cannot be
     satisfied by an off-by-one that also refuses the last legal number.
 
-    A K of 1000 is absurd for a real pool and the cut will say so when the field is
+    A K of 1000 is absurd for a real group and the cut will say so when the field is
     known. That is deliberately not this layer's call: a configuration legal when it was
     written must not depend on who has entered yet."""
     client, _ = authed_client
@@ -634,7 +638,7 @@ async def test_a_draw_type_with_no_knockout_stage_reads_back_no_qualifier_count(
     The other side of the pairing, and it has to be asserted or the read is one-sided:
     a field hard-wired to the requested K, or defaulted to some convention, would pass
     the rr-then-ko test above and quietly tell a director that their round-robin
-    advances two per pool — a configuration the write union says cannot exist. (It used
+    advances two per group — a configuration the write union says cannot exist. (It used
     to be the settings table's ``CASE`` ``CHECK`` saying so too; that constraint went
     with the column, so the union is the only one saying it now.) Both of the count-less
     draw types are asked, because a read keyed off a single slug would look right on a
@@ -646,7 +650,7 @@ async def test_a_draw_type_with_no_knockout_stage_reads_back_no_qualifier_count(
     """
     client, _ = authed_client
     tournament_id = await _tournament(client)
-    payload = _event_payload(draw_type=draw_type, pools=[])
+    payload = _event_payload(draw_type=draw_type, reservations=[])
     del payload["qualifiers_per_group"]
 
     created = await client.post(f"/v1/tournaments/{tournament_id}/events", json=payload)
@@ -712,7 +716,7 @@ async def _twelve_entrant_event(
 ) -> tuple[str, str, list[TournamentEntry]]:
     """An rr-then-ko event with a stated field of twelve seeded entrants.
 
-    Seeds and registration times are both pinned, so which pool each entrant snakes
+    Seeds and registration times are both pinned, so which group each entrant snakes
     into is a fact of the fixture rather than of how fast the rows were written.
     """
     tournament_id = await _tournament(client)
@@ -724,15 +728,15 @@ async def _twelve_entrant_event(
     return tournament_id, event_id, entries
 
 
-async def test_the_cut_emits_the_pools_and_the_whole_bracket(
+async def test_the_cut_emits_the_groups_and_the_whole_bracket(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
-    """One stroke, two stages: three pools of four (18 pool fixtures) plus the bracket
-    for the 6 qualifiers, cut before anybody has played.
+    """One stroke, two stages: three groups of four (18 group fixtures) plus the
+    bracket for the 6 qualifiers, cut before anybody has played.
 
     The bracket is cut upfront because ``AdvancePlan`` can express only a side-fill —
     there is deliberately no way for ``advance()`` to create a fixture — and it costs
-    nothing, since ``P × K`` is known at cut time. Its fixtures are ``pool_id IS NULL``
+    nothing, since ``P × K`` is known at cut time. Its fixtures are ``group_id IS NULL``
     (that *is* the knockout stage) with every side TBD, and its rounds restart at 1.
     """
     client, _ = authed_client
@@ -741,15 +745,15 @@ async def test_the_cut_emits_the_pools_and_the_whole_bracket(
     assert (await _cut(client, tournament_id, event_id)).status_code == 201
 
     fixtures = await _fixtures(db_session, event_id)
-    pooled = [f for f in fixtures if f.pool_id is not None]
-    bracket = [f for f in fixtures if f.pool_id is None]
-    # Three pools of four: every pairing within a pool, six per pool.
-    assert sorted(str(p.pool_id) for p in pooled) == sorted(
-        [str(pool_id) for pool_id in await _pool_ids(db_session, event_id)] * 6
+    grouped = [f for f in fixtures if f.group_id is not None]
+    bracket = [f for f in fixtures if f.group_id is None]
+    # Three groups of four: every pairing within a group, six per group.
+    assert sorted(str(f.group_id) for f in grouped) == sorted(
+        [str(group_id) for group_id in await _group_ids(db_session, event_id)] * 6
     )
-    assert all(f.entry_a_id is not None and f.entry_b_id is not None for f in pooled), (
-        "every pool pairing is known at the cut"
-    )
+    assert all(
+        f.entry_a_id is not None and f.entry_b_id is not None for f in grouped
+    ), "every group pairing is known at the cut"
     # 6 qualifiers → a bracket of 8: 4 quarterfinals (two of them byes, so absent),
     # 2 semifinals, 1 final. A bye is the ABSENCE of a fixture (ADR-0786).
     assert sorted((f.round, f.position) for f in bracket) == [
@@ -764,23 +768,23 @@ async def test_the_cut_emits_the_pools_and_the_whole_bracket(
     )
 
 
-async def test_a_knockout_stage_and_a_swiss_stage_are_distinguishable_by_stage_not_pool(
+async def test_a_knockout_and_swiss_stage_are_distinguishable_by_stage_not_group(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     """The regression pin for ADR 20260815's whole reason to exist.
 
-    A swiss draw's rounds and an rr-then-ko draw's knockout bracket are BOTH un-pooled
-    (``pool_id IS NULL``) — the ambiguity that once rendered a swiss draw's rounds as a
-    knockout bracket, because a reader told the two apart from the event's overall draw
-    type instead of from each fixture's own stage
+    A swiss draw's rounds and an rr-then-ko draw's knockout bracket are BOTH
+    un-grouped (``group_id IS NULL``) — the ambiguity that once rendered a swiss
+    draw's rounds as a knockout bracket, because a reader told the two apart from the
+    event's overall draw type instead of from each fixture's own stage
     (``web-client/src/components/tournaments/data/draw.ts:147``, cited in the ADR's
     Context). Two SEPARATE events, one of each shape, so this is a claim about telling
     the two apart, not merely about one event's own consistency.
 
-    Every un-pooled fixture now carries a ``stage_id`` (ADR 20260815 decision 5), and
+    Every un-grouped fixture now carries a ``stage_id`` (ADR 20260815 decision 5), and
     every event serves its ``stages`` with each one's OWN ``draw_type`` (decision 1).
-    ``pool_id IS NULL`` cannot make this assertion — it is the same value on both
-    events' un-pooled fixtures — so this is a claim only ``stage_id`` can prove.
+    ``group_id IS NULL`` cannot make this assertion — it is the same value on both
+    events' un-grouped fixtures — so this is a claim only ``stage_id`` can prove.
 
     **Falsification** (``.claude/rules/verify-the-artifact-under-test.md``): point
     ``app.tournament_queries.fixtures_by_event`` at the wrong stage id (e.g.
@@ -803,7 +807,7 @@ async def test_a_knockout_stage_and_a_swiss_stage_are_distinguishable_by_stage_n
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": False, "length_games": 3},
         "predicates": [],
-        "pools": [],
+        "reservations": [],
     }
     created_swiss = await client.post(
         f"/v1/tournaments/{tournament_id}/events", json=swiss_payload
@@ -831,12 +835,14 @@ async def test_a_knockout_stage_and_a_swiss_stage_are_distinguishable_by_stage_n
         )
         return by_id[stage_id]
 
-    bracket_fixtures = [f for f in rr_then_ko_event["fixtures"] if f["pool_id"] is None]
-    swiss_fixtures = [f for f in swiss_event["fixtures"] if f["pool_id"] is None]
-    assert bracket_fixtures, "the bracket must have un-pooled fixtures to distinguish"
-    assert swiss_fixtures, "a swiss draw must have un-pooled fixtures to distinguish"
+    bracket_fixtures = [
+        f for f in rr_then_ko_event["fixtures"] if f["group_id"] is None
+    ]
+    swiss_fixtures = [f for f in swiss_event["fixtures"] if f["group_id"] is None]
+    assert bracket_fixtures, "the bracket must have un-grouped fixtures to distinguish"
+    assert swiss_fixtures, "a swiss draw must have un-grouped fixtures to distinguish"
 
-    # Same shape on the row (``pool_id: null`` on both), different stage.
+    # Same shape on the row (``group_id: null`` on both), different stage.
     assert {
         _stage_draw_type(rr_then_ko_event, f["stage_id"]) for f in bracket_fixtures
     } == {"single-elim"}
@@ -845,7 +851,7 @@ async def test_a_knockout_stage_and_a_swiss_stage_are_distinguishable_by_stage_n
     }
 
 
-async def test_cutting_for_more_qualifiers_than_the_smallest_pool_holds_is_refused(
+async def test_cutting_for_more_qualifiers_than_the_smallest_group_holds_is_refused(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     """A moving bound, refused at the cut in the director's own language — and it names
@@ -874,8 +880,8 @@ async def test_cutting_for_more_qualifiers_than_the_smallest_pool_holds_is_refus
     assert response.status_code == 422, response.text
     detail = response.json()["detail"]
     assert detail == (
-        "Taking 5 qualifiers from each pool is more than the 4 entrants in the "
-        "smallest pool — take fewer qualifiers from each pool, or add entrants."
+        "Taking 5 qualifiers from each group is more than the 4 entrants in the "
+        "smallest group — take fewer qualifiers from each group, or add entrants."
     )
     assert await _fixtures(db_session, event_id) == [], (
         "a refused cut writes nothing at all"
@@ -889,7 +895,7 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
 
     The bracket is cut upfront for ``P × K`` and qualifiers are seated into
     predetermined slots. A bracket cut at K=2 and then advanced at K=3 would leave
-    three pools' worth of thirds with nowhere to sit — which past this refusal is a
+    three groups' worth of thirds with nowhere to sit — which past this refusal is a
     ``MissingBracketSlot`` (a 500 nobody can act on), so the 409 is what makes it a
     sentence a director can. Re-sending the SAME configuration is not a
     change and is allowed, which is what makes this a freeze on the edit rather than on
@@ -910,8 +916,8 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
     assert unchanged.status_code == 200, unchanged.text
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == (
-        "This event's draw is already cut, so the number of qualifiers per pool is "
-        "frozen: its knockout bracket was cut for the top 2 out of each pool of a "
+        "This event's draw is already cut, so the number of qualifiers per group is "
+        "frozen: its knockout bracket was cut for the top 2 out of each group of a "
         "“rr-then-ko” draw, and changing that count would leave qualifiers with no "
         "slot to be seated into. To change it, remove the draw first, then cut it "
         "again."
@@ -920,20 +926,20 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
     assert _stored_qualifiers(event) == 2, "a refusal wrote nothing"
 
 
-async def test_a_patch_response_still_splits_pools_from_the_bracket(
+async def test_a_patch_response_still_splits_groups_from_the_bracket(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     """The PATCH response (``app.tournament_serialization.shape_event_read``) projects
-    a cut rr-then-ko event's results through the SAME pool-vs-bracket split the
+    a cut rr-then-ko event's results through the SAME group-vs-bracket split the
     tournament-detail GET does, even though it does not serve the event's ``stages``
     array on its own wire body (``EventStageRead``'s documented "not projected on this
     page" case).
 
     That split now reads each fixture's own ``stage_id`` (ADR 20260815) rather than
-    ``pool_id IS NULL``, and doing so needs the real stage rows — which this adapter
+    ``group_id IS NULL``, and doing so needs the real stage rows — which this adapter
     does not otherwise load. A version of ``shape_event_read`` that forgot to load them
     (passing an empty map to ``event_results``) would silently return a
-    ``standings_then_finishes`` block with an EMPTY ``pools`` list on every PATCH of a
+    ``standings_then_finishes`` block with an EMPTY ``groups`` list on every PATCH of a
     cut two-stage event: this pins that against regressing.
     """
     client, _ = authed_client
@@ -948,39 +954,39 @@ async def test_a_patch_response_still_splits_pools_from_the_bracket(
     assert response.status_code == 200, response.text
     results = response.json()["results"]
     assert results["kind"] == "standings_then_finishes"
-    assert [pool["pool_id"] for pool in results["pools"]] == [
-        str(pool_id) for pool_id in await _pool_ids(db_session, event_id)
-    ], "the pool stage's fixtures must still be found and grouped by pool"
-    assert all(len(pool["rows"]) == 4 for pool in results["pools"]), (
-        "each of the three pools of four entrants stands its whole field"
+    assert [group["group_id"] for group in results["groups"]] == [
+        str(group_id) for group_id in await _group_ids(db_session, event_id)
+    ], "the group stage's fixtures must still be found and grouped by group"
+    assert all(len(group["rows"]) == 4 for group in results["groups"]), (
+        "each of the three groups of four entrants stands its whole field"
     )
 
 
-# ----- the seam: a finished pool seats its qualifiers -------------------------------
+# ----- the seam: a finished group seats its qualifiers ------------------------------
 
 
-async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
+async def test_a_finished_group_seats_its_qualifiers_into_the_bracket(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     """**The one that proves the game counts reach ``advance()``.**
 
-    Twelve entrants, three pools of four, top two out of each. One pool is played out
+    Twelve entrants, three groups of four, top two out of each. One group is played out
     in full through the real score routes while the other two are untouched; the moment
-    its last match completes, that pool's top two are seated into their predetermined
-    bracket slots — and the other pools' slots stay TBD, because a seat is filled per
-    pool, as that pool finishes, not per event.
+    its last match completes, that group's top two are seated into their predetermined
+    bracket slots — and the other groups' slots stay TBD, because a seat is filled per
+    group, as that group finishes, not per event.
 
     **Who qualifies is decided by the games, not by the wins.** Seed 1 takes all three
     of their matches; the other three form a beat-cycle (6 beats 7, 7 beats 12, 12 beats
     6) and finish level on **one win apiece**. Wins alone cannot separate them, and
     head-to-head does not apply to a three-way tie, so the second qualifying place is
     settled by **game difference** — 7 at −1, 6 at −2, 12 at −4 — which exists only if
-    the seam loaded the fixtures' game counts. A pool played 2–0 throughout would be
+    the seam loaded the fixtures' game counts. A group played 2–0 throughout would be
     ordered identically by a games-blind strategy, and this test would then be evidence
     about nothing.
 
-    Pool A holds seeds 1, 6, 7, 12 (the snake deals 1..P then back), whose users are
-    the four with clients here.
+    Reservation A holds seeds 1, 6, 7, 12 (the snake deals 1..P then back), whose users
+    are the four with clients here.
     """
     client, owner = authed_client
     async with (
@@ -990,7 +996,7 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
     ):
         tournament_id = await _tournament(client)
         event_id = (await _create_event(client, tournament_id)).json()["id"]
-        # Seeds 1, 6, 7, 12 snake into pool A; the eight extras fill B and C.
+        # Seeds 1, 6, 7, 12 snake into group A; the eight extras fill B and C.
         players = {1: owner, 6: user_b, 7: user_c, 12: user_d}
         entries: dict[int, TournamentEntry] = {}
         for seed in range(1, 13):
@@ -1005,15 +1011,15 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
         )
         assert live.status_code == 201, live.text
 
-        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
-        pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
+        group_a_id = await _group_id(db_session, event_id, "Reservation A")
+        group_a = [
+            f for f in await _fixtures(db_session, event_id) if f.group_id == group_a_id
         ]
-        assert len(pool_a) == 6, "a pool of four is six pairings"
-        await _call(db_session, tournament_id, pool_a)
-        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
-        pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
+        assert len(group_a) == 6, "a group of four is six pairings"
+        await _call(db_session, tournament_id, group_a)
+        group_a_id = await _group_id(db_session, event_id, "Reservation A")
+        group_a = [
+            f for f in await _fixtures(db_session, event_id) if f.group_id == group_a_id
         ]
 
         clients = {
@@ -1022,7 +1028,7 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
             entries[7].id: client_c,
             entries[12].id: client_d,
         }
-        by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in pool_a}
+        by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in group_a}
 
         def fixture_between(a: int, b: int) -> TournamentFixture:
             return by_pair[frozenset({entries[a].id, entries[b].id})]
@@ -1068,7 +1074,7 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
         )
 
         bracket = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id is None
+            f for f in await _fixtures(db_session, event_id) if f.group_id is None
         ]
         seated = {
             entry_id
@@ -1077,7 +1083,7 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
             if entry_id is not None
         }
         assert seated == {entries[1].id, entries[7].id}, (
-            "exactly pool A's top two are seated — and the runner-up is the one the "
+            "exactly group A's top two are seated — and the runner-up is the one the "
             "standings' game-difference tiebreak names, which wins alone cannot pick"
         )
         # Nothing is ready to play: every knockout fixture still has a TBD side, so none
@@ -1085,20 +1091,20 @@ async def test_a_finished_pool_seats_its_qualifiers_into_the_bracket(
         assert all(f.match_id is None for f in bracket)
 
 
-def _pool_payload(group: TournamentEventStageGroup) -> dict[str, Any]:
-    """The full :class:`~app.schemas.tournament.PoolUpsert` a PATCH must send to
-    *cite* an existing pool: an id alone is not enough, since the shape carries
-    ``name``, ``slot`` and ``table_ids`` too.
+def _reservation_payload(group: TournamentEventStageGroup) -> dict[str, Any]:
+    """The full :class:`~app.schemas.tournament.ReservationUpsert` a PATCH must send
+    to *cite* an existing reservation: an id alone is not enough, since the shape
+    carries ``name``, ``slot`` and ``table_ids`` too.
 
-    The id is the **group's** and the rest is its **reservation's** — the same split
-    ``app.tournament_reservations.group_read`` projects, spelled here against the rows.
-    ``table_ids`` is sent empty rather than round-tripped — a table this test's
-    tournament does not have is dropped silently
-    (``app.tournament_reservations._reservation_tables``) — so the emptiness itself asserts
-    nothing either way."""
+    The id is the **reservation's own** — the wire diffs
+    (``apply_event_reservations``) on the reservation's id now, not the group's, so
+    citing the group's id here would name no reservation this event has. ``table_ids``
+    is sent empty rather than round-tripped — a table this test's tournament does not
+    have is dropped silently (``app.tournament_reservations._reservation_tables``) —
+    so the emptiness itself asserts nothing either way."""
     reservation = group.reservation
     return {
-        "id": str(group.id),
+        "id": str(reservation.id),
         "name": reservation.name,
         "slot": {
             "date": reservation.slot_date.isoformat(),
@@ -1109,46 +1115,47 @@ def _pool_payload(group: TournamentEventStageGroup) -> dict[str, Any]:
     }
 
 
-async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
+async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
-    """The end-to-end regression for the mutable-``pool_position`` bug
-    (``app.tournament_events._enforce_pool_set_frozen``'s reorder guard).
+    """The end-to-end regression for the mutable-``group_position`` bug
+    (``app.tournament_events._enforce_group_set_frozen``'s reorder guard).
 
-    Three pools of **three**, top two per pool (nine entrants rather than the twelve
+    Three groups of **three**, top two per group (nine entrants rather than the twelve
     other tests in this file use — see below for why): the snake deals seeds 1, 6, 7
-    into pool A, 2, 5, 8 into pool B, 3, 4, 9 into pool C. Pool A is played out first —
-    the LOWER seed always wins, so its two matches touching seed 1 and its one match
-    between 6 and 7 leave 1 and 6 as its only winners, and therefore its top two — and
-    they seat into their predetermined bracket slots. A PATCH then cites the SAME three
-    pools, reversed, and is refused with a `409` naming the pool order as frozen — pools
-    B and C are still playing, and pool B's qualifiers have not been seated yet. Pool B
-    is then played out, and its own top two (seeds 2 and 5) seat in too, alongside pool
-    A's untouched pair — exactly four distinct entrants seated, nobody doubled and
-    nobody dropped.
+    into group A, 2, 5, 8 into group B, 3, 4, 9 into group C. Group A is played out
+    first — the LOWER seed always wins, so its two matches touching seed 1 and its one
+    match between 6 and 7 leave 1 and 6 as its only winners, and therefore its top two
+    — and they seat into their predetermined bracket slots. A PATCH then cites the SAME
+    three reservations, reversed, and is refused with a `409` naming the group order as
+    frozen — groups B and C are still playing, and group B's qualifiers have not been
+    seated yet. Group B is then played out, and its own top two (seeds 2 and 5) seat in
+    too, alongside group A's untouched pair — exactly four distinct entrants seated,
+    nobody doubled and nobody dropped.
 
-    Three-a-side rather than four-a-side on purpose: in a pool of three, "the lower seed
-    always wins" makes every one of a pool's three matches won by one of its own top two
-    (the third match is between them), so only two real player sessions are needed per
-    pool. A pool of four adds a match between its bottom two seeds, whose winner is
-    neither — a third client this test has no use for otherwise.
+    Three-a-side rather than four-a-side on purpose: in a group of three, "the lower
+    seed always wins" makes every one of a group's three matches won by one of its own
+    top two (the third match is between them), so only two real player sessions are
+    needed per group. A group of four adds a match between its bottom two seeds, whose
+    winner is neither — a third client this test has no use for otherwise.
 
     **Falsification** (``.claude/rules/verify-the-artifact-under-test.md``): revert
-    ``_enforce_pool_set_frozen``'s reorder branch to the old id-SET comparison (so a
+    ``_enforce_group_set_frozen``'s reorder branch to the old id-SET comparison (so a
     same-set, different-order payload is treated as unchanged) and this test's own
     ``assert reorder.status_code == 409`` reds — confirmed directly, along with
-    ``tests/test_tournament_events.py::test_update_event_frozen_pool_reorder_is_refused``,
+    ``tests/test_tournament_events.py::test_update_event_frozen_group_reorder_is_refused``,
     which reds with ``DID NOT RAISE GroupSetFrozenError`` against the same revert.
-    Past that assertion the reorder DOES restamp each pool's ``position`` exactly as
-    documented (``apply_event_reservations``'s "re-positioned as this payload says"), which is
-    what ``tests/test_draws.py::test_rr_then_ko_labels_pools_by_the_directors_position_
-    not_sorted_ids`` pins at the pure-strategy layer: a position swap alone flips which
-    physical pool a knockout seed is labelled against. This test does not press further
-    into that HTTP round trip past the 409 — a reorder that reaches the response
-    serializer is a path the guard makes permanently unreachable, and a previous probe
-    of it (with the guard removed) hit an unrelated lazy-load crash in
-    ``app.tournament_reservations.group_read``, not a clean 200 to build a strand/double-seat
-    assertion on. The mechanism is proven at the two layers above instead.
+    Past that assertion the reorder DOES restamp each group's ``position`` exactly as
+    documented (``apply_event_reservations``'s "re-positioned as this payload says"),
+    which is what ``tests/test_draws.py::test_rr_then_ko_labels_groups_by_the_directors_
+    position_not_sorted_ids`` pins at the pure-strategy layer: a position swap alone
+    flips which physical group a knockout seed is labelled against. This test does not
+    press further into that HTTP round trip past the 409 — a reorder that reaches the
+    response serializer is a path the guard makes permanently unreachable, and a
+    previous probe of it (with the guard removed) hit an unrelated lazy-load crash in
+    ``app.tournament_reservations.group_read``, not a clean 200 to build a
+    strand/double-seat assertion on. The mechanism is proven at the two layers above
+    instead.
     """
     client, owner = authed_client
     async with (
@@ -1160,7 +1167,7 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
         event_id = (
             await _create_event(client, tournament_id, qualifiers_per_group=2)
         ).json()["id"]
-        # Seeds 1, 6, 7 snake into pool A; 2, 5, 8 into pool B; 3, 4, 9 into pool C.
+        # Seeds 1, 6, 7 snake into group A; 2, 5, 8 into group B; 3, 4, 9 into group C.
         players = {1: owner, 6: user_6, 2: user_2, 5: user_5}
         entries: dict[int, TournamentEntry] = {}
         for seed in range(1, 10):
@@ -1182,19 +1189,23 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
             entries[5].id: client_5,
         }
 
-        async def _play_pool(
+        async def _play_group(
             reservation_name: str, seeds: tuple[int, int, int]
         ) -> None:
-            """Play one pool of three out in full — the LOWER seed always wins, 2-0 —
+            """Play one group of three out in full — the LOWER seed always wins, 2-0 —
             so its finishing order (and therefore its qualifiers) is simply its two
             lowest seeds, with no tiebreak needed and no third client."""
-            pool_id = await _pool_id(db_session, event_id, reservation_name)
+            group_id = await _group_id(db_session, event_id, reservation_name)
             fixtures = [
-                f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_id
+                f
+                for f in await _fixtures(db_session, event_id)
+                if f.group_id == group_id
             ]
             await _call(db_session, tournament_id, fixtures)
             fixtures = [
-                f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_id
+                f
+                for f in await _fixtures(db_session, event_id)
+                if f.group_id == group_id
             ]
             by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in fixtures}
             for a, b in combinations(seeds, 2):
@@ -1206,13 +1217,13 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
                     winner_entry_id=entries[winner].id,
                 )
 
-        await _play_pool("Pool A", (1, 6, 7))
+        await _play_group("Reservation A", (1, 6, 7))
 
         def _seated(fixtures: Sequence[TournamentFixture]) -> set[uuid.UUID]:
             return {
                 entry_id
                 for f in fixtures
-                if f.pool_id is None
+                if f.group_id is None
                 for entry_id in (f.entry_a_id, f.entry_b_id)
                 if entry_id is not None
             }
@@ -1220,9 +1231,9 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
         assert _seated(await _fixtures(db_session, event_id)) == {
             entries[1].id,
             entries[6].id,
-        }, "pool A's top two must already be seated before the reorder is attempted"
+        }, "group A's top two must already be seated before the reorder is attempted"
 
-        pools = (
+        groups = (
             (
                 await db_session.execute(
                     select(TournamentEventStageGroup)
@@ -1237,29 +1248,33 @@ async def test_a_pool_reorder_mid_draw_is_refused_and_seating_stays_correct(
             .scalars()
             .all()
         )
-        stored_order = [pool.id for pool in pools]
+        stored_order = [group.id for group in groups]
         reorder = await client.patch(
             f"/v1/tournaments/{tournament_id}/events/{event_id}",
-            json={"pools": [_pool_payload(pool) for pool in reversed(pools)]},
+            json={
+                "reservations": [
+                    _reservation_payload(group) for group in reversed(groups)
+                ]
+            },
         )
         assert reorder.status_code == 409, reorder.text
-        assert "order of its pools is frozen" in reorder.json()["detail"]
-        assert await _pool_ids(db_session, event_id) == stored_order, (
+        assert "order of its groups is frozen" in reorder.json()["detail"]
+        assert await _group_ids(db_session, event_id) == stored_order, (
             "a refused reorder writes nothing — the stored order is unchanged"
         )
 
-        await _play_pool("Pool B", (2, 5, 8))
+        await _play_group("Reservation B", (2, 5, 8))
 
         assert _seated(await _fixtures(db_session, event_id)) == {
             entries[1].id,
             entries[6].id,
             entries[2].id,
             entries[5].id,
-        }, "both finished pools' qualifiers are seated, once each, with nobody dropped"
+        }, "both finished groups' qualifiers are seated, once each, with nobody dropped"
 
 
 @pytest.mark.parametrize("reorder", [True, False], ids=["reordered", "same-order"])
-async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
+async def test_a_reservations_patch_before_any_draw_is_cut_is_accepted(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession, reorder: bool
 ) -> None:
     """The permitted sibling of the refusal above, run all the way through the HTTP
@@ -1270,10 +1285,10 @@ async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
     **This was an `xfail(strict=True)` until the group/reservation split, and it pinned
     a real 500.** ANY PATCH whose body carried a `pools` key returned 500, reordered or
     resent unchanged: `update_event` ends with `await db.refresh(event)`, which left the
-    venue side of each pool expired rather than eagerly reloaded, and `group_read` then
-    touched it during response serialization — a lazy load, which under async raises
-    `MissingGreenlet`. No test exercised a `pools` PATCH over HTTP before this one, so
-    it had never been caught.
+    venue side of each group expired rather than eagerly reloaded, and `group_read`
+    then touched it during response serialization — a lazy load, which under async
+    raises `MissingGreenlet`. No test exercised a `reservations` PATCH over HTTP before
+    this one, so it had never been caught.
 
     The split fixed it incidentally, and structurally rather than by luck: a group
     reaches its reservation through `lazy="joined"` relationships, so the reservation
@@ -1290,7 +1305,7 @@ async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    pools = (
+    groups = (
         (
             await db_session.execute(
                 select(TournamentEventStageGroup)
@@ -1305,43 +1320,43 @@ async def test_a_pools_patch_before_any_draw_is_cut_is_accepted(
         .scalars()
         .all()
     )
-    assert len(pools) > 1, "a reorder needs at least two pools to be meaningful"
-    sent = list(reversed(pools)) if reorder else pools
-    expected_order = [pool.id for pool in sent]
+    assert len(groups) > 1, "a reorder needs at least two groups to be meaningful"
+    sent = list(reversed(groups)) if reorder else groups
+    expected_order = [group.id for group in sent]
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"pools": [_pool_payload(pool) for pool in sent]},
+        json={"reservations": [_reservation_payload(group) for group in sent]},
     )
 
     assert response.status_code == 200, response.text
-    assert await _pool_ids(db_session, event_id) == expected_order
+    assert await _group_ids(db_session, event_id) == expected_order
 
 
-async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
+async def test_a_group_holding_a_voided_pairing_still_seats_its_qualifiers(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     """**A voided pairing must not wedge the event.**
 
-    The same twelve entrants, the same pool A, and the same five scorelines as the
-    test above — except that pool A's sixth pairing (6 v 12) is played and then
+    The same twelve entrants, the same group A, and the same five scorelines as the
+    test above — except that group A's sixth pairing (6 v 12) is played and then
     **voided**, which is what an account merge's self-play collision does to a match
     that has already been scored (ADR-0013). Voiding takes it out of ``completed`` (so
     its games go away) but leaves the ``winner_entry_id`` the completion wrote back on
     the fixture, so the fixture reads *decided, with no games* forever.
 
-    Before the fix, "a pool is finished when every fixture carries a score" counted
-    that pairing, so pool A sat one score short of finishing **permanently**: its
+    Before the fix, "a group is finished when every fixture carries a score" counted
+    that pairing, so group A sat one score short of finishing **permanently**: its
     qualifiers were never seated, the knockout never became ready, no champion was ever
     crowned, and there was nothing a director could do about it. Meanwhile the
-    standings — which already exclude voided pairings from a pool's ``fixture_count`` —
-    showed that very pool ``complete``. Two layers disagreeing about whether the pool
-    was over.
+    standings — which already exclude voided pairings from a group's ``fixture_count``
+    — showed that very group ``complete``. Two layers disagreeing about whether the
+    group was over.
 
     **The runner-up flips, which is what makes this evidence about the ordering.** With
     6 v 12 counted, 6, 7 and 12 form a beat-cycle on one win apiece and game difference
     seats **7**. With it voided, 6 and 7 are a plain two-way tie that head-to-head
-    settles for **6**: a different qualifier, reachable only by ordering the pool on
+    settles for **6**: a different qualifier, reachable only by ordering the group on
     the results that survive. And it is asserted against the standings table read back
     off the tournament payload rather than against a hardcoded pair, so "the qualifiers
     are the top of the table a director is reading" is checked, not assumed.
@@ -1369,14 +1384,14 @@ async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
             )
         ).status_code == 201
 
-        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
-        pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
+        group_a_id = await _group_id(db_session, event_id, "Reservation A")
+        group_a = [
+            f for f in await _fixtures(db_session, event_id) if f.group_id == group_a_id
         ]
-        await _call(db_session, tournament_id, pool_a)
-        pool_a_id = await _pool_id(db_session, event_id, "Pool A")
-        pool_a = [
-            f for f in await _fixtures(db_session, event_id) if f.pool_id == pool_a_id
+        await _call(db_session, tournament_id, group_a)
+        group_a_id = await _group_id(db_session, event_id, "Reservation A")
+        group_a = [
+            f for f in await _fixtures(db_session, event_id) if f.group_id == group_a_id
         ]
         clients = {
             entries[1].id: client,
@@ -1384,7 +1399,7 @@ async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
             entries[7].id: client_c,
             entries[12].id: client_d,
         }
-        by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in pool_a}
+        by_pair = {frozenset({f.entry_a_id, f.entry_b_id}): f for f in group_a}
 
         def fixture_between(a: int, b: int) -> TournamentFixture:
             return by_pair[frozenset({entries[a].id, entries[b].id})]
@@ -1421,7 +1436,7 @@ async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
 
         results = (await _event_read(client, tournament_id))["results"]
 
-    bracket = [f for f in await _fixtures(db_session, event_id) if f.pool_id is None]
+    bracket = [f for f in await _fixtures(db_session, event_id) if f.group_id is None]
     seated = {
         entry_id
         for f in bracket
@@ -1429,19 +1444,21 @@ async def test_a_pool_holding_a_voided_pairing_still_seats_its_qualifiers(
         if entry_id is not None
     }
     assert seated == {entries[1].id, entries[6].id}, (
-        "the pool finished on the five results that survived the void, and seated the "
-        "two the surviving results put on top — 6, not the 7 the beat-cycle would have"
+        "the group finished on the five results that survived the void, and seated "
+        "the two the surviving results put on top — 6, not the 7 the beat-cycle would "
+        "have"
     )
-    # And the two layers agree, which is the whole point: the pool the bracket treated
-    # as over is the pool the director's table calls ``complete``, and the qualifiers
-    # are its top two rows.
-    (pool_a_read,) = [
-        pool
-        for pool in results["pools"]
-        if pool["pool_id"] == str(await _pool_id(db_session, event_id, "Pool A"))
+    # And the two layers agree, which is the whole point: the group the bracket
+    # treated as over is the group the director's table calls ``complete``, and the
+    # qualifiers are its top two rows.
+    (group_a_read,) = [
+        group
+        for group in results["groups"]
+        if group["group_id"]
+        == str(await _group_id(db_session, event_id, "Reservation A"))
     ]
-    assert pool_a_read["complete"] is True
-    assert [row["entry_id"] for row in pool_a_read["rows"][:2]] == [
+    assert group_a_read["complete"] is True
+    assert [row["entry_id"] for row in group_a_read["rows"][:2]] == [
         str(entries[1].id),
         str(entries[6].id),
     ]
@@ -1452,12 +1469,12 @@ async def test_the_results_read_out_as_both_stages(
 ) -> None:
     """The tournament-detail payload carries the third arm of the results union.
 
-    ``kind: "standings_then_finishes"``, with one block per stage: the pool tables read
-    exactly as a round-robin's do (the same models), and the finishes list exactly as a
-    single-elim's does. It is live and partial, like every other results shape — the
-    played pool is ``complete`` while its neighbours are not, the bracket has produced
-    no finishes yet, and there is **no champion**, because a champion comes from the
-    bracket's final and never from topping a pool.
+    ``kind: "standings_then_finishes"``, with one block per stage: the group tables
+    read exactly as a round-robin's do (the same models), and the finishes list exactly
+    as a single-elim's does. It is live and partial, like every other results shape —
+    the played group is ``complete`` while its neighbours are not, the bracket has
+    produced no finishes yet, and there is **no champion**, because a champion comes
+    from the bracket's final and never from topping a group.
     """
     client, owner = authed_client
     async with opponent_session(db_session, "rrko-solo") as (client_b, user_b):
@@ -1496,16 +1513,17 @@ async def test_the_results_read_out_as_both_stages(
     assert results["kind"] == "standings_then_finishes"
     assert results["complete"] is False
     assert results["champion"] is None
-    assert [pool["pool_id"] for pool in results["pools"]] == [
-        str(pool_id) for pool_id in await _pool_ids(db_session, event_id)
+    assert [group["group_id"] for group in results["groups"]] == [
+        str(group_id) for group_id in await _group_ids(db_session, event_id)
     ]
-    assert all(pool["complete"] is False for pool in results["pools"])
-    (pool_a,) = [
-        pool
-        for pool in results["pools"]
-        if pool["pool_id"] == str(await _pool_id(db_session, event_id, "Pool A"))
+    assert all(group["complete"] is False for group in results["groups"])
+    (group_a,) = [
+        group
+        for group in results["groups"]
+        if group["group_id"]
+        == str(await _group_id(db_session, event_id, "Reservation A"))
     ]
-    leader = pool_a["rows"][0]
+    leader = group_a["rows"][0]
     assert leader["entry_id"] == str(entries[1].id)
     assert (leader["wins"], leader["games_won"], leader["games_lost"]) == (1, 2, 1)
     assert results["finishes"] == [], "nobody has been knocked out yet"
