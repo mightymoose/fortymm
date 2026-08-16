@@ -39,7 +39,6 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventGroupReservation,
     TournamentEventReservation,
     TournamentEventStageGroup,
     TournamentFixture,
@@ -52,6 +51,7 @@ from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
     grant_permissions,
+    joined_to_reservation,
     make_user,
     opponent_session,
     start_session,
@@ -129,18 +129,7 @@ async def _pool_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.U
     the two halves of what the wire calls one pool."""
     return (
         await db_session.execute(
-            select(TournamentEventStageGroup.id)
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
-            )
-            .where(
+            joined_to_reservation(select(TournamentEventStageGroup.id)).where(
                 TournamentEventStageGroup.stage_id.in_(
                     stage_ids_for_events([uuid.UUID(event_id)])
                 ),

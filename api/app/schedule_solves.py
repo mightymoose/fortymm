@@ -581,6 +581,26 @@ def event_wide_pool_key(event_id: uuid.UUID) -> PoolId:
     return PoolId(f"{event_id}:{EVENT_WIDE_POOL_SUFFIX}")
 
 
+def reservation_pool_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> PoolId:
+    """The solver ``PoolId`` of one real reservation — the one spelling of it, so the
+    snapshot's ``SchedulePool``, the fixtures that name it and the resolution maps
+    keyed by it cannot drift apart.
+
+    **The suffix is the RESERVATION's id, not the group's**, because a
+    ``SchedulePool`` *is* a reservation here: a set of tables and a window. A group
+    only decides which reservation confines a given fixture, and that lookup happens
+    before this is called. Keying on the reservation is also what makes the interval
+    stay a single interval once two groups may share one — they collapse onto one key
+    rather than needing a disjunction.
+
+    Deliberately a named function beside :func:`event_wide_pool_key` rather than an
+    inline f-string at each site: the preview keys the same-shaped string on the GROUP
+    id (``app.schedule_preview.preview_pool_key``), and two indistinguishable id spaces
+    are worth being able to grep for.
+    """
+    return PoolId(f"{event_id}:{reservation_id}")
+
+
 def event_wide_pool_name(event_name: str) -> str:
     """What a director reads when an infeasibility reason blames an event-wide
     reservation (ADR: "the event-wide reservation needs a name a director can
@@ -952,7 +972,7 @@ async def _load_solver_inputs(
             # per pool; what changes is which row the key refers to, which is
             # what makes the key stay one interval when a later change lets two
             # groups share a reservation.
-            key = f"{event.id}:{reservation_ids[pool.id]}"
+            key = reservation_pool_key(event.id, reservation_ids[pool.id])
             start, end = _slot_bounds(pool.slot, event_tz)
             tables = tuple(
                 TableId(table_id)
@@ -1041,13 +1061,23 @@ async def _load_solver_inputs(
             # group→reservation map rather than spliced into a key directly:
             # exactly one reservation per fixture, looked up, which is what keeps
             # the CP-SAT interval constraint a single interval instead of a
-            # disjunction over several. The lookup is total — a fixture's group
-            # belongs to this event's stage 0 by its own composite foreign key,
-            # and every group of it is in the map.
+            # disjunction over several.
+            #
+            # The lookup is total, but NOT because the foreign key says so. The
+            # fixture's composite FK only requires the group to be on that
+            # FIXTURE's stage, while ``reservation_ids`` is built from
+            # ``TournamentEvent.groups``, which is pinned to stage 0. What closes
+            # the gap is that no fixture outside stage 0 carries a group at all:
+            # the knockout half of an rr-then-ko draw, single-elim and swiss are
+            # un-pooled end to end, so they take the ``None`` arm above
+            # (``app.draws`` never assigns a ``pool_id`` on a non-zero stage).
+            # Give a later stage real groups and this becomes a ``KeyError`` —
+            # loudly, which is the right failure, but it is this invariant and not
+            # the constraint that holds it up.
             pool_key = (
                 event_wide_pool_key(event.id)
                 if fixture.pool_id is None
-                else PoolId(f"{event.id}:{reservation_ids[fixture.pool_id]}")
+                else reservation_pool_key(event.id, reservation_ids[fixture.pool_id])
             )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it

@@ -94,6 +94,7 @@ from tests._helpers import (
     assert_tournament_address_is_sql_null,
     counted_statements,
     grant_permissions,
+    joined_to_reservation,
     make_client,
     make_user,
     opponent_session,
@@ -1728,18 +1729,7 @@ async def _group_id_named(
     the two rows the wire serves as one pool."""
     return (
         await db_session.execute(
-            select(TournamentEventStageGroup.id)
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
-            )
-            .where(
+            joined_to_reservation(select(TournamentEventStageGroup.id)).where(
                 TournamentEventStageGroup.stage_id == stage_id,
                 TournamentEventReservation.name == name,
             )
@@ -5219,20 +5209,12 @@ async def _pool_names(
     names: dict[uuid.UUID | None, str | None] = {None: None}
     for pool_id, name in (
         await db_session.execute(
-            select(TournamentEventStageGroup.id, TournamentEventReservation.name)
+            joined_to_reservation(
+                select(TournamentEventStageGroup.id, TournamentEventReservation.name)
+            )
             .join(
                 TournamentEventStage,
                 TournamentEventStage.id == TournamentEventStageGroup.stage_id,
-            )
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
             )
             .where(TournamentEventStage.event_id == uuid.UUID(event_id))
         )
@@ -6323,23 +6305,15 @@ async def _pools_of(db_session: AsyncSession, event_id: str) -> list[dict[str, A
     """
     rows = (
         await db_session.execute(
-            select(
-                TournamentEventStageGroup.id,
-                TournamentEventReservation.name,
-                TournamentEventReservation.slot_date,
-                TournamentEventReservation.slot_start,
-                TournamentEventReservation.slot_end,
-                TournamentEventStageGroup.position,
-            )
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
+            joined_to_reservation(
+                select(
+                    TournamentEventStageGroup.id,
+                    TournamentEventReservation.name,
+                    TournamentEventReservation.slot_date,
+                    TournamentEventReservation.slot_start,
+                    TournamentEventReservation.slot_end,
+                    TournamentEventStageGroup.position,
+                )
             )
             .where(
                 TournamentEventStageGroup.stage_id.in_(

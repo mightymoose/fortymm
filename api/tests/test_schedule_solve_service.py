@@ -123,6 +123,7 @@ from tests._helpers import (
     event_draw_settings,
     event_pools,
     hijack_solve,
+    joined_to_reservation,
     make_user,
     table_ids_of,
     venue_tables,
@@ -2047,54 +2048,17 @@ class TestEventWideReservation:
         so that assertion would pass while the confinement was gone."""
         tournament_id, event_id = await _make_two_pool_tournament(db_session)
 
-        pool_rows = (
-            await db_session.execute(
-                select(
-                    TournamentEventStageGroup.id,
-                    TournamentEventReservation.slot_start,
-                    TournamentEventReservation.slot_end,
-                )
-                .join(
-                    TournamentEventGroupReservation,
-                    TournamentEventGroupReservation.group_id
-                    == TournamentEventStageGroup.id,
-                )
-                .join(
-                    TournamentEventReservation,
-                    TournamentEventReservation.id
-                    == TournamentEventGroupReservation.reservation_id,
-                )
-                .where(
-                    TournamentEventStageGroup.stage_id.in_(
-                        stage_ids_for_events([event_id])
-                    )
-                )
-            )
-        ).all()
-        assert len(pool_rows) == 2
+        # ``_pool_reservations`` is the same two queries this test used to spell out
+        # for itself — same joins, same shape, keyed by the same group id. One reader
+        # of the group -> reservation walk per file is enough.
+        reservations = await _pool_reservations(db_session, event_id)
+        assert len(reservations) == 2
         pool_windows = {
-            pool_id: (
-                datetime.combine(date.fromisoformat(DATE), start, tzinfo=VENUE_TZ),
-                datetime.combine(date.fromisoformat(DATE), end, tzinfo=VENUE_TZ),
-            )
-            for pool_id, start, end in pool_rows
+            pool_id: (start, end) for pool_id, (start, end, _t) in reservations.items()
         }
-        pool_tables: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
-        for pool_id, table_id in (
-            await db_session.execute(
-                select(
-                    TournamentEventGroupReservation.group_id,
-                    TournamentEventReservationTable.table_id,
-                )
-                .join(
-                    TournamentEventReservationTable,
-                    TournamentEventReservationTable.reservation_id
-                    == TournamentEventGroupReservation.reservation_id,
-                )
-                .where(TournamentEventReservationTable.event_id == event_id)
-            )
-        ).all():
-            pool_tables[pool_id].add(str(table_id))
+        pool_tables = {
+            pool_id: tables for pool_id, (_s, _e, tables) in reservations.items()
+        }
         assert [len(tables) for tables in pool_tables.values()] == [1, 1]
 
         fixture_pool = {
@@ -2391,22 +2355,13 @@ async def _pool_reservations(
         )
         for pool_id, start, end in (
             await db.execute(
-                select(
-                    TournamentEventStageGroup.id,
-                    TournamentEventReservation.slot_start,
-                    TournamentEventReservation.slot_end,
-                )
-                .join(
-                    TournamentEventGroupReservation,
-                    TournamentEventGroupReservation.group_id
-                    == TournamentEventStageGroup.id,
-                )
-                .join(
-                    TournamentEventReservation,
-                    TournamentEventReservation.id
-                    == TournamentEventGroupReservation.reservation_id,
-                )
-                .where(
+                joined_to_reservation(
+                    select(
+                        TournamentEventStageGroup.id,
+                        TournamentEventReservation.slot_start,
+                        TournamentEventReservation.slot_end,
+                    )
+                ).where(
                     TournamentEventStageGroup.stage_id.in_(
                         stage_ids_for_events([event_id])
                     )

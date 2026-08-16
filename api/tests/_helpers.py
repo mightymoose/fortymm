@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient, Request
 from rq import Queue
-from sqlalchemy import event, select, text
+from sqlalchemy import Select, event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import schedule_solves, scheduling
@@ -325,6 +325,39 @@ def with_table_aliases(
     every helper the pools are passed to.
     """
     return event_pools(pools, event=event, tournament=tournament)
+
+
+def joined_to_reservation(stmt: Select[Any]) -> Select[Any]:
+    """``stmt``, joined from :class:`TournamentEventStageGroup` through to its
+    :class:`TournamentEventReservation` — the one place the group→reservation walk is
+    spelled in the suite.
+
+    What the wire calls one pool is two rows joined by a third, so any assertion about
+    a pool's NAME or WINDOW keyed by the id a fixture holds has to walk that path. Seven
+    call sites across four test files had written it out by hand, each restating ON
+    clauses the relationships already carry.
+
+    Joined through the **relationships** rather than by explicit ``onclause``, so the
+    foreign-key topology lives in the models and nowhere else: renaming a column breaks
+    one place instead of silently changing what seven joins mean.
+
+    It is one function rather than seven for a reason that is not tidiness. These are
+    INNER joins, and they are correct only while every group has a reservation. The
+    moment a group may exist without one, every one of them silently drops rows instead
+    of failing — and the fix is ``.outerjoin`` in exactly one place if this helper is
+    used, or a hunt through four files if it is not.
+
+    Usage::
+
+        rows = await db.execute(
+            joined_to_reservation(
+                select(TournamentEventStageGroup.id, TournamentEventReservation.name)
+            ).where(TournamentEventStageGroup.stage_id == stage_id)
+        )
+    """
+    return stmt.join(TournamentEventStageGroup.reservation_link).join(
+        TournamentEventGroupReservation.reservation
+    )
 
 
 async def stage_id_at(
