@@ -212,6 +212,15 @@ Pass the **same id Step 5 gave `qa-up.sh`**. In stacked mode the walk has moved 
 
 **Never** `docker system prune -a` or `docker volume prune`. `fortymm-uat_postgres-data` is unattached and the k3d cluster holds `tailscale-state` Secrets; a blanket prune destroys both silently. `qa-down.sh` refuses one on purpose — do not work around it.
 
+Then fast-forward the main checkout, so the next branch starts from what this walk merged (in stacked mode, once, after the whole walk):
+
+```bash
+MAIN="$(git worktree list | awk 'NR==1{print $1}')"   # first row is the main checkout
+git -C "$MAIN" pull --ff-only origin main
+```
+
+Only when that checkout is on `main`. If it is on another branch, or the pull refuses, run `git -C "$MAIN" fetch origin` instead and report it. Never force the update. The SessionStart freshness hook only warns about a stale main. Nothing else pulls it.
+
 Two ordering traps worth stating, because both have cost a cycle:
 
 - **`gh pr merge --delete-branch` errors from inside a worktree.** Delete the branch as its own step.

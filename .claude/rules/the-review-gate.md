@@ -143,7 +143,9 @@ Post the ask before moving the column. If the move fails, the human still has th
 - **`review-next-ticket`** posts the decision comment, then moves the ticket to
   **Waiting For Sign Off**. In targeted mode it moves the ticket to **In Progress** first,
   because a change request means the work is being done again, and back to
-  **Waiting For Sign Off** when it posts the next round's ask. It never sets **In Testing**.
+  **Waiting For Sign Off** when it posts the next round's ask. In a Testing repair round it
+  posts no decision comment and moves no column, because the "ever" window above already
+  carries the human's release. It never sets **In Testing**.
 - **`implement-ticket-end-to-end`** watches for the signal for a bounded 15 minutes after
   Review stops, over the **since-the-anchor** window. On release it moves the ticket to
   **In Testing** and invokes `test-next-ticket`. On any other comment from `mightymoose` newer
