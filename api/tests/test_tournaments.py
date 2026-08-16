@@ -6870,23 +6870,24 @@ async def test_the_event_patch_takes_the_tournaments_row_lock(
     assert any("FOR UPDATE" in s for s in statements), statements
 
 
-# ----- the pool ids are the server's ----------------------------------------
+# ----- the reservation ids are the server's ----------------------------------
 #
-# A pool used to be a JSONB value-object whose ``id`` was a client-supplied string — the
-# reason a fixture could name a pool that did not exist, and the reason two pools of one
-# event could share an id and detonate the cut. It is a ``tournament_event_pools`` row
-# now (ADR 20260801) and its id is minted by ``gen_random_uuid()``.
+# A reservation used to be a JSONB value-object whose ``id`` was a client-supplied
+# string — the reason a fixture could name a group that did not exist, and the reason
+# two reservations of one event could share an id and detonate the cut. It is a
+# ``tournament_event_reservations`` row now (ADR 20260801) and its id is minted by
+# ``gen_random_uuid()``.
 #
 # Minting and CITING are different things, and the diff needs the second. A **create**
-# has no pools to cite, so its write shape has no ``id`` field at all and sending one is
-# a 422. A **patch** is a diff, so each entry may carry the id of a pool it is keeping —
-# but only one this event actually has: an id is something a client was *given*, never
-# something it authors. What is left of the duplicate rule is therefore a rule about
-# CITATIONS: one entry per pool you are keeping.
+# has no reservations to cite, so its write shape has no ``id`` field at all and sending
+# one is a 422. A **patch** is a diff, so each entry may carry the id of a reservation it
+# is keeping — but only one this event actually has: an id is something a client was
+# *given*, never something it authors. What is left of the duplicate rule is therefore a
+# rule about CITATIONS: one entry per reservation you are keeping.
 
 
-def _pools_error(response: Response) -> str:
-    """The 422's message for the ``pools`` field, as one string.
+def _reservations_error(response: Response) -> str:
+    """The 422's message for the ``reservations`` field, as one string.
 
     A pydantic 422 is a *list* of errors keyed by ``loc``; the copy the director reads
     is the ``msg``. Reading it out of the right ``loc`` is what stops this test from
@@ -6894,7 +6895,7 @@ def _pools_error(response: Response) -> str:
     """
     errors = response.json()["detail"]
     return " ".join(
-        error["msg"] for error in errors if error["loc"][:2] == ["body", "pools"]
+        error["msg"] for error in errors if error["loc"][:2] == ["body", "reservations"]
     )
 
 
@@ -6908,214 +6909,221 @@ def _error_locs(response: Response) -> list[list[Any]]:
     return [error["loc"] for error in response.json()["detail"]]
 
 
-async def test_creating_an_event_mints_an_id_for_every_pool(
+async def test_creating_an_event_mints_an_id_for_every_reservation(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """The mint, on the create verb: three pools go in with no ids and come back with
-    three distinct uuids the client never sent.
+    """The mint, on the create verb: three reservations go in with no ids and come back
+    with three distinct uuids the client never sent.
 
     This is the whole of ADR 20260801's ``id uuid PRIMARY KEY`` said over the wire. The
-    ids are asserted **distinct** and not merely present, because "every pool got the
-    same id" is a state a single-column primary key would refuse but a half-done mint
-    (one uuid computed once, outside the loop) would produce — and one that a
-    ``pools[0]["id"]`` assertion would sail past.
+    ids are asserted **distinct** and not merely present, because "every reservation got
+    the same id" is a state a single-column primary key would refuse but a half-done
+    mint (one uuid computed once, outside the loop) would produce — and one that a
+    ``reservations[0]["id"]`` assertion would sail past.
     """
     client, _ = authed_client
     _tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B, POOL_C)
+        client, _rr_payload(RESERVATION_A, RESERVATION_B, RESERVATION_C)
     )
 
-    ids = [uuid.UUID(pool["id"]) for pool in event["pools"]]
+    ids = [uuid.UUID(reservation["id"]) for reservation in event["reservations"]]
 
     assert len(set(ids)) == 3
-    assert _anonymous(event["pools"]) == _positioned(POOL_A, POOL_B, POOL_C)
+    assert _anonymous(event["reservations"]) == _positioned(
+        RESERVATION_A, RESERVATION_B, RESERVATION_C
+    )
 
 
-async def test_creating_an_event_whose_pool_carries_an_id_is_refused(
+async def test_creating_an_event_whose_reservation_carries_an_id_is_refused(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """A pool id is not the client's to author, and the create shape says so
+    """A reservation id is not the client's to author, and the create shape says so
     **structurally**: there is no ``id`` field, so sending one is a 422 for an unknown
     key and no event is created.
 
     Refused rather than ignored, which is the same argument ``position`` gets one test
     up: a client that mistakes "what I read" for "what I may write" is told exactly
     which key to drop, in the same request, instead of being handed a 201 for an id that
-    decided nothing — and, worse, went on to name a pool that does not exist.
+    decided nothing — and, worse, went on to name a reservation that does not exist.
     """
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
 
     response = await client.post(
         f"/v1/tournaments/{created['id']}/events",
-        json=_rr_payload({**POOL_A, "id": str(uuid.uuid4())}),
+        json=_rr_payload({**RESERVATION_A, "id": str(uuid.uuid4())}),
     )
 
     assert response.status_code == 422, response.text
-    assert ["body", "pools", 0, "id"] in _error_locs(response), response.text
+    assert ["body", "reservations", 0, "id"] in _error_locs(response), response.text
     assert await _events_of(client, created["id"]) == []
 
 
-async def test_a_pools_patch_keeps_the_pool_it_cites_and_mints_one_for_the_rest(
+async def test_a_reservations_patch_keeps_the_reservation_it_cites_and_mints_one_for_the_rest(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
     """The diff, in one request: an entry citing an id **keeps that row**, an entry with
-    a ``null`` id (or none at all) **adds** one, and a pool no entry cites is removed.
+    a ``null`` id (or none at all) **adds** one, and a reservation no entry cites is
+    removed.
 
-    The kept pool's id is asserted **unchanged**, which is the claim that matters: it is
-    what every fixture drawn into it holds, and a diff that deleted and recreated the
-    row would either take the draw with it or be refused outright.
+    The kept reservation's id is asserted **unchanged**, which is the claim that
+    matters: it is what every fixture drawn into its mapped group holds, and a diff that
+    deleted and recreated the row would either take the draw with it or be refused
+    outright.
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B)
+        client, _rr_payload(RESERVATION_A, RESERVATION_B)
     )
-    kept_a, dropped_b = _kept(await _pools_of(db_session, event["id"]))
+    kept_a, dropped_b = _kept(await _reservations_of(db_session, event["id"]))
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        # Pool A cited, Pool B not cited (removed), Pool C sent with an explicit null id
-        # (added). ``null`` and "omitted" are the same statement; both are exercised —
-        # the omitted form is every other create in this module.
-        json={"pools": [kept_a, {**POOL_C, "id": None}]},
+        # Reservation A cited, Reservation B not cited (removed), Reservation C sent
+        # with an explicit null id (added). ``null`` and "omitted" are the same
+        # statement; both are exercised — the omitted form is every other create in
+        # this module.
+        json={"reservations": [kept_a, {**RESERVATION_C, "id": None}]},
     )
 
     assert response.status_code == 200, response.text
-    stored = await _pools_of(db_session, event["id"])
-    assert _anonymous(stored) == _positioned(POOL_A, POOL_C)
+    stored = await _reservations_of(db_session, event["id"])
+    assert _anonymous(stored) == _positioned(RESERVATION_A, RESERVATION_C)
     assert stored[0]["id"] == kept_a["id"]
     assert stored[1]["id"] not in {kept_a["id"], dropped_b["id"]}
 
 
-async def test_a_pools_patch_citing_an_id_this_event_does_not_have_is_a_422(
+async def test_a_reservations_patch_citing_an_id_this_event_does_not_have_is_a_422(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
     """An ``id`` the server did not mint for **this** event names nothing, and is a 422
-    on that entry rather than a quietly minted new pool.
+    on that entry rather than a quietly minted new reservation.
 
     This arm could not exist while the id was the client's: an id the server had never
-    seen still named the pool the client meant, so it was an *addition*. Now it is
-    neither — minting a fresh pool for it would hand the client back a different id than
-    it asked for while removing the pool it meant to keep, which is the pair of failures
-    a diff must never confuse (the venue catalogue's ``TableNotInCatalogueError`` is the
-    same refusal one resource over).
+    seen still named the reservation the client meant, so it was an *addition*. Now it
+    is neither — minting a fresh reservation for it would hand the client back a
+    different id than it asked for while removing the reservation it meant to keep,
+    which is the pair of failures a diff must never confuse (the venue catalogue's
+    ``TableNotInCatalogueError`` is the same refusal one resource over).
 
-    The id used is a **real pool of another event**, not a random uuid: a plain
+    The id used is a **real reservation of another event**, not a random uuid: a plain
     "does this uuid exist" check would let it through, and it would seat this event's
-    pools under another event's row.
+    groups under another event's row.
     """
     client, _ = authed_client
     tournament_id, (event, other) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B), _rr_payload(POOL_C)
+        client, _rr_payload(RESERVATION_A, RESERVATION_B), _rr_payload(RESERVATION_C)
     )
-    kept_a, _kept_b = _kept(await _pools_of(db_session, event["id"]))
-    (elsewhere,) = _kept(await _pools_of(db_session, other["id"]))
-    before = await _pools_of(db_session, event["id"])
+    kept_a, _kept_b = _kept(await _reservations_of(db_session, event["id"]))
+    (elsewhere,) = _kept(await _reservations_of(db_session, other["id"]))
+    before = await _reservations_of(db_session, event["id"])
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"pools": [kept_a, elsewhere]},
+        json={"reservations": [kept_a, elsewhere]},
     )
 
     assert response.status_code == 422, response.text
-    assert ["body", "pools", 1, "id"] in _error_locs(response), response.text
-    assert await _pools_of(db_session, event["id"]) == before
+    assert ["body", "reservations", 1, "id"] in _error_locs(response), response.text
+    assert await _reservations_of(db_session, event["id"]) == before
 
 
-async def test_a_pools_patch_citing_one_pool_twice_never_reaches_the_cut_draw(
+async def test_a_reservations_patch_citing_one_reservation_twice_never_reaches_the_cut_draw(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
     """**The discriminating case**, and the one the set-based freeze cannot see.
 
     ``[A, A, B]`` against a cut event holding ``{A, B}`` is, as a *set*, exactly the
-    pools the event already has. ``_enforce_pool_set_frozen`` compares sets — because
+    groups the event already has. ``_enforce_group_set_frozen`` compares sets — because
     identity is all it is about — so it finds nothing removed and nothing added, and it
     waved this payload through: measured **200**, the duplicate stored verbatim, and the
-    *next* cut dead on ``uq_tournament_fixtures_event_id_pool_id_round_position`` (a
+    *next* cut dead on ``uq_tournament_fixtures_stage_id_group_id_round_position`` (a
     **500**). The guard that exists to protect the draw was admitting the payload that
     poisons it.
 
     A boundary rule is what closes it, because the freeze is the wrong instrument: it
-    can only ever compare which pools exist, and this payload does not change that.
+    can only ever compare which groups exist, and this payload does not change that.
 
     The proof is not the status code. It is the **re-cut afterwards**: the same event,
-    cut again, still answers 201. A guard that 409'd or 422'd and *wrote the pools
-    anyway* would satisfy every assertion about the response and still hand the director
-    the 500 the moment they cut — so the cut is where this test looks.
+    cut again, still answers 201. A guard that 409'd or 422'd and *wrote the
+    reservations anyway* would satisfy every assertion about the response and still
+    hand the director the 500 the moment they cut — so the cut is where this test
+    looks.
     """
     client, _ = authed_client
-    tournament_id, event = await _cut_two_pool_event(client, db_session)
+    tournament_id, event = await _cut_two_group_event(client, db_session)
     fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
-    pools_before = await _pools_of(db_session, event["id"])
-    pool_a, pool_b = _kept(pools_before)
+    reservations_before = await _reservations_of(db_session, event["id"])
+    reservation_a, reservation_b = _kept(reservations_before)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"pools": [pool_a, pool_a, pool_b]},
+        json={"reservations": [reservation_a, reservation_a, reservation_b]},
     )
 
     assert response.status_code == 422, response.text
-    assert f"“{pool_a['id']}”" in _pools_error(response)
-    # Nothing written: the pools are the two they were, and the fixtures are the same
-    # rows, column for column.
-    assert await _pools_of(db_session, event["id"]) == pools_before
+    assert f"“{reservation_a['id']}”" in _reservations_error(response)
+    # Nothing written: the reservations are the two they were, and the fixtures are the
+    # same rows, column for column.
+    assert await _reservations_of(db_session, event["id"]) == reservations_before
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
     # And the cut the duplicate would have detonated still works.
     re_cut = await client.post(_draw_url(tournament_id, event["id"]))
     assert re_cut.status_code == 201, re_cut.text
 
 
-async def test_an_undrawn_event_also_refuses_a_pools_patch_that_cites_one_pool_twice(
+async def test_an_undrawn_event_also_refuses_a_reservations_patch_that_cites_one_reservation_twice(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
     """The rule is the **boundary's**, not the freeze's: an event with no draw at all —
-    where the pool set is not frozen — still cannot cite one pool twice.
+    where the group set is not frozen — still cannot cite one reservation twice.
 
-    A guard implemented inside ``_enforce_pool_set_frozen`` would pass the test above
+    A guard implemented inside ``_enforce_group_set_frozen`` would pass the test above
     and fail this one, leaving every un-drawn event free to store the duplicate and 500
-    on its first cut. The event is not yet drawn, and the pools it will be drawn across
+    on its first cut. The event is not yet drawn, and the groups it will be drawn across
     are already nonsense.
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B)
+        client, _rr_payload(RESERVATION_A, RESERVATION_B)
     )
-    before = await _pools_of(db_session, event["id"])
-    pool_a, _pool_b = _kept(before)
+    before = await _reservations_of(db_session, event["id"])
+    reservation_a, _reservation_b = _kept(before)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"pools": [pool_a, pool_a]},
+        json={"reservations": [reservation_a, reservation_a]},
     )
 
     assert response.status_code == 422, response.text
-    assert f"“{pool_a['id']}”" in _pools_error(response)
-    assert await _pools_of(db_session, event["id"]) == before
+    assert f"“{reservation_a['id']}”" in _reservations_error(response)
+    assert await _reservations_of(db_session, event["id"]) == before
 
 
-# ----- a pool has a name (422) -----------------------------------------------
+# ----- a reservation has a name (422) -----------------------------------------
 #
 # The rules above are all about the ``id``, which the server now owns outright. The one
-# floor left on the client's side of a pool is its NAME: a pool is *called* something —
-# it is what the director clicks, what the double-booking warning quotes and what a
-# player reads off a wall — and a list of three blank rows is not a thing anyone can act
-# on. Like every other rule about a pools payload it holds on **both verbs**.
+# floor left on the client's side of a reservation is its NAME: a reservation is
+# *called* something — it is what the director clicks, what the double-booking warning
+# quotes and what a player reads off a wall — and a list of three blank rows is not a
+# thing anyone can act on. Like every other rule about a reservations payload it holds
+# on **both verbs**.
 #
-# (Its companion, the floor on an empty pool *id*, is gone with the string it floored: a
-# ``uuid`` cannot be ``""``, so the state ``ValueObjectId``'s ``min_length=1`` was
-# holding off — a fixture drawn into ``""``, pooled by ``pool_id is None`` and un-pooled
-# by the draw-order tie-break — is not expressible at all. A type that cannot hold the
-# bad value beats a validator that refuses it.)
+# (Its companion, the floor on an empty reservation *id*, is gone with the string it
+# floored: a ``uuid`` cannot be ``""``, so the state ``ValueObjectId``'s
+# ``min_length=1`` was holding off — a fixture drawn into ``""``, grouped by
+# ``group_id is None`` and ungrouped by the draw-order tie-break — is not expressible
+# at all. A type that cannot hold the bad value beats a validator that refuses it.)
 
 
-async def test_creating_an_event_with_an_empty_pool_name_is_refused(
+async def test_creating_an_event_with_an_empty_reservation_name_is_refused(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
-    """An event cannot be **born** with a pool whose name is ``""``.
+    """An event cannot be **born** with a reservation whose name is ``""``.
 
     And the refusal writes nothing: a 422 that had already stored the event would be a
     422 in name only.
@@ -7125,40 +7133,40 @@ async def test_creating_an_event_with_an_empty_pool_name_is_refused(
 
     response = await client.post(
         f"/v1/tournaments/{created['id']}/events",
-        json=_rr_payload({**POOL_A, "name": ""}, POOL_B),
+        json=_rr_payload({**RESERVATION_A, "name": ""}, RESERVATION_B),
     )
 
     assert response.status_code == 422, response.text
-    assert ["body", "pools", 0, "name"] in _error_locs(response), response.text
+    assert ["body", "reservations", 0, "name"] in _error_locs(response), response.text
     assert await _events_of(client, created["id"]) == []
 
 
-async def test_a_pools_patch_that_empties_a_pool_name_is_refused(
+async def test_a_reservations_patch_that_empties_a_reservation_name_is_refused(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
     """The **other verb**, and the one that would otherwise be the hole: an event born
-    with two perfectly good pools, edited into holding one with no name.
+    with two perfectly good reservations, edited into holding one with no name.
 
-    Deliberately an **un-drawn** event, where the pool-set freeze does not apply at all.
-    On a *cut* event a payload that adds a pool is refused by the freeze whatever it is
-    called, and the test would pass without the boundary rule existing — proving nothing
-    about the boundary.
+    Deliberately an **un-drawn** event, where the group-set freeze does not apply at
+    all. On a *cut* event a payload that adds a reservation (and its mapped group) is
+    refused by the freeze whatever it is called, and the test would pass without the
+    boundary rule existing — proving nothing about the boundary.
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(POOL_A, POOL_B)
+        client, _rr_payload(RESERVATION_A, RESERVATION_B)
     )
-    before = await _pools_of(db_session, event["id"])
+    before = await _reservations_of(db_session, event["id"])
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"pools": [{**POOL_C, "name": ""}]},
+        json={"reservations": [{**RESERVATION_C, "name": ""}]},
     )
 
     assert response.status_code == 422, response.text
-    assert ["body", "pools", 0, "name"] in _error_locs(response), response.text
-    assert await _pools_of(db_session, event["id"]) == before
+    assert ["body", "reservations", 0, "name"] in _error_locs(response), response.text
+    assert await _reservations_of(db_session, event["id"]) == before
 
 
 # ----- the catalogue's ids are the server's ---------------------------------
