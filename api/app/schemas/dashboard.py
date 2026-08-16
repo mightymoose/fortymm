@@ -279,9 +279,9 @@ class DashboardTournamentEvent(BaseModel):
     wins: int
     losses: int
     # The caller's 1-based rank in whichever standings table ranks them, and how many
-    # players that table holds: their **pool** under round-robin and under an
-    # rr-then-ko event's pool stage, and the **whole field** under swiss, which is
-    # pool-less and ranks everybody in one table (ADR "swiss pre-cuts every round and
+    # players that table holds: their **group** under round-robin and under an
+    # rr-then-ko event's group stage, and the **whole field** under swiss, which is
+    # group-less and ranks everybody in one table (ADR "swiss pre-cuts every round and
     # pairs each one on advance").
     #
     # ``position`` is ``None`` when the event has no such table to rank the caller in:
@@ -292,8 +292,9 @@ class DashboardTournamentEvent(BaseModel):
     field_size: int
     # e.g. ``"Group play"`` / ``"Group complete"``.
     stage_label: str
-    # The caller's pool name, or ``None`` for an un-pooled draw.
-    pool_label: str | None
+    # The caller's group label, derived from its position (ADR 20260808), or
+    # ``None`` for an ungrouped draw.
+    group_label: str | None
     match: DashboardTournamentMatch | None
     fixtures: list[DashboardTournamentFixtureRow]
 
