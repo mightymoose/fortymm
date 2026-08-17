@@ -31,7 +31,6 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventGroupReservation,
     TournamentEventReservation,
     TournamentEventReservationTable,
     TournamentEventStage,
@@ -55,6 +54,7 @@ from app.tournament_reservations import reservation_read
 from tests._helpers import (
     counted_statements,
     event_groups,
+    joined_to_reservation,
     make_user,
     venue_tables,
 )
@@ -502,33 +502,23 @@ async def test_an_events_groups_and_reservations_are_rows_of_their_own(
     db_session.expire_all()
     rows = (
         await db_session.execute(
-            select(
-                TournamentEventStage.event_id,
-                TournamentEventStageGroup.id,
-                TournamentEventReservation.name,
-                TournamentEventStageGroup.position,
-                TournamentEventReservation.slot_date,
-                TournamentEventReservation.slot_start,
-                TournamentEventReservation.slot_end,
-            )
-            .join(
-                TournamentEventStage,
-                TournamentEventStage.id == TournamentEventStageGroup.stage_id,
-            )
             # The name and the window live on the reservation, the id and the position
             # on the group: what the wire once served as one row is these two rows,
             # walked through the join that maps them.
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
-            )
-            .order_by(TournamentEventStageGroup.position)
+            joined_to_reservation(
+                select(
+                    TournamentEventStage.event_id,
+                    TournamentEventStageGroup.id,
+                    TournamentEventReservation.name,
+                    TournamentEventStageGroup.position,
+                    TournamentEventReservation.slot_date,
+                    TournamentEventReservation.slot_start,
+                    TournamentEventReservation.slot_end,
+                ).join(
+                    TournamentEventStage,
+                    TournamentEventStage.id == TournamentEventStageGroup.stage_id,
+                )
+            ).order_by(TournamentEventStageGroup.position)
         )
     ).all()
 

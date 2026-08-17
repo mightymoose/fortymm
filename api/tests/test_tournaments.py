@@ -95,6 +95,7 @@ from tests._helpers import (
     assert_tournament_address_is_sql_null,
     counted_statements,
     grant_permissions,
+    joined_to_reservation,
     make_client,
     make_user,
     opponent_session,
@@ -1730,18 +1731,7 @@ async def _group_id_named(
     the two rows the wire serves as one group."""
     return (
         await db_session.execute(
-            select(TournamentEventStageGroup.id)
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
-            )
-            .where(
+            joined_to_reservation(select(TournamentEventStageGroup.id)).where(
                 TournamentEventStageGroup.stage_id == stage_id,
                 TournamentEventReservation.name == name,
             )
@@ -5250,22 +5240,14 @@ async def _group_names(
     names: dict[uuid.UUID | None, str | None] = {None: None}
     for group_id, name in (
         await db_session.execute(
-            select(TournamentEventStageGroup.id, TournamentEventReservation.name)
-            .join(
-                TournamentEventStage,
-                TournamentEventStage.id == TournamentEventStageGroup.stage_id,
-            )
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
-            )
-            .where(TournamentEventStage.event_id == uuid.UUID(event_id))
+            joined_to_reservation(
+                select(
+                    TournamentEventStageGroup.id, TournamentEventReservation.name
+                ).join(
+                    TournamentEventStage,
+                    TournamentEventStage.id == TournamentEventStageGroup.stage_id,
+                )
+            ).where(TournamentEventStage.event_id == uuid.UUID(event_id))
         )
     ).all():
         names[group_id] = name
@@ -6376,24 +6358,16 @@ async def _reservations_of(
     """
     rows = (
         await db_session.execute(
-            select(
-                TournamentEventStageGroup.id.label("group_id"),
-                TournamentEventReservation.id.label("reservation_id"),
-                TournamentEventReservation.name,
-                TournamentEventReservation.slot_date,
-                TournamentEventReservation.slot_start,
-                TournamentEventReservation.slot_end,
-                TournamentEventStageGroup.position,
-            )
-            .join(
-                TournamentEventGroupReservation,
-                TournamentEventGroupReservation.group_id
-                == TournamentEventStageGroup.id,
-            )
-            .join(
-                TournamentEventReservation,
-                TournamentEventReservation.id
-                == TournamentEventGroupReservation.reservation_id,
+            joined_to_reservation(
+                select(
+                    TournamentEventStageGroup.id.label("group_id"),
+                    TournamentEventReservation.id.label("reservation_id"),
+                    TournamentEventReservation.name,
+                    TournamentEventReservation.slot_date,
+                    TournamentEventReservation.slot_start,
+                    TournamentEventReservation.slot_end,
+                    TournamentEventStageGroup.position,
+                )
             )
             .where(
                 TournamentEventStageGroup.stage_id.in_(

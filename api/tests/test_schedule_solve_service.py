@@ -123,6 +123,7 @@ from tests._helpers import (
     event_draw_settings,
     event_groups,
     hijack_solve,
+    joined_to_reservation,
     make_user,
     table_ids_of,
     venue_tables,
@@ -2061,22 +2062,13 @@ class TestEventWideReservation:
 
         group_rows = (
             await db_session.execute(
-                select(
-                    TournamentEventStageGroup.id,
-                    TournamentEventReservation.slot_start,
-                    TournamentEventReservation.slot_end,
-                )
-                .join(
-                    TournamentEventGroupReservation,
-                    TournamentEventGroupReservation.group_id
-                    == TournamentEventStageGroup.id,
-                )
-                .join(
-                    TournamentEventReservation,
-                    TournamentEventReservation.id
-                    == TournamentEventGroupReservation.reservation_id,
-                )
-                .where(
+                joined_to_reservation(
+                    select(
+                        TournamentEventStageGroup.id,
+                        TournamentEventReservation.slot_start,
+                        TournamentEventReservation.slot_end,
+                    )
+                ).where(
                     TournamentEventStageGroup.stage_id.in_(
                         stage_ids_for_events([event_id])
                     )
@@ -2412,22 +2404,13 @@ async def _group_reservation_windows(
         )
         for group_id, start, end in (
             await db.execute(
-                select(
-                    TournamentEventStageGroup.id,
-                    TournamentEventReservation.slot_start,
-                    TournamentEventReservation.slot_end,
-                )
-                .join(
-                    TournamentEventGroupReservation,
-                    TournamentEventGroupReservation.group_id
-                    == TournamentEventStageGroup.id,
-                )
-                .join(
-                    TournamentEventReservation,
-                    TournamentEventReservation.id
-                    == TournamentEventGroupReservation.reservation_id,
-                )
-                .where(
+                joined_to_reservation(
+                    select(
+                        TournamentEventStageGroup.id,
+                        TournamentEventReservation.slot_start,
+                        TournamentEventReservation.slot_end,
+                    )
+                ).where(
                     TournamentEventStageGroup.stage_id.in_(
                         stage_ids_for_events([event_id])
                     )
