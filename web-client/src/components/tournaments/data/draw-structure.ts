@@ -358,6 +358,12 @@ function impossibleProblemsFor({
 }): ImpossibleProblem[] {
   // 1. A group nobody can play in. Named by the FIRST such group, because that is the one
   //    a director looking down the preview will see first.
+  //
+  //    Inlined `Group ${groupLetter(...)}` rather than `./draw`'s `groupLabel` on
+  //    purpose: `./draw` imports this module (`groupLetter`), so calling back into it
+  //    from here would be a cycle. This is the one call site `groupLabel` cannot
+  //    replace for that reason (see `./standings.ts`, which uses `groupLabel` because it
+  //    only reaches this module transitively, never the reverse).
   const emptyIndex = groupSizes.findIndex((size) => size < 2)
   if (emptyIndex !== -1) {
     const size = groupSizes[emptyIndex]

@@ -13,8 +13,8 @@
 //   two copies would drift the moment a player is renamed.
 // - **A group carries no name of its own** (ticket #1369 — a group is server-owned and
 //   read-only; only its `position` is a fact about it). The table titles itself from
-//   `groupLetter(group.position)` (`./draw-structure`) — `Group A`, `Group B`, … — never
-//   from a reservation's director-typed name, which names the venue booking, not the
+//   `groupLabel(group)` (`./draw`) — `Group A`, `Group B`, … — never from a
+//   reservation's director-typed name, which names the venue booking, not the
 //   competitive group.
 //
 // What it deliberately does **not** do is re-order or recompute anything: the server owns
@@ -25,7 +25,7 @@
 // All of it is a pure function of one event, so it is unit-tested (`./standings.test.ts`)
 // rather than asserted through a DOM.
 
-import { groupLetter } from './draw-structure'
+import { groupLabel } from './draw'
 import { nameByEntryId, nameOf } from './entrant-names'
 import type { StandingRow, StandingsResults, TournamentEvent } from './types'
 
@@ -45,7 +45,7 @@ export interface StandingLine extends StandingRow {
  * decided. */
 export interface GroupStandingsView {
   groupId: string
-  /** `Group A`, `Group B`, … — `groupLetter(group.position)`, never a stored name (a
+  /** `Group A`, `Group B`, … — `groupLabel(group)` (`./draw`), never a stored name (a
    * group carries none). */
   label: string
   rows: StandingLine[]
@@ -114,7 +114,7 @@ export function eventStandings(
       // than blank if it ever did.
       label:
         positionByGroupId.get(group.groupId) !== undefined
-          ? `Group ${groupLetter(positionByGroupId.get(group.groupId) as number)}`
+          ? groupLabel({ position: positionByGroupId.get(group.groupId) as number })
           : group.groupId,
       rows: group.rows.map(
         (row): StandingLine => ({
