@@ -1,6 +1,6 @@
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
-import { groupIdFor, simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
+import { groupsFor, simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
 import {
   BAY_AREA_OPEN_ID,
   SUMMER_SLAM_ID,
@@ -1257,6 +1257,22 @@ export function entryStateFor(
 export function buildTournamentEventRead(
   overrides: Partial<Omit<TournamentEventRead, 'entered'>> = {},
 ): TournamentEventRead {
+  // The one reservation literal for this fixture — written ONCE, and shared by the
+  // `reservations` field below and the `groups` fallback further down, so the two can
+  // never drift the way two copies of the same literal would.
+  const baseReservations: TournamentEventRead['reservations'] = [
+    {
+      id: 'res-os-1',
+      name: 'Reservation A',
+      slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
+      table_ids: ['t1', 't2', 't3', 't4'],
+      // The reservation's place in the event, 0-based — on the READ shape only. The
+      // server assigns it from the index of the reservation in the list a write body
+      // sent, and `ReservationWrite`/`ReservationUpsert` forbid the key outright, so an
+      // override here is describing what came back, never what was asked for.
+      position: 0,
+    },
+  ]
   const event = {
     id: 'ev-open-singles',
     tournament_id: 'bay-area-open-2026',
@@ -1280,21 +1296,9 @@ export function buildTournamentEventRead(
     // mints exactly one `GroupRead` per `Reservation`, at the same `position`. A fixture
     // with several reservations numbers them 0, 1, 2 … — nothing orders either array by
     // id (see `Reservation.position` / `Group.position`, `data/types`).
-    reservations: [
-      {
-        id: 'res-os-1',
-        name: 'Reservation A',
-        slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
-        table_ids: ['t1', 't2', 't3', 't4'],
-        // The reservation's place in the event, 0-based — on the READ shape only. The
-        // server assigns it from the index of the reservation in the list a write body
-        // sent, and `ReservationWrite`/`ReservationUpsert` forbid the key outright, so an
-        // override here is describing what came back, never what was asked for.
-        position: 0,
-      },
-    ],
+    reservations: baseReservations,
     // `groups` is NOT stated here — it is minted 1:1 from `reservations` AFTER the
-    // spread below (`groupIdFor`), so a fixture overriding `reservations` alone still
+    // spread below (`groupsFor`), so a fixture overriding `reservations` alone still
     // gets a `groups` array that resolves against them. Server-owned and read-only in
     // either case: the group's own id names the reservation it plays under, and a
     // client never authors one directly (`GroupRead`, ticket #1369).
@@ -1328,17 +1332,7 @@ export function buildTournamentEventRead(
     // parser would otherwise refuse as an orphaned group. An explicit `groups` override
     // wins outright, for the one fixture that wants a group naming no reservation.
     groups:
-      overrides.groups ??
-      (overrides.reservations ?? [
-        {
-          id: 'res-os-1',
-          name: 'Reservation A',
-          slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
-          table_ids: ['t1', 't2', 't3', 't4'],
-          position: 0,
-        },
-      ]
-      ).map((r, position) => ({ id: groupIdFor(r.id), position, reservation_id: r.id })),
+      overrides.groups ?? groupsFor(overrides.reservations ?? baseReservations),
   } satisfies Omit<TournamentEventRead, 'entered'>
   return {
     ...event,
