@@ -580,16 +580,16 @@ than filled in (ADR 20260808).
 _Avoid_: reservation count (a different number entirely), group total.
 
 **Group size**:
-How many entrants play in one **group**. The system's default size is five, and it
-is a count divisor, not a fill target: the derived **group count** is the field
-divided by five and rounded up, and the field is then split as evenly as it goes,
-with the extra entrants landing in the earliest groups — so 22 entrants give five
+How many entrants play in one **group**. The system's default size is five. The
+five is a count divisor, not a fill target: the derived **group count** is the
+field divided by five, rounded up. The field then splits as evenly as it goes,
+and the extra entrants land in the earliest groups. So 22 entrants give five
 groups of 5, 5, 4, 4, 4. Sizes that differ by one are legal and are reported as
-**uneven**, not as an error. When a director sets the size by hand and leaves
-**group count** automatic, the typed size keeps its greedy meaning: groups are
-filled to it in turn and the last group takes what is left, so 41 in typed fives
-leaves a group of one, and the app states that consequence rather than reshaping
-the number.
+**uneven**, not as an error. When a director types the size and leaves
+**group count** automatic, the typed size keeps its greedy meaning. Groups fill
+to the typed size in turn, and the last group takes what is left. So 41 entrants
+in typed fives leave a group of one. The app states that consequence and does
+not reshape the typed number.
 _Avoid_: reservation size, group capacity (a **reservation**'s **tables** are the
 capacity, which is a scheduling idea, not this one).
 

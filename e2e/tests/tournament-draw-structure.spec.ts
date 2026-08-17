@@ -23,9 +23,11 @@ const ROUND_ROBIN_EVENT = 'One-stage Open'
  * and any `4–5` on screen is a real failure. */
 const FIELD_CAP = 20
 /** The derived group count: `ceil(20 / 5)` under the default divisor of five (#1386).
- * NOT the reservation row count — the derivation stopped reading it, and the four
- * seeded rows below deliberately match this number anyway, so nothing on screen could
- * pass by reading the wrong source. */
+ * NOT the reservation row count — the derivation stopped reading it. The four seeded
+ * rows below deliberately match this number, so every numeric assertion is stable under
+ * either rule and none of them discriminates the source. The one assertion that does is
+ * `GROUP_COUNT_SOURCE`, verbatim: the old rule's sentence named the reservation rows,
+ * and this one names the division. */
 const GROUP_COUNT = 4
 /** The four reservation rows, booking **no** tables — a draw is cut without regard to
  * tables, and an empty `table_ids` is what the editor's own reservation section sends.

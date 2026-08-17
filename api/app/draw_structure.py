@@ -171,6 +171,13 @@ def _at_least_one(value: int) -> int:
     return max(1, value)
 
 
+def _typed(mode: SettingOwnership, value: int | None) -> int | None:
+    """The director's number if the mode is manual, else ``None`` — so the derivation
+    reads one fact ("is there a number here?") rather than re-asking a mode and a value
+    together at every branch."""
+    return value if mode is SettingOwnership.manual else None
+
+
 def _ceil_div(dividend: int, divisor: int) -> int:
     """``ceil(dividend / divisor)`` in integers, so no float ever decides which side of
     a ceiling an exact division falls on. ``divisor`` is always at least one before it
@@ -226,23 +233,10 @@ def derive_draw_structure(options: DrawStructureOptions) -> DrawStructure:
     which is what stops a ``Yours`` badge sitting above a number the system worked out.
     """
     field_size = options.preview_field_size
-    # Resolve the modes first, so the rest of the function reads one fact ("is there a
-    # number here?") rather than re-asking a mode and a value together at every branch.
-    manual_group_count = (
-        options.manual_group_count
-        if options.group_count_mode is SettingOwnership.manual
-        else None
-    )
-    manual_group_size = (
-        options.manual_group_size
-        if options.group_size_mode is SettingOwnership.manual
-        else None
-    )
-    manual_qualifiers = (
-        options.manual_qualifiers
-        if options.qualifiers_mode is SettingOwnership.manual
-        else None
-    )
+    # Resolve the modes first, so the rest of the function reads one fact.
+    manual_group_count = _typed(options.group_count_mode, options.manual_group_count)
+    manual_group_size = _typed(options.group_size_mode, options.manual_group_size)
+    manual_qualifiers = _typed(options.qualifiers_mode, options.manual_qualifiers)
     target_size = (
         _at_least_one(manual_group_size) if manual_group_size is not None else None
     )

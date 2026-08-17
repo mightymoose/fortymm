@@ -257,10 +257,12 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
   const targetSize = setSize ? atLeastOne(manualGroupSize) : null
 
   // Group count: the director's, else derived from a size — theirs when they typed one,
-  // the default divisor otherwise. One shape, one fallback chain.
+  // the default divisor otherwise. One shape, one fallback chain. Named once so the
+  // sentence below reports the same divisor the arithmetic used, structurally.
+  const countDivisor = targetSize ?? DEFAULT_GROUP_SIZE
   const groupCount = setCount
     ? atLeastOne(manualGroupCount)
-    : atLeastOne(Math.ceil(fieldSize / (targetSize ?? DEFAULT_GROUP_SIZE)))
+    : atLeastOne(Math.ceil(fieldSize / countDivisor))
 
   // Group sizes. Both manual means both numbers stand, product be damned — that standoff
   // is reported as a disagreement below, never resolved by moving one of them.
@@ -298,10 +300,11 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
         }
       : null
 
-  // The `not conflict` guard mirrors the README and the Python. No input can distinguish
-  // it: a disagreement needs both modes manual, and both manual gives every group the same
-  // size, so `min === max` already. It stays because the two implementations must read the
-  // same, not because a vector reaches it.
+  // The `not conflict` guard mirrors the README. No input can distinguish it: a
+  // disagreement needs both modes manual, and both manual gives every group the same
+  // size, so `min === max` already. It stays to follow the README's shape, not because a
+  // vector reaches it. (The Python twin carries no uneven logic at all — the tally is
+  // client-only, outside the shared subset.)
   const unevenDistribution =
     !conflict && smallestGroup !== largestGroup ? tallySizes(groupSizes) : null
 
@@ -321,7 +324,7 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
         // was actually used (#1370 decision 3).
         sentence: setCount
           ? 'You set this.'
-          : `${fieldSize} players ÷ about ${targetSize ?? DEFAULT_GROUP_SIZE} per group`,
+          : `${fieldSize} players ÷ about ${countDivisor} per group`,
       },
       groupSize: {
         ownership: setSize ? 'manual' : 'automatic',
