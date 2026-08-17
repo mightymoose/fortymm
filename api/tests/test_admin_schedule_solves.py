@@ -197,7 +197,7 @@ async def test_infeasible_row_carries_resolved_reasons(
         infeasibility_reasons=[
             {
                 "kind": "window_too_short_for_match",
-                "pool_name": "Pool A",
+                "reservation_name": "Reservation A",
                 "window_start": "09:00",
                 "window_end": "09:10",
                 "best_of": 5,
@@ -218,7 +218,7 @@ async def test_infeasible_row_carries_resolved_reasons(
         "no_single_cause",
     ]
     window = reasons[0]
-    assert window["pool_name"] == "Pool A"
+    assert window["reservation_name"] == "Reservation A"
     assert window["best_of"] == 5
     assert window["needed_min"] == 45
     assert window["window_span_min"] == 10

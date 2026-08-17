@@ -418,7 +418,7 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
     **Reads, not statements**, and the distinction is the whole point of counting them:
     each of the three is a fixed number of statements rather than one, so the total is
     around seven (``draw_currency_by_event`` alone is three, and the event read pulls
-    ``pools`` and ``stages`` through their ``selectin`` loaders). What is constant is
+    ``groups`` and ``stages`` through their ``selectin`` loaders). What is constant is
     that **none of the three grows with the number of events** — which is the property
     the row lock cares about, and the reason a per-event query is forbidden here.
     """
@@ -447,7 +447,7 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
     # The events this precondition refuses at all — everything NOT ``current`` — in
     # the events' own order. A ``match`` with ``assert_never`` over the closed
     # ``DrawCurrency`` set here, not an ``if``: a fourth thing that can be true of a
-    # draw (a fixture pointing at a pool the event no longer has, say) is a type error
+    # draw (a fixture pointing at a group the event no longer has, say) is a type error
     # until somebody decides whether it may go live, rather than silently joining
     # ``current`` and sailing through.
     at_fault: list[tuple[TournamentEvent, DrawCurrency]] = []
@@ -495,7 +495,7 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
             )
         except DrawError as exc:
             # A field under two entrants is fixed by adding entrants, or by removing
-            # an event nobody can fill. Every OTHER ``DegenerateDraw`` (no pools, too
+            # an event nobody can fill. Every OTHER ``DegenerateDraw`` (no groups, too
             # many qualifiers, too many rounds) already names its own fix inside the
             # message, so nothing is appended for those.
             fix = "Add entrants, or remove the event." if len(entrants) < 2 else None

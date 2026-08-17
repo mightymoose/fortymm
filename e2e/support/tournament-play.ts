@@ -4,7 +4,7 @@ import { acceptResult, type Guest, type ResultGame } from './match-api'
 // draw has materialized, decided over the real API, until there is nothing left to play.
 //
 // It exists because some claims about a *draw* only become visible once its matches are
-// finished. An `rr-then-ko` event does not seat a single qualifier until a pool is
+// finished. An `rr-then-ko` event does not seat a single qualifier until a group is
 // decided (ADR "rr-then-ko cuts both stages upfront and seeds qualifiers rematch-free"),
 // so a spec whose subject is the seating has to get fourteen matches played before it can
 // look at anything — and fourteen trips through the score-entry UI would be a test of the
@@ -22,7 +22,7 @@ const CSRF_HEADER = 'x-csrf-token'
  *
  * A pass plays every fixture that is currently materialized and undecided; the
  * completions advance the draw, which materializes the next round, which the next pass
- * plays. A bracket seeded from three pools settles in three or four passes, so ten is
+ * plays. A bracket seeded from three groups settles in three or four passes, so ten is
  * generous — its job is to turn "the draw stopped advancing" into a **named error**
  * instead of a test that hangs until Playwright's timeout and reports nothing about why. */
 const MAX_PASSES = 10
@@ -39,7 +39,7 @@ interface PlayableEvent {
   }>
   readonly fixtures: ReadonlyArray<{
     readonly id: string
-    readonly pool_id: string | null
+    readonly group_id: string | null
     /** Which round of the draw the fixture belongs to — what `playSwissRound` scopes
      * itself by. A swiss draw is cut whole, so every round's rows exist from the start
      * and "the fixtures that are playable" is never the same set as "this round's". */
@@ -53,10 +53,10 @@ interface PlayableEvent {
 
 /** Which fixtures a call to `playEvent` is willing to decide.
  *
- * `'pools'` stops at the pool stage, which is the whole point of having the option: an
- * `rr-then-ko` spec needs a moment *between* the stages — pools decided, bracket seated,
+ * `'groups'` stops at the group stage, which is the whole point of having the option: an
+ * `rr-then-ko` spec needs a moment *between* the stages — groups decided, bracket seated,
  * nothing knocked out yet — and that moment does not exist if the helper plays on. */
-export type PlayStage = 'pools' | 'all'
+export type PlayStage = 'groups' | 'all'
 
 /** Who wins one fixture, given the two guests seated in it (side `a` first).
  *
@@ -97,12 +97,12 @@ export function earlierRegisteredWins(entrants: ReadonlyArray<Guest>): PickWinne
  * `pickWinner` defaults to `earlierRegisteredWins(entrants)` — the rule itself is written
  * there, and `entrants` is the field **in registration order**, what `seedEntrants`
  * returns. What it buys a caller here: every outcome in the tournament becomes a function
- * of the seeded field alone, so a pool's finishing order is its members' order in this
+ * of the seeded field alone, so a group's finishing order is its members' order in this
  * list, the qualifiers are the first `K` of them, and the champion is `entrants[0]`. A spec
  * can therefore write down who *should* be in the bracket before a ball is hit, which is
  * the only way an assertion about the seating can be more than "six names appeared".
  *
- * It also keeps the play free of ties: in a three-player pool the rule gives 2–0, 1–1 and
+ * It also keeps the play free of ties: in a three-player group the rule gives 2–0, 1–1 and
  * 0–2, so the finishing order needs no tiebreak and the qualifier set is not a coin flip.
  *
  * ## Passes, not a queue
@@ -145,7 +145,7 @@ export async function playEvent(
       .filter(
         (fixture) =>
           fixture.match_status !== 'completed' &&
-          (stage === 'all' || fixture.pool_id !== null),
+          (stage === 'all' || fixture.group_id !== null),
       )
     if (playable.length === 0) return played
     played += await playFixtures(event, playable, entrants, inStraightGames(pickWinner))

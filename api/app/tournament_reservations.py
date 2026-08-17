@@ -1,37 +1,34 @@
 """The one place an event's groups and reservations are written, and the seam their
 wire shape crosses.
 
-What the wire calls a **pool** is two rows here. A
+The wire carries two arrays now: ``groups`` (server-owned, read-only) and
+``reservations`` (the one a client writes). A
 :class:`~app.models.tournament_event_stage_group.TournamentEventStageGroup` is an
 ordered set of entrants who play all-play-all, parented on a stage; a
 :class:`~app.models.tournament_event_reservation.TournamentEventReservation` is a set of
 tables held for a window of time, parented on the event; and a
 :class:`~app.models.tournament_event_group_reservation.TournamentEventGroupReservation`
-maps one to the other. This module is where the two are written together and read back
-as one, so **the split is invisible above this line** — ``event.pools`` on the wire is
-exactly what it was, and so is ``fixture.pool_id``.
+maps one to the other.
 
 Four things live here and nowhere else.
 
-**The projection.** :func:`pool_read` is the join, in the read direction: a ``Pool``'s
-``id`` and ``position`` come from the group, and its ``name``, ``slot`` and
-``table_ids`` come from the group's mapped reservation. Every pool identifier the API
-serves is therefore a **group** id — ``pools[].id``, ``fixture.pool_id`` and
-``PoolStandingsRead.pool_id`` alike — and a reservation's own id never reaches a client.
+**The projection.** :func:`group_read` and :func:`reservation_read` are the two reads:
+a group's own ``id``, ``position`` and ``reservation_id``; a reservation's own ``id``,
+``position``, ``name``, ``slot`` and ``table_ids``. Slice 1's single joined reservation
+projection is gone — the wire no longer hides which row an id belongs to.
 
-**The 1:1.** A pool write creates, updates and removes a group *and* its reservation
-together, on every path, so the two sets stay in lockstep. Nothing enforces that in the
-database — the join deliberately carries no uniqueness on its reservation column,
-because a later change lets two groups share one reservation — so it is this module's
-invariant to keep. Break it and ``fixture.pool_id`` names a group id ``pools[].id`` does
-not hold: the client's own id-set join buckets nothing and every pool card renders
-empty.
+**The 1:1.** A reservation write creates, updates and removes a reservation *and* its
+mapped group together, on every path, so the two sets stay in lockstep. Nothing
+enforces that in the database — the join deliberately carries no uniqueness on its
+reservation column, because a later change lets two groups share one reservation — so
+it is this module's invariant to keep. Break it and ``fixture.group_id`` names a group
+whose reservation the projected ``reservations[]`` no longer holds.
 
-**The position.** :func:`stored_pools` and :func:`apply_event_pools` stamp each entry
-with its index in the list the client sent — the only place a ``position`` is ever
-assigned, on either row. The group's is what the wire reports and what the snake seeds
-against; the reservation's exists so a reservation set has a stable read order of its
-own, and equals the group's under the lockstep above.
+**The position.** :func:`stored_groups` and :func:`apply_event_reservations` stamp
+each entry with its index in the list the client sent — the only place a ``position``
+is ever assigned, on either row. The reservation's is what the wire reports for
+``reservations[]``; the group's mirrors it under the lockstep above, which is what the
+snake seeds against.
 
 **The Slot⇄columns conversion.** A reservation's window is three wall-clock columns
 (``slot_date``, ``slot_start``, ``slot_end``) and one wire value-object
@@ -50,32 +47,32 @@ Postgres will accept. Each row's ``event_id`` is populated through the ``event``
 relationship rather than a literal — the event's own id does not exist yet on the create
 path, so the unit of work has to fill it in after the event's INSERT returns.
 
-**The id.** A group's id is a uuid the **database** mints, so nothing here assigns one
-on the create path and the create shape has no field for one. On the edit path a client
-*cites* an id it was given, and citing one this event does not have is refused rather
-than silently minted — the same split, and the same 422, ``app.tournament_tables``
-already makes for the venue catalogue.
+**The id.** A reservation's id is a uuid the **database** mints, so nothing here
+assigns one on the create path and the create shape has no field for one. On the edit
+path a client *cites* an id it was given, and citing one this event does not have is
+refused rather than silently minted — the same split, and the same 422,
+``app.tournament_tables`` already makes for the venue catalogue.
 
 The edit path is an **id-keyed diff** and not a wholesale replace, which is a change of
-mechanism and not of meaning: re-sending a pool the event already has must UPDATE that
-group, or the write would delete and recreate the row every fixture in the event points
-at.
+mechanism and not of meaning: re-sending a reservation the event already has must
+UPDATE that reservation (and its mapped group), or the write would delete and recreate
+the row every fixture in the event points at.
 
 **The stage.** A group's parent is its stage (ADR 20260815, "Sequencing with #1338") —
 always the event's stage 0 (decision 3). ``TournamentEvent.groups`` is a *readable*
 association through stage 0, but writing means resolving the actual stage row and
 assigning ``stage.groups``. On the create path the stage is a fresh, unflushed object
 the caller already built (``app.tournament_events.create_event`` passes it straight
-through); on the edit path :func:`apply_event_pools` resolves it itself, with an
+through); on the edit path :func:`apply_event_reservations` resolves it itself, with an
 explicit query, the same way ``app.tournament_event_stages.remint_stages_in_place`` does
 — not because ``TournamentEvent.stages`` is unavailable (it is eager and would already
 be populated) but because ``stage.groups`` is deliberately NOT eager, so this function
 needs its own query to attach the ``selectinload``. That query is why
-:func:`apply_event_pools` takes a session, which is the one exception to the claim
-below.
+:func:`apply_event_reservations` takes a session, which is the one exception to the
+claim below.
 
 It otherwise imports the models, the schemas and the domain-error leaf, and nothing else
-— no router, no FastAPI — so :func:`stored_pools` stays callable from a REPL and
+— no router, no FastAPI — so :func:`stored_groups` stays callable from a REPL and
 cycle-free."""
 
 import uuid
@@ -95,10 +92,21 @@ from app.models import (
     TournamentEventStage,
     TournamentEventStageGroup,
 )
-from app.schemas.tournament import Pool, PoolUpsert, PoolWrite, Slot
-from app.tournament_errors import PoolNotInEventError
+from app.schemas.tournament import (
+    GroupRead,
+    Reservation,
+    ReservationUpsert,
+    ReservationWrite,
+    Slot,
+)
+from app.tournament_errors import ReservationNotInEventError
 
-__all__ = ["apply_event_pools", "pool_read", "stored_pools"]
+__all__ = [
+    "apply_event_reservations",
+    "group_read",
+    "reservation_read",
+    "stored_groups",
+]
 
 
 def _slot_columns(slot: Slot) -> tuple[date, time, time]:
@@ -107,8 +115,8 @@ def _slot_columns(slot: Slot) -> tuple[date, time, time]:
     ``fromisoformat`` and not a hand-rolled ``strptime``: it is the parser the rest of
     this codebase already reads dates with (``app.schedule_preview_solve``), and the
     boundary has already refused anything it would choke on
-    (:data:`~app.schemas.tournament.PoolSlot`) — so this is a total function of what can
-    reach it, not a parse that needs a failure branch.
+    (:data:`~app.schemas.tournament.ReservationSlot`) — so this is a total function of
+    what can reach it, not a parse that needs a failure branch.
     """
     return (
         date.fromisoformat(slot.date),
@@ -121,10 +129,10 @@ def _slot_read(reservation: TournamentEventReservation) -> Slot:
     """The wire :class:`Slot` a stored reservation's three columns compose back into.
 
     ``%H:%M`` exactly, with no seconds, because that is the shape the boundary accepts
-    and therefore the only shape a stored value can have had (:data:`PoolSlot` refuses a
-    time carrying seconds rather than storing one it would later have to truncate). The
-    round trip is lossless: what a client sends is what it reads back, character for
-    character.
+    and therefore the only shape a stored value can have had (:data:`ReservationSlot`
+    refuses a time carrying seconds rather than storing one it would later have to
+    truncate). The round trip is lossless: what a client sends is what it reads back,
+    character for character.
     """
     return Slot(
         date=reservation.slot_date.isoformat(),
@@ -133,38 +141,37 @@ def _slot_read(reservation: TournamentEventReservation) -> Slot:
     )
 
 
-def pool_read(group: TournamentEventStageGroup) -> Pool:
-    """One stored group, projected with its reservation, as the shape everything above
-    the database reads (:class:`~app.schemas.tournament.Pool`).
+def group_read(group: TournamentEventStageGroup) -> GroupRead:
+    """One stored group, projected as the shape everything above the database reads
+    (:class:`~app.schemas.tournament.GroupRead`).
 
-    **This is the join that keeps the wire still.** The row that used to answer all five
-    fields is two rows now, and this is where they are put back together:
-
-    ==================  ===========================================
-    ``id``              the **group**
-    ``position``        the **group**
-    ``name``            the group's mapped **reservation**
-    ``slot``            the group's mapped **reservation**
-    ``table_ids``       the group's mapped **reservation**
-    ==================  ===========================================
-
-    The ``id`` half is the load-bearing one. A fixture's ``pool_id`` is a group id, so
-    the id this projects must be the group's too, or the client's own join of
-    ``fixture.pool_id`` against the ``pools[]`` id set matches nothing and every pool
-    card renders empty. That is a failure no type check can see and no regen can catch,
-    which is why it is stated here rather than left to follow from the field order.
-
-    ``group.reservation`` is total in this slice: every write path in this module
-    writes a group and a reservation together, so a group with no mapping is a state
-    nothing can produce.
+    ``id`` and ``position`` come straight off the row. ``reservation_id`` is read
+    through the join (``group.reservation_link.reservation_id``) rather than through
+    the loaded ``reservation`` object, so this needs no eager load of the reservation
+    itself when a caller only wants the id.
     """
-    reservation = group.reservation
-    return Pool(
+    return GroupRead(
         id=group.id,
+        position=group.position,
+        reservation_id=group.reservation_link.reservation_id,
+    )
+
+
+def reservation_read(reservation: TournamentEventReservation) -> Reservation:
+    """One stored reservation, projected as the shape everything above the database
+    reads (:class:`~app.schemas.tournament.Reservation`).
+
+    ``id`` and ``position`` come straight off the row. ``name``, ``slot`` and
+    ``table_ids`` compose from the reservation's own columns and its mapped
+    :class:`~app.models.tournament_event_reservation_table.TournamentEventReservationTable`
+    rows, in ``position`` order.
+    """
+    return Reservation(
+        id=reservation.id,
         name=reservation.name,
         slot=_slot_read(reservation),
         table_ids=[row.table_id for row in reservation.tables],
-        position=group.position,
+        position=reservation.position,
     )
 
 
@@ -225,8 +232,10 @@ def _reservation_tables(
     return rows
 
 
-def stored_pools(
-    event: TournamentEvent, tournament: Tournament, submitted: Sequence[PoolWrite]
+def stored_groups(
+    event: TournamentEvent,
+    tournament: Tournament,
+    submitted: Sequence[ReservationWrite],
 ) -> list[TournamentEventStageGroup]:
     """Fresh group rows — each already mapped to its own fresh reservation — for an
     event that has none yet, which is the create verb's whole job.
@@ -248,20 +257,23 @@ def stored_pools(
 
     No ``id`` is set on either row: that is the database's, exactly as a venue table's
     is (:func:`app.tournament_tables.stored_tables`), and the point of the ADR is that
-    it is not the client's to author — the create shape (:class:`PoolWrite`) has no
-    field for one.
+    it is not the client's to author — the create shape (:class:`ReservationWrite`) has
+    no field for one.
     """
     return [
-        _new_group(event, tournament, pool, position)
-        for position, pool in enumerate(submitted)
+        _new_group(event, tournament, reservation, position)
+        for position, reservation in enumerate(submitted)
     ]
 
 
 def _new_group(
-    event: TournamentEvent, tournament: Tournament, submitted: PoolWrite, position: int
+    event: TournamentEvent,
+    tournament: Tournament,
+    submitted: ReservationWrite,
+    position: int,
 ) -> TournamentEventStageGroup:
     """One brand-new group at ``position``, mapped to one brand-new reservation, from
-    the pool a client sent — with no ``id`` on either, which the database mints.
+    the reservation a client sent — with no ``id`` on either, which the database mints.
 
     The two are created together and can only be created together: this is the single
     place the create path can produce a group at all, so "every group has a reservation"
@@ -283,14 +295,15 @@ def _new_group(
     )
 
 
-async def apply_event_pools(
+async def apply_event_reservations(
     db: AsyncSession,
     tournament: Tournament,
     event: TournamentEvent,
-    submitted: Sequence[PoolUpsert],
+    submitted: Sequence[ReservationUpsert],
 ) -> None:
-    """Make ``event``'s stage-0 groups and its reservations equal ``submitted``, as an
-    **id-keyed diff** over both at once.
+    """Make ``event``'s reservations equal ``submitted``, and its stage-0 groups equal
+    them in lockstep, as an **id-keyed diff** — keyed on the **reservation's own id**,
+    the one the wire now exposes.
 
     ``tournament`` is the event's own parent, and it is here for the reservation tables:
     it supplies the catalogue each ``table_ids`` is resolved against and the
@@ -298,12 +311,12 @@ async def apply_event_pools(
 
     **Both collections are reassigned, and that is the 1:1.** ``stage.groups`` and
     ``event.reservations`` are written from the same pass over the same payload, in the
-    same order, so an entry adds a group *and* a reservation, an entry citing an id
+    same order, so an entry adds a reservation *and* a group, an entry citing an id
     updates both, and an entry that disappears removes both — the second by
     ``delete-orphan`` on each collection, which also takes the join row with the group.
-    Writing only one of the two would leave ``fixture.pool_id`` naming a group the
-    projected ``pools[]`` no longer holds, which nothing downstream is loud enough to
-    notice (see the module docstring's "The 1:1").
+    Writing only one of the two would leave ``fixture.group_id`` naming a group the
+    projected ``reservations[]`` no longer maps to (see the module docstring's
+    "The 1:1").
 
     Resolves the event's stage 0 with an explicit query, the same discipline
     ``app.tournament_event_stages.remint_stages_in_place`` follows. Not because
@@ -318,9 +331,10 @@ async def apply_event_pools(
     was seeded straight through the ORM bypassing ``create_event`` — a test-fixture bug,
     not a state this function is asked to tolerate.
 
-    Each entry either cites the ``id`` of a group the stage already has — which keeps
-    that row and its reservation, re-named, re-timed, re-tabled and re-positioned as
-    this payload says — or omits one, which adds a pair the database mints ids for.
+    Each entry either cites the ``id`` of a reservation the event already has — which
+    keeps that row and its mapped group, re-named, re-timed, re-tabled and
+    re-positioned as this payload says — or omits one, which adds a pair the database
+    mints ids for.
 
     **Keying on the id is not an optimization, it is the only correct mechanism.** A
     fixture holds its group's id as a foreign key, so a delete-and-recreate of the row a
@@ -329,16 +343,17 @@ async def apply_event_pools(
     Two refusals, and they are asked in two different places:
 
     * an entry citing an id this **event** does not have →
-      :class:`~app.tournament_errors.PoolNotInEventError` (a 422 on that entry's
+      :class:`~app.tournament_errors.ReservationNotInEventError` (a 422 on that entry's
       ``id``), judged here and before anything is written. The id is the server's, so
       one it did not mint names nothing — and quietly minting a fresh one would hand the
-      client back a different id than it asked for while *removing* the pool it meant to
-      keep. It is the same 422 :func:`~app.tournament_tables.apply_table_catalogue`
-      answers an unknown table id with, for the same reason.
-    * a payload that would add or remove a pool of an event whose draw is **cut** →
-      ``_enforce_group_set_frozen`` (``app.tournament_events``), which runs *before*
-      this function, so the 409 wins over the 422 whenever both apply. With no draw, any
-      diff is legal.
+      client back a different id than it asked for while *removing* the reservation it
+      meant to keep. It is the same 422
+      :func:`~app.tournament_tables.apply_table_catalogue` answers an unknown table id
+      with, for the same reason.
+    * a payload that would add or remove a reservation of an event whose draw is
+      **cut** → ``_enforce_group_set_frozen`` (``app.tournament_events``), which runs
+      *before* this function, so the 409 wins over the 422 whenever both apply. With no
+      draw, any diff is legal.
 
     Reassigning whole collections is what expresses all three operations at once, in the
     payload's order — the same gesture ``apply_table_catalogue`` makes, and the reason
@@ -348,9 +363,7 @@ async def apply_event_pools(
     # ``.options(selectinload(...))`` here, rather than a default eager strategy on the
     # relationship itself: ``TournamentEventStage.groups`` is deliberately NOT eager (an
     # event-wide default would double-load against ``TournamentEvent.groups``'s own
-    # selectin), so this one direct reader asks for exactly the load it needs — the
-    # groups, their join rows, and the reservations those name, because the update arm
-    # writes through all three.
+    # selectin), so this one direct reader asks for exactly the load it needs.
     stage = (
         await db.execute(
             select(TournamentEventStage)
@@ -383,24 +396,29 @@ async def apply_event_pools(
     # throwaway ``select(TournamentEvent)`` carrying a loader option does the same job
     # for two statements instead of one, and re-reads a row the session already holds.
     await event.awaitable_attrs.reservations
-    stored = {group.id: group for group in stage.groups}
+    # Keyed on the RESERVATION's own id — the id the wire now exposes and the id a
+    # PATCH cites — not on the group's. The two used to be the same key because only
+    # the group's id ever reached a client; now that both ids are visible, the group's
+    # is server-owned and read-only, and the diff has to run against the array a client
+    # can actually write.
+    stored = {group.reservation.id: group for group in stage.groups}
     # Judged first, over the whole payload, for the reason the catalogue's twin is: a
-    # pool list naming a pool this event does not have is not a pool list, and every
-    # subsequent question (what is kept, and therefore what is removed) would be
-    # answered against a list the client did not mean. Named by index so the refusal
-    # lands on the entry that caused it.
+    # reservation list naming a reservation this event does not have is not a
+    # reservation list, and every subsequent question (what is kept, and therefore what
+    # is removed) would be answered against a list the client did not mean. Named by
+    # index so the refusal lands on the entry that caused it.
     for index, entry in enumerate(submitted):
         if entry.id is not None and entry.id not in stored:
-            raise PoolNotInEventError(index=index, pool_id=str(entry.id))
+            raise ReservationNotInEventError(index=index, reservation_id=str(entry.id))
     groups = [
         _group_for(event, tournament, stored, entry, position)
         for position, entry in enumerate(submitted)
     ]
     # Assigned in lockstep, from the one list, so the two collections cannot disagree
-    # about which pools this event has. The reservations are read back off the groups
-    # rather than accumulated separately, which makes "the reservation set IS the mapped
-    # set" true by construction instead of by a parallel append nobody would notice
-    # drifting.
+    # about which reservations this event has. The reservations are read back off the
+    # groups rather than accumulated separately, which makes "the reservation set IS
+    # the mapped set" true by construction instead of by a parallel append nobody would
+    # notice drifting.
     stage.groups = groups
     event.reservations = [group.reservation for group in groups]
 
@@ -409,15 +427,15 @@ def _group_for(
     event: TournamentEvent,
     tournament: Tournament,
     stored: dict[uuid.UUID, TournamentEventStageGroup],
-    entry: PoolUpsert,
+    entry: ReservationUpsert,
     position: int,
 ) -> TournamentEventStageGroup:
-    """The group one submitted pool resolves to — the cited group with its reservation
-    updated in place, or a brand-new pair.
+    """The group one submitted reservation resolves to — the group mapped to the cited
+    reservation, updated in place, or a brand-new pair.
 
     ``position`` is the entry's index in the submitted list and is assigned on both arms
-    and to both rows, so a patch that re-orders the pools re-orders them (and one that
-    re-sends them unchanged writes the positions they already had).
+    and to both rows, so a patch that re-orders the reservations re-orders them (and one
+    that re-sends them unchanged writes the positions they already had).
 
     ``stored[entry.id]`` cannot miss — every cited id was checked against ``stored``
     before this runs, so this is an indexing operation rather than a second lookup with

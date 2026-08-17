@@ -30,9 +30,9 @@ export function buildSwissStandingLine(
  * sign is load-bearing (`+3`, `0`, `-3`), and a body of all-positive figures could not prove
  * it is rendered.
  *
- * The one body, for the shared table (**both** arms below), and for the pool that wraps it
- * (`pool-standings-table.factory`) — copies of these nine figures would be fixtures free to
- * disagree about what "a pool" looks like, and a swiss table that differed from a pool one
+ * The one body, for the shared table (**both** arms below), and for the group that wraps it
+ * (`group-standings-table.factory`) — copies of these nine figures would be fixtures free to
+ * disagree about what "a group" looks like, and a swiss table that differed from a group one
  * by more than its Buchholz column would stop proving the two share a component.
  */
 export function buildStandingLines(): StandingLine[] {
@@ -86,12 +86,12 @@ const BUCHHOLZ = [8, 6, 7]
  * own — the union cannot be built by one `Partial<>`, and it should not be: which table this
  * is decides which columns it has, so a test picks the arm it means rather than
  * half-specifying one. The two types are stated HERE, beside the builders that take them, so
- * the page object's `renderPool` / `renderSwiss` import the contract rather than restate it.
+ * the page object's `renderGroup` / `renderSwiss` import the contract rather than restate it.
  */
 
-/** What a caller may vary on the **pool** arm — everything but the `format` tag, which IS
- * the arm and so is chosen by picking the pool builder rather than passed. */
-export type PoolOverrides = Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
+/** What a caller may vary on the **group** arm — everything but the `format` tag, which IS
+ * the arm and so is chosen by picking the group builder rather than passed. */
+export type GroupOverrides = Partial<Omit<StandingsTableProps, 'format' | 'rows'>> & {
   rows?: StandingLine[]
 }
 
@@ -101,22 +101,22 @@ export type SwissOverrides = Partial<Omit<StandingsTableProps, 'format' | 'rows'
   rows?: SwissStandingLine[]
 }
 
-/** Props for a **pool** `StandingsTable` — the three-deep body above, named as a pool's
- * table, and no Buchholz column, because every entrant in a pool faces the same
+/** Props for a **group** `StandingsTable` — the three-deep body above, named as a group's
+ * table, and no Buchholz column, because every entrant in a group faces the same
  * opposition. */
-export function buildPoolStandingsTableProps(
-  overrides: PoolOverrides = {},
+export function buildGroupStandingsTableProps(
+  overrides: GroupOverrides = {},
 ): StandingsTableProps {
   return {
-    format: 'pool',
-    ariaLabel: 'Standings for Pool A',
+    format: 'group',
+    ariaLabel: 'Standings for Group A',
     rows: buildStandingLines(),
     ...overrides,
   }
 }
 
 /** Props for a **swiss** `StandingsTable` — the very same three rows, plus the `BUCHHOLZ`
- * figures above. The rows are the pool body with one column added and nothing else changed,
+ * figures above. The rows are the group body with one column added and nothing else changed,
  * so the only difference a test can see between the two arms is the column `format` decides
  * on. */
 export function buildSwissStandingsTableProps(

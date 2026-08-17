@@ -3,9 +3,10 @@ import {
   buildEntrants,
   buildFixture,
   buildFixtureTime,
-  buildPool,
+  buildReservation,
   buildTables,
   buildTournament,
+  groupIdFor,
 } from './seed.factory'
 import {
   axisTicks,
@@ -20,16 +21,16 @@ import {
 } from './timeline'
 import type { Fixture, Tournament, TournamentEvent } from './types'
 
-/** The drawn U1200 event with every Pool A fixture placed — one per tier — and
- * Pool B's single fixture left unplaced. The placements sit inside Pool A's
- * `09:00–12:30` window on `t1`/`t2`. */
+/** The drawn U1200 event with every Group A fixture placed — one per tier — and
+ * Group B's single fixture left unplaced. The placements sit inside Group A's
+ * reservation's `09:00–12:30` window on `t1`/`t2`. */
 const placedEvent = (): TournamentEvent =>
   buildDrawnEvent({
     fixtures: [
       // An ESTIMATE: placed, unpinned, no match yet.
       buildFixture({
         id: 'fx-est',
-        poolId: 'p-a',
+        groupId: groupIdFor('res-a'),
         entryAId: 'entry-1',
         entryBId: 'entry-4',
         tableId: 't1',
@@ -39,7 +40,7 @@ const placedEvent = (): TournamentEvent =>
       // already gone out, so the bar owes a `notified 2×` marker.
       buildFixture({
         id: 'fx-called',
-        poolId: 'p-a',
+        groupId: groupIdFor('res-a'),
         round: 2,
         entryAId: 'entry-1',
         entryBId: 'entry-5',
@@ -51,7 +52,7 @@ const placedEvent = (): TournamentEvent =>
       // STARTED: in progress — and pinned, which the started tier outranks.
       buildFixture({
         id: 'fx-live',
-        poolId: 'p-a',
+        groupId: groupIdFor('res-a'),
         round: 3,
         entryAId: 'entry-4',
         entryBId: 'entry-5',
@@ -61,10 +62,10 @@ const placedEvent = (): TournamentEvent =>
         scheduledStart: '2026-06-13T11:00:00',
         pinnedAt: '2026-06-13T10:50:00',
       }),
-      // Unplaced — Pool B's fixture stays off the axis, in the rail.
+      // Unplaced — Group B's fixture stays off the axis, in the rail.
       buildFixture({
         id: 'fx-await',
-        poolId: 'p-b',
+        groupId: groupIdFor('res-b'),
         entryAId: 'entry-2',
         entryBId: 'entry-3',
       }),
@@ -243,22 +244,22 @@ describe('axisTicks', () => {
 describe('buildTimelineBoard', () => {
   it('derives the window from the earliest placed bar to the latest bar end, padded to the half-hour', () => {
     const board = boardOf(buildTournament({ events: [placedEvent()] }))
-    // Instant-anchored, not pool-window-anchored (ADR "tournament times are
+    // Instant-anchored, not reservation-window-anchored (ADR "tournament times are
     // timezone-aware instants"): the window spans the placed bars, not the naive
-    // pool windows (which can't join the instant axis). Earliest bar 09:00 on the
+    // reservation windows (which can't join the instant axis). Earliest bar 09:00 on the
     // origin date; latest bar ends 11:35, padded up to 12:00.
     expect(board.originDate).toBe('2026-06-13')
     expect(board.startMin).toBe(9 * 60)
     expect(board.endMin).toBe(12 * 60)
   })
 
-  it('stretches the window when a placement ends past its pool window', () => {
+  it('stretches the window when a placement ends past its reservation window', () => {
     const event = buildDrawnEvent({
-      pools: [buildPool({ id: 'p-a', name: 'Pool A' })], // 09:00–12:30
+      reservations: [buildReservation({ id: 'res-a', name: 'Reservation A' })], // 09:00–12:30
       fixtures: [
         buildFixture({
           id: 'fx-late',
-          poolId: 'p-a',
+          groupId: groupIdFor('res-a'),
           tableId: 't1',
           // Bo5 → 35 estimated minutes: ends 12:50, past the 12:30 window end.
           scheduledStart: '2026-06-13T12:15:00',
@@ -269,9 +270,9 @@ describe('buildTimelineBoard', () => {
     expect(board.endMin).toBe(13 * 60) // 12:50 padded up to 13:00
   })
 
-  it('shows a token hour when nothing is placed yet — the naive pool windows can’t size an instant axis', () => {
+  it('shows a token hour when nothing is placed yet — the naive reservation windows can’t size an instant axis', () => {
     const board = boardOf(buildTournament({ events: [buildDrawnEvent()] }))
-    // Before any bar exists there is no instant to anchor to (the pool windows are
+    // Before any bar exists there is no instant to anchor to (the reservation windows are
     // naive venue wall-clock and never join the instant axis), so the board draws a
     // token 09:00–10:00 hour and the Schedule tab shows the "run the scheduler" prompt.
     expect(board.hasBars).toBe(false)
@@ -300,7 +301,7 @@ describe('buildTimelineBoard', () => {
     expect(bar.tz).toBe('CDT')
     expect(bar.label).toBe('player.1 vs player.4')
     expect(bar.tableLabel).toBe('T1')
-    expect(bar.poolName).toBe('Pool A')
+    expect(bar.groupLabel).toBe('Group A')
   })
 
   it('counts minutes across days by instant differencing, from the earliest placed bar', () => {
@@ -309,24 +310,25 @@ describe('buildTimelineBoard', () => {
     // instants"): a day-1 09:00 bar is the origin, and a day-2 09:30 bar sits a full
     // day + 30 minutes later — 24h30m of instant difference, tz-agnostic.
     const event = buildDrawnEvent({
-      pools: [
-        buildPool({ id: 'p-a', name: 'Pool A' }), // 2026-06-13
-        buildPool({
-          id: 'p-b',
-          name: 'Pool B',
+      reservations: [
+        buildReservation({ id: 'res-a', name: 'Reservation A' }), // 2026-06-13
+        buildReservation({
+          id: 'res-b',
+          name: 'Reservation B',
           slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+          position: 1,
         }),
       ],
       fixtures: [
         buildFixture({
           id: 'fx-day1',
-          poolId: 'p-a',
+          groupId: groupIdFor('res-a'),
           tableId: 't1',
           scheduledStart: '2026-06-13T09:00:00',
         }),
         buildFixture({
           id: 'fx-day2',
-          poolId: 'p-b',
+          groupId: groupIdFor('res-b'),
           entryAId: 'entry-2',
           entryBId: 'entry-3',
           tableId: 't3',
@@ -335,7 +337,7 @@ describe('buildTimelineBoard', () => {
       ],
     })
     const board = boardOf(buildTournament({ events: [event] }))
-    // The origin is the earliest bar's venue date (day 1), not the earliest pool.
+    // The origin is the earliest bar's venue date (day 1), not the earliest reservation.
     expect(board.originDate).toBe('2026-06-13')
     const bar = board.tables.find((r) => r.tableId === 't3')!.bars[0]
     expect(bar.startMin).toBe(1440 + 9 * 60 + 30)
@@ -386,7 +388,7 @@ describe('buildTimelineBoard', () => {
       fixtures: [
         buildFixture({
           id: 'fx-ghost',
-          poolId: 'p-a',
+          groupId: 'p-a',
           tableId: 't-gone',
           scheduledStart: '2026-06-13T09:00:00',
         }),
@@ -402,7 +404,7 @@ describe('buildTimelineBoard', () => {
   it('puts a table-only placement (no time) in the rail, with its table named', () => {
     const event = buildDrawnEvent({
       fixtures: [
-        buildFixture({ id: 'fx-half', poolId: 'p-a', tableId: 't2' }),
+        buildFixture({ id: 'fx-half', groupId: 'p-a', tableId: 't2' }),
       ],
     })
     const board = boardOf(buildTournament({ events: [event] }))
@@ -431,7 +433,7 @@ describe('buildTimelineBoard', () => {
       ['fx-est', 'player.4'],
       ['fx-called', 'player.5'],
     ])
-    // Pool B's players have a fixture but no placement: an honest empty track.
+    // Group B's players have a fixture but no placement: an honest empty track.
     expect(board.players.find((p) => p.username === 'player.2')!.bars).toEqual([])
   })
 
@@ -443,7 +445,7 @@ describe('buildTimelineBoard', () => {
       fixtures: [
         buildFixture({
           id: 'fx-ran-long',
-          poolId: 'p-a',
+          groupId: 'p-a',
           tableId: 't1',
           // Bo5 → 35 estimated minutes: 09:00 + 35 = 09:35. The match actually
           // ran to 10:20 — 80 minutes, not 35.
@@ -468,7 +470,7 @@ describe('buildTimelineBoard', () => {
       fixtures: [
         buildFixture({
           id: 'fx-ran-short',
-          poolId: 'p-a',
+          groupId: 'p-a',
           tableId: 't1',
           // Bo5 → 35 estimated minutes, but the match finished in 12.
           scheduledStart: '2026-06-13T09:00:00',
@@ -489,7 +491,7 @@ describe('buildTimelineBoard', () => {
       fixtures: [
         buildFixture({
           id: 'fx-voided',
-          poolId: 'p-a',
+          groupId: 'p-a',
           tableId: 't1',
           scheduledStart: '2026-06-13T09:00:00',
           matchId: 'm-1',
@@ -508,7 +510,7 @@ describe('buildTimelineBoard', () => {
       fixtures: [
         buildFixture({
           id: 'fx-bad-stamp',
-          poolId: 'p-a',
+          groupId: 'p-a',
           tableId: 't1',
           scheduledStart: '2026-06-13T09:00:00',
           matchId: 'm-1',
@@ -530,7 +532,7 @@ describe('buildTimelineBoard', () => {
       fixtures: [
         buildFixture({
           id: 'fx-no-stamp',
-          poolId: 'p-a',
+          groupId: 'p-a',
           tableId: 't1',
           scheduledStart: '2026-06-13T09:00:00',
           matchId: 'm-1',
@@ -549,7 +551,7 @@ describe('buildTimelineBoard', () => {
       fixtures: [
         buildFixture({
           id: 'fx-live',
-          poolId: 'p-a',
+          groupId: 'p-a',
           tableId: 't1',
           scheduledStart: '2026-06-13T09:00:00',
           matchId: 'm-1',
@@ -570,7 +572,7 @@ describe('buildTimelineBoard', () => {
         // entry-9 is nobody the event lists — a withdrawn side.
         buildFixture({
           id: 'fx-w',
-          poolId: 'p-a',
+          groupId: 'p-a',
           entryAId: 'entry-1',
           entryBId: 'entry-9',
           tableId: 't1',

@@ -19,17 +19,18 @@ import {
   buildFixture,
   buildMaterializedDrawnEvent,
   buildPlayedDrawnEvent,
-  buildPool,
+  buildReservation,
   buildSwissDrawnEvent,
-  buildTenPoolDrawnEvent,
+  buildTenGroupDrawnEvent,
   buildTwoStageDrawnEvent,
-  TEN_POOLS_BY_ID,
-  TEN_POOLS_BY_POSITION,
+  groupIdFor,
+  TEN_GROUPS_BY_ID,
+  TEN_GROUPS_BY_POSITION,
 } from '../../data/seed.factory'
 import { drawPanelPage as page } from './draw-panel.page'
 
-/** The seeded drawn event: round-robin, `player.1`…`player.5`, Pool A (1/4/5 — odd) and
- * Pool B (2/3). */
+/** The seeded drawn event: round-robin, `player.1`…`player.5`, Group A (1/4/5 — odd) and
+ * Group B (2/3). */
 const DRAWN = buildDrawnEvent()
 
 /** The same draw, **under way**: one of its four fixtures has a recorded winner. Nothing
@@ -50,7 +51,7 @@ const enabledVerbsIn = (eventId: string) =>
 const cutResponse = () => [
   buildTournamentFixtureRead({
     id: 'fx-a-1',
-    pool_id: 'p-a',
+    group_id: 'p-a',
     round: 1,
     position: 1,
     entry_a_id: 'entry-1',
@@ -60,76 +61,76 @@ const cutResponse = () => [
 
 describe('DrawPanel', () => {
   describe('an event whose draw is cut', () => {
-    it('expands into its pools, in the event’s pool order', () => {
+    it('expands into its groups, in the event’s group order', () => {
       page.render({ event: DRAWN })
 
-      expect(page.getPoolHeading('Pool A')).toBeInTheDocument()
-      expect(page.getPoolHeading('Pool B')).toBeInTheDocument()
+      expect(page.getGroupHeading('Group A')).toBeInTheDocument()
+      expect(page.getGroupHeading('Group B')).toBeInTheDocument()
       expect(page.queryEmptyState()).toBeNull()
     })
 
     /**
-     * **Ten pools read 1 … 10, top to bottom** — the bug `Pool.position` was added to
+     * **Ten groups read 1 … 10, top to bottom** — the bug `Group.position` was added to
      * kill, at the surface it was actually seen on.
      *
-     * Pool ids used to be minted client-side (`genId('p')`), so a ten-pool event held
+     * Group ids used to be minted client-side (`genId('p')`), so a ten-group event held
      * `p-1-…` … `p-10-…`; sorted as strings `p-10-` lands between `p-1-` and `p-2-` and
-     * the draw rendered **1, 10, 2, 3 …**. The fixture hands the panel its pools in that
-     * very order (`buildTenPools`), so the assertion reds for a panel that sorts by id
-     * AND for one that merely renders whatever order it was handed. A nine-pool event
+     * the draw rendered **1, 10, 2, 3 …**. The fixture hands the panel its groups in that
+     * very order (`buildTenReservations`), so the assertion reds for a panel that sorts by id
+     * AND for one that merely renders whatever order it was handed. A nine-group event
      * could not tell any of these apart — the two orders coincide below ten.
      */
-    it('renders ten pools 1 … 10 — by position, not by id', () => {
-      page.render({ event: buildTenPoolDrawnEvent() })
+    it('renders ten groups 1 … 10 — by position, not by id', () => {
+      page.render({ event: buildTenGroupDrawnEvent() })
 
-      expect(page.getPoolNames()).toEqual(TEN_POOLS_BY_POSITION)
+      expect(page.getGroupNames()).toEqual(TEN_GROUPS_BY_POSITION)
       // Said the other way round too, because "not this" is the actual regression: the
       // wrong answer is a specific, recognisable sequence, not just "some other order".
-      expect(page.getPoolNames()).not.toEqual(TEN_POOLS_BY_ID)
+      expect(page.getGroupNames()).not.toEqual(TEN_GROUPS_BY_ID)
     })
 
-    it('lists each pool’s entrants by name — the membership its fixtures imply', () => {
+    it('lists each group’s entrants by name — the membership its fixtures imply', () => {
       page.render({ event: DRAWN })
 
-      // The snake dealt 1/4/5 into Pool A and 2/3 into Pool B. Nothing on the wire says
+      // The snake dealt 1/4/5 into Group A and 2/3 into Group B. Nothing on the wire says
       // so: it is derived from the fixtures (ADR-0786).
-      expect(page.getPoolEntrants('Pool A')).toEqual([
+      expect(page.getGroupEntrants('Group A')).toEqual([
         'player.1',
         'player.4',
         'player.5',
       ])
-      expect(page.getPoolEntrants('Pool B')).toEqual(['player.2', 'player.3'])
+      expect(page.getGroupEntrants('Group B')).toEqual(['player.2', 'player.3'])
     })
 
-    it('renders every fixture as a named "A vs B" line, in round order, in its own pool', () => {
+    it('renders every fixture as a named "A vs B" line, in round order, in its own group', () => {
       page.render({ event: DRAWN })
 
       // NAMES, joined from the event's entrants by entry id — a panel that printed the
       // raw uuids would satisfy "some fixtures rendered" and be useless to a director.
-      expect(page.getPoolLines('p-a')).toEqual([
+      expect(page.getGroupLines(groupIdFor('res-a'))).toEqual([
         'player.1 vs player.4',
         'player.1 vs player.5',
         'player.4 vs player.5',
       ])
-      expect(page.getPoolLines('p-b')).toEqual(['player.2 vs player.3'])
+      expect(page.getGroupLines(groupIdFor('res-b'))).toEqual(['player.2 vs player.3'])
       // Grouped, not merely listed: each line sits inside the round it belongs to.
-      expect(page.getRoundLines(1, 'Pool A')).toEqual(['player.1 vs player.4'])
-      expect(page.getRoundLines(3, 'Pool A')).toEqual(['player.4 vs player.5'])
+      expect(page.getRoundLines(1, 'Group A')).toEqual(['player.1 vs player.4'])
+      expect(page.getRoundLines(3, 'Group A')).toEqual(['player.4 vs player.5'])
       expect(page.getRoundNames()).toEqual([
-        'Round 1 fixtures in Pool A',
-        'Round 2 fixtures in Pool A',
-        'Round 3 fixtures in Pool A',
-        'Round 1 fixtures in Pool B',
+        'Round 1 fixtures in Group A',
+        'Round 2 fixtures in Group A',
+        'Round 3 fixtures in Group A',
+        'Round 1 fixtures in Group B',
       ])
     })
 
-    // An ODD pool (three players) plays three rounds of ONE fixture — the third player
+    // An ODD group (three players) plays three rounds of ONE fixture — the third player
     // sits each round out. A bye is the ABSENCE of a fixture (ADR-0786), so there is no
     // bye row and no fixture with an empty side.
-    it('shows an odd pool’s bye as a missing fixture, not as a row', () => {
+    it('shows an odd group’s bye as a missing fixture, not as a row', () => {
       page.render({ event: DRAWN })
 
-      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      expect(page.getGroupLines(groupIdFor('res-a'))).toHaveLength(3)
       expect(page.getLineTexts().some((line) => /bye/i.test(line))).toBe(false)
     })
 
@@ -138,7 +139,7 @@ describe('DrawPanel', () => {
         fixtures: [
           buildFixture({
             id: 'fx-a-1',
-            poolId: 'p-a',
+            groupId: groupIdFor('res-a'),
             round: 1,
             position: 1,
             entryAId: 'entry-1',
@@ -149,19 +150,19 @@ describe('DrawPanel', () => {
 
       page.render({ event: withTbd })
 
-      expect(page.getPoolLines('p-a')).toEqual(['player.1 vs TBD'])
+      expect(page.getGroupLines(groupIdFor('res-a'))).toEqual(['player.1 vs TBD'])
     })
 
     // The rule that must not break, whatever the routing does: a fixture is never dropped.
-    // This event is a ROUND-ROBIN, so the fixture reaches the un-pooled group with no format
+    // This event is a ROUND-ROBIN, so the fixture reaches the ungrouped group with no format
     // view that can place it — it is shown as itself (`'orphaned'`), which is the claim the
     // next describe block discriminates.
-    it('keeps a fixture that belongs to no pool, rather than dropping it', () => {
+    it('keeps a fixture that belongs to no group, rather than dropping it', () => {
       const withKo = buildDrawnEvent({
         fixtures: [
           buildFixture({
             id: 'fx-ko-1',
-            poolId: null,
+            groupId: null,
             round: 1,
             position: 1,
             entryAId: 'entry-1',
@@ -178,26 +179,26 @@ describe('DrawPanel', () => {
   })
 
   /**
-   * **Which view the un-pooled fixtures get is their own STAGE's answer** (`shapeForStage`,
+   * **Which view the ungrouped fixtures get is their own STAGE's answer** (`shapeForStage`,
    * `../../data/draw`) — the bug this suite exists to hold shut.
    *
-   * Three draw types put fixtures in `unpooled`, and their payloads are indistinguishable
+   * Three draw types put fixtures in `ungrouped`, and their payloads are indistinguishable
    * there: single-elim's whole bracket, `rr-then-ko`'s knockout stage, and every fixture of
-   * a swiss draw all carry `pool_id: null`. The panel routed on that null, so swiss — a
-   * pool-less draw *type* that merely shares it — rendered through single-elimination's
+   * a swiss draw all carry `group_id: null`. The panel routed on that null, so swiss — a
+   * group-less draw *type* that merely shares it — rendered through single-elimination's
    * successor arithmetic, the one thing the ADR says swiss does not have.
    *
    * The type checker could never have caught it: the routing was a value check on a list's
    * length, not an exhaustive switch. It is one now, at both ends, and these are the tests
    * that say the switch sends each type somewhere different.
    */
-  describe('which view the un-pooled fixtures get', () => {
+  describe('which view the ungrouped fixtures get', () => {
     it('gives a SWISS draw the rounds view, and not the bracket', () => {
       page.render({ event: buildSwissDrawnEvent() })
 
       expect(page.querySwissRounds()).toBeInTheDocument()
       // The discriminating half: a swiss draw must not reach the bracket at all.
-      expect(page.queryUnpooled()).toBeNull()
+      expect(page.queryUngrouped()).toBeNull()
     })
 
     it('shows a swiss draw’s round 1 paired and its later rounds as forthcoming', () => {
@@ -221,13 +222,13 @@ describe('DrawPanel', () => {
       )
     })
 
-    // The regression pins. Both of these are un-pooled exactly as the swiss draw above is,
+    // The regression pins. Both of these are ungrouped exactly as the swiss draw above is,
     // and both must still be brackets — for `rr-then-ko` the null genuinely IS the stage
     // discriminator, and that meaning is what the swiss fix must not disturb.
     it('still gives a SINGLE-ELIM draw the bracket', () => {
       page.render({ event: buildBracketDrawnEvent() })
 
-      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.queryUngrouped()).toBeInTheDocument()
       expect(page.querySwissRounds()).toBeNull()
       expect(page.getLineTexts()).toEqual([
         'player.1 vs player.4',
@@ -237,7 +238,7 @@ describe('DrawPanel', () => {
     })
 
     /**
-     * A ROUND-ROBIN fixture naming a pool the event does not list. It cannot be dropped
+     * A ROUND-ROBIN fixture naming a group the event does not list. It cannot be dropped
      * (that rule is pinned above), and it cannot be a bracket either: `Bracket` names its
      * rounds backwards from the last round present, so this one fixture rendered inside a
      * section headed **"Bracket"** with its round labelled **"Final"** — a knockout this
@@ -248,13 +249,13 @@ describe('DrawPanel', () => {
      * bracket, and the words on screen are the neutral ones.
      */
     it('shows a ROUND-ROBIN’s unplaceable fixture as itself — not as a bracket final', () => {
-      const strayPool = buildDrawnEvent({
+      const strayGroup = buildDrawnEvent({
         fixtures: [
           buildFixture({
             id: 'fx-orphan-1',
-            // A pool id the event's `pools` does not list — the only way a round-robin
-            // fixture reaches the un-pooled group at all.
-            poolId: 'p-gone',
+            // A group id the event's `groups` does not list — the only way a round-robin
+            // fixture reaches the ungrouped group at all.
+            groupId: 'p-gone',
             round: 1,
             position: 1,
             entryAId: 'entry-1',
@@ -263,25 +264,25 @@ describe('DrawPanel', () => {
         ],
       })
 
-      page.render({ event: strayPool })
+      page.render({ event: strayGroup })
 
       expect(page.getOrphaned()).toBeInTheDocument()
       expect(page.getLineTexts()).toEqual(['player.1 vs player.4'])
       // Not routed through knockout arithmetic: no bracket block, and the round keeps its
       // own number instead of being read back from a final.
-      expect(page.queryUnpooled()).toBeNull()
+      expect(page.queryUngrouped()).toBeNull()
       expect(page.getRoundNames()).toEqual(['Round 1 fixtures in other fixtures'])
     })
 
-    it('still gives an RR-THEN-KO knockout stage the bracket, with its pools above it', () => {
+    it('still gives an RR-THEN-KO knockout stage the bracket, with its groups above it', () => {
       page.render({ event: buildTwoStageDrawnEvent() })
 
-      expect(page.queryUnpooled()).toBeInTheDocument()
+      expect(page.queryUngrouped()).toBeInTheDocument()
       expect(page.querySwissRounds()).toBeNull()
-      // The pool stage is untouched by the routing change — it never went through
-      // `unpooled` at all.
-      expect(page.getPoolLines('p-a')).toEqual(['player.1 vs player.3'])
-      expect(page.getPoolLines('p-b')).toEqual(['player.2 vs player.4'])
+      // The group stage is untouched by the routing change — it never went through
+      // `ungrouped` at all.
+      expect(page.getGroupLines(groupIdFor('res-a'))).toEqual(['player.1 vs player.3'])
+      expect(page.getGroupLines(groupIdFor('res-b'))).toEqual(['player.2 vs player.4'])
     })
   })
 
@@ -332,7 +333,7 @@ describe('DrawPanel', () => {
       page.render({ event: DRAWN, canEdit: false })
 
       // The draw itself is not owner-only — the players in it may read it…
-      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      expect(page.getGroupLines(groupIdFor('res-a'))).toHaveLength(3)
       // …and there is not one control anywhere in the panel.
       expect(page.getPanelControls('ev-u1200')).toHaveLength(0)
     })
@@ -515,7 +516,7 @@ describe('DrawPanel', () => {
 
       await waitFor(() => expect(page.confirm.queryDialog()).toBeNull())
       expect(calls).toBe(0)
-      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      expect(page.getGroupLines(groupIdFor('res-a'))).toHaveLength(3)
       // A cancel is not a failure: there is nothing to explain, so there is no notice.
       expect(page.queryNotice()).toBeNull()
     })
@@ -533,7 +534,7 @@ describe('DrawPanel', () => {
 
       await waitFor(() => expect(page.confirm.queryDialog()).toBeNull())
       expect(calls).toBe(0)
-      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      expect(page.getGroupLines(groupIdFor('res-a'))).toHaveLength(3)
     })
 
     // The exemption, pinned. The first cut is constructive and re-cuttable: one click
@@ -779,7 +780,7 @@ describe('DrawPanel', () => {
       expect(page.getPanelControls('ev-u1200')).toHaveLength(0)
       expect(page.queryFrozenNotice('ev-u1200')).toBeNull()
       // The draw itself is still theirs to read.
-      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      expect(page.getGroupLines(groupIdFor('res-a'))).toHaveLength(3)
     })
   })
 
@@ -812,7 +813,7 @@ describe('DrawPanel', () => {
       // contract — this is where it is pinned.
       expect(await page.findNotice()).toHaveAttribute('role', 'alert')
       // The standing draw is untouched — a refused cut destroys nothing.
-      expect(page.getPoolLines('p-a')).toHaveLength(3)
+      expect(page.getGroupLines(groupIdFor('res-a'))).toHaveLength(3)
     })
 
     it('explains the 409 play-guard on a delete, too', async () => {
@@ -846,8 +847,8 @@ describe('DrawPanel', () => {
           name: 'Championship Singles',
           drawType: 'single-elim',
           entrants: buildEntrants(1),
-          // Un-pooled — a bracket has no pools (ADR-0786).
-          pools: [],
+          // Ungrouped — a bracket has no groups (ADR-0786).
+          reservations: [],
         }),
       })
 
@@ -858,8 +859,8 @@ describe('DrawPanel', () => {
       expect(notice).toContain(detail)
     })
 
-    it('shows the 422 for an event with no pools configured', async () => {
-      const detail = 'A round-robin draw needs at least one pool.'
+    it('shows the 422 for an event with no groups configured', async () => {
+      const detail = 'A round-robin draw needs at least one group.'
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail }, { status: 422 }),
       )
@@ -868,7 +869,7 @@ describe('DrawPanel', () => {
           id: 'ev-rr',
           name: 'U1500 Singles',
           drawType: 'round-robin',
-          pools: [],
+          reservations: [],
         }),
       })
 
@@ -878,11 +879,11 @@ describe('DrawPanel', () => {
     })
 
     // The refusal whose NUMBERS are the whole message. No client-side string could carry
-    // "5 entrants across 3 pools", which is exactly why the server's sentence is shown
+    // "5 entrants across 3 groups", which is exactly why the server's sentence is shown
     // rather than a generic "this event can't be drawn".
-    it('shows the 422 for pools that would leave someone with nobody to play — numbers and all', async () => {
+    it('shows the 422 for groups that would leave someone with nobody to play — numbers and all', async () => {
       const detail =
-        '5 entrants across 3 pools would leave a pool with fewer than 2 entrants, ' +
+        '5 entrants across 3 groups would leave a group with fewer than 2 entrants, ' +
         'who would have nobody to play.'
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail }, { status: 422 }),
@@ -893,10 +894,10 @@ describe('DrawPanel', () => {
           name: 'U1500 Singles',
           drawType: 'round-robin',
           entrants: buildEntrants(5),
-          pools: [
-            buildPool({ id: 'p-1', name: 'Pool A', position: 0 }),
-            buildPool({ id: 'p-2', name: 'Pool B', position: 1 }),
-            buildPool({ id: 'p-3', name: 'Pool C', position: 2 }),
+          reservations: [
+            buildReservation({ id: 'p-1', name: 'Group A', position: 0 }),
+            buildReservation({ id: 'p-2', name: 'Group B', position: 1 }),
+            buildReservation({ id: 'p-3', name: 'Group C', position: 2 }),
           ],
         }),
       })
@@ -904,7 +905,7 @@ describe('DrawPanel', () => {
       await userEvent.click(await page.findGenerateButton('U1500 Singles'))
 
       const notice = await page.findNoticeText()
-      expect(notice).toContain('5 entrants across 3 pools')
+      expect(notice).toContain('5 entrants across 3 groups')
       expect(notice).toContain('nobody to play')
     })
 
@@ -926,7 +927,7 @@ describe('DrawPanel', () => {
         attempt += 1
         return attempt === 1
           ? HttpResponse.json(
-              { detail: 'A round-robin draw needs at least one pool.' },
+              { detail: 'A round-robin draw needs at least one group.' },
               { status: 422 },
             )
           : HttpResponse.json(cutResponse(), { status: 201 })
@@ -936,13 +937,13 @@ describe('DrawPanel', () => {
           id: 'ev-rr',
           name: 'U1500 Singles',
           drawType: 'round-robin',
-          pools: [],
+          reservations: [],
         }),
       })
 
       const generate = await page.findGenerateButton('U1500 Singles')
       await userEvent.click(generate)
-      expect(await page.findNoticeText()).toContain('at least one pool')
+      expect(await page.findNoticeText()).toContain('at least one group')
 
       await userEvent.click(generate)
 
@@ -975,7 +976,7 @@ describe('DrawPanel', () => {
       name: 'Championship Singles',
       drawType: 'single-elim',
       entrants: buildEntrants(4),
-      pools: [],
+      reservations: [],
     })
 
     /** Get the 422 onto the screen, and hand back the render handle so the test can move
@@ -994,7 +995,7 @@ describe('DrawPanel', () => {
       const { rerenderWith } = await refusedCut()
 
       rerenderWith({
-        event: { ...BRACKET, drawType: 'round-robin', pools: [buildPool({ id: 'p-a' })] },
+        event: { ...BRACKET, drawType: 'round-robin', reservations: [buildReservation({ id: 'p-a' })] },
       })
 
       expect(page.queryNotice()).toBeNull()
@@ -1002,7 +1003,7 @@ describe('DrawPanel', () => {
 
     it('clears once somebody enters, for a refusal about the entrant count', async () => {
       const detail =
-        '5 entrants across 3 pools would leave a pool with fewer than 2 entrants.'
+        '5 entrants across 3 groups would leave a group with fewer than 2 entrants.'
       mockEventCutDrawEndpoint(server, () =>
         HttpResponse.json({ detail }, { status: 422 }),
       )
@@ -1011,7 +1012,7 @@ describe('DrawPanel', () => {
         name: 'U1500 Singles',
         drawType: 'round-robin',
         entrants: buildEntrants(5),
-        pools: [buildPool({ id: 'p-a' })],
+        reservations: [buildReservation({ id: 'p-a' })],
       })
       const { rerenderWith } = page.render({ event: short })
       await userEvent.click(await page.findGenerateButton('U1500 Singles'))
@@ -1030,7 +1031,7 @@ describe('DrawPanel', () => {
      * The discriminating half. A blunt "clear whenever the event object changed" passes
      * both tests above, and then throws away the sentence a director is mid-way through
      * acting on the next time anything at all ticks. Here the event genuinely changes —
-     * renamed, re-priced, a pool renamed — in ways no draw refusal asserts over.
+     * renamed, re-priced, a group renamed — in ways no draw refusal asserts over.
      */
     it('keeps the refusal through a change it says nothing about', async () => {
       const { rerenderWith } = await refusedCut()
@@ -1062,13 +1063,13 @@ describe('DrawPanel', () => {
    * The sentence was written for #786's round-robin and hard-coded, so it rendered on
    * every event whatever its type — unreachable on a bracket until single-elimination
    * became cuttable through the UI, and then plainly wrong: a director of a bracket event
-   * was told to deal its entrants "into its pools".
+   * was told to deal its entrants "into its groups".
    */
   describe('the empty state names what THIS draw type would cut', () => {
     /**
      * The **wiring**, per draw type — that the panel asks `undrawnLead` and renders its
      * answer. What each sentence actually says is `undrawnLead`'s own claim, asserted
-     * once, in `data/draw.test.ts` ("does not promise pools to a bracket", and the rest).
+     * once, in `data/draw.test.ts` ("does not promise groups to a bracket", and the rest).
      *
      * Deliberately not re-typed here. A copy pinned in two files is the shape that has
      * already cost this repo a day: a chore verifies against one file, goes green, and

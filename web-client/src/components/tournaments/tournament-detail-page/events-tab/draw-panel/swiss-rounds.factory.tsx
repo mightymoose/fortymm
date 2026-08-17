@@ -26,19 +26,19 @@ export function buildSwissRoundsPropsFor(
       `Fixture event '${event.id}' has no draw cut, so it has no rounds to render.`,
     )
   }
-  return { rounds: state.unpooled, byes: state.swissByes }
+  return { rounds: state.ungrouped, byes: state.swissByes }
 }
 
 /** Just the rounds of an event's draw — the same output, for the assertions that only
  * read the fixtures. */
-function unpooledRoundsOf(event: TournamentEvent): DrawRound[] {
+function ungroupedRoundsOf(event: TournamentEvent): DrawRound[] {
   return buildSwissRoundsPropsFor(event).rounds
 }
 
 /** A **freshly cut** swiss draw: round 1 paired from the draw order, rounds 2 and 3 written
  * with both sides null. The state a director reviews the moment they cut. */
 export function buildCutSwissRounds(): DrawRound[] {
-  return unpooledRoundsOf(buildSwissDrawnEvent())
+  return ungroupedRoundsOf(buildSwissDrawnEvent())
 }
 
 /**
@@ -50,7 +50,7 @@ export function buildCutSwissRounds(): DrawRound[] {
  * round *number* passes on that fixture alone. Here they disagree.
  */
 export function buildMidSwissRounds(): DrawRound[] {
-  return unpooledRoundsOf(buildSwissMidEvent())
+  return ungroupedRoundsOf(buildSwissMidEvent())
 }
 
 /** Props for `SwissRounds` — the freshly-cut three-round draw by default, which is the

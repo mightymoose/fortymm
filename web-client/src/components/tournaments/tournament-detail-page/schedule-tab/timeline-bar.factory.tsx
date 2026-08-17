@@ -2,7 +2,7 @@ import type { TimelineBarData, TimelinePlayerBarData } from '../../data/timeline
 import type { TimelineBarProps } from './timeline-bar'
 
 /** One placed, **unpinned** Bo5 fixture — `player.1 vs player.4`, U1200 Singles
- * Pool A, on `T1` at `9:00 AM CDT` for 35 estimated minutes: the ordinary
+ * Group A, on `T1` at `9:00 AM CDT` for 35 estimated minutes: the ordinary
  * `estimate` tier every solve produces. Its clocks are the server-rendered
  * venue-local labels (`startClock`/`endClock`) with a `tz` abbrev — never a
  * client-sliced datetime (ADR "a schedule surface always labels the timezone").
@@ -16,7 +16,7 @@ export function buildTimelineBarData(
   return {
     fixtureId: 'fx-a-1',
     eventName: 'U1200 Singles',
-    poolName: 'Pool A',
+    groupLabel: 'Group A',
     label: 'player.1 vs player.4',
     a: 'player.1',
     b: 'player.4',

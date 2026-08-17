@@ -18,15 +18,15 @@ describe('TournamentPathList', () => {
     expect(tournamentPathListPage.getHeading('Your path')).toBeInTheDocument()
   })
 
-  it('names the pool and its size beneath the heading', () => {
-    tournamentPathListPage.render({ subheading: 'Pool B · 6 players' })
+  it('names the group and its size beneath the heading', () => {
+    tournamentPathListPage.render({ subheading: 'Group B · 6 players' })
 
     expect(tournamentPathListPage.queryList()).toHaveTextContent(
-      'Pool B · 6 players',
+      'Group B · 6 players',
     )
   })
 
-  it('omits the subheading line for an un-pooled draw', () => {
+  it('omits the subheading line for an ungrouped draw', () => {
     tournamentPathListPage.render({ subheading: null })
 
     expect(tournamentPathListPage.queryList()).not.toHaveTextContent('players')

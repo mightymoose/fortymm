@@ -15,12 +15,13 @@ import { SettingRow } from './draw-structure-section/setting-row'
 export interface DrawStructureSectionProps {
   /**
    * The event as the editor's **live draft** has it, so the tab recomputes as the
-   * director edits the player limit or adds a pool on the tabs next door.
+   * director edits the player limit or adds a reservation on the tabs next door.
    *
-   * ⚠️ Only two fields are read — `maxPlayers` and `pools.length` — and the second is
-   * read as a *count* deliberately. The editor's draft carries the form's `pools`, which
-   * are `PoolEntry` diffs rather than the read model's `Pool` rows (ADR 20260801); the
-   * length is the same either way, and nothing else here may touch a pool's insides.
+   * ⚠️ Only two fields are read — `maxPlayers` and `reservations.length` — and the
+   * second is read as a *count* deliberately. The editor's draft carries the form's
+   * `reservations`, which are `ReservationEntry` diffs rather than the read model's
+   * `Reservation` rows (ADR 20260801); the length is the same either way, and nothing
+   * else here may touch a reservation's insides.
    */
   event: TournamentEvent
   /**
@@ -42,9 +43,9 @@ export interface DrawStructureSectionProps {
  *
  * A director controls one and a half of these four settings today, and nothing on any
  * tab states the other two (ADR 20260808). #1320 records a real director who set one
- * pool and one qualifier per pool, sent one player to the bracket, and was refused with
- * a message that named the wrong cause. This tab states every number and says where it
- * came from, so the shape of the draw is readable before it is cut.
+ * group and one qualifier per group, sent one player to the bracket, and was refused
+ * with a message that named the wrong cause. This tab states every number and says
+ * where it came from, so the shape of the draw is readable before it is cut.
  *
  * ## What this chore renders, and what it does not
  *
@@ -59,8 +60,8 @@ export interface DrawStructureSectionProps {
  * impossible *notices*, which explain those states and offer fixes, land under the
  * settings in this left column as one `DrawIssuePanel`. **Only the uneven one is built**:
  * `Can’t save` is chore 4c and `Needs your call` is chore 5a, and both come with `Apply`
- * fixes. The Pool size row carries its own uneven copy either way (`{min}–{max} players ·
- * uneven`), because that is row copy and not a panel.
+ * fixes. The Group size row carries its own uneven copy either way (`{min}–{max}
+ * players · uneven`), because that is row copy and not a panel.
  *
  * ## The arithmetic is not here
  *
@@ -80,30 +81,31 @@ export const DrawStructureSection = ({
   const previewBasis = previewBasisLabel(event.maxPlayers)
   const structure = deriveDrawStructure({
     previewFieldSize: fieldSize,
-    // One pool reservation is one pool — today's behaviour, and the automatic source of
-    // the pool count (ADR 20260808).
-    poolReservationCount: event.pools.length,
+    // One reservation is one group — today's behaviour, and the automatic source of the
+    // group count (ADR 20260808; a group is minted 1:1 with a reservation, ticket
+    // #1369).
+    reservationCount: event.reservations.length,
     // All four settings are the system's this chore: nothing writes an ownership mode
     // yet, so there is no manual number for any of them to hold.
-    poolCountMode: 'automatic',
-    manualPoolCount: null,
-    poolSizeMode: 'automatic',
-    manualPoolSize: null,
+    groupCountMode: 'automatic',
+    manualGroupCount: null,
+    groupSizeMode: 'automatic',
+    manualGroupSize: null,
     qualifiersMode: 'automatic',
     manualQualifiers: null,
   })
 
-  // Read off the derived sizes rather than divided out again — the pools are routinely
+  // Read off the derived sizes rather than divided out again — the groups are routinely
   // unequal (22 across 4 is `6, 6, 5, 5`) and the uneven case is a first-class state.
-  const smallestPool = Math.min(...structure.poolSizes)
-  const largestPool = Math.max(...structure.poolSizes)
-  const uneven = smallestPool !== largestPool
+  const smallestGroup = Math.min(...structure.groupSizes)
+  const largestGroup = Math.max(...structure.groupSizes)
+  const uneven = smallestGroup !== largestGroup
 
   // The ONE notice the tab shows, chosen in the reference's order — impossible, then
   // disagreement, then uneven. The derivation reports all three independently and more
   // than one can hold at once (8 players across 6 reservations is an uneven split whose
-  // last four pools have one player each), so the choice is `drawIssueFor`'s and this tab
-  // never re-derives it.
+  // last four groups have one player each), so the choice is `drawIssueFor`'s and this
+  // tab never re-derives it.
   const issue = drawIssueFor(structure)
 
   return (
@@ -129,7 +131,7 @@ export const DrawStructureSection = ({
             Set what matters. We’ll work out the rest.
           </h3>
           <p className="mt-1.5 text-[13px] text-[color:var(--fg-3)]">
-            Pools play all-play-all. The top finishers move into a knockout
+            Groups play all-play-all. The top finishers move into a knockout
             bracket.
           </p>
 
@@ -174,25 +176,25 @@ export const DrawStructureSection = ({
               draw rather than as four unrelated panels. */}
           <div className="mt-5 divide-y divide-[color:var(--border-subtle)] border-t border-[color:var(--border-subtle)]">
             <SettingRow
-              name="Pool count"
-              hint="How many pools the field splits into. Each pool also books its tables and time window."
-              value={String(structure.poolCount)}
+              name="Group count"
+              hint="How many groups the field splits into. Each group's reservation also books its tables and time window."
+              value={String(structure.groupCount)}
               kind="number"
-              unit={structure.poolCount === 1 ? 'pool' : 'pools'}
-              ownership={structure.sources.poolCount.ownership}
-              source={structure.sources.poolCount.sentence}
+              unit={structure.groupCount === 1 ? 'group' : 'groups'}
+              ownership={structure.sources.groupCount.ownership}
+              source={structure.sources.groupCount.sentence}
             />
             {/* The uneven split is this row's own copy, not the 2d notice: `{min}–{max}`
                 with the unit saying so out loud. An en dash, and a middle dot before
                 `uneven` — both the reference's glyphs. */}
             <SettingRow
-              name="Pool size"
-              hint="The target number of players in each pool."
-              value={uneven ? `${smallestPool}–${largestPool}` : String(smallestPool)}
+              name="Group size"
+              hint="The target number of players in each group."
+              value={uneven ? `${smallestGroup}–${largestGroup}` : String(smallestGroup)}
               kind="number"
-              unit={uneven ? 'players · uneven' : 'players per pool'}
-              ownership={structure.sources.poolSize.ownership}
-              source={structure.sources.poolSize.sentence}
+              unit={uneven ? 'players · uneven' : 'players per group'}
+              ownership={structure.sources.groupSize.ownership}
+              source={structure.sources.groupSize.sentence}
             />
             {/* Membership has no number, so `deriveDrawStructure` says nothing about it
                 (its `DrawStructureSources` omits it by design). The row reads its mode
@@ -200,7 +202,7 @@ export const DrawStructureSection = ({
                 what `_snake()` in `api/app/draws.py` already does on every cut. */}
             <SettingRow
               name="Membership"
-              hint="Who lands in each pool. Entrants do not exist until you cut the draw."
+              hint="Who lands in each group. Entrants do not exist until you cut the draw."
               value="Snake automatically"
               kind="phrase"
               ownership="automatic"
@@ -210,11 +212,11 @@ export const DrawStructureSection = ({
                 until then the director sees the stored K on Basics and the DERIVED one
                 here, and the two can disagree. That is deliberate and temporary. */}
             <SettingRow
-              name="Qualifiers per pool"
-              hint="How many finishers from each pool reach the knockout."
-              value={String(structure.qualifiersPerPool)}
+              name="Qualifiers per group"
+              hint="How many finishers from each group reach the knockout."
+              value={String(structure.qualifiersPerGroup)}
               kind="number"
-              unit="through from each pool"
+              unit="through from each group"
               ownership={structure.sources.qualifiers.ownership}
               source={structure.sources.qualifiers.sentence}
             />
@@ -237,12 +239,12 @@ export const DrawStructureSection = ({
           <DrawPreview
             structure={structure}
             fieldSize={fieldSize}
-            // ⚠️ The event's real pool ROWS, not `max(rows, derived)` as the reference
-            // shows (ADR 20260808-an-events-pool-count-is-its-pool-rows-and-a-derived-
-            // count-is-a-projection). Nothing sets a manual pool count this chore, so
-            // the two are equal today; taking the max would hide the gap the moment
-            // chore 3c lets a director type one.
-            poolReservationCount={event.pools.length}
+            // ⚠️ The event's real reservation ROWS, not `max(rows, derived)` as the
+            // reference shows (ADR 20260808, the group-count-is-group-rows-and-a-
+            // derived-count-is-a-projection). Nothing sets a manual group count this
+            // chore, so the two are equal today; taking the max would hide the gap the
+            // moment chore 3c lets a director type one.
+            reservationCount={event.reservations.length}
             previewBasis={previewBasis}
           />
         </div>

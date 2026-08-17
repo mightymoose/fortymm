@@ -43,7 +43,7 @@ from app.models import (
     TournamentEntry,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventStageGroup,
+    TournamentEventReservation,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -54,7 +54,7 @@ from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
-    event_pools,
+    event_groups,
     grant_permissions,
     make_user,
     opponent_session,
@@ -84,7 +84,7 @@ async def _make_tournament(
     tables: tuple[str, ...] = ("t1", "t2"),
 ) -> tuple[uuid.UUID, TournamentEvent]:
     """A published tournament owned by ``owner`` (the authed client's user, so
-    the transitions route accepts them) with a table catalogue and one pooled
+    the transitions route accepts them) with a table catalogue and one grouped
     unrated round-robin event — unrated so a completion needs only the one
     proposing participant, no acceptance verb. Entrants and the cut are the
     test's business: which humans enter decides which *clients* can finish the
@@ -124,10 +124,10 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                 "table_ids": [str(row.id) for row in catalogue],
             }
@@ -148,7 +148,7 @@ async def _enter_and_cut(
     for user in users:
         db.add(TournamentEntry(event_id=event.id, user_id=user.id))
     await db.flush()
-    # ``TournamentEvent.pools`` is a VIEWONLY association through the event's stage now
+    # ``TournamentEvent.groups`` is a VIEWONLY association through the event's stage now
     # (ADR 20260815) — populated on QUERY, not on construction. ``cut_draw`` below
     # reads ``event.groups`` synchronously, so this needs an explicit refresh first.
     await db.refresh(event, attribute_names=["groups"])
@@ -418,7 +418,7 @@ async def test_burst_completions_coalesce_onto_one_queued_solve(
             .all()
         }
         fixtures = await _fixtures_of(db_session, event.id)
-        assert len(fixtures) == 3, "a three-player pool is three fixtures"
+        assert len(fixtures) == 3, "a three-player group is three fixtures"
 
         def proposer_for(fixture: TournamentFixture) -> AsyncClient:
             assert fixture.entry_a_id is not None
@@ -502,7 +502,7 @@ def _catalogue(*labels: str, keeping: Sequence[str] = ()) -> list[dict[str, str]
 
 
 async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[str]:
-    """The tournament's venue-table ids, in catalogue order — what a pool's
+    """The tournament's venue-table ids, in catalogue order — what a reservation's
     ``table_ids`` must name now that they are server-minted UUIDs."""
     return [
         str(table_id)
@@ -518,31 +518,32 @@ async def _catalogue_ids(db: AsyncSession, tournament_id: uuid.UUID) -> list[str
     ]
 
 
-async def _pool_id(db: AsyncSession, event_id: uuid.UUID) -> str:
-    """The id of the event's one pool — server-minted (ADR 20260801), so a payload that
-    means to KEEP that pool has to look it up and cite it."""
+async def _reservation_id(db: AsyncSession, event_id: uuid.UUID) -> str:
+    """The id of the event's one **reservation** — server-minted (ADR 20260801), so a
+    payload that means to KEEP that reservation has to look it up and cite it. The wire
+    diffs on the reservation's own id (``TournamentEventReservation.id``), not the
+    group's — a reservation is 1:1 with its group for a freshly-cut event, so this is
+    unambiguous here."""
     return str(
         (
             await db.execute(
-                select(TournamentEventStageGroup.id).where(
-                    TournamentEventStageGroup.stage_id.in_(
-                        stage_ids_for_events([event_id])
-                    )
+                select(TournamentEventReservation.id).where(
+                    TournamentEventReservation.event_id == event_id
                 )
             )
         ).scalar_one()
     )
 
 
-def _pools_payload(
-    *, pool_id: str, end: str, table_ids: Sequence[str]
+def _reservations_payload(
+    *, reservation_id: str, end: str, table_ids: Sequence[str]
 ) -> list[dict[str, Any]]:
-    """The event's one pool, re-sent **citing its id** (the pool-set freeze demands it)
-    with whatever window/tables the test is moving."""
+    """The event's one reservation, re-sent **citing its id** (the group-set freeze
+    demands it) with whatever window/tables the test is moving."""
     return [
         {
-            "id": pool_id,
-            "name": "Pool A",
+            "id": reservation_id,
+            "name": "Reservation A",
             "slot": {"date": DATE, "start": "09:00", "end": end},
             "table_ids": list(table_ids),
         }
@@ -635,12 +636,13 @@ async def test_a_table_catalogue_edit_with_no_drawn_event_requests_no_settings_s
     assert await _solve_rows(db_session, tournament_id) == []
 
 
-async def test_a_pool_window_edit_requests_a_settings_solve(
+async def test_a_reservation_window_edit_requests_a_settings_solve(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """Moving a pool's slot window (same pool id, so the pool-set freeze allows
-    it) changes where fixtures may be placed — one ``settings_changed`` row."""
+    """Moving a reservation's slot window (same reservation id, so the group-set
+    freeze allows it) changes where fixtures may be placed — one ``settings_changed``
+    row."""
     client, owner = authed_client
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"win-{i}") for i in range(3)]
@@ -650,8 +652,8 @@ async def test_a_pool_window_edit_requests_a_settings_solve(
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event.id}",
         json={
-            "pools": _pools_payload(
-                pool_id=await _pool_id(db_session, event.id),
+            "reservations": _reservations_payload(
+                reservation_id=await _reservation_id(db_session, event.id),
                 end="18:00",
                 table_ids=table_ids,
             )
@@ -667,7 +669,7 @@ async def test_a_name_only_event_patch_requests_no_settings_solve(
     db_session: AsyncSession,
 ) -> None:
     """An event rename reads as display everywhere the solver looks; so does
-    re-sending the pools exactly as the event holds them. No rows."""
+    re-sending the reservations exactly as the event holds them. No rows."""
     client, owner = authed_client
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"nm-{i}") for i in range(3)]
@@ -681,8 +683,8 @@ async def test_a_name_only_event_patch_requests_no_settings_solve(
     resent = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event.id}",
         json={
-            "pools": _pools_payload(
-                pool_id=await _pool_id(db_session, event.id),
+            "reservations": _reservations_payload(
+                reservation_id=await _reservation_id(db_session, event.id),
                 end="17:00",
                 table_ids=table_ids,
             )
@@ -853,8 +855,8 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
     windows for the survivor — that IS a solver-input change: one row."""
     client, owner = authed_client
     tournament_id, event = await _make_tournament(db_session, owner)
-    # The tournament itself, not just its id: the second event's pool reserves the same
-    # two tables, and a reservation is a row keyed on the catalogue it names.
+    # The tournament itself, not just its id: the second event's reservation reserves
+    # the same two tables, and a reservation is a row keyed on the catalogue it names.
     tournament = await db_session.get(Tournament, tournament_id)
     assert tournament is not None
     second_stages = mint_stages(DrawType.round_robin)
@@ -870,10 +872,10 @@ async def test_uncutting_one_of_two_drawn_events_requests_a_settings_solve(
         match_settings={"rated": False, "length_games": 3},
         stages=second_stages,
     )
-    second_stages[0].groups = event_pools(
+    second_stages[0].groups = event_groups(
         [
             {
-                "name": "Pool B",
+                "name": "Reservation B",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                 "table_ids": ["t1", "t2"],
             }

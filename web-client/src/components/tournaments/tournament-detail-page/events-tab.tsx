@@ -93,7 +93,7 @@ export const EventsTab = ({
               // tournament, not just its id, because whether registration is open
               // at all is a property of the tournament's STATUS (ADR-0017).
               action={<EnterEventControl tournament={tournament} event={ev} />}
-              // The event's draw (ADR-0786): its pools and fixtures for everyone, its
+              // The event's draw (ADR-0786): its groups and fixtures for everyone, its
               // three verbs for the director alone. It hangs off the EVENT, not off a
               // tab of its own — a draw belongs to one event, and a "Draw" tab would
               // have to ask which one it meant. `canEdit` is the tournament's, the same

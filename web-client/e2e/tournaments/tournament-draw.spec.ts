@@ -3,7 +3,7 @@
  * it away — and the three refusals that guard it.
  *
  * A draw is the set of **fixtures** an event's draw type prescribes. A fixture is a
- * *planned pairing* (round + position, plus a pool when the draw is pooled) and it is
+ * *planned pairing* (round + position, plus a group when the draw is grouped) and it is
  * NOT a match. A draw is **current** when its fixtures seat exactly the event's active
  * entrants; an entry *or a withdrawal* after the cut makes it **stale**, and go-live
  * refuses a stale one.
@@ -12,7 +12,7 @@
  *
  *   1. **The scaffold renders as a draw, not as data.** `drawState` is unit-tested to
  *      death, but nothing below the browser had ever *cut* a draw and then read the
- *      result off the page: the pools, their membership (which nothing stores — it is
+ *      result off the page: the groups, their membership (which nothing stores — it is
  *      derived from the fixtures), the rounds, and the **named** "A vs B" lines. The
  *      names are the point: a fixture carries entry *ids*, and the usernames are joined
  *      on at render.
@@ -31,8 +31,8 @@
  *      has to change.
  *
  *   4. **The editor's freeze is real, and is not a wholesale grey-out.** With a draw
- *      standing, the pool *set* and the draw *type* are refused (with the reason, and the
- *      way out) — while a pool's tables stay editable, which is the case the freeze
+ *      standing, the group *set* and the draw *type* are refused (with the reason, and the
+ *      way out) — while a reservation's tables stay editable, which is the case the freeze
  *      exists to permit. A section that greyed itself out entirely would pass a test that
  *      only checked Add and Remove.
  *
@@ -59,13 +59,13 @@ const SAY = {
   /** The title over a refused *cut*; the sentence beneath it is the server's. */
   cannotDraw: "This event can't be drawn yet",
   /** …and the server's sentence, verbatim, for the refusal this suite drives: a
-   * round-robin with no pools has nowhere to deal its field.
+   * round-robin with no groups has nowhere to deal its field.
    *
    * Deliberately NOT "A <type> draw cannot be cut yet" — every member of `DrawType` now
    * has a strategy behind it (ADR 20260726), so a stub that answered with that sentence
    * would be putting words in the server's mouth that it can no longer say. This one it
    * emits for real, and permanently. */
-  noPools: 'A round-robin draw needs at least one pool.',
+  noGroups: 'A round-robin draw needs at least one group.',
   /** The bracket's twin of the sentence above: a single-elimination event whose field is
    * one player. Also permanent, and also about the event's *configuration* rather than
    * about its type — which, since the enum shrank, is the only kind of 422 a cut has
@@ -92,30 +92,31 @@ const SAY = {
   /** The instruction that closes the `uncut`/`stale` body — and the anchor the body
    * ORDER is asserted against, since it must trail only the names a cut can fix. */
   cutTheDraw: 'cut the draw for each event named',
-  /** The freeze reasons, one per frozen control. */
-  poolsFrozen: 'a pool can’t be added or removed while the draw stands',
+  /** The freeze reasons, one per frozen control — the CLIENT's own copy
+   * (`groupSetFreeze`, `data/draw.ts`), not the server's 409 sentence. */
+  groupsFrozen: 'a reservation can’t be added or removed while the draw stands',
   drawTypeFrozen: 'its draw type is frozen',
   wayOut: 'Delete the draw',
 } as const
 
 /**
- * The draw the stub's planner deals for `EVENT.POOLS` — five entrants, two pools — and
- * the reason the spec asserts *these* names in *these* pools rather than "some fixtures
+ * The draw the stub's planner deals for `EVENT.GROUPS` — five entrants, two groups — and
+ * the reason the spec asserts *these* names in *these* groups rather than "some fixtures
  * appeared".
  *
- * The snake deals row by row across the pools, reversing every other row, so Pool A gets
- * players 1, 4 and 5 while Pool B gets 2 and 3. A **block** deal (the obvious wrong one)
- * would put 1, 2, 3 in Pool A — so this assertion is what tells a real draw from a
- * plausible-looking one.
+ * The snake deals row by row across the groups, reversing every other row, so Group A
+ * gets players 1, 4 and 5 while Group B gets 2 and 3. A **block** deal (the obvious
+ * wrong one) would put 1, 2, 3 in Group A — so this assertion is what tells a real draw
+ * from a plausible-looking one.
  *
- * Pool A is ODD (three players), which is the whole reason the field is five: each of its
- * rounds holds **one** fixture, not two, because the player drawn against the phantom
- * seat sits that round out. That absence is the *entire* representation of a bye
+ * Group A is ODD (three players), which is the whole reason the field is five: each of
+ * its rounds holds **one** fixture, not two, because the player drawn against the
+ * phantom seat sits that round out. That absence is the *entire* representation of a bye
  * (ADR-0786), and a scaffold that invented a "bye" row would have to be caught here or
  * nowhere.
  */
-const POOL_A = {
-  name: 'Pool A',
+const GROUP_A = {
+  name: 'Group A',
   entrants: ['player.1', 'player.4', 'player.5'],
   rounds: [
     { round: 1, fixtures: ['player.4 vs player.5'] },
@@ -124,23 +125,23 @@ const POOL_A = {
   ],
 } as const
 
-const POOL_B = {
-  name: 'Pool B',
+const GROUP_B = {
+  name: 'Group B',
   entrants: ['player.2', 'player.3'],
   rounds: [{ round: 1, fixtures: ['player.2 vs player.3'] }],
 } as const
 
-/** Every fixture the two pools hold together: C(3,2) + C(2,2) = 3 + 1. */
+/** Every fixture the two groups hold together: C(3,2) + C(2,2) = 3 + 1. */
 const FIXTURE_COUNT = 4
 
 test.describe('Tournaments · cutting the draw', () => {
-  test('the owner generates a draw, sees the pools, re-cuts it, and throws it away', async ({
+  test('the owner generates a draw, sees the groups, re-cuts it, and throws it away', async ({
     page,
   }) => {
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
       drawable: true,
     })
-    const event = EVENT.POOLS
+    const event = EVENT.GROUPS
 
     // --- undrawn: a designed data state, not a gap ----------------------------
     await expect(pom.drawEmpty(event)).toContainText(SAY.noDraw)
@@ -151,16 +152,16 @@ test.describe('Tournaments · cutting the draw', () => {
     // --- cut it --------------------------------------------------------------
     await pom.generateDrawButton(event).click()
 
-    // The scaffold: pools, their membership, and their fixtures round by round — with
+    // The scaffold: groups, their membership, and their fixtures round by round — with
     // NAMES on them. A fixture carries entry ids; the usernames are joined on at render,
     // and a line that read `entry-crowd-4 vs entry-crowd-5` would be a draw no director
     // could use.
-    for (const pool of [POOL_A, POOL_B]) {
-      await expect(pom.poolEntrants(event, pool.name)).toHaveText([
-        ...pool.entrants,
+    for (const group of [GROUP_A, GROUP_B]) {
+      await expect(pom.groupEntrants(event, group.name)).toHaveText([
+        ...group.entrants,
       ])
-      for (const { round, fixtures } of pool.rounds) {
-        await expect(pom.roundFixtures(event, pool.name, round)).toHaveText([
+      for (const { round, fixtures } of group.rounds) {
+        await expect(pom.roundFixtures(event, group.name, round)).toHaveText([
           ...fixtures,
         ])
       }
@@ -170,7 +171,7 @@ test.describe('Tournaments · cutting the draw', () => {
     await expect(pom.generateDrawButton(event)).toHaveCount(0)
     await expect(pom.recutDrawButton(event)).toBeVisible()
 
-    // A bye is the ABSENCE of a fixture (ADR-0786): Pool A's rounds hold one fixture
+    // A bye is the ABSENCE of a fixture (ADR-0786): Group A's rounds hold one fixture
     // each, not two, and nothing anywhere says the word. A scaffold that emitted a row
     // for the phantom seat would pass every assertion above and fail this one.
     await expect(pom.fixtureLines(event)).toHaveCount(FIXTURE_COUNT)
@@ -198,14 +199,14 @@ test.describe('Tournaments · cutting the draw', () => {
     await pom.irreversibleActConfirmButton.click()
 
     // The re-cut is a real re-deal, not a no-op that left the old fixtures standing: the
-    // sixth entrant lands in Pool B (the snake's next seat), and Pool B — a pool of two,
-    // with a single round — now has three players and three rounds of its own.
-    await expect(pom.poolEntrants(event, POOL_B.name)).toHaveText([
+    // sixth entrant lands in Group B (the snake's next seat), and Group B — a group of
+    // two, with a single round — now has three players and three rounds of its own.
+    await expect(pom.groupEntrants(event, GROUP_B.name)).toHaveText([
       'player.2',
       'player.3',
       ME.username,
     ])
-    await expect(pom.roundFixtures(event, POOL_B.name, 3)).toHaveCount(1)
+    await expect(pom.roundFixtures(event, GROUP_B.name, 3)).toHaveCount(1)
     expect(store.fixturesOf(event)).toHaveLength(6) // C(3,2) + C(3,2)
 
     // --- throw it away -------------------------------------------------------
@@ -213,7 +214,7 @@ test.describe('Tournaments · cutting the draw', () => {
     await pom.deleteDrawButton(event).click()
     await pom.irreversibleActConfirmButton.click()
 
-    // Back to the designed empty state — and the event, its entrants and its pools are
+    // Back to the designed empty state — and the event, its entrants and its groups are
     // all still there. Un-cutting removes the draw, not the event.
     await expect(pom.drawEmpty(event)).toContainText(SAY.noDraw)
     await expect(pom.generateDrawButton(event)).toBeVisible()
@@ -227,12 +228,13 @@ test.describe('Tournaments · cutting the draw', () => {
     await expect(pom.toasts).toHaveCount(0)
   })
 
-  test('a round-robin with NO POOLS is REFUSED (422), in the panel, in the server’s words', async ({
+  test('a round-robin with NO GROUPS is REFUSED (422), in the panel, in the server’s words', async ({
     page,
   }) => {
-    // The default seed's U1500 Singles is a round-robin with NO POOLS, so there is
-    // nowhere to deal the field: the refusal lands before the entrants are even looked
-    // at, and the sentence is the *answer* — it names what to change.
+    // The default seed's U1500 Singles is a round-robin with NO RESERVATIONS (and so no
+    // groups), so there is nowhere to deal the field: the refusal lands before the
+    // entrants are even looked at, and the sentence is the *answer* — it names what to
+    // change.
     //
     // This spec used to drive Open Singles and was titled for a draw type nothing could
     // plan. That refusal no longer exists: `DrawType` holds only the types the server has
@@ -248,7 +250,7 @@ test.describe('Tournaments · cutting the draw', () => {
 
     await expect(pom.drawNotice(event)).toBeVisible()
     await expect(pom.drawNotice(event)).toContainText(SAY.cannotDraw)
-    await expect(pom.drawNotice(event)).toContainText(SAY.noPools)
+    await expect(pom.drawNotice(event)).toContainText(SAY.noGroups)
     // Told once, not twice: the panel's mutations carry no global toast, because this
     // notice is their error surface (`web-client/CLAUDE.md`, ## Forms).
     await expect(pom.toasts).toHaveCount(0)
@@ -312,15 +314,16 @@ test.describe('Tournaments · cutting the draw', () => {
     // played is a real pairing with one half still being decided. It is NOT a bye, and
     // the count above is what keeps the two apart.
 
-    // A bracket is UN-POOLED — the event has no pools and would ignore them if it had —
-    // so the pooled renderer must not appear at all. The two are different components,
-    // and "the bracket rendered" and "no pool card rendered" are two claims.
-    await expect(pom.poolDraw(event, 'Pool A')).toHaveCount(0)
+    // A bracket is UNGROUPED — the event has no groups and would ignore them if it
+    // had — so the grouped renderer must not appear at all. The two are different
+    // components, and "the bracket rendered" and "no group card rendered" are two
+    // claims.
+    await expect(pom.groupDraw(event, 'Group A')).toHaveCount(0)
 
-    // The SERVER cut it, and every fixture it dealt belongs to no pool.
+    // The SERVER cut it, and every fixture it dealt belongs to no group.
     const fixtures = store.fixturesOf(event)
     expect(fixtures).toHaveLength(4)
-    expect(fixtures.every((f) => f.pool_id === null)).toBe(true)
+    expect(fixtures.every((f) => f.group_id === null)).toBe(true)
 
     await expect(pom.drawNotice(event)).toHaveCount(0)
     await expect(pom.toasts).toHaveCount(0)
@@ -330,7 +333,7 @@ test.describe('Tournaments · cutting the draw', () => {
   test('a bracket with a LONE entrant is REFUSED (422), in the panel, in the server’s words', async ({
     page,
   }) => {
-    // The bracket twin of the pool-less refusal above, and the other half of the stub's
+    // The bracket twin of the group-less refusal above, and the other half of the stub's
     // single-elim arm: a field of one has nobody to play. Kept because a refusal nothing
     // exercises is a refusal that can be quietly deleted — and because the two 422s
     // together are the whole of what a cut can now refuse for, the draw-TYPE arm having
@@ -367,14 +370,14 @@ test.describe('Tournaments · cutting the draw', () => {
       ...READY_TO_START,
       canEdit: false,
     })
-    const event = EVENT.POOLS
+    const event = EVENT.GROUPS
 
     // The draw itself is public — a player wants to know who they are drawn against.
-    await expect(pom.poolEntrants(event, POOL_A.name)).toHaveText([
-      ...POOL_A.entrants,
+    await expect(pom.groupEntrants(event, GROUP_A.name)).toHaveText([
+      ...GROUP_A.entrants,
     ])
-    await expect(pom.roundFixtures(event, POOL_A.name, 1)).toHaveText([
-      ...POOL_A.rounds[0].fixtures,
+    await expect(pom.roundFixtures(event, GROUP_A.name, 1)).toHaveText([
+      ...GROUP_A.rounds[0].fixtures,
     ])
 
     await expect(pom.generateDrawButton(event)).toHaveCount(0)
@@ -420,7 +423,7 @@ test.describe('Tournaments · going live needs a current draw', () => {
     // A stale draw is not an uncut one — the director is told their draw needs RE-cutting,
     // not that they never cut it — and the event whose draw is still current is not blamed.
     await expect(pom.lifecycleNotice).not.toContainText(SAY.noDrawYet)
-    await expect(pom.lifecycleNotice).not.toContainText(`“${EVENT.POOLS}”`)
+    await expect(pom.lifecycleNotice).not.toContainText(`“${EVENT.GROUPS}”`)
     await expect(pom.toasts).toHaveCount(0)
 
     // THE assertion, half two: the tournament did NOT move. The pill still reads
@@ -471,7 +474,7 @@ test.describe('Tournaments · going live needs a current draw', () => {
     await expect(pom.lifecycleNotice).toContainText(`“${EVENT.DOUBLES}”`)
 
     // …and each of them is told the truth about ITSELF (#1300). Only `JOURNEY` can
-    // actually be cut; the other two never can — `EMPTY` is a round-robin with no pools
+    // actually be cut; the other two never can — `EMPTY` is a round-robin with no groups
     // and nobody entered, `DOUBLES` is a doubles event whose field can never reach two —
     // so they carry their own reason and their own fix rather than the "cut the draw"
     // instruction, which for them is the dead end this ticket closes.
@@ -479,7 +482,7 @@ test.describe('Tournaments · going live needs a current draw', () => {
     // These three lines are what pin the stub to the server. Every assertion above them
     // passes just as happily against the PRE-#1300 refusal, which lumped all three events
     // under "have no draw yet" and sent the director to cut two draws that can only 409.
-    await expect(pom.lifecycleNotice).toContainText(SAY.noPools)
+    await expect(pom.lifecycleNotice).toContainText(SAY.noGroups)
     await expect(pom.lifecycleNotice).toContainText(SAY.nonSingles)
     await expect(pom.lifecycleNotice).toContainText(SAY.removeTheEvent)
 
@@ -494,7 +497,7 @@ test.describe('Tournaments · going live needs a current draw', () => {
     // this suite runs with MSW off, so vitest cannot see this stub at all.
     const notice = (await pom.lifecycleNotice.innerText()).replace(/\s+/g, ' ')
     expect(notice.indexOf(SAY.nonSingles)).toBeLessThan(notice.indexOf(SAY.cutTheDraw))
-    expect(notice.indexOf(SAY.noPools)).toBeLessThan(notice.indexOf(SAY.cutTheDraw))
+    expect(notice.indexOf(SAY.noGroups)).toBeLessThan(notice.indexOf(SAY.cutTheDraw))
     expect(notice.trimEnd().endsWith('then start the tournament.')).toBe(true)
 
     await pom.expectLifecycle('Published', 'Start tournament')
@@ -504,15 +507,15 @@ test.describe('Tournaments · going live needs a current draw', () => {
 })
 
 test.describe('Tournaments · the event editor, with a draw standing', () => {
-  test('freezes the draw type and the pool SET — with the reason attached to each dead control', async ({
+  test('freezes the draw type and the group SET — with the reason attached to each dead control', async ({
     page,
   }) => {
     const { pom } = await TournamentDetailPage.navigateTo(page, {
       drawable: true,
-      drawn: [EVENT.POOLS],
+      drawn: [EVENT.GROUPS],
     })
 
-    await pom.openEditor(EVENT.POOLS)
+    await pom.openEditor(EVENT.GROUPS)
     await expect(pom.eventEditor).toBeVisible()
 
     // --- Basics: the draw type is spoken for ---------------------------------
@@ -523,56 +526,56 @@ test.describe('Tournaments · the event editor, with a draw standing', () => {
 
     // …and the reason is *attached* to it, not merely printed underneath it. A disabled
     // trigger is not focusable and carries no tooltip, so `aria-describedby` is the only
-    // channel it has — and it had none at all until now, while the pools section one tab
-    // over wired the identical freeze correctly.
+    // channel it has — and it had none at all until now, while the reservations section
+    // one tab over wired the identical freeze correctly.
     const drawTypeReason = await pom.describedBy(pom.drawTypeSelect)
     await expect(drawTypeReason).toContainText(SAY.drawTypeFrozen)
     await expect(drawTypeReason).toContainText(SAY.wayOut)
 
-    // --- Table pools: the SET is frozen, and says how to unfreeze it ----------
-    await pom.editorTab('Table pools').click()
+    // --- Reservations: the group SET is frozen, and says how to unfreeze it ---
+    await pom.editorTab('Reservations').click()
 
-    await expect(pom.poolsFrozenNotice).toBeVisible()
-    await expect(pom.poolsFrozenNotice).toContainText(SAY.poolsFrozen)
-    await expect(pom.poolsFrozenNotice).toContainText(SAY.wayOut)
+    await expect(pom.reservationsFrozenNotice).toBeVisible()
+    await expect(pom.reservationsFrozenNotice).toContainText(SAY.groupsFrozen)
+    await expect(pom.reservationsFrozenNotice).toContainText(SAY.wayOut)
 
     // Disabled — not hidden. This button is one deleted draw away from working, and
     // hiding it would hide the way out along with it (contrast the viewer's controls,
     // which are absent because nothing they could do would bring them back).
-    await expect(pom.addPoolButton).toBeDisabled()
-    await expect(await pom.describedBy(pom.addPoolButton)).toContainText(
-      SAY.poolsFrozen,
+    await expect(pom.addReservationButton).toBeDisabled()
+    await expect(await pom.describedBy(pom.addReservationButton)).toContainText(
+      SAY.groupsFrozen,
     )
 
     // Every Remove, not just the first: "the removes are dead" is the claim.
-    await expect(pom.removePoolButtons).toHaveCount(2)
-    for (const remove of await pom.removePoolButtons.all()) {
+    await expect(pom.removeReservationButtons).toHaveCount(2)
+    for (const remove of await pom.removeReservationButtons.all()) {
       await expect(remove).toBeDisabled()
-      await expect(await pom.describedBy(remove)).toContainText(SAY.poolsFrozen)
+      await expect(await pom.describedBy(remove)).toContainText(SAY.groupsFrozen)
     }
   })
 
-  test('leaves a pool’s TABLES editable — and the draw survives the save', async ({
+  test('leaves a reservation’s TABLES editable — and the draw survives the save', async ({
     page,
   }) => {
     // The case the freeze exists to permit, and the one a wholesale grey-out would break.
     // A table breaks on the morning of the tournament and is pulled; the director has to
-    // be able to record that. Only the pool *set* is frozen — a pool's tables, its window
-    // and its name are still the director's, because otherwise they would have to destroy
-    // a perfectly good draw to move a table.
+    // be able to record that. Only the group *set* is frozen — a reservation's tables,
+    // its window and its name are still the director's, because otherwise they would
+    // have to destroy a perfectly good draw to move a table.
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
       drawable: true,
-      drawn: [EVENT.POOLS],
+      drawn: [EVENT.GROUPS],
     })
-    const drawn = store.fixturesOf(EVENT.POOLS).length
+    const drawn = store.fixturesOf(EVENT.GROUPS).length
     expect(drawn).toBe(FIXTURE_COUNT)
 
-    await pom.openEditor(EVENT.POOLS)
-    await pom.editorTab('Table pools').click()
+    await pom.openEditor(EVENT.GROUPS)
+    await pom.editorTab('Reservations').click()
 
-    // Pool A holds T1 and T2. Add T3 to it — a live control on a card whose Remove button
-    // is dead.
-    const chip = pom.poolTableChip(0, 'T3')
+    // Reservation A holds T1 and T2. Add T3 to it — a live control on a card whose
+    // Remove button is dead.
+    const chip = pom.reservationTableChip(0, 'T3')
     await expect(chip).toBeEnabled()
     await expect(chip).toHaveAttribute('aria-pressed', 'false')
     await chip.click()
@@ -581,13 +584,13 @@ test.describe('Tournaments · the event editor, with a draw standing', () => {
     await pom.saveEventButton.click()
     await expect(pom.eventEditor).toHaveCount(0)
 
-    // The server took it: the pool really did gain the table…
-    expect(store.poolsOf(EVENT.POOLS)[0].table_ids).toEqual(['t1', 't2', 't3'])
+    // The server took it: the reservation really did gain the table…
+    expect(store.reservationsOf(EVENT.GROUPS)[0].table_ids).toEqual(['t1', 't2', 't3'])
     // …and the draw is still standing. A PATCH is not a re-cut, and a director who moved
     // a table must not discover their draw was thrown away by the save.
-    expect(store.fixturesOf(EVENT.POOLS)).toHaveLength(drawn)
-    await expect(pom.poolEntrants(EVENT.POOLS, POOL_A.name)).toHaveText([
-      ...POOL_A.entrants,
+    expect(store.fixturesOf(EVENT.GROUPS)).toHaveLength(drawn)
+    await expect(pom.groupEntrants(EVENT.GROUPS, GROUP_A.name)).toHaveText([
+      ...GROUP_A.entrants,
     ])
     await expect(pom.toasts).toHaveCount(0)
     expect(store.unhandled).toEqual([])
@@ -666,7 +669,7 @@ test.describe('Tournaments · the draw types a director is offered', () => {
         {
           key: 'round-robin',
           name: 'Everyone plays everyone',
-          description: 'Every entrant plays every other in their pool.',
+          description: 'Every entrant plays every other in their group.',
           display_order: 1,
         },
       ],
@@ -698,25 +701,25 @@ test.describe('Tournaments · the draw types a director is offered', () => {
 const KNOWN_DESTRUCTIVE_BUTTON_CONTRAST = ['.bg-destructive']
 
 test.describe('Tournaments · the draw · accessibility', () => {
-  test('is axe-clean with the pools scaffold on screen', async ({ page }) => {
+  test('is axe-clean with the groups scaffold on screen', async ({ page }) => {
     const { pom } = await TournamentDetailPage.navigateTo(page, READY_TO_START)
 
     // Prove the state is really rendered before scanning it: an axe pass over a page that
     // has not reached the state is a green that means nothing. (Until this slice, CI's
     // axe only ever saw the *undrawn* panel — the drawn one was unreachable from any
     // spec, because every stubbed event had `fixtures: []`.)
-    await expect(pom.poolEntrants(EVENT.POOLS, POOL_A.name)).toHaveText([
-      ...POOL_A.entrants,
+    await expect(pom.groupEntrants(EVENT.GROUPS, GROUP_A.name)).toHaveText([
+      ...GROUP_A.entrants,
     ])
 
-    await expectAxeClean(page, 'tournament detail — the drawn pools scaffold')
+    await expectAxeClean(page, 'tournament detail — the drawn groups scaffold')
   })
 
   test('is axe-clean with the draw refusal on screen', async ({ page }) => {
     const { pom } = await TournamentDetailPage.navigateTo(page)
 
     // Same subject as the refusal spec above, for the same reason: `EVENT.EMPTY` is the
-    // pool-less round-robin, i.e. the one event in the default seed whose Generate click
+    // group-less round-robin, i.e. the one event in the default seed whose Generate click
     // puts a real server refusal on screen for axe to scan.
     await pom.generateDrawButton(EVENT.EMPTY).click()
     await expect(pom.drawNotice(EVENT.EMPTY)).toBeVisible()
@@ -745,21 +748,21 @@ test.describe('Tournaments · the draw · accessibility', () => {
     // the description they point at.
     const { pom } = await TournamentDetailPage.navigateTo(page, {
       drawable: true,
-      drawn: [EVENT.POOLS],
+      drawn: [EVENT.GROUPS],
     })
 
-    await pom.openEditor(EVENT.POOLS)
+    await pom.openEditor(EVENT.GROUPS)
     await expect(pom.drawTypeSelect).toBeDisabled()
 
     await expectAxeClean(page, 'tournament detail — the frozen editor, Basics', {
       exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
     })
 
-    await pom.editorTab('Table pools').click()
-    await expect(pom.poolsFrozenNotice).toBeVisible()
-    await expect(pom.addPoolButton).toBeDisabled()
+    await pom.editorTab('Reservations').click()
+    await expect(pom.reservationsFrozenNotice).toBeVisible()
+    await expect(pom.addReservationButton).toBeDisabled()
 
-    await expectAxeClean(page, 'tournament detail — the frozen editor, Table pools', {
+    await expectAxeClean(page, 'tournament detail — the frozen editor, Reservations', {
       exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
     })
   })

@@ -3,7 +3,7 @@ on a draw-type change (ADR 20260815 decisions 1, 3, 4).
 
 **The template.** :func:`stage_template` is the whole of decision 3, in code rather than
 a column: ``round_robin`` and ``single_elim`` and ``swiss`` are each their own
-one-stage template, and ``rr_then_ko`` is the one composite — a pool stage feeding a
+one-stage template, and ``rr_then_ko`` is the one composite — a group stage feeding a
 knockout stage. An exhaustive ``match`` with no catch-all, exactly like
 ``app.draws.strategy_for`` — a new :class:`~app.models.tournament.DrawType` member has
 to declare its own template before this type-checks.
@@ -18,7 +18,7 @@ constructor argument, not a follow-up write.
 while no draw exists, the template is re-applied in place": position 0 (the ADR's
 "stage 1") keeps its row identity and only its ``draw_type`` moves; later positions are
 added or removed to match the new template's length. That is what lets anything hung off
-stage 0 — a director's pools today — survive a type change. It is a **total** function:
+stage 0 — a director's groups today — survive a type change. It is a **total** function:
 an event with no stage rows at all (a row seeded straight through the ORM, bypassing
 ``create_event`` — the direct-to-database seam several sibling test helpers already use
 for other tables) mints the whole template fresh rather than indexing into an empty
@@ -34,7 +34,7 @@ this PATCH. That gate is what protects the one case the freeze's own early retur
 not cover — a PATCH that resends the event's *current* draw settings unchanged (same
 draw type, same or different other settings), which the freeze waves through (nothing
 about the *type* moved) even when a draw already exists. A settings-only edit
-(``qualifiers_per_pool``, ``rounds``) on an unchanged type also fails this gate, which
+(``qualifiers_per_group``, ``rounds``) on an unchanged type also fails this gate, which
 is correct: the template :func:`stage_template` mints depends only on ``draw_type``, so
 a re-mint has nothing to do when it has not moved. And whenever the type genuinely HAS
 moved, the freeze above has already proven the event has no draw — it would have raised
@@ -78,7 +78,8 @@ def mint_stages(draw_type: DrawType) -> list[TournamentEventStage]:
     What ``app.tournament_events.create_event`` passes straight into
     ``TournamentEvent(..., stages=...)`` — the rows carry no ``event_id`` yet, and never
     need one set here: SQLAlchemy fills it in from the parent at flush, the same way
-    ``app.tournament_pools.stored_pools`` already works for a brand-new event's pools.
+    ``app.tournament_reservations.stored_groups`` already works for a brand-new event's
+    groups.
     """
     return [
         TournamentEventStage(position=position, draw_type=component)
@@ -108,7 +109,7 @@ async def remint_stages_in_place(
     differed position-for-position at the same length would have kept its stale
     ``draw_type`` at every position past 0. A second pass then drops whatever the
     template no longer names, from the tail. Positions never move, so nothing here
-    ever needs the deferrable-constraint trick the pool/table position columns use for
+    ever needs the deferrable-constraint trick the group/table position columns use for
     a re-order — a stage re-mint is never a re-order.
 
     A **total** function, with no special case for an event with no stage rows at all

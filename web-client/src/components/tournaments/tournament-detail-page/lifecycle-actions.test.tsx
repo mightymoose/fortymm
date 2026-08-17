@@ -191,8 +191,8 @@ describe('LifecycleActions · a refused Start tournament (409)', () => {
   // Undrawable first, so "cut the draw for each event named" trails only the names a cut
   // would actually fix — the other order walked QA's director into a refused cut (#1300).
   const MIXED =
-    'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool would ' +
-    'leave a pool with fewer than 2 entrants, who would have nobody to play. Add ' +
+    'This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 group would ' +
+    'leave a group with fewer than 2 entrants, who would have nobody to play. Add ' +
     'entrants, or remove the event. “B Uncut” has no draw yet; and “C Stale” has a ' +
     'draw that no longer matches its entrants. A draw is cut from the field as it ' +
     'stands at the time, and registration stays open right up to the moment a ' +

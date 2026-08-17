@@ -9,7 +9,7 @@ import type {
   Address,
   Entrant,
   Predicate,
-  PoolDraft,
+  ReservationDraft,
   Tournament,
   TournamentEvent,
 } from './types'
@@ -277,7 +277,7 @@ export function daysBetween(
 
 /** Join labels the way a sentence does: `A`, `A and B`, `A, B and C`. The single
  * definition behind every "list of things" sentence in the tournament UI (a save
- * failure's fields, a refusal's pools, a solve's conflicting matches), so the
+ * failure's fields, a refusal's groups, a solve's conflicting matches), so the
  * comma-and-conjunction rule can't drift between them. Empty in → `''`. */
 export function conjoinWithAnd(labels: string[]): string {
   if (labels.length <= 1) return labels[0] ?? ''
@@ -371,9 +371,9 @@ export function predicateSentence(p: Predicate): string {
 }
 
 /**
- * An event's pools in **position order** — the one answer to "which pool comes first?",
- * shared by everything that lays pools out (the editor's form value, `eventToFormValues`;
- * the draw, `drawState`).
+ * A list of positioned rows — groups or reservations alike — in **position order**, the
+ * one answer to "which one comes first?", shared by everything that lays them out (the
+ * editor's form value, `eventToFormValues`; the draw, `drawState`).
  *
  * It exists because the two plausible alternatives are both wrong:
  *
@@ -382,44 +382,50 @@ export function predicateSentence(p: Predicate): string {
  *   the draw rendered 1, 10, 2, 3 …) and are server-minted uuids now, which sort by
  *   nothing whatsoever — the same wrong answer, arrived at faster.
  * - **Whatever order the array is in** is not an answer at all, only a coincidence. The
- *   server does send its pools in position order, but a client that merely *inherited*
+ *   server does send reservations in position order, but a client that merely *inherited*
  *   that order would state no rule, so nothing would fail when the order stopped holding.
  *
- * Stable (`sort` is stable in every engine we target), so pools that somehow shared a
+ * Stable (`sort` is stable in every engine we target), so rows that somehow shared a
  * position keep their relative order rather than shuffling between renders. Copies rather
  * than sorting in place: the input is usually form state or a query's cached payload, and
  * neither is ours to reorder.
  */
-export function poolsInOrder<T extends { position: number }>(
-  pools: readonly T[],
+export function inPositionOrder<T extends { position: number }>(
+  rows: readonly T[],
 ): T[] {
-  return [...pools].sort((a, b) => a.position - b.position)
+  return [...rows].sort((a, b) => a.position - b.position)
 }
 
-export interface PoolConflict {
+export interface ReservationConflict {
   table: string
-  poolA: string
-  poolB: string
+  reservationA: string
+  reservationB: string
 }
 
-/** Tables double-booked across two pools whose time windows overlap on the
- * same day — surfaced as a warning in the event editor's Table pools tab.
+/** Tables double-booked across two reservations whose time windows overlap on the
+ * same day — surfaced as a warning in the event editor's Reservations tab.
  *
- * Takes `PoolDraft`s — the three fields a director types — so it reads a pool the editor
- * has just added (which has no id and no position yet) exactly as it reads a stored one.
- * A double-booking is a fact about windows and tables; identity has nothing to do with
- * it. */
-export function findPoolConflicts(pools: readonly PoolDraft[]): PoolConflict[] {
-  const conflicts: PoolConflict[] = []
-  for (let i = 0; i < pools.length; i++) {
-    for (let j = i + 1; j < pools.length; j++) {
-      const a = pools[i]
-      const b = pools[j]
+ * Takes `ReservationDraft`s — the three fields a director types — so it reads a
+ * reservation the editor has just added (which has no id and no position yet) exactly
+ * as it reads a stored one. A double-booking is a fact about windows and tables;
+ * identity has nothing to do with it. */
+export function findReservationConflicts(
+  reservations: readonly ReservationDraft[],
+): ReservationConflict[] {
+  const conflicts: ReservationConflict[] = []
+  for (let i = 0; i < reservations.length; i++) {
+    for (let j = i + 1; j < reservations.length; j++) {
+      const a = reservations[i]
+      const b = reservations[j]
       if (a.slot.date !== b.slot.date) continue
       if (a.slot.end <= b.slot.start || b.slot.end <= a.slot.start) continue
       const shared = a.tableIds.filter((t) => b.tableIds.includes(t))
       for (const t of shared) {
-        conflicts.push({ table: t.toUpperCase(), poolA: a.name, poolB: b.name })
+        conflicts.push({
+          table: t.toUpperCase(),
+          reservationA: a.name,
+          reservationB: b.name,
+        })
       }
     }
   }
@@ -475,11 +481,11 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     name: '',
     format: 'singles',
     drawType: 'single-elim',
-    // A bracket has no pools to qualify out of, so it carries NO qualifier count — and
+    // A bracket has no groups to qualify out of, so it carries NO qualifier count — and
     // `null` is the only value the server's `single-elim` draw-settings arm admits (ADR
     // 20260727). A new event that pre-filled a number here would be one whose create
     // body the API 422s the moment the director never touched the draw type.
-    qualifiersPerPool: null,
+    qualifiersPerGroup: null,
     // …and no round count either: a bracket's depth follows from the field rather than from
     // a setting, and `null` is the only value the server's `single-elim` arm admits (the
     // swiss ADR). A new event that pre-filled a number here would be one whose create body
@@ -501,7 +507,8 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     slot: { date: defaultDate, start: '09:00', end: '13:00' },
     predicates: [],
     match: { rated: true, lengthGames: 5 },
-    pools: [],
+    groups: [],
+    reservations: [],
     // A PLACEHOLDER stage, matching the single-elim placeholder `drawType` above (ADR
     // 20260815): the real event does not exist on the server yet, so nothing has
     // actually minted one — the server does that at create, same as every other

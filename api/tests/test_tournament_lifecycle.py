@@ -64,7 +64,7 @@ from tests._helpers import (
     assert_tournament_address_is_sql_null,
     blank_addresses,
     event_draw_settings,
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -635,7 +635,7 @@ async def _make_tournament_at(
     status: TournamentStatus,
     with_event: bool = False,
 ) -> Tournament:
-    """A tournament owned by ``owner`` at ``status``, optionally with one pooled,
+    """A tournament owned by ``owner`` at ``status``, optionally with one grouped,
     unrated, round-robin singles event (no entrants, no draw yet — the caller cuts
     it)."""
     tournament = Tournament(
@@ -664,10 +664,10 @@ async def _make_tournament_at(
             match_settings={"rated": False, "length_games": 3},
             stages=stages,
         )
-        stages[0].groups = event_pools(
+        stages[0].groups = event_groups(
             [
                 {
-                    "name": "Pool A",
+                    "name": "Reservation A",
                     "slot": {"date": _DATE, "start": "09:00", "end": "17:00"},
                     "table_ids": ["t1", "t2"],
                 }
@@ -712,19 +712,19 @@ async def _add_event(
     event_format: EventFormat = EventFormat.singles,
     draw_type: DrawType = DrawType.round_robin,
     rounds: int | None = None,
-    qualifiers_per_pool: int | None = None,
-    pool_count: int = 1,
+    qualifiers_per_group: int | None = None,
+    group_count: int = 1,
 ) -> TournamentEvent:
     """A second (or third...) event on ``tournament``, built with the format/draw type/
-    settings/pool count a #1300 undrawable-classification test needs — the fixture
+    settings/group count a #1300 undrawable-classification test needs — the fixture
     ``_make_tournament_at``'s single ``with_event=True`` round-robin event cannot cover
     on its own.
 
-    ``pool_count=0`` seeds no pools at all (the round-robin-with-no-pools edge case);
-    any other count seeds that many bare pools, positionally named, on the event's
+    ``group_count=0`` seeds no groups at all (the round-robin-with-no-groups edge case);
+    any other count seeds that many bare groups, positionally named, on the event's
     first (position-0) stage — the one ``event.groups`` reads through regardless of
-    draw type (ADR 20260815). What the wire calls a pool is a GROUP plus the
-    RESERVATION it maps to; ``event_pools`` builds both.
+    draw type (ADR 20260815). What the wire calls a group is a GROUP plus the
+    RESERVATION it maps to; ``event_groups`` builds both.
 
     Returns the event **re-read** through a fresh ``select``, not the just-constructed
     instance: ``groups`` is a ``viewonly`` relationship assigned only via
@@ -740,7 +740,7 @@ async def _add_event(
         name=name,
         format=event_format,
         draw_settings=event_draw_settings(
-            draw_type, qualifiers_per_pool=qualifiers_per_pool, rounds=rounds
+            draw_type, qualifiers_per_group=qualifiers_per_group, rounds=rounds
         ),
         max_players=None,
         entry_fee=Decimal("0.00"),
@@ -749,8 +749,8 @@ async def _add_event(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
-        [{} for _ in range(pool_count)], event=event, tournament=tournament
+    stages[0].groups = event_groups(
+        [{} for _ in range(group_count)], event=event, tournament=tournament
     )
     db.add(event)
     # Committed, not merely flushed: ``created_at`` is a server-side ``now()``
@@ -1109,7 +1109,7 @@ async def test_a_one_entrant_event_is_undrawable_for_every_draw_type(
     draw_type: DrawType,
 ) -> None:
     """A field of one is undrawable for every implemented draw type — round-robin and
-    rr-then-ko both refuse it through the same pool-snake floor, single-elim and swiss
+    rr-then-ko both refuse it through the same group-snake floor, single-elim and swiss
     each through their own bracket/field floor — and every one of them is fixed the
     same way: add entrants, or remove the event."""
     owner = await make_user(db_session, f"tx-one-{draw_type.value}")
@@ -1125,7 +1125,7 @@ async def test_a_one_entrant_event_is_undrawable_for_every_draw_type(
         name="Lone Event",
         draw_type=draw_type,
         rounds=3 if draw_type is DrawType.swiss else None,
-        qualifiers_per_pool=1 if draw_type is DrawType.rr_then_ko else None,
+        qualifiers_per_group=1 if draw_type is DrawType.rr_then_ko else None,
     )
     await _enter(db_session, event, 1)
 
@@ -1177,7 +1177,7 @@ async def test_a_zero_entrant_round_robin_event_is_undrawable_like_one_entrant(
     exc = exc_info.value
     assert exc.undrawable == ["Empty Event"]
     assert (
-        "“Empty Event”: 0 entrants across 1 pool would leave a pool with fewer than "
+        "“Empty Event”: 0 entrants across 1 group would leave a group with fewer than "
         "2 entrants, who would have nobody to play. Add entrants, or remove the "
         "event." in str(exc)
     )
@@ -1287,8 +1287,8 @@ async def test_mixed_tournament_names_undrawable_uncut_and_stale_each_with_its_f
     # trails only the names it is true of. The other order sent QA's director to a
     # Generate draw the cut refused (#1300).
     assert detail == (
-        "This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 pool "
-        "would leave a pool with fewer than 2 entrants, who would have nobody to "
+        "This tournament cannot start yet: “A Undrawable”: 1 entrant across 1 group "
+        "would leave a group with fewer than 2 entrants, who would have nobody to "
         "play. Add entrants, or remove the event. “B Uncut” has no draw yet; and "
         "“C Stale” has a draw that no longer matches its entrants. A draw is cut "
         "from the field as it stands at the time, and registration stays open "
@@ -1386,14 +1386,14 @@ async def test_non_singles_event_is_undrawable_without_running_a_strategy(
     )
 
 
-async def test_round_robin_with_no_pools_surfaces_snake_message_verbatim(
+async def test_round_robin_with_no_groups_surfaces_snake_message_verbatim(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """``_snake`` refuses a round-robin event with no pools at all — the dry run
+    """``_snake`` refuses a round-robin event with no groups at all — the dry run
     surfaces that sentence verbatim, with no fix appended (the field has 4 entrants,
     well over the under-two floor, so the fix cannot be mistaken for that one)."""
-    owner = await make_user(db_session, "tx-no-pools")
+    owner = await make_user(db_session, "tx-no-groups")
     tournament = await _make_tournament_at(
         db_session,
         owner=owner,
@@ -1403,9 +1403,9 @@ async def test_round_robin_with_no_pools_surfaces_snake_message_verbatim(
     event = await _add_event(
         db_session,
         tournament,
-        name="No Pools Event",
+        name="No Groups Event",
         draw_type=DrawType.round_robin,
-        pool_count=0,
+        group_count=0,
     )
     await _enter(db_session, event, 4)
 
@@ -1418,17 +1418,17 @@ async def test_round_robin_with_no_pools_surfaces_snake_message_verbatim(
         )
     exc = exc_info.value
     assert str(exc) == (
-        "This tournament cannot start yet: “No Pools Event”: A round-robin draw "
-        "needs at least one pool."
+        "This tournament cannot start yet: “No Groups Event”: A round-robin draw "
+        "needs at least one group."
     )
 
 
-async def test_rr_then_ko_qualifiers_exceeding_smallest_pool_is_verbatim(
+async def test_rr_then_ko_qualifiers_exceeding_smallest_group_is_verbatim(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """5 entrants across 2 pools snake to sizes 3 and 2; asking for 3 qualifiers from
-    each pool is more than the smallest pool holds. The strategy's own message is
+    """5 entrants across 2 groups snake to sizes 3 and 2; asking for 3 qualifiers from
+    each group is more than the smallest group holds. The strategy's own message is
     surfaced verbatim, with no fix appended (5 entrants is well over the under-two
     floor)."""
     owner = await make_user(db_session, "tx-rrko-qualifiers")
@@ -1443,8 +1443,8 @@ async def test_rr_then_ko_qualifiers_exceeding_smallest_pool_is_verbatim(
         tournament,
         name="Big Qualifiers Event",
         draw_type=DrawType.rr_then_ko,
-        pool_count=2,
-        qualifiers_per_pool=3,
+        group_count=2,
+        qualifiers_per_group=3,
     )
     await _enter(db_session, event, 5)
 
@@ -1458,16 +1458,16 @@ async def test_rr_then_ko_qualifiers_exceeding_smallest_pool_is_verbatim(
     exc = exc_info.value
     assert str(exc) == (
         "This tournament cannot start yet: “Big Qualifiers Event”: Taking 3 "
-        "qualifiers from each pool is more than the 2 entrants in the smallest "
-        "pool — take fewer qualifiers from each pool, or add entrants."
+        "qualifiers from each group is more than the 2 entrants in the smallest "
+        "group — take fewer qualifiers from each group, or add entrants."
     )
 
 
-async def test_rr_then_ko_single_qualifier_from_single_pool_is_verbatim(
+async def test_rr_then_ko_single_qualifier_from_single_group_is_verbatim(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """One pool, one qualifier: the knockout stage would hold one player with nobody
+    """One group, one qualifier: the knockout stage would hold one player with nobody
     to play. The strategy's own message is surfaced verbatim, with no fix appended (2
     entrants clears the under-two floor)."""
     owner = await make_user(db_session, "tx-rrko-single-qual")
@@ -1482,8 +1482,8 @@ async def test_rr_then_ko_single_qualifier_from_single_pool_is_verbatim(
         tournament,
         name="Single Qualifier Event",
         draw_type=DrawType.rr_then_ko,
-        pool_count=1,
-        qualifiers_per_pool=1,
+        group_count=1,
+        qualifiers_per_group=1,
     )
     await _enter(db_session, event, 2)
 
@@ -1497,9 +1497,9 @@ async def test_rr_then_ko_single_qualifier_from_single_pool_is_verbatim(
     exc = exc_info.value
     assert str(exc) == (
         "This tournament cannot start yet: “Single Qualifier Event”: Taking 1 "
-        "qualifier from a single pool leaves one player in the knockout stage, who "
-        "would have nobody to play — take more qualifiers from each pool, or "
-        "configure more pools."
+        "qualifier from a single group leaves one player in the knockout stage, who "
+        "would have nobody to play — take more qualifiers from each group, or "
+        "configure more groups."
     )
 
 

@@ -71,7 +71,7 @@ describe('useScopedNotice', () => {
   it('does not resurrect a dropped notice when the scope returns to its earlier value', () => {
     const { result, rerender } = renderScoped('0-entrants')
 
-    act(() => result.current[1]('0 entrants across 2 pools'))
+    act(() => result.current[1]('0 entrants across 2 groups'))
     rerender({ scope: '1-entrant' })
     expect(result.current[0]).toBeNull()
 
@@ -102,7 +102,7 @@ describe('useScopedNotice', () => {
     it('does not resurrect a dropped notice when the scope returns', () => {
       const { result, rerender } = renderScopedStrict('0-entrants')
 
-      act(() => result.current[1]('0 entrants across 2 pools'))
+      act(() => result.current[1]('0 entrants across 2 groups'))
       rerender({ scope: '1-entrant' })
       rerender({ scope: '0-entrants' })
 
@@ -139,12 +139,12 @@ describe('useScopedNotice', () => {
   it('stamps a new notice with the scope current when it is set', () => {
     const { result, rerender } = renderScoped('0-entrants')
 
-    act(() => result.current[1]('0 entrants across 2 pools'))
+    act(() => result.current[1]('0 entrants across 2 groups'))
     rerender({ scope: '5-entrants' })
-    act(() => result.current[1]('5 entrants across 3 pools would leave a pool short'))
+    act(() => result.current[1]('5 entrants across 3 groups would leave a group short'))
 
     expect(result.current[0]).toBe(
-      '5 entrants across 3 pools would leave a pool short',
+      '5 entrants across 3 groups would leave a group short',
     )
   })
 })

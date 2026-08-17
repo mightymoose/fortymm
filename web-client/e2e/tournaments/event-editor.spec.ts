@@ -68,12 +68,13 @@ const SAY = {
  */
 const PYDANTIC = 'String should have at most 255 characters'
 
-/** Its sibling, for the newest floor the server drew (`Pool.name`, `min_length=1`) — the
- * words a cleared pool name used to come back as, in the banner, naming no field. The
- * form refuses that save now, so this string has nowhere to come *from*; it is asserted
- * absent all the same, because "we stopped sending it" and "we stopped printing it" are
- * two different claims and only one of them is about the organizer. */
-const PYDANTIC_POOL = 'String should have at least 1 character'
+/** Its sibling, for the newest floor the server drew (`Reservation.name`,
+ * `min_length=1`) — the words a cleared reservation name used to come back as, in the
+ * banner, naming no field. The form refuses that save now, so this string has nowhere
+ * to come *from*; it is asserted absent all the same, because "we stopped sending it"
+ * and "we stopped printing it" are two different claims and only one of them is about
+ * the organizer. */
+const PYDANTIC_RESERVATION = 'String should have at least 1 character'
 
 /** Longer than the `VARCHAR(255)` the server allows. It no longer *reaches* the
  * server — that is the point of the second QA pass — so it now proves the opposite
@@ -682,47 +683,47 @@ test.describe('Tournaments · the rule builder on a phone (375×667)', () => {
 })
 
 /**
- * The Table pools tab — the last control in this editor that could still author a 422
- * (#786). A pool's id and its default name are **minted**, so the happy path could never
- * make a blank one; the name **box**, however, can be emptied, and `Pool.name` is now
- * `min_length=1` at the server's boundary.
+ * The Reservations tab — the last control in this editor that could still author a 422
+ * (#786). A reservation's id and its default name are **minted**, so the happy path
+ * could never make a blank one; the name **box**, however, can be emptied, and
+ * `Reservation.name` is now `min_length=1` at the server's boundary.
  *
  * Asserted in a browser because the claim is about a REQUEST: not that the message is
  * rendered (jsdom says that), but that nothing is sent — `countOf('PATCH')` is the
  * difference between a form that refuses a save and a form that makes one and then
  * apologises.
  */
-test.describe('Tournaments · a pool with no name', () => {
-  test('a BLANK pool name is refused in the form — no request, and the red is on the card', async ({
+test.describe('Tournaments · a reservation with no name', () => {
+  test('a BLANK reservation name is refused in the form — no request, and the red is on the card', async ({
     page,
   }) => {
     const { pom, store } = await TournamentDetailPage.navigateTo(page)
 
     await pom.openEditorOverlay(EVENT.JOURNEY).click()
-    await pom.editorTab('Table pools').click()
-    await pom.poolNameInput(0).fill('')
+    await pom.editorTab('Reservations').click()
+    await pom.reservationNameInput(0).fill('')
 
     await pom.saveEventButton.click()
 
     // Told, under the box that is empty — the same sentence the event's own name uses,
     // because to the organizer it is the same news.
-    await expect(pom.poolNameErrors).toHaveCount(1)
-    await expect(pom.poolNameErrors.first()).toHaveText(SAY.nameRequired)
-    await expect(pom.poolNameInput(0)).toHaveAttribute('aria-invalid', 'true')
+    await expect(pom.reservationNameErrors).toHaveCount(1)
+    await expect(pom.reservationNameErrors.first()).toHaveText(SAY.nameRequired)
+    await expect(pom.reservationNameInput(0)).toHaveAttribute('aria-invalid', 'true')
 
     // THE assertion: nothing left the page, so the 422 never happened and Pydantic was
     // never asked.
     expect(store.countOf('PATCH')).toBe(0)
     expect(store.countOf('POST')).toBe(0)
     await expect(pom.eventEditor).toBeVisible()
-    await expect(pom.eventEditor).not.toContainText(PYDANTIC_POOL)
+    await expect(pom.eventEditor).not.toContainText(PYDANTIC_RESERVATION)
     await expect(pom.saveFailure).toHaveCount(0)
     await expect(pom.toasts).toHaveCount(0)
 
-    // The positive control: without it, "the form refuses blank pool names" could be
-    // true of a form that refuses every pool name.
-    await pom.poolNameInput(0).fill('Championship')
-    await expect(pom.poolNameErrors).toHaveCount(0)
+    // The positive control: without it, "the form refuses blank reservation names"
+    // could be true of a form that refuses every reservation name.
+    await pom.reservationNameInput(0).fill('Championship')
+    await expect(pom.reservationNameErrors).toHaveCount(0)
 
     await pom.saveEventButton.click()
 
@@ -731,7 +732,7 @@ test.describe('Tournaments · a pool with no name', () => {
     expect(store.unhandled).toEqual([])
   })
 
-  test('takes the organizer to the Table pools tab, where the empty box is', async ({
+  test('takes the organizer to the Reservations tab, where the empty box is', async ({
     page,
   }) => {
     // A message on a tab you cannot see is indistinguishable from a button that does
@@ -739,17 +740,17 @@ test.describe('Tournaments · a pool with no name', () => {
     const { pom, store } = await TournamentDetailPage.navigateTo(page)
 
     await pom.openEditorOverlay(EVENT.JOURNEY).click()
-    await pom.editorTab('Table pools').click()
-    await pom.poolNameInput(0).fill('')
+    await pom.editorTab('Reservations').click()
+    await pom.reservationNameInput(0).fill('')
     await pom.editorTab('Basics').click()
 
     await pom.saveEventButton.click()
 
-    await expect(pom.editorTab('Table pools')).toHaveAttribute(
+    await expect(pom.editorTab('Reservations')).toHaveAttribute(
       'aria-selected',
       'true',
     )
-    await expect(pom.poolNameErrors.first()).toBeVisible()
+    await expect(pom.reservationNameErrors.first()).toBeVisible()
     expect(store.countOf('PATCH')).toBe(0)
   })
 })
@@ -788,19 +789,19 @@ test.describe('Tournaments · the event editor · accessibility', () => {
     })
   })
 
-  test('is axe-clean with a blank POOL NAME on screen', async ({ page }) => {
+  test('is axe-clean with a blank RESERVATION NAME on screen', async ({ page }) => {
     // Red markup on a fourth tab, in a portal — and a box whose border is transparent
     // until it is wrong, which is a contrast question only a browser can answer.
     const { pom } = await TournamentDetailPage.navigateTo(page)
 
     await pom.openEditorOverlay(EVENT.JOURNEY).click()
-    await pom.editorTab('Table pools').click()
-    await pom.poolNameInput(0).fill('')
+    await pom.editorTab('Reservations').click()
+    await pom.reservationNameInput(0).fill('')
     await pom.saveEventButton.click()
 
-    await expect(pom.poolNameErrors.first()).toBeVisible()
+    await expect(pom.reservationNameErrors.first()).toBeVisible()
 
-    await expectAxeClean(page, 'event editor — blank pool name', {
+    await expectAxeClean(page, 'event editor — blank reservation name', {
       exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
     })
   })

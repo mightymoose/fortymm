@@ -11,11 +11,11 @@ import { drawIssueFor } from './draw-issue'
 const structureFor = (overrides: Partial<DrawStructureOptions>) =>
   deriveDrawStructure({
     previewFieldSize: 32,
-    poolReservationCount: 4,
-    poolCountMode: 'automatic',
-    manualPoolCount: null,
-    poolSizeMode: 'automatic',
-    manualPoolSize: null,
+    reservationCount: 4,
+    groupCountMode: 'automatic',
+    manualGroupCount: null,
+    groupSizeMode: 'automatic',
+    manualGroupSize: null,
     qualifiersMode: 'automatic',
     manualQualifiers: null,
     ...overrides,
@@ -36,21 +36,21 @@ describe('drawIssueFor', () => {
     expect(drawIssueFor(structureFor({ previewFieldSize: 22 }))).toEqual({
       kind: 'uneven',
       distribution: [
-        { pools: 2, size: 6 },
-        { pools: 2, size: 5 },
+        { groups: 2, size: 6 },
+        { groups: 2, size: 5 },
       ],
     })
   })
 
   /**
    * ⚠️ The case the ordering exists for. 8 across 6 reservations splits `2, 2, 1, 1, 1,
-   * 1`, so the derivation reports an uneven tally AND a pool nobody can play in — both
-   * non-empty, at once. "Legal, but uneven" is not the thing to say about a pool of one.
+   * 1`, so the derivation reports an uneven tally AND a group nobody can play in — both
+   * non-empty, at once. "Legal, but uneven" is not the thing to say about a group of one.
    */
-  it('puts an unplayable pool ahead of the uneven tally it comes with', () => {
+  it('puts an unplayable group ahead of the uneven tally it comes with', () => {
     const structure = structureFor({
       previewFieldSize: 8,
-      poolReservationCount: 6,
+      reservationCount: 6,
     })
     // Both really are set — otherwise this asserts precedence against a state that never
     // had two answers to choose between.
@@ -64,18 +64,18 @@ describe('drawIssueFor', () => {
   })
 
   /**
-   * The reference's "Numbers disagree" state: 6 manual pools of 5 manual against a field
+   * The reference's "Numbers disagree" state: 6 manual groups of 5 manual against a field
    * of 40. No input can put a disagreement and an uneven tally on screen together — both
-   * modes manual gives every pool the same size — so this pins the middle rung of the
+   * modes manual gives every group the same size — so this pins the middle rung of the
    * order rather than a contest, and it is what chore 5a extends.
    */
   it('reports the disagreement when the director’s two numbers do not multiply out', () => {
     const structure = structureFor({
       previewFieldSize: 40,
-      poolCountMode: 'manual',
-      manualPoolCount: 6,
-      poolSizeMode: 'manual',
-      manualPoolSize: 5,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
+      groupSizeMode: 'manual',
+      manualGroupSize: 5,
     })
 
     expect(drawIssueFor(structure)).toEqual({

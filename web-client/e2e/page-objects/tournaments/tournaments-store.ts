@@ -13,7 +13,7 @@ import {
 } from '../../../src/mocks/factories/tournaments/solver-sim'
 import {
   buildEventResultsRead,
-  buildPoolStandingsRead,
+  buildGroupStandingsRead,
   buildStandingRowRead,
   buildStandingsThenFinishesResultsRead,
   buildTournamentDetailRead,
@@ -28,6 +28,8 @@ import {
   type DrawPlan,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { mockUuid } from '../../../src/mocks/mock-uuid'
+import { groupIdFor, groupsFor } from '../../../src/mocks/factories/tournaments/solver-sim'
+import { groupLetter } from '../../../src/components/tournaments/data/draw-structure'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
@@ -39,12 +41,14 @@ type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
-type Pool = components['schemas']['Pool']
-/** A pool as a **write** body carries it: no `position` on either verb, and an `id` only
- * on the PATCH shape — where it *cites* a pool the event already has rather than
- * authoring one (ADR 20260801, `api/app/tournament_pools.py`). Omitted means "add this
- * pool", and the server mints its uuid. */
-type PoolUpsert = components['schemas']['PoolUpsert']
+/** A slice of tables reserved for a window of time within an event — the **venue** face
+ * (ticket #1369). */
+type Reservation = components['schemas']['Reservation']
+/** A reservation as a **write** body carries it: no `position` on either verb, and an
+ * `id` only on the PATCH shape — where it *cites* a reservation the event already has
+ * rather than authoring one (ADR 20260801, `api/app/tournament_reservations.py`).
+ * Omitted means "add this reservation", and the server mints its uuid. */
+type ReservationUpsert = components['schemas']['ReservationUpsert']
 /** One row of the served **draw-type catalogue** (ADR 20260726). Its `key` is the
  * generated schema's `DrawType`, so a spec cannot serve a slug the API's enum does not
  * hold — the catalogue and the enum are the same set by construction. */
@@ -148,20 +152,20 @@ export const EVENT = {
    * §3). */
   ALL_UNRATED: 'Beginners Singles',
   /** The **drawable** seed's second event (`drawable: true`): singles, round-robin,
-   * five entrants across two pools — the event the draw specs cut. Five and not four,
-   * across two pools and not one, because that is the smallest field that puts every
-   * thing a director reads a draw for on the card at once: two pools (one of 3, one of
-   * 2 — the snake, not blocks), several rounds, and an ODD pool, whose rounds hold
+   * five entrants across two groups — the event the draw specs cut. Five and not four,
+   * across two groups and not one, because that is the smallest field that puts every
+   * thing a director reads a draw for on the card at once: two groups (one of 3, one of
+   * 2 — the snake, not blocks), several rounds, and an ODD group, whose rounds hold
    * fewer fixtures because the player drawn against the phantom seat sits that round out
    * (ADR-0786: a bye is the ABSENCE of a fixture, and a scaffold that invented a "bye"
    * row would have to be caught here or nowhere). */
-  POOLS: 'Pool Play Singles',
+  GROUPS: 'Group Play Singles',
   /** The **bracket** seed's cuttable event (`bracket: true`): singles, `single-elim`,
-   * five entrants and no pools — the one event in this suite whose draw type is not
+   * five entrants and no groups — the one event in this suite whose draw type is not
    * round-robin, and the only user-reachable path to the stub's bracket arm.
    *
    * Five, not four or eight, because a field that is not a power of two is where a
-   * bracket says something a pooled draw cannot: three of the eight slots are phantom,
+   * bracket says something a grouped draw cannot: three of the eight slots are phantom,
    * so seeds 1–3 bye into the semifinals and **round 1 holds exactly one fixture**. A
    * planner that invented a "bye" row, or that padded round 1 to four fixtures with null
    * sides, is caught here and nowhere else (ADR-0786: a bye is the ABSENCE of a
@@ -169,12 +173,12 @@ export const EVENT = {
   BRACKET: 'Championship Singles',
   /** The bracket seed's **uncuttable** event (`bracket: true`): `single-elim` with a
    * LONE entrant, who has nobody to play. It exists so the stub's single-elim refusal
-   * — the `< 2 entrants` 422, the bracket twin of the pool-less one — has a permanent
+   * — the `< 2 entrants` 422, the bracket twin of the group-less one — has a permanent
    * user-reachable path: without it that arm could be reverted to anything at all and
    * this suite would stay green. */
   LONE: 'Novice Singles',
   /** The **two-stage** seed's event (`twoStage: true`): singles, `rr-then-ko`, six entrants
-   * across two pools, two qualifying from each (ADR 20260727). The only user-reachable path
+   * across two groups, two qualifying from each (ADR 20260727). The only user-reachable path
    * to the results union's THIRD arm (`kind: "standings_then_finishes"`) in a real browser —
    * and the one that matters most, because `parseResults` **throws** on a shape it has no
    * arm for, which fails the whole query rather than degrading one panel. */
@@ -283,60 +287,62 @@ function crowd(
 // which is the truth about it, and is why the go-live specs need a different tournament
 // rather than a different assertion.
 
-/** The one pool of the drawable seed's `JOURNEY` event. Two entrants, one pool: the
- * smallest cuttable event there is (a pool of fewer than two is a 422 — a lone entrant
- * has nobody to play). */
-const JOURNEY_POOLS: Pool[] = [
+/** The one reservation of the drawable seed's `JOURNEY` event — and, 1:1, its one group.
+ * Two entrants, one group: the smallest cuttable event there is (a group of fewer than
+ * two is a 422 — a lone entrant has nobody to play). */
+const JOURNEY_RESERVATIONS: Reservation[] = [
   {
-    id: 'p-journey-a',
-    name: 'Pool A',
+    id: 'res-journey-a',
+    name: 'Reservation A',
     slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
 ]
 
-/** The two pools of `EVENT.POOLS`. Their ids are spelled ONCE and handed to both the
- * event and its planner: a fixture's `pool_id` is a string ref into its event's own
- * `pools` (ADR-0786 — pools are JSONB value-objects, not rows), so a seed that spelled
- * them twice could spell them differently and every fixture would point at a pool that
- * does not exist. */
-const PLAY_POOLS: Pool[] = [
+/** The two reservations of `EVENT.GROUPS` — and, 1:1, its two groups. Their ids are
+ * spelled ONCE and handed to both the event and its planner: a fixture's `group_id` is a
+ * string ref into its event's own `groups`, minted 1:1 from `reservations`
+ * (ADR-0786 — groups are JSONB value-objects, not rows), so a seed that spelled the
+ * reservation ids twice could spell them differently and every fixture would point at a
+ * group that does not exist. */
+const PLAY_RESERVATIONS: Reservation[] = [
   {
-    id: 'p-play-a',
-    name: 'Pool A',
+    id: 'res-play-a',
+    name: 'Reservation A',
     slot: { date: '2026-06-13', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: 'p-play-b',
-    name: 'Pool B',
+    id: 'res-play-b',
+    name: 'Reservation B',
     slot: { date: '2026-06-13', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
     position: 1,
   },
 ]
 
-/** How many players are in `EVENT.POOLS` before anybody enters through the UI. Five
- * across two pools snakes to 3 + 2 — see `EVENT.POOLS`. */
+/** How many players are in `EVENT.GROUPS` before anybody enters through the UI. Five
+ * across two groups snakes to 3 + 2 — see `EVENT.GROUPS`. */
 const PLAY_FIELD = 5
 
 /** The field in `EVENT.BRACKET`. Five into a bracket of eight: three byes on the top
  * three seeds, one round-1 fixture, two semifinals and a final — see `EVENT.BRACKET`. */
 const BRACKET_FIELD = 5
 
-/** The played-out result for `EVENT.JOURNEY` (`standings: true`): its one pool
- * (`p-journey-a`) decided, `player.1` over `player.2`, so it is complete with a champion.
- * The row entry ids are the JOURNEY event's own (`entry-1`, `entry-2`), so the FE's join to
- * a username lands — a table of raw ids would render, and prove nothing. Built through the
- * generated-schema-typed factory, so a change to the results contract reds this file. */
+/** The played-out result for `EVENT.JOURNEY` (`standings: true`): its one group
+ * (`groupIdFor('res-journey-a')`) decided, `player.1` over `player.2`, so it is complete
+ * with a champion. The row entry ids are the JOURNEY event's own (`entry-1`, `entry-2`),
+ * so the FE's join to a username lands — a table of raw ids would render, and prove
+ * nothing. Built through the generated-schema-typed factory, so a change to the results
+ * contract reds this file. */
 const JOURNEY_RESULTS: StandingsResultsRead = buildEventResultsRead({
   complete: true,
   champion: 'entry-1',
-  pools: [
-    buildPoolStandingsRead({
-      pool_id: 'p-journey-a',
+  groups: [
+    buildGroupStandingsRead({
+      group_id: groupIdFor('res-journey-a'),
       complete: true,
       rows: [
         buildStandingRowRead({
@@ -366,20 +372,22 @@ const JOURNEY_RESULTS: StandingsResultsRead = buildEventResultsRead({
 
 // ----- the TWO-STAGE seed (`rr-then-ko`, ADR 20260727) ----------------------
 
-/** The two pools of `EVENT.TWO_STAGE`. Their ids are `p-a` / `p-b` because that is what
- * `buildStandingsThenFinishesResultsRead`'s pool blocks name — the results fixture and the
- * event's own `pools` have to agree, or the tables would title themselves from a raw id. */
-const CUP_POOLS: Pool[] = [
+/** The two reservations of `EVENT.TWO_STAGE` — and, 1:1, its two groups. Their ids are
+ * `res-a` / `res-b` because `groupIdFor` derives `grp-res-a` / `grp-res-b`, which is what
+ * `buildStandingsThenFinishesResultsRead`'s group blocks name — the results fixture and
+ * the event's own `reservations` have to agree, or the tables would title themselves from
+ * a raw id. */
+const CUP_RESERVATIONS: Reservation[] = [
   {
-    id: 'p-a',
-    name: 'Pool A',
+    id: 'res-a',
+    name: 'Reservation A',
     slot: { date: '2026-06-13', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: 'p-b',
-    name: 'Pool B',
+    id: 'res-b',
+    name: 'Reservation B',
     slot: { date: '2026-06-13', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
     position: 1,
@@ -398,18 +406,99 @@ const CUP_ENTRANTS: TournamentEntrantRead[] = Array.from({ length: 6 }, (_, i) =
   }),
 )
 
-/** The played-out two-stage result for `EVENT.TWO_STAGE`: both pools decided, the bracket
- * run to a final, and a champion — `player.4` — who **tops neither pool**. The snake deals
- * `p-a` entries 1, 4, 5 and `p-b` entries 2, 3, 6, and the fixture's standings stand over
- * exactly those memberships. */
+/** The played-out two-stage result for `EVENT.TWO_STAGE`: both groups decided, the
+ * bracket run to a final, and a champion — `player.4` — who **tops neither group**. The
+ * snake deals `groupIdFor('res-a')` entries 1, 4, 5 and `groupIdFor('res-b')` entries 2,
+ * 3, 6, and the fixture's standings stand over exactly those memberships.
+ *
+ * The factory's own default `groups` name `grp-a`/`grp-b` literally — fine for a fixture
+ * with no real event behind it, but this one has to agree with `CUP_RESERVATIONS`' real
+ * derived group ids, so both groups are overridden here with the same rows, `group_id`
+ * swapped for `groupIdFor(...)`. */
 const CUP_RESULTS: StandingsThenFinishesResultsRead =
-  buildStandingsThenFinishesResultsRead()
+  buildStandingsThenFinishesResultsRead({
+    groups: [
+      buildGroupStandingsRead({
+        group_id: groupIdFor('res-a'),
+        complete: true,
+        rows: [
+          buildStandingRowRead({
+            entry_id: 'entry-1',
+            rank: 1,
+            played: 2,
+            wins: 2,
+            losses: 0,
+            games_won: 4,
+            games_lost: 1,
+            game_difference: 3,
+          }),
+          buildStandingRowRead({
+            entry_id: 'entry-4',
+            rank: 2,
+            played: 2,
+            wins: 1,
+            losses: 1,
+            games_won: 3,
+            games_lost: 3,
+            game_difference: 0,
+          }),
+          buildStandingRowRead({
+            entry_id: 'entry-5',
+            rank: 3,
+            played: 2,
+            wins: 0,
+            losses: 2,
+            games_won: 1,
+            games_lost: 4,
+            game_difference: -3,
+          }),
+        ],
+      }),
+      buildGroupStandingsRead({
+        group_id: groupIdFor('res-b'),
+        complete: true,
+        rows: [
+          buildStandingRowRead({
+            entry_id: 'entry-2',
+            rank: 1,
+            played: 2,
+            wins: 2,
+            losses: 0,
+            games_won: 4,
+            games_lost: 0,
+            game_difference: 4,
+          }),
+          buildStandingRowRead({
+            entry_id: 'entry-3',
+            rank: 2,
+            played: 2,
+            wins: 1,
+            losses: 1,
+            games_won: 2,
+            games_lost: 3,
+            game_difference: -1,
+          }),
+          buildStandingRowRead({
+            entry_id: 'entry-6',
+            rank: 3,
+            played: 2,
+            wins: 0,
+            losses: 2,
+            games_won: 1,
+            games_lost: 4,
+            game_difference: -3,
+          }),
+        ],
+      }),
+    ],
+  })
 
-/** The same event one match from home: pools decided, the final seated and unplayed. So
+/** The same event one match from home: groups decided, the final seated and unplayed. So
  * `complete` is false, there is no champion, and the finishes list **starts at position 3**
  * — the two beaten semifinalists are all the bracket has placed. */
 const CUP_RESULTS_MID_FLIGHT: StandingsThenFinishesResultsRead =
   buildStandingsThenFinishesResultsRead({
+    groups: CUP_RESULTS.groups,
     complete: false,
     champion: null,
     finishes: CUP_RESULTS.finishes.filter((f) => f.position === 3),
@@ -426,10 +515,10 @@ function twoStageEvents(): TournamentEventRead[] {
       format: 'singles',
       draw_type: 'rr-then-ko',
       // The director's own K, which sizes the bracket at the cut (`P × K` = 2 × 2 = 4).
-      qualifiers_per_pool: 2,
+      qualifiers_per_group: 2,
       max_players: 32,
       entrants: CUP_ENTRANTS,
-      pools: CUP_POOLS,
+      reservations: CUP_RESERVATIONS,
     }),
   ]
 }
@@ -449,16 +538,16 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
       draw_type: 'round-robin',
       max_players: 64,
       entrants: OTHERS,
-      pools: JOURNEY_POOLS,
+      reservations: JOURNEY_RESERVATIONS,
     }),
     buildTournamentEventRead({
-      id: 'ev-pool-play',
-      name: EVENT.POOLS,
+      id: 'ev-group-play',
+      name: EVENT.GROUPS,
       format: 'singles',
       draw_type: 'round-robin',
       max_players: 32,
       entrants: crowd(PLAY_FIELD),
-      pools: PLAY_POOLS,
+      reservations: PLAY_RESERVATIONS,
     }),
     ...(options.bracket ?? false ? bracketEvents() : []),
     ...(options.twoStage ?? false ? twoStageEvents() : []),
@@ -471,10 +560,11 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
  * events: a third and fourth event in the DEFAULT seed would move the tournament's
  * Entries total and the work list a refused start prints.
  *
- * They are **un-pooled**. A bracket ignores its event's pools entirely — on the server
- * and in `planDraw` alike — so giving them pools would suggest a relationship that does
- * not exist. It also keeps `EVENT.LONE`'s refusal honest: the one thing wrong with it is
- * its field of one, so the sentence it gets back can only be the bracket's. */
+ * They are **UNGROUPED**. A bracket ignores its event's reservations entirely — on the
+ * server and in `planDraw` alike — so giving them reservations would suggest a
+ * relationship that does not exist. It also keeps `EVENT.LONE`'s refusal honest: the one
+ * thing wrong with it is its field of one, so the sentence it gets back can only be the
+ * bracket's. */
 function bracketEvents(): TournamentEventRead[] {
   return [
     buildTournamentEventRead({
@@ -484,7 +574,7 @@ function bracketEvents(): TournamentEventRead[] {
       draw_type: 'single-elim',
       max_players: 32,
       entrants: crowd(BRACKET_FIELD),
-      pools: [],
+      reservations: [],
     }),
     buildTournamentEventRead({
       id: 'ev-novice',
@@ -493,7 +583,7 @@ function bracketEvents(): TournamentEventRead[] {
       draw_type: 'single-elim',
       max_players: 16,
       entrants: crowd(1),
-      pools: [],
+      reservations: [],
     }),
   ]
 }
@@ -589,16 +679,17 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
         id: 'ev-u1500',
         name: EVENT.EMPTY,
         format: 'singles',
-        // The **refusal** fixture: a round-robin with NO POOLS, which is a 422 the real
-        // API genuinely emits ("A round-robin draw needs at least one pool."). Both
-        // halves are stated here rather than inherited, because the refusal specs rest
-        // on exactly this pair — a stub that refused a draw type the server can in fact
-        // cut (single-elim shipped in #785) would be asserting a sentence no server
-        // would ever send, which is the one thing a mirror of the API must not do.
+        // The **refusal** fixture: a round-robin with NO RESERVATIONS (and so no
+        // groups), which is a 422 the real API genuinely emits ("A round-robin draw
+        // needs at least one group."). Both halves are stated here rather than
+        // inherited, because the refusal specs rest on exactly this pair — a stub that
+        // refused a draw type the server can in fact cut (single-elim shipped in #785)
+        // would be asserting a sentence no server would ever send, which is the one
+        // thing a mirror of the API must not do.
         draw_type: 'round-robin',
         max_players: 48,
         entrants: [],
-        pools: [],
+        reservations: [],
       }),
       buildTournamentEventRead({
         id: 'ev-mixed-doubles',
@@ -606,7 +697,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
         format: 'doubles',
         max_players: 32,
         entrants: [],
-        pools: [],
+        reservations: [],
       }),
       ...(crowded
         ? [
@@ -616,7 +707,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
               format: 'singles',
               max_players: 64,
               entrants: crowd(CROWD_SIZE),
-              pools: [],
+              reservations: [],
             }),
           ]
         : []),
@@ -640,7 +731,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
                 predicate_id: BEGINNERS_RULE.id,
                 rating: MY_RATING,
               },
-              pools: [],
+              reservations: [],
             }),
           ]
         : []),
@@ -665,7 +756,7 @@ function gatedEvents(): TournamentEventRead[] {
       format: 'singles',
       max_players: SMALL_CAP,
       entrants: crowd(SMALL_CAP),
-      pools: [],
+      reservations: [],
     }),
     buildTournamentEventRead({
       id: 'ev-legends',
@@ -675,7 +766,7 @@ function gatedEvents(): TournamentEventRead[] {
       // One seat short of full — the spec fills it with ME (`enteredIn`), which is
       // the only honest way to reach "an entrant inside a FULL event".
       entrants: crowd(SMALL_CAP - 1),
-      pools: [],
+      reservations: [],
     }),
     buildTournamentEventRead({
       id: 'ev-u1200',
@@ -689,7 +780,7 @@ function gatedEvents(): TournamentEventRead[] {
         predicate_id: U1200_RULE.id,
         rating: MY_RATING,
       },
-      pools: [],
+      reservations: [],
     }),
   ]
 }
@@ -758,7 +849,7 @@ export interface TournamentsStoreOptions {
    * one through the UI is (rightly) refused. */
   enteredIn?: string[]
   /** Seed the **round-robin** tournament instead of the entry-shaped one (ADR-0786):
-   * `EVENT.JOURNEY` and `EVENT.POOLS`, both of them events a draw can be cut for.
+   * `EVENT.JOURNEY` and `EVENT.GROUPS`, both of them events a draw can be cut for.
    *
    * It REPLACES the default events rather than adding to them — see `drawableEvents`.
    * The default seed holds an event with no entrants and a doubles event, and no draw
@@ -786,21 +877,21 @@ export interface TournamentsStoreOptions {
    * still kept a hardcoded list, which is the thing the ADR deleted. */
   drawTypeCatalogue?: DrawTypeRead[]
   /** Events whose draw is already CUT when the page loads — by name, and only from the
-   * drawable seed (the default seed's events are pool-less or empty, and the stub refuses
+   * drawable seed (the default seed's events are group-less or empty, and the stub refuses
    * to cut those exactly as the server does).
    *
    * Cut with the same planner the cut ROUTE uses, from the same entrants and the same
-   * pools, so a seeded draw is one this stub could have dealt — never a hand-written
+   * reservations, so a seeded draw is one this stub could have dealt — never a hand-written
    * list of fixtures no cut would ever produce. */
   drawn?: string[]
-  /** Attach a **played-out** result to `EVENT.JOURNEY` (ADR-0788): its one pool decided,
+  /** Attach a **played-out** result to `EVENT.JOURNEY` (ADR-0788): its one group decided,
    * with a champion — the standings the tournament detail renders once matches complete.
    * Opt-in, and only meaningful with `drawable`, because standings ride on a round-robin
    * event's draw. Its rows name the drawable JOURNEY's own two entrants (`entry-1`,
    * `entry-2`), so the FE's name join lands. */
   standings?: boolean
   /** Add the **two-stage** (`rr-then-ko`) event to the drawable seed — which it also turns
-   * on, since it extends that seed: `EVENT.TWO_STAGE`, six entrants across two pools.
+   * on, since it extends that seed: `EVENT.TWO_STAGE`, six entrants across two groups.
    *
    * Opt-in for the same reason `bracket` is (its entrants would move the Entries total the
    * journey spec narrates), and it is the ONLY browser-reachable path to the results union's
@@ -808,7 +899,7 @@ export interface TournamentsStoreOptions {
    * on its own it is an uncut two-stage event. */
   twoStage?: boolean
   /** Attach the **two-stage** result to `EVENT.TWO_STAGE` (ADR 20260727) — `'complete'` for
-   * a bracket run to a final with a champion, `'mid-flight'` for decided pools and an
+   * a bracket run to a final with a champion, `'mid-flight'` for decided groups and an
    * unplayed final (no champion, finishes starting at position 3). Only meaningful with
    * `twoStage`. */
   twoStageResults?: 'complete' | 'mid-flight'
@@ -836,7 +927,7 @@ export interface TournamentsStoreOptions {
  * one of the two events would be refused, and would look like a bug in the header. */
 export const READY_TO_START: TournamentsStoreOptions = {
   drawable: true,
-  drawn: [EVENT.JOURNEY, EVENT.POOLS],
+  drawn: [EVENT.JOURNEY, EVENT.GROUPS],
 }
 
 /**
@@ -875,7 +966,7 @@ const REGISTRATION_CLOSED_DETAIL: Record<
 //
 // ⚠️ This stub used to be **more permissive than the server** in two ways at once, and
 // each of them would have let a lying UI ship: every event's `fixtures` defaulted to
-// `[]` (so no browser spec could ever reach a *drawn* state — the pools scaffold, the
+// `[]` (so no browser spec could ever reach a *drawn* state — the groups scaffold, the
 // frozen editor and the axe scan over both were unreachable), and `published → live` was
 // accepted unconditionally (so the precondition the server enforces could not be
 // exercised, and a Start button that worked here would 409 in front of a director on the
@@ -907,8 +998,8 @@ function drawCurrency(event: TournamentEventRead): 'current' | 'uncut' | 'stale'
   return same ? 'current' : 'stale'
 }
 
-/** The things a refusal is about, as a human would say them: `“Pool B”`, or
- * `“Pool B” and “Pool C”` (`named_list`, `api/app/schemas/tournament.py`). */
+/** The things a refusal is about, as a human would say them: `“Group B”`, or
+ * `“Group B” and “Group C”` (`named_list`, `api/app/schemas/tournament.py`). */
 function namedList(names: string[]): string {
   const quoted = names.map((name) => `“${name}”`)
   if (quoted.length === 1) return quoted[0]
@@ -1144,14 +1235,14 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
   return planDraw(
     event.draw_type,
     drawOrder(event.entrants).map((e) => e.id),
-    event.pools.map((p) => p.id),
+    event.groups.map((g) => g.id),
     // **The event's own K** (ADR 20260727) — the count the director configured and the
     // PATCH stored, passed through unchanged. It is what sizes an `rr-then-ko` draw's
     // bracket (`P × K`), so substituting anything would cut a `P × 1` bracket for an event
     // configured otherwise: a well-formed draw of the wrong size, with nothing anywhere
     // reporting the substitution. `null` is the honest value for a count-less draw type,
     // and only the arm that never reads it can see it.
-    event.qualifiers_per_pool,
+    event.qualifiers_per_group,
     // **The event's own R** (ADR "swiss pre-cuts every round and pairs each one on
     // advance") — the round count the director configured and the PATCH stored, passed
     // through unchanged and on exactly the same terms as the qualifier count above: it is
@@ -1166,80 +1257,88 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
   )
 }
 
-/** The server's sentence for a pools payload that would change WHICH pools a cut event
- * has (`_pool_set_frozen_detail`, `api/app/tournament_events.py`) — verbatim, because the
- * editor shows it verbatim in its inline banner.
+/** The server's sentence for a reservations payload that would change WHICH groups a cut
+ * event has (`_group_set_frozen_detail`, `api/app/tournament_events.py`) — verbatim,
+ * because the editor shows it verbatim in its inline banner.
  *
- * Both halves are named, from whichever side of the change still knows the name: a pool
- * being removed is only described by the row the event holds, one being added only by the
- * payload. */
-function poolSetFrozenDetail(
+ * Removed groups are NAMED, from the row the event holds: the label its stored position
+ * derives, which is the label the director is looking at right now. Added groups are
+ * COUNTED, not named — they have no position yet, and the label they would land on is
+ * one an existing group currently wears, so naming them would produce a sentence that
+ * contradicts itself ("Group A already has fixtures drawn into it; and Group A would
+ * arrive with no fixtures in it"). Mirrors `_group_set_frozen_detail` byte for byte. */
+function groupSetFrozenDetail(
   event: TournamentEventRead,
   submitted: { id?: string | null; name?: string }[],
 ): string {
-  const existing = new Set(event.pools.map((p) => p.id))
+  const existing = new Set(event.reservations.map((r) => r.id))
   const incoming = new Set(
-    submitted.map((p) => p.id).filter((id): id is string => id != null),
+    submitted.map((r) => r.id).filter((id): id is string => id != null),
   )
   const clauses: string[] = []
-  const removed = event.pools.filter((p) => !incoming.has(p.id)).map((p) => p.name)
-  const added = submitted
-    .filter((p) => p.id == null || !existing.has(p.id))
-    .map((p) => p.name ?? '')
+  const removed = event.reservations
+    .map((r, position) => ({ r, position }))
+    .filter(({ r }) => !incoming.has(r.id))
+    .map(({ position }) => `Group ${groupLetter(position)}`)
+  const added = submitted.filter(
+    (r) => r.id == null || !existing.has(r.id),
+  ).length
   if (removed.length > 0) {
     clauses.push(
       `${namedList(removed)} already has fixtures drawn into it, ` +
-        'which this change would leave pointing at a pool that no longer exists',
+        'which this change would leave pointing at a group that no longer exists',
     )
   }
-  if (added.length > 0) {
+  if (added > 0) {
     clauses.push(
-      `${namedList(added)} would arrive with no fixtures in it, ` +
-        'because the draw was cut across the pools this event had at the time',
+      `${added} new ${added === 1 ? 'group' : 'groups'} would arrive with no ` +
+        `fixtures in ${added === 1 ? 'it' : 'them'}, because the draw was cut ` +
+        'across the groups this event had at the time',
     )
   }
   return (
-    "This event's draw is already cut, so its set of pools is frozen: " +
+    "This event's draw is already cut, so its set of groups is frozen: " +
     clauses.join('; and ') +
-    ". A pool's tables, its time and its name can all still be changed. " +
-    'To add or remove a pool, remove the draw first, then cut it again.'
+    ". A reservation's tables, its time and its name can all still be changed. " +
+    'To add or remove a group, remove the draw first, then cut it again.'
   )
 }
 
 /** Why this event PATCH is refused by a standing draw — or `null` when it is not
- * (`_enforce_pool_set_frozen` / `_enforce_draw_type_frozen`, both a 409).
+ * (`_enforce_group_set_frozen` / `_enforce_draw_type_frozen`, both a 409).
  *
  * Two facts are frozen while fixtures exist, and **only** these two:
- * - the **set of pool ids**, because a fixture names the pool it was dealt into — remove
- *   one and its fixtures point at nothing, add one and it arrives with no fixtures;
+ * - the **set of groups**, because a fixture names the group it was dealt into — remove
+ *   the reservation that mints one and its fixtures point at nothing, add a reservation
+ *   and its new group arrives with no fixtures;
  * - the **draw type**, because it is not a label on an event but the strategy that DEALT
  *   these fixtures.
  *
- * Everything else about a pool — its name, its tables, its window, its place in the order
- * — stays editable, and so does the rest of the event.
+ * Everything else about a reservation — its name, its tables, its window, its place in
+ * the order — stays editable, and so does the rest of the event.
  *
- * **Re-identifying a pool is no longer one of the refusals**, because it is no longer a
- * payload a client can send (ADR 20260801): a pool id is minted by the server, so an
- * entry either cites one this event has or carries none at all — and an entry with no id
- * is an *addition*, which is why it counts towards the change rather than towards the
- * incoming set. */
+ * **Re-identifying a reservation is no longer one of the refusals**, because it is no
+ * longer a payload a client can send (ADR 20260801): a reservation id is minted by the
+ * server, so an entry either cites one this event has or carries none at all — and an
+ * entry with no id is an *addition*, which is why it counts towards the change rather
+ * than towards the incoming set. */
 function frozenDetail(event: TournamentEventRead, body: unknown): string | null {
   if (event.fixtures.length === 0) return null
   const patch = body as {
-    pools?: { id?: string | null }[] | null
+    reservations?: { id?: string | null }[] | null
     draw_type?: string | null
   } | null
 
-  if (patch?.pools) {
-    const before = new Set(event.pools.map((p) => p.id))
+  if (patch?.reservations) {
+    const before = new Set(event.reservations.map((r) => r.id))
     const after = new Set(
-      patch.pools.map((p) => p.id).filter((id): id is string => id != null),
+      patch.reservations.map((r) => r.id).filter((id): id is string => id != null),
     )
     const same =
       before.size === after.size &&
-      after.size === patch.pools.length &&
+      after.size === patch.reservations.length &&
       [...before].every((id) => after.has(id))
-    if (!same) return poolSetFrozenDetail(event, patch.pools)
+    if (!same) return groupSetFrozenDetail(event, patch.reservations)
   }
 
   if (patch?.draw_type && patch.draw_type !== event.draw_type) {
@@ -1263,7 +1362,7 @@ export class TournamentsStore {
   private detail: TournamentDetailRead
   private entryCounter = 0
   private tableCounter = 0
-  private poolCounter = 0
+  private reservationCounter = 0
   private gate: Promise<void> | null = null
   private refusingWrites = false
   private refusingTournamentCreate = false
@@ -1330,8 +1429,8 @@ export class TournamentsStore {
       this.mutateEvent(event.id, (e) => ({ ...e, results: JOURNEY_RESULTS }))
     }
     // The two-stage result (ADR 20260727), on the same footing: it rides on the seeded
-    // `EVENT.TWO_STAGE` draw rather than inventing one, and its pool standings stand over
-    // the pools that draw's snake actually dealt.
+    // `EVENT.TWO_STAGE` draw rather than inventing one, and its group standings stand over
+    // the groups that draw's snake actually dealt.
     if (options.twoStageResults) {
       const event = this.eventNamed(EVENT.TWO_STAGE)
       const results =
@@ -1341,7 +1440,7 @@ export class TournamentsStore {
       this.mutateEvent(event.id, (e) => ({ ...e, results }))
     }
     // A fixture standing on a table — what makes removing that table a 409 rather
-    // than the quiet removal a merely pool-reserved table gets.
+    // than the quiet removal a merely reservation-held table gets.
     if (options.placed) {
       const event = this.eventNamed(options.placed)
       const fixture = event.fixtures[0]
@@ -1430,11 +1529,11 @@ export class TournamentsStore {
     return this.detail.events.find((e) => e.name === eventName)?.fixtures ?? []
   }
 
-  /** An event's pools as the server now holds them — for the other half of the freeze:
-   * a pool's *tables* really did change under a standing draw, and the draw really did
-   * survive it. */
-  poolsOf(eventName: string): Pool[] {
-    return this.detail.events.find((e) => e.name === eventName)?.pools ?? []
+  /** An event's reservations as the server now holds them — for the other half of the
+   * freeze: a reservation's *tables* really did change under a standing draw, and the
+   * draw really did survive it. */
+  reservationsOf(eventName: string): Reservation[] {
+    return this.detail.events.find((e) => e.name === eventName)?.reservations ?? []
   }
 
   /**
@@ -1874,8 +1973,8 @@ export class TournamentsStore {
   /** One step of the mock worker, driven by the detail READS (there is no real
    * queue here) — `stepScheduleSolve`, the shared sim (`solver-sim.ts`), so this
    * stub and the MSW store cannot drift apart on what a solve does: `queued` →
-   * `running`, then `running` → `succeeded` with every unplaced pooled fixture
-   * dealt onto its pool's tables (and, while LIVE, the imminent ones called).
+   * `running`, then `running` → `succeeded` with every unplaced grouped fixture
+   * dealt onto its group's reservation tables (and, while LIVE, the imminent ones called).
    * Terminal rows never move — a seeded `infeasible`/`failed` strip stays what
    * the spec seeded.
    *
@@ -2093,7 +2192,7 @@ export class TournamentsStore {
    * And the removal's refusal, judged **before anything is written**: a table matches
    * are *placed at* cannot go without `unplace_fixtures_on_removed_tables: true`, and
    * without it the answer is a 409 carrying the server's own sentence — verbatim,
-   * because the confirm dialog renders it verbatim. (A table only a *pool* reserves
+   * because the confirm dialog renders it verbatim. (A table only a *reservation* holds
    * needs no opt-in: a reservation is not a placement.)
    *
    * The 422 arm matters as much as the 409: it is what makes a client-minted id a
@@ -2187,18 +2286,21 @@ export class TournamentsStore {
     }
   }
 
-  /** One pool of an event write after the diff: the cited pool, re-worded and
-   * re-positioned — or a brand-new one whose **uuid the server mints**
-   * (`gen_random_uuid()`; `Pool.id` is `format: uuid` on the wire, so the stub must not
-   * hand back a slug, and a client cannot author one at all: ADR 20260801).
+  /** One reservation of an event write after the diff: the cited reservation, re-worded
+   * and re-positioned — or a brand-new one whose **uuid the server mints**
+   * (`gen_random_uuid()`; `Reservation.id` is `format: uuid` on the wire, so the stub
+   * must not hand back a slug, and a client cannot author one at all: ADR 20260801).
    *
    * The twin of `upsertTable` above, one resource over. On the create path the `id` arm
-   * is unreachable by construction — `PoolWrite` has no id — which is exactly the point:
-   * a created event's pools are all new, and all minted here. */
-  private upsertPool(entry: PoolUpsert, position: number): Pool {
+   * is unreachable by construction — `ReservationWrite` has no id — which is exactly the
+   * point: a created event's reservations are all new, and all minted here. */
+  private upsertReservation(
+    entry: ReservationUpsert,
+    position: number,
+  ): Reservation {
     const id =
       entry.id ??
-      mockUuid(`e2e-tournament-event-pool-${(this.poolCounter += 1)}`)
+      mockUuid(`e2e-tournament-event-reservation-${(this.reservationCounter += 1)}`)
     return {
       id,
       name: entry.name,
@@ -2233,17 +2335,23 @@ export class TournamentsStore {
 
     // The wire body (`TournamentEventCreate`) is the read shape minus the fields the
     // server owns — `entered` is derived, and a new event has no entrants.
-    const { pools: submitted, ...fields } = body as Partial<
-      Omit<TournamentEventRead, 'entered' | 'pools'>
-    > & { pools?: PoolUpsert[] }
+    const { reservations: submitted, ...fields } = body as Partial<
+      Omit<TournamentEventRead, 'entered' | 'reservations'>
+    > & { reservations?: ReservationUpsert[] }
     const created = buildTournamentEventRead({
       ...fields,
-      // Every pool of a created event is a NEW pool: `PoolWrite` has no `id` at all
-      // (ADR 20260801), so the server mints one for each and assigns the position from
-      // the array index — the body carries neither, and the order of the list is what
-      // says which pool is first. See the same pair in `updateEvent` below.
+      // Every reservation of a created event is a NEW reservation: `ReservationWrite`
+      // has no `id` at all (ADR 20260801), so the server mints one for each and assigns
+      // the position from the array index — the body carries neither, and the order of
+      // the list is what says which reservation is first. See the same pair in
+      // `updateEvent` below. `groups` is left unstated here — `buildTournamentEventRead`
+      // mints it 1:1 from the reservations this override supplies.
       ...(submitted
-        ? { pools: submitted.map((pool, index) => this.upsertPool(pool, index)) }
+        ? {
+            reservations: submitted.map((reservation, index) =>
+              this.upsertReservation(reservation, index),
+            ),
+          }
         : {}),
       id: `ev-created-${this.detail.events.length + 1}`,
       entrants: [],
@@ -2253,20 +2361,21 @@ export class TournamentsStore {
   }
 
   /** `PATCH …/events/{event_id}` — edit an event, with the same 422, and with the two
-   * **freezes** a cut draw puts on it (ADR-0786, a 409 each): the event's set of pools
+   * **freezes** a cut draw puts on it (ADR-0786, a 409 each): the event's set of groups
    * and its draw type.
    *
    * The editor declines to *build* either change while a draw stands (the controls are
    * disabled, with the reason), so a spec should never reach these — they are here
-   * because a stub that answered **200** to a pool-set change would be more permissive
+   * because a stub that answered **200** to a group-set change would be more permissive
    * than the server, and the day the freeze regressed, the editor would silently orphan
    * every fixture in `npm run dev` and in this suite, and 409 only in production.
    *
    * ⚠️ It is the CHANGE that is refused, never the mere presence of the key: the editor
-   * PATCHes the whole form back — `pools` and `draw_type` included — to move a pool's
-   * tables, which is exactly the edit the freeze exists to permit (a table breaks
-   * mid-event and has to be recorded without destroying a correct draw). A stub that
-   * fired on the key would fail the "tables stay editable" spec, and would be wrong. */
+   * PATCHes the whole form back — `reservations` and `draw_type` included — to move a
+   * reservation's tables, which is exactly the edit the freeze exists to permit (a table
+   * breaks mid-event and has to be recorded without destroying a correct draw). A stub
+   * that fired on the key would fail the "tables stay editable" spec, and would be
+   * wrong. */
   private async updateEvent(route: Route, eventId: string, body: unknown) {
     const event = this.detail.events.find((e) => e.id === eventId)
     if (!event) return json(route, 404, { detail: 'event not found' })
@@ -2276,35 +2385,48 @@ export class TournamentsStore {
     const frozen = frozenDetail(event, body)
     if (frozen) return json(route, 409, { detail: frozen })
 
-    const fields = body as Partial<Omit<TournamentEventRead, 'entered' | 'pools'>> & {
-      pools?: PoolUpsert[]
+    const fields = body as Partial<
+      Omit<TournamentEventRead, 'entered' | 'reservations' | 'groups'>
+    > & {
+      reservations?: ReservationUpsert[]
     }
     // `entrants` and `entered` are the server's, not the editor's — the write body
     // does not carry them, and echoing the client's view back would clobber
     // registrations it never saw.
     //
-    // A pool's `id` and its `position` are the server's too, and in a sharper way: both
-    // write shapes FORBID `position` and the create shape has no `id` at all, so the body
-    // carries neither and the **order of the array** is the only thing saying which pool
-    // comes first. So this stub applies the pools as the server does — an entry citing an
-    // id keeps that pool, an entry with none is minted a fresh uuid (`upsertPool`), and
-    // every one of them takes the position of its index. Spreading the write shape
-    // straight through would strip two required read fields and leave the editor (which
-    // seeds its cards from `position`) sorting by nothing.
-    this.mutateEvent(eventId, (e) => ({
-      ...e,
-      ...fields,
-      pools: fields.pools
-        ? fields.pools.map((pool, index) => this.upsertPool(pool, index))
-        : e.pools,
-      entrants: e.entrants,
-      // **Re-minted on a draw-type change, in place** (ADR 20260815 decision 3) — the
-      // same rule `mocks/tournaments-store.ts`'s `updateEvent` follows, and reachable
-      // for the same reason: `frozenDetail` above already 409s a draw-type change while
-      // a draw stands, so this can only run against an undrawn event.
-      stages:
-        fields.draw_type == null ? e.stages : mintStageReads(fields.draw_type),
-    }))
+    // A reservation's `id` and its `position` are the server's too, and in a sharper
+    // way: both write shapes FORBID `position` and the create shape has no `id` at all,
+    // so the body carries neither and the **order of the array** is the only thing
+    // saying which reservation is first. So this stub applies the reservations as the
+    // server does — an entry citing an id keeps that reservation (and its mapped
+    // group), an entry with none is minted a fresh uuid and a fresh group
+    // (`upsertReservation`, `groupsFor`), and every one of them takes the position of
+    // its index. Spreading the write shape straight through would strip two required
+    // read fields and leave the editor (which seeds its cards from `position`) sorting
+    // by nothing.
+    this.mutateEvent(eventId, (e) => {
+      const reservations = fields.reservations
+        ? fields.reservations.map((reservation, index) =>
+            this.upsertReservation(reservation, index),
+          )
+        : e.reservations
+      return {
+        ...e,
+        ...fields,
+        reservations,
+        // **Minted 1:1 with the (possibly new) reservations** (ticket #1369) — never
+        // stored independently, so the mapping cannot drift out of step with a write
+        // that changed the reservation set.
+        groups: groupsFor(reservations),
+        entrants: e.entrants,
+        // **Re-minted on a draw-type change, in place** (ADR 20260815 decision 3) — the
+        // same rule `mocks/tournaments-store.ts`'s `updateEvent` follows, and reachable
+        // for the same reason: `frozenDetail` above already 409s a draw-type change while
+        // a draw stands, so this can only run against an undrawn event.
+        stages:
+          fields.draw_type == null ? e.stages : mintStageReads(fields.draw_type),
+      }
+    })
     return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))
   }
 

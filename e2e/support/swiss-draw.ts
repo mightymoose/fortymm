@@ -187,7 +187,7 @@ export async function readSwissRounds(
  *
  * Throws when the event reads out any other results shape, naming the one it got. That is
  * a real failure and not defensiveness: a swiss event routed through the round-robin arm
- * would come back with its rows grouped under pools that swiss does not have, and the
+ * would come back with its rows grouped under groups that swiss does not have, and the
  * caller would see an empty order rather than a wrong one.
  */
 export async function readSwissStandings(
@@ -203,7 +203,7 @@ export async function readSwissStandings(
   if (results.kind !== 'swiss_standings' || results.rows === undefined) {
     throw new Error(
       `event ${eventId} reads out "${results.kind}" results — a swiss event reads out ` +
-        'one pool-less "swiss_standings" table',
+        'one group-less "swiss_standings" table',
     )
   }
   const nameOf = new Map(event.entrants.map((entrant) => [entrant.id, entrant.username]))

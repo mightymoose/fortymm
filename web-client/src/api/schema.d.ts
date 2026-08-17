@@ -1078,8 +1078,8 @@ export interface paths {
          *     `unplace_fixtures_on_removed_tables: true`: the table is removed and those matches
          *     are unplaced — table, predicted start and call all cleared — which is a thing worth
          *     saying on purpose rather than a silent side effect of editing the venue. Removing a
-         *     table that only a *pool* reserves needs no confirmation and produces no refusal; the
-         *     pool simply reserves one fewer.
+         *     table that only a *reservation* reserves needs no confirmation and produces no
+         *     refusal; the reservation simply reserves one fewer.
          *
          *     **`address` has three cases and the value alone cannot tell them apart.** Omit it to
          *     leave the venue and its coordinates untouched; send a real address to move the venue
@@ -1170,36 +1170,39 @@ export interface paths {
          * @description Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
          *     sent.
          *
-         *     **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
-         *     carries the `id` of a pool this event already has — keeping that pool, with the
+         *     **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
+         *     carries the `id` of a reservation this event already has — keeping it, with the
          *     `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
-         *     to add a new pool, whose id the server mints. **A pool no entry names is removed.**
-         *     Send back the pools you read, edited: the ids came from the read, and naming an id
-         *     this event does not have is a `422` on that entry. Citing the same pool twice is a
-         *     `422` too — a pool id identifies one pool, and the fixtures of a draw name their
-         *     pool by it.
+         *     to add a new reservation, whose id the server mints. **A reservation no entry names
+         *     is removed.** The server keeps one `groups` entry per reservation in lockstep, so
+         *     adding, removing or reordering a reservation adds, removes or reorders its mapped
+         *     group the same way. Send back the reservations you read, edited: the ids came from
+         *     the read, and naming an id this event does not have is a `422` on that entry.
+         *     Citing the same reservation twice is a `422` too — a reservation id identifies one
+         *     reservation, and a group's own reservation is one of them.
          *
          *     **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
          *     fixtures were derived from:
          *
-         *     * **its set of pools, in order.** A `pools` payload must cite exactly the pools the
-         *       event already has, in the order they already stand, or it is refused with a
-         *       `409`: a removed pool would leave the fixtures drawn into it pointing at nothing,
-         *       an added one would arrive with no fixtures (the draw was dealt across the pools
-         *       that existed at the cut), and a reorder would relabel which pool counts as
-         *       "first" for a knockout bracket's qualifier seats mid-draw. Editing each pool's
-         *       `name`, `slot` and `table_ids` in place is still allowed.
+         *     * **its set of groups, in order.** A `reservations` payload must cite exactly the
+         *       reservations mapped to the groups the event already has, in the order they
+         *       already stand, or it is refused with a `409`: a removed group would leave the
+         *       fixtures drawn into it pointing at nothing, an added one would arrive with no
+         *       fixtures (the draw was dealt across the groups that existed at the cut), and a
+         *       reorder would relabel which group counts as "first" for a knockout bracket's
+         *       qualifier seats mid-draw. Editing each reservation's `name`, `slot` and
+         *       `table_ids` in place is still allowed.
          *     * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
          *       so changing it under a standing draw is a `409` too: the event would claim a shape
          *       its draw does not have. Re-sending the draw type the event already has is not a
          *       change, and is not refused.
          *
          *     Nothing else freezes. The event's name, fee, rules and `max_players`, and each
-         *     pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
-         *     venues change under a running tournament, and recording that must never cost a
-         *     director the draw. To change the pools themselves or the draw type, remove the draw
-         *     (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
-         *     are ordinary fields.
+         *     reservation's `table_ids`, `slot` and `name`, all stay editable with a draw
+         *     standing — venues change under a running tournament, and recording that must never
+         *     cost a director the draw. To change the groups themselves or the draw type, remove
+         *     the draw (`DELETE …/draw`), edit, and cut again. With no draw cut, `reservations`
+         *     and `draw_type` are ordinary fields.
          *
          *     Owner-only.
          */
@@ -1325,7 +1328,7 @@ export interface paths {
          *     with them.
          *
          *     Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
-         *     status: a draw may be cut and re-cut freely while a director inspects the pools and
+         *     status: a draw may be cut and re-cut freely while a director inspects the groups and
          *     the seeding. Nothing else creates fixtures, and going live requires every event to
          *     have one (ADR-0786).
          *
@@ -1333,7 +1336,7 @@ export interface paths {
          *     fresh set is planned from the event's *current* active entrants — the old ones are
          *     not patched, and their ids do not survive. That is the point: a draw is a plan made
          *     against a field, and once the field has changed (somebody entered, somebody
-         *     withdrew) the whole plan is re-made, pool sizes and seeding included.
+         *     withdrew) the whole plan is re-made, group sizes and seeding included.
          *
          *     Entrants are ordered by **seed** ascending where one is set, then by **registration
          *     order**. Nothing is random, so the same field always cuts the same draw.
@@ -1343,17 +1346,17 @@ export interface paths {
          *     those away, and a draw must never silently eat a score.
          *
          *     Refused with a `422` when this event cannot produce a draw at all: it has
-         *     **no pools** configured for a pooled draw type, its field is too small for the
-         *     pools it has — a pool with fewer than two players has nobody to play — or a
+         *     **no groups** configured for a grouped draw type, its field is too small for the
+         *     groups it has — a group with fewer than two players has nobody to play — or a
          *     bracket has fewer than two entrants. The message names what to change.
          *
          *     There is no longer a "this draw type has no generator" refusal here: every
          *     draw type a director can pick is one that has a strategy, because the pickable
          *     set *is* the seeded `draw_types` rows, and those are the types that run
          *     (ADR 20260726). Every `422` this route can raise is now about the event's
-         *     **field or pools**, not its type.
+         *     **field or groups**, not its type.
          *
-         *     Owner-only. Fixtures come back in pool → round → position order, exactly as the
+         *     Owner-only. Fixtures come back in group → round → position order, exactly as the
          *     tournament-detail page carries them.
          */
         post: operations["cut_event_draw_v1_tournaments__tournament_id__events__event_id__draw_post"];
@@ -1363,7 +1366,7 @@ export interface paths {
          *
          *     The way back from a draw the director does not want. The event, its entrants and the
          *     rest of the tournament are untouched — only the fixtures go — and the director is
-         *     free to change the pools and cut again.
+         *     free to change the groups and cut again.
          *
          *     Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
          *     fixture with a recorded winner, or one that has become a real match. Undoing a draw
@@ -1430,9 +1433,10 @@ export interface paths {
          *
          *     **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
          *     pinned, and the placement's other constraints — the table belongs to the fixture's
-         *     pool, the time falls inside the pool's window, nothing is double-booked — are flags
-         *     derived on read, **not** invariants. So an out-of-window time, or a table outside
-         *     the fixture's pool, is **stored, not rejected**; the queued re-solve is what judges
+         *     group's reservation, the time falls inside that reservation's window, nothing is
+         *     double-booked — are flags derived on read, **not** invariants. So an out-of-window
+         *     time, or a table outside the fixture's group's reservation, is **stored, not
+         *     rejected**; the queued re-solve is what judges
          *     the consequences.
          *
          *     **The one hard rule about the fixture:** a fixture whose linked match is `completed`
@@ -1932,7 +1936,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["ReservationHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["ReservationOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
             /** Input Fingerprint */
@@ -2308,8 +2312,8 @@ export interface components {
             field_size: number;
             /** Stage Label */
             stage_label: string;
-            /** Pool Label */
-            pool_label: string | null;
+            /** Group Label */
+            group_label: string | null;
             match: components["schemas"]["DashboardTournamentMatch"] | null;
             /** Fixtures */
             fixtures: components["schemas"]["DashboardTournamentFixtureRow"][];
@@ -2665,6 +2669,55 @@ export interface components {
             longitude: number;
             /** Formatted */
             formatted: string;
+        };
+        /**
+         * GroupRead
+         * @description One competitive group of an event's draw, as it is **read**: server-minted
+         *     identity and order, plus which reservation it plays under.
+         *
+         *     Server-owned, unlike :class:`Reservation` — there is no write shape, because a
+         *     client never authors a group directly. The server mints exactly one group per
+         *     reservation (the 1:1, ``app.tournament_reservations``), so a ``reservations`` write
+         *     is the only way a group comes to exist, is re-ordered, or goes away.
+         *
+         *     ``reservation_id`` names an entry of the event's own ``reservations`` array. It is
+         *     never a dangling ref in this slice: the join column behind it is ``NOT NULL`` and a
+         *     real foreign key, so a group with no mapped reservation is a state the database
+         *     cannot produce. A future slice may relax that (#1370), which is why the client is
+         *     expected to look the id up rather than assume it always resolves.
+         */
+        GroupRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Position */
+            position: number;
+            /**
+             * Reservation Id
+             * Format: uuid
+             */
+            reservation_id: string;
+        };
+        /**
+         * GroupStandingsRead
+         * @description One group's standings: its rows in finishing order, and whether every one of its
+         *     fixtures has been decided.
+         *
+         *     ``group_id`` names a group of this same event — the id a fixture also carries — so a
+         *     client titles the table from the group it already holds.
+         */
+        GroupStandingsRead: {
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /** Rows */
+            rows: components["schemas"]["StandingRowRead"][];
+            /** Complete */
+            complete: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -3217,7 +3270,7 @@ export interface components {
         /**
          * NoSingleCauseRead
          * @description CP-SAT proved the day infeasible yet no structural arm explains it — the
-         *     whole-day residual. No pool: it carries only the day aggregate,
+         *     whole-day residual. No reservation: it carries only the day aggregate,
          *     ``required_min`` against ``available_min``, as integer minutes.
          */
         NoSingleCauseRead: {
@@ -3429,14 +3482,14 @@ export interface components {
         };
         /**
          * PastWindowReasonRead
-         * @description A pool whose **entire** planned window is already in the past — the day
-         *     was dated behind ``now`` (most easily via the silent "today" default on an
-         *     event now a day old), so it cannot run until it is moved to a future day
-         *     (ADR "a past day is named, not disguised"). The most specific pre-live cause,
-         *     fixed by "move the date", not "add tables/time". Resolved: the offending
-         *     ``date`` — the venue-local calendar day the director gave a window for, in
-         *     the event's own timezone frame — so the client says which day to move with
-         *     no timezone math of its own. The DB-aware mirror of
+         * @description A reservation whose **entire** planned window is already in the past —
+         *     the day was dated behind ``now`` (most easily via the silent "today"
+         *     default on an event now a day old), so it cannot run until it is moved to
+         *     a future day (ADR "a past day is named, not disguised"). The most specific
+         *     pre-live cause, fixed by "move the date", not "add tables/time". Resolved:
+         *     the offending ``date`` — the venue-local calendar day the director gave a
+         *     window for, in the event's own timezone frame — so the client says which
+         *     day to move with no timezone math of its own. The DB-aware mirror of
          *     :class:`app.scheduling.PastWindow`.
          */
         PastWindowReasonRead: {
@@ -3723,14 +3776,15 @@ export interface components {
         };
         /**
          * PlayerOverSubscribedRead
-         * @description One human with more match-time in a pool than its window can hold: their
-         *     ``match_count`` matches plus the rest between them need ``required_min``
-         *     minutes of *their* time, against a window spanning only ``window_span_min``.
-         *     A pigeonhole over one person, so adding tables cannot fix it — the remedy is
-         *     fewer matches for them in this pool, or a longer window. Resolved: the
-         *     human's display ``player_name``, the pool's ``name`` + ``HH:MM`` bounds, and
-         *     which kind of ``reservation`` that name is — "a smaller pool" is not a remedy
-         *     an event-wide reservation has; the minutes stay integers for the client to
+         * @description One human with more match-time in a reservation than its window can
+         *     hold: their ``match_count`` matches plus the rest between them need
+         *     ``required_min`` minutes of *their* time, against a window spanning only
+         *     ``window_span_min``. A pigeonhole over one person, so adding tables cannot
+         *     fix it — the remedy is fewer matches for them in this reservation, or a
+         *     longer window. Resolved: the human's display ``player_name``, the
+         *     reservation's ``name`` + ``HH:MM`` bounds, and which kind of
+         *     ``reservation`` that name is — "a smaller reservation" is not a remedy an
+         *     event-wide reservation has; the minutes stay integers for the client to
          *     format.
          */
         PlayerOverSubscribedRead: {
@@ -3741,14 +3795,14 @@ export interface components {
             kind: "player_over_subscribed";
             /** Player Name */
             player_name: string;
-            /** Pool Name */
-            pool_name: string;
+            /** Reservation Name */
+            reservation_name: string;
             /**
              * Reservation
-             * @default pool
+             * @default booked
              * @enum {string}
              */
-            reservation: "pool" | "event";
+            reservation: "booked" | "event";
             /** Window Start */
             window_start: string;
             /** Window End */
@@ -3837,190 +3891,6 @@ export interface components {
             rank?: number | null;
         };
         /**
-         * Pool
-         * @description A pool as it is **read back**: everything a client wrote, plus the ``id`` the
-         *     server minted for it and the ``position`` it stamped on it.
-         *
-         *     It is also the model every interior read of an event's pools arrives through —
-         *     ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule snapshots — which
-         *     is why moving pools from a JSONB array into ``tournament_event_pools`` rows changed
-         *     nothing above ``app.tournament_pools.pool_read``: the projection composes this same
-         *     model out of typed columns where it used to validate it out of untyped dicts.
-         *     Deriving it from :class:`PoolWrite` is what keeps the two shapes one shape plus two
-         *     fields, exactly as :class:`TournamentTable` derives from
-         *     :class:`TournamentTableWrite`: a column added to the write side is readable without
-         *     a second edit, and the two can never disagree about what a pool *is*.
-         *
-         *     ``position`` keeps its ``0`` default even though the column is NOT NULL and every
-         *     row carries a real one: the default is what lets a **literal** ``Pool`` be built in
-         *     a test or a REPL without spelling an order out, and a read boundary that
-         *     hard-required it would gain nothing — the projection always supplies it. ``id`` has
-         *     no default, because there is no id a literal pool could sensibly default to.
-         */
-        Pool: {
-            /** Name */
-            name: string;
-            slot: components["schemas"]["Slot"];
-            /** Table Ids */
-            table_ids: string[];
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Position
-             * @description Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
-             * @default 0
-             */
-            position: number;
-        };
-        /**
-         * PoolHasNoTablesRead
-         * @description A pool with active fixtures but no tables at all — nowhere to place them.
-         *     Resolved: the pool's display ``name`` (never the namespaced solver id) and
-         *     which kind of ``reservation`` that name belongs to.
-         */
-        PoolHasNoTablesRead: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "pool_has_no_tables";
-            /** Pool Name */
-            pool_name: string;
-            /**
-             * Reservation
-             * @default pool
-             * @enum {string}
-             */
-            reservation: "pool" | "event";
-        };
-        /**
-         * PoolOverCapacityRead
-         * @description A pool whose aggregate match-time (``required_min``) exceeds the
-         *     table-minutes its window offers (``capacity_min`` = window span ×
-         *     ``table_count``). Resolved: the pool ``name``, which kind of ``reservation``
-         *     it is, and its ``HH:MM`` bounds; the minutes stay integers.
-         */
-        PoolOverCapacityRead: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "pool_over_capacity";
-            /** Pool Name */
-            pool_name: string;
-            /**
-             * Reservation
-             * @default pool
-             * @enum {string}
-             */
-            reservation: "pool" | "event";
-            /** Window Start */
-            window_start: string;
-            /** Window End */
-            window_end: string;
-            /** Required Min */
-            required_min: number;
-            /** Capacity Min */
-            capacity_min: number;
-            /** Table Count */
-            table_count: number;
-        };
-        /**
-         * PoolStandingsRead
-         * @description One pool's standings: its rows in finishing order, and whether every one of its
-         *     fixtures has been decided.
-         *
-         *     ``pool_id`` names a pool of this same event — the id a fixture also carries — so a
-         *     client titles the table from the pool it already holds.
-         */
-        PoolStandingsRead: {
-            /**
-             * Pool Id
-             * Format: uuid
-             */
-            pool_id: string;
-            /** Rows */
-            rows: components["schemas"]["StandingRowRead"][];
-            /** Complete */
-            complete: boolean;
-        };
-        /**
-         * PoolUpsert
-         * @description One pool of an event a client **edits** (``PATCH …/events/{id}``): everything
-         *     :class:`PoolWrite` carries, plus an **optional** ``id`` naming a pool the event
-         *     already has.
-         *
-         *     The exact twin of :class:`TournamentTableUpsert`, one resource over, and the two
-         *     cases are exhaustive:
-         *
-         *     * ``id`` **present** — "this is the pool you already have, with these words". The
-         *       row keeps its id, and therefore every fixture drawn into it and every table it
-         *       reserves, and takes the new ``name``/``slot``/``table_ids``; its place in the list
-         *       is its new place in the event's pool order.
-         *     * ``id`` **omitted** (or ``null``) — "add a pool". The server mints its id, exactly
-         *       as on create.
-         *     * a stored pool **no entry names** — "remove it".
-         *
-         *     ``X | None = None`` and never a non-null default: an optional field on a *write*
-         *     schema whose default is not ``None`` generates as **required** in the TypeScript
-         *     client, which would make "omit the id to add a pool" unsayable there.
-         *
-         *     An id that names no pool of *this* event is a 422 on the field
-         *     (:class:`~app.tournament_errors.PoolNotInEventError`), not a quietly minted new
-         *     pool. Until this chore that arm was an *addition*, because the id was the client's
-         *     and an id the server had never seen still named the pool the client meant. It is the
-         *     server's now, so an id it did not mint names nothing — and minting a fresh one would
-         *     hand the client back a different id than it asked for while *removing* the pool it
-         *     meant to keep, which is the pair of failures a diff must never confuse.
-         */
-        PoolUpsert: {
-            /** Name */
-            name: string;
-            slot: components["schemas"]["Slot"];
-            /** Table Ids */
-            table_ids: string[];
-            /** Id */
-            id?: string | null;
-        };
-        /**
-         * PoolWrite
-         * @description A slice of tables reserved for a window of time within an event, as a client
-         *     **creates** it.
-         *
-         *     It has **no** ``id``, and that absence is the whole content of the chore that minted
-         *     them: a pool's id is a uuid the database mints (ADR 20260801's ``id uuid PRIMARY
-         *     KEY``), so it is not the client's to author and there is nothing here for it to
-         *     author. Sending one is a 422 for an unknown field — the same treatment
-         *     :class:`TournamentTableWrite` gives a venue table's id, and for the same reason. A
-         *     client that *cites* an id it was given is patching, not creating, and the shape for
-         *     that is :class:`PoolUpsert`.
-         *
-         *     Its ``name`` has a floor for the plainer reason: a pool is *called* something — it
-         *     is what the director clicks, what the conflict warnings quote, and what a player
-         *     reads off a wall. ``""`` is not a name, and an event whose pools list is three blank
-         *     rows is not a thing anyone could act on.
-         *
-         *     ``position`` is absent for the same reason the id is: it is the server's to assign
-         *     (:data:`PoolPosition`), so it is simply not a field of this model, and
-         *     ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
-         *     the treatment ``entered`` already gets on the event schemas — a server-managed value
-         *     is kept **off** the write shape rather than accepted and then ignored. Accepting it
-         *     would be worse than useless in both directions: a client cannot tell from the schema
-         *     that the number it sent decided nothing, and a boundary that silently discards half
-         *     of a payload has to be documented to be understood. The order a client *does*
-         *     control is the order of the list itself.
-         */
-        PoolWrite: {
-            /** Name */
-            name: string;
-            slot: components["schemas"]["Slot"];
-            /** Table Ids */
-            table_ids: string[];
-        };
-        /**
          * Predicate
          * @description An eligibility rule. ``field`` names the one fact we actually hold about a
          *     player — their rating on the tournament's league (ADR-0783) — so ``value`` is a
@@ -4086,9 +3956,9 @@ export interface components {
          *
          *     ``matches`` is the drawn pairing count (stable regardless of verdict — the draw
          *     is instant and always completes); ``byes`` is the round-robin sit-outs the
-         *     field incurs (a pool of an odd number of players gives one bye per round —
-         *     every player byes exactly once — so an odd pool of ``P`` contributes ``P``,
-         *     an even pool ``0``). ``duration_min`` is the event's own makespan span (last
+         *     field incurs (a group of an odd number of players gives one bye per round —
+         *     every player byes exactly once — so an odd group of ``P`` contributes ``P``,
+         *     an even group ``0``). ``duration_min`` is the event's own makespan span (last
          *     placement end minus first placement start, in minutes) — ``None`` when the
          *     solve produced no plan (infeasible / unknown), where there is nothing to
          *     span.
@@ -4123,22 +3993,25 @@ export interface components {
          * @description One drawn synthetic pairing, known the instant the draw runs (before the
          *     solve returns) so a caller can render the grid skeleton immediately. The
          *     synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
-         *     sides are always known (the pool stage of a round-robin draw).
+         *     sides are always known (the group stage of a round-robin draw).
          *
-         *     ``pool_id`` is the namespaced ``f"{event_id}:{pool_id}"`` composite the solver
-         *     keys a pool by (unique across events); ``pool_name`` is the human label from the
-         *     event's pool config (e.g. ``"Pool A"``) so the grid can head a column with a name
-         *     a director recognizes rather than the raw composite.
+         *     ``reservation_id`` is the namespaced ``f"{event_id}:{reservation_id}"``
+         *     composite the solver keys a reservation by (unique across events) —
+         *     scheduling is reservation-scoped, so this is the reservation the fixture's
+         *     group is confined to, not the group's own id. ``reservation_name`` is the
+         *     human label from the event's reservation config (e.g. ``"Reservation A"``)
+         *     so the grid can head a column with a name a director recognizes rather than
+         *     the raw composite.
          */
         PreviewFixture: {
             /** Fixture Id */
             fixture_id: string;
             /** Event Id */
             event_id: string;
-            /** Pool Id */
-            pool_id: string;
-            /** Pool Name */
-            pool_name: string;
+            /** Reservation Id */
+            reservation_id: string;
+            /** Reservation Name */
+            reservation_name: string;
             /** Player A Id */
             player_a_id: string;
             /** Player B Id */
@@ -4226,7 +4099,7 @@ export interface components {
             /** Events */
             events: components["schemas"]["PreviewEventBreakdown"][];
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["ReservationHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["ReservationOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Notes */
             notes: string[];
             /**
@@ -4455,6 +4328,176 @@ export interface components {
              */
             fmm_hp_token: string;
         };
+        /**
+         * Reservation
+         * @description A reservation as it is **read back**: everything a client wrote, plus the ``id``
+         *     the server minted for it and the ``position`` it stamped on it.
+         *
+         *     It is also the model every interior read of an event's reservations arrives
+         *     through — ``_ordered_reservations``, ``draw_config``, ``event_reservations``, the
+         *     schedule snapshots — which is why moving reservations from a JSONB array into
+         *     ``tournament_event_reservations`` rows changed nothing above
+         *     ``app.tournament_reservations.reservation_read``: the projection composes this same
+         *     model out of typed columns where it used to validate it out of untyped dicts.
+         *     Deriving it from :class:`ReservationWrite` is what keeps the two shapes one shape
+         *     plus two fields, exactly as :class:`TournamentTable` derives from
+         *     :class:`TournamentTableWrite`: a column added to the write side is readable without
+         *     a second edit, and the two can never disagree about what a reservation *is*.
+         *
+         *     ``position`` keeps its ``0`` default even though the column is NOT NULL and every
+         *     row carries a real one: the default is what lets a **literal** ``Reservation`` be
+         *     built in a test or a REPL without spelling an order out, and a read boundary that
+         *     hard-required it would gain nothing — the projection always supplies it. ``id`` has
+         *     no default, because there is no id a literal reservation could sensibly default
+         *     to.
+         */
+        Reservation: {
+            /** Name */
+            name: string;
+            slot: components["schemas"]["Slot"];
+            /** Table Ids */
+            table_ids: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Position
+             * @description Where this reservation sits in its event's reservation order: 0-based, contiguous, and **assigned by the server** from the reservation's index in the `reservations` list it arrived in. Read-only, and not merely by convention — it is absent from the reservation shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's reservations, send them in the order you want. Two reservations of one event never share a position.
+             * @default 0
+             */
+            position: number;
+        };
+        /**
+         * ReservationHasNoTablesRead
+         * @description A reservation with active fixtures but no tables at all — nowhere to
+         *     place them. Resolved: the reservation's display ``name`` (never the
+         *     namespaced solver id) and which kind of ``reservation`` that name belongs
+         *     to.
+         */
+        ReservationHasNoTablesRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reservation_has_no_tables";
+            /** Reservation Name */
+            reservation_name: string;
+            /**
+             * Reservation
+             * @default booked
+             * @enum {string}
+             */
+            reservation: "booked" | "event";
+        };
+        /**
+         * ReservationOverCapacityRead
+         * @description A reservation whose aggregate match-time (``required_min``) exceeds the
+         *     table-minutes its window offers (``capacity_min`` = window span ×
+         *     ``table_count``). Resolved: the reservation ``name``, which kind of
+         *     ``reservation`` it is, and its ``HH:MM`` bounds; the minutes stay
+         *     integers.
+         */
+        ReservationOverCapacityRead: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reservation_over_capacity";
+            /** Reservation Name */
+            reservation_name: string;
+            /**
+             * Reservation
+             * @default booked
+             * @enum {string}
+             */
+            reservation: "booked" | "event";
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /** Required Min */
+            required_min: number;
+            /** Capacity Min */
+            capacity_min: number;
+            /** Table Count */
+            table_count: number;
+        };
+        /**
+         * ReservationUpsert
+         * @description One reservation of an event a client **edits** (``PATCH …/events/{id}``):
+         *     everything :class:`ReservationWrite` carries, plus an **optional** ``id`` naming a
+         *     reservation the event already has.
+         *
+         *     The exact twin of :class:`TournamentTableUpsert`, one resource over, and the two
+         *     cases are exhaustive:
+         *
+         *     * ``id`` **present** — "this is the reservation you already have, with these
+         *       words". The row keeps its id, and therefore every fixture drawn into it and every
+         *       table it reserves, and takes the new ``name``/``slot``/``table_ids``; its place in
+         *       the list is its new place in the event's reservation order.
+         *     * ``id`` **omitted** (or ``null``) — "add a reservation". The server mints its id,
+         *       exactly as on create.
+         *     * a stored reservation **no entry names** — "remove it".
+         *
+         *     ``X | None = None`` and never a non-null default: an optional field on a *write*
+         *     schema whose default is not ``None`` generates as **required** in the TypeScript
+         *     client, which would make "omit the id to add a reservation" unsayable there.
+         *
+         *     An id that names no reservation of *this* event is a 422 on the field
+         *     (:class:`~app.tournament_errors.ReservationNotInEventError`), not a quietly minted
+         *     new reservation. Until this chore that arm was an *addition*, because the id was the
+         *     client's and an id the server had never seen still named the reservation the client
+         *     meant. It is the server's now, so an id it did not mint names nothing — and minting
+         *     a fresh one would hand the client back a different id than it asked for while
+         *     *removing* the reservation it meant to keep, which is the pair of failures a diff
+         *     must never confuse.
+         */
+        ReservationUpsert: {
+            /** Name */
+            name: string;
+            slot: components["schemas"]["Slot"];
+            /** Table Ids */
+            table_ids: string[];
+            /** Id */
+            id?: string | null;
+        };
+        /**
+         * ReservationWrite
+         * @description A slice of tables reserved for a window of time within an event, as a client
+         *     **creates** it.
+         *
+         *     It has **no** ``id``, and that absence is the whole content of the chore that minted
+         *     them: a reservation's id is a uuid the database mints (ADR 20260801's ``id uuid
+         *     PRIMARY KEY``), so it is not the client's to author and there is nothing here for it
+         *     to author. Sending one is a 422 for an unknown field — the same treatment
+         *     :class:`TournamentTableWrite` gives a venue table's id, and for the same reason. A
+         *     client that *cites* an id it was given is patching, not creating, and the shape for
+         *     that is :class:`ReservationUpsert`.
+         *
+         *     Its ``name`` has a floor for the plainer reason: a reservation is *called*
+         *     something — it is what the director clicks, what the conflict warnings quote, and
+         *     what a player reads off a wall. ``""`` is not a name, and an event whose
+         *     reservations list is three blank rows is not a thing anyone could act on.
+         *
+         *     ``position`` is absent for the same reason the id is: it is the server's to assign
+         *     (:data:`ReservationPosition`), so it is simply not a field of this model, and
+         *     ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
+         *     the treatment ``entered`` already gets on the event schemas — a server-managed value
+         *     is kept **off** the write shape rather than accepted and then ignored. Accepting it
+         *     would be worse than useless in both directions: a client cannot tell from the schema
+         *     that the number it sent decided nothing, and a boundary that silently discards half
+         *     of a payload has to be documented to be understood. The order a client *does*
+         *     control is the order of the list itself.
+         */
+        ReservationWrite: {
+            /** Name */
+            name: string;
+            slot: components["schemas"]["Slot"];
+            /** Table Ids */
+            table_ids: string[];
+        };
         /** RoleCreate */
         RoleCreate: {
             /** Name */
@@ -4530,7 +4573,7 @@ export interface components {
          *     * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
          *
          *     ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
-         *     on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
+         *     on a ``succeeded`` run whose plan ran a fixture past its group's **planned** window
          *     end while the tournament is **live** — the window went soft so the day keeps being
          *     scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
          *     wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
@@ -4540,7 +4583,7 @@ export interface components {
          *     ``infeasibility_reasons`` is **never null** — it is always a list, empty on
          *     every row that is not ``infeasible`` (so a client never null-checks it). An
          *     ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
-         *     could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
+         *     could not be scheduled (group names, ``HH:MM`` window bounds, the integer
          *     minutes to format) — including the pre-live ``past_window`` cause (ADR "a
          *     past day is named, not disguised"), which carries the offending venue-local
          *     ``date`` to move; every other row carries ``[]``. Parsed from the ledger's
@@ -4584,7 +4627,7 @@ export interface components {
             /** Error */
             error: string | null;
             /** Infeasibility Reasons */
-            infeasibility_reasons: (components["schemas"]["PoolHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["PoolOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
+            infeasibility_reasons: (components["schemas"]["ReservationHasNoTablesRead"] | components["schemas"]["WindowTooShortForMatchRead"] | components["schemas"]["ReservationOverCapacityRead"] | components["schemas"]["PlayerOverSubscribedRead"] | components["schemas"]["NoSingleCauseRead"] | components["schemas"]["PastWindowReasonRead"])[];
             /** Placement Conflicts */
             placement_conflicts: (components["schemas"]["TableConflictRead"] | components["schemas"]["PlayerConflictRead"])[];
         };
@@ -4676,16 +4719,17 @@ export interface components {
         SolverVerdict: "optimal" | "feasible" | "infeasible";
         /**
          * StandingRowRead
-         * @description One entry's line in a pool's standings (ADR-0788), at its settled rank.
+         * @description One entry's line in a group's standings (ADR-0788), at its settled rank.
          *
          *     The entry is carried as an **id only**, exactly as a fixture carries its sides: the
          *     username behind ``entry_id`` is on the event's ``entrants`` list already, keyed by
          *     that same id, so a client joins the two rather than reading a copy that could drift.
          *
-         *     ``rank`` is 1-based and distinct per row — the pool's order is total (wins → two-way
-         *     head-to-head → game difference → games won → id), so position 1 is the leader.
-         *     ``game_difference`` (``games_won - games_lost``) rides along because it is the third
-         *     tiebreaker and a client shows it in the table; it is a pure function of the two game
+         *     ``rank`` is 1-based and distinct per row — the group's order is total (wins →
+         *     two-way head-to-head → game difference → games won → id), so position 1 is the
+         *     leader. ``game_difference`` (``games_won - games_lost``) rides along because it is
+         *     the third tiebreaker and a client shows it in the table; it is a pure function of
+         *     the two game
          *     counts beside it, computed once on the server so the two cannot disagree.
          */
         StandingRowRead: {
@@ -4718,15 +4762,15 @@ export interface components {
          * @description The **standings** shape of an event's results (ADR-0788) — the round-robin arm
          *     of the ``results`` discriminated union, tagged ``kind: "standings"``.
          *
-         *     A standings table per pool, whether the whole event is decided, and its champion
+         *     A standings table per group, whether the whole event is decided, and its champion
          *     when there is one. It rides on the tournament-detail payload (one endpoint per page)
          *     and is **derived live** from the fixtures' currently-completed matches — never a
          *     snapshot — so a corrected or voided match re-orders the standings the instant it
          *     leaves ``completed``.
          *
-         *     ``champion`` is the leader of a **complete, single-pool** event — a pure
-         *     round-robin's winner. A multi-pool round-robin has no single champion without a
-         *     knockout stage to join its pool winners, so it is ``null`` there even when
+         *     ``champion`` is the leader of a **complete, single-group** event — a pure
+         *     round-robin's winner. A multi-group round-robin has no single champion without a
+         *     knockout stage to join its group winners, so it is ``null`` there even when
          *     ``complete``; and ``null`` while any fixture is still to be played. An event that
          *     *does* have a knockout stage to join them is a ``rr-then-ko`` draw, which reads out
          *     as the ``standings_then_finishes`` arm below and is crowned from its bracket — a
@@ -4738,8 +4782,8 @@ export interface components {
              * @enum {string}
              */
             kind: "standings";
-            /** Pools */
-            pools: components["schemas"]["PoolStandingsRead"][];
+            /** Groups */
+            groups: components["schemas"]["GroupStandingsRead"][];
             /** Complete */
             complete: boolean;
             /** Champion */
@@ -4751,8 +4795,8 @@ export interface components {
          *     round-robin-then-knockout arm of the ``results`` discriminated union, tagged
          *     ``kind: "standings_then_finishes"``.
          *
-         *     One block per stage: ``pools`` is the pool stage's standings, exactly the
-         *     :class:`PoolStandingsRead` a round-robin event reads out, and ``finishes`` is the
+         *     One block per stage: ``groups`` is the group stage's standings, exactly the
+         *     :class:`GroupStandingsRead` a round-robin event reads out, and ``finishes`` is the
          *     knockout stage's ranked :class:`FinishRowRead`\ s, exactly the ones a
          *     single-elimination event reads out. They are the *same* models rather than
          *     two-stage-flavoured near-copies, so a client renders each stage with the panel it
@@ -4763,10 +4807,10 @@ export interface components {
          *     existing two arms are read, forcing round-robin and single-elim client changes that
          *     buy nothing.
          *
-         *     ``champion`` is the **knockout final's winner, never a pool leader** — the pool
-         *     stage only seeds the bracket, so topping a pool wins nothing — and ``null`` until
+         *     ``champion`` is the **knockout final's winner, never a group leader** — the group
+         *     stage only seeds the bracket, so topping a group wins nothing — and ``null`` until
          *     that final is decided. ``complete`` is **both stages decided**. Live and partial
-         *     like every other results shape: the pool tables fill in as pool matches land, and
+         *     like every other results shape: the group tables fill in as group matches land, and
          *     the finishes list grows as the bracket is played out.
          */
         StandingsThenFinishesResultsRead: {
@@ -4775,8 +4819,8 @@ export interface components {
              * @enum {string}
              */
             kind: "standings_then_finishes";
-            /** Pools */
-            pools: components["schemas"]["PoolStandingsRead"][];
+            /** Groups */
+            groups: components["schemas"]["GroupStandingsRead"][];
             /** Finishes */
             finishes: components["schemas"]["FinishRowRead"][];
             /** Complete */
@@ -4791,7 +4835,7 @@ export interface components {
         Status: "scheduled" | "live" | "final";
         /**
          * SwissStandingRowRead
-         * @description One entry's line in a **swiss** table: every column a pool's row carries, plus
+         * @description One entry's line in a **swiss** table: every column a group's row carries, plus
          *     the **Buchholz** figure that ordered it.
          *
          *     ``buchholz`` is the sum of this entrant's opponents' win counts — the wins column
@@ -4838,14 +4882,14 @@ export interface components {
         };
         /**
          * SwissStandingsResultsRead
-         * @description The **pool-less standings** shape of an event's results — the swiss arm of the
+         * @description The **group-less standings** shape of an event's results — the swiss arm of the
          *     ``results`` discriminated union, tagged ``kind: "swiss_standings"`` (ADR "swiss
          *     pre-cuts every round and pairs each one on advance").
          *
-         *     One table over the whole field, because swiss has no pools: everybody is ranked
+         *     One table over the whole field, because swiss has no groups: everybody is ranked
          *     against everybody, which is what pairing by score is for. The rows are a
          *     :class:`StandingRowRead` plus one column (:class:`SwissStandingRowRead`), and they
-         *     arrive as one list rather than grouped under a pool — both facts about the format
+         *     arrive as one list rather than grouped under a group — both facts about the format
          *     rather than a second row shape.
          *
          *     The order is swiss's own chain: wins, head-to-head when exactly two are tied **and
@@ -4857,7 +4901,7 @@ export interface components {
          *     ``complete`` is every round decided, including the later rounds that are cut up
          *     front with their sides still unknown. ``champion`` is the leader of a complete
          *     event — a swiss ranks its whole field, so unlike the round-robin arm there is no
-         *     multi-pool carve-out — and ``null`` until then. Derived live from the fixtures'
+         *     multi-group carve-out — and ``null`` until then. Derived live from the fixtures'
          *     completed matches like every other results shape.
          */
         SwissStandingsResultsRead: {
@@ -5067,8 +5111,8 @@ export interface components {
             name: string;
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
-            /** Qualifiers Per Pool */
-            qualifiers_per_pool?: number | null;
+            /** Qualifiers Per Group */
+            qualifiers_per_group?: number | null;
             /** Rounds */
             rounds?: number | null;
             /** Max Players */
@@ -5081,8 +5125,8 @@ export interface components {
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
             predicates?: components["schemas"]["Predicate"][];
-            /** Pools */
-            pools?: components["schemas"]["PoolWrite"][];
+            /** Reservations */
+            reservations?: components["schemas"]["ReservationWrite"][];
         };
         /** TournamentEventRead */
         TournamentEventRead: {
@@ -5100,8 +5144,8 @@ export interface components {
             name: string;
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
-            /** Qualifiers Per Pool */
-            qualifiers_per_pool: number | null;
+            /** Qualifiers Per Group */
+            qualifiers_per_group: number | null;
             /** Rounds */
             rounds: number | null;
             /** Max Players */
@@ -5114,8 +5158,10 @@ export interface components {
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
             predicates: components["schemas"]["Predicate"][];
-            /** Pools */
-            pools: components["schemas"]["Pool"][];
+            /** Groups */
+            groups: components["schemas"]["GroupRead"][];
+            /** Reservations */
+            reservations: components["schemas"]["Reservation"][];
             /** Stages */
             stages: components["schemas"]["EventStageRead"][];
             /**
@@ -5150,9 +5196,9 @@ export interface components {
          * TournamentEventUpdate
          * @description Partial update for an event. Absent fields are unchanged. Every column
          *     these fields back except ``max_players`` — ``name``/``format``/``draw_type``/
-         *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
+         *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``reservations`` — is NOT
          *     NULL, so an explicit ``null`` on any of *those* is rejected (422).
-         *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
+         *     ``predicates``/``reservations`` replace wholesale when present. ``entered`` is not
          *     updatable — it is derived from the event's active entries, not stored — so
          *     sending it is a 422 via ``extra="forbid"``.
          *
@@ -5173,8 +5219,8 @@ export interface components {
             name?: string | null;
             format?: components["schemas"]["EventFormat"] | null;
             draw_type?: components["schemas"]["DrawType"] | null;
-            /** Qualifiers Per Pool */
-            qualifiers_per_pool?: number | null;
+            /** Qualifiers Per Group */
+            qualifiers_per_group?: number | null;
             /** Rounds */
             rounds?: number | null;
             /** Max Players */
@@ -5187,8 +5233,8 @@ export interface components {
             match_settings?: components["schemas"]["MatchSettings"] | null;
             /** Predicates */
             predicates?: components["schemas"]["Predicate"][] | null;
-            /** Pools */
-            pools?: components["schemas"]["PoolUpsert"][] | null;
+            /** Reservations */
+            reservations?: components["schemas"]["ReservationUpsert"][] | null;
         };
         /**
          * TournamentFixturePlacementUpdate
@@ -5200,10 +5246,11 @@ export interface components {
          *
          *     **Soft, deliberately — with one exception.** ``scheduled_start`` is a *prediction*,
          *     not a commitment, and three of the placement's four constraints — the table belongs
-         *     to the fixture's pool, the time falls inside the pool's window, nothing is
-         *     double-booked — are **flags derived on read, not invariants** (ADR-0790). So this
-         *     write does **not** reject an out-of-window time or an off-pool table. They save.
-         *     Conflict detection is the scheduler's business, not this boundary's.
+         *     to the fixture's group's reservation, the time falls inside that reservation's
+         *     window, nothing is double-booked — are **flags derived on read, not invariants**
+         *     (ADR-0790). So this write does **not** reject an out-of-window time or an off-group
+         *     table. They save. Conflict detection is the scheduler's business, not this
+         *     boundary's.
          *
          *     The exception is the fourth claim: **the table has to exist**. ``table_id`` names a
          *     ``TournamentTable.id`` in the tournament's ``table_catalogue``, and since the
@@ -5217,10 +5264,10 @@ export interface components {
          *     is a dangling pointer nothing downstream can render.
          *
          *     The field carries the id's canonical **text** rather than a typed UUID, which is
-         *     also what a pool's ``table_ids`` carry — one representation for a table id, moved in
-         *     one piece rather than a field at a time. A value that is not a well-formed id is
-         *     therefore refused by the same 422 as an unknown one: there is one question here
-         *     ("does this name a table of this tournament?") and it gets one answer.
+         *     also what a reservation's ``table_ids`` carry — one representation for a table id,
+         *     moved in one piece rather than a field at a time. A value that is not a well-formed
+         *     id is therefore refused by the same 422 as an unknown one: there is one question
+         *     here ("does this name a table of this tournament?") and it gets one answer.
          *
          *     The one thing the *route* refuses is moving a fixture whose linked match is
          *     ``completed`` or ``voided``: its placement is history (409). A fixture with no match
@@ -5242,7 +5289,7 @@ export interface components {
         /**
          * TournamentFixtureRead
          * @description One planned pairing of an event's draw (ADR-0786): a round and a position —
-         *     plus a pool, when the draw is pooled — whose sides may still be unknown.
+         *     plus a group, when the draw is grouped — whose sides may still be unknown.
          *
          *     A fixture is **not** a match. It materializes into one at go-live (#788): once the
          *     tournament is ``live``, every ready fixture becomes a real ``in_progress`` match and
@@ -5251,14 +5298,14 @@ export interface components {
          *     ``stage_id`` names the **stage** (``EventStageRead``, on the event's ``stages``
          *     array) this fixture belongs to (ADR 20260815 decision 5) — **never** ``null``, the
          *     same NOT NULL guarantee the column carries in the database. A client no longer
-         *     infers a fixture's stage from ``pool_id`` plus the event's overall ``draw_type``:
+         *     infers a fixture's stage from ``group_id`` plus the event's overall ``draw_type``:
          *     that inference is exactly what once rendered a swiss draw's rounds as a knockout
-         *     bracket, because both are un-pooled and indistinguishable by ``pool_id`` alone. Join
-         *     this id against the matching entry in ``stages`` to read that stage's own
-         *     ``draw_type`` — which is always one of the single-stage kinds
-         *     (``round-robin`` / ``single-elim`` / ``swiss``), never ``rr-then-ko`` (a template
-         *     name, not a runnable stage's own type) — and that answers "is this un-pooled block a
-         *     bracket or a set of swiss rounds?" without guessing from the event's shape.
+         *     bracket, because both are un-grouped and indistinguishable by ``group_id`` alone.
+         *     Join this id against the matching entry in ``stages`` to read that stage's own
+         *     ``draw_type`` — which is always one of the single-stage kinds (``round-robin`` /
+         *     ``single-elim`` / ``swiss``), never ``rr-then-ko`` (a template name, not a runnable
+         *     stage's own type) — and that answers "is this un-grouped block a bracket or a set of
+         *     swiss rounds?" without guessing from the event's shape.
          *
          *     **Every ``null`` on this model is a fact, not a missing field**, and a client that
          *     dropped them would lose the draw's whole point:
@@ -5276,18 +5323,19 @@ export interface components {
          *       fixture has not materialized. It rides on the fixture so a bracket shows a slot's
          *       state without a per-slot round-trip; it is the match's *current* status, read
          *       live, not a copy frozen at go-live.
-         *     * ``pool_id`` — ``null`` means this fixture belongs to no pool: **which stage
-         *       leaves fixtures un-pooled is no longer this field's business to say** — read
+         *     * ``group_id`` — ``null`` means this fixture belongs to no group: **which stage
+         *       leaves fixtures un-grouped is no longer this field's business to say** — read
          *       ``stage_id`` against the event's ``stages`` array for that (ADR 20260815). When
-         *       set, it names a pool of **this fixture's own stage**, and it is guaranteed to:
+         *       set, it names a group of **this fixture's own stage**, and it is guaranteed to:
          *       the column is half of a composite foreign key onto
-         *       ``tournament_event_pools (stage_id, id)``, so it is neither a dangling ref nor
-         *       another stage's pool (ADR 20260801, re-parented onto the stage by ADR 20260815).
+         *       ``tournament_event_stage_groups (stage_id, id)``, so it is neither a dangling ref
+         *       nor another stage's group (ADR 20260801, re-parented onto the stage by ADR
+         *       20260815).
          *     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
          *       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
          *       tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
          *       foreign key, so this is never a dangling ref (ADR 20260801). Carried as the id's
-         *       text, the same form a pool's ``table_ids`` carry.
+         *       text, the same form a group's ``table_ids`` carry.
          *     * ``scheduled_start`` — the placement's **predicted** start: ``null`` means
          *       **unscheduled**. When set, a :class:`FixtureTimeRead` (see it) — a venue-local
          *       label + tz abbrev for display, plus the raw UTC instant for geometry — composed
@@ -5327,8 +5375,8 @@ export interface components {
              * Format: uuid
              */
             stage_id: string;
-            /** Pool Id */
-            pool_id: string | null;
+            /** Group Id */
+            group_id: string | null;
             /** Round */
             round: number;
             /** Position */
@@ -5405,13 +5453,13 @@ export interface components {
          *     plus the ``id`` the server minted for it.
          *
          *     Deriving it from :class:`TournamentTableWrite` keeps the two shapes one shape plus
-         *     a field, exactly as :class:`Pool` derives from :class:`PoolWrite`: a column added to
-         *     the write side is readable without a second edit, and the two can never disagree
-         *     about what a table *is*.
+         *     a field, exactly as :class:`Reservation` derives from :class:`ReservationWrite`: a
+         *     column added to the write side is readable without a second edit, and the two can
+         *     never disagree about what a table *is*.
          *
-         *     ``id`` is a UUID — the ``tournament_tables`` row's primary key. It is what a pool's
-         *     ``table_ids`` and a fixture's ``table_id`` name, and (from the fixture side) what a
-         *     foreign key will hold.
+         *     ``id`` is a UUID — the ``tournament_tables`` row's primary key. It is what a
+         *     reservation's ``table_ids`` and a fixture's ``table_id`` name, and (from the fixture
+         *     side) what a foreign key will hold.
          */
         TournamentTable: {
             /** Label */
@@ -5435,9 +5483,9 @@ export interface components {
          *     The two cases are exhaustive and mean different things:
          *
          *     * ``id`` **present** — "this is the table you already have, with these words". The
-         *       row keeps its id (and therefore every pool ``table_ids`` entry and every fixture
-         *       ``table_id`` that names it) and takes the new ``label``/``court``, and its place
-         *       in the list is its new place in the catalogue's order.
+         *       row keeps its id (and therefore every reservation's ``table_ids`` entry and every
+         *       fixture ``table_id`` that names it) and takes the new ``label``/``court``, and its
+         *       place in the list is its new place in the catalogue's order.
          *     * ``id`` **omitted** (or ``null``) — "add a table". The server mints its id, exactly
          *       as on create.
          *     * a stored table **no entry names** — "remove it". Which is the whole reason this
@@ -5478,7 +5526,7 @@ export interface components {
          *     A table is a row now (ADR 20260801, "a placement names a real table"), and its id
          *     is minted by the database (``gen_random_uuid()``). So the id is simply not a field
          *     of this model, and ``extra="forbid"`` turns an attempt to send one into a 422 that
-         *     names it — the treatment :class:`PoolWrite` gives ``position`` and the event
+         *     names it — the treatment :class:`ReservationWrite` gives ``position`` and the event
          *     schemas give ``entered``. A server-managed value is kept **off** the write shape
          *     rather than accepted and then ignored: a client cannot tell from the schema that the
          *     id it sent decided nothing, and a boundary that silently discards half of a payload
@@ -5549,7 +5597,8 @@ export interface components {
          *     whole edit is refused with a ``409`` naming the table, and nothing is written. Set
          *     ``true``, the removal goes through and those matches are unplaced — table, predicted
          *     start and pin all cleared — which is why it is said on purpose (ADR 20260801). A
-         *     table that only a *pool* reserves needs no opt-in: the pool reserves one fewer.
+         *     table that only a *reservation* reserves needs no opt-in: the reservation reserves
+         *     one fewer.
          *
          *     ``league_id`` is updatable, but **only while the tournament is ``draft``**
          *     (ADR-0783): once it is published, registration is open and eligibility is live,
@@ -5639,9 +5688,9 @@ export interface components {
         };
         /**
          * WindowTooShortForMatchRead
-         * @description A single fixture whose pool window cannot hold even one match: its
-         *     ``best_of`` match needs ``needed_min`` minutes but the window spans only
-         *     ``window_span_min``. Resolved: the pool ``name``, which kind of
+         * @description A single fixture whose reservation window cannot hold even one match:
+         *     its ``best_of`` match needs ``needed_min`` minutes but the window spans
+         *     only ``window_span_min``. Resolved: the reservation ``name``, which kind of
          *     ``reservation`` it is, and its ``HH:MM`` window bounds; the minutes pass
          *     through as integers for the client to format.
          */
@@ -5651,14 +5700,14 @@ export interface components {
              * @enum {string}
              */
             kind: "window_too_short_for_match";
-            /** Pool Name */
-            pool_name: string;
+            /** Reservation Name */
+            reservation_name: string;
             /**
              * Reservation
-             * @default pool
+             * @default booked
              * @enum {string}
              */
-            reservation: "pool" | "event";
+            reservation: "booked" | "event";
             /** Window Start */
             window_start: string;
             /** Window End */

@@ -159,7 +159,7 @@ describe('SchedulePreviewModal', () => {
   // The bug behind this block: EVERY 422 was mapped to one hardcoded "this
   // tournament uses a draw type the preview does not support yet" notice, and the
   // server's `detail` was discarded. A director whose round-robin-then-knockout
-  // event took one qualifier per pool was told the draw type was unsupported — false
+  // event took one qualifier per group was told the draw type was unsupported — false
   // twice over (rr-then-ko IS previewed, in part) — instead of being told the one
   // thing they could act on. The API passes the domain's own sentence through on
   // purpose (`_draw_refusal`, `case DegenerateDraw(): detail = str(error)`), so the
@@ -180,9 +180,9 @@ describe('SchedulePreviewModal', () => {
     // screen, not a timeout, so the red says "wrong copy" and nothing else.
     it('shows the degenerate-draw sentence the server sent, not the draw-type guess', async () => {
       const detail =
-        'Taking 1 qualifier from a single pool leaves one player in the knockout ' +
+        'Taking 1 qualifier from a single group leaves one player in the knockout ' +
         'stage, who would have nobody to play — take more qualifiers from each ' +
-        'pool, or configure more pools.'
+        'group, or configure more groups.'
 
       const error = await refuseWith(422, { detail })
 
@@ -254,10 +254,10 @@ describe('SchedulePreviewModal', () => {
     // literally, and injects no element.
     it('renders the 422 detail as text, not markup', async () => {
       const error = await refuseWith(422, {
-        detail: 'Take more qualifiers <b>from each pool</b>.',
+        detail: 'Take more qualifiers <b>from each group</b>.',
       })
 
-      expect(error).toHaveTextContent('Take more qualifiers <b>from each pool</b>.')
+      expect(error).toHaveTextContent('Take more qualifiers <b>from each group</b>.')
       expect(error.querySelector('b')).toBeNull()
     })
 
@@ -301,16 +301,16 @@ describe('SchedulePreviewModal', () => {
     })
   })
 
-  it('heads a synthetic grid card with the human pool name, not the composite id', async () => {
+  it('heads a synthetic grid card with the human reservation name, not the composite id', async () => {
     schedulePreviewModalPage.render()
 
-    // The grid streams in with the instant structure; its cards read the human pool
-    // name (`Pool A`), never the namespaced `{event}:{pool}` composite the solver
-    // keys by.
+    // The grid streams in with the instant structure; its cards read the human
+    // reservation name (`Reservation A`), never the namespaced `{event}:{reservation}`
+    // composite the solver keys by.
     await schedulePreviewModalPage.findFieldSummary()
     const grid = await screen.findByTestId('preview-grid')
-    expect(grid).toHaveTextContent('Pool A')
-    expect(grid).not.toHaveTextContent(/ev-1:pool-1/)
+    expect(grid).toHaveTextContent('Reservation A')
+    expect(grid).not.toHaveTextContent(/ev-1:res-1/)
   })
 
   it('shows the actionable infeasibility reasons instead of a grid', async () => {
@@ -327,8 +327,8 @@ describe('SchedulePreviewModal', () => {
 
     const reasons = await schedulePreviewModalPage.findInfeasible()
     // The client's own sentence + remedy for the resolved cause — never a raw grid.
-    expect(reasons).toHaveTextContent('Pool A has no tables assigned.')
-    expect(reasons).toHaveTextContent(/Assign at least one table to Pool A/)
+    expect(reasons).toHaveTextContent('Reservation A has no tables assigned.')
+    expect(reasons).toHaveTextContent(/Assign at least one table to Reservation A/)
     // No grid when there is no plan to draw.
     expect(schedulePreviewModalPage.queryGrid()).toBeNull()
     // The verdict still reads honestly.

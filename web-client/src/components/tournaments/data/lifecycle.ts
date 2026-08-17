@@ -180,11 +180,11 @@ export interface LifecycleRefusal extends Notice {
  *
  * Since #1300 the go-live guard **dry-runs the cut** for every at-fault event and quotes
  * the planner's own refusal back at the director: "A doubles event cannot be given a
- * draw…", "1 entrant across 1 pool would leave a pool with fewer than 2 entrants…",
- * "Taking 3 qualifiers from each pool is more than the 2 entrants in the smallest pool…",
+ * draw…", "1 entrant across 1 group would leave a group with fewer than 2 entrants…",
+ * "Taking 3 qualifiers from each group is more than the 2 entrants in the smallest group…",
  * "play fewer rounds". Those are the *panel's* sentences, arriving in the *header's*
  * refusal — so the header's scope has to read every fact the panel's does: the format, the
- * draw type and its settings (`drawConfig`), the pool ids, and the seating.
+ * draw type and its settings (`drawConfig`), the group ids, and the seating.
  *
  * Restating that list here is the failure mode, not the safe option. Two hand-written
  * copies of "what a draw refusal is about" drift the moment one of them gains a fact —

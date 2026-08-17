@@ -31,13 +31,13 @@ from app.scheduling import (
     PlayerConflict,
     PlayerId,
     PlayerOverSubscribed,
-    PoolHasNoTables,
-    PoolId,
-    PoolOverCapacity,
     PreviousPlacement,
+    ReservationHasNoTables,
+    ReservationId,
+    ReservationOverCapacity,
     RestShadow,
     ScheduleFixture,
-    SchedulePool,
+    ScheduleReservation,
     ScheduleSnapshot,
     SolveResult,
     TableConflict,
@@ -72,14 +72,14 @@ def _fixture(
     player_b: PlayerId,
     *,
     event: str = "E1",
-    pool: str = "A",
+    reservation: str = "A",
     pin: Pin | None = None,
     completed: bool = False,
 ) -> ScheduleFixture:
     return ScheduleFixture(
         id=FixtureId(f"F{n}"),
         event_id=EventId(event),
-        pool_id=PoolId(pool),
+        reservation_id=ReservationId(reservation),
         player_a_id=player_a,
         player_b_id=player_b,
         pin=pin,
@@ -87,7 +87,7 @@ def _fixture(
     )
 
 
-def _one_pool_snapshot(
+def _one_reservation_snapshot(
     fixtures: tuple[ScheduleFixture, ...],
     *,
     tables: int = 3,
@@ -101,7 +101,9 @@ def _one_pool_snapshot(
     table_ids = _tables(tables)
     return ScheduleSnapshot(
         table_ids=table_ids,
-        pools=(SchedulePool(PoolId("A"), table_ids, Window(*window)),),
+        reservations=(
+            ScheduleReservation(ReservationId("A"), table_ids, Window(*window)),
+        ),
         events=(EventSettings(EventId("E1"), length_games),),
         fixtures=fixtures,
         now_min=now_min,
@@ -117,35 +119,39 @@ def _random_snapshot(
     n_fixtures: int = 12,
     n_players: int = 6,
     n_tables: int = 3,
-    two_pools: bool = False,
+    two_reservations: bool = False,
 ) -> ScheduleSnapshot:
     """A small random instance. Few players against many fixtures forces real
     contention, so the rest floor and per-player no-overlap actually bite."""
     rng = random.Random(seed)
     players = _players(n_players)
     table_ids = _tables(n_tables)
-    if two_pools:
-        pools = (
-            SchedulePool(PoolId("A"), table_ids[:2], Window(0, 480)),
-            SchedulePool(PoolId("B"), table_ids[2:], Window(60, 540)),
+    if two_reservations:
+        reservations = (
+            ScheduleReservation(ReservationId("A"), table_ids[:2], Window(0, 480)),
+            ScheduleReservation(ReservationId("B"), table_ids[2:], Window(60, 540)),
         )
         events = (
             EventSettings(EventId("E1"), 3),
             EventSettings(EventId("E2"), 5),
         )
     else:
-        pools = (SchedulePool(PoolId("A"), table_ids, Window(0, 480)),)
+        reservations = (
+            ScheduleReservation(ReservationId("A"), table_ids, Window(0, 480)),
+        )
         events = (EventSettings(EventId("E1"), 3),)
     fixtures = []
     for n in range(1, n_fixtures + 1):
         player_a, player_b = rng.sample(players, 2)
-        if two_pools and n % 2 == 0:
-            fixtures.append(_fixture(n, player_a, player_b, event="E2", pool="B"))
+        if two_reservations and n % 2 == 0:
+            fixtures.append(
+                _fixture(n, player_a, player_b, event="E2", reservation="B")
+            )
         else:
             fixtures.append(_fixture(n, player_a, player_b))
     return ScheduleSnapshot(
         table_ids=table_ids,
-        pools=pools,
+        reservations=reservations,
         events=events,
         fixtures=tuple(fixtures),
         now_min=0,
@@ -154,10 +160,10 @@ def _random_snapshot(
 
 def _assert_hard_constraints(snapshot: ScheduleSnapshot, result: SolveResult) -> None:
     """Every invariant a solved plan must satisfy, checked from the output
-    alone: coverage, pool tables, windows, the grid, table no-overlap
+    alone: coverage, reservation tables, windows, the grid, table no-overlap
     (including in-progress occupancy), and the per-player rest floor."""
     assert result.verdict in SOLVED
-    pools = {p.id: p for p in snapshot.pools}
+    reservations = {r.id: r for r in snapshot.reservations}
     events = {e.id: e for e in snapshot.events}
     fixtures = {f.id: f for f in snapshot.fixtures}
     running = {m.fixture_id: m for m in snapshot.in_progress}
@@ -188,11 +194,11 @@ def _assert_hard_constraints(snapshot: ScheduleSnapshot, result: SolveResult) ->
             assert placement.table_id == fixture.pin.table_id
             assert placement.start_min >= fixture.pin.start_min
         else:
-            pool = pools[fixture.pool_id]
-            assert placement.table_id in pool.table_ids
+            reservation = reservations[fixture.reservation_id]
+            assert placement.table_id in reservation.table_ids
             assert placement.start_min >= snapshot.now_min
-            assert placement.start_min >= pool.window.start_min
-            assert placement.end_min <= pool.window.end_min
+            assert placement.start_min >= reservation.window.start_min
+            assert placement.end_min <= reservation.window.end_min
             assert placement.start_min % BUCKET_MIN == 0
 
     for match in snapshot.in_progress:
@@ -238,15 +244,15 @@ class TestDurations:
 
 class TestHardConstraints:
     @pytest.mark.parametrize("seed", [0, 1, 2, 3])
-    def test_random_single_pool_instances(self, seed: int) -> None:
+    def test_random_single_reservation_instances(self, seed: int) -> None:
         snapshot = _random_snapshot(seed)
         _assert_hard_constraints(snapshot, solve(snapshot, time_cap_s=CAP))
 
     @pytest.mark.parametrize("seed", [10, 11, 12])
-    def test_random_two_pool_instances(self, seed: int) -> None:
-        """Tables split between pools, two events with different durations,
+    def test_random_two_reservation_instances(self, seed: int) -> None:
+        """Tables split between reservations, two events with different durations,
         players shared across both — cross-event no-double-booking."""
-        snapshot = _random_snapshot(seed, two_pools=True, n_fixtures=14)
+        snapshot = _random_snapshot(seed, two_reservations=True, n_fixtures=14)
         _assert_hard_constraints(snapshot, solve(snapshot, time_cap_s=CAP))
 
     def test_contended_instance_respects_rest_between_back_to_backs(
@@ -256,7 +262,7 @@ class TestHardConstraints:
         that player's matches, each ≥ REST_MIN after the previous end."""
         star, *rest = _players(4)
         fixtures = tuple(_fixture(n, star, rest[n % 3]) for n in range(1, 6))
-        snapshot = _one_pool_snapshot(fixtures)
+        snapshot = _one_reservation_snapshot(fixtures)
         result = solve(snapshot, time_cap_s=CAP)
         _assert_hard_constraints(snapshot, result)
         starts = sorted(p.start_min for p in result.placements)
@@ -270,7 +276,7 @@ class TestHardConstraints:
             _fixture(1, p1, p2, completed=True),
             _fixture(2, p3, p4),
         )
-        result = solve(_one_pool_snapshot(fixtures), time_cap_s=CAP)
+        result = solve(_one_reservation_snapshot(fixtures), time_cap_s=CAP)
         assert result.verdict in SOLVED
         assert [p.fixture_id for p in result.placements] == [FixtureId("F2")]
 
@@ -329,7 +335,11 @@ class TestPinsArePromises:
             dataclasses.replace(
                 pinned_snap,
                 table_ids=shrunk_tables,
-                pools=(SchedulePool(PoolId("A"), shrunk_tables, Window(0, 480)),),
+                reservations=(
+                    ScheduleReservation(
+                        ReservationId("A"), shrunk_tables, Window(0, 480)
+                    ),
+                ),
             ),
             dataclasses.replace(pinned_snap, now_min=45),
         ]
@@ -355,19 +365,19 @@ class TestPinsArePromises:
             _fixture(3, p2, p4),  # shares p2 with the pin
             _fixture(4, p3, p4),
         )
-        snapshot = _one_pool_snapshot(fixtures, tables=1)
+        snapshot = _one_reservation_snapshot(fixtures, tables=1)
         result = solve(snapshot, time_cap_s=CAP)
         _assert_hard_constraints(snapshot, result)
 
     def test_pin_outside_its_window_is_kept(self) -> None:
-        """Pins outrank windows: an overrun pin past the pool's end is echoed
+        """Pins outrank windows: an overrun pin past the reservation's end is echoed
         verbatim, not squeezed back inside."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
             _fixture(1, p1, p2, pin=Pin(TableId("T1"), 470)),
             _fixture(2, p3, p4),
         )
-        snapshot = _one_pool_snapshot(fixtures, window=(0, 480))
+        snapshot = _one_reservation_snapshot(fixtures, window=(0, 480))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict in SOLVED
         placed = {p.fixture_id: p for p in result.placements}
@@ -381,7 +391,7 @@ class TestPinsArePromises:
             _fixture(1, p1, p2, pin=Pin(TableId("T1"), 30)),
             _fixture(2, p3, p4),
         )
-        snapshot = _one_pool_snapshot(fixtures, now_min=40)
+        snapshot = _one_reservation_snapshot(fixtures, now_min=40)
         result = solve(snapshot, time_cap_s=CAP)
         placed = {p.fixture_id: p for p in result.placements}
         assert placed[FixtureId("F1")].start_min == 30
@@ -416,7 +426,7 @@ class TestCalledMatchesSlideNotBreak:
             _fixture(1, p1, p2),
             _fixture(2, p3, p4, pin=Pin(TableId("T1"), 30)),
         )
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             fixtures,
             tables=1,
             now_min=60,
@@ -442,7 +452,7 @@ class TestCalledMatchesSlideNotBreak:
         p1, p2 = _players(2)
         off_grid = 63  # not a multiple of BUCKET_MIN
         assert off_grid % BUCKET_MIN != 0
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2, pin=Pin(TableId("T1"), off_grid)),),
         )
         result = solve(snapshot, time_cap_s=CAP)
@@ -461,7 +471,7 @@ class TestCalledMatchesSlideNotBreak:
         Proves: a called fixture's ``table_id`` is invariant across a re-solve."""
         p1, p2, p3, p4 = _players(4)
         pin = Pin(TableId("T2"), 100)
-        base = _one_pool_snapshot(
+        base = _one_reservation_snapshot(
             (_fixture(1, p1, p2, pin=pin), _fixture(2, p3, p4)),
             tables=3,
         )
@@ -501,7 +511,7 @@ class TestCalledMatchesSlideNotBreak:
             _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),  # [0, 25)
             _fixture(2, p3, p4, pin=Pin(TableId("T1"), 10)),  # promised [10, 35)
         )
-        snapshot = _one_pool_snapshot(fixtures, tables=1)
+        snapshot = _one_reservation_snapshot(fixtures, tables=1)
         result = solve(snapshot, time_cap_s=CAP)
         _assert_hard_constraints(snapshot, result)
         placed = {p.fixture_id: p for p in result.placements}
@@ -524,7 +534,7 @@ def _reasons_by_kind(
 class TestInfeasibility:
     def test_window_too_small_for_one_match_is_infeasible(self) -> None:
         p1, p2 = _players(2)
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2),),
             window=(0, 20),  # 25-minute match
         )
@@ -534,29 +544,29 @@ class TestInfeasibility:
         assert result.stats.objective is None
         assert result.reasons == (
             WindowTooShortForMatch(
-                pool_id=PoolId("A"),
+                reservation_id=ReservationId("A"),
                 fixture_id=FixtureId("F1"),
                 needed_min=25,
                 window_span_min=20,
             ),
         )
 
-    def test_pool_over_capacity_is_reported_without_the_solver(self) -> None:
+    def test_reservation_over_capacity_is_reported_without_the_solver(self) -> None:
         """Three back-to-back-impossible matches on one table in a 60-minute
         window: aggregate demand (75) exceeds table-minutes (60), so the
         pigeonhole guard proves it infeasible — no CP-SAT run, and it blames the
-        pool by id with the raw minute arithmetic."""
+        reservation by id with the raw minute arithmetic."""
         players = _players(6)
         fixtures = tuple(
             _fixture(n, players[2 * (n - 1)], players[2 * n - 1]) for n in (1, 2, 3)
         )
-        snapshot = _one_pool_snapshot(fixtures, tables=1, window=(0, 60))
+        snapshot = _one_reservation_snapshot(fixtures, tables=1, window=(0, 60))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
         assert result.reasons == (
-            PoolOverCapacity(
-                pool_id=PoolId("A"),
+            ReservationOverCapacity(
+                reservation_id=ReservationId("A"),
                 required_min=75,  # 3 * 25
                 capacity_min=60,  # 60-minute window * 1 table
                 table_count=1,
@@ -565,110 +575,131 @@ class TestInfeasibility:
 
     def test_over_capacity_excludes_pinned_fixtures(self) -> None:
         """Capacity is scoped to *unpinned* demand only: a pin is not constrained
-        to its pool's tables or window (ADR-0790), so it must not be summed into
+        to its reservation's tables or window (ADR-0790), so it must not be summed into
         the pigeonhole bound. Here the lone unpinned fixture fits the window on
-        its own (25 <= 45), so the pool is never reported as over capacity even
+        its own (25 <= 45), so the reservation is never reported as over capacity even
         though pinned + unpinned would exceed it. This is the completeness
         trade-off: with a single shared table the pin's occupancy genuinely does
         leave no room, so CP-SAT proves it infeasible and it surfaces as the
-        honest NoSingleCause residual, never a false PoolOverCapacity."""
+        honest NoSingleCause residual, never a false ReservationOverCapacity."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
             _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),  # 25 min pinned [0,25]
             _fixture(2, p3, p4),  # 25 min unpinned
         )
         # One table, a 45-minute window. Unpinned alone (25) fits 45, so no
-        # PoolOverCapacity — but with the pin holding T1 for [0,25] the unpinned
+        # ReservationOverCapacity — but with the pin holding T1 for [0,25] the unpinned
         # 25-min match can't also fit before 45, so CP-SAT proves infeasibility.
-        snapshot = _one_pool_snapshot(fixtures, tables=1, window=(0, 45))
+        snapshot = _one_reservation_snapshot(fixtures, tables=1, window=(0, 45))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
-        assert "pool_over_capacity" not in by_kind
+        assert "reservation_over_capacity" not in by_kind
         assert result.reasons == (NoSingleCause(required_min=50, available_min=45),)
 
-    def test_no_tables_pool_with_only_a_pinned_fixture_is_not_flagged(self) -> None:
-        """Regression: a pool with no tables whose only fixture is *pinned* to a
-        catalogue table owned by another pool (a supported off-pool director
-        placement, ADR-0790) must not fire PoolHasNoTables — that arm is about a
-        pool's *unpinned* fixtures having nowhere to go, and this pool has none.
-        The pinned fixture is honored on its table and the day solves."""
+    def test_no_tables_reservation_with_only_a_pinned_fixture_is_not_flagged(
+        self,
+    ) -> None:
+        """Regression: a reservation with no tables whose only fixture is *pinned* to a
+        catalogue table owned by another reservation (a supported off-group director
+        placement, ADR-0790) must not fire ReservationHasNoTables — that arm is about
+        a reservation's *unpinned* fixtures having nowhere to go, and this reservation
+        has none. The pinned fixture is honored on its table and the day solves."""
         p1, p2, p3, p4 = _players(4)
-        catalogue = _tables(1)  # T1 belongs to pool B; pool A owns no tables
+        catalogue = _tables(
+            1
+        )  # T1 belongs to reservation B; reservation A owns no tables
         snapshot = ScheduleSnapshot(
             table_ids=catalogue,
-            pools=(
-                SchedulePool(PoolId("A"), (), Window(0, 480)),  # no tables
-                SchedulePool(PoolId("B"), catalogue, Window(0, 480)),
+            reservations=(
+                ScheduleReservation(
+                    ReservationId("A"), (), Window(0, 480)
+                ),  # no tables
+                ScheduleReservation(ReservationId("B"), catalogue, Window(0, 480)),
             ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
-                # F1 lives in the no-tables pool A but is pinned onto T1 (pool B's
-                # table) — an off-pool placement the director is allowed to make.
-                _fixture(1, p1, p2, pool="A", pin=Pin(TableId("T1"), 0)),
-                _fixture(2, p3, p4, pool="B"),  # unpinned, plenty of room
+                # F1 lives in the no-tables reservation A but is pinned onto T1
+                # (reservation B's table) — an off-group placement the director is
+                # allowed to make.
+                _fixture(1, p1, p2, reservation="A", pin=Pin(TableId("T1"), 0)),
+                _fixture(2, p3, p4, reservation="B"),  # unpinned, plenty of room
             ),
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict in SOLVED
         by_kind = _reasons_by_kind(result)
-        assert "pool_has_no_tables" not in by_kind
+        assert "reservation_has_no_tables" not in by_kind
         assert result.reasons == ()
 
-    def test_off_pool_pin_does_not_push_a_pool_over_capacity(self) -> None:
-        """Regression: a pool owning one table with a comfortable window and a
+    def test_off_group_pin_does_not_push_a_reservation_over_capacity(self) -> None:
+        """Regression: a reservation owning one table with a comfortable window and a
         single unpinned fixture that fits (25 <= 60) must not be reported over
         capacity just because it *also* owns a fixture pinned to an outside table
         whose duration would overflow the window if naively summed in
-        (25 + 45 = 70 > 60). Pins are not bound to the pool's tables/window, so
+        (25 + 45 = 70 > 60). Pins are not bound to the reservation's tables/window, so
         only the unpinned demand counts — and it fits, so the day solves."""
         p1, p2, p3, p4 = _players(4)
-        catalogue = _tables(2)  # T1 is pool A's; T2 is the outside table
+        catalogue = _tables(2)  # T1 is reservation A's; T2 is the outside table
         snapshot = ScheduleSnapshot(
             table_ids=catalogue,
-            pools=(SchedulePool(PoolId("A"), (TableId("T1"),), Window(0, 60)),),
+            reservations=(
+                ScheduleReservation(
+                    ReservationId("A"), (TableId("T1"),), Window(0, 60)
+                ),
+            ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
-                _fixture(1, p1, p2, pool="A"),  # 25 min unpinned, fits T1 in [0,60]
-                # F2 is pool A's but pinned onto T2 (outside A's tables); 45 min.
-                _fixture(2, p3, p4, pool="A", pin=Pin(TableId("T2"), 0)),
+                _fixture(
+                    1, p1, p2, reservation="A"
+                ),  # 25 min unpinned, fits T1 in [0,60]
+                # F2 is reservation A's but pinned onto T2 (outside A's tables); 45 min.
+                _fixture(2, p3, p4, reservation="A", pin=Pin(TableId("T2"), 0)),
             ),
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict in SOLVED
         by_kind = _reasons_by_kind(result)
-        assert "pool_over_capacity" not in by_kind
+        assert "reservation_over_capacity" not in by_kind
         assert result.reasons == ()
 
-    def test_a_player_shared_across_pools_is_no_single_cause(self) -> None:
-        """Every certain guard passes — each match fits its own pool's window,
-        each pool has a table to itself and is well under aggregate capacity, and
-        no *single pool* over-subscribes anyone (one match each) — yet the two
-        matches share a player across the two pools and cannot both fit with the
+    def test_a_player_shared_across_reservations_is_no_single_cause(self) -> None:
+        """Every certain guard passes — each match fits its own reservation's window,
+        each reservation has a table to itself and is well under aggregate capacity, and
+        no *single reservation* over-subscribes anyone (one match each) — yet the two
+        matches share a player across the two reservations and cannot both fit with the
         rest floor in their tight, overlapping windows, so CP-SAT proves it
         infeasible.
 
-        This is the shape of infeasibility the per-(pool, player) pre-check
-        deliberately does NOT claim: it is scoped to one pool, so a human split
-        across pools is beyond what it can prove. No single structural cause
+        This is the shape of infeasibility the per-(reservation, player) pre-check
+        deliberately does NOT claim: it is scoped to one reservation, so a human split
+        across reservations is beyond what it can prove. No single structural cause
         explains it, so the residual :class:`NoSingleCause` is attached, with
         aggregate room to spare (``required_min <= available_min``)."""
         p1, p2, p3 = _players(3)
         table_ids = _tables(2)
         snapshot = ScheduleSnapshot(
             table_ids=table_ids,
-            pools=(
-                SchedulePool(PoolId("A"), (TableId("T1"),), Window(0, 30)),
-                SchedulePool(PoolId("B"), (TableId("T2"),), Window(0, 30)),
+            reservations=(
+                ScheduleReservation(
+                    ReservationId("A"), (TableId("T1"),), Window(0, 30)
+                ),
+                ScheduleReservation(
+                    ReservationId("B"), (TableId("T2"),), Window(0, 30)
+                ),
             ),
             events=(EventSettings(EventId("E1"), 3),),
-            # P1 plays once in each pool: one match per (pool, player), so the
+            # P1 plays once in each reservation: one match per (reservation, player),
+            # so the
             # per-player pigeonhole never fires — but P1's two 25-min matches plus
             # the 10-min rest need 60 minutes of P1's time, and both windows end
             # at 30.
-            fixtures=(_fixture(1, p1, p2, pool="A"), _fixture(2, p1, p3, pool="B")),
+            fixtures=(
+                _fixture(1, p1, p2, reservation="A"),
+                _fixture(2, p1, p3, reservation="B"),
+            ),
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
@@ -680,10 +711,10 @@ class TestInfeasibility:
         assert only.required_min <= only.available_min
 
     def test_overlapping_reservations_do_not_double_count_the_venue(self) -> None:
-        """An rr-then-ko event's shape: its group stage sits in a pool, and its
-        knockout stage — which belongs to no pool — sits in the event-wide
+        """An rr-then-ko event's shape: its group stage sits in a reservation, and its
+        knockout stage — which belongs to no reservation — sits in the event-wide
         reservation, which covers the SAME tables over the SAME window (ADR
-        20260807 "a pool restricts scheduling, it does not enable it"). Both
+        20260807 "a reservation restricts scheduling, it does not enable it"). Both
         reservations describe one venue, so the day aggregate must describe that
         venue once.
 
@@ -699,18 +730,18 @@ class TestInfeasibility:
         over-subscribes anyone (one match each)."""
         p1, p2, p3 = _players(3)
         table_ids = _tables(2)
-        pool_key = PoolId("E1:A")
-        event_wide_key = PoolId("E1:event-wide")
+        reservation_key = ReservationId("E1:A")
+        event_wide_key = ReservationId("E1:event-wide")
         snapshot = ScheduleSnapshot(
             table_ids=table_ids,
-            pools=(
-                SchedulePool(pool_key, table_ids, Window(0, 50)),
-                SchedulePool(event_wide_key, table_ids, Window(0, 50)),
+            reservations=(
+                ScheduleReservation(reservation_key, table_ids, Window(0, 50)),
+                ScheduleReservation(event_wide_key, table_ids, Window(0, 50)),
             ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
-                _fixture(1, p1, p2, pool=pool_key),  # the group stage
-                _fixture(2, p1, p3, pool=event_wide_key),  # the knockout
+                _fixture(1, p1, p2, reservation=reservation_key),  # the group stage
+                _fixture(2, p1, p3, reservation=event_wide_key),  # the knockout
             ),
             now_min=0,
         )
@@ -718,11 +749,11 @@ class TestInfeasibility:
         assert result.verdict is Verdict.infeasible
         assert result.reasons == (NoSingleCause(required_min=50, available_min=100),)
 
-    def test_pool_with_no_tables_is_infeasible(self) -> None:
+    def test_reservation_with_no_tables_is_infeasible(self) -> None:
         p1, p2 = _players(2)
         snapshot = ScheduleSnapshot(
             table_ids=(),
-            pools=(SchedulePool(PoolId("A"), (), Window(0, 480)),),
+            reservations=(ScheduleReservation(ReservationId("A"), (), Window(0, 480)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(_fixture(1, p1, p2),),
             now_min=0,
@@ -730,51 +761,62 @@ class TestInfeasibility:
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
-        assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
+        assert result.reasons == (
+            ReservationHasNoTables(reservation_id=ReservationId("A")),
+        )
 
-    def test_no_tables_dominates_over_capacity_for_the_same_pool(self) -> None:
-        """A no-tables pool is trivially over capacity too (capacity 0), but the
-        more specific PoolHasNoTables wins — a pool reports exactly one cause."""
+    def test_no_tables_dominates_over_capacity_for_the_same_reservation(self) -> None:
+        """A no-tables reservation is trivially over capacity too (capacity 0), but
+        the more specific ReservationHasNoTables wins — a reservation reports exactly
+        one cause."""
         p1, p2 = _players(2)
         snapshot = ScheduleSnapshot(
             table_ids=(),
-            pools=(SchedulePool(PoolId("A"), (), Window(0, 480)),),
+            reservations=(ScheduleReservation(ReservationId("A"), (), Window(0, 480)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(_fixture(1, p1, p2),),
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
+        assert result.reasons == (
+            ReservationHasNoTables(reservation_id=ReservationId("A")),
+        )
 
     def test_all_structural_causes_are_collected_at_once(self) -> None:
-        """Two independently-broken pools: one has no tables, the other is over
+        """Two independently-broken reservations: one has no tables, the other is over
         capacity. Both causes are reported in a single solve (not first-fail),
-        each blaming its own pool."""
+        each blaming its own reservation."""
         p1, p2, p3, p4, p5, p6 = _players(6)
-        table_ids = _tables(1)  # the single table belongs to pool B only
+        table_ids = _tables(1)  # the single table belongs to reservation B only
         snapshot = ScheduleSnapshot(
             table_ids=table_ids,
-            pools=(
-                SchedulePool(PoolId("A"), (), Window(0, 480)),  # no tables
-                SchedulePool(PoolId("B"), table_ids, Window(0, 40)),  # over cap
+            reservations=(
+                ScheduleReservation(
+                    ReservationId("A"), (), Window(0, 480)
+                ),  # no tables
+                ScheduleReservation(
+                    ReservationId("B"), table_ids, Window(0, 40)
+                ),  # over cap
             ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
-                _fixture(1, p1, p2, pool="A"),
-                # Pool B's two fixtures share no player (each of P3..P6 plays
-                # once), so its only cause is the pool-level capacity one.
-                _fixture(2, p3, p4, pool="B"),
-                _fixture(3, p5, p6, pool="B"),  # 2 * 25 = 50 > 40 * 1
+                _fixture(1, p1, p2, reservation="A"),
+                # Reservation B's two fixtures share no player (each of P3..P6 plays
+                # once), so its only cause is the reservation-level capacity one.
+                _fixture(2, p3, p4, reservation="B"),
+                _fixture(3, p5, p6, reservation="B"),  # 2 * 25 = 50 > 40 * 1
             ),
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
-        assert by_kind["pool_has_no_tables"] == [PoolHasNoTables(pool_id=PoolId("A"))]
-        assert by_kind["pool_over_capacity"] == [
-            PoolOverCapacity(
-                pool_id=PoolId("B"),
+        assert by_kind["reservation_has_no_tables"] == [
+            ReservationHasNoTables(reservation_id=ReservationId("A"))
+        ]
+        assert by_kind["reservation_over_capacity"] == [
+            ReservationOverCapacity(
+                reservation_id=ReservationId("B"),
                 required_min=50,
                 capacity_min=40,
                 table_count=1,
@@ -787,26 +829,27 @@ class TestInfeasibility:
         comfortably solvable day — carries an empty reason tuple."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (_fixture(1, p1, p2), _fixture(2, p3, p4))
-        result = solve(_one_pool_snapshot(fixtures), time_cap_s=CAP)
+        result = solve(_one_reservation_snapshot(fixtures), time_cap_s=CAP)
         assert result.verdict in SOLVED
         assert result.reasons == ()
 
     def test_trivial_optimal_carries_no_reasons(self) -> None:
-        result = solve(_one_pool_snapshot(()), time_cap_s=CAP)
+        result = solve(_one_reservation_snapshot(()), time_cap_s=CAP)
         assert result.verdict is Verdict.optimal
         assert result.reasons == ()
 
     def test_entirely_past_window_pre_live_names_past_window_reason(self) -> None:
-        """A pre-live pool whose ENTIRE window is already behind ``now`` is
+        """A pre-live reservation whose ENTIRE window is already behind ``now`` is
         infeasible with a specific, machine-readable ``past_window`` reason that
-        identifies the offending pool — the most specific pre-live cause, distinct
-        from a too-tight current window (ADR "a past day is named, not disguised",
+        identifies the offending reservation — the most specific pre-live cause,
+        distinct from a too-tight current window (ADR "a past day is named, not
+        disguised",
         #1101). The pure module is minute-only, so the reason carries only the
-        pool id; the DB-aware layer resolves it to a date."""
+        reservation id; the DB-aware layer resolves it to a date."""
         p1, p2 = _players(2)
         # Window [0, 60) is wholly before now (minute 120): no grid start >= now
         # can ever land inside it — a dated-in-the-past day, not too-tight.
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2),),
             window=(0, 60),
             now_min=120,
@@ -818,29 +861,29 @@ class TestInfeasibility:
         assert result.placements == ()
         assert result.overrunning is False
         # Past window dominates: it is the only reason (the tight-window arm is
-        # suppressed for the same pool), and it names the offending pool.
-        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        # suppressed for the same reservation), and it names the offending reservation.
+        assert result.reasons == (PastWindow(reservation_id=ReservationId("A")),)
         (reason,) = result.reasons
         assert isinstance(reason, PastWindow)
         assert reason.kind == "past_window"
 
 
 class TestPlayerOverSubscribed:
-    """The per-(pool, player) pigeonhole (ADR "the conflict core is a second,
+    """The per-(reservation, player) pigeonhole (ADR "the conflict core is a second,
     max-placed solve", decision 1): one human's own serial demand — their
-    matches plus the rest between them — measured against the pool window. A
+    matches plus the rest between them — measured against the reservation window. A
     *certain* cause, proved by arithmetic in the pre-check pass with no CP-SAT
     run, so like every certain arm it must never accuse anyone falsely."""
 
     def test_an_over_subscribed_player_is_reported_without_the_solver(self) -> None:
         """P1 plays three 25-minute matches in a 60-minute window. However many
-        tables the pool owns, P1 can only play one at a time: 75 minutes of
+        tables the reservation owns, P1 can only play one at a time: 75 minutes of
         matches plus two 10-minute rests is 95 minutes of P1's day against a
         60-minute window, so the day cannot fit — blamed on the human by id, with
         the raw minute arithmetic, and no solver run.
 
-        Note the pool itself is nowhere near over capacity (75 needed against
-        60 × 3 tables = 180), which is exactly why the pool-level arms cannot see
+        Note the reservation itself is nowhere near over capacity (75 needed against
+        60 × 3 tables = 180), which is exactly why the reservation-level arms cannot see
         this and a per-player one is needed."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
@@ -848,13 +891,13 @@ class TestPlayerOverSubscribed:
             _fixture(2, p1, p3),
             _fixture(3, p1, p4),
         )
-        snapshot = _one_pool_snapshot(fixtures, tables=3, window=(0, 60))
+        snapshot = _one_reservation_snapshot(fixtures, tables=3, window=(0, 60))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
         assert result.reasons == (
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=ReservationId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,  # 3 * 25 + 2 * REST_MIN
@@ -876,7 +919,7 @@ class TestPlayerOverSubscribed:
         p1, p2, p3 = _players(3)
         assert 2 * match_minutes(3) + (2 - 1) * REST_MIN == 60
         fixtures = (_fixture(1, p1, p2), _fixture(2, p1, p3))
-        snapshot = _one_pool_snapshot(fixtures, tables=2, window=(0, 60))
+        snapshot = _one_reservation_snapshot(fixtures, tables=2, window=(0, 60))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.reasons == ()
         assert result.verdict in SOLVED
@@ -884,20 +927,20 @@ class TestPlayerOverSubscribed:
         assert sorted(p.start_min for p in result.placements) == [0, 35]
 
     def test_a_live_overrunning_day_does_not_accuse_its_busiest_player(self) -> None:
-        """THE falsification for this arm's *span*. Once the day is live the pool
+        """THE falsification for this arm's *span*. Once the day is live the reservation
         window's end is advisory — the unplayed remainder overruns instead of
         wedging (ADR "the solver stops wedging", #1067) — so the span this bound
         is tested against must be the live-softened one, not the planned one.
 
-        P1 is in three 25-minute matches (95 minutes of P1's own day) in a pool
+        P1 is in three 25-minute matches (95 minutes of P1's own day) in a reservation
         whose *planned* window is only 60 minutes long, and it is already minute
         50 of a live day. Measured against the planned span this reads
         95 > 60 — a *certain* reason naming an innocent human — yet the day
         genuinely schedules, P1 playing back-to-back-with-rest into the overrun.
         So no reason may be reported and every fixture must be placed.
 
-        Swap ``effective_end(pool)`` for ``pool.window.end_min`` in the span
-        :func:`_build_model` compares against and this test reds: infeasible,
+        Swap ``effective_end(reservation)`` for ``reservation.window.end_min`` in the
+        span :func:`_build_model` compares against and this test reds: infeasible,
         placements gone, PlayerOverSubscribed(P1, required_min=95) reported."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
@@ -906,7 +949,7 @@ class TestPlayerOverSubscribed:
             _fixture(3, p1, p4),
         )
         snapshot = dataclasses.replace(
-            _one_pool_snapshot(fixtures, tables=3, window=(0, 60), now_min=50),
+            _one_reservation_snapshot(fixtures, tables=3, window=(0, 60), now_min=50),
             is_live=True,
         )
         result = solve(snapshot, time_cap_s=CAP)
@@ -923,14 +966,14 @@ class TestPlayerOverSubscribed:
     def test_the_reported_span_is_the_planned_one_not_the_softened_one(self) -> None:
         """The span reported and the span compared against deliberately differ
         while live. The director's screen prints ``window_span_min`` beside the
-        pool's *planned* window clock, which is never softened, so reporting the
+        reservation's *planned* window clock, which is never softened, so reporting the
         (wider) live-softened span would render a self-contradictory sentence:
         "they need 1.6h, but the window is only 1.4h long" next to a 09:30–10:40
         window. The planned span is reported — as WindowTooShortForMatch already
         does — while the *bound* still uses the softened span, which is the
         conservative direction (see the test above).
 
-        A live day at minute 0 whose pool window is [20, 100): planned span 80,
+        A live day at minute 0 whose reservation window is [20, 100): planned span 80,
         softened span 85 (now + the 105-minute overrun allowance clips the end to
         105). P1's 95 minutes beat both, so the arm fires — and the sentence the
         director reads stays true because planned <= softened < required."""
@@ -941,7 +984,7 @@ class TestPlayerOverSubscribed:
             _fixture(3, p1, p4),
         )
         snapshot = dataclasses.replace(
-            _one_pool_snapshot(fixtures, tables=3, window=(20, 100), now_min=0),
+            _one_reservation_snapshot(fixtures, tables=3, window=(20, 100), now_min=0),
             is_live=True,
         )
         result = solve(snapshot, time_cap_s=CAP)
@@ -949,7 +992,7 @@ class TestPlayerOverSubscribed:
         assert result.verdict is Verdict.infeasible
         assert result.reasons == (
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=ReservationId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,
@@ -980,21 +1023,21 @@ class TestPlayerOverSubscribed:
             _fixture(5, p1, p4),
             _fixture(6, p1, p5),
         )
-        # 4 tables: pool demand is 6 * 25 = 150 against 60 * 4 = 240, so the pool
-        # is under capacity and only the per-player arm can fire.
-        snapshot = _one_pool_snapshot(fixtures, tables=4, window=(0, 60))
+        # 4 tables: reservation demand is 6 * 25 = 150 against 60 * 4 = 240, so the
+        # reservation is under capacity and only the per-player arm can fire.
+        snapshot = _one_reservation_snapshot(fixtures, tables=4, window=(0, 60))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         assert result.reasons == (
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=ReservationId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,
                 window_span_min=60,
             ),
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=ReservationId("A"),
                 player_id=p2,
                 match_count=3,
                 required_min=95,
@@ -1002,14 +1045,14 @@ class TestPlayerOverSubscribed:
             ),
         )
 
-    def test_an_over_capacity_pool_also_names_its_over_subscribed_player(
+    def test_an_over_capacity_reservation_also_names_its_over_subscribed_player(
         self,
     ) -> None:
         """The two certain arms coexist: they are proofs about different subjects
-        with different remedies — "this pool needs more table-time" and "this
-        human is in too many matches" — so a pool that is both reports both,
+        with different remedies — "this reservation needs more table-time" and "this
+        human is in too many matches" — so a reservation that is both reports both,
         rather than one silently dominating the other. One table, a 60-minute
-        window, three matches all involving P1: the pool needs 75 table-minutes
+        window, three matches all involving P1: the reservation needs 75 table-minutes
         against 60, and P1 needs 95 minutes of their own day."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
@@ -1017,13 +1060,13 @@ class TestPlayerOverSubscribed:
             _fixture(2, p1, p3),
             _fixture(3, p1, p4),
         )
-        snapshot = _one_pool_snapshot(fixtures, tables=1, window=(0, 60))
+        snapshot = _one_reservation_snapshot(fixtures, tables=1, window=(0, 60))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.infeasible
         by_kind = _reasons_by_kind(result)
-        assert by_kind["pool_over_capacity"] == [
-            PoolOverCapacity(
-                pool_id=PoolId("A"),
+        assert by_kind["reservation_over_capacity"] == [
+            ReservationOverCapacity(
+                reservation_id=ReservationId("A"),
                 required_min=75,
                 capacity_min=60,
                 table_count=1,
@@ -1031,7 +1074,7 @@ class TestPlayerOverSubscribed:
         ]
         assert by_kind["player_over_subscribed"] == [
             PlayerOverSubscribed(
-                pool_id=PoolId("A"),
+                reservation_id=ReservationId("A"),
                 player_id=p1,
                 match_count=3,
                 required_min=95,
@@ -1041,8 +1084,8 @@ class TestPlayerOverSubscribed:
 
     def test_pinned_matches_do_not_count_toward_a_players_load(self) -> None:
         """Scoped to *unpinned* demand, like every other certain arm: a pin is
-        bound to neither the pool's tables nor its window (ADR-0790), so counting
-        it could invent a false accusation. P1 has one unpinned match in the pool
+        bound to neither the reservation's tables nor its window (ADR-0790), so counting
+        it could invent a false accusation. P1 has one unpinned match in the reservation
         plus two called ones — three in total, which summed naively (95) would
         overflow the 60-minute window — but only the unpinned one is P1's
         provable in-window load, and the day solves."""
@@ -1052,21 +1095,21 @@ class TestPlayerOverSubscribed:
             _fixture(2, p1, p3, pin=Pin(TableId("T1"), 0)),  # called: [0, 25)
             _fixture(3, p1, p4, pin=Pin(TableId("T2"), 300)),  # called, past the window
         )
-        snapshot = _one_pool_snapshot(fixtures, tables=2, window=(0, 60))
+        snapshot = _one_reservation_snapshot(fixtures, tables=2, window=(0, 60))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict in SOLVED
         assert result.reasons == ()
         _assert_hard_constraints(snapshot, result)
 
-    def test_a_no_tables_pool_reports_only_that(self) -> None:
-        """The pool-level *unplaceable* causes dominate: a pool with no tables is
-        already unrunnable, so piling a per-player claim on top of it would be
-        noise. P1 is in three matches of a 60-minute no-tables pool and only
-        :class:`PoolHasNoTables` is reported."""
+    def test_a_no_tables_reservation_reports_only_that(self) -> None:
+        """The reservation-level *unplaceable* causes dominate: a reservation with no
+        tables is already unrunnable, so piling a per-player claim on top of it would
+        be noise. P1 is in three matches of a 60-minute no-tables reservation and only
+        :class:`ReservationHasNoTables` is reported."""
         p1, p2, p3, p4 = _players(4)
         snapshot = ScheduleSnapshot(
             table_ids=(),
-            pools=(SchedulePool(PoolId("A"), (), Window(0, 60)),),
+            reservations=(ScheduleReservation(ReservationId("A"), (), Window(0, 60)),),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2),
@@ -1076,52 +1119,58 @@ class TestPlayerOverSubscribed:
             now_min=0,
         )
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PoolHasNoTables(pool_id=PoolId("A")),)
+        assert result.reasons == (
+            ReservationHasNoTables(reservation_id=ReservationId("A")),
+        )
 
-    def test_a_past_window_pool_reports_only_that(self) -> None:
+    def test_a_past_window_reservation_reports_only_that(self) -> None:
         """The second of the three domination guards this arm shares with the
-        pool-level pass (the no-tables one is above, the short-window one below):
-        a pre-live pool whose ENTIRE window is behind ``now`` is unschedulable
+        reservation-level pass (the no-tables one is above, the short-window one below):
+        a pre-live reservation whose ENTIRE window is behind ``now`` is unschedulable
         because of *when* it is, fixed by moving the date, so naming a human on
         top of it is noise. P1 is in three matches of a 60-minute window that
         ended an hour ago and only :class:`PastWindow` is reported.
 
-        Drop the ``pools_past_window`` ``continue`` from the per-pool loop and
-        this test reds with a PlayerOverSubscribed(P1) piled on."""
+        Drop the ``reservations_past_window`` ``continue`` from the per-reservation
+        loop and this test reds with a PlayerOverSubscribed(P1) piled on."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
             _fixture(1, p1, p2),
             _fixture(2, p1, p3),
             _fixture(3, p1, p4),
         )
-        # 3 tables, so the pool is nowhere near over capacity (75 vs 60 * 3) and
+        # 3 tables, so the reservation is nowhere near over capacity (75 vs 60 * 3) and
         # the per-player arm is the only one the dropped guard could let through.
-        snapshot = _one_pool_snapshot(fixtures, tables=3, window=(0, 60), now_min=120)
+        snapshot = _one_reservation_snapshot(
+            fixtures, tables=3, window=(0, 60), now_min=120
+        )
         assert snapshot.is_live is False
         result = solve(snapshot, time_cap_s=CAP)
-        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        assert result.reasons == (PastWindow(reservation_id=ReservationId("A")),)
 
-    def test_a_short_window_pool_reports_only_its_unfittable_matches(self) -> None:
-        """The third domination guard: a pool whose window cannot hold even one
-        match is already proven unplaceable per fixture, so the pool- and
+    def test_a_short_window_reservation_reports_only_its_unfittable_matches(
+        self,
+    ) -> None:
+        """The third domination guard: a reservation whose window cannot hold even one
+        match is already proven unplaceable per fixture, so the reservation- and
         player-level claims about it are suppressed. A 20-minute window against
         25-minute matches, all three involving P1 — only the three
         :class:`WindowTooShortForMatch` findings are reported.
 
-        Drop the ``pools_short_window`` ``continue`` and this test reds twice
-        over: a PoolOverCapacity (75 > 20 * 3) and a PlayerOverSubscribed(P1,
-        95 > 20) get piled onto a pool that already explained itself."""
+        Drop the ``reservations_short_window`` ``continue`` and this test reds twice
+        over: a ReservationOverCapacity (75 > 20 * 3) and a PlayerOverSubscribed(P1,
+        95 > 20) get piled onto a reservation that already explained itself."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
             _fixture(1, p1, p2),
             _fixture(2, p1, p3),
             _fixture(3, p1, p4),
         )
-        snapshot = _one_pool_snapshot(fixtures, tables=3, window=(0, 20))
+        snapshot = _one_reservation_snapshot(fixtures, tables=3, window=(0, 20))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.reasons == tuple(
             WindowTooShortForMatch(
-                pool_id=PoolId("A"),
+                reservation_id=ReservationId("A"),
                 fixture_id=FixtureId(f"F{n}"),
                 needed_min=25,
                 window_span_min=20,
@@ -1131,21 +1180,21 @@ class TestPlayerOverSubscribed:
 
 
 class TestSoftWindowOnceLive:
-    """Once the tournament is live, a pool window's end is advisory: real time
+    """Once the tournament is live, a reservation window's end is advisory: real time
     passing it makes the day *overrunning*, not instantly infeasible (ADR "the
     solver stops wedging", #1067). Pre-live the window stays a hard constraint."""
 
     def test_live_day_past_its_window_end_overruns_rather_than_wedging(
         self,
     ) -> None:
-        """A live snapshot whose pool window END is already behind ``now`` still
+        """A live snapshot whose reservation window END is already behind ``now`` still
         places its unplayed fixture — into the overrun — and reports feasible +
         ``overrunning``, instead of the 0-ms infeasible wedge."""
         p1, p2 = _players(2)
         # Window closes at minute 60; it is now minute 120 — a full hour past
         # the planned end, with a 25-minute (best-of-3) match still to play.
         snapshot = dataclasses.replace(
-            _one_pool_snapshot(
+            _one_reservation_snapshot(
                 (_fixture(1, p1, p2),),
                 window=(0, 60),
                 now_min=120,
@@ -1171,7 +1220,7 @@ class TestSoftWindowOnceLive:
         """The soft window is live-only: the identical snapshot pre-live still
         proves infeasible (a provisional plan must flag "won't fit")."""
         p1, p2 = _players(2)
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2),),
             window=(0, 60),
             now_min=120,
@@ -1181,15 +1230,15 @@ class TestSoftWindowOnceLive:
         assert result.verdict is Verdict.infeasible
         assert result.placements == ()
         assert result.overrunning is False
-        # Pre-live, the wholly-past window is named as a past window (pool A).
-        assert result.reasons == (PastWindow(pool_id=PoolId("A")),)
+        # Pre-live, the wholly-past window is named as a past window (reservation A).
+        assert result.reasons == (PastWindow(reservation_id=ReservationId("A")),)
 
     def test_live_day_within_its_window_is_not_flagged_overrunning(self) -> None:
         """Live but comfortably inside the window: a normal success, not
         overrunning — the flag names an actual spill past the planned end."""
         p1, p2 = _players(2)
         snapshot = dataclasses.replace(
-            _one_pool_snapshot(
+            _one_reservation_snapshot(
                 (_fixture(1, p1, p2),),
                 window=(0, 480),
                 now_min=0,
@@ -1209,7 +1258,7 @@ class TestInProgress:
         estimated end (start 0 + 25 minutes)."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (_fixture(1, p1, p2), _fixture(2, p3, p4))
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             fixtures,
             tables=1,
             now_min=10,
@@ -1226,7 +1275,7 @@ class TestInProgress:
         next match starts ≥ estimated end + rest floor."""
         p1, p2, p3 = _players(3)
         fixtures = (_fixture(1, p1, p2), _fixture(2, p1, p3))
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             fixtures,
             tables=2,
             now_min=10,
@@ -1241,7 +1290,7 @@ class TestInProgress:
         so the table stays blocked just ahead of the clock."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (_fixture(1, p1, p2), _fixture(2, p3, p4))
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             fixtures,
             tables=1,
             now_min=60,  # the 0-started 25-minute match is 35 minutes over
@@ -1263,9 +1312,9 @@ class TestRestShadows:
         them at ``now``. Without the shadow this fixture starts at 0; with it
         the earliest legal grid start is exactly ``C + REST_MIN``."""
         p1, p2 = _players(2)
-        # A wide-open pool: three tables, an empty day, now at 0. The only
+        # A wide-open reservation: three tables, an empty day, now at 0. The only
         # thing keeping F1 off the very first slot is P1's rest shadow.
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2),),
             rest_shadows=(RestShadow(p1, 0),),
         )
@@ -1280,7 +1329,7 @@ class TestRestShadows:
         """The floor is measured from the completion time the shadow carries,
         not from ``now``: a match that finished 3 minutes ago still owes 7."""
         p1, p2 = _players(2)
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2),),
             now_min=3,
             rest_shadows=(RestShadow(p1, 0),),  # finished at 0, rest until 10
@@ -1295,7 +1344,7 @@ class TestRestShadows:
         interval — per-player no-overlap only bites with more than one — so the
         solve still places the unrelated fixture normally."""
         p1, p2, ghost = _players(3)
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2),),
             rest_shadows=(RestShadow(ghost, 0),),
         )
@@ -1319,7 +1368,7 @@ class TestRestShadows:
         the pre-fix contract this coalesce retires — so it would reject two
         shadows for one player rather than reflect the dedup.)"""
         p1, p2, p3, p4 = _players(4)
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2), _fixture(2, p3, p4)),
             # Two completions for P1, 2 minutes apart — both within REST_MIN.
             rest_shadows=(RestShadow(p1, 0), RestShadow(p1, 2)),
@@ -1360,7 +1409,7 @@ class TestRestShadows:
                 if p1 in (f.player_a_id, f.player_b_id)
             )
 
-        base = _one_pool_snapshot(fixtures, tables=2, length_games=5)
+        base = _one_reservation_snapshot(fixtures, tables=2, length_games=5)
         without = solve(base, time_cap_s=CAP)
         _assert_hard_constraints(base, without)
         # The bug: with nothing carrying P1's just-finished rest, P1 is re-called
@@ -1406,7 +1455,9 @@ class TestInProgressConflicts:
         tables = _tables(2)
         snapshot = ScheduleSnapshot(
             table_ids=tables,
-            pools=(SchedulePool(PoolId("A"), tables, Window(0, 480)),),
+            reservations=(
+                ScheduleReservation(ReservationId("A"), tables, Window(0, 480)),
+            ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2),  # in-progress on T1 → occupancy [0, 25)
@@ -1437,7 +1488,9 @@ class TestInProgressConflicts:
         tables = _tables(3)
         snapshot = ScheduleSnapshot(
             table_ids=tables,
-            pools=(SchedulePool(PoolId("A"), tables, Window(0, 480)),),
+            reservations=(
+                ScheduleReservation(ReservationId("A"), tables, Window(0, 480)),
+            ),
             events=(EventSettings(EventId("E1"), 3),),
             fixtures=(
                 _fixture(1, p1, p2),  # in-progress on T1, human P1
@@ -1462,7 +1515,7 @@ class TestInProgressConflicts:
         """A clean snapshot — one running match, no double-booking — reports an
         empty conflict tuple, the contract's other half."""
         p1, p2, p3, p4 = _players(4)
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (_fixture(1, p1, p2), _fixture(2, p3, p4)),
             in_progress=(InProgressMatch(FixtureId("F1"), TableId("T1"), 0),),
         )
@@ -1475,7 +1528,7 @@ class TestInProgressConflicts:
         conflicts."""
         p1, p2, p3, p4 = _players(4)
         result = solve(
-            _one_pool_snapshot((_fixture(1, p1, p2), _fixture(2, p3, p4))),
+            _one_reservation_snapshot((_fixture(1, p1, p2), _fixture(2, p3, p4))),
             time_cap_s=CAP,
         )
         assert result.verdict in SOLVED
@@ -1484,7 +1537,7 @@ class TestInProgressConflicts:
 
 class TestDegenerateAndStability:
     def test_no_fixtures_is_trivially_optimal(self) -> None:
-        snapshot = _one_pool_snapshot(())
+        snapshot = _one_reservation_snapshot(())
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.optimal
         assert result.placements == ()
@@ -1492,7 +1545,7 @@ class TestDegenerateAndStability:
 
     def test_all_completed_is_trivially_optimal(self) -> None:
         p1, p2 = _players(2)
-        snapshot = _one_pool_snapshot((_fixture(1, p1, p2, completed=True),))
+        snapshot = _one_reservation_snapshot((_fixture(1, p1, p2, completed=True),))
         result = solve(snapshot, time_cap_s=CAP)
         assert result.verdict is Verdict.optimal
         assert result.placements == ()
@@ -1529,22 +1582,24 @@ class TestDegenerateAndStability:
 
 class TestIncoherentSnapshots:
     def test_in_progress_match_without_its_fixture_raises(self) -> None:
-        snapshot = _one_pool_snapshot(
+        snapshot = _one_reservation_snapshot(
             (),
             in_progress=(InProgressMatch(FixtureId("ghost"), TableId("T1"), 0),),
         )
         with pytest.raises(IncoherentSnapshot):
             solve(snapshot, time_cap_s=CAP)
 
-    def test_fixture_with_unknown_pool_raises(self) -> None:
+    def test_fixture_with_unknown_reservation_raises(self) -> None:
         p1, p2 = _players(2)
-        snapshot = _one_pool_snapshot((_fixture(1, p1, p2, pool="ghost"),))
+        snapshot = _one_reservation_snapshot(
+            (_fixture(1, p1, p2, reservation="ghost"),)
+        )
         with pytest.raises(IncoherentSnapshot):
             solve(snapshot, time_cap_s=CAP)
 
     def test_fixture_against_oneself_raises(self) -> None:
         (p1,) = _players(1)
-        snapshot = _one_pool_snapshot((_fixture(1, p1, p1),))
+        snapshot = _one_reservation_snapshot((_fixture(1, p1, p1),))
         with pytest.raises(IncoherentSnapshot):
             solve(snapshot, time_cap_s=CAP)
 
@@ -1576,7 +1631,7 @@ def _star_chain_snapshot(
         PreviousPlacement(FixtureId(f"F{n}"), table_ids[0], (n - 1) * step)
         for n in range(1, n_fixtures + 1)
     )
-    return _one_pool_snapshot(
+    return _one_reservation_snapshot(
         fixtures,
         tables=tables,
         window=(0, 600),

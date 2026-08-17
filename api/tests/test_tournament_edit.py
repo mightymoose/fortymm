@@ -161,7 +161,7 @@ async def _draw_an_event(db: AsyncSession, tournament: Tournament) -> None:
     )
     db.add(event)
     await db.flush()
-    db.add(TournamentFixture(stage_id=stages[0].id, pool_id=None, round=1, position=1))
+    db.add(TournamentFixture(stage_id=stages[0].id, group_id=None, round=1, position=1))
     await db.commit()
 
 

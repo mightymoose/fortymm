@@ -51,7 +51,7 @@ const IN_A_TOURNAMENT = {
           position: 1,
           field_size: 4,
           stage_label: 'Group play',
-          pool_label: 'Pool B',
+          group_label: 'Group B',
           match: {
             state: 'live',
             match_id: '77777777-7777-4777-8777-777777777777',

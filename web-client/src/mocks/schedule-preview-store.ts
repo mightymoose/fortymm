@@ -42,8 +42,8 @@ let tokenCounter = 0
  * halves cleanly into pairings). */
 const DEFAULT_FIELD_SIZE = 4
 
-/** `n·(n-1)/2` — every pairing of an `n`-player round-robin pool, the drawn match
- * count for a single-pool event. */
+/** `n·(n-1)/2` — every pairing of an `n`-player round-robin group, the drawn match
+ * count for a single-group event. */
 function roundRobinMatchCount(n: number): number {
   return (n * (n - 1)) / 2
 }

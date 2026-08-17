@@ -106,9 +106,9 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [],
-        "pools": [
+        "reservations": [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1"],
             }
@@ -209,7 +209,7 @@ async def test_a_second_event_gets_a_settings_row_of_its_own(
 ) -> None:
     """Rows are never shared between events — a second event with the SAME draw
     type still gets its own row, because the follow-on tickets hang per-event
-    configuration (pools, ``qualifiers_per_pool``) off it."""
+    configuration (reservations, ``qualifiers_per_group``) off it."""
     client, _ = authed_client
     tournament_id, first_id = await _create_event(client, draw_type="round-robin")
     second = await client.post(
@@ -499,7 +499,7 @@ async def test_the_settings_column_holds_an_object_or_nothing_at_all(
     one-case test. Accepted objects are asked too, so the refusals are the constraint
     discriminating rather than rejecting everything.
     """
-    accepted = ("'{}'::jsonb", "'{\"qualifiers_per_pool\": 2}'::jsonb")
+    accepted = ("'{}'::jsonb", "'{\"qualifiers_per_group\": 2}'::jsonb")
     refused = ("'[]'::jsonb", "'1'::jsonb", "'\"nope\"'::jsonb", "'null'::jsonb")
 
     for value in accepted:
@@ -580,7 +580,7 @@ async def test_every_arm_round_trips_through_the_settings_column(
     arms: list[DrawSettingsWriteArm] = [
         RoundRobinDrawSettingsWrite(),
         SingleElimDrawSettingsWrite(),
-        RrThenKoDrawSettingsWrite(qualifiers_per_pool=2),
+        RrThenKoDrawSettingsWrite(qualifiers_per_group=2),
         SwissDrawSettingsWrite(rounds=5),
     ]
     assert len(arms) == len(DrawType), (
@@ -631,20 +631,20 @@ async def test_the_qualifier_floor_is_the_unions_now_that_the_column_is_gone(
     become unwritable when a player withdraws.
     """
     for count in (0, -1):
-        with pytest.raises(ValidationError, match="qualifiers_per_pool"):
+        with pytest.raises(ValidationError, match="qualifiers_per_group"):
             draw_settings_from_storage(
-                DrawType.rr_then_ko, {"qualifiers_per_pool": count}
+                DrawType.rr_then_ko, {"qualifiers_per_group": count}
             )
-    with pytest.raises(ValidationError, match="qualifiers_per_pool"):
+    with pytest.raises(ValidationError, match="qualifiers_per_group"):
         draw_settings_from_storage(DrawType.rr_then_ko, {})
 
-    # One qualifier per pool IS legal — a two-pool event at K=1 is a single final
-    # between the two pool winners, which the ADR names as a supported shape. So the
+    # One qualifier per group IS legal — a two-group event at K=1 is a single final
+    # between the two group winners, which the ADR names as a supported shape. So the
     # floor is at 1, not at 2, and this is what says the refusals above are the union
     # discriminating rather than rejecting everything.
     assert draw_settings_from_storage(
-        DrawType.rr_then_ko, {"qualifiers_per_pool": 1}
-    ) == RrThenKoDrawSettingsWrite(qualifiers_per_pool=1)
+        DrawType.rr_then_ko, {"qualifiers_per_group": 1}
+    ) == RrThenKoDrawSettingsWrite(qualifiers_per_group=1)
 
     # And the storage layer no longer has a view: the same K the union refuses is a row
     # the database stores. Named out loud, because a reader who assumes the old CHECK
@@ -653,11 +653,11 @@ async def test_the_qualifier_floor_is_the_unions_now_that_the_column_is_gone(
         sa.text(
             "INSERT INTO tournament_event_draw_settings (draw_type_id, settings)"
             " VALUES (:draw_type_id,"
-            " '{\"qualifiers_per_pool\": 0}'::jsonb) RETURNING settings"
+            " '{\"qualifiers_per_group\": 0}'::jsonb) RETURNING settings"
         ),
         {"draw_type_id": RR_THEN_KO_ID},
     )
-    assert stored.scalar_one() == {"qualifiers_per_pool": 0}
+    assert stored.scalar_one() == {"qualifiers_per_group": 0}
 
     await db_session.rollback()
 

@@ -6,7 +6,7 @@ import { fixtureLinePage, fixtureLineTexts } from './round-list/fixture-line.pag
 
 const scoped = (container: Container) => ({
   /** The list of one round's fixtures, by its accessible name — the name is what tells
-   * Pool A's round 1 from Pool B's when both are on the page. */
+   * Group A's round 1 from Group B's when both are on the page. */
   getRound(round: number, groupName: string) {
     return container.getByRole('list', {
       name: `Round ${round} fixtures in ${groupName}`,

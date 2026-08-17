@@ -199,14 +199,14 @@ export class TournamentDetailPage {
   // ----- the draw panel (ADR-0786) -----------------------------------------
   //
   // Every locator here is scoped to ONE event card, because the tab renders a draw panel
-  // per event and the pools inside them are all called "Pool A": an unscoped
-  // `getByRole('region', { name: 'Pool A' })` would match two different events' pools and
-  // (rightly) throw on the ambiguity — or, worse, assert one event's draw and call it
+  // per event and the groups inside them are all called "Group A": an unscoped
+  // `getByRole('region', { name: 'Group A' })` would match two different events' groups
+  // and (rightly) throw on the ambiguity — or, worse, assert one event's draw and call it
   // the other's.
   //
   // They are addressed by their **accessible names**, not by test ids, wherever the
   // component gives them one. That is deliberate: the whole panel is a screen-reader
-  // artefact (a pool's roster is a named list, a round is a named list, a fixture is a
+  // artefact (a group's roster is a named list, a round is a named list, a fixture is a
   // list item that says "vs" out loud), so a locator that went around the accessibility
   // tree would be testing a draw that a blind director cannot read.
 
@@ -258,37 +258,37 @@ export class TournamentDetailPage {
     return this.eventCard(eventName).locator('[data-testid^="draw-notice-"]')
   }
 
-  /** One pool of a cut draw, by the name the event gives it ("Pool A"). */
-  poolDraw(eventName: string, poolName: string): Locator {
-    return this.eventCard(eventName).getByRole('region', { name: poolName })
+  /** One group of a cut draw, by the label the event gives it ("Group A"). */
+  groupDraw(eventName: string, groupLabel: string): Locator {
+    return this.eventCard(eventName).getByRole('region', { name: groupLabel })
   }
 
-  /** The chips naming who the draw dealt into a pool — its membership, which nothing
-   * stores: it is derived from the pool's own fixtures (ADR-0786). */
-  poolEntrants(eventName: string, poolName: string): Locator {
-    return this.poolDraw(eventName, poolName)
-      .getByRole('list', { name: `Entrants in ${poolName}` })
+  /** The chips naming who the draw dealt into a group — its membership, which nothing
+   * stores: it is derived from the group's own fixtures (ADR-0786). */
+  groupEntrants(eventName: string, groupLabel: string): Locator {
+    return this.groupDraw(eventName, groupLabel)
+      .getByRole('list', { name: `Entrants in ${groupLabel}` })
       .getByRole('listitem')
   }
 
-  /** One round's fixtures within a pool, in position order. An odd pool's rounds hold
+  /** One round's fixtures within a group, in position order. An odd group's rounds hold
    * FEWER of them — the player drawn against the phantom seat sits that round out, and
    * that absence is the entire representation of a bye. */
-  roundFixtures(eventName: string, poolName: string, round: number): Locator {
-    return this.poolDraw(eventName, poolName)
-      .getByRole('list', { name: `Round ${round} fixtures in ${poolName}` })
+  roundFixtures(eventName: string, groupLabel: string, round: number): Locator {
+    return this.groupDraw(eventName, groupLabel)
+      .getByRole('list', { name: `Round ${round} fixtures in ${groupLabel}` })
       .getByRole('listitem')
   }
 
-  /** Every fixture line of one event's draw, across all its pools — for counting the
+  /** Every fixture line of one event's draw, across all its groups — for counting the
    * whole draw, and for sweeping it for words that must never appear on one ("bye"). */
   fixtureLines(eventName: string): Locator {
     return this.drawPanel(eventName).locator('[data-testid^="fixture-line-"]')
   }
 
-  /** The **bracket** a single-elimination draw renders instead of pools (ADR-0785) —
+  /** The **bracket** a single-elimination draw renders instead of groups (ADR-0785) —
    * the `<section>` labelled "Bracket" on one event's card. A round-robin event never
-   * has one (its fixtures all carry a pool), so `toHaveCount(0)` here is how a spec
+   * has one (its fixtures all carry a group), so `toHaveCount(0)` here is how a spec
    * tells the two renderers apart. */
   bracket(eventName: string): Locator {
     return this.eventCard(eventName).getByRole('region', { name: 'Bracket' })
@@ -309,10 +309,10 @@ export class TournamentDetailPage {
 
   // ----- the standings (ADR-0788) ------------------------------------------
   //
-  // The results block below the fixtures on a round-robin card: a table per pool (in the
+  // The results block below the fixtures on a round-robin card: a table per group (in the
   // server's finishing order — never re-sorted here), and a champion once the event is
   // decided. Scoped to one event card, like the draw, because the tab renders one per
-  // event and every "Standings" region / "Pool A" table would otherwise be ambiguous.
+  // event and every "Standings" region / "Group A" table would otherwise be ambiguous.
 
   /** One event's results block — the `<section>` headed "Standings" on its card. Absent
    * (count 0) for an event with no results: an uncut or non-round-robin event stands
@@ -321,20 +321,20 @@ export class TournamentDetailPage {
     return this.eventCard(eventName).getByRole('region', { name: 'Standings' })
   }
 
-  /** One pool's standings table, by the pool name in its accessible label — the whole
+  /** One group's standings table, by the group label in its accessible label — the whole
    * point being that a screen reader reads a real `<table>` by column, so this goes
    * through the accessibility tree, not a test id. */
-  standingsTable(eventName: string, poolName: string): Locator {
+  standingsTable(eventName: string, groupLabel: string): Locator {
     return this.eventCard(eventName).getByRole('table', {
-      name: `Standings for ${poolName}`,
+      name: `Standings for ${groupLabel}`,
     })
   }
 
-  /** The player names down one pool's table, top to bottom — the ORDER the server settled
-   * and the FE renders untouched (ADR-0788). The Player cell is the second cell of each
-   * body row (`<th scope=col>`s are `columnheader`s, not rows here). */
-  standingsRowNames(eventName: string, poolName: string): Locator {
-    return this.standingsTable(eventName, poolName)
+  /** The player names down one group's table, top to bottom — the ORDER the server
+   * settled and the FE renders untouched (ADR-0788). The Player cell is the second cell
+   * of each body row (`<th scope=col>`s are `columnheader`s, not rows here). */
+  standingsRowNames(eventName: string, groupLabel: string): Locator {
+    return this.standingsTable(eventName, groupLabel)
       .locator('tbody tr')
       .locator('td:nth-child(2)')
   }
@@ -476,7 +476,7 @@ export class TournamentDetailPage {
    * open target is a `z-0` sibling stretched under the card, and the card raises its own
    * *controls* above it (`relative z-10`) — the Enter button, and the whole **draw
    * panel**, whose Generate / Re-cut / Delete would otherwise never receive a click. So
-   * on a DRAWN card — a tall one — the centre of the overlay lands inside the pools
+   * on a DRAWN card — a tall one — the centre of the overlay lands inside the groups
    * scaffold, and the click does nothing.
    *
    * That is the correct behaviour, not a bug to route around: a fixture line is not a
@@ -513,7 +513,7 @@ export class TournamentDetailPage {
       | 'Basics'
       | 'Eligibility'
       | 'Match settings'
-      | 'Table pools'
+      | 'Reservations'
       | 'Draw structure',
   ): Locator {
     return this.page.getByRole('tab', { name })
@@ -631,8 +631,9 @@ export class TournamentDetailPage {
   // ----- the editor, with a draw standing (ADR-0786) ------------------------
   //
   // Two of the editor's controls freeze once an event's draw is cut — its **draw type**
-  // (the strategy that dealt the fixtures) and its **set of pools** (each fixture names
-  // one by id). They are DISABLED WITH A REASON, never hidden: unlike the viewer's
+  // (the strategy that dealt the fixtures) and its **set of groups** (each fixture names
+  // one by id, minted 1:1 from a reservation). They are DISABLED WITH A REASON, never
+  // hidden: unlike the viewer's
   // missing buttons, these are one deleted draw away from working, so hiding them would
   // hide the way out along with the control (ADR-0015 forbids the *unexplained* dead
   // end — the reason in text is what makes this one not that).
@@ -662,48 +663,53 @@ export class TournamentDetailPage {
     return labels.map((label) => label.trim())
   }
 
-  /** The Table pools tab's one explanation of the freeze — the `Alert` that both the Add
-   * button and every Remove button point at with `aria-describedby`. */
-  get poolsFrozenNotice(): Locator {
-    return this.page.getByTestId('pools-frozen-notice')
+  /** The Reservations tab's one explanation of the freeze — the `Alert` that both the
+   * Add button and every Remove button point at with `aria-describedby`. */
+  get reservationsFrozenNotice(): Locator {
+    return this.page.getByTestId('reservations-frozen-notice')
   }
 
-  get addPoolButton(): Locator {
-    return this.page.getByRole('button', { name: 'Add pool' })
+  get addReservationButton(): Locator {
+    return this.page.getByRole('button', { name: 'Add reservation' })
   }
 
-  /** Every pool's trash button. Plural on purpose: "the removes are all dead" is the
-   * claim, and a locator that named one pool could only ever prove it of that one. */
-  get removePoolButtons(): Locator {
-    return this.page.getByRole('button', { name: 'Remove pool' })
+  /** Every reservation's trash button. Plural on purpose: "the removes are all dead" is
+   * the claim, and a locator that named one reservation could only ever prove it of that
+   * one. */
+  get removeReservationButtons(): Locator {
+    return this.page.getByRole('button', { name: 'Remove reservation' })
   }
 
-  /** One pool's card in the editor, by position — the pools are a list, and the editor
-   * names them only by an editable text box. */
-  poolCard(index: number): Locator {
-    return this.page.getByTestId('pool-card').nth(index)
+  /** One reservation's card in the editor, by position — the reservations are a list,
+   * and the editor names them only by an editable text box. */
+  reservationCard(index: number): Locator {
+    return this.page.getByTestId('reservation-card').nth(index)
   }
 
-  /** A table chip inside one pool card ("T3"), which toggles that table into the pool.
-   * **Still live with a draw standing** — that is the point of freezing only the pool
-   * *set*: a table breaks mid-event and the director has to be able to record it without
-   * destroying a correct draw. */
-  poolTableChip(poolIndex: number, label: string): Locator {
-    return this.poolCard(poolIndex).getByRole('button', { name: label, exact: true })
+  /** A table chip inside one reservation card ("T3"), which toggles that table into the
+   * reservation. **Still live with a draw standing** — that is the point of freezing
+   * only the group *set*: a table breaks mid-event and the director has to be able to
+   * record it without destroying a correct draw. */
+  reservationTableChip(reservationIndex: number, label: string): Locator {
+    return this.reservationCard(reservationIndex).getByRole('button', {
+      name: label,
+      exact: true,
+    })
   }
 
-  /** One pool's name box. **The only control on this tab that can author a pool the
-   * server refuses**: the id and the default name are minted, but this box can be
-   * emptied — and `Pool.name` is `min_length=1`. Scoped to the card, because the pools
-   * are a list of identically-labelled boxes. */
-  poolNameInput(index: number): Locator {
-    return this.poolCard(index).getByLabel('Pool name')
+  /** One reservation's name box. **The only control on this tab that can author a
+   * reservation the server refuses**: the id and the default name are minted, but this
+   * box can be emptied — and `Reservation.name` is `min_length=1`. Scoped to the card,
+   * because the reservations are a list of identically-labelled boxes. */
+  reservationNameInput(index: number): Locator {
+    return this.reservationCard(index).getByLabel('Reservation name')
   }
 
-  /** The red messages under the pool name boxes — the Table pools counterpart of
-   * `ruleErrors` and `basicsError`. Plural: which card is red is the claim. */
-  get poolNameErrors(): Locator {
-    return this.page.getByTestId('pool-name-error')
+  /** The red messages under the reservation name boxes — the Reservations tab's
+   * counterpart of `ruleErrors` and `basicsError`. Plural: which card is red is the
+   * claim. */
+  get reservationNameErrors(): Locator {
+    return this.page.getByTestId('reservation-name-error')
   }
 
   /**
@@ -714,8 +720,8 @@ export class TournamentDetailPage {
    * It is the only channel a **disabled** control has: it is not focusable, and it holds
    * no tooltip anyone will ever hear. A reason rendered under a dead trigger and not
    * pointed at is a reason for sighted directors only — which is exactly what the
-   * draw-type select was doing while the pools section, one tab over, wired the identical
-   * freeze correctly.
+   * draw-type select was doing while the reservations section, one tab over, wired the
+   * identical freeze correctly.
    *
    * Resolves to a locator that matches NOTHING when the control describes nothing, so an
    * assertion on it fails loudly rather than passing vacuously.
@@ -771,8 +777,8 @@ export class TournamentDetailPage {
    *
    * `hasText` alone does a case-insensitive SUBSTRING match, so `tableCard('Table
    * 1')` would also match `Table 10`, `Table 11`, ... — the same collision the
-   * root `e2e/` suite's `poolDrawNamed` hit and fixed with `exact: true`
-   * (`1e [e2e]: prove the ten-pool draw order against the real stack`).
+   * root `e2e/` suite's `groupDrawNamed` hit and fixed with `exact: true`
+   * (`1e [e2e]: prove the ten-group draw order against the real stack`).
    * `.filter()` has no `exact` option of its own, so `has` + an exact-matching
    * child locator is `.filter()`'s equivalent. */
   tableCard(label: string): Locator {

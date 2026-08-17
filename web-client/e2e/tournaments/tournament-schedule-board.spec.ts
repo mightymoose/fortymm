@@ -32,7 +32,7 @@ import { expectNoHorizontalScroll } from '../support/viewport'
 
 /** Both drawable events drawn — fixtures exist for the solver to place (the
  * same seed the solve-strip spec runs on). */
-const DRAWN_SEED = { drawable: true, drawn: [EVENT.JOURNEY, EVENT.POOLS] } as const
+const DRAWN_SEED = { drawable: true, drawn: [EVENT.JOURNEY, EVENT.GROUPS] } as const
 
 test.describe('Tournaments · schedule boards', () => {
   test('the list stays the default view, and an unsolved board prompts for the scheduler', async ({
@@ -70,10 +70,10 @@ test.describe('Tournaments · schedule boards', () => {
     await pom.runScheduler.click()
     await expect(pom.solveStripState('succeeded')).toBeVisible({ timeout: 15_000 })
 
-    // The server now holds a placement on every pooled fixture…
+    // The server now holds a placement on every grouped fixture…
     const placed = [
       ...store.fixturesOf(EVENT.JOURNEY),
-      ...store.fixturesOf(EVENT.POOLS),
+      ...store.fixturesOf(EVENT.GROUPS),
     ].filter((f) => f.table_id !== null && f.scheduled_start !== null)
     expect(placed.length).toBeGreaterThan(0)
 
@@ -81,7 +81,7 @@ test.describe('Tournaments · schedule boards', () => {
     await pom.setScheduleView('Gantt')
     await expect(pom.ganttRegion).toBeVisible()
     await expect(pom.timelineBars).toHaveCount(placed.length)
-    // Pool A of the POOLS event reserves t1/t2 — its rows carry bars.
+    // Reservation A of the GROUPS event holds t1/t2 — its rows carry bars.
     await expect(pom.ganttRow('t1')).toBeVisible()
     // Everything placed: no "not yet scheduled" rail left.
     await expect(pom.unscheduledRail).not.toBeVisible()
@@ -128,7 +128,7 @@ test.describe('Tournaments · schedule boards', () => {
     // on fixtures whose matches are ALL already in_progress (materialized).
     const fixtures = [
       ...store.fixturesOf(EVENT.JOURNEY),
-      ...store.fixturesOf(EVENT.POOLS),
+      ...store.fixturesOf(EVENT.GROUPS),
     ]
     expect(fixtures.every((f) => f.match_status === 'in_progress')).toBe(true)
     const called = fixtures.filter((f) => f.pinned_at !== null)

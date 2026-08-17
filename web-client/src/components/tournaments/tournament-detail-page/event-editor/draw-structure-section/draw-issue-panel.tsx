@@ -71,9 +71,9 @@ export const DrawIssuePanel = ({ issue }: DrawIssuePanelProps) => {
         <Overline as="span">Legal, but uneven</Overline>
       </div>
 
-      {/* The tally the derivation counted, largest pool first. Each string literal
+      {/* The tally the derivation counted, largest group first. Each string literal
           carries its own spaces — JSX drops the whitespace around a line break, and
-          `2pools of6` is one reformat away from a text node written the other way. */}
+          `2groups of6` is one reformat away from a text node written the other way. */}
       <p
         data-testid="draw-issue-panel-title"
         className="mt-1.5 text-[15px] leading-snug font-semibold text-[color:var(--fg-1)]"
@@ -83,13 +83,13 @@ export const DrawIssuePanel = ({ issue }: DrawIssuePanelProps) => {
           // the list and index keys would reorder wrongly as the field changes.
           <Fragment key={tally.size}>
             {index > 0 && ' · '}
-            <span className="font-mono">{tally.pools}</span>
-            {/* Pluralised, unlike `1 pool reservations` next door. That sentence stays
+            <span className="font-mono">{tally.groups}</span>
+            {/* Pluralised, unlike `1 reservations` next door. That sentence stays
                 unpluralised because a Python twin transcribes it against shared vectors;
-                this title is built here from a `PoolSizeTally[]` and has no twin, and
-                `1 pool of 4 · 1 pool of 3` (a field of 7 over 2 reservations) ships
+                this title is built here from a `GroupSizeTally[]` and has no twin, and
+                `1 group of 4 · 1 group of 3` (a field of 7 over 2 reservations) ships
                 today. */}
-            {tally.pools === 1 ? ' pool of ' : ' pools of '}
+            {tally.groups === 1 ? ' group of ' : ' groups of '}
             <span className="font-mono">{tally.size}</span>
           </Fragment>
         ))}
@@ -99,7 +99,7 @@ export const DrawIssuePanel = ({ issue }: DrawIssuePanelProps) => {
         data-testid="draw-issue-panel-body"
         className="mt-1 text-[13px] leading-snug text-[color:var(--fg-3)]"
       >
-        The bigger pools play more matches. Nothing has been silently reshaped.
+        The bigger groups play more matches. Nothing has been silently reshaped.
       </p>
     </div>
   )

@@ -155,7 +155,7 @@ export const TournamentsListPage = ({
       <PageHeading
         breadcrumb={[{ label: 'Manage' }, { label: 'Tournaments' }]}
         title="Tournaments"
-        subtitle={`${tournaments.length} total · ${liveCount} live. Create draws, schedule pools, publish to players.`}
+        subtitle={`${tournaments.length} total · ${liveCount} live. Create draws, book reservations, publish to players.`}
         action={
           canCreate ? (
             <Button size="lg" onClick={() => setCreateOpen(true)}>

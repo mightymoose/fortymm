@@ -66,7 +66,7 @@ from app.schedule_preview import (
     UnpreviewableDrawType,
     build_preview_snapshot,
     placeholder_label,
-    preview_pool_key,
+    preview_reservation_key,
 )
 from app.schedule_solves import _solve_num_workers
 from app.scheduling import (
@@ -76,8 +76,8 @@ from app.scheduling import (
     PastWindow,
     PlacedFixture,
     PlayerOverSubscribed,
-    PoolHasNoTables,
-    PoolOverCapacity,
+    ReservationHasNoTables,
+    ReservationOverCapacity,
     ScheduleSnapshot,
     SolveResult,
     Verdict,
@@ -97,12 +97,12 @@ from app.schemas.schedule_solve import (
     NoSingleCauseRead,
     PastWindowReasonRead,
     PlayerOverSubscribedRead,
-    PoolHasNoTablesRead,
-    PoolOverCapacityRead,
+    ReservationHasNoTablesRead,
+    ReservationOverCapacityRead,
     ResolvedReason,
     WindowTooShortForMatchRead,
 )
-from app.tournament_draws import event_pools
+from app.tournament_draws import event_reservations
 from app.tournament_errors import (
     NotTournamentOwnerError,
     ScheduleQueueUnavailableError,
@@ -138,15 +138,16 @@ _solve = scheduling.solve
 
 
 @dataclass(frozen=True, slots=True)
-class _PreviewPoolResolution:
-    """The DB-side facts an infeasibility reason needs to name a pool a human can
+class _PreviewReservationResolution:
+    """The DB-side facts an infeasibility reason needs to name a reservation a human can
     act on: its display ``name``, the ``HH:MM`` clock bounds of its window (already
-    strings on the pool's ``Slot``), and the venue-local calendar ``date`` a
+    strings on the reservation's ``Slot``), and the venue-local calendar ``date`` a
     ``past_window`` reason names ("which day to move"). Built in the enqueue verb,
-    where the tournament's pools are loaded, and carried to the (DB-blind) job — the
-    pure snapshot speaks only namespaced ids and minute offsets, so the names cannot
-    be re-derived worker-side. Mirrors ``app.schedule_solves._PoolResolution`` (plus
-    ``pool_dates``)."""
+    where the tournament's reservations are loaded, and carried to the (DB-blind) job —
+    the pure snapshot speaks only namespaced ids and minute offsets, so the names cannot
+    be re-derived worker-side. Mirrors ``app.schedule_solves._ReservationResolution``
+    (plus
+    ``reservation_dates``)."""
 
     name: str
     window_start: str
@@ -158,7 +159,7 @@ class _PreviewPoolResolution:
 class _PreviewEventMeta:
     """One event's honest-notes + breakdown ingredients: its id, display ``name``,
     the synthetic ``field_size`` the preview drew a field to, and how many of its
-    drawn fixtures the preview **left out** — ``knockout_fixtures``, the un-pooled
+    drawn fixtures the preview **left out** — ``knockout_fixtures``, the ungrouped
     knockout stage of an rr-then-ko draw, ``0`` for a plain round-robin. Carried from
     the enqueue verb (which has the loaded events) to the job (which has only the pure
     snapshot, from which "a bracket was dropped" is no longer visible).
@@ -183,9 +184,9 @@ class PreviewJobInputs:
     the pure :class:`~app.scheduling.ScheduleSnapshot` to solve, the ``base`` (an
     aware instant its minute frame is offset from, ``None`` when the tournament has
     no real windows — no wall-clock finish can be projected then), the
-    ``tournament_id`` the preview was enqueued **for**, the per-pool resolutions the
-    job humanizes an infeasible verdict through, and the per-event meta the breakdown
-    + honest-notes are built from.
+    ``tournament_id`` the preview was enqueued **for**, the per-reservation resolutions
+    the job humanizes an infeasible verdict through, and the per-event meta the
+    breakdown + honest-notes are built from.
 
     ``tournament_id`` is the bind that scopes an otherwise tournament-blind Redis job
     to its owner's tournament: the poll/cancel paths (:func:`preview_job_state`,
@@ -200,7 +201,7 @@ class PreviewJobInputs:
     snapshot: ScheduleSnapshot
     base: datetime | None
     tournament_id: uuid.UUID
-    pool_resolutions: dict[str, _PreviewPoolResolution]
+    reservation_resolutions: dict[str, _PreviewReservationResolution]
     events: tuple[_PreviewEventMeta, ...] = ()
 
 
@@ -208,7 +209,7 @@ async def _load_owned_pre_live_tournament(
     db: AsyncSession, tournament_id: uuid.UUID, actor: User
 ) -> Tournament:
     """Load the tournament ``actor`` owns and may preview — with its events (and
-    their pools/settings) eagerly attached for the synthetic-snapshot build —
+    their reservations/settings) eagerly attached for the synthetic-snapshot build —
     applying the same **404 → 403** ordering every owner-gated tournament verb
     shares, then the preview's own pre-live gate:
 
@@ -270,22 +271,26 @@ async def ensure_preview_access(
     _gate_owned_pre_live(tournament, actor)
 
 
-def _pool_resolutions(tournament: Tournament) -> dict[str, _PreviewPoolResolution]:
-    """The namespaced-pool-id → name + ``HH:MM`` map an infeasible preview is
-    humanized through, keyed by the solver's ``f"{event.id}:{pool.id}"`` spelling
+def _reservation_resolutions(
+    tournament: Tournament,
+) -> dict[str, _PreviewReservationResolution]:
+    """The namespaced-reservation-id → name + ``HH:MM`` map an infeasible preview is
+    humanized through, keyed by the solver's ``f"{event.id}:{reservation.id}"`` spelling
     (the same one :func:`app.schedule_preview.build_preview_snapshot` stamps on the
-    snapshot's pools). Parsed through :class:`~app.schemas.tournament.Pool`, not
+    snapshot's reservations). Parsed through
+    :class:`~app.schemas.tournament.Reservation`, not
     indexed off raw JSONB (parse, don't validate)."""
-    resolutions: dict[str, _PreviewPoolResolution] = {}
+    resolutions: dict[str, _PreviewReservationResolution] = {}
     for event in tournament.events:
-        for pool in event_pools(event):
-            resolutions[preview_pool_key(event.id, pool.id)] = _PreviewPoolResolution(
-                name=pool.name,
-                window_start=pool.slot.start,
-                window_end=pool.slot.end,
+        for reservation in event_reservations(event):
+            key = preview_reservation_key(event.id, reservation.id)
+            resolutions[key] = _PreviewReservationResolution(
+                name=reservation.name,
+                window_start=reservation.slot.start,
+                window_end=reservation.slot.end,
                 # The venue-local calendar day the director dated this window for —
                 # the actionable "which day to move" fact a past_window reason names.
-                date=date.fromisoformat(pool.slot.date),
+                date=date.fromisoformat(reservation.slot.date),
             )
     return resolutions
 
@@ -328,7 +333,7 @@ async def request_schedule_preview(
     # The real wall-clock instant the preview is judged from — the same ``now``
     # source the live solve uses (:func:`app.match_calls._wall_now`), threaded into
     # the pure builder so the snapshot's ``now_min`` matches go-live: a past-dated
-    # pool reports the same ``PastWindow`` a pre-live solve would (#1101), not a
+    # reservation reports the same ``PastWindow`` a pre-live solve would (#1101), not a
     # falsely-feasible verdict from a hardcoded ``now_min = 0``.
     preview = build_preview_snapshot(
         tournament, count_overrides=count_overrides, now=_wall_now()
@@ -337,14 +342,15 @@ async def request_schedule_preview(
     # events, so a miss would be a builder bug — fall back to the raw id, since a
     # preview is advisory).
     event_names = {str(event.id): event.name for event in tournament.events}
-    # namespaced pool id → its resolution (name + HH:MM), built once and reused for
-    # both the job's infeasibility humanization and each drawn fixture's pool_name.
-    resolutions = _pool_resolutions(tournament)
+    # namespaced reservation id → its resolution (name + HH:MM), built once and reused
+    # for both the job's infeasibility humanization and each drawn fixture's
+    # reservation_name.
+    resolutions = _reservation_resolutions(tournament)
     inputs = PreviewJobInputs(
         snapshot=preview.snapshot,
         base=preview.base,
         tournament_id=tournament_id,
-        pool_resolutions=resolutions,
+        reservation_resolutions=resolutions,
         events=tuple(
             _PreviewEventMeta(
                 event_id=summary.event_id,
@@ -386,12 +392,12 @@ async def request_schedule_preview(
             PreviewFixture(
                 fixture_id=fixture.id,
                 event_id=fixture.event_id,
-                pool_id=fixture.pool_id,
-                # The human pool label, off the same resolution map the job humanizes
-                # infeasibility through. Every drawn fixture's pool is one the builder
-                # drew over, so a direct lookup is total (a miss would be a builder
-                # bug, not stale input).
-                pool_name=resolutions[fixture.pool_id].name,
+                reservation_id=fixture.reservation_id,
+                # The human reservation label, off the same resolution map the job
+                # humanizes infeasibility through. Every drawn fixture's reservation is
+                # one the builder drew over, so a direct lookup is total (a miss would
+                # be a builder bug, not stale input).
+                reservation_name=resolutions[fixture.reservation_id].name,
                 player_a_id=fixture.player_a_id,
                 player_b_id=fixture.player_b_id,
             )
@@ -431,8 +437,9 @@ def project_preview_result(
     ``base`` is known. Match and bye counts are read off the (instant) draw, so they are
     present on every verdict; peak concurrent tables, utilization and per-event
     durations need a plan, so they are zero / ``None`` on an infeasible or unknown
-    result. Infeasibility reasons are humanized through ``inputs.pool_resolutions``
-    (+ a ``best_of`` map derived from the snapshot) into the *same* resolved union
+    result. Infeasibility reasons are humanized through
+    ``inputs.reservation_resolutions`` (+ a ``best_of`` map derived from the snapshot)
+    into the *same* resolved union
     a real infeasible solve records."""
     snapshot = inputs.snapshot
     fixtures_by_event = _fixtures_by_event(snapshot)
@@ -493,25 +500,26 @@ def _fixtures_by_event(snapshot: ScheduleSnapshot) -> dict[str, list[str]]:
 
 
 def _byes_by_event(snapshot: ScheduleSnapshot) -> dict[str, int]:
-    """event id → its bye count. A round-robin over an **odd** pool of ``P``
+    """event id → its bye count. A round-robin over an **odd** reservation of ``P``
     players gives one bye per round and runs ``P`` rounds — every player byes
-    exactly once — so an odd pool contributes ``P`` byes and an even pool ``0``.
-    A pool's player set is recovered from its fixtures (in a round-robin every
-    player meets every other, so each appears), keeping this pure over the
+    exactly once — so an odd reservation contributes ``P`` byes and an even reservation
+    ``0``. A reservation's player set is recovered from its fixtures (in a round-robin
+    every player meets every other, so each appears), keeping this pure over the
     snapshot with no separate field-size input."""
-    players_by_pool: dict[str, set[str]] = {}
-    pool_event: dict[str, str] = {}
+    players_by_reservation: dict[str, set[str]] = {}
+    reservation_event: dict[str, str] = {}
     for fixture in snapshot.fixtures:
-        pool = str(fixture.pool_id)
-        pool_event[pool] = str(fixture.event_id)
-        members = players_by_pool.setdefault(pool, set())
+        reservation = str(fixture.reservation_id)
+        reservation_event[reservation] = str(fixture.event_id)
+        members = players_by_reservation.setdefault(reservation, set())
         members.add(str(fixture.player_a_id))
         members.add(str(fixture.player_b_id))
     byes: dict[str, int] = {}
-    for pool, members in players_by_pool.items():
+    for reservation, members in players_by_reservation.items():
         count = len(members)
         if count % 2 == 1:
-            byes[pool_event[pool]] = byes.get(pool_event[pool], 0) + count
+            event_id = reservation_event[reservation]
+            byes[event_id] = byes.get(event_id, 0) + count
     return byes
 
 
@@ -569,16 +577,17 @@ def _resolve_reasons(
 ) -> list[ResolvedReason]:
     """Humanize a preview's infeasibility reasons into the *same* resolved union a
     real infeasible solve records (:data:`app.schemas.schedule_solve.ResolvedReason`)
-    — reusing the resolved-reason machinery rather than forking it. The pool name +
-    ``HH:MM`` come from ``inputs.pool_resolutions``; ``best_of`` from a
-    fixture-id → ``length_games`` map derived from the snapshot's events (a preview
-    has no DB to read it from); a blamed *player* from their own synthetic id
-    (``placeholder-7`` → ``Placeholder 7``), since a preview's entrants are
-    stand-ins with no name to look up. Exhaustive ``match`` with an
+    — reusing the resolved-reason machinery rather than forking it. The reservation name
+    + ``HH:MM`` come from ``inputs.reservation_resolutions``; ``best_of`` from a
+    fixture-id → ``length_games`` map derived from the snapshot's events (a preview has
+    no DB to read it from); a blamed *player* from their own synthetic id
+    (``placeholder-7`` → ``Placeholder 7``), since a preview's entrants are stand-ins
+    with no name to look up. Exhaustive ``match`` with an
     ``assert_never`` floor, like ``app.schedule_solves._resolve_reason``."""
     best_of = _fixture_best_of(inputs.snapshot)
     return [
-        _resolve_reason(reason, inputs.pool_resolutions, best_of) for reason in reasons
+        _resolve_reason(reason, inputs.reservation_resolutions, best_of)
+        for reason in reasons
     ]
 
 
@@ -596,7 +605,7 @@ def _fixture_best_of(snapshot: ScheduleSnapshot) -> dict[str, MatchLength]:
 
 def _resolve_reason(
     reason: InfeasibilityReason,
-    pool_resolutions: Mapping[str, _PreviewPoolResolution],
+    reservation_resolutions: Mapping[str, _PreviewReservationResolution],
     best_of: Mapping[str, MatchLength],
 ) -> ResolvedReason:
     """One pure, id-and-minute reason → its resolved read form, the DB-blind twin
@@ -605,35 +614,36 @@ def _resolve_reason(
     ``assert_never`` floor: adding an :data:`~app.scheduling.InfeasibilityReason`
     arm is a type error here until handled.
 
-    Every reservation a preview can blame is a real **pool**: the builder draws
-    over the event's pools and drops an rr-then-ko draw's un-pooled knockout
-    (ADR 20260727, and the honest note that says so), so no event-wide
-    reservation is ever in a preview snapshot. Hence the literal ``"pool"`` — the
-    preview's resolutions carry no reservation kind to read, because there is
-    only one for them to carry."""
+    Every reservation a preview can blame is one a director **booked**: the builder
+    draws over the event's reservations and drops an rr-then-ko draw's ungrouped
+    knockout (ADR 20260727, and the honest note that says so), so the synthetic
+    event-wide reservation is never in a preview snapshot. Hence the literal
+    ``"booked"`` on every arm below — the preview's resolutions carry no reservation
+    kind to read, because there is only one for them to carry."""
     match reason:
-        case PoolHasNoTables():
-            return PoolHasNoTablesRead(
-                pool_name=pool_resolutions[reason.pool_id].name, reservation="pool"
+        case ReservationHasNoTables():
+            return ReservationHasNoTablesRead(
+                reservation_name=reservation_resolutions[reason.reservation_id].name,
+                reservation="booked",
             )
         case WindowTooShortForMatch():
-            pool = pool_resolutions[reason.pool_id]
+            reservation = reservation_resolutions[reason.reservation_id]
             return WindowTooShortForMatchRead(
-                pool_name=pool.name,
-                reservation="pool",
-                window_start=pool.window_start,
-                window_end=pool.window_end,
+                reservation_name=reservation.name,
+                reservation="booked",
+                window_start=reservation.window_start,
+                window_end=reservation.window_end,
                 best_of=best_of[reason.fixture_id],
                 needed_min=reason.needed_min,
                 window_span_min=reason.window_span_min,
             )
-        case PoolOverCapacity():
-            pool = pool_resolutions[reason.pool_id]
-            return PoolOverCapacityRead(
-                pool_name=pool.name,
-                reservation="pool",
-                window_start=pool.window_start,
-                window_end=pool.window_end,
+        case ReservationOverCapacity():
+            reservation = reservation_resolutions[reason.reservation_id]
+            return ReservationOverCapacityRead(
+                reservation_name=reservation.name,
+                reservation="booked",
+                window_start=reservation.window_start,
+                window_end=reservation.window_end,
                 required_min=reason.required_min,
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
@@ -644,13 +654,13 @@ def _resolve_reason(
             # ``placeholder-7`` resolves to the same ``Placeholder 7`` label the
             # preview surface already shows the director, derived from the id with
             # no DB read (:func:`app.schedule_preview.placeholder_label`).
-            pool = pool_resolutions[reason.pool_id]
+            reservation = reservation_resolutions[reason.reservation_id]
             return PlayerOverSubscribedRead(
                 player_name=placeholder_label(reason.player_id),
-                pool_name=pool.name,
-                reservation="pool",
-                window_start=pool.window_start,
-                window_end=pool.window_end,
+                reservation_name=reservation.name,
+                reservation="booked",
+                window_start=reservation.window_start,
+                window_end=reservation.window_end,
                 match_count=reason.match_count,
                 required_min=reason.required_min,
                 window_span_min=reason.window_span_min,
@@ -665,10 +675,12 @@ def _resolve_reason(
             # default on an event now a day old, #1101): genuinely reachable because
             # the builder stamps a real ``now_min`` (``now``'s offset from the frame
             # origin), so a wholly-past window trips the solver's past-window guard
-            # exactly as a live pre-solve would. Resolve the offending pool to its
-            # venue-local calendar day — the same ``past_window`` read a real
+            # exactly as a live pre-solve would. Resolve the offending reservation to
+            # its venue-local calendar day — the same ``past_window`` read a real
             # infeasible solve records, so the client says which day to move.
-            return PastWindowReasonRead(date=pool_resolutions[reason.pool_id].date)
+            return PastWindowReasonRead(
+                date=reservation_resolutions[reason.reservation_id].date
+            )
         case _:
             assert_never(reason)
 
@@ -706,14 +718,14 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
 
     The knockout line is what stops the strip lying by omission about an
     **rr-then-ko** event: the preview plans that event's whole draw but schedules only
-    its pool stage (ADR 20260727 — a bracket is placeable only incrementally, as the
-    pools that feed it resolve), so without a note the director reads a
-    schedule that silently covers part of their event. The *live* solve does place
-    that bracket, incrementally (ADR "a pool restricts scheduling, it does not enable
+    its reservation stage (ADR 20260727 — a bracket is placeable only incrementally, as
+    the reservations that feed it resolve), so without a note the director reads a
+    schedule that silently covers part of their event. The *live* solve does place that
+    bracket, incrementally (ADR "a reservation restricts scheduling, it does not enable
     it"); a preview run before anyone has registered has nothing to resolve it from,
-    which is why the note stays. It is emitted off the count of
-    fixtures actually dropped, so a tournament of plain round-robins — which drops none
-    — gets the strip it always had, unchanged.
+    which is why the note stays. It is emitted off the count of fixtures actually
+    dropped, so a tournament of plain round-robins — which drops none — gets the strip
+    it always had, unchanged.
 
     A skipped event earns **no** "Assumed N entrants" line: no field was synthesized
     for it, so claiming one would contradict the line above it."""
@@ -746,10 +758,10 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
             case _:
                 assert_never(reason)
     notes.extend(
-        f"Only the pool stage of {meta.name} is scheduled here: its knockout "
+        f"Only the reservation stage of {meta.name} is scheduled here: its knockout "
         f"bracket ({meta.knockout_fixtures} further "
         f"{'match' if meta.knockout_fixtures == 1 else 'matches'}) is played "
-        "after the pools finish and is not in this estimate."
+        "after the reservations finish and is not in this estimate."
         for meta in inputs.events
         if meta.knockout_fixtures > 0
     )

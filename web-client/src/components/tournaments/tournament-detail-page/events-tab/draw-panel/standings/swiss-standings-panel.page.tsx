@@ -7,12 +7,12 @@ import {
   type SwissStandingsPanelScenario,
 } from './swiss-standings-panel.factory'
 
-/** The accessible name a swiss table carries — the event, since there is no pool to name.
+/** The accessible name a swiss table carries — the event, since there is no group to name.
  * The panel's own wiring, written once. */
 const tableName = (eventName: string) => `Standings for ${eventName}`
 
 const scoped = (container: Container) => {
-  // The table is the very `StandingsTable` a pool renders, so its readers are
+  // The table is the very `StandingsTable` a group renders, so its readers are
   // `standingsTablePage`'s — composed, not re-implemented. A second row-slice loop here
   // would be this file describing a table it does not own.
   const table = standingsTablePage.within(container)
@@ -40,7 +40,7 @@ const scoped = (container: Container) => {
     },
 
     /** Every table in the panel, by accessible name. Swiss has **one** — the claim that
-     * distinguishes it from the pooled block, so the count is part of the assertion. */
+     * distinguishes it from the grouped block, so the count is part of the assertion. */
     getTableNames() {
       return container
         .getAllByRole('table')
@@ -71,10 +71,10 @@ const scoped = (container: Container) => {
       return table.getColumnUnder(tableName(eventName), header)
     },
 
-    /** A pool table's test hook, which must NEVER appear here: swiss has no pools, so a
-     * `pool-standings-…` node in this panel would mean a forged pool id reached the DOM. */
-    queryPoolTables() {
-      return container.queryAllByTestId(/^pool-standings-/)
+    /** A group table's test hook, which must NEVER appear here: swiss has no groups, so a
+     * `group-standings-…` node in this panel would mean a forged group id reached the DOM. */
+    queryGroupTables() {
+      return container.queryAllByTestId(/^group-standings-/)
     },
   }
 }

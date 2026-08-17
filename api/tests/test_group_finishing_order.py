@@ -1,4 +1,4 @@
-"""Pure tests for the shared finishing orders (ADR 20260727) — the round-robin pool
+"""Pure tests for the shared finishing orders (ADR 20260727) — the round-robin group
 chain and the swiss one.
 
 Three properties are pinned here, because they are load-bearing for
@@ -9,7 +9,7 @@ round-robin-then-knockout and for swiss, and none is observable from
 ``app.draws``, SQLAlchemy or FastAPI. That is what lets the *draw* layer call it
 without an import cycle (``app.results`` already imports ``app.draws``).
 
-**The pool chain's order is exactly wins → head-to-head → game difference →
+**The group chain's order is exactly wins → head-to-head → game difference →
 games won → entry id.** rr-then-ko's whole correctness claim is that the qualifiers
 are the top *K* of the standings table on screen, so a silently reordered chain
 changes who advances.
@@ -33,23 +33,23 @@ import sys
 import uuid
 from pathlib import Path
 
-import app.pool_finishing_order
+import app.group_finishing_order
 from app.draws import (
     EntryId,
     FixtureGames,
     FixtureId,
     FixtureState,
+    GroupId,
     MatchId,
-    PoolId,
     _swiss_standings_order,
 )
-from app.pool_finishing_order import (
+from app.group_finishing_order import (
     EntryTally,
     MatchOutcome,
     finishing_order,
     swiss_finishing_order,
 )
-from app.results import FieldInput, PoolInput, RoundRobinResults, SwissResults
+from app.results import FieldInput, GroupInput, RoundRobinResults, SwissResults
 
 _API_ROOT = Path(__file__).resolve().parent.parent
 
@@ -59,7 +59,7 @@ _API_ROOT = Path(__file__).resolve().parent.parent
 _PURITY_PROBE = """
 import sys
 
-import app.pool_finishing_order as module
+import app.group_finishing_order as module
 
 forbidden = ("app.draws", "app.results", "sqlalchemy", "fastapi")
 print(module.__name__)
@@ -167,12 +167,12 @@ def _fixture(
     first_games: int,
     second_games: int,
 ) -> FixtureState:
-    """One decided, un-pooled fixture as the **draw** layer holds it — the row shape
+    """One decided, ungrouped fixture as the **draw** layer holds it — the row shape
     :func:`app.draws._swiss_standings_order` projects its outcomes from."""
     slot = round_number * 16 + position
     return FixtureState(
         fixture_id=FixtureId(uuid.UUID(int=0xF000 + slot)),
-        pool_id=None,
+        group_id=None,
         round=round_number,
         position=position,
         entry_a_id=first,
@@ -186,8 +186,8 @@ def _fixture(
 def test_the_shared_module_imports_no_layer_that_imports_it() -> None:
     """The no-cycle property, guarded.
 
-    ``app.pool_finishing_order`` exists so that **both** ``app.results`` and
-    ``app.draws`` can reach one definition of how a pool finished. ``app.results``
+    ``app.group_finishing_order`` exists so that **both** ``app.results`` and
+    ``app.draws`` can reach one definition of how a group finished. ``app.results``
     already imports ``app.draws``, so the moment this module imports either of them
     at runtime the draw layer's use of it becomes an import cycle — and the
     ``TYPE_CHECKING`` guard on ``EntryId`` is the only thing preventing that today.
@@ -209,9 +209,9 @@ def test_the_shared_module_imports_no_layer_that_imports_it() -> None:
     imported_name, imported_file, leaked = probe.stdout.splitlines()
     # Provenance: the subprocess imported *this* worktree's module, not some other
     # copy on the path — otherwise a green result is about the wrong artifact.
-    assert imported_name == "app.pool_finishing_order"
-    assert imported_file == app.pool_finishing_order.__file__
-    assert leaked == "", f"pool_finishing_order pulled in {leaked} at import time"
+    assert imported_name == "app.group_finishing_order"
+    assert imported_file == app.group_finishing_order.__file__
+    assert leaked == "", f"group_finishing_order pulled in {leaked} at import time"
 
 
 def test_game_difference_outranks_games_won() -> None:
@@ -269,7 +269,7 @@ def test_a_three_way_tie_is_not_broken_head_to_head() -> None:
 def test_the_entry_id_is_the_final_deterministic_tiebreak() -> None:
     """Entries level on every count still order the same way on every read.
 
-    The same cyclic pool as above, all three on 1-1 with GD 0 and 4 games won, fed in
+    The same cyclic group as above, all three on 1-1 with GD 0 and 4 games won, fed in
     **descending** id order. Python's sort is stable, so without the id fallback the
     result would simply be the input order — the assertion is that it is the reverse.
     """
@@ -444,7 +444,7 @@ def test_a_tied_pair_who_never_met_fall_through_the_head_to_head_link() -> None:
         X beat W 3-0                → X: 1-0, GD +3;  Buchholz W(0) = 0
         Y beat S 3-1                → Y: 1-0, GD +2;  Buchholz S(2) = 2
 
-    The step is shared machinery, so the pool chain is guarded by the same lines — a
+    The step is shared machinery, so the group chain is guarded by the same lines — a
     part-played round-robin reaches it, and a finished one cannot.
     """
     s, x, y, t, u, w = _eid(5), _eid(1), _eid(9), _eid(6), _eid(7), _eid(8)
@@ -586,7 +586,7 @@ def test_a_bye_adds_no_term_to_its_holders_buchholz() -> None:
 def test_the_standings_table_is_this_order() -> None:
     """The standings a director reads *are* the shared finishing order.
 
-    This is the claim rr-then-ko's qualifiers rest on: the top *K* of a pool is the
+    This is the claim rr-then-ko's qualifiers rest on: the top *K* of a group is the
     top *K* of the table on screen, because ``RoundRobinResults`` ranks by nothing
     else. Asserting the two agree keeps the standings from acquiring a private
     tiebreak of their own.
@@ -594,15 +594,15 @@ def test_the_standings_table_is_this_order() -> None:
     x, y, w, z = _eid(9), _eid(2), _eid(5), _eid(1)
     entrants = [w, x, y, z]
     outcomes = [_outcome(x, w, 3, 0), _outcome(y, z, 3, 1), _outcome(w, y, 3, 2)]
-    pool = PoolInput(
-        pool_id=PoolId(uuid.uuid4()),
+    group = GroupInput(
+        group_id=GroupId(uuid.uuid4()),
         entrants=tuple(entrants),
         fixture_count=6,
         outcomes=tuple(outcomes),
     )
 
-    results = RoundRobinResults().tabulate([pool])
+    results = RoundRobinResults().tabulate([group])
 
-    rows = results.pools[0].rows
+    rows = results.groups[0].rows
     assert [row.entry_id for row in rows] == _order(entrants, outcomes)
     assert [row.rank for row in rows] == [1, 2, 3, 4]

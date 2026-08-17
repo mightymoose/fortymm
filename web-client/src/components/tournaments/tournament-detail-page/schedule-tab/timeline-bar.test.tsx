@@ -12,7 +12,7 @@ describe('TimelineBar', () => {
     // client-sliced datetime (ADR "a schedule surface always labels the timezone").
     expect(bar).toHaveTextContent('9:00 AM–9:35 AM CDT · est')
     expect(bar).toHaveAccessibleName(
-      'player.1 vs player.4, U1200 Singles · Pool A, T1, 9:00 AM–9:35 AM CDT. Estimate — the scheduler may still move it.',
+      'player.1 vs player.4, U1200 Singles · Group A, T1, 9:00 AM–9:35 AM CDT. Estimate — the scheduler may still move it.',
     )
   })
 
@@ -156,7 +156,7 @@ describe('TimelineBar', () => {
 
     const tip = await page.findTooltip()
     expect(tip).toHaveTextContent('player.1 vs player.4')
-    expect(tip).toHaveTextContent('U1200 Singles · Pool A')
+    expect(tip).toHaveTextContent('U1200 Singles · Group A')
     expect(tip).toHaveTextContent('T1 · Jun 13 · 9:00 AM–9:35 AM CDT')
     expect(tip).toHaveTextContent('Estimate — the scheduler may still move it')
   })

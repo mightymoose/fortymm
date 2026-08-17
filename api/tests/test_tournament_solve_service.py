@@ -47,7 +47,7 @@ from app.tournament_errors import (
 from app.tournament_event_stages import mint_stages
 from app.tournament_solve_service import request_schedule_solve
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -72,7 +72,7 @@ async def _make_tournament(
     tables: tuple[str, ...] = ("t1", "t2"),
 ) -> tuple[uuid.UUID, User]:
     """A published tournament and its owner: a two-table catalogue and (unless
-    ``with_event=False``) one pooled round-robin event whose single pool spans
+    ``with_event=False``) one grouped round-robin event whose single group spans
     both tables, ``entrants`` entered players, and (unless ``cut=False``) a cut
     draw. Written straight to the database — creation routes are not under test
     here. Returns ``(tournament_id, owner)``."""
@@ -118,10 +118,10 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
-    stages[0].groups = event_pools(
+    stages[0].groups = event_groups(
         [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
                 "table_ids": [str(row.id) for row in catalogue],
             }
@@ -138,7 +138,7 @@ async def _make_tournament(
     await db.flush()
 
     if cut:
-        # ``TournamentEvent.pools`` is a VIEWONLY association through the event's
+        # ``TournamentEvent.groups`` is a VIEWONLY association through the event's
         # stage now (ADR 20260815) — populated on QUERY, not on construction.
         # ``cut_draw`` reads ``event.groups`` synchronously, so this needs an
         # explicit refresh first.

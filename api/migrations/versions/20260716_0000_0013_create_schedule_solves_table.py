@@ -11,6 +11,7 @@ verbatim. The matching pin facts on the fixture itself (``pinned_at``,
 pre-deploy convention in api/CLAUDE.md, edits to this migration happen in
 place. No backfill — assumes a fresh / empty DB.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -102,7 +103,7 @@ def upgrade() -> None:
         # its guarded apply.
         sa.Column("fixtures_placed", sa.Integer(), nullable=True),
         sa.Column("fixtures_pinned", sa.Integer(), nullable=True),
-        # Whether a live day's plan ran past a planned pool window into the
+        # Whether a live day's plan ran past a planned reservation window into the
         # overrun (ADR "the solver stops wedging"). A success qualifier on a
         # ``succeeded`` solve while live; false pre-live and on any run that
         # placed nothing.
@@ -149,7 +150,6 @@ def upgrade() -> None:
         "schedule_solves",
         ["tournament_id", sa.text("requested_at DESC")],
     )
-
 
 
 def downgrade() -> None:

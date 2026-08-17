@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attention import list_attention_kind
+from app.draws import group_label
 from app.match_queries import current_game_number, match_eager_options
 from app.models import (
     Match,
@@ -71,7 +72,7 @@ from app.schemas.tournament import (
     TournamentFixtureRead,
     TournamentTable,
 )
-from app.tournament_draws import event_pools
+from app.tournament_draws import event_groups
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -114,8 +115,8 @@ async def build_tournament_panels(
     game_counts = await game_counts_by_match(db, completed_match_ids(fixtures))
     # Every stage id on this page mapped to that stage's OWN draw type (ADR 20260815)
     # — what ``_round_label`` and ``event_results`` read a fixture's ``stage_id``
-    # against to tell an un-pooled block's vocabulary (bracket vs swiss rounds) apart,
-    # in place of inferring it from the EVENT's overall draw type plus ``pool_id IS
+    # against to tell an un-grouped block's vocabulary (bracket vs swiss rounds) apart,
+    # in place of inferring it from the EVENT's overall draw type plus ``group_id IS
     # NULL``. Read off each event's eager (``lazy="selectin"``) stages collection —
     # already loaded with the entities above, so this costs the panel no statement of
     # its own.
@@ -129,10 +130,10 @@ async def build_tournament_panels(
         stage.id: stage.draw_type for event in events for stage in event.stages
     }
 
-    # The caller's own fixtures, per event — the path list, and the pool the focus
+    # The caller's own fixtures, per event — the path list, and the group the focus
     # match is chosen out of. Sorted chronologically (#1297): a player reading the
     # path top-to-bottom must meet their matches in the order they are actually
-    # played, not in draw order (pool -> round -> position, ADR-0786), which can
+    # played, not in draw order (group -> round -> position, ADR-0786), which can
     # and does run out of time order once fixtures are called onto real tables.
     my_fixtures = {
         event_id: _sorted_by_effective_time(
@@ -277,7 +278,7 @@ def _focus_fixture(
     find the game they are standing at a table for.
 
     Among the not-yet-played, the earliest by effective time (``pinned_at or
-    scheduled_start``) wins, untimed fixtures falling back to draw order (pool ->
+    scheduled_start``) wins, untimed fixtures falling back to draw order (group ->
     round -> position, ADR-0786) among themselves — the same chronological ordering
     the path list itself now uses (#1297), so the focus match is always the top row
     of "Your matches". Among the finished, the latest by that same ordering. ``None``
@@ -313,7 +314,7 @@ def _build_event(
     stage_draw_types: Mapping[uuid.UUID, StageDrawType],
 ) -> DashboardTournamentEvent:
     username_by_entry = {entrant.id: entrant.username for entrant in entrants}
-    pools = {pool.id: pool for pool in event_pools(event)}
+    group_positions = {g.id: g.position for g in event_groups(event)}
     settings = MatchSettings.model_validate(event.match_settings)
     # The draw type off the event's ``draw_settings`` row — its one home (ADR "an
     # event's draw configuration is a row, not a column"). Read once here and passed
@@ -334,34 +335,34 @@ def _build_event(
         game_counts=game_counts,
         stage_draw_types=stage_draw_types,
     )
-    my_pool_id = next(
-        (f.pool_id for f in my_fixtures if f.pool_id is not None),
+    my_group_id = next(
+        (f.group_id for f in my_fixtures if f.group_id is not None),
         None,
     )
     my_standing = None
     field_size = 0
-    pool_complete = False
-    # The two shapes that carry a per-pool table with the caller's row in it: the
-    # round-robin **standings**, and the pool stage of an rr-then-ko event's
-    # **standings_then_finishes** (ADR 20260727 — the same ``PoolStandingsRead`` model,
+    group_complete = False
+    # The two shapes that carry a per-group table with the caller's row in it: the
+    # round-robin **standings**, and the group stage of an rr-then-ko event's
+    # **standings_then_finishes** (ADR 20260727 — the same ``GroupStandingsRead`` model,
     # which is why one branch reads both). A single-elim **finishes** block has no such
     # table, so it falls through to the fixture-counted record below.
     if isinstance(results, StandingsResultsRead | StandingsThenFinishesResultsRead):
-        for pool_standings in results.pools:
-            if my_pool_id is not None and pool_standings.pool_id != my_pool_id:
+        for group_standings in results.groups:
+            if my_group_id is not None and group_standings.group_id != my_group_id:
                 continue
-            for row in pool_standings.rows:
+            for row in group_standings.rows:
                 if row.entry_id == my_entry_id:
                     my_standing = row
-                    field_size = len(pool_standings.rows)
-                    pool_complete = pool_standings.complete
+                    field_size = len(group_standings.rows)
+                    group_complete = group_standings.complete
                     break
             if my_standing is not None:
                 break
     elif isinstance(results, SwissStandingsResultsRead):
-        # The third shape that carries the caller's row — swiss, which is POOL-LESS
+        # The third shape that carries the caller's row — swiss, which is GROUP-LESS
         # (ADR "swiss pre-cuts every round and pairs each one on advance"): one table
-        # over the whole field, so there is no pool to filter by and the field size is
+        # over the whole field, so there is no group to filter by and the field size is
         # that table's own length. Without this arm a swiss player's panel would show
         # no rank at all while the table holding their row rode along on the same
         # payload, and ``stage_complete`` below could never be true for them.
@@ -370,25 +371,25 @@ def _build_event(
                 my_standing = row
                 field_size = len(results.rows)
                 break
-    # What ``stage_label`` is judged on, and it is NOT always the pool's completeness.
-    # For a round-robin the two coincide — the pool finishing IS the event finishing,
+    # What ``stage_label`` is judged on, and it is NOT always the group's completeness.
+    # For a round-robin the two coincide — the group finishing IS the event finishing,
     # and "Group complete" is the right thing to say. For a two-stage event they come
-    # apart badly: the caller's pool finishes early and the bracket it seeds them into
-    # runs for hours afterwards, so reading the pool's flag would announce "Complete"
+    # apart badly: the caller's group finishes early and the bracket it seeds them into
+    # runs for hours afterwards, so reading the group's flag would announce "Complete"
     # over an event still being played. The two-stage shape's own ``complete`` is both
     # stages decided (ADR 20260727) — the only honest answer this minimal label can
     # give.
-    # Swiss joins the two-stage shape on the left of this: it has no pool whose
+    # Swiss joins the two-stage shape on the left of this: it has no group whose
     # completeness could stand in, and its own ``complete`` is every round decided —
     # which is exactly what "is this event over" means for a format that eliminates
-    # nobody. Reading ``pool_complete`` for it would leave the label stuck on "In play"
+    # nobody. Reading ``group_complete`` for it would leave the label stuck on "In play"
     # through the final round and past it.
     stage_complete = (
         results.complete
         if isinstance(
             results, StandingsThenFinishesResultsRead | SwissStandingsResultsRead
         )
-        else pool_complete
+        else group_complete
     )
 
     # The caller's own decided fixtures, counted directly — draw-type-agnostic, so it
@@ -442,7 +443,7 @@ def _build_event(
         # Taken from the standings row when there IS one, so the record agrees with
         # the table it sits beside; counted from the caller's own decided fixtures
         # otherwise. The fallback is not decoration: a single-elim event's results are
-        # a **finishes** block with no per-pool standings row (ADR-0785), and
+        # a **finishes** block with no per-group standings row (ADR-0785), and
         # ``event_results`` answers ``None`` for an event with no draw cut yet, so
         # hard-coding a zero here would show ``0–0`` to every player of a bracket event,
         # however many matches they had actually won — and nothing would catch it.
@@ -451,9 +452,9 @@ def _build_event(
         position=my_standing.rank if my_standing is not None else None,
         field_size=field_size,
         stage_label=_stage_label(draw_type, complete=stage_complete),
-        pool_label=(
-            pools[my_pool_id].name
-            if my_pool_id is not None and my_pool_id in pools
+        group_label=(
+            group_label(group_positions[my_group_id])
+            if my_group_id is not None and my_group_id in group_positions
             else None
         ),
         match=focus_match,
@@ -668,10 +669,10 @@ def _round_label(stage_draw_type: StageDrawType, round_number: int) -> str:
     maps an integer to a word.
 
     It takes the fixture's OWN STAGE's draw type (ADR 20260815), not the event's overall
-    one, and no longer takes ``pool_id`` at all. A two-stage event's vocabulary used to
-    be chosen by ``pool_id IS NULL`` standing in for "which stage is this" — the same
-    two-fact inference (event draw type + un-pooled-ness) that once rendered a swiss
-    draw's rounds as a knockout bracket, because both are un-pooled and
+    one, and no longer takes ``group_id`` at all. A two-stage event's vocabulary used to
+    be chosen by ``group_id IS NULL`` standing in for "which stage is this" — the same
+    two-fact inference (event draw type + un-grouped-ness) that once rendered a swiss
+    draw's rounds as a knockout bracket, because both are un-grouped and
     indistinguishable that way. Every stage a fixture can actually belong to is one of
     the three single-stage kinds, so this needs nothing else to decide the word.
 
@@ -712,7 +713,7 @@ def _stage_label(draw_type: DrawType, *, complete: bool) -> str:
             return "Complete" if complete else "In play"
         case DrawType.swiss:
             # Not the round-robin wording: a swiss event has no group to complete, and
-            # "Group complete" over a pool-less field would name a stage it never had.
+            # "Group complete" over a group-less field would name a stage it never had.
             return "Complete" if complete else "In play"
         case _:
             assert_never(draw_type)
@@ -762,9 +763,9 @@ def _sorted_by_effective_time(
 
     A player reading "Your matches" top-to-bottom must meet their matches in the
     order they are actually played — a fixture called for 9:00 AM has to outrank one
-    called for noon regardless of which round or pool it belongs to. Fixtures with no
+    called for noon regardless of which round or group it belongs to. Fixtures with no
     time at all (not yet placed) sort LAST, after every timed one, via a
-    ``datetime.max`` sentinel key, and keep their relative draw order (pool -> round
+    ``datetime.max`` sentinel key, and keep their relative draw order (group -> round
     -> position, ADR-0786) among themselves — :func:`sorted` is stable, so that
     fallback needs no extra code, only an equal sort key for every untimed fixture."""
 

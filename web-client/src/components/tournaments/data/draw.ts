@@ -2,24 +2,27 @@
 // behind the Events tab's draw panel, and the copy behind its refusals.
 //
 // The wire gives us a flat list of `Fixture`s (parsed at the boundary by `./fixtures`)
-// and, separately, the event's `pools` and `entrants`. A director reads a draw as
-// **pool → round → fixture**, with *names* on it. Nothing on the wire is shaped that
+// and, separately, the event's `groups` and `entrants`. A director reads a draw as
+// **group → round → fixture**, with *names* on it. Nothing on the wire is shaped that
 // way, and deliberately so:
 //
 // - **Names are not on a fixture.** It carries entry *ids*; the usernames behind them
 //   are already on the event (`entrants` is keyed by that id), so the join happens here,
 //   once. Copying the username onto the fixture would be carrying a field and its own
 //   derivation, and the two copies would drift the moment a player is renamed.
-// - **Pool membership is not stored.** ADR-0786: it is derived from the fixtures
+// - **Group membership is not stored.** ADR-0786: it is derived from the fixtures
 //   themselves, exactly as `entered` is derived from the entries (ADR-0016).
-// - **A bye is the ABSENCE of a fixture**, never a row. An odd pool simply has fewer
+// - **A bye is the ABSENCE of a fixture**, never a row. An odd group simply has fewer
 //   fixtures in some rounds. Nothing here invents a fixture to stand for one, and nothing
 //   asks the server for a "byed entrant" field — a stored one would be a second,
 //   drift-prone copy of the planner's rotation. For a **swiss** round, whose whole field
 //   is one table, the absence is read back off the data already here (`SwissByes`): the
-//   event's entrants minus the entry ids the round's fixtures name. A pool's bye is not
-//   derived, because "in no fixture of this pool" also describes every entrant in the
-//   other pools.
+//   event's entrants minus the entry ids the round's fixtures name. A group's bye is not
+//   derived, because "in no fixture of this group" also describes every entrant in the
+//   other groups.
+// - **A group carries no name.** It is server-owned (ticket #1369) — only its
+//   `position` is a fact about it — so everywhere this module once printed a
+//   director-typed name it now prints `Group ${groupLetter(position)}` (`./draw-structure`).
 //
 // All of it is a pure function of one event, so it is unit-tested (`./draw.test.ts`)
 // rather than asserted through a DOM.
@@ -27,7 +30,8 @@
 import { ApiError } from '@/api/client'
 import type { MatchStatus } from '@/api/matches'
 
-import { poolsInOrder } from './helpers'
+import { groupLetter } from './draw-structure'
+import { inPositionOrder } from './helpers'
 import { fallbackNotice, type Notice } from './notice'
 import { labelFor } from './options'
 import type {
@@ -35,10 +39,68 @@ import type {
   DrawTypeOption,
   Entrant,
   Fixture,
+  Group,
+  Reservation,
   Stage,
   StageDrawType,
   TournamentEvent,
 } from './types'
+
+/**
+ * An event's groups and reservations, indexed by id — built **once per event**
+ * (`buildDrawIndex`) rather than re-scanned per fixture. `fixtureReservation` does the
+ * two-hop lookup ticket #1369 introduced (fixture → `groupId` → that group's
+ * `reservationId` → the reservation) many times per event — once per fixture, in every
+ * caller — so a linear `.find` on each hop turns an O(1) lookup into an O(fixtures ×
+ * groups) scan for no reason: the event's groups and reservations don't change between
+ * fixtures.
+ */
+export interface DrawIndex {
+  groupById: Map<string, Group>
+  reservationById: Map<string, Reservation>
+}
+
+/** Build a `DrawIndex` for one event. Call this once per event, outside the per-fixture
+ * loop — every `fixtureReservation` call for that event's fixtures shares it. */
+export function buildDrawIndex(
+  event: Pick<TournamentEvent, 'groups' | 'reservations'>,
+): DrawIndex {
+  return {
+    groupById: new Map(event.groups.map((g) => [g.id, g])),
+    reservationById: new Map(event.reservations.map((r) => [r.id, r])),
+  }
+}
+
+/**
+ * Resolve one fixture's **group and reservation** via the two-hop lookup ticket #1369
+ * introduced: fixture → `groupId` → that group's `reservationId` → the reservation in
+ * the event's `reservations`, both hops through the event's `DrawIndex`
+ * (`buildDrawIndex`).
+ *
+ * Both hops tolerate an unresolved id rather than throwing: a fixture whose `groupId`
+ * names no entry of `event.groups` is a domain-legal state (a knockout fixture simply
+ * has none, and it is shown in the ungrouped block, never dropped — `drawState` below).
+ * A group's `reservationId` is guaranteed to resolve by the API's own NOT NULL
+ * constraint (`GroupRead`, `schema.d.ts`) — parsed and rejected at the boundary if it
+ * ever didn't (`./api`) — but this lookup stays tolerant of both hops for one reason:
+ * it is a plain JS `Map` lookup over already-parsed data, and the one thing worth
+ * asserting once is the wire's own guarantee, at the boundary where it is checked.
+ */
+export function fixtureReservation(
+  index: DrawIndex,
+  fixture: Pick<Fixture, 'groupId'>,
+): { group: Group | null; reservation: Reservation | null } {
+  const group = fixture.groupId !== null ? (index.groupById.get(fixture.groupId) ?? null) : null
+  const reservation =
+    group !== null ? (index.reservationById.get(group.reservationId) ?? null) : null
+  return { group, reservation }
+}
+
+/** `Group A`, `Group B`, … — the one label a group ever renders as (ticket #1369: a
+ * group is server-owned and carries no name of its own). */
+export function groupLabel(group: Pick<Group, 'position'>): string {
+  return `Group ${groupLetter(group.position)}`
+}
 
 /** A fixture side whose occupant is not decided yet (`entryAId`/`entryBId` is
  * `null` — ADR-0786: "**TBD**, never a bye"). Round-robin never produces one. A knockout
@@ -100,7 +162,7 @@ export interface FixtureLine {
   match: FixtureMatch | null
 }
 
-/** The fixtures of one round, in position order. An odd round-robin pool has *fewer*
+/** The fixtures of one round, in position order. An odd round-robin group has *fewer*
  * of them in some rounds — the player drawn against the phantom seat sits that round
  * out — and that absence is the whole representation of a bye. */
 export interface DrawRound {
@@ -131,35 +193,36 @@ export interface DrawRound {
  */
 export type SwissByes = ReadonlyMap<number, Entrant[]>
 
-/** One pool of a cut draw: the pool as the event names it, the entrants the draw dealt
- * into it (derived from its fixtures), and those fixtures grouped by round. */
-export interface PoolDraw {
+/** One group of a cut draw: the group's position-derived label (`groupLabel` — a group
+ * carries no stored name of its own, ticket #1369), the entrants the draw dealt into it
+ * (derived from its fixtures), and those fixtures grouped by round. */
+export interface GroupDraw {
   id: string
-  name: string
-  /** The pool's members, in **draw order** (see `drawOrder`). Derived from the
+  label: string
+  /** The group's members, in **draw order** (see `drawOrder`). Derived from the
    * fixtures, never stored (ADR-0786). */
   entrants: Entrant[]
   rounds: DrawRound[]
 }
 
 /**
- * How an event's **un-pooled fixtures read** — the one decision that says which view the
+ * How an event's **un-grouped fixtures read** — the one decision that says which view the
  * draw panel gives them.
  *
  * It is a fact about the fixtures' own **stage's draw type** (`shapeForStage` below),
- * never about `poolId` being null: `pool_id IS NULL` only ever said "this fixture has no
- * pool", and reading it as "this is a bracket" once conflated a null-pooled swiss round
- * with a null-pooled knockout one and rendered the swiss draw through
+ * never about `groupId` being null: `group_id IS NULL` only ever said "this fixture has no
+ * group", and reading it as "this is a bracket" once conflated a null-grouped swiss round
+ * with a null-grouped knockout one and rendered the swiss draw through
  * single-elimination's successor arithmetic — the one thing the ADR says swiss does not
  * have. `stageId` (ADR 20260815) removed the guesswork: it names the stage outright.
  *
  * A third answer exists because the first two are both *claims about a format*, and one case
- * can make neither: a round-robin fixture naming a pool the event does not list (or, more
- * generally, an un-pooled fixture whose own stage runs round-robin, or one naming a stage
+ * can make neither: a round-robin fixture naming a group the event does not list (or, more
+ * generally, an un-grouped fixture whose own stage runs round-robin, or one naming a stage
  * this event does not have). It is shown — nothing is ever dropped — as `'orphaned'`, which
  * says only that.
  */
-export type UnpooledShape =
+export type UngroupedShape =
   /** Rounds-as-columns, named back from the final (`Bracket`). */
   | 'bracket'
   /** A flat list of rounds, the unpaired ones announced as forthcoming (`SwissRounds`). */
@@ -170,30 +233,30 @@ export type UnpooledShape =
   | 'orphaned'
 
 /**
- * Which view a **stage's own** un-pooled fixtures get — **exhaustive over
+ * Which view a **stage's own** un-grouped fixtures get — **exhaustive over
  * `StageDrawType`, with no catch-all**, so a fifth single-stage draw type is a compile
  * error here until somebody says how its draw reads. `StageDrawType` excludes
  * `rr-then-ko` by construction (ADR 20260815 decision 4 — that member names a template,
  * never a runnable stage's own type), so there is no arm for it to reach: the routing
- * this replaced needed one (`unpooledShape(DrawType)`'s old `'rr-then-ko'` case), and a
+ * this replaced needed one (`ungroupedShape(DrawType)`'s old `'rr-then-ko'` case), and a
  * fifth arm is precisely the class of thing that let a stray value check drift.
  *
  * A `round-robin` stage answers `'orphaned'`, never `'bracket'`: a round-robin draw has
- * no un-pooled fixtures the server can legitimately send (every fixture is dealt into a
- * pool), so one reaching here names a pool the event does not list — a payload that
+ * no un-grouped fixtures the server can legitimately send (every fixture is dealt into a
+ * group), so one reaching here names a group the event does not list — a payload that
  * cannot legitimately arise, and `drawState` deliberately does not DROP it (see below).
  * `Bracket` names its rounds backwards from the last round present, so a single stray
  * fixture rendered inside a section headed "Bracket" would read its round as a "Final" —
  * a knockout this event does not have, a final nobody played.
  */
-export function shapeForStage(stageDrawType: StageDrawType): UnpooledShape {
+export function shapeForStage(stageDrawType: StageDrawType): UngroupedShape {
   switch (stageDrawType) {
     case 'single-elim':
       return 'bracket'
     case 'round-robin':
       return 'orphaned'
     case 'swiss':
-      // Pool-less by design, and NOT a bracket: nobody is eliminated, `position` is a
+      // Group-less by design, and NOT a bracket: nobody is eliminated, `position` is a
       // pairing rank rather than a topology, and rounds past the first are cut with both
       // sides unknown until `advance()` pairs them.
       return 'swiss-rounds'
@@ -205,26 +268,26 @@ export function shapeForStage(stageDrawType: StageDrawType): UnpooledShape {
 }
 
 /**
- * Which view an event's **un-pooled block** gets — the shape `drawState` actually reads
- * off, resolved from the stage(s) the un-pooled fixtures name.
+ * Which view an event's **un-grouped block** gets — the shape `drawState` actually reads
+ * off, resolved from the stage(s) the un-grouped fixtures name.
  *
  * Only one draw type is multi-stage (ADR 20260815, "Only one draw type is multi-stage"),
- * so an event has **at most one** stage whose own draw type calls for an un-pooled view
- * of its own (single-elim or swiss) — `rr-then-ko`'s pool stage always deals every
- * fixture into a pool, so nothing of its round-robin stage should legitimately land
+ * so an event has **at most one** stage whose own draw type calls for an un-grouped view
+ * of its own (single-elim or swiss) — `rr-then-ko`'s group stage always deals every
+ * fixture into a group, so nothing of its round-robin stage should legitimately land
  * here. That is why this scans for, and returns, the first fixture's stage that is NOT
  * `round-robin`: it is the real block (the knockout stage of an `rr-then-ko` draw, or
  * the sole stage of a single-elim/swiss event), and it wins over an orphaned round-robin
- * anomaly sharing the same un-pooled list. Nothing but `round-robin` stages (or a
+ * anomaly sharing the same un-grouped list. Nothing but `round-robin` stages (or a
  * fixture naming a stage this event does not have) leaves every fixture `'orphaned'`.
  */
-function unpooledShapeOf(event: TournamentEvent, unpooled: readonly Fixture[]): UnpooledShape {
+function ungroupedShapeOf(event: TournamentEvent, ungrouped: readonly Fixture[]): UngroupedShape {
   const stagesById = new Map(event.stages.map((s): [string, Stage] => [s.id, s]))
-  for (const fixture of unpooled) {
+  for (const fixture of ungrouped) {
     const stage = stagesById.get(fixture.stageId)
     if (stage && stage.drawType !== 'round-robin') return shapeForStage(stage.drawType)
   }
-  // Every un-pooled fixture (if any) belongs to a round-robin stage, or names a stage
+  // Every un-grouped fixture (if any) belongs to a round-robin stage, or names a stage
   // this event does not have — an anomaly either way, shown honestly as itself.
   return 'orphaned'
 }
@@ -240,19 +303,19 @@ export type DrawState =
   | { kind: 'undrawn' }
   | {
       kind: 'drawn'
-      /** The pools the draw actually used, in the event's own pool order. */
-      pools: PoolDraw[]
-      /** Fixtures belonging to **no pool** — a pool-less draw (single-elim, swiss), or the
-       * knockout stage of an `rr-then-ko` draw (ADR 20260815: `pool_id` is `null` for all
-       * of them). A fixture that has no pool must not be *dropped*: it is rendered,
-       * honestly, outside the pools.
+      /** The groups the draw actually used, in the event's own group order. */
+      groups: GroupDraw[]
+      /** Fixtures belonging to **no group** — a group-less draw (single-elim, swiss), or the
+       * knockout stage of an `rr-then-ko` draw (ADR 20260815: `group_id` is `null` for all
+       * of them). A fixture that has no group must not be *dropped*: it is rendered,
+       * honestly, outside the groups.
        *
-       * **Which view it gets is `unpooledShape` below, not this list.** */
-      unpooled: DrawRound[]
-      /** How `unpooled` reads — decided from the fixtures' own **stage**'s draw type
-       * (`unpooledShapeOf`), once, here, so no renderer has to infer a format from a null
-       * pool id, or from the event's overall (possibly composite) draw type. */
-      unpooledShape: UnpooledShape
+       * **Which view it gets is `ungroupedShape` below, not this list.** */
+      ungrouped: DrawRound[]
+      /** How `ungrouped` reads — decided from the fixtures' own **stage**'s draw type
+       * (`ungroupedShapeOf`), once, here, so no renderer has to infer a format from a null
+       * group id, or from the event's overall (possibly composite) draw type. */
+      ungroupedShape: UngroupedShape
       /** Who sits out each **paired swiss round**, by round number (`SwissByes`). Empty
        * for every other draw type — an entrant missing from a bracket round is
        * eliminated, not byed. */
@@ -260,7 +323,7 @@ export type DrawState =
     }
 
 /**
- * The order the draw dealt a pool's entrants in: **seed ascending where one is set,
+ * The order the draw dealt a group's entrants in: **seed ascending where one is set,
  * then registration order** for the unseeded rest — the exact rule `plan_initial`
  * receives its list in (ADR-0786, "Entrants are ordered by seed, then registration
  * order").
@@ -297,7 +360,7 @@ function matchOf(fixture: Fixture): FixtureMatch | null {
 
 /** Group a flat fixture list into rounds, ascending, each in position order.
  *
- * It **sorts**, rather than trusting the payload's order (the server sends pool → round
+ * It **sorts**, rather than trusting the payload's order (the server sends group → round
  * → position). Order is a claim about untrusted data like any other, and a panel whose
  * rounds only happened to come out right is one bad page of a paginated API away from
  * showing round 3 above round 1. */
@@ -327,14 +390,14 @@ function roundsOf(fixtures: Fixture[], byId: Map<string, Entrant>): DrawRound[] 
 
 /**
  * The entrants a **swiss** round leaves out — the byes (`SwissByes`), computed once from
- * the event's entrants and its un-pooled fixtures.
+ * the event's entrants and its un-grouped fixtures.
  *
  * Three gates, and each one is a different fact:
  *
- * 1. **The un-pooled block's shape is swiss.** A bracket's un-pooled rounds are the same
+ * 1. **The un-grouped block's shape is swiss.** A bracket's un-grouped rounds are the same
  *    shape, and an entrant missing from one of those is *eliminated*, not byed — naming
  *    them "Bye" would be the same class of lie as rendering a swiss draw as a knockout
- *    (`unpooledShapeOf`). Asked of the resolved `shape` rather than re-resolved here, so
+ *    (`ungroupedShapeOf`). Asked of the resolved `shape` rather than re-resolved here, so
  *    the caller's one derivation is the only one — a second call could disagree with the
  *    first on which stage's fixtures these are.
  * 2. **The field is odd.** An even field seats everybody, so "nobody sits out" is not news
@@ -349,15 +412,15 @@ function roundsOf(fixtures: Fixture[], byId: Map<string, Entrant>): DrawRound[] 
  */
 function swissByesOf(
   event: TournamentEvent,
-  unpooled: Fixture[],
-  shape: UnpooledShape,
+  ungrouped: Fixture[],
+  shape: UngroupedShape,
 ): SwissByes {
   const byes = new Map<number, Entrant[]>()
   if (shape !== 'swiss-rounds') return byes
   if (event.entrants.length % 2 === 0) return byes
 
   const seatedByRound = new Map<number, Set<string>>()
-  for (const fixture of unpooled) {
+  for (const fixture of ungrouped) {
     const seated = seatedByRound.get(fixture.round) ?? new Set<string>()
     if (fixture.entryAId !== null) seated.add(fixture.entryAId)
     if (fixture.entryBId !== null) seated.add(fixture.entryBId)
@@ -382,7 +445,7 @@ function swissByesOf(
  * on by `drawState` below and asked by the editor's two freezes.
  *
  * It is deliberately *not* spelled `drawState(event).kind === 'drawn'`. That answers the
- * same yes/no by grouping every fixture into its pool, sorting each round and building
+ * same yes/no by grouping every fixture into its group, sorting each round and building
  * two Maps, then throwing all of it away — and the event editor asks it twice on every
  * keystroke. */
 const hasDraw = (event: TournamentEvent): boolean => event.fixtures.length > 0
@@ -415,43 +478,47 @@ const drawIsUnderWay = (event: TournamentEvent): boolean =>
   event.fixtures.some((f) => f.winnerEntryId !== null || f.matchId !== null)
 
 /**
- * An event's draw, shaped for the reader: pools with their members and rounds, or the
+ * An event's draw, shaped for the reader: groups with their members and rounds, or the
  * designed `undrawn` state.
  *
  * Two things it deliberately does *not* do:
- * - It does not announce a pool the draw never used. A pool with no fixtures is not part
- *   of the draw, and the pool *set* is frozen while a draw exists (ADR-0786), so this
- *   filter cannot hide a pool a director added afterwards — there is no such pool.
- * - It does not drop a fixture. One whose `poolId` is `null`, or names a pool this event
- *   does not have, lands in `unpooled` — visible, rather than silently gone.
+ * - It does not announce a group the draw never used. A group with no fixtures is not
+ *   part of the draw, and the group *set* is frozen while a draw exists (ADR-0786), so
+ *   this filter cannot hide a group a director added afterwards — there is no such group.
+ * - It does not drop a fixture. One whose `groupId` is `null`, or names a group this
+ *   event does not have, lands in `ungrouped` — visible, rather than silently gone. This
+ *   is the domain's own tolerance (`./types`, `Fixture.groupId`), and it is deliberately
+ *   the mirror image of the event parser's rejection (`./api`): a `groups[].reservationId`
+ *   naming no reservation is a parse failure (unreachable from a correct server), while a
+ *   fixture's `groupId` naming no group is a state the domain genuinely allows.
  */
 export function drawState(event: TournamentEvent): DrawState {
   if (!hasDraw(event)) return { kind: 'undrawn' }
 
   const byId = new Map(event.entrants.map((e) => [e.id, e]))
-  const poolIds = new Set(event.pools.map((p) => p.id))
-  const byPool = new Map<string, Fixture[]>()
-  const unpooled: Fixture[] = []
+  const groupIds = new Set(event.groups.map((g) => g.id))
+  const byGroup = new Map<string, Fixture[]>()
+  const ungrouped: Fixture[] = []
   for (const fixture of event.fixtures) {
-    const poolId = fixture.poolId
-    if (poolId === null || !poolIds.has(poolId)) {
-      unpooled.push(fixture)
+    const groupId = fixture.groupId
+    if (groupId === null || !groupIds.has(groupId)) {
+      ungrouped.push(fixture)
       continue
     }
-    const bucket = byPool.get(poolId)
+    const bucket = byGroup.get(groupId)
     if (bucket) bucket.push(fixture)
-    else byPool.set(poolId, [fixture])
+    else byGroup.set(groupId, [fixture])
   }
 
-  // **In POSITION order** (`poolsInOrder`), which is the order the director arranged them
-  // in and the order the event editor shows them in — not the order they arrived in, and
-  // emphatically not by id: pool ids are minted `p-1-…`, `p-2-…`, `p-10-…`, so a sort by
-  // id puts `p-10-` between `p-1-` and `p-2-` and a ten-pool event reads 1, 10, 2, 3 …
-  const pools: PoolDraw[] = poolsInOrder(event.pools).flatMap((pool) => {
-    const fixtures = byPool.get(pool.id)
+  // **In POSITION order** (`inPositionOrder`), which is the order the director arranged
+  // them in and the order the event editor shows them in — not the order they arrived
+  // in, and emphatically not by id: reservation-derived ids sort by nothing meaningful,
+  // which is exactly the bug `inPositionOrder`'s own history documents (`./helpers`).
+  const groups: GroupDraw[] = inPositionOrder(event.groups).flatMap((group) => {
+    const fixtures = byGroup.get(group.id)
     if (!fixtures) return []
-    // Membership is the entry ids the pool's own fixtures name — the derivation
-    // ADR-0786 chose over an entrant↔pool table. A withdrawn entry is named by the
+    // Membership is the entry ids the group's own fixtures name — the derivation
+    // ADR-0786 chose over an entrant↔group table. A withdrawn entry is named by the
     // fixtures and listed by nobody, so it is not a member: it is not an entrant at all
     // (ADR-0016). Its fixtures still say `Withdrawn`, which is how the staleness shows.
     const memberIds = new Set<string>()
@@ -461,28 +528,28 @@ export function drawState(event: TournamentEvent): DrawState {
     }
     return [
       {
-        id: pool.id,
-        name: pool.name,
+        id: group.id,
+        label: groupLabel(group),
         entrants: drawOrder(event.entrants.filter((e) => memberIds.has(e.id))),
         rounds: roundsOf(fixtures, byId),
       },
     ]
   })
 
-  // Read off the un-pooled fixtures' own STAGE, never off the null pool id they were
-  // bucketed by above — see `unpooledShapeOf`. Resolved once, here, so `swissByes`
+  // Read off the un-grouped fixtures' own STAGE, never off the null group id they were
+  // bucketed by above — see `ungroupedShapeOf`. Resolved once, here, so `swissByes`
   // reads the same answer rather than re-deriving it.
-  const shape = unpooledShapeOf(event, unpooled)
+  const shape = ungroupedShapeOf(event, ungrouped)
 
   return {
     kind: 'drawn',
-    pools,
-    unpooled: roundsOf(unpooled, byId),
-    unpooledShape: shape,
+    groups,
+    ungrouped: roundsOf(ungrouped, byId),
+    ungroupedShape: shape,
     // Computed from the entry IDS, here, where they are — the same join `roundsOf` makes
     // for the names, and the reason this is not the renderer's job: a `FixtureLine` has
     // usernames on it and no ids at all.
-    swissByes: swissByesOf(event, unpooled, shape),
+    swissByes: swissByesOf(event, ungrouped, shape),
   }
 }
 
@@ -517,31 +584,34 @@ export type EditFreeze =
 
 
 /**
- * May the director change **which pools** this event has?
+ * May the director change **which groups** this event has?
  *
- * Frozen the moment a draw exists, because every fixture names its pool by a string id
- * into that very list: remove a pool (or re-`id` one, which is a removal with an
+ * Frozen the moment a draw exists, because every fixture names its group by a string id
+ * into that very list: remove a group (or re-`id` one, which is a removal with an
  * addition standing where it was) and its fixtures point at nothing; add one and it
- * arrives with no fixtures, since the draw was dealt across the pools the event had at
- * the cut. The server refuses it with a 409 (`_enforce_pool_set_frozen`) — this is the
- * client declining to *build* the change the server would refuse.
+ * arrives with no fixtures, since the draw was dealt across the groups the event had at
+ * the cut. Since a group is minted 1:1 with a reservation (ticket #1369), what a director
+ * actually edits is `reservations` — adding, removing or reordering a reservation adds,
+ * removes or reorders its mapped group the same way. The server refuses it with a 409
+ * (`_enforce_group_set_frozen`) — this is the client declining to *build* the change the
+ * server would refuse.
  *
- * **Only the identity set is frozen**, and the reason says so out loud: a pool's tables,
- * its window and its name stay editable with a draw standing, on purpose. Venues move
- * under a running tournament — a table breaks and is pulled, one frees up early — and a
- * director who could not record that would have to destroy a *correct* draw to move a
- * table. Over-freezing the section would break the very case the freeze exists to
+ * **Only the identity set is frozen**, and the reason says so out loud: a reservation's
+ * tables, its window and its name stay editable with a draw standing, on purpose. Venues
+ * move under a running tournament — a table breaks and is pulled, one frees up early —
+ * and a director who could not record that would have to destroy a *correct* draw to
+ * move a table. Over-freezing the section would break the very case the freeze exists to
  * preserve.
  */
-export function poolSetFreeze(event: TournamentEvent): EditFreeze {
+export function groupSetFreeze(event: TournamentEvent): EditFreeze {
   if (!hasDraw(event)) return { kind: 'open' }
   return {
     kind: 'frozen',
     reason:
-      'Every fixture names the pool it was dealt into, so a pool can’t be added or ' +
-      'removed while the draw stands. Delete the draw to change them, then cut it ' +
-      'again. A pool’s name, its tables and its time window can still be edited right ' +
-      'now — a table that breaks mid-event costs you nothing.',
+      'Every fixture names the group it was dealt into, so a reservation can’t be ' +
+      'added or removed while the draw stands. Delete the draw to change them, then ' +
+      'cut it again. A reservation’s name, its tables and its time window can still ' +
+      'be edited right now — a table that breaks mid-event costs you nothing.',
   }
 }
 
@@ -551,7 +621,7 @@ export function poolSetFreeze(event: TournamentEvent): EditFreeze {
  * Frozen once a draw exists, for the sibling reason (`_enforce_draw_type_frozen`, a 409):
  * the draw type is not a label on an event, it is the strategy that dealt these fixtures.
  * Re-label it under a standing draw and the event claims a shape its draw does not have —
- * a `single-elim` event holding pooled round-robin fixtures, which no bracket can render
+ * a `single-elim` event holding grouped round-robin fixtures, which no bracket can render
  * and no strategy would ever have produced.
  *
  * The reason names the type the fixtures were actually dealt as, in the words the select
@@ -585,7 +655,7 @@ export function drawTypeFreeze(
  * May the director **re-cut or remove** this event's draw?
  *
  * The third freeze, and the one whose refusal has **no way out**. Its two siblings are
- * about an event's *configuration* — change the draw type, change the pool set — and both
+ * about an event's *configuration* — change the draw type, change the group set — and both
  * end by telling the director how to get unstuck, because deleting the draw really does
  * unstick them. This one is about the draw *itself*, and once it shows evidence of play
  * (`drawIsUnderWay`) neither verb is available again: deleting the draw is the very act
@@ -639,10 +709,10 @@ export type DrawNotice = Notice
  *
  * - the **format**, for "a doubles event cannot be given a draw — draws are singles-only";
  * - the **draw type and its settings** (`drawConfig`), for "a single-elim draw cannot be
- *   cut yet", "take fewer qualifiers from each pool", "play fewer rounds";
- * - the **pools**, for "a round-robin draw needs at least one pool";
- * - the **seating** (`drawSeating`), for "5 entrants across 3 pools would leave a pool
- *   with fewer than 2", and for the 409's evidence of play.
+ *   cut yet", "take fewer qualifiers from each group", "play fewer rounds";
+ * - the **groups**, for "a round-robin draw needs at least one group";
+ * - the **seating** (`drawSeating`), for "5 entrants across 3 groups would leave a
+ *   group with fewer than 2", and for the 409's evidence of play.
  *
  * That list is the whole design, and getting it short is how the mechanism fails: a
  * refusal naming something the scope does not read survives the director doing exactly
@@ -652,15 +722,16 @@ export type DrawNotice = Notice
  *
  * Narrow, still. The event's name, slot, entry fee, predicates and match settings are all
  * absent: no draw refusal asserts anything about them, and this page polls, so a wider
- * scope would drop the sentence a director is mid-way through acting on. Pool **ids**
- * rather than pool contents, because a renamed pool refuses exactly as it did before.
+ * scope would drop the sentence a director is mid-way through acting on. Group **ids**
+ * rather than group contents, because a group with the same id refuses exactly as it did
+ * before — its own reservation's name is not part of this scope at all.
  */
 export function drawRefusalScope(event: TournamentEvent): string {
   return [
     event.format,
     drawConfig(event),
     drawSeating(event),
-    event.pools.map((pool) => pool.id).join(','),
+    event.groups.map((group) => group.id).join(','),
   ].join('|')
 }
 
@@ -671,7 +742,7 @@ export function drawRefusalScope(event: TournamentEvent): string {
  * A `switch` with a `never` default, so a fifth draw type is a compile error here until
  * somebody says which settings its refusals turn on. That is the entire reason this is a
  * function and not two more fields inlined above: the cut refuses an `rr-then-ko` event
- * whose K exceeds its smallest pool ("take fewer qualifiers from each pool") and a `swiss`
+ * whose K exceeds its smallest group ("take fewer qualifiers from each group") and a `swiss`
  * event whose R exceeds a rematch-free field ("play fewer rounds"), and a scope blind to
  * those two numbers would leave both sentences on screen after the director lowered them.
  *
@@ -680,16 +751,16 @@ export function drawRefusalScope(event: TournamentEvent): string {
  * drag react-query, the router and the toaster into a module that is pure derivation.
  */
 function drawConfig(
-  event: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool' | 'rounds'>,
+  event: Pick<TournamentEvent, 'drawType' | 'qualifiersPerGroup' | 'rounds'>,
 ): string {
   switch (event.drawType) {
     case 'rr-then-ko':
-      return `rr-then-ko:${event.qualifiersPerPool}`
+      return `rr-then-ko:${event.qualifiersPerGroup}`
     case 'swiss':
       return `swiss:${event.rounds}`
     case 'round-robin':
     case 'single-elim':
-      // No setting of their own: the refusals these two produce are about the pools and
+      // No setting of their own: the refusals these two produce are about the groups and
       // the field, both of which the scope reads separately.
       return event.drawType
     default: {
@@ -739,33 +810,33 @@ export function drawSeating(event: TournamentEvent): string {
  * Exhaustive over `DrawType` with a `never` default, so a fifth draw type is a compile
  * error here until somebody says what its cut produces. It has to be its own table:
  * the sentence was a single hard-coded round-robin one ("deal this event's entrants into
- * its pools"), which rendered on **every** event regardless of type, and told the director
- * of a single-elimination event to deal entrants into pools a bracket does not have
+ * its groups"), which rendered on **every** event regardless of type, and told the director
+ * of a single-elimination event to deal entrants into groups a bracket does not have
  * (#1220). The copy was written for #786's round-robin and was simply unreachable on a
  * bracket until single-elimination became cuttable through the UI.
  *
- * Deliberately **not** derived from `unpooledShape`: that function answers a different
- * question — which view already-cut, pool-less *fixtures* get — and an un-cut event has no
+ * Deliberately **not** derived from `ungroupedShape`: that function answers a different
+ * question — which view already-cut, group-less *fixtures* get — and an un-cut event has no
  * fixtures to ask about. Routing this off it would be the same class of mistake as the
- * `pool_id IS NULL` check it replaced: a predicate borrowed from one question to answer
+ * `group_id IS NULL` check it replaced: a predicate borrowed from one question to answer
  * another it only coincidentally agrees with. (They already disagree: round-robin answers
  * `'orphaned'` there, which says nothing about what a cut deals into.)
  */
 export function undrawnLead(drawType: DrawType): string {
   switch (drawType) {
     case 'round-robin':
-      return 'Generate the draw to deal this event’s entrants into its pools and plan their fixtures.'
+      return 'Generate the draw to deal this event’s entrants into its groups and plan their fixtures.'
     case 'rr-then-ko':
-      // Both stages, in the order they are played: the pool stage is what the cut deals
+      // Both stages, in the order they are played: the group stage is what the cut deals
       // now, and the bracket is what the qualifiers reach — naming only the first would
       // describe half the draw this event is about to get.
-      return 'Generate the draw to deal this event’s entrants into its pools, then bracket the qualifiers from each one.'
+      return 'Generate the draw to deal this event’s entrants into its groups, then bracket the qualifiers from each one.'
     case 'single-elim':
       return 'Generate the draw to seed this event’s entrants into a bracket and plan their fixtures.'
     case 'swiss':
       // "Pair into rounds", never "seed into a bracket": swiss eliminates nobody, so a
       // bracket's vocabulary would be a lie in the empty state before it was one in the
-      // draw (`unpooledShape` makes the same distinction for the cut draw).
+      // draw (`ungroupedShape` makes the same distinction for the cut draw).
       return 'Generate the draw to pair this event’s entrants into rounds and plan their fixtures.'
     default: {
       const exhaustive: never = drawType
@@ -782,8 +853,8 @@ export function undrawnLead(drawType: DrawType): string {
  *
  * **The 409 and the 422 carry the server's own sentence, verbatim.** They are the two
  * refusals a director actually meets, and for both of them the sentence is the *point*:
- * it names the thing they have to change ("5 entrants across 3 pools would leave a
- * pool with fewer than 2 entrants…", "A round-robin draw needs at least one pool."). It is authored
+ * it names the thing they have to change ("5 entrants across 3 groups would leave a
+ * group with fewer than 2 entrants…", "A round-robin draw needs at least one group."). It is authored
  * for them, on the server, where the numbers are; replacing it with a generic string of
  * ours would throw away the only actionable half of the refusal and leave the director
  * clicking Generate again. The client owns the *title* — the state, in a few words —
@@ -810,14 +881,14 @@ export function drawRefusalNotice(error: unknown, verb: string): DrawNotice {
           error.detail ??
           'At least one fixture has a match or a recorded winner, so the draw can no longer be cut or removed.',
       }
-    // The planner refuses this event as it stands: an unsupported draw type, no pools,
-    // or a pool that would get fewer than two entrants.
+    // The planner refuses this event as it stands: an unsupported draw type, no groups,
+    // or a group that would get fewer than two entrants.
     case 422:
       return {
         title: "This event can't be drawn yet",
         description:
           error.detail ??
-          'This event cannot be planned as it stands. Check its draw type and its pools.',
+          'This event cannot be planned as it stands. Check its draw type and its groups.',
       }
     // Owner-only. The panel offers no draw action to anyone else, so this can only mean
     // the page is looking at somebody else's tournament — the server is the boundary,

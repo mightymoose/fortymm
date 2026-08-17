@@ -41,12 +41,12 @@ from app.models import (
     VenueTable,
 )
 from app.schemas.schedule_solve import (
-    PoolHasNoTablesRead,
+    ReservationHasNoTablesRead,
     parse_infeasibility_reasons,
 )
 from app.schemas.tournament import ScheduleSolveRead
 from app.tournament_event_stages import mint_stages
-from tests._helpers import event_pools, make_user, venue_tables
+from tests._helpers import event_groups, make_user, venue_tables
 
 
 async def _make_tournament(db_session: AsyncSession) -> Tournament:
@@ -97,8 +97,8 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
         match_settings={"rated": True, "length_games": 5},
         stages=stages,
     )
-    stages[0].groups = event_pools(
-        [{"name": "Pool A", "slot": {}, "table_ids": []}], event=event
+    stages[0].groups = event_groups(
+        [{"name": "Reservation A", "slot": {}, "table_ids": []}], event=event
     )
     db_session.add(event)
     await db_session.commit()
@@ -272,7 +272,7 @@ async def test_a_fresh_fixture_is_unpinned_and_never_notified(
     event = await _make_event(db_session)
     fixture = TournamentFixture(
         stage_id=event.groups[0].stage_id,
-        pool_id=event.groups[0].id,
+        group_id=event.groups[0].id,
         round=1,
         position=1,
     )
@@ -307,7 +307,7 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
     called_at = datetime(2026, 8, 1, 14, 30, tzinfo=UTC)
     fixture = TournamentFixture(
         stage_id=event.groups[0].stage_id,
-        pool_id=event.groups[0].id,
+        group_id=event.groups[0].id,
         round=1,
         position=1,
         table_id=table_id,
@@ -330,15 +330,15 @@ async def test_a_pinned_fixture_round_trips_its_pin_facts(
     assert fresh.call_notified_count == 2
 
 
-def test_a_reason_stored_before_the_discriminator_reads_as_a_pool() -> None:
+def test_a_reason_stored_before_the_discriminator_reads_as_booked() -> None:
     """The ledger's ``infeasibility_reasons`` is JSONB written at apply, so rows
     recorded before a reason carried ``reservation`` are still on disk and are
-    read back by this same parser. ``"pool"`` is the true value for every one of
-    them: until the event-wide reservation existed the only thing a reason could
-    blame was a pool row (ADR 20260807)."""
+    read back by this same parser. ``"booked"`` is the true value for every one
+    of them: until the event-wide reservation existed the only thing a reason
+    could blame was a director-booked reservation row (ADR 20260807)."""
     (reason,) = parse_infeasibility_reasons(
-        [{"kind": "pool_has_no_tables", "pool_name": "Pool A"}]
+        [{"kind": "reservation_has_no_tables", "reservation_name": "Reservation A"}]
     )
-    assert isinstance(reason, PoolHasNoTablesRead)
-    assert reason.pool_name == "Pool A"
-    assert reason.reservation == "pool"
+    assert isinstance(reason, ReservationHasNoTablesRead)
+    assert reason.reservation_name == "Reservation A"
+    assert reason.reservation == "booked"

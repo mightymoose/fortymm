@@ -5,9 +5,10 @@ import {
   buildEvent,
   buildFixture,
   buildFixtureTime,
-  buildPool,
+  buildReservation,
   buildTables,
   buildTournament,
+  groupIdFor,
 } from './seed.factory'
 import {
   buildSchedule,
@@ -28,13 +29,13 @@ describe('buildSchedule', () => {
           fixtures: [
             buildFixture({
               id: 'late',
-              poolId: 'p-a',
+              groupId: groupIdFor('res-a'),
               tableId: 't1',
               scheduledStart: at('11:00'),
             }),
             buildFixture({
               id: 'early',
-              poolId: 'p-a',
+              groupId: groupIdFor('res-a'),
               tableId: 't1',
               scheduledStart: at('09:00'),
             }),
@@ -73,13 +74,13 @@ describe('buildSchedule', () => {
           fixtures: [
             buildFixture({
               id: 'fx-est',
-              poolId: 'p-a',
+              groupId: groupIdFor('res-a'),
               tableId: 't1',
               scheduledStart: at('09:00'),
             }),
             buildFixture({
               id: 'fx-called',
-              poolId: 'p-a',
+              groupId: groupIdFor('res-a'),
               round: 2,
               tableId: 't1',
               scheduledStart: at('10:00'),
@@ -88,7 +89,7 @@ describe('buildSchedule', () => {
             }),
             buildFixture({
               id: 'fx-live',
-              poolId: 'p-a',
+              groupId: groupIdFor('res-a'),
               round: 3,
               matchId: 'm-live',
               matchStatus: 'in_progress',
@@ -118,8 +119,8 @@ describe('buildSchedule', () => {
       events: [
         buildDrawnEvent({
           fixtures: [
-            buildFixture({ id: 'known', poolId: 'p-a', tableId: 't1' }),
-            buildFixture({ id: 'gone', poolId: 'p-a', tableId: 't-removed' }),
+            buildFixture({ id: 'known', groupId: groupIdFor('res-a'), tableId: 't1' }),
+            buildFixture({ id: 'gone', groupId: groupIdFor('res-a'), tableId: 't-removed' }),
           ],
         }),
       ],
@@ -139,15 +140,29 @@ describe('buildSchedule', () => {
       id: 'ev-a',
       name: 'Event A',
       entrants: buildEntrants(2),
-      pools: [buildPool({ id: 'pa', tableIds: ['t1'] })],
-      fixtures: [buildFixture({ id: 'a1', poolId: 'pa', tableId: 't1', scheduledStart: at('09:00') })],
+      reservations: [buildReservation({ id: 'res-pa', tableIds: ['t1'] })],
+      fixtures: [
+        buildFixture({
+          id: 'a1',
+          groupId: groupIdFor('res-pa'),
+          tableId: 't1',
+          scheduledStart: at('09:00'),
+        }),
+      ],
     })
     const b = buildEvent({
       id: 'ev-b',
       name: 'Event B',
       entrants: buildEntrants(2),
-      pools: [buildPool({ id: 'pb', tableIds: ['t1'] })],
-      fixtures: [buildFixture({ id: 'b1', poolId: 'pb', tableId: 't1', scheduledStart: at('10:00') })],
+      reservations: [buildReservation({ id: 'res-pb', tableIds: ['t1'] })],
+      fixtures: [
+        buildFixture({
+          id: 'b1',
+          groupId: groupIdFor('res-pb'),
+          tableId: 't1',
+          scheduledStart: at('10:00'),
+        }),
+      ],
     })
     const { tables } = buildSchedule(buildTournament({ events: [a, b] }), buildTables())
     expect(tables).toHaveLength(1)
@@ -159,10 +174,10 @@ describe('buildSchedule', () => {
       events: [
         buildDrawnEvent({
           fixtures: [
-            buildFixture({ id: 'planned', poolId: 'p-a' }),
-            buildFixture({ id: 'live', poolId: 'p-a', matchId: 'm1', matchStatus: 'in_progress' }),
-            buildFixture({ id: 'done', poolId: 'p-a', matchId: 'm2', matchStatus: 'completed' }),
-            buildFixture({ id: 'void', poolId: 'p-a', matchId: 'm3', matchStatus: 'voided' }),
+            buildFixture({ id: 'planned', groupId: groupIdFor('res-a') }),
+            buildFixture({ id: 'live', groupId: groupIdFor('res-a'), matchId: 'm1', matchStatus: 'in_progress' }),
+            buildFixture({ id: 'done', groupId: groupIdFor('res-a'), matchId: 'm2', matchStatus: 'completed' }),
+            buildFixture({ id: 'void', groupId: groupIdFor('res-a'), matchId: 'm3', matchStatus: 'voided' }),
           ],
         }),
       ],
@@ -173,12 +188,17 @@ describe('buildSchedule', () => {
     expect(placeable).toEqual({ planned: true, live: true, done: false, void: false })
   })
 
-  it('inherits the placement window from the fixture’s pool slot', () => {
+  it('inherits the placement window from the fixture’s group’s reservation slot', () => {
     const tournament = buildTournament({
       events: [
         buildDrawnEvent({
-          pools: [buildPool({ id: 'p-a', slot: { date: '2026-07-01', start: '13:00', end: '17:00' } })],
-          fixtures: [buildFixture({ id: 'x', poolId: 'p-a' })],
+          reservations: [
+            buildReservation({
+              id: 'res-a',
+              slot: { date: '2026-07-01', start: '13:00', end: '17:00' },
+            }),
+          ],
+          fixtures: [buildFixture({ id: 'x', groupId: groupIdFor('res-a') })],
         }),
       ],
     })
@@ -186,18 +206,19 @@ describe('buildSchedule', () => {
     expect(match.window).toEqual({ date: '2026-07-01', start: '13:00', end: '17:00' })
   })
 
-  // ----- an UN-POOLED fixture (ADR 20260807, "a pool restricts scheduling, it does
-  // not enable it"): a bracket, a swiss round and a knockout stage carry no pool, so
-  // their reservation is the EVENT's own window over the WHOLE tournament's tables.
-  // A pool must keep restricting — the two claims are pinned as a pair. -----------
+  // ----- an UNGROUPED fixture (ADR 20260807, "a reservation restricts scheduling, it
+  // does not enable it"): a bracket, a swiss round and a knockout stage carry no group,
+  // so their reservation is the EVENT's own window over the WHOLE tournament's tables.
+  // A reservation must keep restricting — the two claims are pinned as a pair. --------
 
-  it('inherits an un-pooled fixture’s placement window from its EVENT slot', () => {
+  it('inherits an ungrouped fixture’s placement window from its EVENT slot', () => {
     const tournament = buildTournament({
       events: [
-        // A single-elim bracket: `pools: []`, every fixture `poolId: null`. Its event
-        // window is the SECOND day of the tournament, deliberately — `buildPool` and
-        // `buildEvent` both default to 2026-06-13, so a fixture left on the default
-        // date could not tell "read the event slot" from "read a pool slot".
+        // A single-elim bracket: `reservations: []`, every fixture `groupId: null`. Its
+        // event window is the SECOND day of the tournament, deliberately —
+        // `buildReservation` and `buildEvent` both default to 2026-06-13, so a fixture
+        // left on the default date could not tell "read the event slot" from "read a
+        // reservation slot".
         buildBracketDrawnEvent({
           slot: { date: '2026-06-14', start: '10:00', end: '16:00' },
         }),
@@ -208,7 +229,7 @@ describe('buildSchedule', () => {
     expect(match.reservation).toBe('event')
   })
 
-  it('suggests the WHOLE tournament’s tables for an un-pooled fixture', () => {
+  it('suggests the WHOLE tournament’s tables for an ungrouped fixture', () => {
     const tournament = buildTournament({ events: [buildBracketDrawnEvent()] })
     // `buildTournament` reserves t1…t8 while the catalogue runs to t12: the
     // suggestion is the TOURNAMENT's reservation, not every table that exists.
@@ -225,18 +246,18 @@ describe('buildSchedule', () => {
     ])
   })
 
-  it('keeps a POOLED fixture on its own pool’s tables — a pool still restricts', () => {
+  it('keeps a GROUPED fixture on its own group’s reservation tables — a reservation still restricts', () => {
     const tournament = buildTournament({
       events: [
         buildDrawnEvent({
-          pools: [buildPool({ id: 'p-a', tableIds: ['t2', 't3'] })],
-          fixtures: [buildFixture({ id: 'x', poolId: 'p-a' })],
+          reservations: [buildReservation({ id: 'res-a', tableIds: ['t2', 't3'] })],
+          fixtures: [buildFixture({ id: 'x', groupId: groupIdFor('res-a') })],
         }),
       ],
     })
     const [match] = buildSchedule(tournament, buildTables()).awaiting
     expect(match.suggestedTableIds).toEqual(['t2', 't3'])
-    expect(match.reservation).toBe('pool')
+    expect(match.reservation).toBe('booked')
   })
 })
 
@@ -263,7 +284,7 @@ describe('placement helpers', () => {
       buildTournament({
         events: [
           buildDrawnEvent({
-            fixtures: [buildFixture({ id: 'x', poolId: 'p-a', entryAId: 'entry-1', entryBId: 'entry-4' })],
+            fixtures: [buildFixture({ id: 'x', groupId: 'p-a', entryAId: 'entry-1', entryBId: 'entry-4' })],
           }),
         ],
       }),

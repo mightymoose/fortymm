@@ -3,24 +3,24 @@
 // composite of `./standings` and `./finishes` rather than a third copy of either.
 //
 // The wire gives us the `standings_then_finishes` arm of `EventResults` (parsed at the
-// boundary by `./results`): one **pool-stage** standings block, one **knockout-stage**
+// boundary by `./results`): one **group-stage** standings block, one **knockout-stage**
 // finishes block, and a single `complete`/`champion` pair describing the event as a whole.
 // Both blocks are the very models the other two arms carry, so this module makes no joins
 // of its own beyond the champion's — it hands each block to the selector that already
 // shapes it (`eventStandings`, `eventFinishes`) and composes the two views.
 //
 // It hands over a `StandingsBlock` / `FinishesBlock` — the fields those selectors read —
-// and **never a forged arm of the union**. Tagging this event's pools `kind: 'standings'`
+// and **never a forged arm of the union**. Tagging this event's groups `kind: 'standings'`
 // to fit a signature would construct a boundary type *inward*, which is the wrong
 // direction (`.claude/rules/parse-at-boundaries.md`): the wire's arms are parsed at the
 // edge and carried in, never minted here to satisfy a parameter.
 //
 // **The champion belongs to the event, not to a stage** (ADR 20260727: "the champion comes
-// from the bracket — never from a pool"), so it is lifted out of both sub-views and named
+// from the bracket — never from a group"), so it is lifted out of both sub-views and named
 // once, here:
 //
-// - the **standings** sub-view is given `champion: null` because a pool stage genuinely
-//   crowns nobody. Topping a pool wins nothing in this format; it seeds a bracket slot.
+// - the **standings** sub-view is given `champion: null` because a group stage genuinely
+//   crowns nobody. Topping a group wins nothing in this format; it seeds a bracket slot.
 // - the **finishes** sub-view is given `champion: null` too — not because the bracket has
 //   no winner, but because this composite shows that winner **once**, above both stages.
 //   Leaving it on the sub-view would print the same fact twice on one card.
@@ -31,7 +31,7 @@
 // never either — while each sub-view carries its own stage's, because that is what
 // `StandingsView.complete` / `FinishesView.complete` mean. A mid-flight event is the
 // ordinary case, not an edge, and it is exactly where the two answers differ: complete
-// pools (so the standings block IS complete), a finishes list that starts below 1st, no
+// groups (so the standings block IS complete), a finishes list that starts below 1st, no
 // champion, and an incomplete event.
 //
 // A pure function of one event, so it is unit-tested (`./two-stage.test.ts`) rather than
@@ -42,20 +42,20 @@ import { eventFinishes, type FinishesView } from './finishes'
 import { eventStandings, type StandingsView } from './standings'
 import type { StandingsThenFinishesResults, TournamentEvent } from './types'
 
-/** A two-stage event's results, shaped for the reader: the pool stage's tables, the
+/** A two-stage event's results, shaped for the reader: the group stage's tables, the
  * knockout stage's placements, and the one champion the two stages produce between them. */
 export interface TwoStageView {
-  /** The **pool stage**, exactly as a round-robin's standings render — minus a champion,
-   * which a pool stage does not award. */
+  /** The **group stage**, exactly as a round-robin's standings render — minus a champion,
+   * which a group stage does not award. */
   standings: StandingsView
   /** The **knockout stage**, exactly as a single-elimination's finishes render — minus a
    * champion, which the composite names once above both stages. */
   finishes: FinishesView
   /** True when **both** stages are decided — the server's own flag. Not either sub-view's
-   * `complete`: the pool stage is decided well before the event is. */
+   * `complete`: the group stage is decided well before the event is. */
   complete: boolean
   /** The champion's username — the **bracket final's** winner, joined from the server's
-   * `champion` entry id — or `null` until that final is decided. Never a pool leader. */
+   * `champion` entry id — or `null` until that final is decided. Never a group leader. */
   champion: string | null
 }
 
@@ -68,7 +68,7 @@ export interface TwoStageView {
  * all.
  *
  * It composes the existing selectors instead of re-deriving either stage. That is what
- * keeps a two-stage event's pool table identical to a round-robin's and its placement list
+ * keeps a two-stage event's group table identical to a round-robin's and its placement list
  * identical to a single-elimination's — including the tie labels and the withdrawn-entrant
  * join, which would otherwise be a second implementation waiting to disagree.
  */
@@ -77,7 +77,7 @@ export function eventStandingsThenFinishes(
   results: StandingsThenFinishesResults,
 ): TwoStageView {
   // The BRACKET's winner. Read off `results.champion` — the server's own figure — and
-  // never off the top of a standings table, which would crown whoever led a pool.
+  // never off the top of a standings table, which would crown whoever led a group.
   //
   // The entrant map is built HERE, inside the branch that needs it: it feeds exactly one
   // lookup, and a mid-flight event — the ordinary case — has no champion to look up.
@@ -90,13 +90,13 @@ export function eventStandingsThenFinishes(
     // `champion: null` on both sub-blocks is the composite's decision, not a claim about
     // the data — see the module note. The event's champion is named above, once.
     standings: eventStandings(event, {
-      pools: results.pools,
-      // The POOL STAGE's own completeness, which is what a `StandingsView.complete`
+      groups: results.groups,
+      // The GROUP STAGE's own completeness, which is what a `StandingsView.complete`
       // states. `results.complete` is a different fact — *both* stages — and handing it
-      // over would have this block report an unplayed final as an undecided pool stage.
-      // Every pool decided IS the pool stage decided, the same reading
+      // over would have this block report an unplayed final as an undecided group stage.
+      // Every group decided IS the group stage decided, the same reading
       // `StandingsResults.complete` carries for a round-robin event.
-      complete: results.pools.every((pool) => pool.complete),
+      complete: results.groups.every((group) => group.complete),
       champion: null,
     }),
     finishes: eventFinishes(event, {

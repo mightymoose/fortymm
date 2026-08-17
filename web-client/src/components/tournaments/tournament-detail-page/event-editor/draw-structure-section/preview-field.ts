@@ -15,7 +15,7 @@
  * The field a preview assumes when the event has **no cap**.
  *
  * `maxPlayers: null` is "no cap" and never zero (ADR-0935), so there is no number to
- * divide into pools — and a preview of nothing is not a preview. Sixteen is the
+ * divide into groups — and a preview of nothing is not a preview. Sixteen is the
  * synthetic field we invent instead.
  *
  * ⚠️ **Mirrors `DEFAULT_UNCAPPED_FIELD` in `api/app/schedule_preview.py`**, which invents

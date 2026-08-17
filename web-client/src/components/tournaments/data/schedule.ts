@@ -8,11 +8,17 @@
 // has been chosen for yet.
 //
 // A fixture carries a **placement** (ADR-0790): `tableId` (a string ref into the
-// tournament's table catalogue, like `poolId`) and a naive `scheduledStart` — a
+// tournament's table catalogue, like `groupId`) and a naive `scheduledStart` — a
 // *predicted* wall-clock timestamp, not a promise. The placement's **date is fixed** by
-// the fixture's pool Slot (or the event Slot when un-pooled), so a director only ever
-// chooses a *time within that window*; `composeScheduledStart` puts the two back
-// together, in the same naive frame the Slot is already in (never a `Date`/UTC coercion).
+// the fixture's group's reservation Slot (or the event Slot when un-grouped), so a
+// director only ever chooses a *time within that window*; `composeScheduledStart` puts
+// the two back together, in the same naive frame the Slot is already in (never a
+// `Date`/UTC coercion).
+//
+// **The window and tables are a two-hop lookup** (ticket #1369): fixture → `groupId` →
+// that group's `reservationId` → the reservation in the event's `reservations`
+// (`fixtureReservation`, `./draw`) — never a direct `groupId` → `Slot`/`tableIds` join,
+// because a group no longer carries either.
 //
 // All of it is a pure function of one tournament + its table catalogue, so it is
 // unit-tested (`./schedule.test.ts`) rather than asserted through a DOM — the same shape
@@ -20,7 +26,15 @@
 
 import type { MatchStatus } from '@/api/matches'
 
-import { type FixtureMatch, type FixtureSide, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
+import {
+  buildDrawIndex,
+  fixtureReservation,
+  type DrawIndex,
+  type FixtureMatch,
+  type FixtureSide,
+  TBD_LABEL,
+  WITHDRAWN_LABEL,
+} from './draw'
 import { fixtureTier, fmtFixtureTime, isTold, type TimelineTier } from './timeline'
 import type {
   Entrant,
@@ -63,27 +77,31 @@ export interface ScheduleMatch {
   /** The placement's predicted start, a `FixtureTime` (`null` = unscheduled) — a
    * venue-local label + tz abbrev for display, plus a UTC instant for ordering. */
   scheduledStart: FixtureTime | null
-  /** The window whose **date** the placement is fixed to: the fixture's pool Slot, or the
-   * event Slot when the fixture is un-pooled (ADR-0790). The time picker chooses within it. */
+  /** The window whose **date** the placement is fixed to: the fixture's group's
+   * reservation Slot, or the event Slot when the fixture is un-grouped (ADR-0790). The
+   * time picker chooses within it. */
   window: Slot
-  /** **Which reservation** the two fields above came from (ADR 20260807, "a pool restricts
-   * scheduling, it does not enable it"):
+  /** **Which reservation** the two fields above came from (ADR 20260807, "a reservation
+   * restricts scheduling, it does not enable it"):
    *
-   * - `pool` — the fixture names a pool, so its window and its tables are that pool's. A
-   *   pool RESTRICTS: it is a strict slice of the venue, and naming it is information.
-   * - `event` — the fixture names no pool (a bracket, a swiss round, a knockout stage), so
-   *   it is scheduled against the **event's own window** over **every table in the
+   * - `booked` — the fixture names a group, whose mapped reservation's window and tables
+   *   are its own (the two-hop lookup, `fixtureReservation`/`./draw`). A booked
+   *   reservation RESTRICTS: it is a strict slice of the venue, and naming it is
+   *   information.
+   * - `event` — the fixture names no group (a bracket, a swiss round, a knockout stage),
+   *   so it is scheduled against the **event's own window** over **every table in the
    *   tournament**. That is not "no reservation": it is the event-wide one.
    *
-   * Carried rather than re-derived from `poolId` downstream so a reader states the source
-   * once, in the words the ADR uses. */
-  reservation: 'pool' | 'event'
+   * Carried rather than re-derived from `groupId` downstream so a reader states the
+   * source once, in the words the ADR uses — the same two words
+   * `InfeasibilityReason.reservation` uses (`./solve`) for the same fact. */
+  reservation: 'booked' | 'event'
   /** The tables the fixture's reservation covers — the natural suggestion for a placement:
-   * a pooled fixture's pool tables, and an un-pooled fixture's whole tournament (ADR
-   * 20260807). An un-pooled fixture is therefore offered a suggestion whenever the
-   * tournament has any table at all. A **pooled** one can still be empty, because a pool
-   * that reserves no tables is a real (and infeasible) state — the server's own
-   * `PoolHasNoTables`. */
+   * a grouped fixture's reservation tables, and an un-grouped fixture's whole tournament
+   * (ADR 20260807). An un-grouped fixture is therefore offered a suggestion whenever the
+   * tournament has any table at all. A **grouped** one can still be empty, because a
+   * reservation that reserves no tables is a real (and infeasible) state — the server's
+   * own `ReservationHasNoTables`. */
   suggestedTableIds: string[]
   /** Whether the placement can still be changed. `false` once the match is
    * `completed`/`voided` — its placement is frozen server-side, so the control is hidden
@@ -153,14 +171,17 @@ function toScheduleMatch(
   fixture: Fixture,
   event: TournamentEvent,
   byId: Map<string, Entrant>,
-  poolById: Map<string, TournamentEvent['pools'][number]>,
-  /** Every table the TOURNAMENT reserves — the event-wide reservation an un-pooled
+  /** The event's groups/reservations, indexed once per event (`buildDrawIndex`) rather
+   * than re-scanned per fixture. */
+  drawIndex: DrawIndex,
+  /** Every table the TOURNAMENT reserves — the event-wide reservation an un-grouped
    * fixture is scheduled against (ADR 20260807). The tournament's own `tableIds`, not
    * the catalogue passed to `buildSchedule`: the catalogue is what a placement is
    * *resolved* through, the tournament's ids are what it may be placed *on*. */
   tournamentTableIds: string[],
 ): ScheduleMatch {
-  const pool = fixture.poolId !== null ? (poolById.get(fixture.poolId) ?? null) : null
+  // The two-hop lookup (ticket #1369): fixture → group → the group's mapped reservation.
+  const { reservation } = fixtureReservation(drawIndex, fixture)
   return {
     fixtureId: fixture.id,
     eventId: event.id,
@@ -170,16 +191,16 @@ function toScheduleMatch(
     match: matchOf(fixture),
     tableId: fixture.tableId,
     scheduledStart: fixture.scheduledStart,
-    // The pool fixes the date the placement falls on; an un-pooled fixture inherits the
-    // event's own Slot (ADR-0790).
-    window: pool?.slot ?? event.slot,
-    reservation: pool ? 'pool' : 'event',
-    // A pool RESTRICTS scheduling, it does not enable it (ADR 20260807): a pooled
-    // fixture is suggested its pool's slice of the venue, and an un-pooled one the
-    // whole tournament — the reservation it is actually scheduled against. An empty
-    // list here would offer a bracket, a swiss round and a knockout stage no
-    // suggestion at all, which is what it used to do.
-    suggestedTableIds: pool?.tableIds ?? tournamentTableIds,
+    // The reservation fixes the date the placement falls on; an un-grouped fixture
+    // inherits the event's own Slot (ADR-0790).
+    window: reservation?.slot ?? event.slot,
+    reservation: reservation ? 'booked' : 'event',
+    // A booked reservation RESTRICTS scheduling, it does not enable it (ADR 20260807): a
+    // grouped fixture is suggested its reservation's slice of the venue, and an
+    // un-grouped one the whole tournament — the reservation it is actually scheduled
+    // against. An empty list here would offer a bracket, a swiss round and a knockout
+    // stage no suggestion at all, which is what it used to do.
+    suggestedTableIds: reservation?.tableIds ?? tournamentTableIds,
     placeable:
       fixture.matchStatus === null || !FROZEN_STATUSES.has(fixture.matchStatus),
     tier: fixtureTier(fixture),
@@ -223,11 +244,9 @@ export function buildSchedule(
   const matches: ScheduleMatch[] = []
   for (const event of tournament.events) {
     const byId = new Map(event.entrants.map((e) => [e.id, e]))
-    const poolById = new Map(event.pools.map((p) => [p.id, p]))
+    const drawIndex = buildDrawIndex(event)
     for (const fixture of event.fixtures) {
-      matches.push(
-        toScheduleMatch(fixture, event, byId, poolById, tournament.tableIds),
-      )
+      matches.push(toScheduleMatch(fixture, event, byId, drawIndex, tournament.tableIds))
     }
   }
 
@@ -307,8 +326,9 @@ export function matchLabel(match: ScheduleMatch): string {
  * Compose the naive wall-clock timestamp a placement stores (ADR-0790) from the window's
  * fixed **date** and a chosen **time** (`HH:MM`): `YYYY-MM-DDTHH:MM:SS`, no timezone.
  *
- * This is the whole reason the control only asks for a time: the date is the pool/event
- * Slot's, and the placement lives in the *same naive frame* the Slot does — so this is
+ * This is the whole reason the control only asks for a time: the date is the
+ * reservation/event Slot's, and the placement lives in the *same naive frame* the Slot
+ * does — so this is
  * plain string assembly, never a `Date` (which would drag a timezone in and coerce the
  * wall-clock instant to UTC, the exact thing ADR-0790 refuses).
  */

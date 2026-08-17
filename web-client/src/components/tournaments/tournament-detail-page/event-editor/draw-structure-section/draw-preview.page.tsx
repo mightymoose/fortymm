@@ -2,13 +2,13 @@ import { render, screen, within, type Container } from '@/test/utilities'
 
 import { DrawPreview, type DrawPreviewProps } from './draw-preview'
 import { buildDrawPreviewProps } from './draw-preview.factory'
-import { poolCardPage } from './draw-preview/pool-card.page'
+import { groupCardPage } from './draw-preview/group-card.page'
 
 const scoped = (container: Container) => {
-  const getPoolList = () =>
-    container.getByRole('list', { name: 'Projected pools' })
-  const getPoolCards = () =>
-    within(getPoolList()).queryAllByTestId('draw-preview-pool-card')
+  const getGroupList = () =>
+    container.getByRole('list', { name: 'Projected groups' })
+  const getGroupCards = () =>
+    within(getGroupList()).queryAllByTestId('draw-preview-group-card')
 
   return {
     /** The preview panel. */
@@ -30,34 +30,34 @@ const scoped = (container: Container) => {
     getBadge() {
       return container.getByTestId('draw-preview-badge')
     },
-    /** `{field} players ÷ {count} pools = {size} per pool`. */
+    /** `{field} players ÷ {count} groups = {size} per group`. */
     getEquation() {
       return container.getByTestId('draw-preview-equation')
     },
-    /** The pool-card group. Named, so a screen reader can introduce it before reading
+    /** The group-card group. Named, so a screen reader can introduce it before reading
      * eight identically-shaped cards. */
-    getPoolList,
-    /** Every pool card, **in the order it renders** — the claim that the cards read
+    getGroupList,
+    /** Every group card, **in the order it renders** — the claim that the cards read
      * A, B, C, …, which no letter-addressed accessor can state. */
-    getPoolCards,
-    /** Every card's pool name, **in the order it renders** — `Pool A`, `Pool B`, …
+    getGroupCards,
+    /** Every card's group name, **in the order it renders** — `Group A`, `Group B`, …
      * The one claim a letter-addressed accessor cannot make. */
-    getPoolNames(): string[] {
-      return getPoolCards().map(
-        (card) => (card.textContent ?? '').match(/Pool [A-Z]+/)?.[0] ?? '',
+    getGroupNames(): string[] {
+      return getGroupCards().map(
+        (card) => (card.textContent ?? '').match(/Group [A-Z]+/)?.[0] ?? '',
       )
     },
-    /** One pool's card, addressed by its letter. Returns the card's own accessors
-     * (`poolCardPage`), scoped to it — with `getCard` re-bound to the card itself,
+    /** One group's card, addressed by its letter. Returns the card's own accessors
+     * (`groupCardPage`), scoped to it — with `getCard` re-bound to the card itself,
      * since `within` searches a node's descendants and not the node. */
-    pool(letter: string) {
-      const card = getPoolCards().find((node) =>
-        (node.textContent ?? '').includes(`Pool ${letter}`),
+    group(letter: string) {
+      const card = getGroupCards().find((node) =>
+        (node.textContent ?? '').includes(`Group ${letter}`),
       )
-      if (!card) throw new Error(`No preview card for Pool ${letter}`)
-      return { ...poolCardPage.within(within(card)), getCard: () => card }
+      if (!card) throw new Error(`No preview card for Group ${letter}`)
+      return { ...groupCardPage.within(within(card)), getCard: () => card }
     },
-    /** The knockout card: bracket size, byes and the pool-match total. */
+    /** The knockout card: bracket size, byes and the group-match total. */
     getKnockout() {
       return container.getByTestId('draw-preview-knockout')
     },

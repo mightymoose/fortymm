@@ -994,7 +994,7 @@ function detail(message: string, status = 422) {
  * side, holds pydantic to those strings, so a minor bump would silently desynchronise
  * `npm run dev` and vitest from production with everything still green.
  *
- * So these are authored, in the app's voice, and each names `qualifiers_per_pool` — the
+ * So these are authored, in the app's voice, and each names `qualifiers_per_group` — the
  * field the director has to fix, which is the part that IS load-bearing. Tests pin the
  * rule that fired by referring to the constant, never by retyping a sentence.
  *
@@ -1004,31 +1004,31 @@ function detail(message: string, status = 422) {
 export const DRAW_SETTINGS_REFUSALS = {
   /** `rr-then-ko` requires a count, and has no default to fall back on. */
   countRequired:
-    'An “rr-then-ko” event needs a qualifiers_per_pool: how many of each pool’s ' +
+    'An “rr-then-ko” event needs a qualifiers_per_group: how many of each group’s ' +
     'finishers advance into the knockout stage. There is no default — name a count.',
   /** `K ≥ 1`, and a whole number of players. */
   countTooSmall:
-    'qualifiers_per_pool must be a whole number of 1 or more: a knockout stage ' +
+    'qualifiers_per_group must be a whole number of 1 or more: a knockout stage ' +
     'nobody qualifies for is not a stage.',
   /** `K ≤ 1000`, the same ceiling the server enforces. */
   countTooLarge:
-    'qualifiers_per_pool must be 1,000 or fewer: no pool advances more players ' +
+    'qualifiers_per_group must be 1,000 or fewer: no group advances more players ' +
     'than that into the knockout stage.',
   /** The two count-less arms declare no such field, so the key is refused outright —
    * never silently dropped on the way to a column whose `CHECK` says `NULL`. */
   countForbidden: (drawType: string) =>
     `A “${drawType}” draw has no knockout stage to qualify for, so it takes no ` +
-    'qualifiers_per_pool. Remove the count.',
+    'qualifiers_per_group. Remove the count.',
   /** A count arriving with no `draw_type` beside it — the server's own words. */
   countUnpaired:
-    'qualifiers_per_pool is part of an event’s draw configuration and is patched ' +
+    'qualifiers_per_group is part of an event’s draw configuration and is patched ' +
     'with it: send draw_type alongside it.',
 } as const
 
 /** Mirror the server's event-body constraints (ADR-0935) so an invalid event is
  * a 422 the editor surfaces inline, not a value the store silently accepts:
  *   • name — required, at most 255 chars.
- *   • the draw configuration — `(draw_type, qualifiers_per_pool)` as a pair (ADR
+ *   • the draw configuration — `(draw_type, qualifiers_per_group)` as a pair (ADR
  *     20260727): required and ≥ 1 for `rr-then-ko`, refused outright on the other two.
  *   • max_players — when present, a positive integer (`null` = no cap is fine).
  *   • entry_fee — when present, non-negative.
@@ -1050,40 +1050,43 @@ function validateEventBody(
     }
   }
   // The **draw configuration**, judged as the pair it is (ADR 20260727). On the server
-  // `(draw_type, qualifiers_per_pool)` is flat on the wire and a discriminated union in
+  // `(draw_type, qualifiers_per_group)` is flat on the wire and a discriminated union in
   // the interior: the `rr-then-ko` arm REQUIRES a count with no default, and the other
   // two arms are `extra="forbid"` and declare no such field — so a count sent with either
   // of them is a 422, not a value quietly dropped on the way to a column whose `CHECK`
   // says `NULL`.
   //
   // Mirrored here because a mock more permissive than the server is a trap: a client that
-  // sent `qualifiers_per_pool: null` on a round-robin event, or a bare `rr-then-ko` with
+  // sent `qualifiers_per_group: null` on a round-robin event, or a bare `rr-then-ko` with
   // no count, would look perfectly healthy in `npm run dev` and in vitest, and 422 in
   // production. (The store below then keeps whatever survives this — see `createEvent`.)
   // The rules are the server's; the sentences are ours — see `DRAW_SETTINGS_REFUSALS`.
   if (body.draw_type !== undefined && body.draw_type !== null) {
     if (body.draw_type === 'rr-then-ko') {
-      if (body.qualifiers_per_pool === undefined || body.qualifiers_per_pool === null) {
+      if (
+        body.qualifiers_per_group === undefined ||
+        body.qualifiers_per_group === null
+      ) {
         return detail(DRAW_SETTINGS_REFUSALS.countRequired, 422)
       }
       if (
-        !Number.isInteger(body.qualifiers_per_pool) ||
-        body.qualifiers_per_pool < 1
+        !Number.isInteger(body.qualifiers_per_group) ||
+        body.qualifiers_per_group < 1
       ) {
         return detail(DRAW_SETTINGS_REFUSALS.countTooSmall, 422)
       }
-      if (body.qualifiers_per_pool > 1000) {
+      if (body.qualifiers_per_group > 1000) {
         return detail(DRAW_SETTINGS_REFUSALS.countTooLarge, 422)
       }
     } else if (
-      body.qualifiers_per_pool !== undefined &&
-      body.qualifiers_per_pool !== null
+      body.qualifiers_per_group !== undefined &&
+      body.qualifiers_per_group !== null
     ) {
       return detail(DRAW_SETTINGS_REFUSALS.countForbidden(body.draw_type), 422)
     }
   } else if (
-    body.qualifiers_per_pool !== undefined &&
-    body.qualifiers_per_pool !== null
+    body.qualifiers_per_group !== undefined &&
+    body.qualifiers_per_group !== null
   ) {
     // A count with no draw type beside it: judging it would mean reading the event's
     // STORED draw type, two layers past the boundary. The server refuses it there
@@ -1100,41 +1103,43 @@ function validateEventBody(
       return detail('Entry fee can’t be negative.', 422)
     }
   }
-  // A pool id IDENTIFIES a pool, and a fixture names the pool it was dealt into
-  // (ADR-0786). Two ENTRIES citing one id is a payload the interior cannot hold: the
-  // write is an id-keyed diff (`applyEventPools`), so both entries resolve onto the one
-  // stored pool and the payload is accepted as a single-pool event rather than refused as
-  // the two-pool one it claims to be (`_pool_ids_are_unique`,
+  // A reservation id IDENTIFIES a reservation, and a fixture names the GROUP it was
+  // dealt into (ADR-0786; a group is minted 1:1 with a reservation, ticket #1369). Two
+  // ENTRIES citing one id is a payload the interior cannot hold: the write is an
+  // id-keyed diff (`applyEventReservations`), so both entries resolve onto the one
+  // stored reservation and the payload is accepted as a single-reservation event rather
+  // than refused as the two-reservation one it claims to be (`_reservation_ids_are_unique`,
   // `api/app/schemas/tournament.py`).
   //
   // It lives HERE, at the mock's boundary rather than in the store's freeze, for the two
   // reasons the server's validator does:
   //  • it is a 422 in *every* state the event could be in — an event with no draw at all
-  //    still cannot cite one pool twice;
-  //  • and it is the PATCH path's rule, because the pool-set freeze compares SETS:
+  //    still cannot cite one reservation twice;
+  //  • and it is the PATCH path's rule, because the group-set freeze compares SETS:
   //    `[A, A, B]` against a cut event holding `{A, B}` is the same set, so the freeze
   //    waves it through and the next cut dies. The guard that protects the draw was
   //    admitting the payload that poisons it.
   //
-  // **Entries with no `id` are ignored**: those are additions, and any number of pools may
-  // be added at once. The rule has no create-path twin and needs none — `PoolWrite` has no
-  // `id` at all (ADR 20260801), so "the patch path is the hole" is not a hole a create can
-  // have here.
-  if (body.pools != null) {
+  // **Entries with no `id` are ignored**: those are additions, and any number of
+  // reservations may be added at once. The rule has no create-path twin and needs none —
+  // `ReservationWrite` has no `id` at all (ADR 20260801), so "the patch path is the hole"
+  // is not a hole a create can have here.
+  if (body.reservations != null) {
     const seen = new Set<string>()
-    const duplicated = body.pools
-      // `'id' in pool` is the narrowing, not a cast: the create shape declares no such
-      // key, so this is also where a `PoolWrite[]` body drops out of the rule entirely.
-      .map((pool) => ('id' in pool ? pool.id : null))
+    const duplicated = body.reservations
+      // `'id' in reservation` is the narrowing, not a cast: the create shape declares no
+      // such key, so this is also where a `ReservationWrite[]` body drops out of the
+      // rule entirely.
+      .map((reservation) => ('id' in reservation ? reservation.id : null))
       .filter((id): id is string => id != null)
       .filter((id) => (seen.has(id) ? true : (seen.add(id), false)))
     if (duplicated.length > 0) {
       const ids = [...new Set(duplicated)]
       return detail(
-        `A pool id identifies one pool: ${namedList(ids)} ` +
+        `A reservation id identifies one reservation: ${namedList(ids)} ` +
           `${ids.length === 1 ? 'is' : 'are'} cited by more than one entry of this ` +
-          "event's pools. Cite each pool you are keeping exactly once, and omit the id " +
-          'of a pool you are adding.',
+          "event's reservations. Cite each reservation you are keeping exactly once, " +
+          'and omit the id of a reservation you are adding.',
         422,
       )
     }
@@ -1923,7 +1928,7 @@ export const handlers = [
   }),
   // ----- tournaments (admin) ---------------------------------------------
   // Dev-only handlers backed by `tournaments-store`. The seed includes rows
-  // owned by the dev user (editable, with events + pools) and one owned by
+  // owned by the dev user (editable, with events + reservations) and one owned by
   // `league.office` (can_edit: false) so the ownership gating is visible.
   // PATCH/DELETE on a non-owned row (tournament or event) returns 403,
   // mirroring the real API. The list and detail GET both return
@@ -2058,9 +2063,9 @@ export const handlers = [
   // status change cuts one — and it is refused exactly as the server refuses it: 403
   // (not the owner), 409 (the draw shows evidence of play: a fixture with a winner or a
   // linked match), 422 (this event cannot be planned — an unsupported draw type, no
-  // pools, or a pool that would get fewer than two entrants). The refusal SENTENCES come
-  // from the store, because for the 422 the sentence is the answer: it names the numbers
-  // the director has to change.
+  // groups, or a group that would get fewer than two entrants). The refusal SENTENCES
+  // come from the store, because for the 422 the sentence is the answer: it names the
+  // numbers the director has to change.
   http.post(
     '*/v1/tournaments/:tournamentId/events/:eventId/draw',
     async ({ params }) => {
@@ -2234,23 +2239,24 @@ export const handlers = [
         body ?? {},
       )
       if (!result.ok) {
-        // The pool-set freeze (ADR-0786): this PATCH would add or remove a pool on an
-        // event whose draw is cut, orphaning the fixtures drawn into it. The store's
-        // sentence says so — naming the pools — and says how to get out of it.
+        // The group-set freeze (ADR-0786): this PATCH would add or remove a reservation
+        // — and therefore the group mapped to it — on an event whose draw is cut,
+        // orphaning the fixtures drawn into it. The store's sentence says so — naming
+        // the groups — and says how to get out of it.
         if (result.status === 409) return detail(result.detail, 409)
         // An entry citing an id this event does not have (ADR 20260801). Shaped as a
         // **field** refusal — FastAPI's per-field array, `loc` naming the entry's index —
         // because that is what the route really sends and what `validationFields`
-        // (`src/api/client.ts`) reads to blame the pool card.
+        // (`src/api/client.ts`) reads to blame the reservation card.
         if (result.status === 422) {
           return HttpResponse.json(
             {
               detail: [
                 {
                   type: 'value_error',
-                  loc: ['body', 'pools', result.index, 'id'],
+                  loc: ['body', 'reservations', result.index, 'id'],
                   msg: result.detail,
-                  input: result.poolId,
+                  input: result.reservationId,
                 },
               ],
             },

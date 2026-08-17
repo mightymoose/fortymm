@@ -172,7 +172,7 @@ struct DashboardTournamentPanel: View {
 // MARK: - Stats strip
 
 /// The three-tile strip under a tournament event's match card: the viewer's
-/// win–loss record, where they stand in their pool, and what stage the event is
+/// win–loss record, where they stand in their group, and what stage the event is
 /// at.
 ///
 /// The middle tile is the one that can be absent — an event whose draw has not
@@ -257,7 +257,7 @@ struct TournamentStatsStrip: View {
 struct TournamentPathList: View {
     /// `Your matches` — what this event calls the viewer's own run through it.
     let heading: String
-    /// `Pool A · 4 players`, or `nil` for an un-pooled draw.
+    /// `Group A · 4 players`, or `nil` for an ungrouped draw.
     let subheading: String?
     let rows: [TournamentPathRowView]
 
@@ -420,7 +420,7 @@ private let previewPanel = TournamentPanelView(
                 TournamentPathRowView(id: "3", label: "M3", opponentName: "slim-manatee", state: .live, detail: "In progress", youWon: nil),
                 TournamentPathRowView(id: "4", label: "M4", opponentName: "TBD", state: .upcoming, detail: "6:00 PM CDT · Table 3", youWon: nil),
             ],
-            pathSubheading: "Pool A · 4 players"
+            pathSubheading: "Group A · 4 players"
         ),
     ]
 )

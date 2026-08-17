@@ -23,6 +23,7 @@ import { parseDrawTypeCatalogue } from './draw-types'
 import { entryRefusalNotice } from './entry-refusal'
 import { hasVenue } from './helpers'
 import { parseFixtures } from './fixtures'
+import { parseGroupsAndReservations } from './groups'
 import { parseResults } from './results'
 import { parseStages } from './stages'
 import {
@@ -38,8 +39,7 @@ import type {
   Entrant,
   EventEntryState,
   Fixture,
-  Pool,
-  PoolEntry,
+  ReservationEntry,
   Predicate,
   PredicateValue,
   Tournament,
@@ -57,7 +57,6 @@ type TournamentUpdate = components['schemas']['TournamentUpdate']
 type AddressInput = components['schemas']['AddressInput']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
-type ApiPool = components['schemas']['Pool']
 type ApiPredicate = components['schemas']['Predicate']
 type ApiEntryState = TournamentEventRead['entry_state']
 type TournamentFixturePlacementUpdate =
@@ -135,6 +134,12 @@ export function apiToEntrant(e: TournamentEntrantRead): Entrant {
  * rating satisfies its rules, is the server's judgement and never the client's
  * (ADR-0783). */
 export function apiToEvent(e: TournamentEventRead): TournamentEvent {
+  // PARSED, not cast (`./groups`, `.claude/rules/parse-at-boundaries.md`) — and
+  // cross-checked as a pair: every group's `reservation_id` must resolve against
+  // `reservations`, which is unreachable from a correct server (a real NOT NULL
+  // foreign key), so a payload that fails it fails HERE rather than rendering a
+  // fixture's window from a reservation that silently isn't there (ticket #1369).
+  const { groups, reservations } = parseGroupsAndReservations(e.groups, e.reservations)
   return {
     id: e.id,
     name: e.name,
@@ -145,7 +150,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     // shape's `NOT NULL`-less column really holds. Coalescing it to a number here would
     // invent a qualifier count for a format that has no knockout stage — and, on the way
     // back out, author a body the server 422s.
-    qualifiersPerPool: e.qualifiers_per_pool,
+    qualifiersPerGroup: e.qualifiers_per_group,
     // **R**, carried across the same way and for the same reason (the swiss ADR): `null`
     // is what the three round-count-less draw types store, not missing data, and inventing
     // a `ceil(log2 n)` here would author a body the server 422s on the way back out.
@@ -159,19 +164,24 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     slot: e.slot,
     predicates: e.predicates.map(apiToPredicate),
     match: { rated: e.match_settings.rated, lengthGames: e.match_settings.length_games },
-    pools: e.pools.map(apiToPool),
+    groups,
+    reservations,
     // PARSED, not cast (`./stages`, `.claude/rules/parse-at-boundaries.md`) — the same
     // boundary the fixtures cross, and for the same reason: a fixture's `stageId` is
-    // joined against this array to answer "is this fixture's un-pooled block a bracket
+    // joined against this array to answer "is this fixture's un-grouped block a bracket
     // or a set of swiss rounds?" (`shapeForStage`, `./draw`), so a stage whose
     // `draw_type` this build cannot resolve to a single-stage kind must fail HERE.
     stages: parseStages(e.stages),
     // PARSED, not cast (`./fixtures`, `.claude/rules/parse-at-boundaries.md`). Every
     // other field above is mapped on the compiler's word that the payload matches
     // `schema.d.ts`; the draw is checked at RUNTIME, because it is the one structure on
-    // this payload a renderer walks by shape — pool → round → position, sides that may
+    // this payload a renderer walks by shape — group → round → position, sides that may
     // be null — so a malformed fixture would otherwise surface as an `undefined` in a
-    // bracket cell, three components away from the response that carried it.
+    // bracket cell, three components away from the response that carried it. A
+    // fixture's `groupId` naming no entry of `groups` is NOT refused here — that is a
+    // domain-legal state (a knockout fixture), tolerated by `./fixtures` and rendered in
+    // the ungrouped block by `drawState` (`./draw`) — the mirror image of the strict
+    // check `groups`/`reservations` just went through above.
     //
     // Both callers of this mapper run inside a `queryFn` (see the queries below), so
     // the throw lands where a failed fetch lands: the query errors, the cache is never
@@ -185,20 +195,6 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     // cell. `null` is the designed "no results" state (an uncut or non-round-robin event),
     // and parses straight through to `null`.
     results: parseResults(e.results),
-  }
-}
-
-/** Map an API pool to the prototype's `Pool`. `position` is carried across as the server
- * assigned it — it is the *read* shape's field and appears on no write body (see
- * `poolEntriesToApi`). The order of `e.pools` is NOT relied on here: whoever lays pools out
- * sorts by `position` itself (`poolsInOrder`, `./helpers`). */
-function apiToPool(p: ApiPool): Pool {
-  return {
-    id: p.id,
-    name: p.name,
-    slot: p.slot,
-    tableIds: p.table_ids,
-    position: p.position,
   }
 }
 
@@ -385,66 +381,72 @@ export function catalogueToUpdateBody(
 }
 
 /**
- * The words of a pool, as **both** write shapes take them — **without `id` and without
- * `position`**.
+ * The words of a reservation, as **both** write shapes take them — **without `id` and
+ * without `position`**.
  *
  * Same category of field as `entered` two functions down: server-managed, and echoing
  * the client's copy back is at best noise and at worst a lie. It is stronger here,
- * though. `entered` is merely *ignored* by the write schema; `PoolWrite` is
+ * though. `entered` is merely *ignored* by the write schema; `ReservationWrite` is
  * `extra="forbid"` and declares neither of these, so sending one is a **422 naming the
  * field** — the whole save refused, for a key the director never typed.
  */
-function poolDraftToApi(entry: PoolEntry) {
+function reservationDraftToApi(entry: ReservationEntry) {
   return { name: entry.name, slot: entry.slot, table_ids: entry.tableIds }
 }
 
 /**
- * The pools as a **create** body takes them (`PoolWrite[]`): the words, and nothing
- * else.
+ * The reservations as a **create** body takes them (`ReservationWrite[]`): the words,
+ * and nothing else.
  *
- * An event being born has no pools to cite — every pool on it is new, and the server
- * mints an id for each (ADR 20260801) — so there is no id arm here at all. A `kept` entry
- * cannot arise on a create in practice, and if one did its id would name a pool of some
- * *other* event: dropping it is the only honest reading, and it is also the only one the
- * schema permits.
+ * An event being born has no reservations to cite — every reservation on it is new, and
+ * the server mints an id for each, and one group per reservation in lockstep (ADR
+ * 20260801) — so there is no id arm here at all. A `kept` entry cannot arise on a create
+ * in practice, and if one did its id would name a reservation of some *other* event:
+ * dropping it is the only honest reading, and it is also the only one the schema
+ * permits.
  */
-function poolEntriesToWrite(pools: readonly PoolEntry[]) {
-  return pools.map(poolDraftToApi)
+function reservationEntriesToWrite(reservations: readonly ReservationEntry[]) {
+  return reservations.map(reservationDraftToApi)
 }
 
 /**
- * The pools as a **patch** body takes them (`PoolUpsert[]`) — the server's **id-keyed
- * diff** (ADR 20260801), which is three statements in one array:
+ * The reservations as a **patch** body takes them (`ReservationUpsert[]`) — the
+ * server's **id-keyed diff** (ADR 20260801), which is three statements in one array:
  *
- * - an entry **citing an id** keeps that pool, and therefore every fixture drawn into it,
- *   while taking this payload's words and place;
- * - an entry with **no id** adds a pool, whose id the server mints;
- * - a stored pool **no entry cites** is removed.
+ * - an entry **citing an id** keeps that reservation — and therefore its mapped group,
+ *   and every fixture drawn into it — while taking this payload's words and place;
+ * - an entry with **no id** adds a reservation, whose id the server mints (and a group
+ *   in lockstep with it);
+ * - a stored reservation **no entry cites** is removed (and its mapped group with it).
  *
  * The `added` arm omits the `id` **key** rather than sending `null`. Both are accepted
- * (`PoolUpsert.id` is `string | null` and optional), so this is not a correctness fix on
- * today's schema — it is the discipline `tableEntryToApi` and `drawSettingsToApi` already
- * follow: send the field only when there is a pool to name. A payload a reader can eyeball
- * and see "this entry cites nothing, so it is an insert" is the whole readability of a
- * diff.
+ * (`ReservationUpsert.id` is `string | null` and optional), so this is not a correctness
+ * fix on today's schema — it is the discipline `tableEntryToApi` and `drawSettingsToApi`
+ * already follow: send the field only when there is a reservation to name. A payload a
+ * reader can eyeball and see "this entry cites nothing, so it is an insert" is the whole
+ * readability of a diff.
  *
- * An id this event does not hold is a **422 on that entry** (`['body','pools',i,'id']`),
- * never a quietly minted pool — which is why the ids reaching here may only ever have come
- * from a read (`keepPools`, `./pool-entries`).
+ * ⚠️ **The `id` here is the RESERVATION's id, never the mapped group's** — this has bitten
+ * the API's own test suite twice, so it is worth stating in the one place a client could
+ * make the same mistake. An id this event's reservations do not hold is a **422 on that
+ * entry** (`['body','reservations',i,'id']`), never a quietly minted reservation — which
+ * is why the ids reaching here may only ever have come from a read (`keepReservations`,
+ * `./reservation-entries`).
  *
- * **The order of this array IS the ordering.** The server assigns each pool the position
- * of its index in this very list, so reordering pools is done by sending them in the
- * order you want, and nothing else. That is why the editor's form value is seeded in
- * position order (`eventToFormValues`, `../event-form`): the array a save serializes has
- * to be the array the director was looking at, or the pools shuffle on the round trip.
+ * **The order of this array IS the ordering.** The server assigns each reservation the
+ * position of its index in this very list — and its mapped group the same position, in
+ * lockstep — so reordering reservations is done by sending them in the order you want,
+ * and nothing else. That is why the editor's form value is seeded in position order
+ * (`eventToFormValues`, `../event-form`): the array a save serializes has to be the array
+ * the director was looking at, or the reservations shuffle on the round trip.
  */
-function poolEntriesToApi(
-  pools: readonly PoolEntry[],
-): components['schemas']['PoolUpsert'][] {
-  return pools.map((entry) =>
+function reservationEntriesToApi(
+  reservations: readonly ReservationEntry[],
+): components['schemas']['ReservationUpsert'][] {
+  return reservations.map((entry) =>
     entry.kind === 'kept'
-      ? { id: entry.id, ...poolDraftToApi(entry) }
-      : poolDraftToApi(entry),
+      ? { id: entry.id, ...reservationDraftToApi(entry) }
+      : reservationDraftToApi(entry),
   )
 }
 
@@ -457,9 +459,10 @@ function poolEntriesToApi(
  * The fields are flat on the wire and a **discriminated union tagged by `draw_type`** in
  * the server's interior. Every arm is `extra="forbid"` and declares only its own setting,
  * so a key that belongs to another arm is a **422 at the request boundary**: a
- * `qualifiers_per_pool` on a swiss body is refused exactly as a `rounds` on an
+ * `qualifiers_per_group` on a swiss body is refused exactly as a `rounds` on an
  * `rr-then-ko` one is. Not a value silently dropped — a director naming a qualifier count
- * for a pool-less format has misunderstood something the server would rather say out loud.
+ * for a group-less format has misunderstood something the server would rather say out
+ * loud.
  *
  * So this sends **exactly one arm's worth of keys** and omits the rest rather than sending
  * `null`, and it is the ONE place that decision is made — shared by create and update,
@@ -470,18 +473,18 @@ function poolEntriesToApi(
  *
  * Each arm's own setting is **required** — the union arms carry no defaults — so it is sent
  * as-is, `null` included. A `null` there is a 422 the form is meant to have caught first
- * (`qualifiersPerPoolSchema` / `swissRoundsSchema`, `data/event-validation`); sending it is
+ * (`qualifiersPerGroupSchema` / `swissRoundsSchema`, `data/event-validation`); sending it is
  * honest, and far better than inventing a number the director never chose.
  *
  * A `switch` with a `never` default rather than a chain of ternaries: a fifth draw type is a
  * **compile error here** until somebody says which settings it puts on the wire.
  */
 function drawSettingsToApi(
-  ev: Pick<TournamentEvent, 'drawType' | 'qualifiersPerPool' | 'rounds'>,
+  ev: Pick<TournamentEvent, 'drawType' | 'qualifiersPerGroup' | 'rounds'>,
 ) {
   switch (ev.drawType) {
     case 'rr-then-ko':
-      return { draw_type: ev.drawType, qualifiers_per_pool: ev.qualifiersPerPool }
+      return { draw_type: ev.drawType, qualifiers_per_group: ev.qualifiersPerGroup }
     case 'swiss':
       return { draw_type: ev.drawType, rounds: ev.rounds }
     case 'round-robin':
@@ -495,9 +498,10 @@ function drawSettingsToApi(
 }
 
 /** The event fields shared by the create and update bodies — everything except the
- * server-managed values (the `entered` count, and each pool's `id` and `position`) and
- * the pools themselves, whose two shapes are the one thing the two verbs do NOT share:
- * a create writes `PoolWrite[]`, a patch writes the `PoolUpsert[]` diff. */
+ * server-managed values (the `entered` count, each group, and each reservation's `id`
+ * and `position`) and the reservations themselves, whose two shapes are the one thing
+ * the two verbs do NOT share: a create writes `ReservationWrite[]`, a patch writes the
+ * `ReservationUpsert[]` diff. */
 function eventToApiFields(ev: EditedEvent) {
   return {
     name: ev.name,
@@ -512,27 +516,32 @@ function eventToApiFields(ev: EditedEvent) {
   }
 }
 
-/** Build the event *create* body (POST) from the editor's `EditedEvent`. Its pools carry
- * **no ids at all** — the server mints one per pool (`poolEntriesToWrite`). */
+/** Build the event *create* body (POST) from the editor's `EditedEvent`. Its
+ * reservations carry **no ids at all** — the server mints one per reservation (and a
+ * group in lockstep with each, `reservationEntriesToWrite`). */
 export function eventToCreateBody(ev: EditedEvent): TournamentEventCreate {
-  return { ...eventToApiFields(ev), pools: poolEntriesToWrite(ev.pools) }
+  return { ...eventToApiFields(ev), reservations: reservationEntriesToWrite(ev.reservations) }
 }
 
-/** Build the event *update* body (PATCH) from the editor's `EditedEvent`, its pools as
- * the id-keyed diff (`poolEntriesToApi`).
+/** Build the event *update* body (PATCH) from the editor's `EditedEvent`, its
+ * reservations as the id-keyed diff (`reservationEntriesToApi`).
  *
  * `entered` is deliberately omitted: it's a server-managed registration count
  * the editor never touches, so echoing the client's last-read value back would
  * clobber registrations that changed server-side since load (a lost update).
  *
- * ⚠️ **The pools are not optional here**, even for a surface that is editing something
- * else about the event. A PATCH leaves an absent field alone, but a *present* one is the
- * whole diff — so a body built from an event whose pools were dropped, or whose entries
- * had lost their ids, reads as "remove every pool you have", and takes the draw dealt
- * across them with it. Build the entries from a read (`keepPools`) and the ids come along
- * for free; that is what `eventToFormValues` does, and it is the only path to here. */
+ * ⚠️ **The reservations are not optional here**, even for a surface that is editing
+ * something else about the event. A PATCH leaves an absent field alone, but a *present*
+ * one is the whole diff — so a body built from an event whose reservations were dropped,
+ * or whose entries had lost their ids, reads as "remove every reservation you have", and
+ * takes the draw dealt across their mapped groups with it. Build the entries from a read
+ * (`keepReservations`) and the ids come along for free; that is what `eventToFormValues`
+ * does, and it is the only path to here. */
 export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
-  return { ...eventToApiFields(ev), pools: poolEntriesToApi(ev.pools) }
+  return {
+    ...eventToApiFields(ev),
+    reservations: reservationEntriesToApi(ev.reservations),
+  }
 }
 
 // ----- query keys ----------------------------------------------------------
@@ -1143,7 +1152,7 @@ export function useWithdrawEntry(tournamentId: string) {
 
 /** Cut (or **re-cut**) an event's draw: `POST …/events/{event_id}/draw`. Owner-only.
  * Resolves to the created fixtures, parsed (`./fixtures`) — the same list the next read
- * of the tournament will carry, in the same pool → round → position order.
+ * of the tournament will carry, in the same group → round → position order.
  *
  * A re-cut **replaces the draw wholesale**: the old fixtures are deleted and a fresh set
  * is planned from the event's *current* active entrants, so their ids do not survive.
@@ -1155,8 +1164,8 @@ export function useWithdrawEntry(tournamentId: string) {
  *   only mean the page is looking at somebody else's tournament.
  * - **409** — the draw shows evidence of play; it can no longer be cut or removed.
  * - **422** — this event cannot be planned as it stands: an unsupported draw type (only
- *   round-robin has a generator today), no pools configured, or a field too small for
- *   the pools it has. The server's sentence names what the director must change, which
+ *   round-robin has a generator today), no groups configured, or a field too small for
+ *   the groups it has. The server's sentence names what the director must change, which
  *   is why it is a sentence and not a code.
  *
  * **No global `onError` toast**, by the same convention `useCreateEvent` and
@@ -1196,8 +1205,8 @@ export function useCutDraw(tournamentId: string) {
  * with no body.
  *
  * The way back from a draw the director does not want — the event, its entrants and the
- * rest of the tournament are untouched, only the fixtures go, and the pool set unfreezes
- * so the pools can be edited before cutting again.
+ * rest of the tournament are untouched, only the fixtures go, and the group set unfreezes
+ * so the reservations can be edited before cutting again.
  *
  * **Idempotent**: removing a draw that was never cut is a 204, not a 404 (this is a
  * DELETE, and an event with no draw is already in the state it asks for). The one
@@ -1247,7 +1256,7 @@ export function useUncutDraw(tournamentId: string) {
  * (ADR 20260801, "a placement names a real table, and only that is an invariant") — a
  * **422 on `table_id`**. `null` is not a miss; it is the unplace case, and always passes.
  * Everything else about a placement stays soft — an out-of-window time, a table outside
- * the fixture's pool, a double-booking — saved, not refused (flags derived on read,
+ * the fixture's group's reservation, a double-booking — saved, not refused (flags derived on read,
  * ADR-0790 undisturbed). The other refusal is a **409** on a fixture whose match is
  * `completed`/`voided` — its placement is history. The Schedule tab does not offer the
  * control for a finished match, so the 409 only surfaces on a lost race; the toast

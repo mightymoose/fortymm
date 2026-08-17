@@ -2,8 +2,8 @@ import { WITHDRAWN_LABEL } from './draw'
 import {
   buildEntrants,
   buildEventResults,
-  buildPool,
-  buildPoolStandings,
+  buildReservation,
+  buildGroupStandings,
   buildStandingRow,
   buildStandingsEvent,
   standingsResultsOf,
@@ -19,12 +19,12 @@ const viewOf = (event: TournamentEvent) =>
   eventStandings(event, standingsResultsOf(event))
 
 describe('eventStandings', () => {
-  it('joins each row’s entry id to a username, and titles each pool from the event', () => {
+  it('joins each row’s entry id to a username, and titles each group by its position — never a stored name', () => {
     const view = viewOf(buildStandingsEvent())
 
-    expect(view.pools).toHaveLength(1)
-    expect(view.pools[0].name).toBe('Pool A')
-    expect(view.pools[0].rows.map((r) => r.name)).toEqual([
+    expect(view.groups).toHaveLength(1)
+    expect(view.groups[0].label).toBe('Group A')
+    expect(view.groups[0].rows.map((r) => r.name)).toEqual([
       'player.1',
       'player.4',
       'player.5',
@@ -37,8 +37,8 @@ describe('eventStandings', () => {
     const view = viewOf(
       buildStandingsEvent({
         results: buildEventResults({
-          pools: [
-            buildPoolStandings({
+          groups: [
+            buildGroupStandings({
               rows: [
                 buildStandingRow({ entryId: 'entry-5', rank: 3, gameDifference: -3 }),
                 buildStandingRow({ entryId: 'entry-1', rank: 1, gameDifference: 3 }),
@@ -49,8 +49,8 @@ describe('eventStandings', () => {
       }),
     )
 
-    expect(view.pools[0].rows.map((r) => r.entryId)).toEqual(['entry-5', 'entry-1'])
-    expect(view.pools[0].rows.map((r) => r.gameDifference)).toEqual([-3, 3])
+    expect(view.groups[0].rows.map((r) => r.entryId)).toEqual(['entry-5', 'entry-1'])
+    expect(view.groups[0].rows.map((r) => r.gameDifference)).toEqual([-3, 3])
   })
 
   it('joins the champion to a name', () => {
@@ -60,7 +60,7 @@ describe('eventStandings', () => {
     expect(view.champion).toBe('player.1')
   })
 
-  it('keeps a null champion null — a live or multi-pool event', () => {
+  it('keeps a null champion null — a live or multi-group event', () => {
     const view = viewOf(
       buildStandingsEvent({
         results: buildEventResults({ complete: false, champion: null }),
@@ -78,8 +78,8 @@ describe('eventStandings', () => {
       buildStandingsEvent({
         entrants: buildEntrants(4), // entry-5 is gone
         results: buildEventResults({
-          pools: [
-            buildPoolStandings({
+          groups: [
+            buildGroupStandings({
               rows: [buildStandingRow({ entryId: 'entry-5', rank: 1 })],
             }),
           ],
@@ -87,21 +87,21 @@ describe('eventStandings', () => {
       }),
     )
 
-    expect(view.pools[0].rows[0].name).toBe(WITHDRAWN_LABEL)
+    expect(view.groups[0].rows[0].name).toBe(WITHDRAWN_LABEL)
   })
 
-  it('falls back to the pool id if the event does not list the pool', () => {
-    // A pool the standings name but the event does not carry is a payload the server cannot
-    // send; the fallback keeps the table titled rather than blank if it ever did.
+  it('falls back to the group id if the event does not list the group', () => {
+    // A group the standings name but the event does not carry is a payload the server
+    // cannot send; the fallback keeps the table titled rather than blank if it ever did.
     const view = viewOf(
       buildStandingsEvent({
-        pools: [buildPool({ id: 'p-a', name: 'Pool A' })],
+        reservations: [buildReservation({ id: 'res-a', name: 'Reservation A' })],
         results: buildEventResults({
-          pools: [buildPoolStandings({ poolId: 'p-ghost' })],
+          groups: [buildGroupStandings({ groupId: 'grp-ghost' })],
         }),
       }),
     )
 
-    expect(view.pools[0].name).toBe('p-ghost')
+    expect(view.groups[0].label).toBe('grp-ghost')
   })
 })

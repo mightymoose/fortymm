@@ -27,13 +27,13 @@ function wireRow(overrides: Partial<StandingRowRead> = {}): StandingRowRead {
   }
 }
 
-/** A complete single-pool `standings` results block off the wire. */
+/** A complete single-group `standings` results block off the wire. */
 function wireStandings(
   overrides: Partial<StandingsResultsRead> = {},
 ): StandingsResultsRead {
   return {
     kind: 'standings',
-    pools: [{ pool_id: 'p-a', complete: true, rows: [wireRow()] }],
+    groups: [{ group_id: 'p-a', complete: true, rows: [wireRow()] }],
     complete: true,
     champion: 'entry-1',
     ...overrides,
@@ -70,16 +70,16 @@ function wireFinishes(
 }
 
 /** A complete `standings_then_finishes` results block off the wire (ADR 20260727) — one
- * decided pool and a bracket run to a final. The champion is `entry-2`, who does **not**
- * top the pool: the pool stage only seeds the bracket. */
+ * decided group and a bracket run to a final. The champion is `entry-2`, who does **not**
+ * top the group: the group stage only seeds the bracket. */
 function wireTwoStage(
   overrides: Partial<StandingsThenFinishesResultsRead> = {},
 ): StandingsThenFinishesResultsRead {
   return {
     kind: 'standings_then_finishes',
-    pools: [
+    groups: [
       {
-        pool_id: 'p-a',
+        group_id: 'p-a',
         complete: true,
         rows: [wireRow(), wireRow({ entry_id: 'entry-2', rank: 2 })],
       },
@@ -94,7 +94,7 @@ function wireTwoStage(
   }
 }
 
-/** A wire **swiss** row (`SwissStandingRowRead`): a pool's row plus `buchholz`. Built off
+/** A wire **swiss** row (`SwissStandingRowRead`): a group's row plus `buchholz`. Built off
  * `wireRow` rather than restated, exactly as the schema `.extend()`s rather than
  * re-declaring — so the eight shared columns are written once here too.
  *
@@ -107,7 +107,7 @@ function wireSwissRow(
 }
 
 /** A complete `swiss_standings` results block off the wire (the swiss ADR) — **one list of
- * rows, no pools**, because swiss ranks the whole field in one table, and each row carrying
+ * rows, no groups**, because swiss ranks the whole field in one table, and each row carrying
  * the Buchholz figure that ordered it. */
 function wireSwiss(
   overrides: Partial<SwissStandingsResultsRead> = {},
@@ -128,9 +128,9 @@ describe('parseResults', () => {
   it('maps a wire standings block to the camelCase domain shape', () => {
     expect(parseResults(wireStandings())).toEqual({
       kind: 'standings',
-      pools: [
+      groups: [
         {
-          poolId: 'p-a',
+          groupId: 'p-a',
           complete: true,
           rows: [
             {
@@ -174,9 +174,9 @@ describe('parseResults', () => {
     // that takes the whole page down, not one panel.
     expect(parseResults(wireTwoStage())).toEqual({
       kind: 'standings_then_finishes',
-      pools: [
+      groups: [
         {
-          poolId: 'p-a',
+          groupId: 'p-a',
           complete: true,
           rows: [
             {
@@ -212,7 +212,7 @@ describe('parseResults', () => {
   })
 
   it('keeps a MID-FLIGHT two-stage block’s partial finishes and null champion', () => {
-    // Pools decided, final unplayed: `complete: false`, no champion, and a finishes list
+    // Groups decided, final unplayed: `complete: false`, no champion, and a finishes list
     // that starts at position 3 — the shape `ev-shield` is seeded in. Nothing is padded and
     // nothing is invented.
     const parsed = parseResults(
@@ -236,7 +236,7 @@ describe('parseResults', () => {
   })
 
   it('maps a wire swiss block to the camelCase domain shape', () => {
-    // The fourth arm (the swiss ADR): ONE list of rows, no `pools` key at all, and the tag
+    // The fourth arm (the swiss ADR): ONE list of rows, no `groups` key at all, and the tag
     // preserved so `ResultsPanel` can narrow to it. Without this arm the parse THROWS — and
     // since the tournaments list maps every event through it, that takes the whole page
     // down, not one panel.
@@ -252,9 +252,9 @@ describe('parseResults', () => {
           gamesWon: 4,
           gamesLost: 1,
           gameDifference: 3,
-          // The one column a pool's row does not carry, and the reason the swiss arm has a
+          // The one column a group's row does not carry, and the reason the swiss arm has a
           // row parser of its own. `toEqual` is exact, so a parse that dropped it — or that
-          // let a pool row through unchanged — reds here.
+          // let a group row through unchanged — reds here.
           buchholz: 5,
         },
         {
@@ -276,7 +276,7 @@ describe('parseResults', () => {
     })
   })
 
-  /** A pool's row has no `buchholz`, so a swiss payload carrying pool rows is real server
+  /** A group's row has no `buchholz`, so a swiss payload carrying group rows is real server
    * drift — and it must fail at the boundary rather than reach a table with one column
    * permanently blank. `.extend()` on a Zod object keeps the field **required**, which is
    * what this pins; `.partial()` or an `.optional()` would quietly let it through. */
@@ -338,9 +338,9 @@ describe('parseResults', () => {
     // rank order and expect them back exactly as sent.
     const parsed = parseResults(
       wireStandings({
-        pools: [
+        groups: [
           {
-            pool_id: 'p-a',
+            group_id: 'p-a',
             complete: true,
             rows: [
               wireRow({ entry_id: 'entry-5', rank: 3 }),
@@ -353,7 +353,7 @@ describe('parseResults', () => {
 
     expect(
       parsed?.kind === 'standings'
-        ? parsed.pools[0].rows.map((r) => r.entryId)
+        ? parsed.groups[0].rows.map((r) => r.entryId)
         : null,
     ).toEqual(['entry-5', 'entry-1'])
   })
@@ -400,7 +400,7 @@ describe('parseResults', () => {
     ).toThrow()
     // …and a payload with NO tag at all.
     expect(() =>
-      parseResults({ pools: [], complete: true, champion: null }),
+      parseResults({ groups: [], complete: true, champion: null }),
     ).toThrow()
   })
 
@@ -413,7 +413,7 @@ describe('parseResults', () => {
     // reach the render path as an unrenderable blob instead of failing loudly here.
     //
     // The tags are deliberately a hair away from the real ones: a parser matching on a
-    // prefix, or narrowing to "the shape has pools and finishes", waves these through.
+    // prefix, or narrowing to "the shape has groups and finishes", waves these through.
     for (const kind of [
       'standings_then_finishes_v2',
       'finishes_then_standings',
@@ -427,23 +427,23 @@ describe('parseResults', () => {
   it('rejects a two-stage block missing a whole stage', () => {
     // Both blocks are required — a two-stage arm that accepted a `finishes`-less payload
     // would hand the panel an undefined stage to render.
-    const withoutKey = (key: 'pools' | 'finishes') => {
+    const withoutKey = (key: 'groups' | 'finishes') => {
       const block: Record<string, unknown> = { ...wireTwoStage() }
       delete block[key]
       return block
     }
 
     expect(() => parseResults(withoutKey('finishes'))).toThrow()
-    expect(() => parseResults(withoutKey('pools'))).toThrow()
+    expect(() => parseResults(withoutKey('groups'))).toThrow()
   })
 
   it('rejects a malformed standings row rather than letting a NaN leak inward', () => {
     expect(() =>
       parseResults(
         wireStandings({
-          pools: [
+          groups: [
             {
-              pool_id: 'p-a',
+              group_id: 'p-a',
               complete: true,
               // `wins` as a string is exactly the shape a cast would wave through.
               rows: [{ ...wireRow(), wins: 'two' } as unknown as StandingRowRead],

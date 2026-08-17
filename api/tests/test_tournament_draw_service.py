@@ -41,21 +41,21 @@ from app.tournament_errors import (
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
 
-# Two pools, so the snake has somewhere to snake to and a fixture's ``pool_id`` is a
-# ref that resolves against the right one — the same shape ``test_tournaments.py``'s
+# Two groups, so the snake has somewhere to snake to and a fixture's ``group_id`` is
+# a ref that resolves against the right one — the same shape ``test_tournaments.py``'s
 # draw tests cut across.
-POOL_A: dict[str, object] = {
-    "name": "Pool A",
+RESERVATION_A: dict[str, object] = {
+    "name": "Reservation A",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
     "table_ids": ["t1"],
 }
-POOL_B: dict[str, object] = {
-    "name": "Pool B",
+RESERVATION_B: dict[str, object] = {
+    "name": "Reservation B",
     "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
     "table_ids": ["t2"],
 }
@@ -97,7 +97,7 @@ async def _make_event(
     *,
     format: EventFormat = EventFormat.singles,
     draw_type: DrawType = DrawType.round_robin,
-    pools: list[dict[str, object]] | None = None,
+    groups: list[dict[str, object]] | None = None,
 ) -> TournamentEvent:
     stages = mint_stages(draw_type)
     event = TournamentEvent(
@@ -113,8 +113,10 @@ async def _make_event(
         predicates=[],
         stages=stages,
     )
-    stages[0].groups = event_pools(
-        [POOL_A, POOL_B] if pools is None else pools, event=event, tournament=tournament
+    stages[0].groups = event_groups(
+        [RESERVATION_A, RESERVATION_B] if groups is None else groups,
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.commit()
@@ -126,7 +128,7 @@ async def _enter_field(
     db: AsyncSession, event: TournamentEvent, count: int, *, prefix: str
 ) -> list[TournamentEntry]:
     """``count`` active, seeded (1..N) entrants — enough for the round-robin snake to
-    deal a clean draw across the two pools."""
+    deal a clean draw across the two groups."""
     entries = [
         TournamentEntry(
             event_id=event.id,
@@ -178,7 +180,7 @@ async def test_owner_cut_creates_and_persists_fixtures(
         db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
     )
 
-    # Four singles over two pools: 2 apiece, one round-robin fixture in each pool.
+    # Four singles over two groups: 2 apiece, one round-robin fixture in each group.
     assert len(result) == 2
     rows = await _fixture_rows(db_session, event_id)
     # The verb answers with the persisted draw — same rows, same ids.
@@ -193,7 +195,7 @@ async def test_owner_cut_creates_and_persists_fixtures(
     )
 
 
-# ----- the owner cuts a single-elim event: an un-pooled bracket is persisted -
+# ----- the owner cuts a single-elim event: an ungrouped bracket is persisted -
 
 
 async def test_owner_cut_of_a_single_elim_event_persists_the_bracket(
@@ -201,14 +203,14 @@ async def test_owner_cut_of_a_single_elim_event_persists_the_bracket(
     default_league: League,
 ) -> None:
     """The second implemented draw type (ADR-0785): cutting a single-elim event no
-    longer raises ``UnsupportedDrawType`` — it persists a seeded bracket. Un-pooled, so
-    every fixture's ``pool_id`` is ``NULL``, and unlike a round-robin cut the later
+    longer raises ``UnsupportedDrawType`` — it persists a seeded bracket. Ungrouped, so
+    every fixture's ``group_id`` is ``NULL``, and unlike a round-robin cut the later
     rounds are TBD (``NULL`` sides), filled by ``advance()`` as results land."""
     owner = await make_user(db_session, "owner-se-cut")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    # A single-elim event has no pools; the strategy ignores ``pool_ids`` regardless.
+    # A single-elim event has no groups; the strategy ignores ``group_ids`` regardless.
     event = await _make_event(
-        db_session, tournament, draw_type=DrawType.single_elim, pools=[]
+        db_session, tournament, draw_type=DrawType.single_elim, groups=[]
     )
     tournament_id, event_id = tournament.id, event.id
     await _enter_field(db_session, event, 5, prefix="se")
@@ -223,8 +225,8 @@ async def test_owner_cut_of_a_single_elim_event_persists_the_bracket(
     assert len(result) == 4
     rows = await _fixture_rows(db_session, event_id)
     assert {f.id for f in result} == {r.id for r in rows}
-    # Un-pooled, one fixture in the final round, and nothing played yet.
-    assert all(r.pool_id is None for r in rows)
+    # Ungrouped, one fixture in the final round, and nothing played yet.
+    assert all(r.group_id is None for r in rows)
     assert sorted(r.round for r in rows) == [1, 2, 2, 3]
     assert all(r.winner_entry_id is None and r.match_id is None for r in rows)
     # Byes are absence and later rounds are TBD: unlike round-robin, not every fixture

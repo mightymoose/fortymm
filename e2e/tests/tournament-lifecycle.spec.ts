@@ -19,7 +19,7 @@ const EVENT_NAME = 'Open Singles'
  * orchestration), against the REAL composed stack — no stubs.
  *
  * A director creates a tournament with one singles, round-robin, **unrated**,
- * best-of-1 event drawn across a single pool → publishes → enters two players →
+ * best-of-1 event drawn across a single group → publishes → enters two players →
  * cuts the draw → goes live (materializing the one fixture into a *scheduled*,
  * born-`pending` match — "Not started", #1073) → CALLS it onto the seeded table
  * with a full manual placement (which flips it `pending → in_progress` and makes
@@ -35,7 +35,7 @@ const EVENT_NAME = 'Open Singles'
  *
  * ## Seed vs UI split
  *
- * The inert scaffolding — the tournament, its event, its pool, and the second
+ * The inert scaffolding — the tournament, its event, its reservation, and the second
  * entrant (director-entry, which has no web UI) — is provisioned over the API
  * (`support/tournament-api.ts`). The load-bearing lifecycle steps are driven
  * through the browser: publishing, the director's own Enter, cutting the draw,
@@ -82,7 +82,7 @@ test.describe('Tournament — round-robin lifecycle', () => {
     // The inert scaffolding, over the API, as the director (so it comes back
     // `can_edit: true` and the browser sees the owner controls).
     const name = `RR ${faker.string.alphanumeric(8)}`
-    const { tournamentId, eventId, poolId, tables } = await seedTournament(
+    const { tournamentId, eventId, groupId, tables } = await seedTournament(
       director,
       name,
     )
@@ -111,7 +111,7 @@ test.describe('Tournament — round-robin lifecycle', () => {
     await expect(detail.entrantsList(EVENT_NAME)).toContainText(director.username)
     await expect(detail.entrantsList(EVENT_NAME)).toContainText(opponent.username)
 
-    // ----- cut the draw: 2 entrants in 1 pool = exactly 1 fixture -----------
+    // ----- cut the draw: 2 entrants in 1 group = exactly 1 fixture -----------
     await detail.generateDrawButton(EVENT_NAME).click()
     // The one fixture pairs the two entrants. It is not yet a match — no link.
     await expect(detail.drawPanel(eventId)).toContainText(director.username)
@@ -151,7 +151,7 @@ test.describe('Tournament — round-robin lifecycle', () => {
       throw new Error('the materialized fixture carries no match id')
     }
     const score = await ScoreEntryPage.navigateToNew(page, matchId, 1)
-    // The director wins 11–5, so they are the sole pool winner → champion. Inputs
+    // The director wins 11–5, so they are the sole group winner → champion. Inputs
     // are labelled by username, so this is correct whichever side each was drawn on.
     await score.scoreInput(director.username).fill('11')
     await score.scoreInput(opponent.username).fill('5')
@@ -168,15 +168,16 @@ test.describe('Tournament — round-robin lifecycle', () => {
     // ----- the standings crown the champion ---------------------------------
     const played = await TournamentDetailPage.navigateTo(page, tournamentId)
     // The champion callout renders ONLY for the rank-#1 leader of a complete,
-    // single-pool round-robin, so its presence with the director's name is the
+    // single-group round-robin, so its presence with the director's name is the
     // "winner ranked #1 as champion" fact itself.
     await expect(played.standingsChampion(eventId)).toBeVisible()
     await expect(played.standingsChampion(eventId)).toContainText(director.username)
-    // And the pool table shows both entrants, with the director in the top row.
-    // `poolId` is nullable on the seed — a pool-less seed (`pools: []`) has no first
-    // pool — but this seed took the default single pool, so it is a string here.
-    expect(poolId, 'the default seed reserves one pool').not.toBeNull()
-    const standings = played.poolStandings(poolId!)
+    // And the group table shows both entrants, with the director in the top row.
+    // `groupId` is nullable on the seed — a reservation-less seed (`reservations: []`,
+    // which mints no groups) has no first group — but this seed took the default single
+    // reservation, so it is a string here.
+    expect(groupId, 'the default seed reserves one group').not.toBeNull()
+    const standings = played.groupStandings(groupId!)
     await expect(standings).toContainText(director.username)
     await expect(standings).toContainText(opponent.username)
     // Row 0 is the header; row 1 is rank 1 — the director, the champion.

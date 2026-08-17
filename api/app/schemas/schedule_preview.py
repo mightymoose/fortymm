@@ -16,7 +16,7 @@ The infeasibility reasons **reuse** the resolved-reason machinery
 (:data:`app.schemas.schedule_solve.ResolvedReason`): a preview is the *same*
 CP-SAT engine as a real solve, so an infeasible preview explains itself with the
 exact same structured, discriminated-on-``kind`` reasons a real infeasible solve
-does — humanized once (pool id → name + ``HH:MM``, fixture id → ``best_of``) and
+does — humanized once (reservation id → name + ``HH:MM``, fixture id → ``best_of``) and
 never re-derived downstream.
 
 These models **do** reach ``openapi.json``: :class:`PreviewEnqueued` is the enqueue
@@ -78,9 +78,9 @@ class PreviewEventBreakdown(BaseModel):
 
     ``matches`` is the drawn pairing count (stable regardless of verdict — the draw
     is instant and always completes); ``byes`` is the round-robin sit-outs the
-    field incurs (a pool of an odd number of players gives one bye per round —
-    every player byes exactly once — so an odd pool of ``P`` contributes ``P``,
-    an even pool ``0``). ``duration_min`` is the event's own makespan span (last
+    field incurs (a group of an odd number of players gives one bye per round —
+    every player byes exactly once — so an odd group of ``P`` contributes ``P``,
+    an even group ``0``). ``duration_min`` is the event's own makespan span (last
     placement end minus first placement start, in minutes) — ``None`` when the
     solve produced no plan (infeasible / unknown), where there is nothing to
     span."""
@@ -146,17 +146,20 @@ class PreviewFixture(BaseModel):
     """One drawn synthetic pairing, known the instant the draw runs (before the
     solve returns) so a caller can render the grid skeleton immediately. The
     synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
-    sides are always known (the pool stage of a round-robin draw).
+    sides are always known (the group stage of a round-robin draw).
 
-    ``pool_id`` is the namespaced ``f"{event_id}:{pool_id}"`` composite the solver
-    keys a pool by (unique across events); ``pool_name`` is the human label from the
-    event's pool config (e.g. ``"Pool A"``) so the grid can head a column with a name
-    a director recognizes rather than the raw composite."""
+    ``reservation_id`` is the namespaced ``f"{event_id}:{reservation_id}"``
+    composite the solver keys a reservation by (unique across events) —
+    scheduling is reservation-scoped, so this is the reservation the fixture's
+    group is confined to, not the group's own id. ``reservation_name`` is the
+    human label from the event's reservation config (e.g. ``"Reservation A"``)
+    so the grid can head a column with a name a director recognizes rather than
+    the raw composite."""
 
     fixture_id: str
     event_id: str
-    pool_id: str
-    pool_name: str
+    reservation_id: str
+    reservation_name: str
     player_a_id: str
     player_b_id: str
 

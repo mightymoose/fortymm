@@ -37,19 +37,21 @@ const scoped = (container: Container) => ({
   getPlayerLimitInput() {
     return container.getByLabelText(/Player limit/)
   },
-  /** A pool's name box (Table pools). Singular: the seeded event has one pool, and a
-   * test that wants two says so and reads them off `getPoolNameInputs()`. */
-  getPoolNameInput() {
-    return container.getByLabelText('Pool name')
+  /** A reservation's name box (Reservations). Singular: the seeded event has one
+   * reservation, and a test that wants two says so and reads them off
+   * `getReservationNameInputs()`. */
+  getReservationNameInput() {
+    return container.getByLabelText('Reservation name')
   },
-  getPoolNameInputs() {
-    return container.queryAllByLabelText('Pool name')
+  getReservationNameInputs() {
+    return container.queryAllByLabelText('Reservation name')
   },
-  /** The red messages under the pool name boxes, in card order — the Table pools
-   * counterpart of `queryFieldError` on Basics and `getRuleErrors()` on Eligibility. */
-  getPoolNameErrors(): (string | null)[] {
+  /** The red messages under the reservation name boxes, in card order — the
+   * Reservations counterpart of `queryFieldError` on Basics and `getRuleErrors()` on
+   * Eligibility. */
+  getReservationNameErrors(): (string | null)[] {
     return container
-      .queryAllByTestId('pool-name-error')
+      .queryAllByTestId('reservation-name-error')
       .map((node: HTMLElement) => node.textContent)
   },
   /** A red message under a Basics field (the `Field` row's error `hint`) — the
@@ -98,12 +100,12 @@ const scoped = (container: Container) => ({
   /** **K** — the qualifier-count box on Basics, which exists only while the draft's draw
    * type is `rr-then-ko` (ADR 20260727). */
   getQualifiersInput() {
-    return container.getByLabelText(/Qualifiers per pool/)
+    return container.getByLabelText(/Qualifiers per group/)
   },
   /** …and its `query` twin, for the claim that the row is not on screen at all for a
    * draw type with no knockout stage. */
   queryQualifiersInput() {
-    return container.queryByLabelText(/Qualifiers per pool/)
+    return container.queryByLabelText(/Qualifiers per group/)
   },
   /** The draw-type select on Basics. */
   getDrawTypeTrigger() {

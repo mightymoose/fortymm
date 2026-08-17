@@ -201,10 +201,11 @@ class Tournament(Base):
 
 class TournamentEvent(Base):
     """An event (a draw) within a tournament — its own format, draw type, entry
-    rules, schedule slot, and pool layout. The value-objects (``slot``,
+    rules, schedule slot, and groups/reservations. The value-objects (``slot``,
     ``match_settings``, ``predicates``) are typed JSONB decoded to Pydantic models at
-    the API boundary; the pool layout is **not** — it is ``pools``, a real child table
-    (ADR 20260801 "a pool belongs to its event")."""
+    the API boundary; the groups and reservations are **not** — they are real child
+    tables, ``groups`` and ``reservations`` below (ADR 20260801, on what belongs to an
+    event rather than to its draw settings)."""
 
     __tablename__ = "tournament_events"
     __table_args__ = (
@@ -299,11 +300,12 @@ class TournamentEvent(Base):
     predicates: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    # There is deliberately no ``pools`` JSONB column. An event's pools were a NOT NULL
-    # JSONB list of ``{id, name, slot, table_ids}`` value-objects keyed by
-    # client-supplied strings; they are the ``pools`` relationship below now, so a
-    # fixture can foreign-key the pool it names — and name one of its OWN event's pools
-    # (ADR 20260801 "a pool belongs to its event").
+    # There is deliberately no JSONB column for either. An event's groups and their
+    # reservations were once a NOT NULL JSONB list of ``{id, name, slot, table_ids}``
+    # value-objects keyed by client-supplied strings; they are the ``groups`` and
+    # ``reservations`` relationships below now, so a fixture can foreign-key the group
+    # it names — and name one of its OWN event's groups (ADR 20260801, on what belongs
+    # to an event rather than to its draw settings).
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -362,19 +364,20 @@ class TournamentEvent(Base):
     # The event's GROUPS, in the director's own order — which is what
     # ``TournamentEventStageGroup.position`` carries, and what the snake seeds against.
     #
-    # This relationship was called ``pools`` until the pool row split in two. A group is
-    # the half a fixture names; the tables and the window are a reservation, which hangs
-    # off this event directly (``reservations`` below). Neither collection is the wire's
-    # ``pools[]`` array on its own — that is the two projected back together, by
-    # :func:`app.tournament_pools.pool_read`, through each group's own ``reservation``.
+    # This relationship carried one combined name until a single wire-level slot split
+    # into a group row and a reservation row. A group is the half a fixture names; the
+    # tables and the window are a reservation, which hangs off this event directly
+    # (``reservations`` below). The wire now serves the two as separate arrays —
+    # :func:`app.tournament_reservations.group_read` projects a group,
+    # :func:`~app.tournament_reservations.reservation_read` its mapped reservation.
     #
     # VIEWONLY, reachable through the event's stages, not the real parent-child
     # relationship: ADR 20260815's "Sequencing with #1338" consequence parents a group
     # on its stage (always stage 0 — decision 3), because
     # ``tournament_fixtures.event_id`` is dropped in the same ADR and a group must share
     # a column with the fixtures whose composite FK targets it. Writes go through
-    # ``app.tournament_pools``, which resolves the event's first stage and assigns
-    # ``stage.groups`` (the real relationship, declared on
+    # ``app.tournament_reservations``, which resolves the event's first stage and
+    # assigns ``stage.groups`` (the real relationship, declared on
     # :class:`~app.models.tournament_event_stage.TournamentEventStage`) — never this
     # one, which SQLAlchemy refuses to flush from.
     # ``secondary="tournament_event_stages"`` is an unusual use of that argument (the
@@ -398,20 +401,20 @@ class TournamentEvent(Base):
         order_by="TournamentEventStageGroup.position",
     )
 
-    # The event's RESERVATIONS — the tables-and-window half of what a pool row used to
-    # be, parented here rather than on a stage (see
+    # The event's RESERVATIONS — the tables-and-window half of what one wire-level
+    # slot used to be, parented here rather than on a stage (see
     # :class:`~app.models.tournament_event_reservation.TournamentEventReservation` for
     # why: nothing names a reservation through a fixture's composite key, and an
     # event-parented one is what lets an rr-then-ko draw's two stages read one set).
     #
     # A REAL relationship, not a viewonly one, unlike ``groups`` above — this is the
-    # collection ``app.tournament_pools`` writes, and ``delete-orphan`` is what removes
-    # a reservation when the pool entry that owned it leaves the payload. The 1:1 with
+    # collection ``app.tournament_reservations`` writes, and ``delete-orphan`` is what
+    # removes a reservation when its own entry leaves the payload. The 1:1 with
     # ``groups`` is maintained by that module on every write path, not by anything here.
     #
     # Deliberately **NOT eager**, unlike almost every other collection on this model,
-    # and the reason is a statement count. No reader goes through here: a projected pool
-    # reaches its reservation from its own group (``TournamentEventStageGroup
+    # and the reason is a statement count. No reader goes through here: a caller
+    # reaches a group's reservation from the group itself (``TournamentEventStageGroup
     # .reservation``), so making this eager would load every reservation a SECOND time —
     # and chain a second load of their ``tables`` off it — on every page that touches an
     # event. That is two statements per page bought for nothing, on the tournament list,
@@ -419,11 +422,12 @@ class TournamentEvent(Base):
     # counts.
     #
     # The one writer loads it explicitly instead, with ``await
-    # event.awaitable_attrs.reservations`` (``app.tournament_pools.apply_event_pools``)
-    # — the async-safe way to populate a lazy collection, and the seam that keeps this
-    # cost on the write path where it belongs. Assigning to an unloaded
-    # ``delete-orphan`` collection would otherwise emit a lazy load mid-assignment,
-    # which under async raises ``MissingGreenlet`` rather than querying.
+    # event.awaitable_attrs.reservations``
+    # (``app.tournament_reservations.apply_event_reservations``) — the async-safe way to
+    # populate a lazy collection, and the seam that keeps this cost on the write path
+    # where it belongs. Assigning to an unloaded ``delete-orphan`` collection would
+    # otherwise emit a lazy load mid-assignment, which under async raises
+    # ``MissingGreenlet`` rather than querying.
     reservations: Mapped[list["TournamentEventReservation"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
@@ -438,13 +442,13 @@ class TournamentEvent(Base):
     # construction time (``stages=mint_stages(...)``), in the same transaction as the
     # event itself.
     #
-    # ``lazy="selectin"``, matching ``pools`` above and for the same reason: async
+    # ``lazy="selectin"``, matching ``groups`` above and for the same reason: async
     # SQLAlchemy raises rather than emitting a lazy load, so every reader of an event's
     # stages — the tournament-detail/list serializers today, and whatever reads them
     # next — would otherwise have to remember its own loader option. ``selectin`` and
     # not ``joined`` because this is a one-to-many, batching over the whole result set
     # in ONE extra statement however many events a page holds (the same reasoning
-    # ``pools`` gives). ``app.tournament_event_stages`` still reaches these rows
+    # ``groups`` gives). ``app.tournament_event_stages`` still reaches these rows
     # through explicit queries of its own on the mint/re-mint path — it never reads
     # this attribute — but every OTHER reader (the serializer chief among them) now
     # gets a populated collection for free.
@@ -466,10 +470,10 @@ class TournamentEvent(Base):
     # stage"; ``tournament_fixtures.event_id`` is dropped outright) —
     # :attr:`~app.models.tournament_event_stage.TournamentEventStage.fixtures` is the
     # real relationship, one stage at a time; an rr-then-ko event's draw spans BOTH of
-    # its stages, unlike ``pools`` above, because both the pool stage and the knockout
-    # stage hold fixtures. This model carried a VIEWONLY shim spanning both stages,
-    # ordered pool → round → position, for the one test that walked it directly; that
-    # test now walks a stage's own ``fixtures`` instead (the same order, declared on
-    # that relationship). Every production read of a draw goes through the batched
-    # ``app.tournament_queries.fixtures_by_event`` loader, never through either
+    # its stages, unlike ``groups`` above, because both the group stage and the
+    # knockout stage hold fixtures. This model carried a VIEWONLY shim spanning both
+    # stages, ordered group → round → position, for the one test that walked it
+    # directly; that test now walks a stage's own ``fixtures`` instead (the same order,
+    # declared on that relationship). Every production read of a draw goes through the
+    # batched ``app.tournament_queries.fixtures_by_event`` loader, never through either
     # relationship.

@@ -1,5 +1,5 @@
 import type { DrawRound } from '../../../data/draw'
-// FixtureLine is shared with RoundList (the pooled renderer); its owner is the
+// FixtureLine is shared with RoundList (the grouped renderer); its owner is the
 // `round-list/` subtree today. Reached across for the sides + match-link rendering rather
 // than duplicating the three-way `FixtureSide` switch. If a third importer appears it
 // should float up to `draw-panel/` per the supremum rule — left in place here to keep this
@@ -7,9 +7,9 @@ import type { DrawRound } from '../../../data/draw'
 import { FixtureLine } from './round-list/fixture-line'
 
 export interface BracketProps {
-  /** The event's un-pooled fixtures, already grouped and ordered into rounds by
+  /** The event's ungrouped fixtures, already grouped and ordered into rounds by
    * `drawState` (`../../../data/draw`) — round 1 first, the final last. A single-elim
-   * draw's whole bracket; the round-robin path never reaches here (it renders pools). */
+   * draw's whole bracket; the round-robin path never reaches here (it renders groups). */
   rounds: DrawRound[]
 }
 
@@ -36,11 +36,11 @@ function roundLabel(round: number, finalRound: number): string {
 }
 
 /**
- * A single-elimination draw's un-pooled fixtures, as a **columnar bracket** (ADR-0785):
+ * A single-elimination draw's ungrouped fixtures, as a **columnar bracket** (ADR-0785):
  * one column per round laid out left-to-right (Round 1 … Final), each fixture a card
  * naming both sides.
  *
- * This replaces the flat `RoundList` placeholder for `state.unpooled` — pools still render
+ * This replaces the flat `RoundList` placeholder for `state.ungrouped` — groups still render
  * through `RoundList`, a bracket does not. What it renders is entirely `drawState`'s read
  * model; it derives nothing of its own:
  *
@@ -57,7 +57,7 @@ function roundLabel(round: number, finalRound: number): string {
  * - **It renders pre-live too.** A cut-but-not-yet-live draw shows the seeded round-1
  *   pairings and its downstream `TBD` cards for the director to review before go-live;
  *   once live, each card that has materialized links to its match and shows its status
- *   (all of that is `FixtureLine`, reused unchanged from the pooled renderer).
+ *   (all of that is `FixtureLine`, reused unchanged from the grouped renderer).
  *
  * Each round is its own `<ul>` so a fixture stays an `<li>` a screen reader can count, and
  * each list is named by its round (`"Semifinals fixtures in the bracket"`) so the rotor
