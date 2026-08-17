@@ -161,13 +161,12 @@ export function placeUnplacedFixtures<E extends SimEvent>(
 ): { events: E[]; placed: number } {
   let placed = 0
   const next = events.map((event) => {
-    // The two-hop lookup this event's own groups derive (`groupsFor`): a fixture names a
-    // GROUP, and a group's tables/window are its mapped RESERVATION's.
+    // The two-hop lookup this event's own groups derive (`groupIdFor`): a fixture names
+    // a GROUP, and a group's tables/window are its mapped RESERVATION's. Keyed straight
+    // off each reservation's own derived group id — the loop already holds the
+    // reservation, so there is nothing to re-find.
     const reservationByGroupId = new Map(
-      groupsFor(event.reservations).map((group) => [
-        group.id,
-        event.reservations.find((r) => r.id === group.reservation_id)!,
-      ]),
+      event.reservations.map((r) => [groupIdFor(r.id), r]),
     )
     const perReservation = new Map<string, number>()
     const fixtures = event.fixtures.map((fixture) => {
