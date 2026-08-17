@@ -27,7 +27,9 @@
 import type { MatchStatus } from '@/api/matches'
 
 import {
+  buildDrawIndex,
   fixtureReservation,
+  type DrawIndex,
   type FixtureMatch,
   type FixtureSide,
   TBD_LABEL,
@@ -169,6 +171,9 @@ function toScheduleMatch(
   fixture: Fixture,
   event: TournamentEvent,
   byId: Map<string, Entrant>,
+  /** The event's groups/reservations, indexed once per event (`buildDrawIndex`) rather
+   * than re-scanned per fixture. */
+  drawIndex: DrawIndex,
   /** Every table the TOURNAMENT reserves — the event-wide reservation an un-grouped
    * fixture is scheduled against (ADR 20260807). The tournament's own `tableIds`, not
    * the catalogue passed to `buildSchedule`: the catalogue is what a placement is
@@ -176,7 +181,7 @@ function toScheduleMatch(
   tournamentTableIds: string[],
 ): ScheduleMatch {
   // The two-hop lookup (ticket #1369): fixture → group → the group's mapped reservation.
-  const { reservation } = fixtureReservation(event, fixture)
+  const { reservation } = fixtureReservation(drawIndex, fixture)
   return {
     fixtureId: fixture.id,
     eventId: event.id,
@@ -239,8 +244,9 @@ export function buildSchedule(
   const matches: ScheduleMatch[] = []
   for (const event of tournament.events) {
     const byId = new Map(event.entrants.map((e) => [e.id, e]))
+    const drawIndex = buildDrawIndex(event)
     for (const fixture of event.fixtures) {
-      matches.push(toScheduleMatch(fixture, event, byId, tournament.tableIds))
+      matches.push(toScheduleMatch(fixture, event, byId, drawIndex, tournament.tableIds))
     }
   }
 

@@ -18,7 +18,14 @@
 
 import type { MatchStatus } from '@/api/matches'
 
-import { fixtureReservation, groupLabel, TBD_LABEL, WITHDRAWN_LABEL } from './draw'
+import {
+  buildDrawIndex,
+  fixtureReservation,
+  groupLabel,
+  TBD_LABEL,
+  WITHDRAWN_LABEL,
+  type DrawIndex,
+} from './draw'
 import type {
   Entrant,
   Fixture,
@@ -367,7 +374,14 @@ export interface TimelinePlayerRow {
 export interface UnscheduledFixture {
   fixtureId: string
   eventName: string
-  groupLabel: string | null
+  /** The rail's secondary line, venue-neutral on purpose: the **real** schedule fills it
+   * with the fixture's derived `groupLabel` (`Group A`, `./draw`, ticket #1369 — a group
+   * carries no name of its own), but the **preview** grid reuses this same rail before a
+   * draw has minted any group at all (`schedule-preview-modal.tsx`'s `fixtureToRailItem`)
+   * and fills it with the reservation's own director-typed name instead — the closest
+   * thing a preview knows. Named `contextLabel`, not `groupLabel`, so the field is honest
+   * about carrying either. */
+  contextLabel: string | null
   label: string
   /** The half-placement's table label, when it has a table but no time. */
   tableLabel: string | null
@@ -415,6 +429,9 @@ interface EventFixture {
   fixture: Fixture
   event: TournamentEvent
   entrantById: Map<string, Entrant>
+  /** The event's groups/reservations, indexed once per event (`buildDrawIndex`) rather
+   * than re-scanned per fixture — every fixture of the event shares it. */
+  drawIndex: DrawIndex
 }
 
 /**
@@ -434,8 +451,9 @@ export function buildTimelineBoard(
   const all: EventFixture[] = []
   for (const event of tournament.events) {
     const entrantById = new Map(event.entrants.map((e) => [e.id, e]))
+    const drawIndex = buildDrawIndex(event)
     for (const fixture of event.fixtures) {
-      all.push({ fixture, event, entrantById })
+      all.push({ fixture, event, entrantById, drawIndex })
     }
   }
 
@@ -446,7 +464,7 @@ export function buildTimelineBoard(
   // and cannot join an instant axis without timezone math, so they no longer size
   // the board — it is only drawn once at least one bar exists (`hasBars`).
   const venueDateOf = (ef: EventFixture): string => {
-    const { reservation } = fixtureReservation(ef.event, ef.fixture)
+    const { reservation } = fixtureReservation(ef.drawIndex, ef.fixture)
     return (reservation?.slot ?? ef.event.slot).date
   }
 
@@ -478,7 +496,7 @@ export function buildTimelineBoard(
 
   // ---- bars -------------------------------------------------------------------
   const barByFixture = new Map<string, TimelineBarData>()
-  for (const { fixture, event, entrantById } of all) {
+  for (const { fixture, event, entrantById, drawIndex } of all) {
     if (fixture.tableId === null || fixture.scheduledStart === null) continue
     const startInstant = instantMs(fixture.scheduledStart)
     if (!Number.isFinite(startInstant)) continue
@@ -504,7 +522,7 @@ export function buildTimelineBoard(
       }
     }
     const endMin = startMin + durationMin
-    const { group, reservation } = fixtureReservation(event, fixture)
+    const { group, reservation } = fixtureReservation(drawIndex, fixture)
     const a = sideOf(fixture.entryAId, entrantById)
     const b = sideOf(fixture.entryBId, entrantById)
     // The end reads in the bar's OWN venue frame: a decided fixture's real
@@ -600,13 +618,13 @@ export function buildTimelineBoard(
 
   // ---- the unscheduled rail ----------------------------------------------------
   const unscheduled: UnscheduledFixture[] = []
-  for (const { fixture, event, entrantById } of all) {
+  for (const { fixture, event, entrantById, drawIndex } of all) {
     if (fixture.tableId !== null && fixture.scheduledStart !== null) continue
-    const { group } = fixtureReservation(event, fixture)
+    const { group } = fixtureReservation(drawIndex, fixture)
     unscheduled.push({
       fixtureId: fixture.id,
       eventName: event.name,
-      groupLabel: group !== null ? groupLabel(group) : null,
+      contextLabel: group !== null ? groupLabel(group) : null,
       label: `${sideOf(fixture.entryAId, entrantById)} vs ${sideOf(fixture.entryBId, entrantById)}`,
       tableLabel:
         fixture.tableId !== null

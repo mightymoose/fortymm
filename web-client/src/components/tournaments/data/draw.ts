@@ -47,9 +47,35 @@ import type {
 } from './types'
 
 /**
+ * An event's groups and reservations, indexed by id — built **once per event**
+ * (`buildDrawIndex`) rather than re-scanned per fixture. `fixtureReservation` does the
+ * two-hop lookup ticket #1369 introduced (fixture → `groupId` → that group's
+ * `reservationId` → the reservation) many times per event — once per fixture, in every
+ * caller — so a linear `.find` on each hop turns an O(1) lookup into an O(fixtures ×
+ * groups) scan for no reason: the event's groups and reservations don't change between
+ * fixtures.
+ */
+export interface DrawIndex {
+  groupById: Map<string, Group>
+  reservationById: Map<string, Reservation>
+}
+
+/** Build a `DrawIndex` for one event. Call this once per event, outside the per-fixture
+ * loop — every `fixtureReservation` call for that event's fixtures shares it. */
+export function buildDrawIndex(
+  event: Pick<TournamentEvent, 'groups' | 'reservations'>,
+): DrawIndex {
+  return {
+    groupById: new Map(event.groups.map((g) => [g.id, g])),
+    reservationById: new Map(event.reservations.map((r) => [r.id, r])),
+  }
+}
+
+/**
  * Resolve one fixture's **group and reservation** via the two-hop lookup ticket #1369
  * introduced: fixture → `groupId` → that group's `reservationId` → the reservation in
- * the event's `reservations`.
+ * the event's `reservations`, both hops through the event's `DrawIndex`
+ * (`buildDrawIndex`).
  *
  * Both hops tolerate an unresolved id rather than throwing: a fixture whose `groupId`
  * names no entry of `event.groups` is a domain-legal state (a knockout fixture simply
@@ -57,21 +83,16 @@ import type {
  * A group's `reservationId` is guaranteed to resolve by the API's own NOT NULL
  * constraint (`GroupRead`, `schema.d.ts`) — parsed and rejected at the boundary if it
  * ever didn't (`./api`) — but this lookup stays tolerant of both hops for one reason:
- * it is a plain JS `Map`/`find` over already-parsed data, and the one thing worth
+ * it is a plain JS `Map` lookup over already-parsed data, and the one thing worth
  * asserting once is the wire's own guarantee, at the boundary where it is checked.
  */
 export function fixtureReservation(
-  event: TournamentEvent,
+  index: DrawIndex,
   fixture: Pick<Fixture, 'groupId'>,
 ): { group: Group | null; reservation: Reservation | null } {
-  const group =
-    fixture.groupId !== null
-      ? (event.groups.find((g) => g.id === fixture.groupId) ?? null)
-      : null
+  const group = fixture.groupId !== null ? (index.groupById.get(fixture.groupId) ?? null) : null
   const reservation =
-    group !== null
-      ? (event.reservations.find((r) => r.id === group.reservationId) ?? null)
-      : null
+    group !== null ? (index.reservationById.get(group.reservationId) ?? null) : null
   return { group, reservation }
 }
 
