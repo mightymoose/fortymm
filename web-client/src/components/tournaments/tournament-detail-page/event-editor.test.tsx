@@ -825,7 +825,7 @@ describe('EventEditor', () => {
         "This event's draw is already cut, so its set of groups is frozen: “Group B” " +
         'already has fixtures drawn into it, which this change would leave pointing at ' +
         "a group that no longer exists. A reservation's tables, its time and its name " +
-        'can all still be changed. To add or remove a reservation, remove the draw ' +
+        'can all still be changed. To add or remove a group, remove the draw ' +
         'first, then cut it again.'
       const onSave = rejectWith(
         new ApiError(409, refusal, 'update event', { detail: refusal }),
