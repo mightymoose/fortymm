@@ -23,7 +23,7 @@ Captured from the reference at 1280x800, at twice the pixel density.
 
 | File | What it shows |
 | --- | --- |
-| `nothing-set.png` | 32 players, 4 reservations, every setting automatic |
+| `nothing-set.png` | 32 players, 4 reservations, every setting automatic — the four derived groups show the **reference's** count rule, not ours (see "What the reference does not settle", item 4) |
 | `uneven-field.png` | 22 players across 4 pools |
 | `uneven-field-panel.png` | the same state, scrolled to the uneven notice |
 | `numbers-disagree.png` | 40 players, 6 manual pools of 5 manual |
@@ -350,3 +350,15 @@ After the cut: `Draw cut.` with `4 pools · 40 pool matches · 8-player knockout
 2. **The target bracket size is the constant 8.** Nothing in the reference writes it.
 3. **The preview basis label** always says `cap`, even when the field is the uncapped
    default of 16.
+4. **Divergence (#1386, 2026-08-17): the automatic count no longer follows the
+   reference.** The reference derives it from the reservation row count
+   (`max(1, poolReservationCount)`, "The derivation" above). The implementation
+   instead divides the field by a default group size of five —
+   `max(1, ceil(field / 5))` — and balances the sizes across that count, so an
+   out-of-the-box event stays legal (a field of 16 gives four groups of four, where
+   filling to five greedily would leave a group of one). Two row sentences are
+   therefore ours, not the reference's: the automatic count source reads
+   `{field} players ÷ about 5 per group`, and the manual one reads `You set this.`
+   — the reference's reservation clause is gone because the derivation stops
+   reading reservations. "The derivation" and "Row copy" above are unchanged: they
+   record the reference, and this note records where the implementation departs.

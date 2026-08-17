@@ -79,12 +79,12 @@ export const DrawStructureSection = ({
   // Called twice they could eventually be called with different arguments, and two
   // sentences about the same number is exactly the confusion #1320 removes.
   const previewBasis = previewBasisLabel(event.maxPlayers)
+  // The derivation deliberately does NOT read the event's reservation rows (#1386): the
+  // automatic group count derives from the default group size, so adding or removing a
+  // reservation changes no derived number. The preview still states the real rows — see
+  // the `reservationCount` prop below, which is the one reader that keeps them.
   const structure = deriveDrawStructure({
     previewFieldSize: fieldSize,
-    // One reservation is one group — today's behaviour, and the automatic source of the
-    // group count (ADR 20260808; a group is minted 1:1 with a reservation, ticket
-    // #1369).
-    reservationCount: event.reservations.length,
     // All four settings are the system's this chore: nothing writes an ownership mode
     // yet, so there is no manual number for any of them to hold.
     groupCountMode: 'automatic',
@@ -96,7 +96,7 @@ export const DrawStructureSection = ({
   })
 
   // Read off the derived sizes rather than divided out again — the groups are routinely
-  // unequal (22 across 4 is `6, 6, 5, 5`) and the uneven case is a first-class state.
+  // unequal (22 across 5 is `5, 5, 4, 4, 4`) and the uneven case is a first-class state.
   const smallestGroup = Math.min(...structure.groupSizes)
   const largestGroup = Math.max(...structure.groupSizes)
   const uneven = smallestGroup !== largestGroup

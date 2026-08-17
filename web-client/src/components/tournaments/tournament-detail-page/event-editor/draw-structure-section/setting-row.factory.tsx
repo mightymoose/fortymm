@@ -1,10 +1,9 @@
 import type { SettingRowProps } from './setting-row'
 
 /**
- * The reference's **Group count** row in its "Nothing set" state
- * (`docs/designs/rr-then-ko-draw-structure/nothing-set.png`): four groups, derived from
- * four reservations, so every part of the row is populated — a numeric value, a
- * unit, an `Automatic` badge and a source sentence.
+ * The **Group count** row with nothing set: four groups, derived by dividing a
+ * 20-player field by the default group size of five (#1386), so every part of the row
+ * is populated — a numeric value, a unit, an `Automatic` badge and a source sentence.
  *
  * The Membership row (no number, no unit) is built by overriding
  * `kind: 'phrase'` and dropping the unit.
@@ -19,7 +18,7 @@ export function buildSettingRowProps(
     kind: 'number',
     unit: 'groups',
     ownership: 'automatic',
-    source: "4 reservations · today's behaviour",
+    source: '20 players ÷ about 5 per group',
     ...overrides,
   }
 }

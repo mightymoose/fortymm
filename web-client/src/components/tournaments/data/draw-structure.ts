@@ -1,4 +1,4 @@
-// The whole **round-robin-then-knockout draw structure**, derived from the eight numbers
+// The whole **round-robin-then-knockout draw structure**, derived from the seven numbers
 // a director can set (#1320). Group count, group sizes, qualifiers, the bracket, the byes,
 // the group-match total, the source sentence under each row, and the three notices —
 // disagreement, uneven, impossible.
@@ -17,12 +17,14 @@
 // vectors do not pin is drift waiting to happen**, which is why the result carries only
 // the fields the tab actually reads.
 //
-// The spec is `docs/designs/rr-then-ko-draw-structure/README.md` — its "The derivation"
-// section for the maths, its "Row copy" and "Impossible" sections for the strings. The
-// strings are **verbatim**, including the `÷` and `·` glyphs and including
-// `1 reservations`: this module does not pluralise copy the reference does not
-// pluralise, because a silent improvement here reds the Python vectors later and the diff
-// looks like a Python bug.
+// The starting point is `docs/designs/rr-then-ko-draw-structure/README.md` — its "The
+// derivation" section for the maths, its "Row copy" and "Impossible" sections for the
+// strings — but **not every string here is the reference's any more**. The automatic
+// group count departs from it (#1386): the count derives from `DEFAULT_GROUP_SIZE`, not
+// from the reservation rows, and the two group-count sentences are ours. The README's
+// "What the reference does not settle" section records the divergence. Reference copy
+// this module keeps is kept **verbatim**, `÷` and `·` glyphs included: a silent
+// improvement here reds the Python vectors later and the diff looks like a Python bug.
 //
 // ⚠️ **`groupLetter` is asserted against `api/tests/test_draws.py`**, which pins the
 // identical seven `(position, label)` pairs and carries a comment pointing back at this
@@ -34,6 +36,17 @@
  * nothing in the reference writes it, so no UI exposes it. A director who wants a
  * different bracket sets the qualifiers themselves, which is a setting they own. */
 export const TARGET_BRACKET_SIZE = 8
+
+/** The group size the automatic group count divides by — `max(1, ceil(field / 5))`, with
+ * the sizes then balanced across that count. **A count divisor, not a size target**: a
+ * field of 16 gives four groups of four, where filling to five greedily would give
+ * `5, 5, 5, 1` and a group of one is a competition nobody can play (#1370 decision 1). A
+ * director who *types* a five keeps the greedy meaning — a typed number is theirs, and
+ * the app states its consequence rather than reshaping it. **A constant, not stored
+ * state**, like the bracket target above.
+ *
+ * ⚠️ Duplicated in `api/app/draw_structure.py`, and the shared vectors pin both copies. */
+export const DEFAULT_GROUP_SIZE = 5
 
 /** Who a structural setting belongs to: the system derived it, or the director typed it.
  * The row's `Automatic` / `Yours` badge is this, and nothing else. */
@@ -102,15 +115,16 @@ export interface ImpossibleProblem {
   body: string
 }
 
-/** The eight inputs. Every one of them is stated at each call site and in every vector —
+/** The seven inputs. Every one of them is stated at each call site and in every vector —
  * there is no defaults builder, because the Python side transcribes this table by hand and
- * a hidden default is a guess waiting to be made wrong. */
+ * a hidden default is a guess waiting to be made wrong.
+ *
+ * The reservation count is deliberately **not** here (#1386): the automatic group count
+ * derives from `DEFAULT_GROUP_SIZE`, so adding or removing a reservation changes no
+ * derived number. */
 export interface DrawStructureOptions {
   /** The field the preview derives against: the event's cap, or the uncapped default. */
   previewFieldSize: number
-  /** How many reservation rows the event already has — today's behaviour for the group
-   * count (a group is minted 1:1 with a reservation, ticket #1369). */
-  reservationCount: number
   groupCountMode: SettingOwnership
   manualGroupCount: number | null
   groupSizeMode: SettingOwnership
@@ -218,7 +232,7 @@ function tallySizes(sizes: number[]): GroupSizeTally[] {
 }
 
 /**
- * Derive the whole draw structure from the eight inputs.
+ * Derive the whole draw structure from the seven inputs.
  *
  * **A mode of `manual` with no number is automatic.** A director who clears the input has
  * not set anything, and the row must go on showing a real number rather than a blank or a
@@ -228,7 +242,6 @@ function tallySizes(sizes: number[]): GroupSizeTally[] {
 export function deriveDrawStructure(options: DrawStructureOptions): DrawStructure {
   const {
     previewFieldSize: fieldSize,
-    reservationCount,
     groupCountMode,
     manualGroupCount,
     groupSizeMode,
@@ -243,13 +256,11 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
 
   const targetSize = setSize ? atLeastOne(manualGroupSize) : null
 
-  // Group count: the director's, else derived from their group size, else today's
-  // behaviour — one reservation row is one group.
+  // Group count: the director's, else derived from a size — theirs when they typed one,
+  // the default divisor otherwise. One shape, one fallback chain.
   const groupCount = setCount
     ? atLeastOne(manualGroupCount)
-    : targetSize !== null
-      ? atLeastOne(Math.ceil(fieldSize / targetSize))
-      : atLeastOne(reservationCount)
+    : atLeastOne(Math.ceil(fieldSize / (targetSize ?? DEFAULT_GROUP_SIZE)))
 
   // Group sizes. Both manual means both numbers stand, product be damned — that standoff
   // is reported as a disagreement below, never resolved by moving one of them.
@@ -305,11 +316,12 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
     sources: {
       groupCount: {
         ownership: setCount ? 'manual' : 'automatic',
+        // One template for the whole automatic arm: the division that happened is
+        // `field / (typed size ?? default)`, so the sentence reports whichever divisor
+        // was actually used (#1370 decision 3).
         sentence: setCount
-          ? 'You set this. Each group also gets a reservation.'
-          : targetSize !== null
-            ? `${fieldSize} players ÷ about ${targetSize} per group`
-            : `${groupCount} reservations · today's behaviour`,
+          ? 'You set this.'
+          : `${fieldSize} players ÷ about ${targetSize ?? DEFAULT_GROUP_SIZE} per group`,
       },
       groupSize: {
         ownership: setSize ? 'manual' : 'automatic',
