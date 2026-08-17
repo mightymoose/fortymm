@@ -1261,10 +1261,12 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
  * event has (`_group_set_frozen_detail`, `api/app/tournament_events.py`) — verbatim,
  * because the editor shows it verbatim in its inline banner.
  *
- * Both halves are named from whichever side of the change still knows the label: a
- * group being removed is described by the POSITION the row the event holds already
- * stands at; one being added is described by the position it would land at — its own
- * index in the incoming array, since it has no group yet. */
+ * Removed groups are NAMED, from the row the event holds: the label its stored position
+ * derives, which is the label the director is looking at right now. Added groups are
+ * COUNTED, not named — they have no position yet, and the label they would land on is
+ * one an existing group currently wears, so naming them would produce a sentence that
+ * contradicts itself ("Group A already has fixtures drawn into it; and Group A would
+ * arrive with no fixtures in it"). Mirrors `_group_set_frozen_detail` byte for byte. */
 function groupSetFrozenDetail(
   event: TournamentEventRead,
   submitted: { id?: string | null; name?: string }[],
@@ -1278,20 +1280,20 @@ function groupSetFrozenDetail(
     .map((r, position) => ({ r, position }))
     .filter(({ r }) => !incoming.has(r.id))
     .map(({ position }) => `Group ${groupLetter(position)}`)
-  const added = submitted
-    .map((r, position) => ({ r, position }))
-    .filter(({ r }) => r.id == null || !existing.has(r.id))
-    .map(({ position }) => `Group ${groupLetter(position)}`)
+  const added = submitted.filter(
+    (r) => r.id == null || !existing.has(r.id),
+  ).length
   if (removed.length > 0) {
     clauses.push(
       `${namedList(removed)} already has fixtures drawn into it, ` +
         'which this change would leave pointing at a group that no longer exists',
     )
   }
-  if (added.length > 0) {
+  if (added > 0) {
     clauses.push(
-      `${namedList(added)} would arrive with no fixtures in it, ` +
-        'because the draw was cut across the groups this event had at the time',
+      `${added} new ${added === 1 ? 'group' : 'groups'} would arrive with no ` +
+        `fixtures in ${added === 1 ? 'it' : 'them'}, because the draw was cut ` +
+        'across the groups this event had at the time',
     )
   }
   return (

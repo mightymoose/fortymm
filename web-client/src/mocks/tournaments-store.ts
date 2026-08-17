@@ -2665,20 +2665,21 @@ function groupSetFrozenDetail(
   const same =
     existing.size === incoming.size && [...existing].every((id) => incoming.has(id))
   if (same && cites) return null
-  // Named from whichever side of the change still knows the label: a group being
-  // removed is described by the POSITION the row we hold already stands at; one being
-  // added is described by the position it would land at — its own index in the incoming
-  // array, since it has no group yet. An entry citing an id this event does not have
-  // counts as an addition here — it is one in effect, and past this guard it is the 422
-  // `applyEventReservations` answers.
+  // Removed groups are NAMED, from the row we hold: the label its stored position
+  // derives, which is the label the director is looking at right now. Added groups are
+  // COUNTED, not named — they have no position yet, and the label they would land on is
+  // one an existing group currently wears, so naming them makes the sentence contradict
+  // itself ("Group A already has fixtures…; and Group A would arrive with no fixtures").
+  // Mirrors `app.tournament_events._group_set_frozen_detail` byte for byte. An entry
+  // citing an id this event does not have counts as an addition here — it is one in
+  // effect, and past this guard it is the 422 `applyEventReservations` answers.
   const removed = event.reservations
     .map((r, position) => ({ r, position }))
     .filter(({ r }) => !incoming.has(r.id))
     .map(({ position }) => `Group ${groupLetter(position)}`)
-  const added = patch.reservations
-    .map((r, position) => ({ r, position }))
-    .filter(({ r }) => r.id == null || !existing.has(r.id))
-    .map(({ position }) => `Group ${groupLetter(position)}`)
+  const added = patch.reservations.filter(
+    (r) => r.id == null || !existing.has(r.id),
+  ).length
   const clauses: string[] = []
   if (removed.length > 0) {
     clauses.push(
@@ -2686,10 +2687,11 @@ function groupSetFrozenDetail(
         'which this change would leave pointing at a group that no longer exists',
     )
   }
-  if (added.length > 0) {
+  if (added > 0) {
     clauses.push(
-      `${namedList(added)} would arrive with no fixtures in it, ` +
-        'because the draw was cut across the groups this event had at the time',
+      `${added} new ${added === 1 ? 'group' : 'groups'} would arrive with no ` +
+        `fixtures in ${added === 1 ? 'it' : 'them'}, because the draw was cut ` +
+        'across the groups this event had at the time',
     )
   }
   return (

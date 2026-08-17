@@ -2201,7 +2201,9 @@ describe('the group set freezes while a draw exists', () => {
     expect(reservationsOf(ROUND_ROBIN)).toHaveLength(2)
   })
 
-  it('refuses a PATCH that ADDS a reservation — its group would arrive with no fixtures', () => {
+  // An added group is COUNTED, not named: it has no position yet, and the label it
+  // would land on is one an existing group wears today (see the collision test below).
+  it('refuses a PATCH that ADDS a reservation — the arriving group is counted, not named', () => {
     const reservations = reservationsOf(ROUND_ROBIN)
 
     const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
@@ -2214,9 +2216,36 @@ describe('the group set freezes while a draw exists', () => {
 
     expect(result.ok).toBe(false)
     if (result.ok || result.status !== 409) throw new Error('expected a 409')
-    expect(result.detail).toContain('“Group C”')
-    expect(result.detail).toContain('would arrive with no fixtures in it')
+    expect(result.detail).toContain('1 new group would arrive with no fixtures in it')
+    expect(result.detail).not.toContain('“Group C”')
     expect(reservationsOf(ROUND_ROBIN)).toHaveLength(2)
+  })
+
+  // The collision the naming bug produced: replacing the FIRST reservation removes the
+  // group at position 0 and adds one that would land at position 0 too — so naming both
+  // sides by their derived position reported "Group A already has fixtures drawn into
+  // it; and Group A would arrive with no fixtures in it", the same label simultaneously
+  // departing and arriving. The added side is counted now, so no label can appear on
+  // both sides of the "; and " join.
+  it('refuses a PATCH that replaces the FIRST reservation — no label departs and arrives at once', () => {
+    const [reservationA, reservationB] = reservationsOf(ROUND_ROBIN)
+
+    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+      reservations: [
+        { name: 'Reservation A (new)', slot: SLOT, table_ids: [] },
+        citing(reservationB),
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok || result.status !== 409) throw new Error('expected a 409')
+    expect(result.detail).toContain('“Group A”')
+    expect(result.detail).toContain('1 new group would arrive with no fixtures in it')
+    const [departing, arriving] = result.detail.split('; and ')
+    for (const label of departing.match(/Group [A-Z]+/g) ?? []) {
+      expect(arriving).not.toContain(label)
+    }
+    expect(reservationsOf(ROUND_ROBIN)).toEqual([reservationA, reservationB])
   })
 
   // Only the GROUP's identity is frozen. A reservation's tables and its window stay
