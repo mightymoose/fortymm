@@ -8,7 +8,7 @@ export function buildUnscheduledFixture(
   return {
     fixtureId: 'fx-b-1',
     eventName: 'U1200 Singles',
-    groupLabel: 'Group B',
+    contextLabel: 'Group B',
     label: 'player.2 vs player.3',
     tableLabel: null,
     statusLabel: 'Not started',

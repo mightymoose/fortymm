@@ -196,9 +196,9 @@ function fixtureToRailItem(
     // The human reservation name (`"Reservation A"`), never the namespaced
     // `{event}:{reservation}` composite the solver keys by — the card heads
     // with a name a director reads. A preview has no materialized group yet
-    // (that is a solved fact), so the rail's `groupLabel` slot carries the
-    // reservation's name instead — the closest thing the preview knows.
-    groupLabel: fixture.reservationName,
+    // (that is a solved fact), so the rail's venue-neutral `contextLabel` slot
+    // carries the reservation's name instead — the closest thing the preview knows.
+    contextLabel: fixture.reservationName,
     label: `${placeholderName(fixture.playerAId)} vs ${placeholderName(fixture.playerBId)}`,
     tableLabel: null,
     statusLabel: '',
