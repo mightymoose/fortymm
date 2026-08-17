@@ -219,11 +219,14 @@ class GroupSetFrozenError(Exception):
     well-formed — it is the *resource* that is in the wrong state, and the same request
     becomes legal the moment the draw is removed. Carries the exact, domain-authored
     sentence the HTTP handler used to compose inline (rebuilt verbatim with
-    ``str(exc)``) plus the structured ``removed`` / ``added`` group labels for any
-    adapter that wants to reshape rather than echo. Never an ``HTTPException`` — the
+    ``str(exc)``) plus structured detail for any adapter that wants to reshape rather
+    than echo: ``removed``, the labels of the groups that would go, and ``added``, a
+    **count** of the groups that would arrive. Added groups are counted and not labelled
+    because a label is derived from a position this very payload rewrites — see
+    ``app.tournament_events._group_set_frozen_detail``. Never an ``HTTPException`` — the
     caller adapts it to its transport."""
 
-    def __init__(self, message: str, *, removed: list[str], added: list[str]) -> None:
+    def __init__(self, message: str, *, removed: list[str], added: int) -> None:
         super().__init__(message)
         self.removed = removed
         self.added = added

@@ -56,8 +56,10 @@ class TournamentEventStageGroup(Base):
 
     **The label is derived, not stored.** A group had a ``name`` for as long as it was
     also a reservation and the director typed one. A group's own label is a function of
-    its ``position`` — nothing writes it and nothing stores it. What the wire still
-    calls ``groups[].name`` is the mapped reservation's name, projected.
+    its ``position`` (``app.draws.group_label``) — nothing writes it and nothing stores
+    it. The wire serves no ``groups[].name`` at all: ``GroupRead`` is ``id`` /
+    ``position`` / ``reservation_id``, and the director-typed name lives where it is
+    actually stored, on ``reservations[].name``.
 
     ``id`` is a **server-minted uuid** — ``gen_random_uuid()`` — inherited unchanged
     from the group row this splits, along with ``tournament_fixtures.group_id``'s type

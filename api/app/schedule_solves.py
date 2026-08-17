@@ -261,7 +261,7 @@ from app.schemas.schedule_solve import (
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Reservation, Slot, TournamentTable
-from app.tournament_draws import event_reservations
+from app.tournament_draws import event_groups, event_reservations
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_realtime import stage_event_entrant_hints
 
@@ -581,6 +581,23 @@ def event_wide_reservation_key(event_id: uuid.UUID) -> ReservationId:
     return ReservationId(f"{event_id}:{EVENT_WIDE_RESERVATION_SUFFIX}")
 
 
+def reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> ReservationId:
+    """The solver ``ReservationId`` of one **booked** reservation — the twin of
+    :func:`event_wide_reservation_key`, and the one spelling of it.
+
+    The ``ScheduleReservation`` the snapshot carries and the fixtures that name it must
+    agree byte for byte, or ``app.scheduling`` refuses the snapshot as incoherent. It
+    was written out as a raw f-string at both sites; one function means one edit.
+
+    The suffix is a **reservation** id, matching the preview's
+    ``app.schedule_preview.preview_reservation_key``. Both spaces key the same way, so
+    a value from one is structurally indistinguishable from the other's — they never
+    meet today (each module builds and consumes its own map), but that is a property of
+    the call graph rather than of the type.
+    """
+    return ReservationId(f"{event_id}:{reservation_id}")
+
+
 def event_wide_reservation_name(event_name: str) -> str:
     """What a director reads when an infeasibility reason blames an event-wide
     reservation (ADR: "the event-wide reservation needs a name a director can
@@ -897,20 +914,22 @@ async def _load_solver_inputs(
         event.id: Slot.model_validate(event.slot) for event, _s, _p in parsed_events
     }
     # Group id → the id of the RESERVATION that group plays in. This is the one
-    # place the solver crosses from the wire's vocabulary into the schema's: a
-    # projected ``Reservation.id`` and a ``fixture.group_id`` are both **group** ids,
-    # while the thing this module actually constrains — a set of tables for a
-    # window — is the reservation. Keying the solver on the reservation is what
-    # makes "which reservation confines this fixture" a lookup rather than an
-    # assumption, and it is why the ``ScheduleReservation`` set below has exactly one
-    # entry per reservation however many groups map to it.
+    # place the solver crosses from the draw's vocabulary into the venue's: a
+    # ``fixture.group_id`` names a **group**, while the thing this module actually
+    # constrains — a set of tables for a window — is the reservation. Keying the
+    # solver on the reservation is what makes "which reservation confines this
+    # fixture" a lookup rather than an assumption, and it is why the
+    # ``ScheduleReservation`` set below has exactly one entry per reservation however
+    # many groups map to it.
     #
-    # Read off the ORM rather than the projection because the projection
-    # deliberately does not carry a reservation id — no client has ever seen one.
+    # Read through the projection seam (``event_groups``), not off the ORM: since the
+    # wire split the two names apart, ``GroupRead`` carries the mapped
+    # ``reservation_id`` outright, so the hop has one spelling and #1370 has one place
+    # to change it.
     reservation_ids: dict[uuid.UUID, uuid.UUID] = {
-        group.id: group.reservation.id
+        group.id: group.reservation_id
         for event in drawn_events
-        for group in event.groups
+        for group in event_groups(event)
     }
 
     # Reservation ids are per-event value-objects — two events may both hold a
@@ -954,7 +973,7 @@ async def _load_solver_inputs(
             # for the per-fixture side, which only has a group id to resolve
             # through). This loop emits one spec per reservation, one entry
             # whatever the number of groups a later change lets share it.
-            key = f"{event.id}:{reservation.id}"
+            key = reservation_key(event.id, reservation.id)
             start, end = _slot_bounds(reservation.slot, event_tz)
             tables = tuple(
                 TableId(table_id)
@@ -1046,10 +1065,10 @@ async def _load_solver_inputs(
             # disjunction over several. The lookup is total — a fixture's group
             # belongs to this event's stage 0 by its own composite foreign key,
             # and every group of it is in the map.
-            reservation_key = (
+            fixture_reservation_key = (
                 event_wide_reservation_key(event.id)
                 if fixture.group_id is None
-                else ReservationId(f"{event.id}:{reservation_ids[fixture.group_id]}")
+                else reservation_key(event.id, reservation_ids[fixture.group_id])
             )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it
@@ -1110,7 +1129,7 @@ async def _load_solver_inputs(
                 ScheduleFixture(
                     id=fixture_id,
                     event_id=EventId(str(event.id)),
-                    reservation_id=reservation_key,
+                    reservation_id=fixture_reservation_key,
                     # User-level ids, not entry ids: the no-double-booking and
                     # rest constraints hold across events, on humans.
                     player_a_id=PlayerId(str(entry_user[fixture.entry_a_id])),

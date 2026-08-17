@@ -13,6 +13,7 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 import asyncio
 import json
 import math
+import re
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
@@ -6680,13 +6681,24 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
 @pytest.mark.parametrize(
     ("payload", "named"),
     [
-        pytest.param(lambda kept: [*kept, RESERVATION_C], ["Group C"], id="added"),
+        pytest.param(lambda kept: [*kept, RESERVATION_C], ["1 new group"], id="added"),
         pytest.param(lambda kept: kept[:1], ["Group B"], id="removed"),
         pytest.param(lambda _kept: [], ["Group A", "Group B"], id="cleared"),
         pytest.param(
             lambda kept: [kept[0], {k: v for k, v in kept[1].items() if k != "id"}],
-            ["Group B"],
+            ["Group B", "1 new group"],
             id="re-added",
+        ),
+        # The collision arm. Replacing the FIRST reservation removes the group at
+        # position 0 and adds one that would land at position 0 — so while BOTH sides
+        # were named by their derived label, this sentence read "Group A already has
+        # fixtures drawn into it; and Group A would arrive with no fixtures in it".
+        # The added side is counted now, and the assertion below proves no label is
+        # claimed to be simultaneously departing and arriving.
+        pytest.param(
+            lambda kept: [{k: v for k, v in kept[0].items() if k != "id"}, kept[1]],
+            ["Group A", "1 new group"],
+            id="first-replaced",
         ),
     ],
 )
@@ -6752,6 +6764,14 @@ async def test_a_cut_draw_refuses_a_reservations_patch_that_changes_which_groups
     detail = response.json()["detail"]
     for name in named:
         assert name in detail, detail
+    # No label may be reported as BOTH departing and arriving. A group's label derives
+    # from its position and this payload is what rewrites the positions, so an added
+    # group's eventual label belongs to an existing group today — which is why the
+    # added side is counted rather than named. Naming it produced "Group A already has
+    # fixtures drawn into it; and Group A would arrive with no fixtures in it".
+    departing, _, arriving = detail.partition("; and ")
+    for label in re.findall(r"Group [A-Z]+", departing):
+        assert label not in arriving, detail
     assert await _reservations_of(db_session, event["id"]) == reservations_before
     assert _snapshot(await _fixture_rows(db_session, event["id"])) == fixtures_before
 

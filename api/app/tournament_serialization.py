@@ -77,6 +77,7 @@ from app.schemas.tournament import (
     TournamentRead,
 )
 from app.tournament_draw_settings import draw_settings_of
+from app.tournament_draws import event_groups, event_reservations
 from app.tournament_eligibility import (
     Eligible,
     RatingIneligible,
@@ -90,7 +91,6 @@ from app.tournament_queries import (
     fixtures_by_event,
     game_counts_by_match,
 )
-from app.tournament_reservations import group_read, reservation_read
 
 # Public shared surface: the serializers both the HTTP router (``tournaments.py``)
 # and the MCP adapter import. ``_serialize_event`` is public too because the
@@ -795,13 +795,14 @@ def serialize_event(
             # join that keeps this wire field exactly what it was. Both sides ride on
             # the event's own eager ``selectin`` loads, so this costs the page no
             # statement of its own — the same arrangement the venue catalogue has.
-            "groups": [group_read(group) for group in e.groups],
-            # The event's reservations, read through each group's own eager
-            # ``reservation`` (never through ``TournamentEvent.reservations``, which is
-            # deliberately NOT eager — see that relationship's docstring) — the same
-            # ``event_reservations`` seam ``app.tournament_draws`` exposes, inlined here
-            # because this loop already holds ``e.groups``.
-            "reservations": [reservation_read(group.reservation) for group in e.groups],
+            # Both arrays through the ``app.tournament_draws`` seam, not inlined here.
+            # They read ``event.groups`` themselves — the same eager collection this
+            # loop already holds, so going through the seam costs nothing — and being
+            # the one spelling is what matters: when #1370 lets two groups share a
+            # reservation, ``event_reservations`` has to dedupe, and a second copy
+            # living in the BFF's own payload would go on emitting the duplicate.
+            "groups": event_groups(e),
+            "reservations": event_reservations(e),
             # Read straight off the relationship, exactly as ``groups`` above is:
             # ``TournamentEvent.stages`` is ``lazy="selectin"`` now, so every event this
             # serializer reaches already carries its stages, however it was loaded — no

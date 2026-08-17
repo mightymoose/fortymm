@@ -314,7 +314,7 @@ def _build_event(
     stage_draw_types: Mapping[uuid.UUID, StageDrawType],
 ) -> DashboardTournamentEvent:
     username_by_entry = {entrant.id: entrant.username for entrant in entrants}
-    groups = {group.id: group for group in event_groups(event)}
+    group_positions = {g.id: g.position for g in event_groups(event)}
     settings = MatchSettings.model_validate(event.match_settings)
     # The draw type off the event's ``draw_settings`` row — its one home (ADR "an
     # event's draw configuration is a row, not a column"). Read once here and passed
@@ -453,8 +453,8 @@ def _build_event(
         field_size=field_size,
         stage_label=_stage_label(draw_type, complete=stage_complete),
         group_label=(
-            group_label(groups[my_group_id].position)
-            if my_group_id is not None and my_group_id in groups
+            group_label(group_positions[my_group_id])
+            if my_group_id is not None and my_group_id in group_positions
             else None
         ),
         match=focus_match,

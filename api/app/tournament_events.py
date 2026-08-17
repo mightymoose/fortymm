@@ -212,19 +212,28 @@ async def delete_event(
     await db.commit()
 
 
-def _group_set_frozen_detail(removed: list[str], added: list[str]) -> str:
+def _group_set_frozen_detail(removed: list[str], added: int) -> str:
     """The 409 sentence for a reservations payload that would change *which groups* a
     cut event has — composed exactly as the router's ``_group_set_refusal`` used to
     compose it inline, so :class:`GroupSetFrozenError` carries the byte-identical body.
 
-    Both halves are named, because a payload can move both at once and the director has
-    to be told which of their groups went missing: a **removed** group leaves its
+    Both halves are reported, because a payload can move both at once and the director
+    has to be told which of their groups went missing: a **removed** group leaves its
     fixtures pointing at a group that no longer exists (which the composite foreign key
     would refuse too, but only at COMMIT and only as a driver error), and an **added**
     group arrives with **no fixtures**, because the draw was dealt across the groups the
     event had at the cut. The sentence ends with the way out (remove the draw, change
     the groups, cut again) and with what is still allowed, so a director who has to move
     a broken table is never left with nowhere to go.
+
+    **Only the removed side is named, and the added side is counted.** A group's label
+    is derived from its position (ADR 20260808), and this very payload is what rewrites
+    the positions — so an added group's eventual label is one an *existing* group wears
+    right now. Naming both sides produced a sentence that contradicted itself: replacing
+    the first of three reservations reported "Group A already has fixtures drawn into
+    it; and Group A would arrive with no fixtures in it". The removed side names real
+    groups the director can see on screen; the added side has no identity to name yet,
+    so it is counted instead.
 
     It no longer offers "re-identify" as a third thing to do: a group id is minted by
     the server (ADR 20260801), so re-identifying one is not a payload a client can send.
@@ -237,8 +246,9 @@ def _group_set_frozen_detail(removed: list[str], added: list[str]) -> str:
         )
     if added:
         clauses.append(
-            f"{named_list(added)} would arrive with no fixtures in it, "
-            "because the draw was cut across the groups this event had at the time"
+            f"{added} new {'group' if added == 1 else 'groups'} would arrive with no "
+            f"fixtures in {'it' if added == 1 else 'them'}, because the draw was cut "
+            "across the groups this event had at the time"
         )
     return (
         "This event's draw is already cut, so its set of groups is frozen: "
@@ -457,22 +467,23 @@ async def _enforce_group_set_frozen(
         return
     existing = set(existing_order)
     incoming = set(incoming_order)
-    # Labeled by position, from whichever side of the change still knows it: a group
-    # being removed is only described by the row we hold (its own stored position), and
-    # one being added only by the payload (the index its entry sits at, which is the
-    # position ``apply_event_reservations`` would stamp the new group with). An entry
-    # citing an id this event does not have counts as an addition here — it is one in
-    # effect, and past this guard it is the 422 ``apply_event_reservations`` raises.
+    # Removed groups are NAMED, from the row we hold: the label its stored position
+    # derives, which is the label the director is looking at right now. Added groups are
+    # COUNTED, not named — they have no position yet, and the label they would land on
+    # is one an existing group currently wears, so naming them makes the sentence
+    # contradict itself (see :func:`_group_set_frozen_detail`). An entry citing an id
+    # this event does not have counts as an addition here — it is one in effect, and
+    # past this guard it is the 422 ``apply_event_reservations`` raises.
     removed = [
         group_label(group.position)
         for group in current
         if group.reservation_id not in incoming
     ]
-    added = [
-        group_label(index)
-        for index, entry in enumerate(updates.reservations)
+    added = sum(
+        1
+        for entry in updates.reservations
         if entry.id is None or entry.id not in existing
-    ]
+    )
     if removed or added:
         raise GroupSetFrozenError(
             _group_set_frozen_detail(removed, added), removed=removed, added=added
@@ -486,7 +497,7 @@ async def _enforce_group_set_frozen(
     raise GroupSetFrozenError(
         _group_order_frozen_detail([group_label(group.position) for group in current]),
         removed=[],
-        added=[],
+        added=0,
     )
 
 

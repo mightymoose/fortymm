@@ -164,7 +164,7 @@ def preview_reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> s
     the string contract lives in exactly one place and cannot drift between them.
 
     **The suffix is a RESERVATION id, the same as a live solve's**
-    (``app.schedule_solves.event_wide_reservation_key`` and its per-reservation twin).
+    (``app.schedule_solves.reservation_key``, beside its event-wide twin).
     It was a GROUP id until the wire split the two names apart: the preview keyed its
     fixture refs off the projected slot's ``id``, which was the group's. Both spaces
     key on the reservation now, because a reservation is what a fixture is actually
@@ -691,9 +691,10 @@ def _schedule_fixture(
     exactly one reservation per fixture, looked up rather than assumed, the same
     cross ``app.schedule_solves`` makes. The reservation ref is namespaced by the
     event id, matching the ``ScheduleReservation`` keys; the fixture id is a
-    deterministic, event-namespaced composite (unique because
-    ``(reservation, round, position)`` is unique within an event). Each synthetic
-    entrant is its own human, so the entry id doubles as the ``PlayerId`` — and
+    deterministic, event-namespaced composite keyed on the **group** (unique because
+    ``(group, round, position)`` is unique within an event, whatever the 1:1 does).
+    Each synthetic entrant is its own human, so the entry id doubles as the
+    ``PlayerId`` — and
     since entry ids are globally disjoint, so are the players.
 
     The entrant ids are minted as ``uuid.UUID(int=k)`` for the global ordinal
@@ -706,13 +707,24 @@ def _schedule_fixture(
     assert fixture.group_id is not None
     assert fixture.entry_a_id is not None
     assert fixture.entry_b_id is not None
-    # One namespaced reservation ref, used for both the fixture id and its
-    # reservation_id so the ``event:reservation`` spelling cannot drift between them.
+    # The two ids answer different questions and are keyed on different things.
+    #
+    # ``id`` identifies the FIXTURE, so it is namespaced by the **group** that holds it:
+    # ``(group, round, position)`` is unique within an event by construction, because a
+    # group deals its own rounds. ``reservation_id`` names what CONFINES the fixture —
+    # tables inside a window — which is the reservation.
+    #
+    # They are not interchangeable, even though the 1:1 makes them isomorphic today.
+    # Keying the fixture id on the reservation would make its uniqueness conditional on
+    # that 1:1: the moment #1370 lets two groups share a reservation, two group-stage
+    # fixtures would collide on ``(reservation, round, position)`` and the snapshot
+    # would be refused as incoherent, naming a symptom rather than the cause.
     reservation_ref = preview_reservation_key(
         event_uuid, group_reservation_ids[fixture.group_id]
     )
+    group_ref = preview_reservation_key(event_uuid, fixture.group_id)
     return ScheduleFixture(
-        id=FixtureId(f"{reservation_ref}:{fixture.round}:{fixture.position}"),
+        id=FixtureId(f"{group_ref}:{fixture.round}:{fixture.position}"),
         event_id=event_id,
         reservation_id=ReservationId(reservation_ref),
         player_a_id=PlayerId(f"{PLACEHOLDER_PREFIX}{fixture.entry_a_id.int}"),

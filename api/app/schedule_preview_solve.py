@@ -614,12 +614,12 @@ def _resolve_reason(
     ``assert_never`` floor: adding an :data:`~app.scheduling.InfeasibilityReason`
     arm is a type error here until handled.
 
-    Every reservation a preview can blame is a real **reservation**: the builder draws
-    over the event's reservations and drops an rr-then-ko draw's ungrouped knockout
-    (ADR 20260727, and the honest note that says so), so no event-wide
-    reservation is ever in a preview snapshot. Hence the literal ``"reservation"`` — the
-    preview's resolutions carry no reservation kind to read, because there is
-    only one for them to carry."""
+    Every reservation a preview can blame is one a director **booked**: the builder
+    draws over the event's reservations and drops an rr-then-ko draw's ungrouped
+    knockout (ADR 20260727, and the honest note that says so), so the synthetic
+    event-wide reservation is never in a preview snapshot. Hence the literal
+    ``"booked"`` on every arm below — the preview's resolutions carry no reservation
+    kind to read, because there is only one for them to carry."""
     match reason:
         case ReservationHasNoTables():
             return ReservationHasNoTablesRead(

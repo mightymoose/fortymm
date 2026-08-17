@@ -436,9 +436,7 @@ def event_reservations(event: TournamentEvent) -> list[Reservation]:
     ``event.groups``' own (``position``), which is the reservations' order too under
     this slice's 1:1.
     """
-    return [
-        reservation_read(group.reservation_link.reservation) for group in event.groups
-    ]
+    return [reservation_read(group.reservation) for group in event.groups]
 
 
 async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:

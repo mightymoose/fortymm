@@ -882,8 +882,12 @@ async def test_update_event_frozen_group_reorder_is_refused(
             updates=updates,
         )
     assert "order of its groups is frozen" in str(excinfo.value)
+    # A reorder gains and loses nothing — the set is identical, only the sequence moved.
+    # ``added`` is a COUNT, not a list of labels: an added group's label derives from a
+    # position this very payload rewrites, so naming it would collide with an existing
+    # group's (see ``_group_set_frozen_detail``).
     assert excinfo.value.removed == []
-    assert excinfo.value.added == []
+    assert excinfo.value.added == 0
 
     # Refused before the setattr loop: neither the groups' order nor the name changed.
     db_session.expire_all()
