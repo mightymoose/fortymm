@@ -1,10 +1,15 @@
 import {
   PRED_FIELDS,
   PRED_OPS_BY_TYPE,
+  STATUS_FILTER_OPTIONS,
+  STATUS_TAB_LABEL,
+  TOURNAMENT_STATUS_KEYS,
   parsePredicateOp,
+  parseStatusFilter,
   type PredicateOp,
+  type StatusFilter,
 } from './options'
-import type { Predicate } from './types'
+import type { Predicate, TournamentStatus } from './types'
 
 /** The seven operators, written down once. They are pinned at BOTH levels off
  * this one list: what the builder *renders* (runtime, below) and what a
@@ -35,6 +40,57 @@ describe('the eligibility predicate vocabulary', () => {
     expect(PRED_OPS_BY_TYPE[PRED_FIELDS.rating.type].map((o) => o.value)).toEqual([
       ...SEVEN_OPS,
     ])
+  })
+})
+
+/** The tournaments list's filter tabs. This list used to re-type the status values by
+ * hand and it dropped `live`, so a tournament an owner had started was reachable only
+ * under "All" (#970). It is now derived from a `Record<TournamentStatus, string>`, and
+ * these pin both halves of that: the runtime strip, and the type that stops
+ * `Object.keys`' `string[]` from widening the tab values back to `string`. */
+describe('the tournament status filter tabs', () => {
+  it('offers All plus one tab per status, in tab order', () => {
+    expect(STATUS_FILTER_OPTIONS.map((o) => o.value)).toEqual([
+      'all',
+      'draft',
+      'published',
+      'live',
+      'archived',
+    ])
+    expect(STATUS_FILTER_OPTIONS.map((o) => o.label)).toEqual([
+      'All',
+      'Drafts',
+      'Published',
+      'Live',
+      'Archived',
+    ])
+  })
+
+  // Deliberately NOT a `STATUS_FILTER_OPTIONS` vs `TOURNAMENT_STATUS_KEYS` comparison.
+  // Both sides are built from `STATUS_TAB_LABEL`, so dropping a key removes it from
+  // both and such a test can never fail — it would read as coverage while pinning
+  // nothing. The exhaustiveness guard is `tsc -b`: deleting the `live` key reds with
+  // `TS2741: Property 'live' is missing … but required in type
+  // Record<TournamentStatus, string>`, falsified on this branch. The runtime shadow is
+  // the literal five-value, five-label list asserted above, which does red on a drop.
+
+  // A tab must read as the status pill does for the status it names — `Live` on both.
+  it('labels the live tab the way the status pill does', () => {
+    expect(STATUS_TAB_LABEL.live).toBe('Live')
+  })
+
+  it('parses a raw tab value, falling back to all', () => {
+    for (const status of TOURNAMENT_STATUS_KEYS) {
+      expect(parseStatusFilter(status)).toBe(status)
+    }
+    expect(parseStatusFilter('all')).toBe('all')
+    expect(parseStatusFilter('someoldvalue')).toBe('all')
+  })
+
+  // Annotating the array is what keeps this from collapsing to `string`, which would
+  // let an unknown tab value typecheck as a filter.
+  it('keeps the tab value union narrow', () => {
+    expectTypeOf<StatusFilter>().toEqualTypeOf<'all' | TournamentStatus>()
   })
 })
 

@@ -89,6 +89,12 @@ function renderRoute() {
     getParentRoute: () => rootRoute,
     path: '/tournaments/',
     component: TournamentsRoute,
+    // The real route's validator, read off `Route.options` rather than rebuilt from
+    // the schema: without it `useSearch` inside `TournamentsListPage` hands back raw,
+    // unparsed search and these tests would exercise a page the app never renders —
+    // and a rebuilt copy would stay green after the real route changed its validator.
+    // Same spelling as `matches/index.test.tsx` and `players/index.test.tsx`.
+    validateSearch: Route.options.validateSearch,
   })
   const router = createRouter({
     routeTree: rootRoute.addChildren([indexRoute]),
