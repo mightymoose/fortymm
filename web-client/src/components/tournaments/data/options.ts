@@ -1,7 +1,7 @@
 // Select/segmented-control option lists and the eligibility predicate schema.
 // Shared by the event editor, the event cards, and the predicate formatter.
 
-import type { EventFormat, MatchLength } from './types'
+import type { EventFormat, MatchLength, TournamentStatus } from './types'
 
 /** The label an option list gives `value`, or `fallback` when the list has no
  * entry for it. A viewer reads the option's label ("Round robin"), never the enum
@@ -45,15 +45,67 @@ export const MATCH_LENGTH_OPTIONS: { value: MatchLength; label: string }[] = [
   { value: 7, label: 'Bo7' },
 ]
 
+/** The filter-tab label for each tournament status, **in tab order**.
+ *
+ * Typed `Record<TournamentStatus, string>` on purpose, exactly as `LIFECYCLE_EDGE`
+ * (`./lifecycle`) and `STATUS_META` (`../status-badge`) are: a fifth status added to
+ * `TournamentStatus` fails the type check here until it gets a tab. The list this
+ * replaced re-typed the four values by hand and dropped `live`, so a status an owner
+ * could reach from a button had no tab that found it (#970) — the hand-written union
+ * WAS the defect, and deriving the tabs from the enum is what keeps it closed.
+ *
+ * These are *tab* labels, not pill labels, so this is not `STATUS_META`: the tab reads
+ * `Drafts` (a bucket of things) where the pill reads `Draft` (one thing's state).
+ *
+ * Declaration order is tab order — JavaScript preserves string-key insertion order, so
+ * `Object.keys` below yields All · Drafts · Published · Live · Archived. */
+export const STATUS_TAB_LABEL: Record<TournamentStatus, string> = {
+  draft: 'Drafts',
+  published: 'Published',
+  live: 'Live',
+  archived: 'Archived',
+}
+
+/** Every `TournamentStatus`, in tab order — read off the `Record` above rather than
+ * re-listed, so there is one place a new status has to be named. The assertion only
+ * restores what `Object.keys` erases (it is typed `string[]`); the exhaustiveness is
+ * the `Record`'s, and it survives.
+ *
+ * A non-empty tuple because `z.enum` (`./search`) takes one. */
+export const TOURNAMENT_STATUS_KEYS = Object.keys(STATUS_TAB_LABEL) as [
+  TournamentStatus,
+  ...TournamentStatus[],
+]
+
+/** The value a status tab selects: a concrete status, or `all` (the default, which
+ * carries no `status` in the URL). */
+export type StatusFilter = 'all' | TournamentStatus
+
+/** The tab strip on the tournaments list. Annotated rather than inferred because
+ * `Object.keys` returns `string[]`, which would collapse `StatusFilter` to `string`
+ * and let an unknown tab value typecheck. */
 export const STATUS_FILTER_OPTIONS: {
-  value: 'all' | 'published' | 'draft' | 'archived'
+  value: StatusFilter
   label: string
 }[] = [
   { value: 'all', label: 'All' },
-  { value: 'published', label: 'Published' },
-  { value: 'draft', label: 'Drafts' },
-  { value: 'archived', label: 'Archived' },
+  ...TOURNAMENT_STATUS_KEYS.map((status) => ({
+    value: status,
+    label: STATUS_TAB_LABEL[status],
+  })),
 ]
+
+/** Narrow the raw `string` the `Tabs` widget hands back to a `StatusFilter`, falling
+ * back to `all`.
+ *
+ * A widget's `onValueChange` is a boundary like any other, so it gets a parse rather
+ * than a cast (`.claude/rules/parse-at-boundaries.md`) — the same treatment, and the
+ * same shape, as `parsePredicateOp` below. Looking the value up in the very list the
+ * tabs were rendered from IS the parse: a tab value the strip never offered cannot
+ * become the active filter. */
+export function parseStatusFilter(raw: string): StatusFilter {
+  return STATUS_FILTER_OPTIONS.find((o) => o.value === raw)?.value ?? 'all'
+}
 
 /** The kinds of value control a predicate field can take. Only `number` exists
  * today, because only `rating` exists (see `PRED_FIELDS`) — the `enum` and `bool`

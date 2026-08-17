@@ -96,7 +96,12 @@ export const MatchList = () => {
           const merged = { ...prev, ...patch }
           return {
             q: merged.q && merged.q.length > 0 ? merged.q : undefined,
-            status: merged.status,
+            // `prev` is the router's union across EVERY route's search params, so
+            // `merged.status` also admits the values other routes put under that key
+            // (the tournaments list added `draft`/`published`/`live`/`archived` in
+            // #970). Parse it back through this route's own field so a status this
+            // page does not own drops out instead of being written to /matches.
+            status: matchesSearchSchema.shape.status.parse(merged.status),
             page: merged.page && merged.page > 1 ? merged.page : undefined,
           }
         },
