@@ -6,7 +6,7 @@
 //
 // Three rules keep it transcribable:
 //
-// 1. **Every vector states all eight inputs.** No defaults builder, no shared base object.
+// 1. **Every vector states all seven inputs.** No defaults builder, no shared base object.
 //    A hidden `groupCountMode: 'automatic'` is a guess the Python author would have to
 //    make, and DRY is worth less here than being readable as a spec.
 // 2. **Every vector states the whole result**, including all three source sentences. One
@@ -31,9 +31,12 @@
 //   the server), `unevenDistribution` (a notice, not a refusal — the API does not object
 //   to unequal groups), and the `title` / `body` on each impossible problem.
 //
-// The `input` side crosses whole: all eight numbers, unchanged.
+// The `input` side crosses whole: all seven numbers, unchanged. Both sides also pin
+// `DEFAULT_GROUP_SIZE` itself, so the divisor cannot drift while every vector still
+// happens to agree.
 
 import {
+  DEFAULT_GROUP_SIZE,
   deriveDrawStructure,
   groupLetter,
   type DrawStructure,
@@ -54,12 +57,14 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   // ---------------------------------------------------------------------------------
 
   {
-    // The reference's "Nothing set" screen. One group per reservation row — today's
-    // behaviour, kept as the automatic answer.
-    name: 'nothing set: 32 players across 4 reservations',
+    // The reference's "Nothing set" screen — under OUR automatic rule, not the
+    // reference's (#1386): the count divides the field by the default five, and the
+    // sizes balance across it. The reference derived four groups of eight from the four
+    // reservation rows; the divergence note in
+    // `docs/designs/rr-then-ko-draw-structure/README.md` records the departure.
+    name: 'nothing set: a 32-player cap makes seven groups',
     input: {
       previewFieldSize: 32,
-      reservationCount: 4,
       groupCountMode: 'automatic',
       manualGroupCount: null,
       groupSizeMode: 'automatic',
@@ -68,26 +73,29 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       manualQualifiers: null,
     },
     expected: {
-      groupCount: 4,
-      groupSizes: [8, 8, 8, 8],
+      groupCount: 7,
+      groupSizes: [5, 5, 5, 5, 4, 4, 4],
       qualifiersPerGroup: 2,
-      totalQualifiers: 8,
-      knockoutBracketSize: 8,
-      firstRoundByes: 0,
-      groupMatchCount: 112,
+      totalQualifiers: 14,
+      knockoutBracketSize: 14,
+      firstRoundByes: 2,
+      groupMatchCount: 58,
       sources: {
         groupCount: {
           ownership: 'automatic',
-          sentence: "4 reservations · today's behaviour",
+          sentence: '32 players ÷ about 5 per group',
         },
-        groupSize: { ownership: 'automatic', sentence: '32 players ÷ 4 groups' },
+        groupSize: { ownership: 'automatic', sentence: '32 players ÷ 7 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 4 groups.',
+          sentence: 'Aiming at an 8-player knockout across 7 groups.',
         },
       },
       disagreement: null,
-      unevenDistribution: null,
+      unevenDistribution: [
+        { groups: 4, size: 5 },
+        { groups: 3, size: 4 },
+      ],
       impossibleProblems: [],
     },
   },
@@ -98,7 +106,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'manual group count only: 40 players across 6 groups',
     input: {
       previewFieldSize: 40,
-      reservationCount: 4,
       groupCountMode: 'manual',
       manualGroupCount: 6,
       groupSizeMode: 'automatic',
@@ -117,7 +124,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each group also gets a reservation.',
+          sentence: 'You set this.',
         },
         groupSize: { ownership: 'automatic', sentence: '40 players ÷ 6 groups' },
         qualifiers: {
@@ -140,7 +147,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'manual group size only: 40 players in groups of 5',
     input: {
       previewFieldSize: 40,
-      reservationCount: 4,
       groupCountMode: 'automatic',
       manualGroupCount: null,
       groupSizeMode: 'manual',
@@ -180,7 +186,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'both manual and disagreeing: 6 groups of 5 seat 30 of a 40 field',
     input: {
       previewFieldSize: 40,
-      reservationCount: 6,
       groupCountMode: 'manual',
       manualGroupCount: 6,
       groupSizeMode: 'manual',
@@ -199,7 +204,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each group also gets a reservation.',
+          sentence: 'You set this.',
         },
         groupSize: { ownership: 'manual', sentence: 'You set this.' },
         qualifiers: {
@@ -227,7 +232,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'both manual, seats to spare: 8 groups of 5 seat 40 of a 30 field',
     input: {
       previewFieldSize: 30,
-      reservationCount: 8,
       groupCountMode: 'manual',
       manualGroupCount: 8,
       groupSizeMode: 'manual',
@@ -246,7 +250,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each group also gets a reservation.',
+          sentence: 'You set this.',
         },
         groupSize: { ownership: 'manual', sentence: 'You set this.' },
         qualifiers: {
@@ -268,12 +272,12 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
-    // The reference's "Uneven field" screen. Legal, and said out loud — the bigger groups
-    // play more matches, and nothing has been silently reshaped.
-    name: 'uneven but legal: 22 players across 4 groups',
+    // The reference's "Uneven field" screen, re-derived under the default divisor: 22 is
+    // five groups now, not four. Legal, and said out loud — the bigger groups play more
+    // matches, and nothing has been silently reshaped.
+    name: 'uneven but legal: a 22-player cap splits 5, 5, 4, 4, 4',
     input: {
       previewFieldSize: 22,
-      reservationCount: 4,
       groupCountMode: 'automatic',
       manualGroupCount: null,
       groupSizeMode: 'automatic',
@@ -282,28 +286,153 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       manualQualifiers: null,
     },
     expected: {
-      groupCount: 4,
-      groupSizes: [6, 6, 5, 5],
+      groupCount: 5,
+      groupSizes: [5, 5, 4, 4, 4],
       qualifiersPerGroup: 2,
-      totalQualifiers: 8,
-      knockoutBracketSize: 8,
-      firstRoundByes: 0,
-      groupMatchCount: 50,
+      totalQualifiers: 10,
+      knockoutBracketSize: 10,
+      firstRoundByes: 6,
+      groupMatchCount: 38,
       sources: {
         groupCount: {
           ownership: 'automatic',
-          sentence: "4 reservations · today's behaviour",
+          sentence: '22 players ÷ about 5 per group',
         },
-        groupSize: { ownership: 'automatic', sentence: '22 players ÷ 4 groups' },
+        groupSize: { ownership: 'automatic', sentence: '22 players ÷ 5 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 4 groups.',
+          sentence: 'Aiming at an 8-player knockout across 5 groups.',
         },
       },
       disagreement: null,
       unevenDistribution: [
-        { groups: 2, size: 6 },
         { groups: 2, size: 5 },
+        { groups: 3, size: 4 },
+      ],
+      impossibleProblems: [],
+    },
+  },
+
+  // ---------------------------------------------------------------------------------
+  // The default divisor, on each side of a multiple-of-five boundary. 39, 40 and 41 are
+  // the three fields #1387's 409 keys on: 39 and 40 both make eight groups, and 41 is
+  // the first field that makes nine.
+  // ---------------------------------------------------------------------------------
+
+  {
+    // One under the boundary: still eight groups, and the short group takes the gap.
+    name: 'a 39-player cap stays at eight groups',
+    input: {
+      previewFieldSize: 39,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
+      qualifiersMode: 'automatic',
+      manualQualifiers: null,
+    },
+    expected: {
+      groupCount: 8,
+      groupSizes: [5, 5, 5, 5, 5, 5, 5, 4],
+      qualifiersPerGroup: 1,
+      totalQualifiers: 8,
+      knockoutBracketSize: 8,
+      firstRoundByes: 0,
+      groupMatchCount: 76,
+      sources: {
+        groupCount: {
+          ownership: 'automatic',
+          sentence: '39 players ÷ about 5 per group',
+        },
+        groupSize: { ownership: 'automatic', sentence: '39 players ÷ 8 groups' },
+        qualifiers: {
+          ownership: 'automatic',
+          sentence: 'Aiming at an 8-player knockout across 8 groups.',
+        },
+      },
+      disagreement: null,
+      unevenDistribution: [
+        { groups: 7, size: 5 },
+        { groups: 1, size: 4 },
+      ],
+      impossibleProblems: [],
+    },
+  },
+
+  {
+    // Exactly on the boundary: the field divides, so every group holds the default five
+    // and each sends its winner only — the bracket is the target eight by construction.
+    name: 'a 40-player cap derives eight groups of five',
+    input: {
+      previewFieldSize: 40,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
+      qualifiersMode: 'automatic',
+      manualQualifiers: null,
+    },
+    expected: {
+      groupCount: 8,
+      groupSizes: [5, 5, 5, 5, 5, 5, 5, 5],
+      qualifiersPerGroup: 1,
+      totalQualifiers: 8,
+      knockoutBracketSize: 8,
+      firstRoundByes: 0,
+      groupMatchCount: 80,
+      sources: {
+        groupCount: {
+          ownership: 'automatic',
+          sentence: '40 players ÷ about 5 per group',
+        },
+        groupSize: { ownership: 'automatic', sentence: '40 players ÷ 8 groups' },
+        qualifiers: {
+          ownership: 'automatic',
+          sentence: 'Aiming at an 8-player knockout across 8 groups.',
+        },
+      },
+      disagreement: null,
+      unevenDistribution: null,
+      impossibleProblems: [],
+    },
+  },
+
+  {
+    // One over the boundary: the ceiling tips the count to nine, and — unlike the greedy
+    // fill of a TYPED five, pinned below — the balanced split leaves no group of one.
+    name: 'a 41-player cap tips into nine balanced groups',
+    input: {
+      previewFieldSize: 41,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
+      qualifiersMode: 'automatic',
+      manualQualifiers: null,
+    },
+    expected: {
+      groupCount: 9,
+      groupSizes: [5, 5, 5, 5, 5, 4, 4, 4, 4],
+      qualifiersPerGroup: 1,
+      totalQualifiers: 9,
+      knockoutBracketSize: 9,
+      firstRoundByes: 7,
+      groupMatchCount: 74,
+      sources: {
+        groupCount: {
+          ownership: 'automatic',
+          sentence: '41 players ÷ about 5 per group',
+        },
+        groupSize: { ownership: 'automatic', sentence: '41 players ÷ 9 groups' },
+        qualifiers: {
+          ownership: 'automatic',
+          sentence: 'Aiming at an 8-player knockout across 9 groups.',
+        },
+      },
+      disagreement: null,
+      unevenDistribution: [
+        { groups: 5, size: 5 },
+        { groups: 4, size: 4 },
       ],
       impossibleProblems: [],
     },
@@ -321,7 +450,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'field too small: 8 players across 6 groups reports the group, not the qualifier',
     input: {
       previewFieldSize: 8,
-      reservationCount: 6,
       groupCountMode: 'manual',
       manualGroupCount: 6,
       groupSizeMode: 'automatic',
@@ -340,7 +468,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each group also gets a reservation.',
+          sentence: 'You set this.',
         },
         groupSize: { ownership: 'automatic', sentence: '8 players ÷ 6 groups' },
         qualifiers: {
@@ -371,7 +499,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'one-player knockout: 1 group taking its top 1',
     input: {
       previewFieldSize: 8,
-      reservationCount: 1,
       groupCountMode: 'manual',
       manualGroupCount: 1,
       groupSizeMode: 'automatic',
@@ -390,7 +517,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each group also gets a reservation.',
+          sentence: 'You set this.',
         },
         groupSize: { ownership: 'automatic', sentence: '8 players ÷ 1 groups' },
         qualifiers: { ownership: 'manual', sentence: 'You set this.' },
@@ -412,7 +539,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'too many qualifiers: top 3 from a group of 2',
     input: {
       previewFieldSize: 10,
-      reservationCount: 4,
       groupCountMode: 'manual',
       manualGroupCount: 4,
       groupSizeMode: 'automatic',
@@ -431,7 +557,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each group also gets a reservation.',
+          sentence: 'You set this.',
         },
         groupSize: { ownership: 'automatic', sentence: '10 players ÷ 4 groups' },
         qualifiers: { ownership: 'manual', sentence: 'You set this.' },
@@ -459,7 +585,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'ordering: a field of one is a group problem, not a bracket problem',
     input: {
       previewFieldSize: 1,
-      reservationCount: 1,
       groupCountMode: 'manual',
       manualGroupCount: 1,
       groupSizeMode: 'automatic',
@@ -478,7 +603,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'manual',
-          sentence: 'You set this. Each group also gets a reservation.',
+          sentence: 'You set this.',
         },
         groupSize: { ownership: 'automatic', sentence: '1 players ÷ 1 groups' },
         qualifiers: { ownership: 'manual', sentence: 'You set this.' },
@@ -496,14 +621,15 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
-    // THE GREEDY EDGE. Nine groups, the ninth holding the one player 41 does not divide
-    // into eight fives. A balanced split would give `5,5,5,5,5,5,5,4,4` and hide the
-    // problem by editing a number the director typed — so the fill stays greedy and the
-    // group of one is reported.
+    // THE GREEDY EDGE, and the other half of the boundary trio above: the same 41
+    // players, but the five is TYPED. Nine groups, the ninth holding the one player 41
+    // does not divide into eight fives. A balanced split would give `5,5,5,5,5,5,5,4,4`
+    // and hide the problem by editing a number the director typed — so the fill stays
+    // greedy and the group of one is reported. The two fives mean different things
+    // (#1370 decision 2), and this pair of vectors is what pins the difference.
     name: 'greedy fill: 41 players in groups of 5 leaves a group of one',
     input: {
       previewFieldSize: 41,
-      reservationCount: 4,
       groupCountMode: 'automatic',
       manualGroupCount: null,
       groupSizeMode: 'manual',
@@ -551,13 +677,13 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   // ---------------------------------------------------------------------------------
 
   {
-    // An event with NO cap previews against 16 players. The derivation just takes the
-    // number — the honest "16 players because this event has no cap" basis label is the
-    // renderer's job — and the group-size sentence is where the 16 shows up.
+    // An event with NO cap previews against 16 players. Sixteen does not fill four
+    // fives, so this is the vector that pins the five as a COUNT DIVISOR: the balanced
+    // split gives four groups of four, where filling to five greedily would give
+    // `5, 5, 5, 1` and refuse the out-of-the-box event (#1370 decision 1).
     name: 'no cap: the uncapped preview field of 16 players',
     input: {
       previewFieldSize: 16,
-      reservationCount: 4,
       groupCountMode: 'automatic',
       manualGroupCount: null,
       groupSizeMode: 'automatic',
@@ -576,7 +702,7 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       sources: {
         groupCount: {
           ownership: 'automatic',
-          sentence: "4 reservations · today's behaviour",
+          sentence: '16 players ÷ about 5 per group',
         },
         groupSize: { ownership: 'automatic', sentence: '16 players ÷ 4 groups' },
         qualifiers: {
@@ -591,53 +717,65 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
   },
 
   {
-    // An event with no group rows yet. The count clamps to one, and the sentence reports
-    // the number the derivation USED — `1 reservations`, unpluralised, because the
-    // sentence explains the division that happened and the reference does not pluralise.
-    name: 'no reservations yet: the count clamps to one and the sentence says so',
+    // The OTHER five, beside the vector above: the same field of 16, but the five is
+    // TYPED. The count is the same four — the division is identical — and the fill is
+    // not: greedy leaves `5, 5, 5, 1`, and the group of one is reported rather than
+    // rebalanced away, because a typed number is the director's (#1370 decision 2).
+    // This pair is the side-by-side the decision asks the table to pin.
+    name: 'a typed five on a field of 16 fills greedily: 5, 5, 5, 1',
     input: {
       previewFieldSize: 16,
-      reservationCount: 0,
       groupCountMode: 'automatic',
       manualGroupCount: null,
-      groupSizeMode: 'automatic',
-      manualGroupSize: null,
+      groupSizeMode: 'manual',
+      manualGroupSize: 5,
       qualifiersMode: 'automatic',
       manualQualifiers: null,
     },
     expected: {
-      groupCount: 1,
-      groupSizes: [16],
-      qualifiersPerGroup: 8,
+      groupCount: 4,
+      groupSizes: [5, 5, 5, 1],
+      qualifiersPerGroup: 2,
       totalQualifiers: 8,
       knockoutBracketSize: 8,
       firstRoundByes: 0,
-      groupMatchCount: 120,
+      groupMatchCount: 30,
       sources: {
         groupCount: {
           ownership: 'automatic',
-          sentence: "1 reservations · today's behaviour",
+          sentence: '16 players ÷ about 5 per group',
         },
-        groupSize: { ownership: 'automatic', sentence: '16 players ÷ 1 groups' },
+        groupSize: {
+          ownership: 'manual',
+          sentence: 'You set the target. We derived the group count.',
+        },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 1 groups.',
+          sentence: 'Aiming at an 8-player knockout across 4 groups.',
         },
       },
       disagreement: null,
-      unevenDistribution: null,
-      impossibleProblems: [],
+      unevenDistribution: [
+        { groups: 3, size: 5 },
+        { groups: 1, size: 1 },
+      ],
+      impossibleProblems: [
+        {
+          kind: 'group',
+          title: 'Group D would have one player',
+          body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
+        },
+      ],
     },
   },
 
   {
     // A director typing a zero into the group-size box. It clamps to one, and — the same
-    // rule as the reservation sentence above — the copy reports the clamped value, not
+    // rule as every other reported divisor — the copy reports the clamped value, not
     // the zero, because that is the division that was actually done.
     name: 'a manual group size of zero clamps to one, in the maths and in the copy',
     input: {
       previewFieldSize: 3,
-      reservationCount: 4,
       groupCountMode: 'automatic',
       manualGroupCount: null,
       groupSizeMode: 'manual',
@@ -678,11 +816,12 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
 
   {
     // A field of nobody — the state a brand-new event with a zero cap would preview. The
-    // group refusal has a second sentence for it: `no players`, not `one player`.
-    name: 'an empty field: the groups have no players at all',
+    // group refusal has a second sentence for it: `no players`, not `one player`. This is
+    // also the vector that pins the `max(1, …)` clamp on the automatic count:
+    // `ceil(0 / 5)` is 0, and the clamp is what makes it one group rather than none.
+    name: 'an empty field: the one group has no players at all',
     input: {
       previewFieldSize: 0,
-      reservationCount: 3,
       groupCountMode: 'automatic',
       manualGroupCount: null,
       groupSizeMode: 'automatic',
@@ -691,22 +830,22 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       manualQualifiers: null,
     },
     expected: {
-      groupCount: 3,
-      groupSizes: [0, 0, 0],
-      qualifiersPerGroup: 3,
-      totalQualifiers: 9,
-      knockoutBracketSize: 9,
-      firstRoundByes: 7,
+      groupCount: 1,
+      groupSizes: [0],
+      qualifiersPerGroup: 8,
+      totalQualifiers: 8,
+      knockoutBracketSize: 8,
+      firstRoundByes: 0,
       groupMatchCount: 0,
       sources: {
         groupCount: {
           ownership: 'automatic',
-          sentence: "3 reservations · today's behaviour",
+          sentence: '0 players ÷ about 5 per group',
         },
-        groupSize: { ownership: 'automatic', sentence: '0 players ÷ 3 groups' },
+        groupSize: { ownership: 'automatic', sentence: '0 players ÷ 1 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 3 groups.',
+          sentence: 'Aiming at an 8-player knockout across 1 groups.',
         },
       },
       disagreement: null,
@@ -729,7 +868,6 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
     name: 'a manual mode with no number is automatic, badge and all',
     input: {
       previewFieldSize: 32,
-      reservationCount: 4,
       groupCountMode: 'manual',
       manualGroupCount: null,
       groupSizeMode: 'manual',
@@ -738,26 +876,29 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       manualQualifiers: null,
     },
     expected: {
-      groupCount: 4,
-      groupSizes: [8, 8, 8, 8],
+      groupCount: 7,
+      groupSizes: [5, 5, 5, 5, 4, 4, 4],
       qualifiersPerGroup: 2,
-      totalQualifiers: 8,
-      knockoutBracketSize: 8,
-      firstRoundByes: 0,
-      groupMatchCount: 112,
+      totalQualifiers: 14,
+      knockoutBracketSize: 14,
+      firstRoundByes: 2,
+      groupMatchCount: 58,
       sources: {
         groupCount: {
           ownership: 'automatic',
-          sentence: "4 reservations · today's behaviour",
+          sentence: '32 players ÷ about 5 per group',
         },
-        groupSize: { ownership: 'automatic', sentence: '32 players ÷ 4 groups' },
+        groupSize: { ownership: 'automatic', sentence: '32 players ÷ 7 groups' },
         qualifiers: {
           ownership: 'automatic',
-          sentence: 'Aiming at an 8-player knockout across 4 groups.',
+          sentence: 'Aiming at an 8-player knockout across 7 groups.',
         },
       },
       disagreement: null,
-      unevenDistribution: null,
+      unevenDistribution: [
+        { groups: 4, size: 5 },
+        { groups: 3, size: 4 },
+      ],
       impossibleProblems: [],
     },
   },
@@ -766,6 +907,14 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
 describe('deriveDrawStructure', () => {
   it.each(DRAW_STRUCTURE_VECTORS)('$name', ({ input, expected }) => {
     expect(deriveDrawStructure(input)).toEqual(expected)
+  })
+})
+
+describe('DEFAULT_GROUP_SIZE', () => {
+  // Pinned on both sides (`api/tests/test_draw_structure.py` asserts its twin), because
+  // the vectors alone cannot catch two implementations that changed the divisor in step.
+  it('is five', () => {
+    expect(DEFAULT_GROUP_SIZE).toBe(5)
   })
 })
 

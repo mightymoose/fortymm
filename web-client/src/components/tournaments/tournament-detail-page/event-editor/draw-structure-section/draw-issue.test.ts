@@ -4,14 +4,13 @@ import {
 } from '../../../data/draw-structure'
 import { drawIssueFor } from './draw-issue'
 
-/** The eight derivation inputs, all-automatic, so a case states only what it changes.
- * Structures are **derived, never hand-written**: a `DrawStructure` typed out by hand can
- * hold a tally the arithmetic never produces, and then the precedence is proved against a
- * state no director can reach. */
+/** The seven derivation inputs, all-automatic over a field that divides, so a case
+ * states only what it changes. Structures are **derived, never hand-written**: a
+ * `DrawStructure` typed out by hand can hold a tally the arithmetic never produces, and
+ * then the precedence is proved against a state no director can reach. */
 const structureFor = (overrides: Partial<DrawStructureOptions>) =>
   deriveDrawStructure({
-    previewFieldSize: 32,
-    reservationCount: 4,
+    previewFieldSize: 20,
     groupCountMode: 'automatic',
     manualGroupCount: null,
     groupSizeMode: 'automatic',
@@ -28,29 +27,30 @@ const structureFor = (overrides: Partial<DrawStructureOptions>) =>
  * renderer and leave this alone.
  */
 describe('drawIssueFor', () => {
-  it('has nothing to say about a draw that divides — 32 across 4', () => {
+  it('has nothing to say about a draw that divides — 20 across 4', () => {
     expect(drawIssueFor(structureFor({}))).toBeNull()
   })
 
-  it('reports the uneven tally when that is all that is wrong — 22 across 4', () => {
+  it('reports the uneven tally when that is all that is wrong — 22 across 5', () => {
     expect(drawIssueFor(structureFor({ previewFieldSize: 22 }))).toEqual({
       kind: 'uneven',
       distribution: [
-        { groups: 2, size: 6 },
         { groups: 2, size: 5 },
+        { groups: 3, size: 4 },
       ],
     })
   })
 
   /**
-   * ⚠️ The case the ordering exists for. 8 across 6 reservations splits `2, 2, 1, 1, 1,
+   * ⚠️ The case the ordering exists for. 8 across 6 manual groups splits `2, 2, 1, 1, 1,
    * 1`, so the derivation reports an uneven tally AND a group nobody can play in — both
    * non-empty, at once. "Legal, but uneven" is not the thing to say about a group of one.
    */
   it('puts an unplayable group ahead of the uneven tally it comes with', () => {
     const structure = structureFor({
       previewFieldSize: 8,
-      reservationCount: 6,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
     })
     // Both really are set — otherwise this asserts precedence against a state that never
     // had two answers to choose between.

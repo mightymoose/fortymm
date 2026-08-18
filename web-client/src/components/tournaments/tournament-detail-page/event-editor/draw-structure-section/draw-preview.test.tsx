@@ -3,11 +3,10 @@ import { drawPreviewPage } from './draw-preview.page'
 
 describe('DrawPreview', () => {
   /**
-   * The reference's **"Nothing set"** state
-   * (`docs/designs/rr-then-ko-draw-structure/nothing-set.png`): 32 players across 4
-   * reservations, every setting the system's.
+   * The factory's default state: a 20-player cap, every setting the system's, so the
+   * default divisor of five derives 4 groups of 5 — even, and sound.
    */
-  describe('the reference’s "Nothing set" state — 32 players, 4 reservations', () => {
+  describe('the default state — a 20-player cap, every setting the system’s', () => {
     it('says the draw is ready, in words and on the badge', () => {
       drawPreviewPage.render()
 
@@ -19,7 +18,7 @@ describe('DrawPreview', () => {
       drawPreviewPage.render()
 
       expect(drawPreviewPage.getEquation()).toHaveTextContent(
-        '32 players ÷ 4 groups = 8 per group',
+        '20 players ÷ 4 groups = 5 per group',
       )
     })
 
@@ -34,7 +33,7 @@ describe('DrawPreview', () => {
       ])
       for (const letter of ['A', 'B', 'C', 'D']) {
         const card = drawPreviewPage.group(letter).getCard()
-        expect(card).toHaveTextContent('8')
+        expect(card).toHaveTextContent('5')
         expect(card).toHaveTextContent('players')
         expect(card).toHaveTextContent('top 2 advance')
       }
@@ -47,7 +46,7 @@ describe('DrawPreview', () => {
       expect(knockout).toHaveTextContent('Knockout')
       expect(knockout).toHaveTextContent('8-player bracket')
       expect(knockout).toHaveTextContent('No first-round byes')
-      expect(knockout).toHaveTextContent('112 group matches')
+      expect(knockout).toHaveTextContent('40 group matches')
     })
 
     it('deals membership by snake', () => {
@@ -60,7 +59,7 @@ describe('DrawPreview', () => {
       drawPreviewPage.render()
 
       expect(drawPreviewPage.getFact('Preview basis')).toHaveTextContent(
-        '32-player cap',
+        '20-player cap',
       )
     })
 
@@ -79,13 +78,12 @@ describe('DrawPreview', () => {
     drawPreviewPage.render(
       buildDrawPreviewPropsFor({
         previewFieldSize: 22,
-        reservationCount: 4,
       }),
     )
 
-    // 22 across 4 is 6, 6, 5, 5.
+    // 22 under the default divisor is five groups of 5, 5, 4, 4, 4.
     expect(drawPreviewPage.getEquation()).toHaveTextContent(
-      '22 players ÷ 4 groups = 5–6 per group',
+      '22 players ÷ 5 groups = 4–5 per group',
     )
   })
 
@@ -98,7 +96,6 @@ describe('DrawPreview', () => {
     const disagreeing = () =>
       buildDrawPreviewPropsFor({
         previewFieldSize: 40,
-        reservationCount: 6,
         groupCountMode: 'manual',
         manualGroupCount: 6,
         groupSizeMode: 'manual',
@@ -141,7 +138,6 @@ describe('DrawPreview', () => {
     drawPreviewPage.render(
       buildDrawPreviewPropsFor({
         previewFieldSize: 32,
-        reservationCount: 3,
         groupCountMode: 'manual',
         manualGroupCount: 3,
         qualifiersMode: 'manual',
@@ -165,7 +161,6 @@ describe('DrawPreview', () => {
     const tooSmall = () =>
       buildDrawPreviewPropsFor({
         previewFieldSize: 8,
-        reservationCount: 6,
         groupCountMode: 'manual',
         manualGroupCount: 6,
         qualifiersMode: 'manual',
@@ -194,7 +189,6 @@ describe('DrawPreview', () => {
       drawPreviewPage.render(
         buildDrawPreviewPropsFor({
           previewFieldSize: 32,
-          reservationCount: 4,
           groupCountMode: 'manual',
           manualGroupCount: 4,
           groupSizeMode: 'manual',
@@ -221,23 +215,22 @@ describe('DrawPreview', () => {
   })
 
   /**
-   * ⚠️ The ADR's departure from the reference
-   * (ADR 20260808, the group-count-is-group-rows decision).
-   * The reference renders this fact as `max(reservations, derived)`, which for this very
-   * state would print `8` and hide the gap. Both halves are asserted together, because
+   * ⚠️ The departure from the reference, now on both counts: the reference renders this
+   * fact as `max(reservations, derived)`, which for this very state would print `8` and
+   * hide the gap — and since #1386 the derivation does not read the reservation rows at
+   * all, so the fact is fed its own prop. Both halves are asserted together, because
    * the gap — not either number — is the thing being reported.
    */
   it('states the event’s real reservation rows, even when the structure needs more', () => {
     drawPreviewPage.render(
       buildDrawPreviewPropsFor({
         previewFieldSize: 40,
-        reservationCount: 4,
         groupSizeMode: 'manual',
         manualGroupSize: 5,
       }),
     )
 
-    // 40 in groups of 5 needs 8 groups. The event has 4 reservation rows.
+    // 40 in groups of 5 needs 8 groups. The factory's event has 4 reservation rows.
     expect(drawPreviewPage.getEquation()).toHaveTextContent('8 groups')
     expect(drawPreviewPage.getFact('Reservations')).toHaveTextContent('4')
   })
@@ -248,12 +241,12 @@ describe('DrawPreview', () => {
     drawPreviewPage.render(
       buildDrawPreviewPropsFor({
         previewFieldSize: 48,
-        reservationCount: 12,
       }),
     )
 
+    // 48 under the default divisor is ten groups.
     expect(drawPreviewPage.getGroupCards()).toHaveLength(8)
-    expect(drawPreviewPage.getEquation()).toHaveTextContent('12 groups')
+    expect(drawPreviewPage.getEquation()).toHaveTextContent('10 groups')
   })
 
   it('shows the preview basis it was given, cap or no cap', () => {

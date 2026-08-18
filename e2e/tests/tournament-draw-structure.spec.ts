@@ -18,13 +18,16 @@ const RR_KO_EVENT = 'Two-stage Open'
 const ROUND_ROBIN_EVENT = 'One-stage Open'
 
 /** The event's **cap**, which is the field the tab derives against (a capped event
- * previews against its cap; an uncapped one against a synthetic 16). Thirty-two because
- * it is the reference's own "nothing set" state, and because it divides by four exactly —
- * so the uneven notice is absent and any `6–8` on screen is a real failure. */
-const FIELD_CAP = 32
-/** How many **group rows** the event carries. Today's behaviour, and the automatic
- * source of the group count: one reservation is one group (ADR 20260808, extended by
- * #1369's split). */
+ * previews against its cap; an uncapped one against a synthetic 16). Twenty because it
+ * divides by the default group size of five exactly — so the uneven notice is absent
+ * and any `4–5` on screen is a real failure. */
+const FIELD_CAP = 20
+/** The derived group count: `ceil(20 / 5)` under the default divisor of five (#1386).
+ * NOT the reservation row count — the derivation stopped reading it. The four seeded
+ * rows below deliberately match this number, so every numeric assertion is stable under
+ * either rule and none of them discriminates the source. The one assertion that does is
+ * `GROUP_COUNT_SOURCE`, verbatim: the old rule's sentence named the reservation rows,
+ * and this one names the division. */
 const GROUP_COUNT = 4
 /** The four reservation rows, booking **no** tables — a draw is cut without regard to
  * tables, and an empty `table_ids` is what the editor's own reservation section sends.
@@ -46,15 +49,16 @@ const RESERVATIONS: ReadonlyArray<ReservationSpec> = ['A', 'B', 'C', 'D'].map(
  * moves the setting onto this tab for good and makes them one number. */
 const STORED_QUALIFIERS_PER_GROUP = 2
 
-/** What the derivation makes of `32` across `4`, and the only numbers this spec asserts.
- * Worked from the reference's own arithmetic (`docs/designs/rr-then-ko-draw-structure`):
- * a balanced split of 32 into 4 is `8, 8, 8, 8`; the automatic qualifier count is
- * `ceil(8 / 4)` = 2; the bracket is `4 × 2` = 8, which is already a power of two and so
- * takes no byes; and the group stage plays `4 × C(8,2)` = 112 matches. */
-const GROUP_SIZE = 8
+/** What the derivation makes of a field of `20`, and the only numbers this spec asserts.
+ * Worked from the derivation's own arithmetic (`data/draw-structure.ts`, and the
+ * divergence note in `docs/designs/rr-then-ko-draw-structure`): `ceil(20 / 5)` = 4
+ * groups, balanced to `5, 5, 5, 5`; the automatic qualifier count is `ceil(8 / 4)` = 2;
+ * the bracket is `4 × 2` = 8, which is already a power of two and so takes no byes; and
+ * the group stage plays `4 × C(5,2)` = 40 matches. */
+const GROUP_SIZE = 5
 const QUALIFIERS_ADVANCING = 2
 const BRACKET_SIZE = 8
-const GROUP_MATCHES = 112
+const GROUP_MATCHES = 40
 
 /** The equation, whole. Safe to assert as one string — unlike the cards below it, every
  * literal in that line carries its own spaces (`textContent` inserts none of its own, so
@@ -63,17 +67,11 @@ const EQUATION = `${FIELD_CAP} players ÷ ${GROUP_COUNT} groups = ${GROUP_SIZE} 
 
 /** The source line under the Group count row, **verbatim**.
  *
- * The glyphs are the reference's and are load-bearing: a middle dot (`·`, U+00B7), and a
- * **straight** apostrophe (U+0027) in `today's` — the one exception to the reference's
- * right-single-quote rule, which the design README states at the top and this string
- * exists to pin. A test that normalises either way is a test that stops noticing.
- *
- * Confirmed against `web-client/src/components/tournaments/data/draw-structure.ts`'s own
- * in-flight rename (#1369, not yet landed at the component layer that renders it): the
- * old venue-facing term is dropped outright rather than becoming "Reservations" —
- * `${groupCount} reservations · today's behaviour`, lowercase, no capitalization
- * change. */
-const GROUP_COUNT_SOURCE = `${GROUP_COUNT} reservations · today's behaviour`
+ * Ours, not the reference's (#1386): the automatic count divides the field by the
+ * default group size of five, and the sentence reports that division — the `÷` glyph
+ * (U+00F7) is load-bearing, and the divisor is the default the director never typed.
+ * The reference's reservation-count sentence is gone with the input it reported. */
+const GROUP_COUNT_SOURCE = `${FIELD_CAP} players ÷ about 5 per group`
 
 /** Where the preview field came from. `{n}-player cap` for a capped event — the honest
  * label an uncapped one gets instead is `preview-field.ts`'s deviation from the reference
@@ -84,9 +82,9 @@ const PREVIEW_BASIS = `${FIELD_CAP}-player cap`
  * **The Draw structure tab, through the whole composed stack** (#1320).
  *
  * A director opens a round-robin-then-knockout event they have already saved, and reads
- * the draw their four reservation rows and their 32-player cap already imply: four
- * groups of eight, two out of each, an eight-player bracket with no byes, and 112 group
- * matches to decide it.
+ * the draw their 20-player cap already implies under the default group size of five:
+ * four groups of five, two out of each, an eight-player bracket with no byes, and 40
+ * group matches to decide it.
  *
  * ## What only this suite can say
  *
@@ -95,13 +93,12 @@ const PREVIEW_BASIS = `${FIELD_CAP}-player cap`
  * the tab from a fixture. Both stop at the same edge: they hand the derivation numbers
  * that a *test* chose.
  *
- * This spec hands it numbers the **server** chose. The cap is a `max_players` column, the
- * group count is four rows in `tournament_event_reservations`, and both reach the tab
- * only by being serialized onto `GET /v1/tournaments/{id}`, parsed at the client's fetch
- * boundary, and mapped into the editor's draft. Every step of that is real here and
- * mocked everywhere else — so `112 group matches` on this screen is the statement that
- * the real payload, decoded through the real fetch stack, produces the reference's
- * number.
+ * This spec hands it numbers the **server** chose. The cap is a `max_players` column,
+ * and it reaches the tab only by being serialized onto `GET /v1/tournaments/{id}`,
+ * parsed at the client's fetch boundary, and mapped into the editor's draft. Every step
+ * of that is real here and mocked everywhere else — so `40 group matches` on this
+ * screen is the statement that the real payload, decoded through the real fetch stack,
+ * produces the derivation's number.
  *
  * ## …and the tab is CONDITIONAL, which is the regression worth a control
  *
@@ -121,7 +118,7 @@ const PREVIEW_BASIS = `${FIELD_CAP}-player cap`
  * that arc's 422 lived in. Every reading below is the browser's.
  */
 test.describe('Tournament — the rr-then-ko draw structure', () => {
-  test('a director reads the draw their reservation rows already imply, and only this format offers it', async ({
+  test('a director reads the draw their player cap already implies, and only this format offers it', async ({
     page,
     baseURL,
   }) => {
@@ -204,8 +201,7 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     // Eight qualifiers into an eight-slot bracket. The `No …` wording is the state, not
     // an absence of text: a bracket that took byes says `{n} first-round byes` here.
     await expect(drawStructure.previewKnockout).toContainText('No first-round byes')
-    // `4 × C(8,2)`. The one number on this screen that no other surface states, and the
-    // reference's own worked example.
+    // `4 × C(5,2)`. The one number on this screen that no other surface states.
     await expect(drawStructure.previewKnockout).toContainText(
       `${GROUP_MATCHES} group matches`,
     )
@@ -218,8 +214,8 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
 
     // ----- and the Group count row says where its number came from -----------
     // The row a director looks at to learn that nobody chose this: the value, the badge
-    // that says the system owns it, and the sentence naming the reservation rows it was
-    // read off. Addressed by the setting's name, which is the row's accessible name.
+    // that says the system owns it, and the sentence naming the division that produced
+    // it. Addressed by the setting's name, which is the row's accessible name.
     await expect(drawStructure.settingValue('Group count')).toHaveText(
       String(GROUP_COUNT),
     )

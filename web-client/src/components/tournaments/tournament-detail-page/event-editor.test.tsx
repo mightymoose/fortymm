@@ -202,7 +202,7 @@ describe('EventEditor', () => {
       ])
       expect(
         eventEditorPage.drawStructure.setting('Group size').getSource(),
-      ).toHaveTextContent('32 players ÷ 2 groups')
+      ).toHaveTextContent('32 players ÷ 7 groups')
     })
 
     // The draft is what the tab is keyed on, so the picker reveals and hides it live —

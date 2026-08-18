@@ -4,25 +4,24 @@ import type { TournamentEvent } from '../../data/types'
 import type { DrawStructureSectionProps } from './draw-structure-section'
 
 /**
- * The reference's **"Nothing set"** state
- * (`docs/designs/rr-then-ko-draw-structure/nothing-set.png`): a two-stage event capped
- * at **32 players** with **four** reservations, so the tab derives 4 groups of 8 and
- * 2 qualifiers apiece, and every setting is the system's.
+ * The default state: a two-stage event capped at **20 players** with **four**
+ * reservations, and every setting the system's, so the default divisor of five derives
+ * 4 groups of 5 and 2 qualifiers apiece (#1386).
  *
- * ⚠️ **Both numbers are stated here rather than inherited**, because two of the four
- * source sentences read them out — `32 players ÷ 4 groups` and
- * `4 reservations · today's behaviour`. A cap or a reservation count that moved under
- * this factory would move the copy the tests pin, and the red would look like a copy
- * bug.
+ * ⚠️ **The cap is stated here rather than inherited**, because three of the four source
+ * sentences read it out — `20 players ÷ about 5 per group` and `20 players ÷ 4 groups`
+ * among them. A cap that moved under this factory would move the copy the tests pin,
+ * and the red would look like a copy bug. The reservation count no longer reaches the
+ * derivation; the preview's `Reservations` fact is its one reader.
  *
- * The split is deliberately **even** (32 ÷ 4 = 8), so the uneven case is something a
+ * The split is deliberately **even** (20 ÷ 5 = 4), so the uneven case is something a
  * test asks for rather than something it gets by accident.
  */
 export function buildDrawStructureEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
 ): TournamentEvent {
   return buildRrThenKoEvent({
-    maxPlayers: 32,
+    maxPlayers: 20,
     reservations: Array.from({ length: 4 }, (_, i) =>
       buildReservation({
         id: `res-${groupLetter(i).toLowerCase()}`,
@@ -34,7 +33,7 @@ export function buildDrawStructureEvent(
   })
 }
 
-/** Props for `DrawStructureSection` — the "Nothing set" event above, and a spy-able
+/** Props for `DrawStructureSection` — the default event above, and a spy-able
  * way back to Basics. */
 export function buildDrawStructureSectionProps(
   overrides: Partial<DrawStructureSectionProps> = {},

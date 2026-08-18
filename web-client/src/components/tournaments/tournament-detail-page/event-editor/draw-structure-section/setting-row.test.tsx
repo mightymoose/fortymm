@@ -11,7 +11,7 @@ describe('SettingRow', () => {
     expect(settingRowPage.getValue()).toHaveTextContent('4')
     expect(settingRowPage.queryUnit()).toHaveTextContent('groups')
     expect(settingRowPage.getSource()).toHaveTextContent(
-      "4 reservations · today's behaviour",
+      '20 players ÷ about 5 per group',
     )
   })
 
