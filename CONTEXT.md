@@ -471,7 +471,9 @@ group's name.
 The set of group **identities** a stage has is frozen the moment a **draw**
 exists: groups can no longer be added, removed, or re-identified, because every
 **fixture** names the group it belongs to. The order is frozen with them, because
-that order is what the draw was seeded against.
+that order is what the draw was seeded against. The mapping from each group to
+its **reservation** freezes too, so a reservation can no longer be added or
+removed either (ADR 20260822).
 A group plays in a **reservation**, and it is the reservation that **restricts**
 scheduling rather than the group (ADR 20260807). A fixture that names a group is
 placed on that group's reservation — its tables, inside its window — while a
@@ -492,8 +494,10 @@ A director may edit a reservation's name, its tables and its window **mid-event*
 and none of that is frozen by a **draw** — because the venue changes under a
 running tournament (a table breaks, a table frees up), and nothing about the draw
 depends on where a **group** plays. Only the set of group identities freezes.
-Every group plays in exactly one reservation. A reservation with no group is a
-state nothing produces today.
+A group plays in at most one reservation, and two groups may share one. A
+reservation with no group, and a group with no reservation, are both ordinary
+states of a round-robin-then-knockout event, because its **group count**
+derives from its field and not from its reservations (ADR 20260822).
 _Avoid_: the old one-word term (see **group**), slot (that is the reservation's
 *window*, one part of it), booking, allocation.
 
@@ -571,12 +575,16 @@ flipped), override, default (a **default** is a starting value, not a claim abou
 who owns it).
 
 **Group count**:
-How many **groups** an event has, which is always the number of group rows it
-has. There is no second number stored anywhere. When a director sets it by hand,
-the group rows are created or removed to match, through the same write the
-Reservations tab uses. When the system derives a count larger than the rows, that
-is a **projection** of what the structure needs, and the gap is reported rather
-than filled in (ADR 20260808).
+How many **groups** an event has, which is the number of group rows it has. The
+server owns those rows and no client sends a group list (ADR 20260822). For a
+round-robin-then-knockout **draw** the count derives from the **preview field**
+before the **cut**: the field divided by five, rounded up, re-materialised on
+every write to the event. At the cut the server derives it once more from the
+real registered field, and after that nothing recomputes it. For every other
+**draw type** the count is one group per **reservation**. A group count creates
+no reservation. Each group maps to the reservation at its position modulo the
+reservation count, so eight groups across four reservations put two on each,
+and a group on an event with no reservation plays in none.
 _Avoid_: reservation count (a different number entirely), group total.
 
 **Group size**:
