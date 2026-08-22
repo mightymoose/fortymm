@@ -222,9 +222,10 @@ const reservationOverCapacityWireSchema = z.object({
   required_min: z.number().int(),
   capacity_min: z.number().int(),
   table_count: z.number().int(),
-  // Optional on the wire, `0` when absent: the solve ledger stores resolved reasons
-  // as JSONB, so a row written before the field existed reads back without it, and
-  // the API's own read-back default is 0 (the same rule `reservation` follows).
+  // Defensive `.default(0)`: the API always emits the field (its own JSONB read-back
+  // default turns a ledger row written before #1389 into 0), so this only guards a
+  // payload the generated type says cannot arrive — the same stance `reservation`
+  // takes.
   group_count: z.number().int().nonnegative().default(0),
 }) satisfies z.ZodType<ReservationOverCapacityWire>
 

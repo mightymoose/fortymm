@@ -135,7 +135,7 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       requiredMin: 480,
       capacityMin: 450,
       tableCount: 5,
-      // Absent on the wire (a ledger row written before #1389) reads back as 0.
+      // A ledger row written before #1389 arrives as 0: the API's read-back default.
       groupCount: 0,
     })
   })

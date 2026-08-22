@@ -676,38 +676,43 @@ def build_preview_snapshot(
         group_labels_by_id = {
             group.id: group_label(group.position) for group in plan.event.groups
         }
+        # The SAME filter the windows pass used (``_previewed_fixtures``), so the set
+        # of fixtures that reach the snapshot is exactly the set the event-wide guard
+        # judged — a fixture kept here is keyed to a window that pass built, and a
+        # window built there holds at least one fixture, so the frame origin cannot
+        # drift onto an empty window.
+        #
+        # What the filter drops is the knockout stage of an rr-then-ko draw.
+        # ``group_id IS NULL`` is a safe read of that HERE — unlike the
+        # persisted-fixture readers ADR 20260815 moved onto ``stage_id``, a
+        # ``PlannedFixture`` is pre-persistence, from one event's own plan, with
+        # single-elim and swiss events already skipped whole above (an rr-then-ko
+        # plan's only ungrouped fixtures are its knockout stage's), so there is no
+        # swiss/knockout ambiguity for a real stage row to resolve. Dropped rather
+        # than refused, and the drop is still right for a reason that is no longer
+        # about reservations: a preview runs before anyone has registered, so no
+        # group has been played, so both sides of every one of these fixtures are
+        # unknown — and a TBD-sided fixture is unplaceable in this engine and in the
+        # live one alike. A live solve does schedule the bracket (ADR "a group
+        # restricts scheduling, it does not enable it"), incrementally, as the groups
+        # feeding it resolve; a preview has nothing to resolve it from.
+        #
         # Counted, not just dropped: the caller turns a non-zero count into the honest
         # note that this event's knockout stage is missing from the schedule shown.
-        knockout_fixtures = 0
-        for fixture in plan.fixtures:
-            if fixture.group_id is None:
-                # The knockout stage of an rr-then-ko draw. ``group_id IS NULL`` is a
-                # safe read of that HERE — unlike the persisted-fixture readers ADR
-                # 20260815 moved onto ``stage_id``, this ``fixture`` is a
-                # pre-persistence ``PlannedFixture`` from one event's own plan, with
-                # single-elim and swiss events already skipped whole above (an
-                # rr-then-ko plan's only ungrouped fixtures are its knockout stage's),
-                # so there is no swiss/knockout ambiguity for a real stage row to
-                # resolve. Dropped here rather than refused, and the drop is still
-                # right for a reason that is no longer about reservations: a preview
-                # runs before anyone has registered, so no reservation has been played,
-                # so both sides of every one of these fixtures are unknown — and a
-                # TBD-sided fixture is unplaceable in this engine and in the live one
-                # alike. A live solve does schedule the bracket (ADR "a group restricts
-                # scheduling, it does not enable it"), incrementally, as the
-                # reservations feeding it resolve; a preview has nothing to resolve it
-                # from.
-                knockout_fixtures += 1
-                continue
+        previewed = _previewed_fixtures(plan)
+        knockout_fixtures = len(plan.fixtures) - len(previewed)
+        for fixture in previewed:
+            group_id = fixture.group_id
+            assert group_id is not None, "_previewed_fixtures keeps only grouped ones"
             # Which reservation restricts this fixture: its group's, or the event-wide
             # one built above for a group that plays in none (#1387, #1389) — through
             # the same rule the live solve resolves by, so the key is always one the
             # windows pass built and the lookup is total.
             schedule_fixture = _schedule_fixture(
-                event_id, fixture, keys_by_group[fixture.group_id]
+                event_id, fixture, keys_by_group[group_id]
             )
             schedule_fixtures.append(schedule_fixture)
-            group_labels[schedule_fixture.id] = group_labels_by_id[fixture.group_id]
+            group_labels[schedule_fixture.id] = group_labels_by_id[group_id]
         summaries.append(
             EventFieldSummary(
                 event_id=event_id,
