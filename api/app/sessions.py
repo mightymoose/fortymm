@@ -4,6 +4,7 @@ import os
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from email.utils import parseaddr
 from typing import Annotated
 
 import redis.exceptions
@@ -18,13 +19,14 @@ from fastapi import (
 )
 from pyrate_limiter import Duration, Rate
 from rq.job import Job
-from sqlalchemy import ColumnElement, delete, func, or_, select
+from sqlalchemy import ColumnElement, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import captcha as captcha_module
 from app import queue as queue_module
 from app.account_merge import merge_user
+from app.config import get_settings
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import (
@@ -43,6 +45,7 @@ from app.schemas.session import (
     ConfirmEmailRequest,
     ConsumeLoginRequest,
     LoginRequestAccepted,
+    LoginSenderResponse,
     MergePreview,
     MergePreviewRequest,
     MergeSummary,
@@ -103,6 +106,14 @@ EMAIL_CHANGE_CONTEXT_PREFIX = "change:"
 EMAIL_MERGE_CONTEXT_PREFIX = "merge:"
 LOGIN_TOKEN_CONTEXT = "login"
 LOGIN_TOKEN_LIFETIME = timedelta(minutes=15)
+# Structured `code`s on the 400 ``consume_login_token`` raises, so the web
+# client can tell apart the reasons an emailed sign-in link can fail instead
+# of collapsing all of them into one generic message. Capped at three: every
+# other cause (never valid, used, claimed first-sign-in row, the merge
+# integrity race) reports the same INVALID_OR_EXPIRED as it always has.
+LOGIN_INVALID_OR_EXPIRED_CODE = "invalid_or_expired"
+LOGIN_EMAIL_CHANGED_CODE = "email_changed"
+LOGIN_REPLACED_CODE = "replaced"
 # Email-change and account-merge confirmation links are mailed (so they tolerate
 # slower inbox round-trips than an in-app sign-in) but still expire, so a leaked
 # or forwarded link can't be redeemed indefinitely.
@@ -225,6 +236,13 @@ def _login_token_clause() -> ColumnElement[bool]:
         UserToken.context == LOGIN_TOKEN_CONTEXT,
         UserToken.context.startswith(_LOGIN_CONTEXT_PREFIX),
     )
+
+
+def _is_login_context(context: str) -> bool:
+    """Python-side twin of ``_login_token_clause`` — true for either login-token
+    flavour. Used where a row is already loaded (e.g. ``preview_merge``) and a
+    second query would be wasteful."""
+    return context == LOGIN_TOKEN_CONTEXT or context.startswith(_LOGIN_CONTEXT_PREFIX)
 
 
 async def _guest_match_count(db: AsyncSession, guest_id: uuid.UUID) -> int:
@@ -439,6 +457,18 @@ def _clear_cookie_header() -> dict[str, str]:
     if _cookie_secure():
         attrs.append("Secure")
     return {"set-cookie": "; ".join(attrs)}
+
+
+def _login_token_exception(code: str, message: str) -> HTTPException:
+    """Build the 400 ``consume_login_token`` raises for a dead magic link,
+    carrying a stable ``code`` alongside the human-readable ``message`` —
+    mirrors ``_session_ended_exception`` / ``_merged_session_exception``'s
+    structured-detail shape. Capped at three codes; see
+    ``LOGIN_INVALID_OR_EXPIRED_CODE`` and friends."""
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"code": code, "message": message},
+    )
 
 
 def _session_ended_exception() -> HTTPException:
@@ -1280,6 +1310,22 @@ async def _confirm_account_merge(
     return await _sign_in_after_merge(db, response, target, merged)
 
 
+@router.get("/v1/login/sender", response_model=LoginSenderResponse)
+async def get_login_sender() -> LoginSenderResponse:
+    """The bare address auth mail really sends from, e.g. for the ``/login/sent``
+    receipt screen.
+
+    A static, deployment-wide constant read straight off ``Settings.email_from``
+    — takes no input, reads no cookie, and mints no guest session, unlike
+    ``GET /v1/session``. Deliberately its own endpoint rather than a field on
+    ``LoginRequestAccepted`` (would make the address attacker-controllable
+    through a crafted ``/login/sent`` URL) or on ``GET /v1/session`` (would
+    create a guest account as a side effect of a bookmarked receipt page).
+    """
+    _, address = parseaddr(get_settings().email_from)
+    return LoginSenderResponse(address=address or None)
+
+
 @router.post(
     "/v1/login/request",
     status_code=status.HTTP_202_ACCEPTED,
@@ -1436,12 +1482,33 @@ async def _issue_and_send_login_email(
     ``merge_from_guest_id`` is recorded in the token context so consuming the
     link folds that specific guest in (token-bound). ``first_sign_in`` marks a
     token cut against a user this flow minted, whose address is stamped on at
-    consume time rather than compared against."""
+    consume time rather than compared against.
+
+    Rather than deleting the previous live token outright, this stamps
+    ``replaced_at`` on it so a click on the old link can report "a newer link
+    was requested" (see ``LOGIN_REPLACED_CODE`` in ``consume_login_token``)
+    instead of the generic invalid/expired. A row survives being replaced for
+    up to ``LOGIN_TOKEN_LIFETIME`` past its own ``created_at`` — the sweep below
+    is keyed on age alone, not on ``replaced_at``, so a chain of several
+    resends each still reports "replaced" (not "gone") until they individually
+    age out. That sweep is what bounds a replaced row's lifetime; no separate
+    cleanup job is needed."""
+    now = datetime.now(UTC)
     await db.execute(
         delete(UserToken).where(
             UserToken.user_id == user.id,
             _login_token_clause(),
+            UserToken.created_at < now - LOGIN_TOKEN_LIFETIME,
         )
+    )
+    await db.execute(
+        update(UserToken)
+        .where(
+            UserToken.user_id == user.id,
+            _login_token_clause(),
+            UserToken.replaced_at.is_(None),
+        )
+        .values(replaced_at=now)
     )
     raw_token = secrets.token_urlsafe(32)
     db.add(
@@ -1507,17 +1574,31 @@ async def consume_login_token(
         )
     ).scalar_one_or_none()
     if token_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That sign-in link is invalid or expired.",
+        raise _login_token_exception(
+            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
         )
 
+    # Expiry before replacement, deliberately: a link that is BOTH replaced and
+    # past its own LOGIN_TOKEN_LIFETIME must report expired, because that is
+    # true regardless of whether a later request has physically swept the row
+    # out of the table yet (the sweep in ``_issue_and_send_login_email`` is
+    # opportunistic, not synchronous with every consume). Age is always read
+    # off ``created_at``, never inferred from "the row still exists".
     if _token_expired(token_row, LOGIN_TOKEN_LIFETIME):
         await db.delete(token_row)
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That sign-in link is invalid or expired.",
+        raise _login_token_exception(
+            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
+        )
+
+    if token_row.replaced_at is not None:
+        # Superseded by a newer request. Not expired (checked above) and not
+        # single-use-consumed — leave the row alone so a second click on the
+        # same dead link keeps reporting the same true reason, rather than
+        # deleting it out from under a person who clicks it twice.
+        raise _login_token_exception(
+            LOGIN_REPLACED_CODE,
+            "A newer sign-in link was requested. Use the most recent email.",
         )
 
     user = (
@@ -1526,9 +1607,8 @@ async def consume_login_token(
     if user is None:
         await db.delete(token_row)
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That sign-in link is invalid or expired.",
+        raise _login_token_exception(
+            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
         )
 
     first_sign_in = _is_first_sign_in_context(token_row.context)
@@ -1545,9 +1625,9 @@ async def consume_login_token(
         ):
             await db.delete(token_row)
             await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="That sign-in link is invalid or expired.",
+            raise _login_token_exception(
+                LOGIN_INVALID_OR_EXPIRED_CODE,
+                "That sign-in link is invalid or expired.",
             )
     # If the user changed their email between request and click, the link no
     # longer matches the inbox that proved control — reject so the new owner
@@ -1555,9 +1635,8 @@ async def consume_login_token(
     elif token_row.sent_to and token_row.sent_to != user.email:
         await db.delete(token_row)
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That sign-in link no longer matches your email.",
+        raise _login_token_exception(
+            LOGIN_EMAIL_CHANGED_CODE, "That sign-in link no longer matches your email."
         )
 
     # Token-bound merge: fold the guest recorded at request time (follows the
@@ -1600,9 +1679,8 @@ async def consume_login_token(
         # this the rollback restores it, and every retry hits the same race.
         await db.execute(delete(UserToken).where(UserToken.id == token_id))
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That sign-in link is invalid or expired.",
+        raise _login_token_exception(
+            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
         ) from None
 
 
@@ -1659,6 +1737,21 @@ async def preview_merge(
         )
     ).scalar_one_or_none()
     if token_row is None:
+        return MergePreview(is_merge=False)
+
+    # A login token that's been superseded or has simply aged out can no
+    # longer be consumed — treat it the same as "not found" here, mirroring
+    # ``consume_login_token``'s own expiry-before-replacement ordering. Age is
+    # read off ``created_at`` directly rather than trusting "the row still
+    # exists", since the sweep in ``_issue_and_send_login_email`` is
+    # opportunistic and may not have run yet. Settings merge tokens
+    # (``EMAIL_MERGE_CONTEXT_PREFIX``) have no ``replaced_at`` semantics and
+    # keep their own separate lifetime elsewhere, so this only applies to the
+    # login-token branch.
+    if _is_login_context(token_row.context) and (
+        token_row.replaced_at is not None
+        or _token_expired(token_row, LOGIN_TOKEN_LIFETIME)
+    ):
         return MergePreview(is_merge=False)
 
     if token_row.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):

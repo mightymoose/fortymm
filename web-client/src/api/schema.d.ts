@@ -135,6 +135,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/login/sender": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Login Sender
+         * @description The bare address auth mail really sends from, e.g. for the ``/login/sent``
+         *     receipt screen.
+         *
+         *     A static, deployment-wide constant read straight off ``Settings.email_from``
+         *     — takes no input, reads no cookie, and mints no guest session, unlike
+         *     ``GET /v1/session``. Deliberately its own endpoint rather than a field on
+         *     ``LoginRequestAccepted`` (would make the address attacker-controllable
+         *     through a crafted ``/login/sent`` URL) or on ``GET /v1/session`` (would
+         *     create a guest account as a side effect of a bookmarked receipt page).
+         */
+        get: operations["get_login_sender_v1_login_sender_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/login/request": {
         parameters: {
             query?: never;
@@ -2836,6 +2864,20 @@ export interface components {
              * Format: email
              */
             email: string;
+        };
+        /**
+         * LoginSenderResponse
+         * @description Body for ``GET /v1/login/sender`` — the bare address auth mail really
+         *     sends from, parsed out of ``Settings.email_from``'s RFC 5322 display form
+         *     (``FortyMM <noreply@fortymm.com>`` -> ``noreply@fortymm.com``). A static,
+         *     deployment-wide constant, not user- or request-specific, so it is safe to
+         *     serve with no cookie and no captcha. ``None`` only when the configured
+         *     value doesn't parse to an address at all — the client renders without a
+         *     sender row rather than a broken one.
+         */
+        LoginSenderResponse: {
+            /** Address */
+            address: string | null;
         };
         /**
          * MarkAllReadResponse
@@ -6057,6 +6099,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_login_sender_v1_login_sender_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginSenderResponse"];
                 };
             };
         };

@@ -1469,6 +1469,11 @@ export const handlers = [
     }
     return HttpResponse.json(mockSession)
   }),
+  // Static, deployment-wide sender address for the /login/sent receipt row
+  // (#1466 defect 1) — no input, no cookie.
+  http.get('*/v1/login/sender', () =>
+    HttpResponse.json({ address: 'noreply@fortymm.com' }),
+  ),
   http.post('*/v1/login/request', async ({ request }) => {
     const body =
       ((await readJson(request)) as {

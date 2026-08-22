@@ -17,6 +17,9 @@ vi.mock('@/components/turnstile', () => ({
 }))
 
 describe('ScreenSent expiry countdown', () => {
+  // 15-min link lifetime (mirrors the API).
+  const LINK_TTL_MS = 15 * 60 * 1000
+
   beforeEach(() => {
     vi.useFakeTimers()
   })
@@ -28,14 +31,14 @@ describe('ScreenSent expiry countdown', () => {
     const now = 1_700_000_000_000
     vi.setSystemTime(now)
 
-    // 15-min link lifetime (mirrors the API); seed sentAt so only 3s remain.
-    const LINK_TTL_MS = 15 * 60 * 1000
+    // Seed sentAt so only 3s remain.
     render(
       <ScreenSent email="rita@example.com" sentAt={now - (LINK_TTL_MS - 3000)} />,
     )
 
     const timer = screen.getByRole('timer')
     expect(timer).toHaveTextContent('00:03')
+    expect(screen.getByText(/flying toward/i)).toBeInTheDocument()
 
     act(() => {
       vi.advanceTimersByTime(1000)
@@ -47,6 +50,59 @@ describe('ScreenSent expiry countdown', () => {
     })
     expect(screen.getByRole('timer')).toHaveTextContent('00:00')
     expect(screen.getByText(/link expired/i)).toBeInTheDocument()
+  })
+
+  // Regression (#1466 defect 2): the subtitle used to be a fixed string that
+  // always claimed a link was "flying toward" the address with "Expires in
+  // 15" left, regardless of whether the link had actually expired. It must
+  // now read the same "expired" value the countdown uses, so the two can
+  // never disagree.
+  it('drops the "flying toward" / "Expires in 15" claim once the link has expired, and agrees with the countdown', () => {
+    const now = 1_700_000_000_000
+    vi.setSystemTime(now)
+
+    // Already past the deadline at first render.
+    render(
+      <ScreenSent email="rita@example.com" sentAt={now - LINK_TTL_MS - 1000} />,
+    )
+
+    expect(screen.getByRole('timer')).toHaveTextContent('00:00')
+    expect(screen.getByText(/link expired/i)).toBeInTheDocument()
+
+    const text = document.body.textContent ?? ''
+    expect(text).not.toMatch(/flying toward/i)
+    expect(text).not.toMatch(/expires in 15/i)
+    expect(text).toMatch(/may have expired/i)
+  })
+
+  // Regression (#1466 defect 2, the "criterion Review is most likely to tick
+  // with the defect still live"): opening /login/sent with no `sentAt` at all
+  // (a bookmark, a shared URL) used to fall back to `Date.now()`, so the
+  // subtitle and the countdown both lied that a link sent who-knows-how-long
+  // ago was fresh. An unknown `sentAt` must render neither claim, and no
+  // countdown widget should assert a specific state (fresh OR expired) for a
+  // link whose age is genuinely unknown.
+  it('does not claim freshness (or expiry) when sentAt is unknown, e.g. opened from a bookmark', () => {
+    const now = 1_700_000_000_000
+    vi.setSystemTime(now)
+
+    render(<ScreenSent email="rita@example.com" />)
+
+    const text = document.body.textContent ?? ''
+    expect(text).not.toMatch(/flying toward/i)
+    expect(text).not.toMatch(/expires in 15/i)
+    expect(text).not.toMatch(/link expired/i)
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument()
+
+    // Advancing time must not manufacture a countdown out of the unknown
+    // sentAt either.
+    act(() => {
+      vi.advanceTimersByTime(LINK_TTL_MS + 5000)
+    })
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument()
+    const laterText = document.body.textContent ?? ''
+    expect(laterText).not.toMatch(/flying toward/i)
+    expect(laterText).not.toMatch(/expires in 15/i)
   })
 })
 
@@ -141,5 +197,27 @@ describe('ScreenVerifyNetError fabricated diagnostics (#226)', () => {
 
     await user.click(screen.getByRole('button', { name: /send a new link/i }))
     expect(onSendNewLink).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ScreenSent From row (#1466 defect 1)', () => {
+  it('renders the bare sender address verbatim when given one', () => {
+    render(<ScreenSent email="rita@example.com" sender="noreply@fortymm.com" />)
+
+    expect(screen.getByText('noreply@fortymm.com')).toBeInTheDocument()
+  })
+
+  it('renders no From row at all when the API gives no address (undefined)', () => {
+    render(<ScreenSent email="rita@example.com" />)
+
+    expect(screen.queryByText('From')).not.toBeInTheDocument()
+  })
+
+  it('renders no From row at all when the API gives no address (null)', () => {
+    render(<ScreenSent email="rita@example.com" sender={null} />)
+
+    expect(screen.queryByText('From')).not.toBeInTheDocument()
+    // The rest of the receipt still renders fine.
+    expect(screen.getByText('Your FortyMM sign-in link')).toBeInTheDocument()
   })
 })

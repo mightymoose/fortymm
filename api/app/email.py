@@ -14,6 +14,8 @@ import smtplib
 from email.message import EmailMessage
 from urllib.parse import urlencode
 
+from app.config import get_settings
+
 log = logging.getLogger(__name__)
 
 
@@ -113,7 +115,7 @@ def _deliver(
 
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = os.environ.get("EMAIL_FROM", "noreply@fortymm.local")
+    message["From"] = get_settings().email_from
     message["To"] = to_email
     message.set_content(body)
     _send_via_smtp(message)

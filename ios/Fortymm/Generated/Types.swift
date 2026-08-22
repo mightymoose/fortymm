@@ -83,6 +83,21 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/me/email/confirm`.
     /// - Remark: Generated from `#/paths//v1/me/email/confirm/post(confirm_email_v1_me_email_confirm_post)`.
     func confirmEmailV1MeEmailConfirmPost(_ input: Operations.ConfirmEmailV1MeEmailConfirmPost.Input) async throws -> Operations.ConfirmEmailV1MeEmailConfirmPost.Output
+    /// Get Login Sender
+    ///
+    /// The bare address auth mail really sends from, e.g. for the ``/login/sent``
+    /// receipt screen.
+    ///
+    /// A static, deployment-wide constant read straight off ``Settings.email_from``
+    /// — takes no input, reads no cookie, and mints no guest session, unlike
+    /// ``GET /v1/session``. Deliberately its own endpoint rather than a field on
+    /// ``LoginRequestAccepted`` (would make the address attacker-controllable
+    /// through a crafted ``/login/sent`` URL) or on ``GET /v1/session`` (would
+    /// create a guest account as a side effect of a bookmarked receipt page).
+    ///
+    /// - Remark: HTTP `GET /v1/login/sender`.
+    /// - Remark: Generated from `#/paths//v1/login/sender/get(get_login_sender_v1_login_sender_get)`.
+    func getLoginSenderV1LoginSenderGet(_ input: Operations.GetLoginSenderV1LoginSenderGet.Input) async throws -> Operations.GetLoginSenderV1LoginSenderGet.Output
     /// Request Login Email
     ///
     /// Mint a magic-link sign-in token and email it.
@@ -1233,6 +1248,23 @@ extension APIProtocol {
             headers: headers,
             body: body
         ))
+    }
+    /// Get Login Sender
+    ///
+    /// The bare address auth mail really sends from, e.g. for the ``/login/sent``
+    /// receipt screen.
+    ///
+    /// A static, deployment-wide constant read straight off ``Settings.email_from``
+    /// — takes no input, reads no cookie, and mints no guest session, unlike
+    /// ``GET /v1/session``. Deliberately its own endpoint rather than a field on
+    /// ``LoginRequestAccepted`` (would make the address attacker-controllable
+    /// through a crafted ``/login/sent`` URL) or on ``GET /v1/session`` (would
+    /// create a guest account as a side effect of a bookmarked receipt page).
+    ///
+    /// - Remark: HTTP `GET /v1/login/sender`.
+    /// - Remark: Generated from `#/paths//v1/login/sender/get(get_login_sender_v1_login_sender_get)`.
+    internal func getLoginSenderV1LoginSenderGet(headers: Operations.GetLoginSenderV1LoginSenderGet.Input.Headers = .init()) async throws -> Operations.GetLoginSenderV1LoginSenderGet.Output {
+        try await getLoginSenderV1LoginSenderGet(Operations.GetLoginSenderV1LoginSenderGet.Input(headers: headers))
     }
     /// Request Login Email
     ///
@@ -5312,6 +5344,29 @@ internal enum Components {
             }
             internal enum CodingKeys: String, CodingKey {
                 case email
+            }
+        }
+        /// Body for ``GET /v1/login/sender`` — the bare address auth mail really
+        /// sends from, parsed out of ``Settings.email_from``'s RFC 5322 display form
+        /// (``FortyMM <noreply@fortymm.com>`` -> ``noreply@fortymm.com``). A static,
+        /// deployment-wide constant, not user- or request-specific, so it is safe to
+        /// serve with no cookie and no captcha. ``None`` only when the configured
+        /// value doesn't parse to an address at all — the client renders without a
+        /// sender row rather than a broken one.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LoginSenderResponse`.
+        internal struct LoginSenderResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/LoginSenderResponse/address`.
+            internal var address: Swift.String?
+            /// Creates a new `LoginSenderResponse`.
+            ///
+            /// - Parameters:
+            ///   - address:
+            internal init(address: Swift.String? = nil) {
+                self.address = address
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case address
             }
         }
         /// How many previously-unread notifications were just marked read — the
@@ -13992,6 +14047,126 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Get Login Sender
+    ///
+    /// The bare address auth mail really sends from, e.g. for the ``/login/sent``
+    /// receipt screen.
+    ///
+    /// A static, deployment-wide constant read straight off ``Settings.email_from``
+    /// — takes no input, reads no cookie, and mints no guest session, unlike
+    /// ``GET /v1/session``. Deliberately its own endpoint rather than a field on
+    /// ``LoginRequestAccepted`` (would make the address attacker-controllable
+    /// through a crafted ``/login/sent`` URL) or on ``GET /v1/session`` (would
+    /// create a guest account as a side effect of a bookmarked receipt page).
+    ///
+    /// - Remark: HTTP `GET /v1/login/sender`.
+    /// - Remark: Generated from `#/paths//v1/login/sender/get(get_login_sender_v1_login_sender_get)`.
+    internal enum GetLoginSenderV1LoginSenderGet {
+        internal static let id: Swift.String = "get_login_sender_v1_login_sender_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/login/sender/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetLoginSenderV1LoginSenderGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetLoginSenderV1LoginSenderGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.GetLoginSenderV1LoginSenderGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            internal init(headers: Operations.GetLoginSenderV1LoginSenderGet.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/login/sender/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/login/sender/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.LoginSenderResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.LoginSenderResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetLoginSenderV1LoginSenderGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetLoginSenderV1LoginSenderGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/login/sender/get(get_login_sender_v1_login_sender_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.GetLoginSenderV1LoginSenderGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.GetLoginSenderV1LoginSenderGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
                             response: self
                         )
                     }

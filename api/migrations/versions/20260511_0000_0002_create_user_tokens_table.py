@@ -37,6 +37,9 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        # Set when a newer login request supersedes this row — see
+        # UserToken.replaced_at / app.sessions._issue_and_send_login_email.
+        sa.Column("replaced_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index(
         "ix_user_tokens_user_id", "user_tokens", ["user_id"]

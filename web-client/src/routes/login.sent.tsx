@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { ApiError } from '@/api/client'
-import { useRequestLogin } from '@/api/session'
+import { useLoginSender, useRequestLogin } from '@/api/session'
 import { ScreenSent } from '@/components/login/login-screens'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import { pageTitle } from '@/lib/page-title'
@@ -25,6 +25,10 @@ function LoginSentPage() {
   const { email, sentAt } = Route.useSearch()
   const navigate = useNavigate()
   const requestLogin = useRequestLogin()
+  // Best-effort — a pending/failed fetch must never block or break this
+  // screen (#1466 defect 1); EmailReceipt renders fine with `sender`
+  // undefined.
+  const { data: sender } = useLoginSender()
   // A fresh captcha token is kept on this page (the Turnstile widget below
   // hands one over and replaces it after each use) so "Resend" can re-issue
   // the link without bouncing through /login to re-run the challenge.
@@ -88,6 +92,7 @@ function LoginSentPage() {
       <ScreenSent
         email={email || 'your inbox'}
         sentAt={sentAt}
+        sender={sender}
         onStartOver={startOver}
         // Disabled until a captcha token is in hand (and there's an address to
         // send to); the button shows the disabled state in the meantime.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import {
@@ -8,13 +9,40 @@ import {
   useConsumeLoginToken,
   useMergePreview,
 } from '@/api/session'
-import { btnPrimary } from '@/components/login/styles'
+import { btnGhost, btnPrimary, fineprint } from '@/components/login/styles'
 import { LinkCheckPage } from '@/components/login/link-check-page/link-check-page'
 import { ScreenVerifyNetError } from '@/components/login/login-screens'
 import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
-type VerifyError = 'expired' | 'net'
+type VerifyError = 'expired' | 'net' | 'replaced' | 'email_changed'
+
+const VERIFY_ERRORS = new Set<VerifyError>([
+  'expired',
+  'net',
+  'replaced',
+  'email_changed',
+])
+
+// `POST /v1/login/consume`'s 400 body, `{ detail: { code, message } }` —
+// `consume_login_token`'s three coded reasons (#1466 defect 3). NOT declared
+// on the route's OpenAPI `responses=` (matches the existing
+// `session_merged`/`session_ended` precedent in client.ts), so it never
+// reaches `schema.d.ts` — read off `ApiError.body`, never off the typed
+// `ApiError.detail` (a bare `string | null`), and parse it here.
+const loginConsumeErrorSchema = z.object({
+  detail: z.object({ code: z.string(), message: z.string() }),
+})
+
+/** The structured `code` a 4xx from `/login/consume` carries, or `null` when
+ * the body doesn't parse as the coded shape (a plain-string detail, no body,
+ * or an unrecognized error). `null` maps to the safe `'expired'` fallback —
+ * today's behaviour for every other 4xx. */
+function loginConsumeErrorCode(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null
+  const parsed = loginConsumeErrorSchema.safeParse(err.body)
+  return parsed.success ? parsed.data.detail.code : null
+}
 
 export const Route = createFileRoute('/login/verifying')({
   head: () => ({
@@ -28,7 +56,10 @@ export const Route = createFileRoute('/login/verifying')({
     const raw = Array.isArray(search.token) ? search.token[0] : search.token
     return {
       token: typeof raw === 'string' ? raw : '',
-      error: e === 'expired' || e === 'net' ? (e as VerifyError) : undefined,
+      error:
+        typeof e === 'string' && VERIFY_ERRORS.has(e as VerifyError)
+          ? (e as VerifyError)
+          : undefined,
     }
   },
   component: LoginVerifyingPage,
@@ -62,9 +93,16 @@ function LoginVerifyingPage() {
         },
         onError: (err) => {
           if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+            const code = loginConsumeErrorCode(err)
+            const nextError: VerifyError =
+              code === 'replaced'
+                ? 'replaced'
+                : code === 'email_changed'
+                  ? 'email_changed'
+                  : 'expired'
             navigate({
               to: '/login/verifying',
-              search: { token: '', error: 'expired' },
+              search: { token: '', error: nextError },
             })
           } else {
             navigate({ to: '/login/verifying', search: { token, error: 'net' } })
@@ -106,12 +144,40 @@ function LoginVerifyingPage() {
     </button>
   )
 
+  // The `replaced` state's screen must NOT offer "Send a new link" as its
+  // main action — that would kill the newer link the copy just told the user
+  // to open (#1466 defect 3, acceptance criteria). Guidance text plus a
+  // demoted secondary action instead of the primary CTA every other error
+  // state uses.
+  const replacedFooter = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
+        Look for the most recent sign-in email — that link is still live.
+      </p>
+      <button
+        type="button"
+        style={{ ...btnGhost, width: '100%' }}
+        onClick={sendNewLink}
+      >
+        Send a new link instead
+      </button>
+    </div>
+  )
+
   if (!token && !error) {
     return <LinkCheckPage state="missing" footer={sendNewLinkButton} />
   }
 
   if (error === 'expired') {
     return <LinkCheckPage state="expired" footer={sendNewLinkButton} />
+  }
+
+  if (error === 'email_changed') {
+    return <LinkCheckPage state="email_changed" footer={sendNewLinkButton} />
+  }
+
+  if (error === 'replaced') {
+    return <LinkCheckPage state="replaced" footer={replacedFooter} />
   }
 
   if (error === 'net') {
