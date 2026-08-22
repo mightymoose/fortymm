@@ -25,15 +25,18 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.draws import group_label
 from app.models import (
     DrawType,
     ScheduleSolveTrigger,
     TournamentEvent,
+    TournamentEventReservation,
     TournamentFixture,
     User,
 )
+from app.schedule_preview import preview_field_size
 from app.schedule_solves import request_solve
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
@@ -61,7 +64,13 @@ from app.tournament_errors import (
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_queries import stage_ids_for_events
-from app.tournament_reservations import apply_event_reservations, stored_groups
+from app.tournament_reservations import (
+    apply_event_reservations,
+    group_count_for,
+    materialise_event_groups,
+    materialise_groups,
+    stored_reservations,
+)
 
 
 async def _load_event(
@@ -110,9 +119,11 @@ async def create_event(
 
     Then it writes the event exactly as the HTTP handler did inline — the nested
     value-objects (``slot``, ``match_settings``, ``predicates``) persist as plain JSONB
-    via ``model_dump``, and the ``groups`` as child **rows** through
-    :func:`app.tournament_reservations.stored_groups`, which composes them and stamps
-    the server-assigned ``position`` the write shape has no field for. Commits
+    via ``model_dump``, the ``reservations`` as child **rows** through
+    :func:`app.tournament_reservations.stored_reservations`, which composes them and
+    stamps the server-assigned ``position`` the write shape has no field for, and the
+    ``groups`` as rows the server materialises from the draw type and the preview
+    field (:func:`app.tournament_reservations.materialise_groups`, #1387). Commits
     and refreshes before returning. Never raises ``HTTPException`` — the caller adapts
     each domain exception to its transport and shapes the read (a just-created event has
     no entrants, draw or results, so those are all empty without a query).
@@ -154,22 +165,48 @@ async def create_event(
         predicates=[p.model_dump() for p in payload.predicates],
         stages=stages,
     )
-    # What a client submits is a RESERVATION; the server mints a group in lockstep for
-    # each one, which hangs off the event's stage 0 (ADR 20260815, "Sequencing with
-    # #1338") while the reservation itself hangs off the event. ``stored_groups``
-    # composes both — turning the WRITE shape, which carries no ``position``, into rows
-    # that do, from each entry's index in the list this payload sent — and returns the
-    # groups with their reservations already mapped, so assigning the groups to the
-    # stage attaches the whole graph. Assigned here, onto
-    # the just-minted stage, rather than passed into the ``TournamentEvent`` constructor
-    # above: ``TournamentEvent.groups`` is a read-only (VIEWONLY) association and would
-    # silently drop a write. ``event`` is already a live Python object at this point
-    # (just not flushed yet), which is all ``stored_groups`` needs for the reservations'
-    # own ``event`` relationship.
-    stages[0].groups = stored_groups(event, tournament, payload.reservations)
+    # What a client submits is a RESERVATION, and the server owns the groups (#1387).
+    # ``stored_reservations`` turns the WRITE shape, which carries no ``position``,
+    # into rows that do, from each entry's index in the list this payload sent; they
+    # hang off the event. ``materialise_groups`` then mints the group rows onto the
+    # event's stage 0 (ADR 20260815, "Sequencing with #1338") — as many as
+    # ``group_count_for`` says for this draw type against the PREVIEW field (the cap,
+    # or 16), each mapped to the reservation at ``position % reservation count`` —
+    # which is the same rule ``update_event`` re-applies on every later write, so a
+    # create and a patch cannot drift. Assigned onto the just-minted stage rather than
+    # passed into the ``TournamentEvent`` constructor above: ``TournamentEvent.groups``
+    # is a read-only (VIEWONLY) association and would silently drop a write. ``event``
+    # is already a live Python object at this point (just not flushed yet), which is
+    # all the reservations' own ``event`` relationship needs.
+    event.reservations = stored_reservations(event, tournament, payload.reservations)
+    materialise_groups(
+        stages[0],
+        event.reservations,
+        group_count_for(
+            payload.draw_settings.draw_type,
+            field_size=preview_field_size(payload.max_players),
+            reservation_count=len(event.reservations),
+        ),
+    )
     db.add(event)
     await db.commit()
     await db.refresh(event)
+    # ``refresh`` re-runs ``reservations``' own ``selectin`` load, but a reservation
+    # this session already held — every one the patch KEPT — comes back with its
+    # ``tables`` still expired by the commit: the chained ``selectin`` under a refresh
+    # populates the rows it finds in the identity map without re-running their own
+    # collection loads. The serializer reads ``reservation.tables`` next, and under
+    # async an expired collection is a ``MissingGreenlet``, not a lazy load — so the
+    # tables are reloaded here, explicitly, in one statement per event rather than one
+    # per reservation. (A reservation the patch ADDED is a fresh object and arrives
+    # fully loaded; this is only for the kept ones, and it is cheaper to reload all
+    # than to tell them apart.)
+    await db.execute(
+        select(TournamentEventReservation)
+        .options(selectinload(TournamentEventReservation.tables))
+        .where(TournamentEventReservation.event_id == event.id)
+        .execution_options(populate_existing=True)
+    )
     return event, tournament.league_id
 
 
@@ -212,81 +249,89 @@ async def delete_event(
     await db.commit()
 
 
-def _group_set_frozen_detail(removed: list[str], added: int) -> str:
-    """The 409 sentence for a reservations payload that would change *which groups* a
-    cut event has — composed exactly as the router's ``_group_set_refusal`` used to
-    compose it inline, so :class:`GroupSetFrozenError` carries the byte-identical body.
+def _group_set_frozen_detail(
+    removed: list[str], added: int, *, removed_unmapped: int = 0
+) -> str:
+    """The 409 sentence for a reservations payload that would change *which
+    reservations* a cut event has, and through them which groups can play where
+    (:class:`GroupSetFrozenError` carries it as its body).
 
-    Both halves are reported, because a payload can move both at once and the director
-    has to be told which of their groups went missing: a **removed** group leaves its
-    fixtures pointing at a group that no longer exists (which the composite foreign key
-    would refuse too, but only at COMMIT and only as a driver error), and an **added**
-    group arrives with **no fixtures**, because the draw was dealt across the groups the
-    event had at the cut. The sentence ends with the way out (remove the draw, change
-    the groups, cut again) and with what is still allowed, so a director who has to move
-    a broken table is never left with nowhere to go.
+    Both halves are reported, because a payload can move both at once. A **removed**
+    reservation leaves every group mapped to it with nowhere to play — and those
+    groups already have fixtures drawn into them, so they are **named**, by the label
+    each one's position derives (``Group G``, ``app.draws.group_label``; a group has no
+    name column). An **added** reservation is **counted**, not named, and the clause
+    says why it is refused now that a group count creates no reservation (#1387
+    decision 4): each group was mapped to a reservation at the cut and nothing
+    re-maps one afterwards, so the new reservation could hold no group — a table set
+    this event's fixtures can never reach, with nothing on screen saying why. The
+    sentence ends with what is still allowed and with the way out (remove the draw,
+    change the reservations, cut again), so a director who has to move a broken table
+    is never left with nowhere to go.
 
-    **Only the removed side is named, and the added side is counted.** A group's label
-    is derived from its position (ADR 20260808), and this very payload is what rewrites
-    the positions — so an added group's eventual label is one an *existing* group wears
-    right now. Naming both sides produced a sentence that contradicted itself: replacing
-    the first of three reservations reported "Group A already has fixtures drawn into
-    it; and Group A would arrive with no fixtures in it". The removed side names real
-    groups the director can see on screen; the added side has no identity to name yet,
-    so it is counted instead.
+    ``removed_unmapped`` counts removed reservations that no group maps onto — an
+    event deriving one group across four reservations has three such — so a removal
+    that strands no group is still refused with a sentence that has a clause in it:
+    the set is identity once a draw exists, whether or not a group sits on every
+    member of it.
 
-    It no longer offers "re-identify" as a third thing to do: a group id is minted by
-    the server (ADR 20260801), so re-identifying one is not a payload a client can send.
+    It no longer offers "re-identify" as a third thing to do: a reservation id is minted
+    by the server (ADR 20260801), so re-identifying one is not a payload a client can
+    send.
     """
     clauses = []
     if removed:
         clauses.append(
             f"{named_list(removed)} already has fixtures drawn into it, "
-            "which this change would leave pointing at a group that no longer exists"
+            "which this change would leave with no reservation to play in"
+        )
+    if removed_unmapped:
+        clauses.append(
+            f"{removed_unmapped} "
+            f"{'reservation' if removed_unmapped == 1 else 'reservations'} would be "
+            "removed, and the groups were mapped to the reservations this event had "
+            "when the draw was cut"
         )
     if added:
         clauses.append(
-            f"{added} new {'group' if added == 1 else 'groups'} would arrive with no "
-            f"fixtures in {'it' if added == 1 else 'them'}, because the draw was cut "
-            "across the groups this event had at the time"
+            f"{added} new {'reservation' if added == 1 else 'reservations'} could hold "
+            "no group, because each group was mapped to a reservation when the draw "
+            "was cut and nothing re-maps one until the draw is removed"
         )
     return (
-        "This event's draw is already cut, so its set of groups is frozen: "
+        "This event's draw is already cut, so its set of reservations is frozen: "
         + "; and ".join(clauses)
         + ". A reservation's tables, its time and its name can all still be changed. "
-        "To add or remove a group, remove the draw first, then cut it again."
+        "To add or remove a reservation, remove the draw first, then cut it again."
     )
 
 
 def _group_order_frozen_detail(names: list[str]) -> str:
-    """The 409 sentence for a groups payload that cites exactly the groups a cut event
-    already has, in a **different order** — the freeze's second way to fire, beside the
-    set changing (ADR-0786, extended: group order is identity once fixtures exist).
+    """The 409 sentence for a reservations payload that cites exactly the reservations
+    a cut event already has, in a **different order** — the freeze's second way to fire,
+    beside the set changing (ADR-0786, extended: the mapping is identity once fixtures
+    exist).
 
-    The snake seeded the draw against the event's group order (``app.draws.DrawConfig``,
-    ``app.tournament_draws.draw_config``), and a groups-then-knockout draw's qualifier
-    seam labels a finished group's seats by that same order
-    (``RrThenKoStrategy._qualifier_fills``'s ``group_position``). Both are read once at
-    the moment they are needed and never again, so a PATCH that re-sends the same groups
-    in a new sequence would relabel which physical group counts as "group 1" **between**
-    two groups finishing — one already-seated group's qualifiers retargeting fresh slots
-    (a double seating) while another's find those slots already filled and are silently
-    dropped. Nothing downstream — not the composite foreign key, not the qualifier seam
-    itself — would notice the relabelling; it would look like an ordinary, playable
-    bracket.
+    A group maps to the reservation at ``position % reservation count``, read at the
+    cut and never again (#1387 decision 3). Reordering the reservations would leave the
+    stored mapping true and the rule it was derived from false: the reservation a
+    group plays in would no longer be the one its position names, and the next thing
+    to re-derive the mapping — an uncut, then a write — would move every group to a
+    different table set than the director is looking at. ``names`` are the groups, by
+    derived label, so the sentence says which groups the frozen mapping holds.
 
     Deliberately its own sentence rather than a fold into
-    :func:`_group_set_frozen_detail` above: that one names groups *gained* and *lost*,
-    and a reorder loses none — the honest complaint is about the order, not the
-    membership, so the director is told that.
+    :func:`_group_set_frozen_detail` above: that one names what is *lost* and counts
+    what is *gained*, and a reorder does neither — the honest complaint is about the
+    order, not the membership, so the director is told that.
     """
     return (
-        "This event's draw is already cut, so the order of its groups is frozen "
-        f"({named_list(names)}): the draw was seeded against that order, and a "
-        "groups-then-knockout event's qualifiers are seated into their bracket by it. "
-        "Re-ordering the groups now would relabel which group is “first” partway "
-        "through the draw. A reservation's tables, its time and its name can all still "
-        "be changed. To reorder the groups, remove the draw first, then cut it again."
+        "This event's draw is already cut, so the order of its reservations is frozen "
+        f"({named_list(names)} play in them): each group was mapped to a reservation "
+        "by position when the draw was cut, and nothing re-maps one until the draw is "
+        "removed. A reservation's tables, its time and its name can all still be "
+        "changed. To reorder the reservations, remove the draw first, then cut it "
+        "again."
     )
 
 
@@ -383,53 +428,48 @@ async def _enforce_group_set_frozen(
     db: AsyncSession, event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
     """Raise :class:`GroupSetFrozenError` once a ``reservations`` payload would change
-    *which groups* an event with a cut draw has, **or the order they stand in**
-    (ADR-0786).
+    *which reservations* an event with a cut draw has, **or the order they stand in**
+    (ADR-0786, #1387 decisions 3 and 4).
 
-    Remove a group and every fixture drawn into it refers to nothing; add one and it
-    arrives with no fixtures, because the draw was dealt across the groups that existed
-    at the cut. Reorder them and neither of those is true, but the order itself is
-    load-bearing: it is what the snake seeded the draw against
-    (``app.draws.DrawConfig.group_ids``) and what a groups-then-knockout draw's
-    qualifier seam labels a finished group's seats by
-    (``RrThenKoStrategy._qualifier_fills``'s ``group_position``, read off
-    ``Group.position`` — the very column a reorder restamps).
+    **What is frozen is the mapping, and what the payload diffs is reservations.** At
+    the cut every group was mapped to the reservation at ``position % reservation
+    count``, and nothing re-maps a group while the draw stands. So remove a reservation
+    and every group mapped to it — with fixtures already drawn into it — has nowhere to
+    play; add one and it can hold no group, because the mapping will not be re-read
+    until the draw is removed; reorder them and the stored mapping no longer follows
+    from the positions it was derived from. The comparison runs in the reservation's
+    id space (the one the wire lets a client cite) against ``event.reservations``, and
+    it reports in the group's terms, naming by derived label the groups a removed
+    reservation would strand.
 
-    **What is frozen is the group set, but what the payload diffs is reservations.**
-    The wire only lets a client cite a *reservation's* id now (``reservations`` is the
-    one writable array); a group's own id is server-owned and never reaches a client.
-    So this guard runs the comparison in the reservation's id space — each current
-    group is represented by its mapped reservation's id — while it still reports and
-    refuses in the group's own terms, because the group is what a fixture actually
-    names and what the composite foreign key actually protects. Under this slice's
-    1:1 the two id spaces are in exact bijection, so the comparison is sound; #1370,
-    which breaks the 1:1, is explicitly out of scope for this guard (see its ticket).
-
-    **What this guard is left saying, now that the ids are minted.**
+    **What this guard does not do, since #1387.** It does not compare a group count
+    against anything. The count derives from the preview field before the cut and
+    from the real field at the cut, and those are different numbers on purpose, so a
+    guard that compared a stored count against a re-derived one would refuse a rename
+    forever (derive from the cap) or refuse the next unrelated edit after a walk-in
+    (derive from the real field). A ``max_players`` change on a cut event succeeds and
+    moves no group row; every event edit that is not a reservation add, remove or
+    reorder succeeds.
 
     * **Re-identifying** a reservation — citing an id the server never minted — is
       caught by :func:`~app.tournament_reservations.apply_event_reservations`'s own
-      422, not here: a bare unknown id is not by itself a group-count change, though in
-      practice it always widens the "added" side of this guard too (an unknown id
-      contributes nothing to ``incoming``).
-    * **Removing** a group: the composite foreign key does refuse it, but *deferred*, at
-      COMMIT, as an ``IntegrityError`` — a 500 the director cannot act on, where this is
-      a 409 naming the groups and the way out.
-    * **Adding** a group: no constraint says anything at all. A group arriving into a
-      cut draw with no fixtures in it is perfectly legal SQL and still an incoherent
-      draw, so this is the only thing standing between a director and one.
-    * **Reordering** the same set of groups: also nothing a constraint could answer — no
-      row is added, removed or reassigned a foreign key, only ``position`` moves — so
-      this is, again, the only thing standing between a director and a mislabelled
-      qualifier seam.
+      422, not here, though in practice it always widens the "added" side of this
+      guard too (an unknown id contributes nothing to ``incoming``).
+    * **Removing** a reservation: the join row's foreign key cascades the mapping away
+      silently, and the database says nothing about the groups left without one, so
+      this is the only thing standing between a director and a draw whose fixtures
+      have no window.
+    * **Adding** a reservation: no constraint says anything at all.
+    * **Reordering** the same set: only ``position`` moves, so again nothing a
+      constraint could answer.
 
     A reservation's ``table_ids``, its ``slot`` and its ``name`` stay editable with a
     draw standing, on purpose — this is the case the freeze exists to *permit*, not to
     prevent.
 
     Asked **before** anything is written (and, like every judge-then-write guard, under
-    the tournament's row lock the verb holds), so a refusal leaves both the groups and
-    the fixtures exactly as they were — never written, not merely rolled back. It is
+    the tournament's row lock the verb holds), so a refusal leaves both the reservations
+    and the fixtures exactly as they were — never written, not merely rolled back. It is
     also asked before
     :func:`~app.tournament_reservations.apply_event_reservations`'s own 422 for an id
     this event does not have, so a cut event answers the 409 that names its groups.
@@ -446,14 +486,13 @@ async def _enforce_group_set_frozen(
     # orphanable as a played one.
     if not await event_has_draw(db, event.id):
         return
-    # Projected ONCE, and kept: the ordered sequence decides *whether* to refuse, and
-    # the current groups' own positions say *which label* — a refusal names them
-    # (``named_list``), by position-derived label rather than a stored name (ADR
-    # 20260808). Sorted by ``position`` explicitly rather than trusted to arrive that
-    # way — the same belt-and-braces stance ``app.tournament_draws._ordered_groups``
-    # takes on the very same relationship, and for the identical reason.
-    current = sorted(event_groups(event), key=lambda group: group.position)
-    existing_order = [group.reservation_id for group in current]
+    # The reservations the event holds, in their stored order — ``event.reservations``
+    # is eager, and sorted by ``position`` explicitly rather than trusted to arrive
+    # that way, the same belt-and-braces stance ``app.tournament_draws`` takes.
+    existing_order = [
+        reservation.id
+        for reservation in sorted(event.reservations, key=lambda row: row.position)
+    ]
     # An entry with no ``id`` is an addition and contributes nothing to the incoming
     # SEQUENCE — which is what makes ``existing_order == incoming_order`` "you cited
     # exactly the reservations you have, in the order you have them" rather than merely
@@ -467,33 +506,41 @@ async def _enforce_group_set_frozen(
         return
     existing = set(existing_order)
     incoming = set(incoming_order)
-    # Removed groups are NAMED, from the row we hold: the label its stored position
-    # derives, which is the label the director is looking at right now. Added groups are
-    # COUNTED, not named — they have no position yet, and the label they would land on
-    # is one an existing group currently wears, so naming them makes the sentence
-    # contradict itself (see :func:`_group_set_frozen_detail`). An entry citing an id
-    # this event does not have counts as an addition here — it is one in effect, and
-    # past this guard it is the 422 ``apply_event_reservations`` raises.
+    # The groups, in position order: the rows a refusal NAMES, by the label each
+    # position derives (ADR 20260808, ``group_label``) — a group has no name column.
+    current = sorted(event_groups(event), key=lambda group: group.position)
+    # A removed reservation strands every group mapped to it; those groups are the
+    # ones named. An added reservation is COUNTED — it has no identity yet. An entry
+    # citing an id this event does not have counts as an addition here — it is one in
+    # effect, and past this guard it is the 422 ``apply_event_reservations`` raises.
     removed = [
         group_label(group.position)
         for group in current
-        if group.reservation_id not in incoming
+        if group.reservation_id is not None and group.reservation_id not in incoming
     ]
     added = sum(
         1
         for entry in updates.reservations
         if entry.id is None or entry.id not in existing
     )
-    if removed or added:
+    # A removed reservation no group maps onto strands nothing and is refused all the
+    # same: the set is identity once a draw exists. Counted so the sentence has a
+    # clause for it (see :func:`_group_set_frozen_detail`).
+    mapped = {group.reservation_id for group in current}
+    removed_unmapped = sum(
+        1 for reservation_id in existing - incoming if reservation_id not in mapped
+    )
+    if removed or added or removed_unmapped:
         raise GroupSetFrozenError(
-            _group_set_frozen_detail(removed, added), removed=removed, added=added
+            _group_set_frozen_detail(removed, added, removed_unmapped=removed_unmapped),
+            removed=removed,
+            added=added,
         )
     # The set is unchanged (this is the ``existing_order != incoming_order`` branch
     # that falls through the equality check above with an equal SET) — so what moved
-    # is purely the order, which the set comparison the old guard made could never
-    # see. Its own sentence, not a fold into the set refusal above: no group was gained
-    # or lost, so the honest complaint is about the sequence, and the director is told
-    # that.
+    # is purely the order, which the set comparison could never see. Its own sentence,
+    # not a fold into the set refusal above: no reservation was gained or lost, so the
+    # honest complaint is about the sequence, and the director is told that.
     raise GroupSetFrozenError(
         _group_order_frozen_detail([group_label(group.position) for group in current]),
         removed=[],
@@ -729,6 +776,10 @@ async def update_event(
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
+    # Read ONCE, under the row lock, for the two gates below (the materialisation and
+    # the re-solve trigger): a draw is cut or removed only under this same lock, so
+    # the answer cannot move between here and the commit.
+    has_draw = await event_has_draw(db, event.id)
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to
@@ -821,17 +872,33 @@ async def update_event(
         await _reanchor_placements_for_timezone_change(
             db, event.id, old_timezone=old_timezone, new_timezone=event.timezone
         )
-    # Flushed before the facts are re-read, because one of them is a group's ``id`` and
-    # a group this payload ADDED does not have one until the INSERT runs: the id is the
-    # database's (``gen_random_uuid()``), not the client's, so an unflushed row would
-    # project as ``id=None`` and the read boundary (``Group``) would refuse it. Flushing
-    # is safe here for the same reason the diff is: both position constraints and the
+    # The groups are the server's, re-materialised on EVERY write while the event has
+    # no draw (#1387) — unconditionally, not only when the patch carried a
+    # ``reservations`` key, because a patch of ``max_players`` alone or ``draw_type``
+    # alone moves the count too. Late, on purpose, and two orderings force the spot:
+    # after the reservations diff above, or the groups would map onto a stale
+    # reservation set; and after ``store_draw_settings``, or a patch TO ``rr-then-ko``
+    # would read the old type and materialise nothing. ``remint_stages_in_place`` is
+    # safe to sit before it: stage 0 keeps its row identity across a re-mint (ADR
+    # 20260815 decision 3), so the groups hanging off it survive.
+    #
+    # Gated on the draw NOT existing (decision 3): once a draw is cut nothing
+    # recomputes the count, so a cap change on a cut event succeeds and moves no
+    # group row, and the freeze above is the only thing that speaks to the set.
+    if not has_draw:
+        await materialise_event_groups(
+            db, event, field_size=preview_field_size(event.max_players)
+        )
+    # Flushed before the facts are re-read, because one of them is a reservation's
+    # ``id`` and a reservation this payload ADDED does not have one until the INSERT
+    # runs: the id is the database's (``gen_random_uuid()``), not the client's, so an
+    # unflushed row would project as ``id=None`` and the read boundary would refuse
+    # it. The same goes for a group the materialisation just minted. Flushing is safe
+    # here for the same reason the diff is: both position constraints and the
     # fixture's composite foreign key are DEFERRABLE INITIALLY DEFERRED, so an
     # intermediate state is nobody's business until COMMIT.
     await db.flush()
-    if facts_before != _event_scheduling_facts(event) and await event_has_draw(
-        db, event.id
-    ):
+    if has_draw and facts_before != _event_scheduling_facts(event):
         # Gated on THIS event having a cut draw — stricter than the tournament-wide
         # gate, because ``_load_solver_inputs`` reads the groups and settings of *drawn*
         # events only. Same transaction, same tournament row lock (the order
@@ -840,4 +907,20 @@ async def update_event(
         await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
     await db.refresh(event)
+    # ``refresh`` re-runs ``reservations``' own ``selectin`` load, but a reservation
+    # this session already held — every one the patch KEPT — comes back with its
+    # ``tables`` still expired by the commit: the chained ``selectin`` under a refresh
+    # populates the rows it finds in the identity map without re-running their own
+    # collection loads. The serializer reads ``reservation.tables`` next, and under
+    # async an expired collection is a ``MissingGreenlet``, not a lazy load — so the
+    # tables are reloaded here, explicitly, in one statement per event rather than one
+    # per reservation. (A reservation the patch ADDED is a fresh object and arrives
+    # fully loaded; this is only for the kept ones, and it is cheaper to reload all
+    # than to tell them apart.)
+    await db.execute(
+        select(TournamentEventReservation)
+        .options(selectinload(TournamentEventReservation.tables))
+        .where(TournamentEventReservation.event_id == event.id)
+        .execution_options(populate_existing=True)
+    )
     return event, tournament.league_id

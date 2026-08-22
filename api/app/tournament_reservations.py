@@ -17,18 +17,22 @@ a group's own ``id``, ``position`` and ``reservation_id``; a reservation's own `
 ``position``, ``name``, ``slot`` and ``table_ids``. Slice 1's single joined reservation
 projection is gone — the wire no longer hides which row an id belongs to.
 
-**The 1:1.** A reservation write creates, updates and removes a reservation *and* its
-mapped group together, on every path, so the two sets stay in lockstep. Nothing
-enforces that in the database — the join deliberately carries no uniqueness on its
-reservation column, because a later change lets two groups share one reservation — so
-it is this module's invariant to keep. Break it and ``fixture.group_id`` names a group
-whose reservation the projected ``reservations[]`` no longer holds.
+**The materialisation** (#1387, ADR 20260822). The server owns an event's group rows.
+:func:`materialise_event_groups` makes the stage-0 group row count equal
+:func:`group_count_for`'s answer on every event write — for an ``rr-then-ko`` event
+the count #1386's derivation returns for the field it is handed (the preview field on
+an event write, the real registered field at the cut), for every other draw type one
+group per reservation — and maps each group to the reservation at ``position %
+reservation count``, or to none when the event has no reservation. A group count
+creates no reservation. Nothing calls it once a draw exists: the cut re-derives once
+against the real field and the identities and the mapping freeze there.
 
-**The position.** :func:`stored_groups` and :func:`apply_event_reservations` stamp
-each entry with its index in the list the client sent — the only place a ``position``
-is ever assigned, on either row. The reservation's is what the wire reports for
-``reservations[]``; the group's mirrors it under the lockstep above, which is what the
-snake seeds against.
+**The position.** :func:`stored_reservations`, :func:`apply_event_reservations` and
+:func:`materialise_event_groups` stamp each row with its index — the reservation's
+from the list the client sent, the group's from ``range(count)`` — the only place a
+``position`` is ever assigned, on either row. The reservation's is what the wire
+reports for ``reservations[]``; the group's is what the snake seeds against and what
+its label derives from.
 
 **The Slot⇄columns conversion.** A reservation's window is three wall-clock columns
 (``slot_date``, ``slot_start``, ``slot_end``) and one wire value-object
@@ -53,27 +57,27 @@ path a client *cites* an id it was given, and citing one this event does not hav
 refused rather than silently minted — the same split, and the same 422,
 ``app.tournament_tables`` already makes for the venue catalogue.
 
-The edit path is an **id-keyed diff** and not a wholesale replace, which is a change of
-mechanism and not of meaning: re-sending a reservation the event already has must
-UPDATE that reservation (and its mapped group), or the write would delete and recreate
-the row every fixture in the event points at.
+Both edit paths are **id-keyed diffs** and not wholesale replaces, which is a change
+of mechanism and not of meaning: re-sending a reservation the event already has must
+UPDATE that reservation, and re-materialising a count the event already holds must keep
+every group row, or the write would delete and recreate the rows every fixture in the
+event points at.
 
 **The stage.** A group's parent is its stage (ADR 20260815, "Sequencing with #1338") —
 always the event's stage 0 (decision 3). ``TournamentEvent.groups`` is a *readable*
 association through stage 0, but writing means resolving the actual stage row and
 assigning ``stage.groups``. On the create path the stage is a fresh, unflushed object
-the caller already built (``app.tournament_events.create_event`` passes it straight
-through); on the edit path :func:`apply_event_reservations` resolves it itself, with an
-explicit query, the same way ``app.tournament_event_stages.remint_stages_in_place`` does
-— not because ``TournamentEvent.stages`` is unavailable (it is eager and would already
-be populated) but because ``stage.groups`` is deliberately NOT eager, so this function
-needs its own query to attach the ``selectinload``. That query is why
-:func:`apply_event_reservations` takes a session, which is the one exception to the
-claim below.
+the caller already built (``app.tournament_events.create_event`` hands it to
+:func:`materialise_groups`); on the edit path :func:`materialise_event_groups` resolves
+it itself, with an explicit query, the same way
+``app.tournament_event_stages.remint_stages_in_place`` does — not because
+``TournamentEvent.stages`` is unavailable (it is eager and would already be populated)
+but because ``stage.groups`` is deliberately NOT eager, so this function needs its own
+query to attach the ``selectinload``. That query is why it takes a session.
 
-It otherwise imports the models, the schemas and the domain-error leaf, and nothing else
-— no router, no FastAPI — so :func:`stored_groups` stays callable from a REPL and
-cycle-free."""
+It otherwise imports the models, the schemas, the pure derivation and the domain-error
+leaf, and nothing else — no router, no FastAPI — so :func:`materialise_groups` stays
+callable from a REPL and cycle-free."""
 
 import uuid
 from collections.abc import Sequence
@@ -83,7 +87,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.draw_structure import (
+    DrawStructureOptions,
+    SettingOwnership,
+    derive_draw_structure,
+)
 from app.models import (
+    DrawType,
     Tournament,
     TournamentEvent,
     TournamentEventGroupReservation,
@@ -99,13 +109,17 @@ from app.schemas.tournament import (
     ReservationWrite,
     Slot,
 )
+from app.tournament_draw_settings import draw_settings_of
 from app.tournament_errors import ReservationNotInEventError
 
 __all__ = [
     "apply_event_reservations",
+    "group_count_for",
     "group_read",
+    "materialise_event_groups",
+    "materialise_groups",
     "reservation_read",
-    "stored_groups",
+    "stored_reservations",
 ]
 
 
@@ -148,12 +162,15 @@ def group_read(group: TournamentEventStageGroup) -> GroupRead:
     ``id`` and ``position`` come straight off the row. ``reservation_id`` is read
     through the join (``group.reservation_link.reservation_id``) rather than through
     the loaded ``reservation`` object, so this needs no eager load of the reservation
-    itself when a caller only wants the id.
+    itself when a caller only wants the id — and it is ``None`` for a group with no
+    join row, which is how a group that plays in no reservation reaches the wire
+    (#1387).
     """
+    link = group.reservation_link
     return GroupRead(
         id=group.id,
         position=group.position,
-        reservation_id=group.reservation_link.reservation_id,
+        reservation_id=link.reservation_id if link is not None else None,
     )
 
 
@@ -232,55 +249,45 @@ def _reservation_tables(
     return rows
 
 
-def stored_groups(
+def stored_reservations(
     event: TournamentEvent,
     tournament: Tournament,
     submitted: Sequence[ReservationWrite],
-) -> list[TournamentEventStageGroup]:
-    """Fresh group rows — each already mapped to its own fresh reservation — for an
-    event that has none yet, which is the create verb's whole job.
-
-    Returns the **groups**, and the reservations ride along inside them: each group
-    carries a ``reservation_link`` holding a brand-new reservation whose ``event`` is
-    this event, so attaching the groups to a stage attaches the whole graph. The caller
-    does not have to know the shape — ``app.tournament_events.create_event`` assigns the
-    result to the event's stage 0 and the unit of work writes all four tables in
-    dependency order.
+) -> list[TournamentEventReservation]:
+    """Fresh reservation rows for an event that has none yet, which is the create
+    verb's reservation half (its group half is :func:`materialise_groups`).
 
     Each row is stamped with the ``position`` of its index in ``submitted``: the only
-    place a position is assigned on the create path, and what makes the stored positions
-    ``range(len(submitted))`` by construction rather than by a caller's care.
+    place a reservation's position is assigned on the create path, and what makes the
+    stored positions ``range(len(submitted))`` by construction rather than by a
+    caller's care. Each row's ``event`` is set to the fresh, unflushed ``event``, which
+    populates its ``event_id`` at flush.
 
-    ``event`` is the fresh, unflushed event these belong to; ``tournament`` supplies
-    both the catalogue each ``table_ids`` entry is resolved against and the
-    ``tournament_id`` every reservation-table row carries (:func:`_reservation_tables`).
+    ``tournament`` supplies both the catalogue each ``table_ids`` entry is resolved
+    against and the ``tournament_id`` every reservation-table row carries
+    (:func:`_reservation_tables`).
 
-    No ``id`` is set on either row: that is the database's, exactly as a venue table's
-    is (:func:`app.tournament_tables.stored_tables`), and the point of the ADR is that
-    it is not the client's to author — the create shape (:class:`ReservationWrite`) has
-    no field for one.
+    No ``id`` is set: that is the database's, exactly as a venue table's is
+    (:func:`app.tournament_tables.stored_tables`), and the point of the ADR is that it
+    is not the client's to author — the create shape (:class:`ReservationWrite`) has no
+    field for one.
     """
     return [
-        _new_group(event, tournament, reservation, position)
+        _new_reservation(event, tournament, reservation, position)
         for position, reservation in enumerate(submitted)
     ]
 
 
-def _new_group(
+def _new_reservation(
     event: TournamentEvent,
     tournament: Tournament,
     submitted: ReservationWrite,
     position: int,
-) -> TournamentEventStageGroup:
-    """One brand-new group at ``position``, mapped to one brand-new reservation, from
-    the reservation a client sent — with no ``id`` on either, which the database mints.
-
-    The two are created together and can only be created together: this is the single
-    place the create path can produce a group at all, so "every group has a reservation"
-    holds by construction rather than by inspection.
-    """
+) -> TournamentEventReservation:
+    """One brand-new reservation at ``position``, from the reservation a client sent —
+    with no ``id``, which the database mints."""
     slot_date, slot_start, slot_end = _slot_columns(submitted.slot)
-    reservation = TournamentEventReservation(
+    return TournamentEventReservation(
         name=submitted.name,
         position=position,
         slot_date=slot_date,
@@ -289,10 +296,156 @@ def _new_group(
         event=event,
         tables=_reservation_tables(event, tournament, submitted.table_ids),
     )
-    return TournamentEventStageGroup(
-        position=position,
-        reservation_link=TournamentEventGroupReservation(reservation=reservation),
+
+
+def group_count_for(
+    draw_type: DrawType, *, field_size: int, reservation_count: int
+) -> int:
+    """How many group rows an event of ``draw_type`` holds (#1387, ADR 20260822).
+
+    **Two rules, stated rather than hidden.** An ``rr-then-ko`` event derives its
+    count from the field through #1386's derivation, with every structural setting
+    automatic (``ceil(field / 5)``, at least one) — the reservation count plays no
+    part, which is why adding a reservation adds no group. Every other draw type keeps
+    one group per reservation, exactly as it behaved before the derivation existed:
+    ``single-elim`` and ``swiss`` deal nothing into groups, and whether ``round-robin``
+    should run groups of five is a product question about that draw type, not a
+    materialisation one (#1387 decision 2).
+
+    ``field_size`` is the **caller's** question — the preview field (the cap, or 16)
+    on an event write, the real registered field at the cut — and this function only
+    takes the number. This module writes no arithmetic of its own: the count is the
+    derivation's, called with whichever field the caller holds.
+    """
+    if draw_type is not DrawType.rr_then_ko:
+        return reservation_count
+    return derive_draw_structure(
+        DrawStructureOptions(
+            preview_field_size=field_size,
+            group_count_mode=SettingOwnership.automatic,
+            manual_group_count=None,
+            group_size_mode=SettingOwnership.automatic,
+            manual_group_size=None,
+            qualifiers_mode=SettingOwnership.automatic,
+            manual_qualifiers=None,
+        )
+    ).group_count
+
+
+def materialise_groups(
+    stage: TournamentEventStage,
+    reservations: Sequence[TournamentEventReservation],
+    count: int,
+) -> None:
+    """Make ``stage``'s groups exactly ``count`` rows at positions ``0..count-1``, each
+    mapped to ``reservations[position % len(reservations)]`` — or to nothing when the
+    event has no reservation — as an **id-keyed diff** over the rows the stage holds.
+
+    Pure over loaded objects: no session, so the create path can run it on a fresh,
+    unflushed stage and the edit path on one it just loaded.
+
+    **Which rows survive a shrink is named, not incidental.** Going from eight groups
+    to two keeps positions 0 and 1 and drops the tail, so the surviving mapping and
+    the ``Group A`` / ``Group B`` labels agree with what the 409 and the draw panel
+    report. A grow appends fresh rows after the highest kept position; nothing is
+    re-positioned, so a kept group's ``id`` — the one its fixtures name — never moves.
+
+    **The join row is diffed in place, never replaced.** Its primary key is the group's
+    id, so assigning a fresh ``TournamentEventGroupReservation`` to a group that already
+    has one would ask the unit of work to INSERT a primary key it is about to DELETE —
+    and it emits the inserts first. A kept group whose target reservation changed has
+    its existing row re-pointed (an UPDATE); one whose target vanished has the row
+    orphaned (``delete-orphan`` on ``reservation_link``, a DELETE); one whose target is
+    unchanged is not touched at all.
+    """
+    kept = sorted(stage.groups, key=lambda group: group.position)[:count]
+    groups: list[TournamentEventStageGroup] = []
+    for position in range(count):
+        target = reservations[position % len(reservations)] if reservations else None
+        if position < len(kept):
+            group = kept[position]
+            group.position = position
+            link = group.reservation_link
+            if target is None:
+                group.reservation_link = None
+            elif link is None:
+                group.reservation_link = TournamentEventGroupReservation(
+                    reservation=target
+                )
+            elif link.reservation is not target:
+                link.reservation = target
+        else:
+            group = TournamentEventStageGroup(
+                position=position,
+                reservation_link=(
+                    TournamentEventGroupReservation(reservation=target)
+                    if target is not None
+                    else None
+                ),
+            )
+        groups.append(group)
+    stage.groups = groups
+
+
+async def materialise_event_groups(
+    db: AsyncSession, event: TournamentEvent, *, field_size: int
+) -> None:
+    """Make ``event``'s stage-0 group rows equal :func:`group_count_for`'s answer for
+    ``field_size`` and the event's current reservations, mapped round-robin
+    (:func:`materialise_groups`) — the edit-path and cut-path door onto the
+    materialisation.
+
+    **The caller decides whether it runs, and which field it runs against.**
+    ``app.tournament_events.update_event`` calls it unconditionally, late in the write
+    (after the reservations diff and after ``store_draw_settings``, so it maps onto the
+    new reservation set and reads the new draw type) and only while the event has no
+    draw, with the preview field. ``app.tournament_draws.cut_draw`` calls it with the
+    real registered field, and only when the derived count differs from the stored
+    one. Nothing calls it after the cut: the identities and the mapping freeze there
+    (#1387 decision 3).
+
+    Reads the draw type off ``draw_settings_of(event.draw_settings)`` — the settings
+    row rides along with the event (``lazy="joined"``) — and the reservations off
+    ``event.reservations``, which is eager and, on the edit path, already the list the
+    reservations diff just assigned.
+
+    Resolves the event's stage 0 with an explicit query, the same discipline
+    ``app.tournament_event_stages.remint_stages_in_place`` follows: ``TournamentEvent
+    .stages`` is eager, but ``TournamentEventStage.groups`` is deliberately NOT, so
+    this needs its own query to attach the ``selectinload`` that loads it.
+    ``scalar_one()``, not ``scalar_one_or_none()``: every event holds at least one
+    stage from the moment it exists (ADR 20260815 decision 1), so a miss here means the
+    event was seeded straight through the ORM bypassing ``create_event`` — a
+    test-fixture bug, not a state this function is asked to tolerate.
+
+    Does not flush. A fresh group's ``id`` is the database's (``gen_random_uuid()``)
+    and projects as ``None`` until the INSERT runs, so a caller that reads the groups
+    back in the same transaction — the cut, which hands their ids to the snake — flushes
+    after this returns.
+    """
+    # ``.options(selectinload(...))`` here, rather than a default eager strategy on the
+    # relationship itself: ``TournamentEventStage.groups`` is deliberately NOT eager (an
+    # event-wide default would double-load against ``TournamentEvent.groups``'s own
+    # selectin), so this one direct reader asks for exactly the load it needs. ONE
+    # option, not a chain down to the tables: ``reservation_link`` and ``reservation``
+    # are ``joined`` on their own models and ride this query's own SELECT.
+    stage = (
+        await db.execute(
+            select(TournamentEventStage)
+            .options(selectinload(TournamentEventStage.groups))
+            .where(
+                TournamentEventStage.event_id == event.id,
+                TournamentEventStage.position == 0,
+            )
+        )
+    ).scalar_one()
+    reservations = sorted(event.reservations, key=lambda row: row.position)
+    count = group_count_for(
+        draw_settings_of(event.draw_settings).draw_type,
+        field_size=field_size,
+        reservation_count=len(reservations),
     )
+    materialise_groups(stage, reservations, count)
 
 
 async def apply_event_reservations(
@@ -301,44 +454,28 @@ async def apply_event_reservations(
     event: TournamentEvent,
     submitted: Sequence[ReservationUpsert],
 ) -> None:
-    """Make ``event``'s reservations equal ``submitted``, and its stage-0 groups equal
-    them in lockstep, as an **id-keyed diff** — keyed on the **reservation's own id**,
-    the one the wire now exposes.
+    """Make ``event``'s reservations equal ``submitted`` as an **id-keyed diff** —
+    keyed on the reservation's own id, the one the wire exposes and a PATCH cites.
 
     ``tournament`` is the event's own parent, and it is here for the reservation tables:
     it supplies the catalogue each ``table_ids`` is resolved against and the
     ``tournament_id`` their rows carry (:func:`_reservation_tables`).
 
-    **Both collections are reassigned, and that is the 1:1.** ``stage.groups`` and
-    ``event.reservations`` are written from the same pass over the same payload, in the
-    same order, so an entry adds a reservation *and* a group, an entry citing an id
-    updates both, and an entry that disappears removes both — the second by
-    ``delete-orphan`` on each collection, which also takes the join row with the group.
-    Writing only one of the two would leave ``fixture.group_id`` naming a group the
-    projected ``reservations[]`` no longer maps to (see the module docstring's
-    "The 1:1").
-
-    Resolves the event's stage 0 with an explicit query, the same discipline
-    ``app.tournament_event_stages.remint_stages_in_place`` follows. Not because
-    ``TournamentEvent.stages`` would fail — it is eager (``lazy="selectin"``) and would
-    already be populated on ``event`` — but because ``TournamentEventStage.groups`` is
-    the one that is deliberately NOT eager, so this still needs its own query to attach
-    the ``selectinload`` that loads it. The ``reservation_link`` and its ``reservation``
-    are chained onto that load, because the update arm re-times and re-tables the
-    reservation each kept group already has.
-    ``scalar_one()``, not ``scalar_one_or_none()``: every event holds at least one stage
-    from the moment it exists (ADR 20260815 decision 1), so a miss here means the event
-    was seeded straight through the ORM bypassing ``create_event`` — a test-fixture bug,
-    not a state this function is asked to tolerate.
+    **This writes reservations only.** The groups are the server's
+    (:func:`materialise_event_groups`), and ``app.tournament_events.update_event``
+    re-materialises them after this diff — unconditionally, whether or not the patch
+    carried a ``reservations`` key — so they map onto the reservation set this just
+    wrote. Before #1387 this function wrote a group per reservation in lockstep; that
+    1:1 is gone, and a reservation a group maps to can be removed here (with no draw
+    cut) because the re-materialisation that follows re-points the group.
 
     Each entry either cites the ``id`` of a reservation the event already has — which
-    keeps that row and its mapped group, re-named, re-timed, re-tabled and
-    re-positioned as this payload says — or omits one, which adds a pair the database
-    mints ids for.
+    keeps that row, re-named, re-timed, re-tabled and re-positioned as this payload
+    says — or omits one, which adds a row the database mints an id for.
 
     **Keying on the id is not an optimization, it is the only correct mechanism.** A
-    fixture holds its group's id as a foreign key, so a delete-and-recreate of the row a
-    standing draw points at would take the draw with it or be refused outright.
+    group's join row holds its reservation's id as a foreign key, and a delete-and-
+    recreate of a reservation would take every mapping with it.
 
     Two refusals, and they are asked in two different places:
 
@@ -355,53 +492,29 @@ async def apply_event_reservations(
       *before* this function, so the 409 wins over the 422 whenever both apply. With no
       draw, any diff is legal.
 
-    Reassigning whole collections is what expresses all three operations at once, in the
-    payload's order — the same gesture ``apply_table_catalogue`` makes, and the reason
-    every ``position`` constraint involved is DEFERRABLE: a reorder moves a row onto a
-    position its neighbour has not vacated yet.
+    Reassigning the whole collection is what expresses all three operations at once, in
+    the payload's order — the same gesture ``apply_table_catalogue`` makes, and the
+    reason every ``position`` constraint involved is DEFERRABLE: a reorder moves a row
+    onto a position its neighbour has not vacated yet.
+
+    ``event.reservations`` is eager (``selectin``), so it is already loaded on the
+    object in hand and the assignment below never triggers the lazy load that, under
+    async, would raise ``MissingGreenlet``.
+
+    **Unmaps, then flushes, and the order is the point.** A group mapped to a
+    reservation this payload removes has its join row orphaned here, and the whole
+    diff is flushed before this returns. Two facts force that. The join row's
+    reservation leg is ``ON DELETE CASCADE``, and the unit of work emits the
+    reservation's DELETE before a join row's UPDATE — so re-pointing the row at a new
+    reservation in the same flush would have the database cascade it away first and
+    the UPDATE match nothing. And the join row's primary key is the group's id, so
+    minting a fresh row for the same group in the same flush as the orphan's DELETE
+    would INSERT a key about to be deleted (the inserts go first). Orphaning in this
+    flush and letting :func:`materialise_event_groups` mint the replacement in the
+    next is the one ordering both accept. A group whose reservation is kept keeps its
+    row untouched; a re-point between two kept reservations is a plain UPDATE there.
     """
-    # ``.options(selectinload(...))`` here, rather than a default eager strategy on the
-    # relationship itself: ``TournamentEventStage.groups`` is deliberately NOT eager (an
-    # event-wide default would double-load against ``TournamentEvent.groups``'s own
-    # selectin), so this one direct reader asks for exactly the load it needs.
-    stage = (
-        await db.execute(
-            select(TournamentEventStage)
-            # ONE option, not a chain down to the tables. Everything below ``groups`` is
-            # already eager on its own model — ``reservation_link`` and ``reservation``
-            # as ``joined`` (one-to-one and many-to-one, so they ride this query's own
-            # SELECT), and ``tables`` as ``selectin``. Spelling the tail out here would
-            # not add loads, it would REPLACE them: an explicit loader option overrides
-            # the mapper's default for that path, so chaining ``selectinload`` over the
-            # two joined legs turns each into its own round trip — five statements where
-            # two do, and precisely the joins those models argue for.
-            .options(selectinload(TournamentEventStage.groups))
-            .where(
-                TournamentEventStage.event_id == event.id,
-                TournamentEventStage.position == 0,
-            )
-        )
-    ).scalar_one()
-    # ``TournamentEvent.reservations`` is deliberately NOT eager (see that
-    # relationship's docstring: no reader needs it, and eager it would cost every page
-    # a statement it never reads). This is its one writer, so it loads it here.
-    #
-    # It has to be loaded BEFORE the assignment below: assigning to an unloaded
-    # ``delete-orphan`` collection makes the unit of work emit a lazy load
-    # mid-assignment, to work out what is being orphaned — which under async raises
-    # ``MissingGreenlet`` rather than querying.
-    #
-    # ``awaitable_attrs`` is the sanctioned spelling for exactly that (``AsyncAttrs`` on
-    # ``app.db.Base``): it loads the one relationship, on the object already in hand. A
-    # throwaway ``select(TournamentEvent)`` carrying a loader option does the same job
-    # for two statements instead of one, and re-reads a row the session already holds.
-    await event.awaitable_attrs.reservations
-    # Keyed on the RESERVATION's own id — the id the wire now exposes and the id a
-    # PATCH cites — not on the group's. The two used to be the same key because only
-    # the group's id ever reached a client; now that both ids are visible, the group's
-    # is server-owned and read-only, and the diff has to run against the array a client
-    # can actually write.
-    stored = {group.reservation.id: group for group in stage.groups}
+    stored = {reservation.id: reservation for reservation in event.reservations}
     # Judged first, over the whole payload, for the reason the catalogue's twin is: a
     # reservation list naming a reservation this event does not have is not a
     # reservation list, and every subsequent question (what is kept, and therefore what
@@ -410,46 +523,39 @@ async def apply_event_reservations(
     for index, entry in enumerate(submitted):
         if entry.id is not None and entry.id not in stored:
             raise ReservationNotInEventError(index=index, reservation_id=str(entry.id))
-    groups = [
-        _group_for(event, tournament, stored, entry, position)
+    kept = {entry.id for entry in submitted if entry.id is not None}
+    for group in event.groups:
+        link = group.reservation_link
+        if link is not None and link.reservation_id not in kept:
+            group.reservation_link = None
+    event.reservations = [
+        _reservation_for(event, tournament, stored, entry, position)
         for position, entry in enumerate(submitted)
     ]
-    # Assigned in lockstep, from the one list, so the two collections cannot disagree
-    # about which reservations this event has. The reservations are read back off the
-    # groups rather than accumulated separately, which makes "the reservation set IS
-    # the mapped set" true by construction instead of by a parallel append nobody would
-    # notice drifting.
-    stage.groups = groups
-    event.reservations = [group.reservation for group in groups]
+    await db.flush()
 
 
-def _group_for(
+def _reservation_for(
     event: TournamentEvent,
     tournament: Tournament,
-    stored: dict[uuid.UUID, TournamentEventStageGroup],
+    stored: dict[uuid.UUID, TournamentEventReservation],
     entry: ReservationUpsert,
     position: int,
-) -> TournamentEventStageGroup:
-    """The group one submitted reservation resolves to — the group mapped to the cited
-    reservation, updated in place, or a brand-new pair.
+) -> TournamentEventReservation:
+    """The reservation one submitted entry resolves to — the cited row, updated in
+    place, or a brand-new one.
 
-    ``position`` is the entry's index in the submitted list and is assigned on both arms
-    and to both rows, so a patch that re-orders the reservations re-orders them (and one
-    that re-sends them unchanged writes the positions they already had).
+    ``position`` is the entry's index in the submitted list and is assigned on both
+    arms, so a patch that re-orders the reservations re-orders them (and one that
+    re-sends them unchanged writes the positions they already had).
 
     ``stored[entry.id]`` cannot miss — every cited id was checked against ``stored``
     before this runs, so this is an indexing operation rather than a second lookup with
     a second opinion about what an unknown id means.
-
-    The update arm writes the **reservation's** name, window and tables and the
-    **group's** position, which is exactly the split the projection reads back: identity
-    and order on the group, everything a director can edit mid-event on the reservation.
     """
     if entry.id is None:
-        return _new_group(event, tournament, entry, position)
-    group = stored[entry.id]
-    group.position = position
-    reservation = group.reservation
+        return _new_reservation(event, tournament, entry, position)
+    reservation = stored[entry.id]
     reservation.name = entry.name
     reservation.position = position
     reservation.slot_date, reservation.slot_start, reservation.slot_end = _slot_columns(
@@ -463,4 +569,4 @@ def _group_for(
     reservation.tables = _reservation_tables(
         event, tournament, entry.table_ids, reservation.tables
     )
-    return group
+    return reservation

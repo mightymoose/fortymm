@@ -1929,12 +1929,19 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # batched load of every one of THOSE groups' reservations' table reservations
 # (the reservation's ``tables``, ``lazy="selectin"`` — they are rows too
 # now, and selectin chains onto the groups' own batched load rather than costing a
-# query per group), and ONE batched load of every event's stages
+# query per group), ONE batched load of every event's RESERVATIONS
+# (``TournamentEvent.reservations``, ``lazy="selectin"`` since #1387 — the wire's
+# ``reservations[]`` reads this collection now that a group count no longer equals a
+# reservation count, so the group chain is neither complete nor duplicate-free) and
+# ONE batched load of those reservations' tables chained off it (the same rows the
+# group chain's load above fetched — a reservation reached by both paths is one
+# identity, but each path runs its own ``selectin`` for the collection), and ONE
+# batched load of every event's stages
 # (``TournamentEvent.stages``, ``lazy="selectin"`` too now, ADR 20260815 — the list is
 # no longer a special case that skips them, it just never asked for a separate batch).
-# Nine, whatever the number of tournaments, tables, events, groups, reservations and
+# Eleven, whatever the number of tournaments, tables, events, groups, reservations and
 # stages.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 9
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 11
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -4608,20 +4615,25 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # now, ADR 20260801), plus ONE batched load of every one of those groups' reservations'
 # table reservations (the reservation's ``tables``, ``lazy="selectin"`` — chained onto
 # the groups' own batched load, so it is one statement per page and not one per
-# group), plus ONE batched
+# group), plus ONE batched load of every event's RESERVATIONS
+# (``TournamentEvent.reservations``, ``lazy="selectin"`` since #1387 — the wire's
+# ``reservations[]`` reads this collection now that a group count no longer equals a
+# reservation count) and ONE batched load of those reservations' tables chained off
+# it (the same rows the group chain fetched; each path runs its own ``selectin``),
+# plus ONE batched
 # load of every event's STAGES (``selectinload(TournamentEvent.stages)`` at the
 # ``tournament_detail`` read site — ADR 20260815 — riding
 # ``TournamentEventStage.draw_type_option``'s own ``lazy="joined"`` along on that same
-# statement). Eleven, whatever the number of
+# statement). Thirteen, whatever the number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
 # whatever the size of the venue, whatever the number of stages, and whatever the
 # length of the day's solve ledger.
 #
-# Two of the ten are deliberate flat reads that grow with nothing: the draw-type
+# Two of the thirteen are deliberate flat reads that grow with nothing: the draw-type
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 11
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 13
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -6655,12 +6667,14 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
 @pytest.mark.parametrize(
     ("payload", "named"),
     [
-        pytest.param(lambda kept: [*kept, RESERVATION_C], ["1 new group"], id="added"),
+        pytest.param(
+            lambda kept: [*kept, RESERVATION_C], ["1 new reservation"], id="added"
+        ),
         pytest.param(lambda kept: kept[:1], ["Group B"], id="removed"),
         pytest.param(lambda _kept: [], ["Group A", "Group B"], id="cleared"),
         pytest.param(
             lambda kept: [kept[0], {k: v for k, v in kept[1].items() if k != "id"}],
-            ["Group B", "1 new group"],
+            ["Group B", "1 new reservation"],
             id="re-added",
         ),
         # The collision arm. Replacing the FIRST reservation removes the group at
@@ -6671,7 +6685,7 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
         # claimed to be simultaneously departing and arriving.
         pytest.param(
             lambda kept: [{k: v for k, v in kept[0].items() if k != "id"}, kept[1]],
-            ["Group A", "1 new group"],
+            ["Group A", "1 new reservation"],
             id="first-replaced",
         ),
     ],
@@ -6683,24 +6697,25 @@ async def test_a_cut_draw_refuses_a_reservations_patch_that_changes_which_groups
     named: list[str],
 ) -> None:
     """The freeze itself: with a draw standing, a ``reservations`` payload must cite
-    exactly the reservations the event already has — because each maps 1:1 to a group,
-    and it is the GROUP set the freeze protects.
+    exactly the reservations the event already has — because each group was mapped to
+    a reservation at the cut and nothing re-maps one while the draw stands (#1387
+    decisions 3 and 4), and it is that MAPPING the freeze protects.
 
-    Each arm is a different way to break the same reference, and only one of them is a
+    Each arm is a different way to break the same reference, and none of them is a
     thing the database could refuse on its own:
 
-    * **added** — the new reservation (and its mapped group) arrives with no fixtures,
-      because the draw was dealt across the groups that existed at the cut and nothing
-      re-deals it. **No constraint says anything about this at all** — it is perfectly
-      legal SQL and an incoherent draw — so this guard is the only thing between a
-      director and one;
-    * **removed** / **cleared** — every fixture drawn into the departing group would
-      name a group that does not exist. The composite foreign key *does* refuse that,
-      but *deferred*, at COMMIT, as an ``IntegrityError`` the director would read as a
-      **500**. The 409 here is what makes it actionable, and it is judged first;
+    * **added** — the new reservation could hold no group, because the mapping was
+      read at the cut and will not be re-read until the draw is removed. **No
+      constraint says anything about this at all** — it is perfectly legal SQL and a
+      table set the fixtures can never reach — so this guard is the only thing between
+      a director and one;
+    * **removed** / **cleared** — every group mapped to the departing reservation has
+      fixtures drawn into it and would be left with nowhere to play. The join row's
+      foreign key cascades the mapping away *silently*, so nothing below this guard
+      says a word. The 409 here is what makes it actionable, and it is judged first;
     * **re-added** — a reservation re-sent with its ``id`` dropped is a removal and an
       addition at once, and it is the one a director would never see coming: the
-      reservations page looks unchanged and every fixture in Group B is orphaned.
+      reservations page looks unchanged and every fixture in Group B loses its venue.
       (Its predecessor, a reservation *re-identified* by giving it a different id, is
       no longer expressible at all — the id is minted by the server now, so the only
       two things a client can say are "keep this one" and "add one".)

@@ -170,9 +170,8 @@ def preview_reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> s
     key on the reservation now, because a reservation is what a fixture is actually
     confined to — its tables, inside its window — and because a field called
     ``reservation_id`` holding a group id is the exact conflation this rename ends.
-    Under the 1:1 the two ids are in exact correspondence, so the preview a director
-    sees is unchanged; once #1370 lets two groups share a reservation, keying on the
-    reservation is the answer that stays correct.
+    Two groups may share a reservation now (#1387), and a group may have none, so
+    keying on the reservation is the answer that stays correct.
 
     **The namespace is no longer needed for uniqueness, and is kept anyway.** It was
     minted because a reservation id was a per-event string and two events of one
@@ -299,15 +298,30 @@ class PreviewSnapshot:
     base: datetime | None
 
 
+def preview_field_size(max_players: int | None) -> int:
+    """The **preview field** (``CONTEXT.md``): the invented number of entrants the app
+    reasons against before registration closes — the event's ``max_players`` cap, or
+    :data:`DEFAULT_UNCAPPED_FIELD` for an uncapped (``NULL`` cap) event.
+
+    The one server-side spelling of that rule. The schedule preview's synthetic field
+    (:func:`_field_size`) and the group materialisation on an event write
+    (``app.tournament_events``, through
+    ``app.tournament_reservations.materialise_event_groups``, #1387) both read it, so
+    the rows a write materialises and the field the preview deals into them cannot
+    disagree. The client's copy is
+    ``web-client/.../draw-structure-section/preview-field.ts``, with the same 16.
+    """
+    if max_players is not None:
+        return max_players
+    return DEFAULT_UNCAPPED_FIELD
+
+
 def _field_size(event: TournamentEvent, override: int | None) -> int:
     """How many synthetic entrants to invent for this event: the override if the
-    caller gave one, else the event's ``max_players`` cap, else
-    :data:`DEFAULT_UNCAPPED_FIELD` for an uncapped (``NULL`` cap) event."""
+    caller gave one, else the event's preview field (:func:`preview_field_size`)."""
     if override is not None:
         return override
-    if event.max_players is not None:
-        return event.max_players
-    return DEFAULT_UNCAPPED_FIELD
+    return preview_field_size(event.max_players)
 
 
 def _slot_bounds(
@@ -620,7 +634,9 @@ def build_preview_snapshot(
         # (a pure ``app.draws`` value) carries only a group id, never a
         # reservation one.
         group_reservation_ids = {
-            group.id: group.reservation.id for group in plan.event.groups
+            group.id: group.reservation_link.reservation_id
+            for group in plan.event.groups
+            if group.reservation_link is not None
         }
         # Counted, not just dropped: the caller turns a non-zero count into the honest
         # note that this event's knockout stage is missing from the schedule shown.
@@ -644,6 +660,14 @@ def build_preview_snapshot(
                 # reservations feeding it resolve; a preview has nothing to resolve it
                 # from.
                 knockout_fixtures += 1
+                continue
+            if fixture.group_id not in group_reservation_ids:
+                # A group that plays in no reservation (#1387: an ``rr-then-ko``
+                # event's groups map round-robin onto its reservations, and an event
+                # with none has groups with none). The preview has no window to place
+                # such a fixture in until #1389 hands it the event-wide reservation,
+                # so it is left out of the schedule shown rather than refused — the
+                # same stance the knockout stage above takes.
                 continue
             schedule_fixtures.append(
                 _schedule_fixture(
@@ -714,11 +738,11 @@ def _schedule_fixture(
     # group deals its own rounds. ``reservation_id`` names what CONFINES the fixture —
     # tables inside a window — which is the reservation.
     #
-    # They are not interchangeable, even though the 1:1 makes them isomorphic today.
-    # Keying the fixture id on the reservation would make its uniqueness conditional on
-    # that 1:1: the moment #1370 lets two groups share a reservation, two group-stage
-    # fixtures would collide on ``(reservation, round, position)`` and the snapshot
-    # would be refused as incoherent, naming a symptom rather than the cause.
+    # They are not interchangeable. Two groups share a reservation routinely now
+    # (#1387 maps eight groups across four reservations two apiece), so keying the
+    # fixture id on the reservation would collide two group-stage fixtures on
+    # ``(reservation, round, position)`` and the snapshot would be refused as
+    # incoherent, naming a symptom rather than the cause.
     reservation_ref = preview_reservation_key(
         event_uuid, group_reservation_ids[fixture.group_id]
     )

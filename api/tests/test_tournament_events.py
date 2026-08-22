@@ -871,7 +871,7 @@ async def test_update_event_frozen_group_reorder_is_refused(
             actor=owner,
             updates=updates,
         )
-    assert "order of its groups is frozen" in str(excinfo.value)
+    assert "order of its reservations is frozen" in str(excinfo.value)
     # A reorder gains and loses nothing — the set is identical, only the sequence moved.
     # ``added`` is a COUNT, not a list of labels: an added group's label derives from a
     # position this very payload rewrites, so naming it would collide with an existing
@@ -1620,7 +1620,18 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
 # It is not a count that must never move — a real change to what the verb does may move
 # it. It is a count that must never move BY ACCIDENT. If it changes, say why in the
 # same commit.
-EXPECTED_RESERVATION_WRITE_STATEMENTS = 15
+#
+# Fifteen became twenty with #1387, and all five are named. ``TournamentEvent
+# .reservations`` is eager now (the wire reads it, since a group count no longer
+# equals a reservation count), so the event load carries the reservations and their
+# tables (2), and the closing ``refresh`` re-runs the reservations load (1). The
+# refresh leaves a KEPT reservation's ``tables`` expired — a chained ``selectin``
+# under a refresh does not re-run for an instance the session already held — so
+# ``update_event`` reloads them explicitly after it, before the serializer reads
+# them (2). The group materialisation itself adds nothing this verb did not already
+# pay: the stage-0 load the old lockstep diff was written against is the one
+# ``materialise_event_groups`` reads.
+EXPECTED_RESERVATION_WRITE_STATEMENTS = 20
 
 
 async def test_reservation_write_statement_count_does_not_drift(

@@ -139,6 +139,25 @@ async def _group_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.
     ).scalar_one()
 
 
+async def _reservations(
+    db_session: AsyncSession, event_id: str
+) -> list[TournamentEventReservation]:
+    """The event's reservation rows in their own order — what a ``reservations``
+    PATCH cites (#1387: a group is the server's, so a payload is built from the
+    reservations, never from the groups)."""
+    return list(
+        (
+            await db_session.execute(
+                select(TournamentEventReservation)
+                .where(TournamentEventReservation.event_id == uuid.UUID(event_id))
+                .order_by(TournamentEventReservation.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 async def _group_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
     """The event's group ids in its own group order."""
     return list(
@@ -1080,18 +1099,17 @@ async def test_a_finished_group_seats_its_qualifiers_into_the_bracket(
         assert all(f.match_id is None for f in bracket)
 
 
-def _reservation_payload(group: TournamentEventStageGroup) -> dict[str, Any]:
+def _reservation_payload(reservation: TournamentEventReservation) -> dict[str, Any]:
     """The full :class:`~app.schemas.tournament.ReservationUpsert` a PATCH must send
     to *cite* an existing reservation: an id alone is not enough, since the shape
     carries ``name``, ``slot`` and ``table_ids`` too.
 
     The id is the **reservation's own** — the wire diffs
-    (``apply_event_reservations``) on the reservation's id now, not the group's, so
-    citing the group's id here would name no reservation this event has. ``table_ids``
+    (``apply_event_reservations``) on the reservation's id, not the group's, so
+    citing a group's id here would name no reservation this event has. ``table_ids``
     is sent empty rather than round-tripped — a table this test's tournament does not
     have is dropped silently (``app.tournament_reservations._reservation_tables``) —
     so the emptiness itself asserts nothing either way."""
-    reservation = group.reservation
     return {
         "id": str(reservation.id),
         "name": reservation.name,
@@ -1110,17 +1128,18 @@ async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
     """The end-to-end regression for the mutable-``group_position`` bug
     (``app.tournament_events._enforce_group_set_frozen``'s reorder guard).
 
-    Three groups of **three**, top two per group (nine entrants rather than the twelve
-    other tests in this file use — see below for why): the snake deals seeds 1, 6, 7
-    into group A, 2, 5, 8 into group B, 3, 4, 9 into group C. Group A is played out
-    first — the LOWER seed always wins, so its two matches touching seed 1 and its one
-    match between 6 and 7 leave 1 and 6 as its only winners, and therefore its top two
-    — and they seat into their predetermined bracket slots. A PATCH then cites the SAME
-    three reservations, reversed, and is refused with a `409` naming the group order as
-    frozen — groups B and C are still playing, and group B's qualifiers have not been
-    seated yet. Group B is then played out, and its own top two (seeds 2 and 5) seat in
-    too, alongside group A's untouched pair — exactly four distinct entrants seated,
-    nobody doubled and nobody dropped.
+    Two groups of **three**, top two per group (six entrants rather than the twelve
+    other tests in this file use — see below for why): the cut derives the count from
+    the real field (#1387, ``ceil(6 / 5)``), and the snake deals seeds 1, 4, 5 into
+    group A and 2, 3, 6 into group B. Group A is played out first — the LOWER seed
+    always wins, so its two matches touching seed 1 and its one match between 4 and 5
+    leave 1 and 4 as its only winners, and therefore its top two — and they seat into
+    their predetermined bracket slots. A PATCH then cites the SAME three reservations
+    (the event has three, the third mapped to no group), reversed, and is refused with
+    a `409` naming the reservation order as frozen — group B is still playing, and its
+    qualifiers have not been seated yet. Group B is then played out, and its own top
+    two (seeds 2 and 3) seat in too, alongside group A's untouched pair — exactly four
+    distinct entrants seated, nobody doubled and nobody dropped.
 
     Three-a-side rather than four-a-side on purpose: in a group of three, "the lower
     seed always wins" makes every one of a group's three matches won by one of its own
@@ -1148,18 +1167,18 @@ async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
     """
     client, owner = authed_client
     async with (
-        opponent_session(db_session, "reorder-6") as (client_6, user_6),
+        opponent_session(db_session, "reorder-4") as (client_4, user_4),
         opponent_session(db_session, "reorder-2") as (client_2, user_2),
-        opponent_session(db_session, "reorder-5") as (client_5, user_5),
+        opponent_session(db_session, "reorder-3") as (client_3, user_3),
     ):
         tournament_id = await _tournament(client)
         event_id = (
             await _create_event(client, tournament_id, qualifiers_per_group=2)
         ).json()["id"]
-        # Seeds 1, 6, 7 snake into group A; 2, 5, 8 into group B; 3, 4, 9 into group C.
-        players = {1: owner, 6: user_6, 2: user_2, 5: user_5}
+        # Seeds 1, 4, 5 snake into group A; 2, 3, 6 into group B.
+        players = {1: owner, 4: user_4, 2: user_2, 3: user_3}
         entries: dict[int, TournamentEntry] = {}
-        for seed in range(1, 10):
+        for seed in range(1, 7):
             user = players.get(seed) or await make_user(db_session, f"reorder{seed}")
             entries[seed] = await _enter(
                 db_session, event_id, user, seed=seed, minutes=seed
@@ -1173,9 +1192,9 @@ async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
         ).status_code == 201
         clients_by_entry = {
             entries[1].id: client,
-            entries[6].id: client_6,
+            entries[4].id: client_4,
             entries[2].id: client_2,
-            entries[5].id: client_5,
+            entries[3].id: client_3,
         }
 
         async def _play_group(
@@ -1206,7 +1225,7 @@ async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
                     winner_entry_id=entries[winner].id,
                 )
 
-        await _play_group("Reservation A", (1, 6, 7))
+        await _play_group("Reservation A", (1, 4, 5))
 
         def _seated(fixtures: Sequence[TournamentFixture]) -> set[uuid.UUID]:
             return {
@@ -1219,46 +1238,33 @@ async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
 
         assert _seated(await _fixtures(db_session, event_id)) == {
             entries[1].id,
-            entries[6].id,
+            entries[4].id,
         }, "group A's top two must already be seated before the reorder is attempted"
 
-        groups = (
-            (
-                await db_session.execute(
-                    select(TournamentEventStageGroup)
-                    .where(
-                        TournamentEventStageGroup.stage_id.in_(
-                            stage_ids_for_events([uuid.UUID(event_id)])
-                        )
-                    )
-                    .order_by(TournamentEventStageGroup.position)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        stored_order = [group.id for group in groups]
+        reservations = await _reservations(db_session, event_id)
+        stored_order = await _group_ids(db_session, event_id)
         reorder = await client.patch(
             f"/v1/tournaments/{tournament_id}/events/{event_id}",
             json={
                 "reservations": [
-                    _reservation_payload(group) for group in reversed(groups)
+                    _reservation_payload(reservation)
+                    for reservation in reversed(reservations)
                 ]
             },
         )
         assert reorder.status_code == 409, reorder.text
-        assert "order of its groups is frozen" in reorder.json()["detail"]
+        assert "order of its reservations is frozen" in reorder.json()["detail"]
         assert await _group_ids(db_session, event_id) == stored_order, (
             "a refused reorder writes nothing — the stored order is unchanged"
         )
 
-        await _play_group("Reservation B", (2, 5, 8))
+        await _play_group("Reservation B", (2, 3, 6))
 
         assert _seated(await _fixtures(db_session, event_id)) == {
             entries[1].id,
-            entries[6].id,
+            entries[4].id,
             entries[2].id,
-            entries[5].id,
+            entries[3].id,
         }, "both finished groups' qualifiers are seated, once each, with nobody dropped"
 
 
@@ -1295,32 +1301,38 @@ async def test_a_reservations_patch_before_any_draw_is_cut_is_accepted(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    groups = (
-        (
-            await db_session.execute(
-                select(TournamentEventStageGroup)
-                .where(
-                    TournamentEventStageGroup.stage_id.in_(
-                        stage_ids_for_events([uuid.UUID(event_id)])
-                    )
-                )
-                .order_by(TournamentEventStageGroup.position)
-            )
-        )
-        .scalars()
-        .all()
+    reservations = await _reservations(db_session, event_id)
+    assert len(reservations) > 1, (
+        "a reorder needs at least two reservations to be meaningful"
     )
-    assert len(groups) > 1, "a reorder needs at least two groups to be meaningful"
-    sent = list(reversed(groups)) if reorder else groups
-    expected_order = [group.id for group in sent]
+    sent = list(reversed(reservations)) if reorder else reservations
+    expected_order = [reservation.id for reservation in sent]
+    group_ids = await _group_ids(db_session, event_id)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"reservations": [_reservation_payload(group) for group in sent]},
+        json={
+            "reservations": [_reservation_payload(reservation) for reservation in sent]
+        },
     )
 
     assert response.status_code == 200, response.text
-    assert await _group_ids(db_session, event_id) == expected_order
+    assert [
+        reservation.id for reservation in await _reservations(db_session, event_id)
+    ] == expected_order
+    # The groups are the server's and keep their identities across a reservation
+    # reorder (#1387): only the mapping moves, re-read as ``position % reservation
+    # count`` against the new order.
+    assert await _group_ids(db_session, event_id) == group_ids
+    body = response.json()
+    by_position = {
+        reservation["position"]: reservation["id"]
+        for reservation in body["reservations"]
+    }
+    groups = sorted(body["groups"], key=lambda group: group["position"])
+    assert [group["reservation_id"] for group in groups] == [
+        by_position[group["position"] % len(by_position)] for group in groups
+    ]
 
 
 async def test_a_group_holding_a_voided_pairing_still_seats_its_qualifiers(

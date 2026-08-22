@@ -209,11 +209,11 @@ class EventNotFoundError(Exception):
 
 class GroupSetFrozenError(Exception):
     """Raised by the update-event verb when a ``reservations`` payload would change
-    *which groups* an event with a **cut draw** has (ADR-0786). A fixture names its
-    group by a foreign key onto the event's own groups, and adding or removing a
-    reservation adds or removes its mapped group in lockstep — so removing one orphans
-    every fixture drawn into it and adding one arrives with no fixtures — integrity the
-    database cannot enforce, so the freeze does.
+    *which reservations* an event with a **cut draw** has, or their order (ADR-0786,
+    #1387). Each group was mapped to a reservation at the cut and nothing re-maps one
+    while the draw stands — so removing a reservation leaves the groups mapped to it
+    (with fixtures already drawn into them) nowhere to play, and adding one gives it
+    no group to hold — integrity the database cannot enforce, so the freeze does.
 
     It is a 409, not a 403 (ADR-0017): the caller is the owner and the payload is
     well-formed — it is the *resource* that is in the wrong state, and the same request

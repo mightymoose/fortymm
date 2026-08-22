@@ -200,10 +200,14 @@ def event_groups(
     :class:`~app.models.tournament_event_reservation.TournamentEventReservation` (the
     name, the window and the tables, parented on the event), joined by a
     :class:`~app.models.tournament_event_group_reservation.TournamentEventGroupReservation`.
-    This helper builds all three from one dict, exactly as
-    ``app.tournament_reservations.stored_groups`` does from one payload entry, so a
-    seeded group and a POSTed one are the same rows — and so a seed cannot accidentally
-    create the group-without-reservation state no application path produces.
+    This helper builds all three from one dict — one group per reservation, mapped
+    1:1 — which is the shape every draw type but ``rr-then-ko`` materialises
+    (``app.tournament_reservations.materialise_groups``), so a seeded group and a
+    POSTed one are the same rows. An ``rr-then-ko`` event created through the API
+    derives its group count from the preview field instead (#1387), and re-derives it
+    from the real field at the cut; a test that seeds one straight through the ORM
+    gets exactly the groups it lists, and the cut will re-materialise them if the
+    field says otherwise.
 
     It returns the **groups**, with the reservations riding along inside them, so the
     caller assigns one collection and gets the whole graph:
@@ -342,10 +346,11 @@ def joined_to_reservation(stmt: Select[Any]) -> Select[Any]:
     one place instead of silently changing what seven joins mean.
 
     It is one function rather than seven for a reason that is not tidiness. These are
-    INNER joins, and they are correct only while every group has a reservation. The
-    moment a group may exist without one, every one of them silently drops rows instead
-    of failing — and the fix is ``.outerjoin`` in exactly one place if this helper is
-    used, or a hunt through four files if it is not.
+    INNER joins, so a group with no reservation — reachable since #1387, for an
+    ``rr-then-ko`` event whose groups outnumber its reservations' positions, or one
+    with no reservation at all — is not in the result. Every caller keys on a
+    reservation's NAME, so that is the answer they want; a caller that needs the
+    unmapped groups too changes ``.join`` to ``.outerjoin`` in exactly one place.
 
     Usage::
 
