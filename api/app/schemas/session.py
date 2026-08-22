@@ -136,9 +136,17 @@ class MergePreview(BaseModel):
     ``is_merge`` is true only for a link that would fold a guest into another
     account (a settings merge token, or a sign-in token that recorded a
     requesting guest). The client shows the gate only when there are matches to
-    carry (``guest_matches_count > 0``); otherwise it finalizes silently."""
+    carry (``guest_matches_count > 0``); otherwise it finalizes silently.
+
+    ``adopts_guest_username`` is true only when the link is a *first* sign-in,
+    where the account being signed into was minted moments ago and its
+    ``owner_username`` is a throwaway generated slug. Accepting the merge moves
+    ``guest_username`` onto it; declining leaves the generated one. On every
+    other merge the username does not move, so the gate must not promise it
+    will."""
 
     is_merge: bool
     owner_username: str | None = None
     guest_username: str | None = None
     guest_matches_count: int = 0
+    adopts_guest_username: bool = False

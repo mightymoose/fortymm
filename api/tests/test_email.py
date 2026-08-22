@@ -1302,29 +1302,6 @@ def test_send_notification_email_builds_subject_body_and_link(monkeypatch):
     assert "https://fortymm.test/matches/m-1" in body
 
 
-def test_send_no_account_email_builds_subject_and_body(monkeypatch):
-    from app import email as email_module
-
-    monkeypatch.setenv("SMTP_HOST", "smtp.test")
-    monkeypatch.setenv("APP_BASE_URL", "https://fortymm.test")
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        email_module, "_send_via_smtp", lambda message: captured.update(msg=message)
-    )
-
-    email_module.send_no_account_email("stranger@example.com")
-
-    message = captured["msg"]
-    assert message["Subject"] == "About your FortyMM sign-in request"  # type: ignore[index]
-    assert message["To"] == "stranger@example.com"  # type: ignore[index]
-    body = message.get_content()  # type: ignore[attr-defined]
-    assert "no FortyMM account" in body
-    assert "https://fortymm.test" in body
-    # Tokenless — it must never carry a sign-in/confirm bearer link.
-    assert "/login/verifying" not in body
-    assert "/confirm-email" not in body
-
-
 def test_send_notification_email_omits_the_link_when_absent(monkeypatch):
     from app import email as email_module
 

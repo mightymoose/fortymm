@@ -154,10 +154,29 @@ def _pending_email_token_clause() -> ColumnElement[bool]:
 # drives is token-bound (works cross-device) like the settings merge: bare
 # ``login`` when the requester wasn't an ephemeral guest, else
 # ``login:<guest-id>``.
+#
+# A *first sign-in* token — cut for an address that had no account, against the
+# user this flow just minted — adds a ``first`` marker in the same position:
+# ``login:first`` alone, or ``login:first:<guest-id>`` when a guest was
+# recorded. Staying inside the ``login:`` prefix is load-bearing. It keeps the
+# marker matched by ``_login_token_clause()``, so ``consume_login_token``,
+# ``preview_merge`` and the replace-the-live-token DELETE all see it with no
+# clause change, and it keeps the marker *out* of
+# ``_pending_email_token_clause()``, which matches ``change:`` and ``merge:``.
+# A generated guest id is a UUID, so it can never collide with ``first``.
 _LOGIN_CONTEXT_PREFIX = f"{LOGIN_TOKEN_CONTEXT}:"
+_FIRST_SIGN_IN_MARKER = "first"
+_FIRST_SIGN_IN_CONTEXT = f"{_LOGIN_CONTEXT_PREFIX}{_FIRST_SIGN_IN_MARKER}"
+_FIRST_SIGN_IN_GUEST_PREFIX = f"{_FIRST_SIGN_IN_CONTEXT}:"
 
 
-def _login_context(guest_id: uuid.UUID | None) -> str:
+def _login_context(guest_id: uuid.UUID | None, *, first_sign_in: bool = False) -> str:
+    if first_sign_in:
+        return (
+            _FIRST_SIGN_IN_CONTEXT
+            if guest_id is None
+            else f"{_FIRST_SIGN_IN_GUEST_PREFIX}{guest_id}"
+        )
     return (
         LOGIN_TOKEN_CONTEXT
         if guest_id is None
@@ -165,13 +184,37 @@ def _login_context(guest_id: uuid.UUID | None) -> str:
     )
 
 
+def _is_first_sign_in_context(context: str) -> bool:
+    """True for a login token cut against a user this flow minted for an
+    address that had no account. Such a user has ``email IS NULL`` until the
+    link is clicked, so ``consume_login_token`` stamps the address on instead
+    of comparing against it."""
+    return context == _FIRST_SIGN_IN_CONTEXT or context.startswith(
+        _FIRST_SIGN_IN_GUEST_PREFIX
+    )
+
+
+def _first_sign_in_token_clause() -> ColumnElement[bool]:
+    """Match both first-sign-in flavours (``login:first`` and
+    ``login:first:<guest>``) — the SQL twin of
+    ``_is_first_sign_in_context``."""
+    return or_(
+        UserToken.context == _FIRST_SIGN_IN_CONTEXT,
+        UserToken.context.startswith(_FIRST_SIGN_IN_GUEST_PREFIX),
+    )
+
+
 def _guest_id_from_login_context(context: str) -> uuid.UUID | None:
     """The requesting guest recorded on a login token, or ``None`` for a bare
-    ``login`` context (or a malformed id)."""
-    if not context.startswith(_LOGIN_CONTEXT_PREFIX):
+    ``login`` / ``login:first`` context (or a malformed id)."""
+    if context.startswith(_FIRST_SIGN_IN_GUEST_PREFIX):
+        raw = context.removeprefix(_FIRST_SIGN_IN_GUEST_PREFIX)
+    elif context.startswith(_LOGIN_CONTEXT_PREFIX):
+        raw = context.removeprefix(_LOGIN_CONTEXT_PREFIX)
+    else:
         return None
     try:
-        return uuid.UUID(context.removeprefix(_LOGIN_CONTEXT_PREFIX))
+        return uuid.UUID(raw)
     except ValueError:
         return None
 
@@ -218,17 +261,45 @@ async def _merge_guest_into(
     return MergeSummary(matches_moved=summary.matches_moved)
 
 
+async def _revoke_other_sessions(db: AsyncSession, user: User) -> None:
+    """Delete every session token ``user`` currently holds, so only the cookie
+    the caller is about to receive still authenticates.
+
+    Every mailed-link confirmation runs this. The link is a bearer credential
+    that anybody holding the inbox can redeem from any browser, and confirming
+    it used to *add* a session without removing the ones already there — so the
+    browser that asked for the link kept a live session for the confirmed
+    account after a different person clicked it. Revoking here closes that for
+    the sign-in path and for the settings claim flow alike.
+
+    Deliberately broad: it ends the confirmed user's other devices too. A mailed
+    confirmation is the strongest ownership proof the product has, and a
+    narrower "only the requesting browser" rule cannot be expressed here — the
+    click may arrive from a browser that never held a cookie at all.
+
+    Stage this *after* any lookup that resolves the caller from their session
+    cookie, and before the replacement token is added.
+    """
+    await db.execute(
+        delete(UserToken).where(
+            UserToken.user_id == user.id,
+            UserToken.context == SESSION_TOKEN_CONTEXT,
+        )
+    )
+
+
 async def _sign_in_after_merge(
     db: AsyncSession,
     response: Response,
     user: User,
     merged: MergeSummary | None,
 ) -> SessionResponse:
-    """Mint a fresh session for ``user``, commit the pending transaction, fire
-    the rating recompute when a merge happened, rotate the cookie, and return the
-    session. The shared tail of the token-bound merge sign-in paths
-    (``consume_login_token`` and ``_confirm_account_merge``): the caller stages
-    the token deletion + merge, this finalizes."""
+    """Revoke ``user``'s existing sessions, mint a fresh one, commit the pending
+    transaction, fire the rating recompute when a merge happened, rotate the
+    cookie, and return the session. The shared tail of the token-bound merge
+    sign-in paths (``consume_login_token`` and ``_confirm_account_merge``): the
+    caller stages the token deletion + merge, this finalizes."""
+    await _revoke_other_sessions(db, user)
     raw_session = secrets.token_urlsafe(32)
     db.add(
         UserToken(
@@ -776,23 +847,6 @@ def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
     )
 
 
-def _enqueue_no_account_email(to_email: str) -> Job:
-    """The tokenless 'no account for this email yet' notice. Carries no
-    credential — the account doesn't exist — so it takes neither a token nor a
-    username.
-
-    Not routed through ``_enqueue_email_job`` (which threads a raw token +
-    username), but it mirrors that helper's ``result_ttl`` / ``failure_ttl`` so
-    every email job ages out of the RQ registries on the same schedule. There's
-    no token to protect here — the short TTLs are just registry hygiene."""
-    return queue_module.get_email_queue().enqueue(
-        "app.email.send_no_account_email",
-        to_email,
-        result_ttl=60,
-        failure_ttl=300,
-    )
-
-
 def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
     """Fire-and-forget the rating recompute for ``user_id`` after a merge.
 
@@ -1014,10 +1068,16 @@ async def confirm_email(
 
     Invariant: ``user.email`` holds the prior confirmed address; the new
     address lives on ``token.sent_to`` until this endpoint runs. This is one of
-    two places either column flips — the other is
+    three places either column flips — the others are
     ``auth0_provisioning._provision_user``, which stamps ``email`` +
-    ``confirmed_at`` together on a first-seen verified Auth0 email — so both
-    writers preserve the same invariant (email set ⇒ account confirmed).
+    ``confirmed_at`` together on a first-seen verified Auth0 email, and
+    ``consume_login_token``, which stamps them on the pending user a
+    first-sign-in link was cut against — so all three writers preserve the same
+    invariant (email set ⇒ account confirmed).
+
+    Confirming also revokes the user's other session tokens, so the browser that
+    asked for the link no longer holds a session once someone else clicks it.
+    See ``_revoke_other_sessions``.
 
     The token in the email is itself the bearer credential — we don't
     require the click to come from the same browser that requested it.
@@ -1098,6 +1158,8 @@ async def confirm_email(
         user.confirmed_at = datetime.now(UTC)
         await db.delete(token_row)
         merged = await _maybe_merge_prior_session(db, session_cookie, user)
+        # After the cookie lookup above, before the replacement token below.
+        await _revoke_other_sessions(db, user)
         db.add(
             UserToken(
                 user_id=user.id,
@@ -1188,15 +1250,23 @@ async def request_login_email(
 ) -> LoginRequestAccepted:
     """Mint a magic-link sign-in token and email it.
 
-    Always returns the same 202 shape regardless of whether the address
-    belongs to a known account. Differential responses would let an
-    attacker enumerate the user base by cycling guest sessions for fresh
-    rate-limit budgets — the same enumeration vector the email-change flow
-    guards against. An address with no account still gets a (tokenless)
-    "no account yet" email, so a known and an unknown address are
-    indistinguishable from the outside — same status, same shape, and a
-    piece of mail either way — rather than the unknown case silently
-    delivering nothing.
+    **Both branches mint a user, send the same email, and return the same 202.**
+    An address that already has an account gets a link for that account. An
+    address with no account gets one for a user this endpoint mints on the spot,
+    whose ``email`` stays NULL until the link is clicked — so the sign-in link,
+    its ``Your FortyMM sign-in link`` subject and its 15-minute
+    ``LOGIN_TOKEN_LIFETIME`` are identical either way. That is the guard: nothing
+    the caller can observe — the status, the response shape, the subject, the
+    link lifetime, or the login screen's countdown — reveals whether the address
+    had an account. Differential responses would let an attacker enumerate the
+    user base by cycling guest sessions for fresh rate-limit budgets, the same
+    enumeration vector the email-change flow guards against.
+
+    A minted user is a full member: it joins the default league and holds the
+    default user role, exactly as a guest minted by ``GET /v1/session`` does
+    (ADR-0016). A repeat request for the same unclaimed address — a resend
+    included — reuses that pending user and replaces its token, so one live link
+    exists per address at a time.
 
     Records the requesting browser's guest on the token so the merge it drives
     is token-bound (follows the guest cross-device), mirroring the settings
@@ -1209,20 +1279,80 @@ async def request_login_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
-    # ``users.email`` is only ever set by ``confirm_email`` or
-    # ``auth0_provisioning._provision_user``, and both stamp ``confirmed_at``
+    # ``users.email`` is only ever set by ``confirm_email``,
+    # ``consume_login_token`` (the first-sign-in branch below) or
+    # ``auth0_provisioning._provision_user``, and all three stamp ``confirmed_at``
     # alongside it — so an address lookup can only ever match a confirmed account,
     # and there is no unconfirmed-user branch to handle here.
     user = (
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
+    first_sign_in = user is None
     if user is None:
-        await _send_no_account_email_or_503(email)
-        return LoginRequestAccepted(email=email)
+        user = await _pending_user_for(db, email) or await _mint_pending_user(db)
 
     guest_id = await _requesting_guest_id(db, session_cookie, target=user)
-    await _issue_and_send_login_email(db, user, email, merge_from_guest_id=guest_id)
+    await _issue_and_send_login_email(
+        db,
+        user,
+        email,
+        merge_from_guest_id=guest_id,
+        first_sign_in=first_sign_in,
+    )
     return LoginRequestAccepted(email=email)
+
+
+async def _pending_user_for(db: AsyncSession, email: str) -> User | None:
+    """The unclaimed user a previous first-sign-in request already minted for
+    ``email``, if one is still reusable.
+
+    A pending user has ``email IS NULL`` until its link is clicked, so it cannot
+    be found by address — its live first-sign-in token is the only link between
+    the two, through ``sent_to``. Restricting the lookup to that token context is
+    load-bearing: ``sent_to`` is also set on known-account login tokens and on
+    ``change:``/``merge:`` tokens, any of which would hand back a *confirmed*
+    account to "reuse".
+
+    Two concurrent first requests for one address can each mint, so more than one
+    row can legitimately match. Take the newest rather than raising.
+    """
+    pending = (
+        (
+            await db.execute(
+                select(User)
+                .join(UserToken, UserToken.user_id == User.id)
+                .where(
+                    UserToken.sent_to == email,
+                    _first_sign_in_token_clause(),
+                )
+                .order_by(UserToken.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if (
+        pending is None
+        or pending.email is not None
+        or pending.confirmed_at is not None
+        or pending.merged_into_user_id is not None
+    ):
+        return None
+    return pending
+
+
+async def _mint_pending_user(db: AsyncSession) -> User:
+    """Create the account a first-sign-in link will confirm. Mirrors
+    ``_create_session``'s membership setup — default league, default user role
+    (ADR-0016) — but mints no session token: nobody is signed in yet, and the
+    mailed link is the only thing that can claim this row."""
+    user = User(username=await generate_username(db))
+    db.add(user)
+    await db.flush()
+    await add_user_to_default_league(db, user.id)
+    await grant_default_role(db, user.id)
+    return user
 
 
 async def _requesting_guest_id(
@@ -1244,33 +1374,23 @@ async def _requesting_guest_id(
     return requester.id
 
 
-async def _send_no_account_email_or_503(email: str) -> None:
-    """Enqueue the tokenless 'no account yet' notice for an unknown address.
-
-    There's no DB write to guard, but on an enqueue failure we raise the same
-    503 the known-account path raises — so a Redis flap fails both paths
-    identically and the outcome never reveals whether the address exists."""
-    try:
-        _enqueue_no_account_email(email)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service unavailable. Try again in a moment.",
-        ) from None
-
-
 async def _issue_and_send_login_email(
     db: AsyncSession,
     user: User,
     email: str,
     merge_from_guest_id: uuid.UUID | None = None,
+    *,
+    first_sign_in: bool = False,
 ) -> None:
     """Replace any live login token for this user with a fresh one and
     enqueue the sign-in email. Enqueue before commit so a Redis flap
-    rolls the DB write back instead of stranding a tokenless user.
+    rolls the DB write back instead of stranding a tokenless user (and, on a
+    first sign-in, rolls the freshly minted user back with it).
 
     ``merge_from_guest_id`` is recorded in the token context so consuming the
-    link folds that specific guest in (token-bound)."""
+    link folds that specific guest in (token-bound). ``first_sign_in`` marks a
+    token cut against a user this flow minted, whose address is stamped on at
+    consume time rather than compared against."""
     await db.execute(
         delete(UserToken).where(
             UserToken.user_id == user.id,
@@ -1281,7 +1401,7 @@ async def _issue_and_send_login_email(
     db.add(
         UserToken(
             user_id=user.id,
-            context=_login_context(merge_from_guest_id),
+            context=_login_context(merge_from_guest_id, first_sign_in=first_sign_in),
             token=hash_token(raw_token),
             sent_to=email,
         )
@@ -1322,6 +1442,13 @@ async def consume_login_token(
     any browser — the inbox proves ownership of the email. The endpoint
     rotates the caller's session cookie to the token's owner regardless of
     which guest session (if any) the browser arrived with.
+
+    On a *first sign-in* token (``login:first...``) the owner is a user
+    ``request_login_email`` minted for an address that had no account, so its
+    ``email`` is still NULL. This endpoint stamps ``email`` + ``confirmed_at``
+    on it, which makes it the third writer of that pair alongside
+    ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
+    stamp them together, so the invariant holds: email set implies confirmed.
     """
     token_row = (
         await db.execute(
@@ -1358,10 +1485,28 @@ async def consume_login_token(
             detail="That sign-in link is invalid or expired.",
         )
 
+    first_sign_in = _is_first_sign_in_context(token_row.context)
+    if first_sign_in:
+        # The owner is the pending user this address was minted for, so it has
+        # no email to match against — it must still have none. Anything else
+        # means the row was claimed after the link was cut (an Auth0 provision,
+        # or a merge that tombstoned it), and the link is stale.
+        if (
+            not token_row.sent_to
+            or user.email is not None
+            or user.confirmed_at is not None
+            or user.merged_into_user_id is not None
+        ):
+            await db.delete(token_row)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That sign-in link is invalid or expired.",
+            )
     # If the user changed their email between request and click, the link no
     # longer matches the inbox that proved control — reject so the new owner
     # of the old address can't ride an in-flight link.
-    if token_row.sent_to and token_row.sent_to != user.email:
+    elif token_row.sent_to and token_row.sent_to != user.email:
         await db.delete(token_row)
         await db.commit()
         raise HTTPException(
@@ -1376,27 +1521,63 @@ async def consume_login_token(
     recorded_guest_id = _guest_id_from_login_context(token_row.context)
     # The merge helpers run a query that autoflushes the staged rows before the
     # explicit commit, so the users.email unique-constraint race (the merge
-    # re-points rows onto an address another account already confirmed) can
-    # surface anywhere in this block — not just at commit. Roll back and return
-    # the opaque "invalid or expired" so we don't leak who owns the address.
-    # Mirrors the guard on ``confirm_email``.
+    # re-points rows onto an address another account already confirmed, or —
+    # on a first sign-in — another flow confirmed this very address between
+    # request and click) can surface anywhere in this block, not just at commit.
+    # Roll back and return the opaque "invalid or expired" so we don't leak who
+    # owns the address. Mirrors the guard on ``confirm_email``, including
+    # capturing the token PK first so the except path can burn the token with a
+    # targeted DELETE without touching an ORM object the rollback expired.
+    token_id = token_row.id
+    # Read the address off the token before it is staged for deletion.
+    confirmed_email = token_row.sent_to
     try:
         # Single-use: delete the link the moment we accept it.
         await db.delete(token_row)
+        if first_sign_in:
+            # Third writer of the (email, confirmed_at) pair — see the docstring.
+            user.email = confirmed_email
+            user.confirmed_at = datetime.now(UTC)
         if payload.skip_merge:
             merged = None
         elif recorded_guest_id is not None:
             guest = await db.get(User, recorded_guest_id)
             merged = await _merge_guest_into(db, guest=guest, target=user)
+            if merged is not None and first_sign_in and guest is not None:
+                await _adopt_guest_username(db, guest=guest, target=user)
         else:
             merged = await _maybe_merge_prior_session(db, session_cookie, user)
         return await _sign_in_after_merge(db, response, user, merged)
     except IntegrityError:
         await db.rollback()
+        # Burn the token so the person isn't trapped in a resend loop: without
+        # this the rollback restores it, and every retry hits the same race.
+        await db.execute(delete(UserToken).where(UserToken.id == token_id))
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That sign-in link is invalid or expired.",
         ) from None
+
+
+async def _adopt_guest_username(db: AsyncSession, *, guest: User, target: User) -> None:
+    """Move the merged guest's username onto the brand-new account it was folded
+    into, so a first-time signer keeps the name they have been playing under.
+
+    Only ever called on a first sign-in, where ``target`` was minted moments ago
+    and its username is a throwaway generated slug. ``merge_user`` deliberately
+    does not move the username, because it also serves the settings claim flow,
+    where moving it would rename an established account.
+
+    ``users.username`` is unique and the tombstone row survives the merge, so
+    this takes two statements: rename the tombstone to a dead, collision-proof
+    value and flush that, then take the freed name. A single swap trips the
+    unique index."""
+    adopted = guest.username
+    guest.username = f"merged-{guest.id}"
+    await db.flush()
+    target.username = adopted
+    await db.flush()
 
 
 @router.post(
@@ -1459,4 +1640,7 @@ async def preview_merge(
         owner_username=owner.username,
         guest_username=guest.username,
         guest_matches_count=await _guest_match_count(db, guest.id),
+        # A first-sign-in link is the only merge that moves the username, so it
+        # is the only one whose gate may say the guest name is kept.
+        adopts_guest_username=_is_first_sign_in_context(token_row.context),
     )
