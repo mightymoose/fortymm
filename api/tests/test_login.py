@@ -1,4 +1,5 @@
 import hashlib
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
@@ -24,6 +25,7 @@ from app.models import (
     UserToken,
 )
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
+from app.schemas.session import USERNAME_MAX_LENGTH, USERNAME_PATTERN
 from app.sessions import (
     LOGIN_TOKEN_CONTEXT,
     SESSION_COOKIE_NAME,
@@ -1160,6 +1162,11 @@ async def test_accepted_first_sign_in_merge_takes_the_guest_username(
     await db_session.refresh(guest)
     assert guest.username != guest_name
     assert guest.merged_into_user_id == signed_in.id
+    # The dead name is still a name the product would accept. The dashed uuid
+    # form is 43 characters and breaks USERNAME_MAX_LENGTH silently, because no
+    # response model constrains `username`.
+    assert len(guest.username) <= USERNAME_MAX_LENGTH
+    assert re.fullmatch(USERNAME_PATTERN, guest.username)
 
 
 async def test_declined_first_sign_in_merge_leaves_the_generated_username(

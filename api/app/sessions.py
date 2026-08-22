@@ -1572,9 +1572,14 @@ async def _adopt_guest_username(db: AsyncSession, *, guest: User, target: User) 
     ``users.username`` is unique and the tombstone row survives the merge, so
     this takes two statements: rename the tombstone to a dead, collision-proof
     value and flush that, then take the freed name. A single swap trips the
-    unique index."""
+    unique index.
+
+    The dead name uses the uuid's ``hex`` form, not its dashed one: 7 + 32 = 39
+    characters fits ``USERNAME_MAX_LENGTH`` (40) and matches
+    ``USERNAME_PATTERN``, so a tombstone still holds a name the product would
+    accept. The dashed form is 43 and would not."""
     adopted = guest.username
-    guest.username = f"merged-{guest.id}"
+    guest.username = f"merged-{guest.id.hex}"
     await db.flush()
     target.username = adopted
     await db.flush()

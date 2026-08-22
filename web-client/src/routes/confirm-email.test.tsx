@@ -174,4 +174,29 @@ describe('/confirm-email merged-matches toast (#241)', () => {
       ),
     ).toHaveLength(1)
   })
+
+  it('carries adopts_guest_username from the preview into the gate (#1292)', async () => {
+    // Pins the prop wiring in confirm-email.tsx. merge-gate.test.tsx renders
+    // the component directly, so deleting the `adoptsGuestUsername={...}` line
+    // here left every test green.
+    server.use(
+      http.post('*/v1/merge/preview', () =>
+        HttpResponse.json({
+          is_merge: true,
+          owner_username: 'rita',
+          guest_username: 'drifting-grouse',
+          guest_matches_count: 2,
+          adopts_guest_username: true,
+        }),
+      ),
+    )
+
+    renderAt('/confirm-email?token=first-sign-in-token')
+
+    await screen.findByRole('heading', { name: /bring your matches over/i })
+    expect(screen.getByText(/this also keeps your name/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /not now — sign me in as rita/i }),
+    ).toBeInTheDocument()
+  })
 })
