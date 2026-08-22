@@ -313,6 +313,15 @@ describe('SchedulePreviewModal', () => {
     expect(grid).not.toHaveTextContent(/ev-1:res-1/)
   })
 
+  it('reads a card as event · group · reservation, so two groups sharing a reservation stay told apart (ticket #1389)', async () => {
+    schedulePreviewModalPage.render()
+
+    await schedulePreviewModalPage.findFieldSummary()
+    const grid = await screen.findByTestId('preview-grid')
+    const [card] = grid.querySelectorAll('[data-testid^="unscheduled-"]')
+    expect(card).toHaveTextContent(/Group A · Reservation A/)
+  })
+
   it('shows the actionable infeasibility reasons instead of a grid', async () => {
     mockSchedulePreviewPollEndpoint(server, () =>
       HttpResponse.json(

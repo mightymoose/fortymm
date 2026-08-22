@@ -77,8 +77,18 @@ class ReservationOverCapacityRead(BaseModel):
     """A reservation whose aggregate match-time (``required_min``) exceeds the
     table-minutes its window offers (``capacity_min`` = window span ×
     ``table_count``). Resolved: the reservation ``name``, which kind of
-    ``reservation`` it is, and its ``HH:MM`` bounds; the minutes stay
-    integers."""
+    ``reservation`` it is, its ``HH:MM`` bounds, and ``group_count`` — how many
+    groups' fixtures the reservation holds (#1389). Two groups sharing one
+    reservation compete for one set of tables, so a count above one names a cause
+    the director can act on: add a reservation, and the groups re-spread across
+    them. It is the groups mapped to a booked reservation, or the groups with no
+    reservation for an event-wide one (0 when only a knockout stage sits in it).
+    The minutes stay integers.
+
+    ``group_count`` defaults to ``0``: the solve ledger stores resolved reasons as
+    JSONB, so a row written before the field existed reads back as 0, and a client
+    renders no group clause for it — the same read-back default
+    :data:`ReservationKind` carries."""
 
     kind: Literal["reservation_over_capacity"] = "reservation_over_capacity"
     reservation_name: str
@@ -88,6 +98,7 @@ class ReservationOverCapacityRead(BaseModel):
     required_min: int
     capacity_min: int
     table_count: int
+    group_count: int = 0
 
 
 class PlayerOverSubscribedRead(BaseModel):

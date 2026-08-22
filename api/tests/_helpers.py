@@ -49,6 +49,7 @@ from app.schemas.notification import NotificationJob
 from app.schemas.tournament import draw_settings_from_storage
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 from app.tournament_draw_settings import draw_settings_row
+from app.tournament_reservations import materialise_groups
 
 
 def hijack_solve(
@@ -329,6 +330,25 @@ def with_table_aliases(
     UUID through every helper the groups are passed to.
     """
     return event_groups(groups, event=event, tournament=tournament)
+
+
+def materialise_derived_groups(
+    stage: TournamentEventStage, *, draw_type: DrawType, field_size: int
+) -> None:
+    """Replace ``stage``'s seeded 1:1 groups with the rows the real materialisation
+    policy (:func:`app.tournament_reservations.materialise_groups`) derives for
+    ``draw_type`` against ``field_size``, over the reservations those seeded groups
+    booked. For ``rr-then-ko`` that is ``ceil(field / 5)`` groups mapped round-robin
+    onto the reservations (#1387): eight players over one reservation give two groups
+    sharing it, and eight over none give two groups with none — the two states the API
+    produces and #1389 is about. Call it after :func:`with_table_aliases`, before the
+    event is added to the session."""
+    rows = [
+        group.reservation_link.reservation
+        for group in stage.groups
+        if group.reservation_link is not None
+    ]
+    materialise_groups(stage, rows, draw_type=draw_type, field_size=field_size)
 
 
 def joined_to_reservation(stmt: Select[Any]) -> Select[Any]:

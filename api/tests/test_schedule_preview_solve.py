@@ -21,6 +21,7 @@ These tests prove the whole preview core end to end:
 """
 
 import uuid
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -32,6 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import queue as queue_module
+from app import schedule_preview_solve
 from app.models import (
     League,
     ScheduleSolve,
@@ -54,6 +56,7 @@ from app.schedule_preview_solve import (
     run_schedule_preview,
     wait_for_preview,
 )
+from app.scheduling import ReservationId, ReservationOverCapacity
 from app.schemas.schedule_preview import (
     PreviewJobStatus,
     PreviewResult,
@@ -62,6 +65,7 @@ from app.schemas.schedule_preview import (
 from app.schemas.schedule_solve import (
     PastWindowReasonRead,
     PlayerOverSubscribedRead,
+    ReservationOverCapacityRead,
     WindowTooShortForMatchRead,
 )
 from app.tournament_errors import (
@@ -73,6 +77,7 @@ from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_draw_settings,
     make_user,
+    materialise_derived_groups,
     venue_tables,
     with_table_aliases,
 )
@@ -162,7 +167,12 @@ async def _add_event(
     timezone: str = "America/Los_Angeles",
     draw_type: DrawType = DrawType.round_robin,
     qualifiers_per_group: int | None = None,
+    derive_groups: bool = False,
 ) -> TournamentEvent:
+    """One event, seeded straight through the ORM: one group per reservation, mapped
+    1:1 — or, with ``derive_groups``, the real ``rr-then-ko`` materialisation policy
+    (``app.tournament_reservations.materialise_groups``) over those reservations
+    against ``max_players`` as the field (#1387)."""
     stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -184,10 +194,139 @@ async def _add_event(
         tournament,
         [_reservation(["t1", "t2"])] if reservations is None else reservations,
     )
+    if derive_groups:
+        assert max_players is not None, "the derived count needs a field"
+        materialise_derived_groups(
+            stages[0], draw_type=draw_type, field_size=max_players
+        )
     db.add(event)
     await db.commit()
     await db.refresh(event)
     return event
+
+
+async def test_a_preview_fixture_names_its_group_and_its_reservation(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """Two derived groups over one reservation (#1387): every fixture names the one
+    reservation, and each still names its own group through ``group_label``, so the
+    group structure the director just changed stays visible on a card that would
+    otherwise read the same reservation name eight times (#1389 decision 2)."""
+    owner = await make_user(db_session, "prev-group-label")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=8,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_group=2,
+        derive_groups=True,
+    )
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+
+    assert len(enqueued.fixtures) == 12
+    assert {f.reservation_name for f in enqueued.fixtures} == {"Reservation A"}
+    assert len({f.reservation_id for f in enqueued.fixtures}) == 1
+    by_group = Counter(f.group_label for f in enqueued.fixtures)
+    assert by_group == {"Group A": 6, "Group B": 6}
+
+
+async def test_an_rr_then_ko_event_with_no_reservation_previews_over_the_venue(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """A tournament whose only event is an ``rr-then-ko`` with groups and no
+    reservation returns a preview — it no longer answers 422 (#1389 decision 1). Its
+    fixtures read the event-wide reservation's name, its ``base`` is the event's own
+    slot so the result reports a wall-clock finish, and a reason blaming that
+    reservation says so (``reservation == "event"``) and counts the groups it holds."""
+    owner = await make_user(db_session, "prev-rrko-venue")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(
+        db_session,
+        tournament,
+        name="Championship",
+        max_players=8,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_group=2,
+        reservations=[],
+        derive_groups=True,
+    )
+
+    enqueued = await request_schedule_preview(
+        db_session, tournament_id=tournament.id, actor=owner
+    )
+    assert len(enqueued.fixtures) == 12
+    assert {f.reservation_name for f in enqueued.fixtures} == {
+        "Championship (whole venue)"
+    }
+    assert {f.group_label for f in enqueued.fixtures} == {"Group A", "Group B"}
+
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    assert inputs.base == datetime(
+        2026, 6, 13, 9, 0, tzinfo=ZoneInfo("America/Los_Angeles")
+    )
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+    assert result.verdict is not PreviewVerdict.infeasible
+    assert result.estimated_finish is not None
+
+    # The event-wide reservation's resolution: the event's kind, and the two groups
+    # with no reservation as its group count.
+    (key,) = {f.reservation_id for f in enqueued.fixtures}
+    resolved = schedule_preview_solve._resolve_reason(
+        ReservationOverCapacity(
+            reservation_id=ReservationId(key),
+            required_min=600,
+            capacity_min=480,
+            table_count=2,
+        ),
+        inputs.reservation_resolutions,
+        {},
+    )
+    assert isinstance(resolved, ReservationOverCapacityRead)
+    assert resolved.reservation == "event"
+    assert resolved.reservation_name == "Championship (whole venue)"
+    assert resolved.group_count == 2
+
+
+async def test_an_over_capacity_reason_counts_the_groups_sharing_the_reservation(
+    db_session: AsyncSession, default_league: League, preview_queue: Queue
+) -> None:
+    """Two derived groups over one reservation that cannot hold them surface as the
+    existing over-capacity reason — no new refusal — and the reason carries
+    ``group_count == 2``, the cause a director acts on by adding a reservation."""
+    owner = await make_user(db_session, "prev-shared-capacity")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    # Twelve fixtures of best-of-5 (35 min each, 420 table-minutes) on one table in
+    # a two-hour window (120 table-minutes): over capacity by any packing.
+    await _add_event(
+        db_session,
+        tournament,
+        max_players=8,
+        length_games=5,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_group=2,
+        reservations=[_reservation(["t1"], start="09:00", end="11:00")],
+        derive_groups=True,
+    )
+
+    await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)
+    (job,) = preview_queue.jobs
+    (inputs,) = job.args
+    result = PreviewResult.model_validate(run_schedule_preview(inputs))
+
+    assert result.verdict is PreviewVerdict.infeasible
+    (reason,) = [
+        r
+        for r in result.infeasibility_reasons
+        if isinstance(r, ReservationOverCapacityRead)
+    ]
+    assert reason.reservation_name == "Reservation A"
+    assert reason.reservation == "booked"
+    assert reason.group_count == 2
 
 
 def _run_recorded_preview_job(queue: Queue) -> None:

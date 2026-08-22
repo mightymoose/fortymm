@@ -62,13 +62,21 @@ from app.match_calls import _wall_now
 from app.models import Tournament, TournamentStatus, User
 from app.schedule_preview import (
     DegenerateConfiguration,
+    PreviewSnapshot,
     SkipReason,
     UnpreviewableDrawType,
     build_preview_snapshot,
     placeholder_label,
-    preview_reservation_key,
 )
-from app.schedule_solves import _solve_num_workers
+from app.schedule_solves import (
+    _solve_num_workers,
+    event_wide_reservation_key,
+    event_wide_reservation_name,
+    group_counts_by_reservation,
+    group_reservation_ids,
+    reservation_key,
+    reservation_keys_by_group,
+)
 from app.scheduling import (
     InfeasibilityReason,
     MatchLength,
@@ -98,10 +106,12 @@ from app.schemas.schedule_solve import (
     PastWindowReasonRead,
     PlayerOverSubscribedRead,
     ReservationHasNoTablesRead,
+    ReservationKind,
     ReservationOverCapacityRead,
     ResolvedReason,
     WindowTooShortForMatchRead,
 )
+from app.schemas.tournament import Slot
 from app.tournament_draws import event_reservations
 from app.tournament_errors import (
     NotTournamentOwnerError,
@@ -153,6 +163,17 @@ class _PreviewReservationResolution:
     window_start: str
     window_end: str
     date: date
+    #: Which kind of reservation this is (#1389): ``"booked"`` for a director's row,
+    #: ``"event"`` for the synthetic event-wide reservation the builder gives an event
+    #: whose groups play in no reservation. A reason blaming the latter must not be
+    #: answered with a reservation remedy, exactly as the live solve's twin carries it.
+    #: No default: a construction site has to say which kind it is. The live twin's
+    #: default is for ledger rows written before the field existed; this object only
+    #: rides the job payload through Redis for the life of one preview request.
+    reservation: ReservationKind
+    #: How many groups' fixtures this reservation holds (#1389) — the groups mapped to
+    #: a booked reservation, or the groups with no reservation for the event-wide one.
+    group_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,18 +293,33 @@ async def ensure_preview_access(
 
 
 def _reservation_resolutions(
-    tournament: Tournament,
+    tournament: Tournament, preview: PreviewSnapshot
 ) -> dict[str, _PreviewReservationResolution]:
     """The namespaced-reservation-id → name + ``HH:MM`` map an infeasible preview is
     humanized through, keyed by the solver's ``f"{event.id}:{reservation.id}"`` spelling
     (the same one :func:`app.schedule_preview.build_preview_snapshot` stamps on the
-    snapshot's reservations). Parsed through
-    :class:`~app.schemas.tournament.Reservation`, not
-    indexed off raw JSONB (parse, don't validate)."""
+    snapshot's reservations), plus one entry per event the builder gave an
+    **event-wide reservation** (#1389) — recognised by its key being among the
+    snapshot's reservations — named, windowed and dated off the event's own ``slot``,
+    and marked ``reservation="event"`` so a reason blaming it offers the event's
+    controls, not a reservation's. Parsed through
+    :class:`~app.schemas.tournament.Reservation` and
+    :class:`~app.schemas.tournament.Slot`, not indexed off raw JSONB (parse, don't
+    validate).
+
+    ``group_count`` is resolved through the same rule a fixture resolves by
+    (:func:`app.schedule_solves.reservation_keys_by_group`): the groups whose
+    fixtures each reservation holds, which for the event-wide one is the groups with no
+    reservation."""
     resolutions: dict[str, _PreviewReservationResolution] = {}
+    built = {reservation.id for reservation in preview.snapshot.reservations}
     for event in tournament.events:
+        keys_by_group = reservation_keys_by_group(
+            event.id, group_reservation_ids(event)
+        )
+        group_counts = group_counts_by_reservation(keys_by_group)
         for reservation in event_reservations(event):
-            key = preview_reservation_key(event.id, reservation.id)
+            key = reservation_key(event.id, reservation.id)
             resolutions[key] = _PreviewReservationResolution(
                 name=reservation.name,
                 window_start=reservation.slot.start,
@@ -291,6 +327,19 @@ def _reservation_resolutions(
                 # The venue-local calendar day the director dated this window for —
                 # the actionable "which day to move" fact a past_window reason names.
                 date=date.fromisoformat(reservation.slot.date),
+                reservation="booked",
+                group_count=group_counts.get(key, 0),
+            )
+        event_wide_key = event_wide_reservation_key(event.id)
+        if event_wide_key in built:
+            event_slot = Slot.model_validate(event.slot)
+            resolutions[event_wide_key] = _PreviewReservationResolution(
+                name=event_wide_reservation_name(event.name),
+                window_start=event_slot.start,
+                window_end=event_slot.end,
+                date=date.fromisoformat(event_slot.date),
+                reservation="event",
+                group_count=group_counts.get(event_wide_key, 0),
             )
     return resolutions
 
@@ -345,7 +394,7 @@ async def request_schedule_preview(
     # namespaced reservation id → its resolution (name + HH:MM), built once and reused
     # for both the job's infeasibility humanization and each drawn fixture's
     # reservation_name.
-    resolutions = _reservation_resolutions(tournament)
+    resolutions = _reservation_resolutions(tournament, preview)
     inputs = PreviewJobInputs(
         snapshot=preview.snapshot,
         base=preview.base,
@@ -398,6 +447,10 @@ async def request_schedule_preview(
                 # one the builder drew over, so a direct lookup is total (a miss would
                 # be a builder bug, not stale input).
                 reservation_name=resolutions[fixture.reservation_id].name,
+                # The group that holds the fixture, labelled by the builder (the one
+                # place that still sees the group rows); total over the snapshot's
+                # fixtures by construction.
+                group_label=preview.group_labels[fixture.id],
                 player_a_id=fixture.player_a_id,
                 player_b_id=fixture.player_b_id,
             )
@@ -614,23 +667,22 @@ def _resolve_reason(
     ``assert_never`` floor: adding an :data:`~app.scheduling.InfeasibilityReason`
     arm is a type error here until handled.
 
-    Every reservation a preview can blame is one a director **booked**: the builder
-    draws over the event's reservations and drops an rr-then-ko draw's ungrouped
-    knockout (ADR 20260727, and the honest note that says so), so the synthetic
-    event-wide reservation is never in a preview snapshot. Hence the literal
-    ``"booked"`` on every arm below — the preview's resolutions carry no reservation
-    kind to read, because there is only one for them to carry."""
+    A preview can blame a booked reservation or, since #1389, the event-wide one the
+    builder gives an event whose groups play in no reservation — so every
+    reservation-naming arm reads ``reservation`` (the kind) off the resolution, and the
+    over-capacity arm carries its ``group_count``, exactly as the live solve's twin
+    does."""
     match reason:
         case ReservationHasNoTables():
             return ReservationHasNoTablesRead(
                 reservation_name=reservation_resolutions[reason.reservation_id].name,
-                reservation="booked",
+                reservation=reservation_resolutions[reason.reservation_id].reservation,
             )
         case WindowTooShortForMatch():
             reservation = reservation_resolutions[reason.reservation_id]
             return WindowTooShortForMatchRead(
                 reservation_name=reservation.name,
-                reservation="booked",
+                reservation=reservation.reservation,
                 window_start=reservation.window_start,
                 window_end=reservation.window_end,
                 best_of=best_of[reason.fixture_id],
@@ -641,12 +693,13 @@ def _resolve_reason(
             reservation = reservation_resolutions[reason.reservation_id]
             return ReservationOverCapacityRead(
                 reservation_name=reservation.name,
-                reservation="booked",
+                reservation=reservation.reservation,
                 window_start=reservation.window_start,
                 window_end=reservation.window_end,
                 required_min=reason.required_min,
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
+                group_count=reservation.group_count,
             )
         case PlayerOverSubscribed():
             # The one arm that names a *player* — and a preview's entrants are
@@ -658,7 +711,7 @@ def _resolve_reason(
             return PlayerOverSubscribedRead(
                 player_name=placeholder_label(reason.player_id),
                 reservation_name=reservation.name,
-                reservation="booked",
+                reservation=reservation.reservation,
                 window_start=reservation.window_start,
                 window_end=reservation.window_end,
                 match_count=reason.match_count,

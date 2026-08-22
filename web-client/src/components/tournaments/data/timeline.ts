@@ -376,11 +376,13 @@ export interface UnscheduledFixture {
   eventName: string
   /** The rail's secondary line, venue-neutral on purpose: the **real** schedule fills it
    * with the fixture's derived `groupLabel` (`Group A`, `./draw`, ticket #1369 — a group
-   * carries no name of its own), but the **preview** grid reuses this same rail before a
-   * draw has minted any group at all (`schedule-preview-modal.tsx`'s `fixtureToRailItem`)
-   * and fills it with the reservation's own director-typed name instead — the closest
-   * thing a preview knows. Named `contextLabel`, not `groupLabel`, so the field is honest
-   * about carrying either. */
+   * carries no name of its own), but the **preview** grid reuses this same rail
+   * (`schedule-preview-modal.tsx`'s `fixtureToRailItem`) and fills it with the group
+   * label AND the reservation's director-typed name, `Group C · Reservation A` (ticket
+   * #1389): two groups routinely share one reservation there, so the reservation alone
+   * would read the same on every card. Named `contextLabel`, not `groupLabel`, so the
+   * field is honest about carrying either, and it stays one string so the rail needs no
+   * per-producer shape. */
   contextLabel: string | null
   label: string
   /** The half-placement's table label, when it has a table but no time. */

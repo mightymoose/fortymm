@@ -193,12 +193,14 @@ function fixtureToRailItem(
   return {
     fixtureId: fixture.fixtureId,
     eventName: eventName(fixture.eventId),
-    // The human reservation name (`"Reservation A"`), never the namespaced
-    // `{event}:{reservation}` composite the solver keys by — the card heads
-    // with a name a director reads. A preview has no materialized group yet
-    // (that is a solved fact), so the rail's venue-neutral `contextLabel` slot
-    // carries the reservation's name instead — the closest thing the preview knows.
-    contextLabel: fixture.reservationName,
+    // The fixture's own group and the human reservation name (`"Group C ·
+    // Reservation A"`), never the namespaced `{event}:{reservation}` composite the
+    // solver keys by. Both, because two groups routinely share one reservation
+    // (#1387): under eight groups over one reservation every card would read the
+    // same reservation name, and the group structure is what the director just
+    // changed (#1389). Composed here, in the preview's one mapper, so the shared
+    // rail's venue-neutral `contextLabel` slot stays one string.
+    contextLabel: `${fixture.groupLabel} · ${fixture.reservationName}`,
     label: `${placeholderName(fixture.playerAId)} vs ${placeholderName(fixture.playerBId)}`,
     tableLabel: null,
     statusLabel: '',

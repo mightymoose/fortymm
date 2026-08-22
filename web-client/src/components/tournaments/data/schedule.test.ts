@@ -259,6 +259,60 @@ describe('buildSchedule', () => {
     expect(match.suggestedTableIds).toEqual(['t2', 't3'])
     expect(match.reservation).toBe('booked')
   })
+
+  // ----- a fixture resolves through its GROUP's reservation (ticket #1389): two groups
+  // may share one reservation, and a group may have none (#1387, rr-then-ko only). The
+  // window and the tables come from the reservation the group maps to, or from the
+  // event when it maps to none — never from the group itself. ----------------------
+
+  it('treats a fixture whose group has NO reservation as event-wide: the event’s slot, the whole venue, source `event`', () => {
+    const tournament = buildTournament({
+      events: [
+        buildDrawnEvent({
+          drawType: 'rr-then-ko',
+          slot: { date: '2026-06-14', start: '10:00', end: '16:00' },
+          reservations: [],
+          groups: [{ id: 'grp-none', position: 0, reservationId: null }],
+          fixtures: [buildFixture({ id: 'x', groupId: 'grp-none' })],
+        }),
+      ],
+    })
+    const [match] = buildSchedule(tournament, buildTables()).awaiting
+    expect(match.window).toEqual({ date: '2026-06-14', start: '10:00', end: '16:00' })
+    expect(match.reservation).toBe('event')
+    expect(match.suggestedTableIds).toEqual(['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'])
+  })
+
+  it('resolves two groups that SHARE a reservation to the same window and the same tables', () => {
+    const tournament = buildTournament({
+      events: [
+        buildDrawnEvent({
+          drawType: 'rr-then-ko',
+          reservations: [
+            buildReservation({
+              id: 'res-a',
+              tableIds: ['t2', 't3'],
+              slot: { date: '2026-07-01', start: '13:00', end: '17:00' },
+            }),
+          ],
+          groups: [
+            { id: 'grp-0', position: 0, reservationId: 'res-a' },
+            { id: 'grp-1', position: 1, reservationId: 'res-a' },
+          ],
+          fixtures: [
+            buildFixture({ id: 'x', groupId: 'grp-0' }),
+            buildFixture({ id: 'y', groupId: 'grp-1' }),
+          ],
+        }),
+      ],
+    })
+    const [x, y] = buildSchedule(tournament, buildTables()).awaiting
+    expect(x.window).toEqual({ date: '2026-07-01', start: '13:00', end: '17:00' })
+    expect(y.window).toEqual(x.window)
+    expect(x.suggestedTableIds).toEqual(['t2', 't3'])
+    expect(y.suggestedTableIds).toEqual(x.suggestedTableIds)
+    expect([x.reservation, y.reservation]).toEqual(['booked', 'booked'])
+  })
 })
 
 describe('placement helpers', () => {

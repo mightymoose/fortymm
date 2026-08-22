@@ -48,10 +48,12 @@ from app.schedule_preview import (
     UnpreviewableDrawType,
     build_preview_snapshot,
 )
+from app.schedule_solves import event_wide_reservation_key
 from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_draw_settings,
     make_user,
+    materialise_derived_groups,
     venue_tables,
     with_table_aliases,
 )
@@ -112,7 +114,18 @@ async def _add_event(
     length_games: int = 5,
     name: str = "Open Singles",
     timezone: str = "America/Los_Angeles",
+    derive_groups: bool = False,
 ) -> TournamentEvent:
+    """One event of ``draw_type``, seeded straight through the ORM.
+
+    ``reservations`` become one group each, mapped 1:1 — the shape every draw type
+    but ``rr-then-ko`` materialises. ``derive_groups`` runs the real materialisation
+    policy (``app.tournament_reservations.materialise_groups``) over those
+    reservations instead, against ``max_players`` as the field: for ``rr-then-ko``
+    that is ``ceil(field / 5)`` groups mapped round-robin onto the reservations (#1387),
+    so eight players over one reservation give two groups sharing it, and eight over
+    none give two groups with none — the two states the API produces and #1389 is
+    about."""
     stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -134,6 +147,11 @@ async def _add_event(
         tournament,
         [_one_reservation(["t1"])] if reservations is None else reservations,
     )
+    if derive_groups:
+        assert max_players is not None, "the derived count needs a field"
+        materialise_derived_groups(
+            stages[0], draw_type=draw_type, field_size=max_players
+        )
     db.add(event)
     await db.commit()
     await db.refresh(event)
@@ -577,12 +595,11 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_group_stage_only(
     preview = build_preview_snapshot(loaded)
 
     assert len(preview.snapshot.fixtures) == 15
-    # The PREVIEW's key is ``{event}:{reservation}`` (see
-    # ``app.schedule_preview.preview_reservation_key``), the same namespace the
-    # live solve keys on — a ``PlannedFixture`` carries only a GROUP id, so the
-    # builder crosses it into its mapped reservation's id
-    # (``group_reservation_ids`` in ``build_preview_snapshot``) before composing
-    # the ref, exactly as ``app.schedule_solves`` does for a real solve.
+    # The PREVIEW's key is ``{event}:{reservation}`` — the live solve's own
+    # ``app.schedule_solves.reservation_key``, one keyspace for both — a
+    # ``PlannedFixture`` carries only a GROUP id, so the builder crosses it into its
+    # mapped reservation's key (``reservation_keys_by_group``) before composing the
+    # ref, exactly as ``app.schedule_solves`` does for a real solve.
     (group,) = loaded.events[0].groups
     assert {f.reservation_id for f in preview.snapshot.fixtures} == {
         scheduling.ReservationId(f"{loaded.events[0].id}:{group.reservation.id}")
@@ -720,18 +737,117 @@ async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
     assert (skipped.field_size, skipped.knockout_fixtures) == (0, 0)
 
 
-async def test_preview_snapshot_event_without_reservations_refuses(
+async def test_preview_snapshot_round_robin_event_without_reservations_refuses(
     db_session: AsyncSession, default_league: League
 ) -> None:
+    """A ``round_robin`` event keeps one group per reservation (#1387 decision 2), so
+    zero reservations is zero groups, and the strategy refuses an empty group set — a
+    clear domain error, never a partial snapshot. This refusal still fires here; it
+    no longer fires for ``rr-then-ko``, whose groups derive from the field (below)."""
     owner = await make_user(db_session, "prev-noreservations")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     await _add_event(db_session, tournament, reservations=[])
     loaded = await _load(db_session, tournament.id)
 
-    # No reservations to schedule against: the round-robin strategy refuses an
-    # empty group set — a clear domain error, never a partial snapshot.
     with pytest.raises(DegenerateDraw):
         build_preview_snapshot(loaded)
+
+
+async def test_an_rr_then_ko_event_with_groups_and_no_reservation_is_previewed(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """An ``rr-then-ko`` event with no reservation holds derived groups with none
+    (#1387). Its fixtures resolve to no booked reservation, so the preview builds
+    the **event-wide reservation** for it, exactly as the live solve does (ADR "a
+    reservation restricts scheduling, it does not enable it"): the event's own slot,
+    read in the event's timezone, over the whole tournament catalogue. The event is
+    not skipped, no ``DegenerateConfiguration`` fires, and a tournament holding only
+    this event returns a preview.
+
+    Eight synthetic entrants derive two groups of four: 2 × C(4, 2) = 12 group-stage
+    fixtures, and a 4-slot bracket (top 2 of each) adds 3 knockout fixtures that stay
+    dropped — decision 1 gives the group stage a window, not the bracket."""
+    owner = await make_user(db_session, "prev-rrko-noreservation")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_group=2,
+        max_players=8,
+        reservations=[],
+        derive_groups=True,
+    )
+    loaded = await _load(db_session, tournament.id)
+    assert len(loaded.events[0].groups) == 2
+    assert all(g.reservation_link is None for g in loaded.events[0].groups)
+
+    # Judged from the morning of the event, so the (fixed) seed date is not a day
+    # behind ``now`` and a ``past_window`` cannot mask the verdict under test.
+    preview = build_preview_snapshot(
+        loaded, now=datetime(2026, 6, 13, 8, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    )
+
+    event_wide_key = event_wide_reservation_key(event.id)
+    (summary,) = preview.field_summaries
+    assert summary.skip_reason is None
+    assert (summary.field_size, summary.knockout_fixtures) == (8, 3)
+    assert len(preview.snapshot.fixtures) == 12
+    assert {f.reservation_id for f in preview.snapshot.fixtures} == {event_wide_key}
+    # Exactly one reservation — the event-wide one — built once for the event.
+    (reservation,) = preview.snapshot.reservations
+    assert reservation.id == event_wide_key
+    assert set(reservation.table_ids) == {str(t.id) for t in loaded.tables}
+    assert reservation.window == scheduling.Window(start_min=0, end_min=9 * 60)
+    # The frame origin is the event's slot, read in the event's own zone, so the
+    # caller reports a wall-clock finish rather than minutes only.
+    assert preview.base == datetime(
+        2026, 6, 13, 9, 0, tzinfo=ZoneInfo("America/Los_Angeles")
+    )
+    # Every previewed fixture is labelled with its own group.
+    assert {preview.group_labels[f.id] for f in preview.snapshot.fixtures} == {
+        "Group A",
+        "Group B",
+    }
+    assert (
+        scheduling.solve(preview.snapshot).verdict is not scheduling.Verdict.infeasible
+    )
+
+
+async def test_two_groups_sharing_a_reservation_preview_as_one_spec(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """Two derived groups over one reservation resolve to one key and **one**
+    ``ScheduleReservation`` — counted, because a duplicate spec double-counts the
+    reservation's table-minutes and turns an infeasible reservation feasible, which
+    no key assertion catches. No event-wide reservation is built: every previewed
+    fixture resolves to the booked one, and the dropped knockout stage does not
+    count."""
+    owner = await make_user(db_session, "prev-rrko-shared")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko,
+        qualifiers_per_group=2,
+        max_players=8,
+        derive_groups=True,
+    )
+    loaded = await _load(db_session, tournament.id)
+    groups = loaded.events[0].groups
+    assert len(groups) == 2
+    (reservation_row,) = loaded.events[0].reservations
+    key = scheduling.ReservationId(f"{event.id}:{reservation_row.id}")
+
+    preview = build_preview_snapshot(loaded)
+
+    assert [r.id for r in preview.snapshot.reservations] == [key]
+    assert len(preview.snapshot.fixtures) == 12
+    assert {f.reservation_id for f in preview.snapshot.fixtures} == {key}
+    assert sorted({preview.group_labels[f.id] for f in preview.snapshot.fixtures}) == [
+        "Group A",
+        "Group B",
+    ]
 
 
 async def test_a_tournament_whose_only_event_is_degenerate_is_still_refused(
