@@ -137,6 +137,7 @@ function ConfirmEmailPage() {
         ownerUsername={p.owner_username ?? ''}
         guestUsername={p.guest_username ?? null}
         matchesCount={p.guest_matches_count}
+        adoptsGuestUsername={p.adopts_guest_username}
         busy={confirm.isPending}
         onBringThemOver={() => confirmWithToast({ token })}
         onNotNow={() => confirmWithToast({ token, skipMerge: true })}

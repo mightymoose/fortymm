@@ -2,6 +2,15 @@ interface MergeGateProps {
   ownerUsername: string
   guestUsername: string | null
   matchesCount: number
+  /**
+   * True only on a *first* sign-in, where the account being signed into was
+   * minted moments ago and `ownerUsername` is a throwaway generated slug. The
+   * gate then also says what each choice does to the person's name, because
+   * that is the moment the choice is made: accepting keeps the guest name,
+   * declining loses it. On every other merge the username does not move, so
+   * the gate must not promise it will.
+   */
+  adoptsGuestUsername?: boolean
   busy: boolean
   onBringThemOver: () => void
   onNotNow: () => void
@@ -17,12 +26,14 @@ export function MergeGate({
   ownerUsername,
   guestUsername,
   matchesCount,
+  adoptsGuestUsername = false,
   busy,
   onBringThemOver,
   onNotNow,
 }: MergeGateProps) {
   const matchLabel = matchesCount === 1 ? '1 match' : `${matchesCount} matches`
   const from = guestUsername || 'your guest session'
+  const namesTheGuest = adoptsGuestUsername && Boolean(guestUsername)
   return (
     <div
       style={{
@@ -45,6 +56,13 @@ export function MergeGate({
         You're signing in as <strong>{ownerUsername}</strong>. We can bring the{' '}
         <strong>{matchLabel}</strong> you played in {from} into this account.
       </p>
+      {namesTheGuest && (
+        <p style={{ color: 'var(--fg-2)' }}>
+          This also keeps your name. Bring them over and you stay{' '}
+          <strong>{guestUsername}</strong>. Choose not now and you'll be{' '}
+          <strong>{ownerUsername}</strong> instead.
+        </p>
+      )}
       <div
         style={{
           display: 'flex',
@@ -67,7 +85,9 @@ export function MergeGate({
           disabled={busy}
           onClick={onNotNow}
         >
-          Not now — just sign me in
+          {namesTheGuest
+            ? `Not now — sign me in as ${ownerUsername}`
+            : 'Not now — just sign me in'}
         </button>
       </div>
     </div>

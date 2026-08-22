@@ -136,6 +136,7 @@ function LoginVerifyingPage() {
         ownerUsername={gate.owner_username ?? ''}
         guestUsername={gate.guest_username ?? null}
         matchesCount={gate.guest_matches_count}
+        adoptsGuestUsername={gate.adopts_guest_username}
         busy={consume.isPending}
         onBringThemOver={() => runConsume(false)}
         onNotNow={() => runConsume(true)}
