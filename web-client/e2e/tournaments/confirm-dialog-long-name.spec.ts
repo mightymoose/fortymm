@@ -3,17 +3,17 @@
  * it** (#1417).
  *
  * Quinn opened the delete confirmation for a 120-character unbroken tournament name at
- * 1280x800 and the Cancel and Delete buttons were not on the screen: Cancel at x=2158,
- * Delete at x=2244. The dialog's own box stayed 420px wide. Only its buttons left.
+ * 1280x800 and the Cancel and Delete buttons were not on the screen. The dialog's own
+ * box stayed 420px wide. Only its buttons left.
  *
  * ## The mechanism
  *
  * `DialogContent` and `AlertDialogContent` are both a CSS grid with a fixed
  * `w-[420px]`. A grid's automatic column track takes its base size from the content's
  * **min-content** width, and an unbroken 255-character word has a min-content width of
- * its whole rendered length — about 2000px. So the track overflowed the box, the footer
- * sat in that same track, and `sm:justify-end` pinned the buttons to the track's far
- * right edge rather than the box's.
+ * its whole rendered length — 1847px, measured. So the track overflowed the box, the
+ * footer sat in that same track, and `sm:justify-end` pinned the buttons to the track's
+ * far right edge rather than the box's.
  *
  * ## Why `wrap-anywhere` and not `break-words`
  *
@@ -24,40 +24,61 @@
  * `wrap-anywhere`) does contribute them, so it collapses the track's min-content width
  * to one glyph and the footer stays in the box.
  *
- * Measured at both viewports with the 255-character `UNBREAKABLE_TOURNAMENT_NAME`, as
- * the right-hand edge of the delete dialog's Delete button:
+ * All three states were **measured**, with the 255-character
+ * `UNBREAKABLE_TOURNAMENT_NAME`, after the `zoom-in-95` entrance had settled:
  *
- * | Primitive class string | Delete ends at, 1280x800 | Delete ends at, 375x667 |
- * | --- | --- | --- |
- * | unfixed | 2267px | 1871px |
- * | `min-w-0 break-words` added | 2267px — unchanged, the bug survives | 1871px — unchanged |
- * | `min-w-0 wrap-anywhere` added | 823px, on screen | 333px, on screen |
+ * | Primitive class string | Delete's right edge, 1280x800 | Delete's right edge, 375x667 | Description box |
+ * | --- | --- | --- | --- |
+ * | unfixed | 2302px | 1888px | 1847px wide, 42px tall |
+ * | `min-w-0 break-words` added | 2302px | 1888px | 1847px wide, 42px tall |
+ * | `min-w-0 wrap-anywhere` added | 825px | 334px | 370px wide, 126px tall |
  *
- * The `break-words` row is not a guess. It was run, and it reported the same four
- * failures with the same four numbers as the unfixed tree.
+ * The `break-words` row is not inferred. It was run, and all sixteen of the probe's
+ * numbers came back identical to the unfixed tree's, to the pixel. `break-words`
+ * changes nothing about this defect.
  *
- * `min-w-0` earns nothing here and is kept only because it is harmless: the container is
- * fixed-width, so its own min-width never sizes the track. `wrap-anywhere` is the whole
- * fix.
+ * `min-w-0` earns nothing here and is kept only because it is harmless: the container
+ * is fixed-width, so its own min-width never sizes the track. `wrap-anywhere` is the
+ * whole fix.
  *
  * ## Observed failing
  *
- * Reverting the two class strings reds **four** of the eight tests below, each with a
- * measured coordinate and none by timeout. Measured on darwin, at the FIRST assertion
- * each test makes (the second never runs, which is why the table names Cancel and Go
- * back rather than the confirm buttons):
+ * Reverting the two class strings reds **eight** of the twelve tests below, each with a
+ * measured number and none by timeout. Measured on darwin, at the FIRST assertion each
+ * test makes — which is why the coordinate rows name Cancel and Go back rather than the
+ * confirm buttons beside them:
  *
  * | Test | Under the revert | With the fix |
  * | --- | --- | --- |
- * | delete dialog, desktop, Cancel | ends 2195px from the left, past the 1280px viewport | ends at 717 |
- * | delete dialog, phone, Cancel | ends 1888px from the left, past the 375px viewport | ends at 331 |
- * | publish confirm, desktop, Go back | ends 2102px from the left, past the 1280px viewport | ends at 625 |
- * | publish confirm, phone, Go back | ends 1888px from the left, past the 375px viewport | ends at 333 |
+ * | delete dialog, desktop, Cancel on screen | ends 2195px from the left, past the 1280px viewport | ends at 718 |
+ * | delete dialog, phone, Cancel on screen | ends 1888px from the left, past the 375px viewport | ends at 334 |
+ * | publish confirm, desktop, Go back on screen | ends 2102px from the left, past the 1280px viewport | ends at 625 |
+ * | publish confirm, phone, Go back on screen | ends 1888px from the left, past the 375px viewport | ends at 334 |
+ * | delete dialog, desktop, name wraps | 42px tall, 2 lines of 21px | 126px, 6 lines |
+ * | delete dialog, phone, name wraps | 42px tall, 2 lines | 168px, 8 lines |
+ * | publish confirm, desktop, name wraps | 63px tall, 3 lines | 189px, 9 lines |
+ * | publish confirm, phone, name wraps | 63px tall, 3 lines | 231px, 11 lines |
  *
- * The four **dialog-box** tests are green in both states, deliberately. The ticket's
- * Constraints forbid widening the box, and the box was never what overflowed — those
- * tests guard the fix rather than prove it. Under the revert the delete dialog measures
- * 404px at 1280 and 336px at 375, inside its bound in both.
+ * The four **dialog-box** tests are green in all three states, deliberately. The
+ * ticket's Constraints forbid widening the box, and the box was never what overflowed —
+ * those tests guard the fix rather than prove it. The panel measures exactly 420px at
+ * 1280 and exactly 343px at 375 whether the fix is in or out.
+ *
+ * ## Why the wrap tests exist, beside the coordinate ones
+ *
+ * A fix that put `truncate` on the description would pass every coordinate assertion
+ * here, and would pass the vitest full-string assertion too — `overflow: hidden` hides
+ * text from the user, not from the DOM. So the coordinate tests alone cannot tell this
+ * fix from one that shortens the name, which criterion 4 forbids.
+ * `tournament-mobile-header.spec.ts` says the same thing about the `h1` and answers it
+ * the same way: measure the box's height in lines, and check nothing is clipped out of
+ * it.
+ *
+ * That was falsified too, and not only reasoned about. Adding `truncate` to both
+ * description class strings, on top of the real fix, reds all four wrap tests at
+ * `21px tall — 1.0 lines of 21px` — and reds the four coordinate tests as well, harder
+ * than the original bug did (Cancel at 2454px), because `truncate` carries
+ * `whitespace-nowrap` and hands the track its min-content width straight back.
  *
  * ## Everything is scoped to the dialog
  *
@@ -83,6 +104,17 @@ const DESKTOP = { width: 1280, height: 800 }
 const PHONE = { width: 375, height: 667 }
 
 /**
+ * How many lines of its own leading the description must occupy before this file calls
+ * the name **wrapped**.
+ *
+ * Four, and the margin either side of it is wide. Under the revert the description is
+ * two lines in the delete dialog and three in the publish confirm — the name lays out on
+ * one 1847px line and only the surrounding sentence wraps. With the fix the thinnest of
+ * the four cases is six lines and the widest is eleven. A `truncate` "fix" would be one.
+ */
+const WRAPPED_LINES = 4
+
+/**
  * Wait for the **webfonts to settle** before measuring.
  *
  * Every number below is the box around some text, and `src/index.css` fetches Bebas Neue
@@ -102,6 +134,14 @@ async function fontsReady(page: Page) {
  * max-w-[calc(100%-2rem)]` means the cap at 1280 is 420 and the cap at 375 is 343. A
  * flat `<= 420` would pass at 375 against a 400px box, which is a real defect.
  *
+ * Measured with `offsetWidth`, and NOT with `boundingBox()`. The difference is not a
+ * preference: `data-open:zoom-in-95` scales the panel on the way in, `boundingBox()`
+ * reflects CSS transforms, and a reading taken mid-entrance comes back at 97.9% of the
+ * true width — 411 against a 420px bound. That is a 2% blind spot on the one assertion
+ * whose whole job is to catch a box someone widened. `offsetWidth` is layout, and a
+ * transform moves a box without resizing its layout box, so it reports 420 and 343
+ * exactly. `expectNoHorizontalScroll` states the same distinction in `support/viewport.ts`.
+ *
  * This is the assertion that catches a "fix" that widened the box instead of wrapping
  * the content. The ticket's Constraints forbid that.
  */
@@ -110,15 +150,55 @@ async function expectPanelWithinItsBound(page: Page, panel: Locator, what: strin
   expect(viewport, 'the test must set a viewport size').not.toBeNull()
   if (!viewport) return
 
-  const box = await panel.boundingBox()
-  expect(box, `${what} should have a bounding box`).not.toBeNull()
-  if (!box) return
-
+  const width = await panel.evaluate((el) => (el as HTMLElement).offsetWidth)
   const bound = Math.min(420, viewport.width - 32)
   expect(
-    Math.round(box.width),
-    `${what} is ${Math.round(box.width)}px wide, past its ${bound}px bound in a ${viewport.width}px viewport`,
+    width,
+    `${what} is ${width}px wide, past its ${bound}px bound in a ${viewport.width}px viewport`,
   ).toBeLessThanOrEqual(bound)
+}
+
+/**
+ * The name **wraps** across lines inside the dialog, and none of it is hidden.
+ *
+ * Three claims, because a shortening fix would satisfy fewer than three:
+ *
+ * 1. the description holds the whole 255-character name — the same claim the vitest
+ *    file makes, restated here so a browser-only regression cannot slip past it;
+ * 2. the box is at least `WRAPPED_LINES` lines of its own leading tall — `truncate`
+ *    and `line-clamp-1` both make it one;
+ * 3. nothing overflows the box in either direction — which is what separates "wrapped"
+ *    from "clipped", since `overflow: hidden` keeps the box small by hiding the text
+ *    rather than by laying it out.
+ */
+async function expectNameWrapsInFull(description: Locator, what: string) {
+  await expect(description, `${what} should hold the whole name`).toContainText(
+    UNBREAKABLE_TOURNAMENT_NAME,
+  )
+
+  const box = await description.evaluate((el) => ({
+    lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight),
+    clientHeight: el.clientHeight,
+    scrollHeight: el.scrollHeight,
+    clientWidth: el.clientWidth,
+    scrollWidth: el.scrollWidth,
+  }))
+
+  const lines = box.clientHeight / box.lineHeight
+  expect(
+    lines,
+    `${what} is ${box.clientHeight}px tall — ${lines.toFixed(1)} lines of ${box.lineHeight}px. The name is not wrapping`,
+  ).toBeGreaterThanOrEqual(WRAPPED_LINES)
+
+  // 1px of slack for sub-pixel layout rounding, as `expectNoHorizontalScroll` takes.
+  expect(
+    box.scrollHeight,
+    `${what} hides ${box.scrollHeight - box.clientHeight}px of the name below its box — it is clipped, not wrapped`,
+  ).toBeLessThanOrEqual(box.clientHeight + 1)
+  expect(
+    box.scrollWidth,
+    `${what} hides the name past its right-hand edge: ${box.scrollWidth}px of content in a ${box.clientWidth}px box`,
+  ).toBeLessThanOrEqual(box.clientWidth + 1)
 }
 
 /** Open `/tournaments` seeded with the unbreakable name, and press the delete control on
@@ -135,13 +215,13 @@ async function openDeleteDialog(page: Page) {
   // Asserted as its own step: the control is gated on `canEdit`, and a dialog that never
   // opened would red the geometry assertions with "not visible" — which proves nothing
   // about layout.
-  await expect(deleteControl, 'the card\'s delete control').toBeVisible()
+  await expect(deleteControl, "the card's delete control").toBeVisible()
   await deleteControl.click()
 
   const dialog = page.getByRole('dialog')
   await expect(dialog).toBeVisible()
   await fontsReady(page)
-  return dialog
+  return { dialog, description: dialog.locator('[data-slot="dialog-description"]') }
 }
 
 /** Open the tournament detail page as a draft seeded with the unbreakable name, and
@@ -158,105 +238,79 @@ async function openIrreversibleActDialog(page: Page) {
   const dialog = page.getByRole('alertdialog')
   await expect(dialog).toBeVisible()
   await fontsReady(page)
-  return { pom, dialog }
+  return {
+    pom,
+    dialog,
+    description: dialog.locator('[data-slot="alert-dialog-description"]'),
+  }
 }
 
-test.describe('the delete confirmation, desktop', () => {
-  test.use({ viewport: DESKTOP })
+for (const viewport of [DESKTOP, PHONE]) {
+  const where = `${viewport.width}x${viewport.height}`
 
-  test('keeps Cancel and Delete wholly on screen', async ({ page }) => {
-    const dialog = await openDeleteDialog(page)
+  test.describe(`the delete confirmation at ${where}`, () => {
+    test.use({ viewport })
 
-    await expectOnScreen(
+    test('keeps Cancel and Delete wholly on screen', async ({ page }) => {
+      const { dialog } = await openDeleteDialog(page)
+
+      await expectOnScreen(
+        page,
+        dialog.getByRole('button', { name: 'Cancel' }),
+        "the delete dialog's Cancel button",
+      )
+      await expectOnScreen(
+        page,
+        dialog.getByRole('button', { name: 'Delete' }),
+        "the delete dialog's Delete button",
+      )
+    })
+
+    test('wraps the whole name across lines rather than shortening it', async ({
       page,
-      dialog.getByRole('button', { name: 'Cancel' }),
-      "the delete dialog's Cancel button",
-    )
-    await expectOnScreen(
-      page,
-      dialog.getByRole('button', { name: 'Delete' }),
-      "the delete dialog's Delete button",
-    )
+    }) => {
+      const { description } = await openDeleteDialog(page)
+
+      await expectNameWrapsInFull(description, "the delete dialog's description")
+    })
+
+    test('keeps the dialog box inside its own width bound', async ({ page }) => {
+      const { dialog } = await openDeleteDialog(page)
+
+      await expectPanelWithinItsBound(page, dialog, 'the delete dialog')
+    })
   })
 
-  test('keeps the dialog box inside its own width bound', async ({ page }) => {
-    const dialog = await openDeleteDialog(page)
+  test.describe(`the irreversible-act confirmation at ${where}`, () => {
+    test.use({ viewport })
 
-    await expectPanelWithinItsBound(page, dialog, 'the delete dialog')
-  })
-})
+    test('keeps Go back and the confirm button wholly on screen', async ({ page }) => {
+      const { pom, dialog } = await openIrreversibleActDialog(page)
 
-test.describe('the delete confirmation, phone', () => {
-  test.use({ viewport: PHONE })
+      await expectOnScreen(
+        page,
+        dialog.getByTestId('confirm-irreversible-act-cancel'),
+        "the publish confirm's Go back button",
+      )
+      await expectOnScreen(
+        page,
+        pom.irreversibleActConfirmButton,
+        "the publish confirm's Publish the tournament button",
+      )
+    })
 
-  test('keeps Cancel and Delete wholly on screen', async ({ page }) => {
-    const dialog = await openDeleteDialog(page)
-
-    await expectOnScreen(
+    test('wraps the whole name across lines rather than shortening it', async ({
       page,
-      dialog.getByRole('button', { name: 'Cancel' }),
-      "the delete dialog's Cancel button",
-    )
-    await expectOnScreen(
-      page,
-      dialog.getByRole('button', { name: 'Delete' }),
-      "the delete dialog's Delete button",
-    )
+    }) => {
+      const { description } = await openIrreversibleActDialog(page)
+
+      await expectNameWrapsInFull(description, "the publish confirm's description")
+    })
+
+    test('keeps the dialog box inside its own width bound', async ({ page }) => {
+      const { dialog } = await openIrreversibleActDialog(page)
+
+      await expectPanelWithinItsBound(page, dialog, 'the publish confirm dialog')
+    })
   })
-
-  test('keeps the dialog box inside its own width bound', async ({ page }) => {
-    const dialog = await openDeleteDialog(page)
-
-    await expectPanelWithinItsBound(page, dialog, 'the delete dialog')
-  })
-})
-
-test.describe('the irreversible-act confirmation, desktop', () => {
-  test.use({ viewport: DESKTOP })
-
-  test('keeps Go back and the confirm button wholly on screen', async ({ page }) => {
-    const { pom, dialog } = await openIrreversibleActDialog(page)
-
-    await expectOnScreen(
-      page,
-      dialog.getByTestId('confirm-irreversible-act-cancel'),
-      "the publish confirm's Go back button",
-    )
-    await expectOnScreen(
-      page,
-      pom.irreversibleActConfirmButton,
-      "the publish confirm's Publish the tournament button",
-    )
-  })
-
-  test('keeps the dialog box inside its own width bound', async ({ page }) => {
-    const { dialog } = await openIrreversibleActDialog(page)
-
-    await expectPanelWithinItsBound(page, dialog, 'the publish confirm dialog')
-  })
-})
-
-test.describe('the irreversible-act confirmation, phone', () => {
-  test.use({ viewport: PHONE })
-
-  test('keeps Go back and the confirm button wholly on screen', async ({ page }) => {
-    const { pom, dialog } = await openIrreversibleActDialog(page)
-
-    await expectOnScreen(
-      page,
-      dialog.getByTestId('confirm-irreversible-act-cancel'),
-      "the publish confirm's Go back button",
-    )
-    await expectOnScreen(
-      page,
-      pom.irreversibleActConfirmButton,
-      "the publish confirm's Publish the tournament button",
-    )
-  })
-
-  test('keeps the dialog box inside its own width bound', async ({ page }) => {
-    const { dialog } = await openIrreversibleActDialog(page)
-
-    await expectPanelWithinItsBound(page, dialog, 'the publish confirm dialog')
-  })
-})
+}
