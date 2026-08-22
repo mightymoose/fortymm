@@ -91,11 +91,12 @@ export const usersPage = {
   async typeNewUsername(username: string) {
     await userEvent.click(await this.findAddUserButton())
     const input = await this.findNewUsernameInput()
-    await userEvent.clear(input)
-    if (username) await userEvent.type(input, username)
-    const buttons = await screen.findAllByRole('button', { name: /^add user$/i })
-    // The header action and the modal's submit share a name; the modal's is last.
-    return buttons[buttons.length - 1]
+    await userEvent.type(input, username)
+    // The header action and the modal's submit share an accessible name, so
+    // scope to the dialog. Taking the last match relied on render order, which
+    // is not a contract.
+    const dialog = await screen.findByRole('dialog')
+    return rtlWithin(dialog).getByRole('button', { name: /^add user$/i })
   },
 
   /** Click a user's row and resolve the open role-editor drawer. */

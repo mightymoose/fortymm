@@ -30,5 +30,22 @@ export function isValidUsername(value: string): boolean {
   return value.length >= USERNAME_MIN && value.length <= USERNAME_MAX && USERNAME_RE.test(value)
 }
 
-/** The one-line description of the rule, for a form hint. */
-export const USERNAME_HINT = `Lowercase letters, numbers, dots, hyphens and underscores. ${USERNAME_MIN}–${USERNAME_MAX} characters.`
+/**
+ * Whether `value` holds a character the rule does not allow.
+ *
+ * Separate from `isValidUsername` because the settings page surfaces a
+ * disallowed character the moment it is typed, while it gates the length
+ * errors on blur so it does not nag mid-word.
+ */
+export function hasDisallowedUsernameChar(value: string): boolean {
+  return /[^a-z0-9._-]/.test(value)
+}
+
+/**
+ * The one-line description of the rule, for a form hint.
+ *
+ * It names the start-and-end constraint too. Without it the hint describes
+ * `.leading` and `trailing-` as acceptable while the form refuses them, which
+ * is the same defect as the "Min 2 characters" copy this replaced.
+ */
+export const USERNAME_HINT = `Lowercase letters, numbers, dots, hyphens and underscores. Must start and end with a letter or number. ${USERNAME_MIN}–${USERNAME_MAX} characters.`

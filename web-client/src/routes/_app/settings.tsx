@@ -56,6 +56,7 @@ import {
   USERNAME_MAX,
   USERNAME_MIN,
   USERNAME_RE,
+  hasDisallowedUsernameChar,
 } from '@/lib/username'
 import { pageTitle } from '@/lib/page-title'
 import './settings.css'
@@ -512,7 +513,7 @@ function UsernameSection({
   // punctuation outside the allowed set), surface that immediately — the user
   // just typed it and we want them to know it's not going through. Length
   // errors stay gated on blur so we don't nag while they're still typing.
-  const hasInvalidChar = /[^a-z0-9._-]/.test(val)
+  const hasInvalidChar = hasDisallowedUsernameChar(val)
   const displayedErr =
     serverErr ?? ((touched || hasInvalidChar) && !clientV.ok ? (clientV.err ?? null) : null)
 

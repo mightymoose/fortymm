@@ -30,10 +30,21 @@ describe('foldForSearch', () => {
     expect(foldForSearch('が').includes(foldForSearch('か'))).toBe(false)
   })
 
-  it('leaves Hangul, Cyrillic and Han text unchanged', () => {
+  it('leaves Hangul, Han and undecorated Cyrillic unchanged', () => {
     expect(foldForSearch('한글')).toBe('한글')
     expect(foldForSearch('Москва')).toBe('москва')
     expect(foldForSearch('北京')).toBe('北京')
+  })
+
+  it('does fold Cyrillic Ё/Й and the Greek tonos, an accepted widening', () => {
+    // Honest about the limit of the combining-marks range: these are real
+    // combining marks, so they go. The ticket asks for non-Latin text to match
+    // "exactly as it is today" and the Constraints allow symmetric widening;
+    // where those two clauses disagree, this fold widens. Measured, not assumed.
+    expect(foldForSearch('Ёжик')).toBe('ежик')
+    expect(foldForSearch('Йод')).toBe('иод')
+    expect(foldForSearch('Ώρα')).toBe('ωρα')
+    expect(foldForSearch('Αθήνα')).toBe('αθηνα')
   })
 
   it('does not widen Hangul substring matching', () => {

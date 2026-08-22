@@ -14,7 +14,12 @@
 // The combining diacritical marks block, and only it. `\p{Diacritic}` looks
 // like the right property and is not: it also covers U+3099 / U+309A, the
 // Japanese voiced sound marks, so `が` would fold to `か` and `ka` would match
-// `ga`. Non-Latin text must match exactly as it does today.
+// `ga`. Han, Hangul and kana are therefore untouched.
+//
+// Cyrillic and Greek are NOT untouched, and that is deliberate: U+0300-U+036F
+// is exactly what `Ё`, `Й` and the Greek tonos decompose to, so `Ёжик` folds to
+// `ежик` and `Ώρα` to `ωρα`. The fold stays symmetric, so this only ever
+// widens a result set. Pinned in `fold-text.test.ts` so it stays a choice.
 const COMBINING_MARKS = /[\u0300-\u036f]/g
 
 /**
