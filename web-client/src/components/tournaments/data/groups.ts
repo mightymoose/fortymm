@@ -4,14 +4,21 @@
 // one concept — stop being bytes off the wire and become typed domain values.
 //
 // Parsed TOGETHER, deliberately, rather than as two independent arrays: the one
-// invariant that matters crosses both. Every group's `reservation_id` must name an
-// entry of `reservations` — the API's `GroupRead` doc says the join column behind it is
-// `NOT NULL` and a real foreign key, so this is UNREACHABLE from a correct server. But
+// invariant that matters crosses both. Every group's NON-NULL `reservation_id` must
+// name an entry of `reservations` — the API's `GroupRead` doc says the join row behind
+// it is a real foreign key, so this is UNREACHABLE from a correct server. But
 // "unreachable from a correct server" is exactly the class of bug
 // `.claude/rules/parse-at-boundaries.md` exists to catch: a broken serializer that
 // silently dropped a reservation would otherwise render a fixture's window from a
 // reservation that silently isn't there (or throw a bare `TypeError` three components
 // downstream), instead of failing loudly, here, at the fetch boundary.
+//
+// A NULL `reservation_id` is a different thing, and it is accepted (ticket #1387): the
+// server materialises an `rr-then-ko` event's groups from its field and maps each onto
+// a reservation by `position % reservation count`, so an event with no reservation
+// holds groups with none. Such a group is a real, reachable domain state — it renders
+// without a window and without tables (`fixtureReservation`, `./draw`, already
+// tolerates the unresolved hop) — so it is neither dropped nor a parse failure.
 //
 // A fixture's own `group_id` is the mirror-image case, and deliberately NOT checked
 // here: `./fixtures` parses it permissively (`z.string().nullable()`, no membership
@@ -36,7 +43,7 @@ const slotWireSchema = z.object({
 const groupWireSchema = z.object({
   id: z.string(),
   position: z.number().int(),
-  reservation_id: z.string(),
+  reservation_id: z.string().nullable(),
 })
 
 /** The wire shape (`Reservation`, the read model): everything a client wrote
@@ -50,10 +57,11 @@ const reservationWireSchema = z.object({
 })
 
 /**
- * Both arrays, parsed together and **cross-checked**: every group's `reservation_id`
- * must name an entry of `reservations`. Unreachable from a correct server (see the file
- * header), so a payload that fails this is a broken serializer, and refusing beats
- * silently rendering a plausible-but-wrong window.
+ * Both arrays, parsed together and **cross-checked**: every group's non-null
+ * `reservation_id` must name an entry of `reservations`. Unreachable from a correct
+ * server (see the file header), so a payload that fails this is a broken serializer,
+ * and refusing beats silently rendering a plausible-but-wrong window. A `null` is a
+ * group that plays in no reservation, and passes.
  */
 const groupsAndReservationsWireSchema = z
   .object({
@@ -63,7 +71,7 @@ const groupsAndReservationsWireSchema = z
   .superRefine((value, ctx) => {
     const reservationIds = new Set(value.reservations.map((r) => r.id))
     value.groups.forEach((group, i) => {
-      if (!reservationIds.has(group.reservation_id)) {
+      if (group.reservation_id !== null && !reservationIds.has(group.reservation_id)) {
         ctx.addIssue({
           code: 'custom',
           path: ['groups', i, 'reservation_id'],

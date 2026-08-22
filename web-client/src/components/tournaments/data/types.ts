@@ -90,24 +90,27 @@ export interface MatchSettings {
  * reservation it plays under (ticket #1369, "group and reservation").
  *
  * Server-owned, unlike `Reservation` below — there is no write shape, because a client
- * never authors a group directly. The server mints exactly one group per reservation
- * (the 1:1 this ticket keeps; a later ticket breaks it), so a `reservations` write is
- * the only way a group comes to exist, is re-ordered, or goes away.
+ * never authors a group directly. The server materialises the group rows on every
+ * event write (ticket #1387): for an `rr-then-ko` event, `ceil(field / 5)` against the
+ * preview field; for every other draw type, one group per reservation. Each group maps
+ * to the reservation at `position % reservation count`.
  *
- * `reservationId` names an entry of this same event's `reservations`. It is never a
- * dangling ref in this slice — the join column behind it is `NOT NULL` and a real
- * foreign key, so a group with no mapped reservation is a state the database cannot
- * produce — but the client still looks it up rather than assuming it always resolves
+ * `reservationId` names an entry of this same event's `reservations`, or is `null` for
+ * a group that plays in no reservation (every group of an event with no reservation).
+ * A non-null id is never a dangling ref — the join row behind it is a real foreign
+ * key — but the client still looks it up rather than assuming it always resolves
  * (`eventSchema`/`apiToEvent`, `./api`, reject a payload where it does not). */
 export interface Group {
   id: string
   /** Where this group sits in its event's ordering — 0-based, and assigned by the
-   * server from its reservation's position (`groupLetter`, `./draw-structure`, is what
-   * turns this into `Group A`, `Group B`, …). */
+   * server (`groupLetter`, `./draw-structure`, is what turns this into `Group A`,
+   * `Group B`, …). */
   position: number
   /** The reservation this group plays under — the id to look up in this same event's
-   * `reservations` for its tables, its window and the name a director typed. */
-  reservationId: string
+   * `reservations` for its tables, its window and the name a director typed — or
+   * `null` when it plays in none, in which case it renders without a window and
+   * without tables. */
+  reservationId: string | null
 }
 
 /** A slice of tables reserved for a window of time within an event — the **venue**

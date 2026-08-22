@@ -1,11 +1,13 @@
 import { ApiError } from '@/api/client'
 
 import {
+  buildDrawIndex,
   drawRefusalNotice,
   drawRefusalScope,
   drawState,
   drawTypeFreeze,
   drawVerbFreeze,
+  fixtureReservation,
   groupSetFreeze,
   shapeForStage,
   undrawnLead,
@@ -892,5 +894,36 @@ describe('drawVerbFreeze', () => {
     // One sentence covers both halves of the guard — a director cannot be shown a reason
     // that names the half their own draw does not have.
     expect(reason).toBe(frozenReason(buildPlayedDrawnEvent()))
+  })
+})
+
+describe('fixtureReservation', () => {
+  /**
+   * A group that plays in no reservation (ticket #1387): its `reservationId` is `null`,
+   * and a fixture in it resolves to the group and to NO reservation — the callers
+   * (`./schedule`, `./timeline`) then fall back to the event's own window and the whole
+   * catalogue, exactly as they do for an ungrouped fixture. Neither dropped nor thrown.
+   */
+  it('resolves the group and no reservation when the group has none', () => {
+    const index = buildDrawIndex({
+      groups: [{ id: 'grp-a', position: 0, reservationId: null }],
+      reservations: [],
+    })
+    expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
+      group: { id: 'grp-a', position: 0, reservationId: null },
+      reservation: null,
+    })
+  })
+
+  it('resolves both hops when the group has a reservation', () => {
+    const reservation = buildReservation({ id: 'res-a' })
+    const index = buildDrawIndex({
+      groups: [{ id: 'grp-a', position: 0, reservationId: 'res-a' }],
+      reservations: [reservation],
+    })
+    expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
+      group: { id: 'grp-a', position: 0, reservationId: 'res-a' },
+      reservation,
+    })
   })
 })

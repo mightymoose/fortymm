@@ -78,8 +78,8 @@ def mint_stages(draw_type: DrawType) -> list[TournamentEventStage]:
     What ``app.tournament_events.create_event`` passes straight into
     ``TournamentEvent(..., stages=...)`` — the rows carry no ``event_id`` yet, and never
     need one set here: SQLAlchemy fills it in from the parent at flush, the same way
-    ``app.tournament_reservations.stored_groups`` already works for a brand-new event's
-    groups.
+    ``app.tournament_reservations.stored_reservations`` already works for a brand-new
+    event's reservations.
     """
     return [
         TournamentEventStage(position=position, draw_type=component)

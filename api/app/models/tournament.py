@@ -409,29 +409,28 @@ class TournamentEvent(Base):
     #
     # A REAL relationship, not a viewonly one, unlike ``groups`` above — this is the
     # collection ``app.tournament_reservations`` writes, and ``delete-orphan`` is what
-    # removes a reservation when its own entry leaves the payload. The 1:1 with
-    # ``groups`` is maintained by that module on every write path, not by anything here.
+    # removes a reservation when its own entry leaves the payload.
     #
-    # Deliberately **NOT eager**, unlike almost every other collection on this model,
-    # and the reason is a statement count. No reader goes through here: a caller
-    # reaches a group's reservation from the group itself (``TournamentEventStageGroup
-    # .reservation``), so making this eager would load every reservation a SECOND time —
-    # and chain a second load of their ``tables`` off it — on every page that touches an
-    # event. That is two statements per page bought for nothing, on the tournament list,
-    # the detail read and the dashboard panel alike, all three of which pin their
-    # counts.
+    # **Eager (``selectin``), since #1387.** It was deliberately lazy while every group
+    # had exactly one reservation, because then the group chain
+    # (``groups[].reservation_link.reservation``) already held every reservation and a
+    # second load here bought nothing. That 1:1 is gone: an ``rr-then-ko`` event's
+    # group count derives from its field, so an event may hold a reservation no group
+    # maps onto (one group, four reservations) or a group no reservation maps onto (an
+    # event with no reservation at all). The wire's ``reservations[]`` and every solver
+    # input read THIS collection now (``app.tournament_draws.event_reservations``), so
+    # it has to ride along with the event however the event was loaded — a lazy load
+    # under async is a ``MissingGreenlet``, not a slow read. It costs the tournament
+    # list, the detail read and the dashboard panel one statement each (plus one for
+    # the reservations' ``tables``); the pinned counts in their tests moved with it.
     #
-    # The one writer loads it explicitly instead, with ``await
-    # event.awaitable_attrs.reservations``
-    # (``app.tournament_reservations.apply_event_reservations``) — the async-safe way to
-    # populate a lazy collection, and the seam that keeps this cost on the write path
-    # where it belongs. Assigning to an unloaded ``delete-orphan`` collection would
-    # otherwise emit a lazy load mid-assignment, which under async raises
-    # ``MissingGreenlet`` rather than querying.
+    # ``selectin``, not ``joined``: a one-to-many joined load would multiply the event
+    # rows, which the tournament list's LIMIT/OFFSET could not survive.
     reservations: Mapped[list["TournamentEventReservation"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        lazy="selectin",
         order_by="TournamentEventReservation.position",
     )
 

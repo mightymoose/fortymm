@@ -48,19 +48,19 @@ class TournamentEventGroupReservation(Base):
     four legs for exactly this reason after ADR 20260815, so the shape is idiomatic
     here.
 
-    **The primary key is the group column alone, and that is the 1:1.** One group maps
-    to at most one reservation, which is the uniqueness this slice's every write path
-    maintains and every reader assumes. There is deliberately **no** uniqueness on
-    ``reservation_id``: two groups of one event naming one reservation is a state the
-    database accepts and no application path in this slice produces. #1370 is what
-    starts producing it — a group count that creates groups without booking a venue —
-    and it needs the column already free of a constraint that would have refused it.
+    **The primary key is the group column alone.** One group maps to at most one
+    reservation, which is the uniqueness every write path maintains and every reader
+    assumes. There is deliberately **no** uniqueness on ``reservation_id``: since #1387
+    an ``rr-then-ko`` event maps its groups round-robin onto its reservations
+    (``position % reservation count``), so eight groups across four reservations put
+    two groups on each one.
 
-    ``reservation_id`` is ``NOT NULL``. Every write path mints a group and a reservation
-    together, so a reservation-less group is unreachable here
-    and the column states what is true rather than what a later slice will allow. #1370
-    relaxes it by editing the revision in place, because no environment holds data worth
-    keeping.
+    **All three legs are ``NOT NULL``, and a group with no reservation has no row
+    here.** That is the other half of #1387: a group whose position has no reservation
+    to map onto — every group of an event with no reservation — is the ABSENCE of this
+    row, never a null ``reservation_id`` on it. The primary key is ``group_id`` alone,
+    so an absent row already means "no reservation", and no column needed relaxing
+    and no migration was owed.
 
     **All three delete rules are CASCADE.** The mapping is not a thing in its own right:
     it exists only while both ends do, so it goes with either of them, and with the

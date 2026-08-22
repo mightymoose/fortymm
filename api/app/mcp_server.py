@@ -1415,13 +1415,17 @@ async def update_event(
     in order: an entry carrying an ``id`` keeps that reservation (re-worded, re-timed,
     re-tabled, re-positioned), an entry omitting one adds a reservation the server
     mints an id for, and a reservation no entry names is removed — so send back the
-    reservations you read, edited. The server keeps one ``groups`` entry per
-    reservation in lockstep, server-owned and read-only. An ``id`` this event does not
-    have is refused. Editing an event is OWNER-GATED — only the tournament's creator
-    may (there is no permission on this route). **Once the event's draw is cut, two
-    things freeze** (ADR-0786): a ``reservations`` payload that changes *which groups*
-    the event has is refused, and so is a ``draw_type`` change — remove the draw, edit,
-    and cut again. Everything else (name, fee, rules, ``max_players``, a
+    reservations you read, edited. ``groups`` is server-owned and read-only: the
+    server materialises the group rows on every write (for an ``rr-then-ko`` event,
+    ``ceil(field / 5)`` against the player cap, or 16 when uncapped; one group per
+    reservation for every other draw type) and maps each group to the reservation at
+    ``position % reservation count``, or to none when the event has no reservation.
+    An ``id`` this event does not have is refused. Editing an event is OWNER-GATED —
+    only the tournament's creator may (there is no permission on this route). **Once
+    the event's draw is cut, two things freeze** (ADR-0786): a ``reservations``
+    payload that adds, removes or reorders a reservation is refused, and so is a
+    ``draw_type`` change — remove the draw, edit, and cut again. Everything else
+    (name, fee, rules, ``max_players``, a
     reservation's ``table_ids`` / ``slot`` / ``name``) stays editable with a draw
     standing. A ``timezone`` edit preserves the wall-clock of already-placed fixtures.
     Returns the updated ``TournamentEventRead`` from the caller's perspective (its

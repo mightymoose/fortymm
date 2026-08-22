@@ -29,7 +29,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from tests._helpers import counted_statements, opponent_session
+from tests._helpers import counted_statements, make_user, opponent_session
 from tests.test_tournaments import (
     RESERVATION_A,
     RESERVATION_B,
@@ -747,7 +747,11 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # rows now too, ADR 20260801, and the panel resolves a fixture's group LABEL through
 # them) and ONE of every one of THOSE groups' reservations' table reservations
 # (the reservation's ``tables``, ``lazy="selectin"`` — chained onto the groups' own
-# batched load, so it is one statement per panel build and not one per group),
+# batched load, so it is one statement per panel build and not one per group), ONE of
+# every event's RESERVATIONS (``TournamentEvent.reservations``, ``lazy="selectin"``
+# since #1387 — eager for every reader now that a group count no longer equals a
+# reservation count; the panel does not read it) and ONE of those reservations'
+# tables chained off it (the same rows as above, fetched once per path),
 # then ONE batched load of every event's active entrants, ONE of every event's fixtures,
 # ONE of the completed matches' game counts, ONE batched eager load of every event's
 # STAGES (``TournamentEvent.stages``, ``lazy="selectin"`` — what
@@ -755,9 +759,9 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # inferring a fixture's stage from the event's overall draw type plus
 # ``group_id IS NULL``, ADR 20260815), ONE of the handful of focus matches, and that
 # load's own eager options (the match's league, results, sides, settings, side
-# players and those players' users — one batched ``selectin`` each). Fifteen, whatever
-# the number of events.
-EXPECTED_DASHBOARD_PANEL_STATEMENTS = 15
+# players and those players' users — one batched ``selectin`` each). Seventeen,
+# whatever the number of events.
+EXPECTED_DASHBOARD_PANEL_STATEMENTS = 17
 
 
 @pytest.mark.parametrize("event_count", [1, 3])
@@ -942,14 +946,17 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
     the one-stage draw types, because the same match must not read differently
     depending on which event it happens to be in.
 
-    Driven end to end: four players, two groups of two, top one out of each, so the
-    group winners meet in a single final. The caller's card is asserted **twice** —
-    once while their group match is the focus, once after the final has materialized
-    — which is what
-    makes this about the stage rather than about the event's draw type. ``stage_label``
-    stays minimal ("In play"), deliberately: naming which stage is live needs plumbing
-    this ticket does not buy, and "Group complete" on an event whose bracket is still
-    being played would announce it over.
+    Driven end to end: six players, two groups of three (the cut derives the count
+    from the real field, #1387: ``ceil(6 / 5)``), top one out of each, so the group
+    winners meet in a single final. The snake deals seeds 1, 4, 5 into group A and 2,
+    3, 6 into group B; the LOWER seed always wins, so seeds 1 and 2 top their groups,
+    and the only other winners (4 over 5, 3 over 6) are the two remaining sessions.
+    The caller's card is asserted **twice** — once while a group match of theirs is
+    the focus, once after the final has materialized — which is what makes this about
+    the stage rather than about the event's draw type. ``stage_label`` stays minimal
+    ("In play"), deliberately: naming which stage is live needs plumbing this ticket
+    does not buy, and "Group complete" on an event whose bracket is still being played
+    would announce it over.
     """
     client, owner = authed_client
     async with (
@@ -969,46 +976,53 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
             ),
         )
         base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
-        entries = [
-            await _enter(
+        players = {1: owner, 2: user_2, 3: user_3, 4: user_4}
+        entries = {
+            seed: await _enter(
                 db_session,
                 event["id"],
-                user,
+                players.get(seed) or await make_user(db_session, f"rrko-panel-{seed}"),
                 seed=seed,
                 created_at=base + timedelta(minutes=seed),
             )
-            for seed, user in ((1, owner), (2, user_2), (3, user_3), (4, user_4))
-        ]
+            for seed in range(1, 7)
+        }
+        seed_by_entry = {entry.id: seed for seed, entry in entries.items()}
         await _cut_the_draw(client, tournament_id, event["id"])
         await _set_status(db_session, tournament_id, TournamentStatus.published)
         assert (await _go_live(client, tournament_id)).status_code == 201
-        clients = dict(
-            zip(
-                [entry.id for entry in entries],
-                [client, client_2, client_3, client_4],
-                strict=True,
-            )
-        )
+        clients = {
+            entries[1].id: client,
+            entries[2].id: client_2,
+            entries[3].id: client_3,
+            entries[4].id: client_4,
+        }
 
-        # -- the group stage: the caller's own group match is the focus, and it is a
-        #    "Group match".
+        # -- the group stage: a group match of the caller's is the focus, and it is a
+        #    "Group match" (which round of the group's three is theirs first is the
+        #    round-robin pairing's business, not this test's).
         groups = [f for f in await _fixture_rows(db_session, event["id"]) if f.group_id]
         await _call_fixtures(db_session, tournament_id, groups)
         groups = [f for f in await _fixture_rows(db_session, event["id"]) if f.group_id]
         (panel,) = await _panels(client)
         (group_event,) = panel["events"]
-        assert group_event["match"]["round_label"] == "Group match 1"
+        assert group_event["match"]["round_label"].startswith("Group match ")
         assert group_event["stage_label"] == "In play"
 
         # -- both groups decided: each winner is seated into the final, which becomes a
         #    real match in the same transaction.
         for fixture in groups:
             assert fixture.entry_a_id is not None
+            assert fixture.entry_b_id is not None
             await _win_fixture_match(
                 fixture,
                 clients_by_entry=clients,
-                # ``entry_a`` is the higher seed in both groups (1 over 4, 2 over 3).
-                winner_entry_id=fixture.entry_a_id,
+                # The LOWER seed always wins, so each group's top one is its lowest
+                # seed and every winner holds a session.
+                winner_entry_id=min(
+                    (fixture.entry_a_id, fixture.entry_b_id),
+                    key=lambda entry_id: seed_by_entry[entry_id],
+                ),
                 rated=False,
             )
 
@@ -1023,7 +1037,9 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
         "the caller's final is against the other group's winner"
     )
     assert ko_event["stage_label"] == "In play"
-    assert [row["label"] for row in ko_event["fixtures"]] == ["M1", "M2"]
+    # The caller's path: their two group matches (a group of three plays two apiece)
+    # and the final they were seated into.
+    assert [row["label"] for row in ko_event["fixtures"]] == ["M1", "M2", "M3"]
 
 
 async def test_the_path_list_sorts_by_scheduled_time_not_draw_order(

@@ -24,29 +24,55 @@ const EVENT_NAME = 'Open Singles'
  * (ADR 20260726), so this string is the seed row's `name` column, not the client's. */
 const DRAW_TYPE_LABEL = 'Round-robin then knockout'
 
-/** `P` — three reservations (and therefore three groups), which is the smallest number
- * at which the format's cross-group seeding rule has anything to say (with one group
- * the guarantee is waived, with two it is nearly free). */
+/** `P` — three reservations, which is the smallest number at which the format's
+ * cross-group seeding rule has anything to say (with one group the guarantee is waived,
+ * with two it is nearly free).
+ *
+ * ⚠️ The reservation count no longer DETERMINES the group count (#1387): the server
+ * materializes `ceil(field / 5)` group rows on every event write and maps the group at
+ * position `p` onto reservation `p % RESERVATION_COUNT` — groups and reservations are no
+ * longer minted one-per-one in lockstep. `MAX_PLAYERS` below is chosen so the derived
+ * `GROUP_COUNT` comes out equal to this number anyway, which is what keeps a plain 1:1
+ * reading true on the page without asserting a rule the server no longer runs. */
 const RESERVATION_COUNT = 3
 /** `K` — the qualifiers per group. The number this whole spec exists to get onto the
  * wire: an `rr-then-ko` create body without it is a **422** at the request boundary. */
 const QUALIFIERS_PER_GROUP = 2
-/** `N` — nine entrants, dealt three to a group. Enough to satisfy the cut's two
- * entrant-dependent refusals (`K ≤ ⌊N/P⌋` = 3, and `P × K ≥ 2`) with room to spare, and
- * enough that each group is a real round-robin rather than a single pairing. */
-const ENTRANT_COUNT = 9
+/** The event's player limit (`max_players`), set through the editor before the create.
+ * The server materializes `ceil(field / 5)` group rows on every event write using this
+ * cap as the field (#1387) — so THIS number, not `RESERVATION_COUNT`, is what decides
+ * `GROUP_COUNT` below. Chosen equal to `ENTRANT_COUNT` so the cut's re-derivation off the
+ * real registered field (also `ceil(entrants / 5)`) agrees with the create's, and the
+ * draw is never re-materialized between create and cut. */
+const MAX_PLAYERS = 12
+/** `N` — twelve entrants, dealt four to a group. Enough to satisfy the cut's two
+ * entrant-dependent refusals (`K ≤ ⌊N/P⌋` = 4, and `P × K ≥ 2`) with room to spare, and
+ * enough that each group is a real round-robin rather than a single pairing. Equal to
+ * `MAX_PLAYERS`, so the field the create materializes groups against is the field that
+ * actually registers. */
+const ENTRANT_COUNT = 12
 
 /** The names the editor's reservation section mints, in the order it adds them — the
- * director's order, and therefore the `position` order the server stamps on both the
- * reservations and the groups it mints for them in lockstep. Written down here because
- * it is what the reservation-facing assertions below compare against; the *rendered*
- * group order below is a computed label, not these names. */
+ * director's order, and therefore the `position` order the server stamps on the
+ * reservations (the groups get their own `position`, derived from the player limit rather
+ * than from these rows — #1387). Written down here because it is what the
+ * reservation-facing assertions below compare against; the *rendered* group order below
+ * is a computed label, not these names. */
 const RESERVATION_NAMES = ['Reservation A', 'Reservation B', 'Reservation C']
+
+/** `ceil(MAX_PLAYERS / 5)` — the group count the server materializes for this event
+ * (#1387), spelled out as arithmetic rather than hardcoded so the "3" next to it is
+ * legible. It comes out equal to `RESERVATION_COUNT`: the server maps the group at
+ * position `p` onto reservation `p % RESERVATION_COUNT`, and with the two counts equal
+ * that map is the identity (0→0, 1→1, 2→2) — which is why the reservation-to-group
+ * assertions below still read as a plain 1:1, even though the rule behind them is not
+ * one any more. */
+const GROUP_COUNT = Math.ceil(MAX_PLAYERS / 5)
 
 /** What the draw renders, top to bottom: `Group A`, `Group B`, `Group C` — the computed
  * label of the group at position 0, 1, 2. A group carries no name of its own (ADR
  * 20260808), so these are derived, never typed by the director. */
-const GROUP_LABELS = Array.from({ length: RESERVATION_COUNT }, (_, i) => groupLabel(i))
+const GROUP_LABELS = Array.from({ length: GROUP_COUNT }, (_, i) => groupLabel(i))
 
 /** `B` — the bracket the cut must derive: the smallest power of two that holds the
  * `P × K` = 6 qualifiers. **Eight, not sixteen** — the bracket is sized from the
@@ -58,19 +84,20 @@ const BRACKET_ROUNDS = 3
  * fixture** (ADR-0786) — so round one holds two fixtures, not four. */
 const ROUND_ONE_FIXTURES = 2
 
-/** How many matches each stage is: three groups of three is `3 × C(3,2)` = **nine**, and
- * an eight-slot bracket holding six qualifiers is 2 + 2 + 1 = **five** (the two byes cost
- * no fixture). Asserted against what `playEvent` actually decided, so a stage that
- * quietly materialized fewer matches than it owes is a red here — the "N passed against
- * N collected" check, one layer down. */
-const GROUP_MATCHES = 9
+/** How many matches each stage is: three groups of four is `3 × C(4,2)` = **eighteen**,
+ * and an eight-slot bracket holding six qualifiers is 2 + 2 + 1 = **five** (the two byes
+ * cost no fixture — unchanged, since the bracket is sized from `P × K`, never from the
+ * field). Asserted against what `playEvent` actually decided, so a stage that quietly
+ * materialized fewer matches than it owes is a red here — the "N passed against N
+ * collected" check, one layer down. */
+const GROUP_MATCHES = 18
 const KNOCKOUT_MATCHES = 5
 
 /**
  * **Who the snake deals into each group**, by registration index (`_snake`, ADR-0786):
- * nine entrants across three groups is one pass out, one back, one out again, so the
- * group at position 0 (`Group A`) takes registrations 0, 5 and 6; position 1 (`Group B`)
- * 1, 4 and 7; position 2 (`Group C`) 2, 3 and 8.
+ * twelve entrants across three groups is one pass out, one back, one out, one back again
+ * — so the group at position 0 (`Group A`) takes registrations 0, 5, 6 and 11; position 1
+ * (`Group B`) 1, 4, 7 and 10; position 2 (`Group C`) 2, 3, 8 and 9.
  *
  * Written down rather than read back off the draw, because the qualifier set below is
  * *derived* from it: who advances is "the top `K` of each group", and that is only a
@@ -79,12 +106,12 @@ const KNOCKOUT_MATCHES = 5
  * subject at ten groups, and this is not a second copy of that proof.
  */
 const GROUP_MEMBERS: ReadonlyArray<ReadonlyArray<number>> = [
-  [0, 5, 6],
-  [1, 4, 7],
-  [2, 3, 8],
+  [0, 5, 6, 11],
+  [1, 4, 7, 10],
+  [2, 3, 8, 9],
 ]
 
-/** The six who **qualify**, by registration index, and the three who do not.
+/** The six who **qualify**, by registration index, and the six who do not.
  *
  * `playEvent`'s winner rule is "the earlier-registered entrant wins", so a group's
  * finishing order is its members in registration order and its qualifiers are the first
@@ -120,11 +147,11 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * group and reservation").
  *
  * A director creates a tournament, authors an `rr-then-ko` event **in the browser** with
- * a qualifiers-per-group count and three reservations, publishes, has nine players
- * entered, cuts the draw across three **server-minted** groups, takes the tournament
- * live, and the event is played out to a champion — the group stage seating its six
- * qualifiers into a bracket that was cut before anyone played, and the bracket crowning
- * one of them.
+ * a qualifiers-per-group count, a twelve-player limit and three reservations, publishes,
+ * has twelve players entered, cuts the draw across three **server-materialized** groups
+ * — `ceil(field / 5)` of them, #1387 — takes the tournament live, and the event is played
+ * out to a champion — the group stage seating its six qualifiers into a bracket that was
+ * cut before anyone played, and the bracket crowning one of them.
  *
  * ## Why this spec is the one that matters for this format
  *
@@ -156,18 +183,24 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * ## The groups are the SERVER's now, and the draw is dealt across them in ITS order
  *
  * A group used to be one client-minted string inside a JSONB column, doing double duty
- * as a venue booking too; #1369 split it into a director-writable **reservation** row
- * and a server-owned **group** row the server
- * mints for it in lockstep, each with a `gen_random_uuid()` primary key and an explicit
- * `position` (ADR 20260801, extended). Every claim this spec makes about the group stage
- * therefore has to be keyed on ids the *server* chose, and the order has to be the one
- * the director typed rather than any order those ids happen to sort in. Three readings
- * say so, at three different depths:
+ * as a venue booking too; #1369 split it into a director-writable **reservation** row and
+ * a server-owned **group** row. **#1387 changes what mints the group row**: it is no
+ * longer one group per reservation. The server materializes `ceil(field / 5)` group rows
+ * on every event write (`field` being the event's player limit, or 16 uncapped), and maps
+ * the group at position `p` onto reservation `p % RESERVATION_COUNT` — so a group and a
+ * reservation are still each a real row with its own `gen_random_uuid()` primary key and
+ * an explicit `position` (ADR 20260801, extended), but they are minted by two different
+ * rules, not one lockstep pair. This spec's `MAX_PLAYERS` happens to make the two counts
+ * agree (both 3), which is what lets the assertions below still read as a plain 1:1.
+ * Every claim this spec makes about the group stage has to be keyed on ids the *server*
+ * chose, and the order has to be the one the director typed rather than any order those
+ * ids happen to sort in. Three readings say so, at three different depths:
  *
  * * **stored** — the three reservations read back off the create response are uuids at
  *   positions 0, 1, 2, named `Reservation A`, `Reservation B`, `Reservation C` in the
- *   order the editor added them, and the three groups the server minted for them read
- *   back at the same positions, each mapped to its reservation's id;
+ *   order the editor added them, and the three groups the server derived from the player
+ *   limit read back at the same positions, each mapped onto its reservation by `position
+ *   % RESERVATION_COUNT`;
  * * **on the wire** — the detail's fixtures come back grouped by group in position
  *   order, so the group ids' first appearances read as those three ids, in that order;
  * * **on the page** — each group section is keyed by its uuid, the headings read
@@ -181,19 +214,21 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * the sides it is handed. Only here does a real group, decided by real matches through
  * the real completion hook, put a real name into a real bracket slot — so the spec plays
  * the group stage out and then asserts the bracket names **exactly** the six who
- * qualified and **none** of the three who did not, on a bracket that named nobody at all
+ * qualified and **none** of the six who did not, on a bracket that named nobody at all
  * an hour before. Then the knockout is played too, and the card crowns the champion the
  * bracket produced.
  *
  * ## Seed vs UI split
  *
  * Inert scaffolding over the API (`support/tournament-api.ts`, `support/tournament-play.ts`):
- * the tournament shell, its table catalogue, the nine entrants — director-entry, which has
- * no web UI, and nine browser sign-ins to test a *draw* would be nine chances to fail for
- * an unrelated reason — and the fourteen matches, which `tournament-lifecycle.spec.ts`
- * already drives through the score-entry UI once, deliberately. Load-bearing steps in the
- * browser: authoring the event and its draw configuration, publishing, cutting the draw,
- * going live, and every reading of the draw, the bracket and the champion.
+ * the tournament shell, its table catalogue, the twelve entrants — director-entry, which
+ * has no web UI, and twelve browser sign-ins to test a *draw* would be twelve chances to
+ * fail for an unrelated reason — and the twenty-three matches, which
+ * `tournament-lifecycle.spec.ts` already drives through the score-entry UI once,
+ * deliberately. Load-bearing steps in the browser: authoring the event and its draw
+ * configuration (including the player limit the group count is derived from), publishing,
+ * cutting the draw, going live, and every reading of the draw, the bracket and the
+ * champion.
  *
  * ## RBAC
  *
@@ -207,7 +242,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     page,
     baseURL,
   }) => {
-    // Nine minted guests, nine director-entries, a real draw cut and fourteen real
+    // Twelve minted guests, twelve director-entries, a real draw cut and twenty-three real
     // matches through the completion hook (each one advancing the draw and re-solving the
     // schedule on the stack's own worker), on top of the ordinary page work.
     test.setTimeout(600_000)
@@ -242,6 +277,9 @@ test.describe('Tournament — rr-then-ko draw', () => {
     // proof the picker's choice reached the form, before anything is submitted.
     await expect(editor.qualifiersInput).toBeVisible()
     await editor.setQualifiersPerGroup(QUALIFIERS_PER_GROUP)
+    // The field the server derives the group count from (#1387) — set on the Basics tab,
+    // BEFORE `addReservations` switches the sheet to the Reservations tab.
+    await editor.setPlayerLimit(MAX_PLAYERS)
     await editor.addReservations(RESERVATION_COUNT)
 
     // THE 422 GATE. The create body is the client's own, and its status is asserted
@@ -270,7 +308,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     const eventId = event.id
 
     // ----- …and three reservations the SERVER minted, in the order they were added, plus
-    //       the three groups it minted for them in lockstep -------------------
+    //       the three groups it DERIVED from the player limit (#1387) -----------
     // Positions 0, 1, 2 against the editor's own `Reservation A`, `Reservation B`,
     // `Reservation C`. The client sent neither an id nor a position
     // (`ReservationWrite` has a field for neither), so both columns here are the
@@ -283,6 +321,10 @@ test.describe('Tournament — rr-then-ko draw', () => {
     expect(reservations.map((reservation) => reservation.position)).toEqual([0, 1, 2])
     for (const reservation of reservations) expect(reservation.id).toMatch(UUID)
 
+    // `ceil(MAX_PLAYERS / 5)` = 3 group rows, at positions 0, 1, 2 — the same count as
+    // `RESERVATION_COUNT`, so `position % RESERVATION_COUNT` is the identity and this
+    // still reads as a plain 1:1 map onto the reservations above, even though the server
+    // no longer mints one because of the other.
     const groups = await getEventGroups(director, tournamentId, eventId)
     expect(groups.map((group) => group.position)).toEqual([0, 1, 2])
     expect(groups.map((group) => group.reservation_id)).toEqual(
@@ -302,8 +344,8 @@ test.describe('Tournament — rr-then-ko draw', () => {
       ENTRANT_COUNT,
     )
     // How many entries landed is asked of the SERVER, not counted off the roster: the
-    // card lists eight chips and collapses the rest into "+1 more", so a list-item count
-    // here would be nine for the wrong reason — the truncation, not the field.
+    // card lists eight chips and collapses the rest into "+4 more", so a list-item count
+    // here would be eight for the wrong reason — the truncation, not the field.
     const filled = await findEventByName(director, tournamentId, EVENT_NAME)
     expect(filled.entered).toBe(ENTRANT_COUNT)
 
@@ -323,7 +365,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     ).toBe(201)
 
     // ----- stage one: three groups, keyed and ordered by the server -----------
-    await expect(detail.groupDraws(eventId)).toHaveCount(RESERVATION_COUNT)
+    await expect(detail.groupDraws(eventId)).toHaveCount(GROUP_COUNT)
     // Top to bottom in position order. One statement pinning both the count and the
     // order — a draw whose sections came back in any other order reds here. (What that
     // order is *derived from* — `position`, and never the group ids — is
@@ -335,7 +377,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
       // the server's id and would find nothing if the page keyed its sections any other
       // way.
       await expect(detail.groupDraw(eventId, group.id)).toBeVisible()
-      // Nine entrants snake-dealt across three groups is three apiece — the group
+      // Twelve entrants snake-dealt across three groups is four apiece — the group
       // membership is derived from the group's own fixtures (ADR-0786), so this is also
       // the statement that each group really got a round-robin of its own, and that the
       // deal followed the same group order the headings above are in.
@@ -364,7 +406,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     // ----- stage two: the bracket, present already, and entirely unknown -----
     await expect(detail.bracket(eventId)).toBeVisible()
     // Sized from the qualifiers (6 → 8 slots → 3 rounds), never from the entrants
-    // (9 → 16 → 4 rounds). The absent fourth round is the load-bearing half.
+    // (12 → 16 → 4 rounds). The absent fourth round is the load-bearing half.
     await expect(detail.bracketRound(eventId, BRACKET_ROUNDS)).toBeVisible()
     await expect(detail.bracketRound(eventId, BRACKET_ROUNDS + 1)).toHaveCount(0)
     // Two byes, so round one is two fixtures — a bye is an absent fixture, not a row.
@@ -404,7 +446,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
       ).toContainText(entrants[index].username)
     }
     // The half that makes it an assertion about *seeding* rather than about names
-    // appearing: the three who did not qualify are still absent, so the bracket was
+    // appearing: the six who did not qualify are still absent, so the bracket was
     // filled from each group's top K and not from the group.
     for (const index of ELIMINATED) {
       await expect(
