@@ -1509,6 +1509,7 @@ export const handlers = [
       owner_username: null,
       guest_username: null,
       guest_matches_count: 0,
+      adopts_guest_username: false,
     }),
   ),
   // ----- matches ---------------------------------------------------------

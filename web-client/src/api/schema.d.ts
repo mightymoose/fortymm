@@ -104,10 +104,16 @@ export interface paths {
          *
          *     Invariant: ``user.email`` holds the prior confirmed address; the new
          *     address lives on ``token.sent_to`` until this endpoint runs. This is one of
-         *     two places either column flips — the other is
+         *     three places either column flips — the others are
          *     ``auth0_provisioning._provision_user``, which stamps ``email`` +
-         *     ``confirmed_at`` together on a first-seen verified Auth0 email — so both
-         *     writers preserve the same invariant (email set ⇒ account confirmed).
+         *     ``confirmed_at`` together on a first-seen verified Auth0 email, and
+         *     ``consume_login_token``, which stamps them on the pending user a
+         *     first-sign-in link was cut against — so all three writers preserve the same
+         *     invariant (email set ⇒ account confirmed).
+         *
+         *     Confirming also revokes the user's other session tokens, so the browser that
+         *     asked for the link no longer holds a session once someone else clicks it.
+         *     See ``_revoke_other_sessions``.
          *
          *     The token in the email is itself the bearer credential — we don't
          *     require the click to come from the same browser that requested it.
@@ -142,15 +148,23 @@ export interface paths {
          * Request Login Email
          * @description Mint a magic-link sign-in token and email it.
          *
-         *     Always returns the same 202 shape regardless of whether the address
-         *     belongs to a known account. Differential responses would let an
-         *     attacker enumerate the user base by cycling guest sessions for fresh
-         *     rate-limit budgets — the same enumeration vector the email-change flow
-         *     guards against. An address with no account still gets a (tokenless)
-         *     "no account yet" email, so a known and an unknown address are
-         *     indistinguishable from the outside — same status, same shape, and a
-         *     piece of mail either way — rather than the unknown case silently
-         *     delivering nothing.
+         *     **Both branches mint a user, send the same email, and return the same 202.**
+         *     An address that already has an account gets a link for that account. An
+         *     address with no account gets one for a user this endpoint mints on the spot,
+         *     whose ``email`` stays NULL until the link is clicked — so the sign-in link,
+         *     its ``Your FortyMM sign-in link`` subject and its 15-minute
+         *     ``LOGIN_TOKEN_LIFETIME`` are identical either way. That is the guard: nothing
+         *     the caller can observe — the status, the response shape, the subject, the
+         *     link lifetime, or the login screen's countdown — reveals whether the address
+         *     had an account. Differential responses would let an attacker enumerate the
+         *     user base by cycling guest sessions for fresh rate-limit budgets, the same
+         *     enumeration vector the email-change flow guards against.
+         *
+         *     A minted user is a full member: it joins the default league and holds the
+         *     default user role, exactly as a guest minted by ``GET /v1/session`` does
+         *     (ADR-0016). A repeat request for the same unclaimed address — a resend
+         *     included — reuses that pending user and replaces its token, so one live link
+         *     exists per address at a time.
          *
          *     Records the requesting browser's guest on the token so the merge it drives
          *     is token-bound (follows the guest cross-device), mirroring the settings
@@ -180,6 +194,13 @@ export interface paths {
          *     any browser — the inbox proves ownership of the email. The endpoint
          *     rotates the caller's session cookie to the token's owner regardless of
          *     which guest session (if any) the browser arrived with.
+         *
+         *     On a *first sign-in* token (``login:first...``) the owner is a user
+         *     ``request_login_email`` minted for an address that had no account, so its
+         *     ``email`` is still NULL. This endpoint stamps ``email`` + ``confirmed_at``
+         *     on it, which makes it the third writer of that pair alongside
+         *     ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
+         *     stamp them together, so the invariant holds: email set implies confirmed.
          */
         post: operations["consume_login_token_v1_login_consume_post"];
         delete?: never;
@@ -3184,6 +3205,13 @@ export interface components {
          *     account (a settings merge token, or a sign-in token that recorded a
          *     requesting guest). The client shows the gate only when there are matches to
          *     carry (``guest_matches_count > 0``); otherwise it finalizes silently.
+         *
+         *     ``adopts_guest_username`` is true only when the link is a *first* sign-in,
+         *     where the account being signed into was minted moments ago and its
+         *     ``owner_username`` is a throwaway generated slug. Accepting the merge moves
+         *     ``guest_username`` onto it; declining leaves the generated one. On every
+         *     other merge the username does not move, so the gate must not promise it
+         *     will.
          */
         MergePreview: {
             /** Is Merge */
@@ -3197,6 +3225,11 @@ export interface components {
              * @default 0
              */
             guest_matches_count: number;
+            /**
+             * Adopts Guest Username
+             * @default false
+             */
+            adopts_guest_username: boolean;
         };
         /** MergePreviewRequest */
         MergePreviewRequest: {
