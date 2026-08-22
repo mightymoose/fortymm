@@ -31,7 +31,8 @@ error, just stale output.
 | **Xcode incremental build** | Reports `BUILD SUCCEEDED` while serving a stale dylib | `rm -rf ios/build/sim` before the build that counts, or check the dylib mtime |
 | **MSW** | Left on, it intercepts the `page.route` stubs an e2e run depends on, false-redding unrelated specs | A hand-started vite reused by Playwright must set `VITE_ENABLE_MSW=false` |
 | **Playwright reporter** | "N passed" can under-report — a whole project (e.g. mobile) never ran | Check "N passed" against `--list`'s collected total |
-| **Worktree tooling** | An untrusted `mise.toml` makes `npx` exit 127; the step "passes" having run nothing | Call `node_modules/.bin/<tool>` directly and **check the exit code** |
+| **Worktree tooling** | An untrusted `mise.toml` makes `npx` exit 127; the step "passes" having run nothing | Run `mise exec -- node_modules/.bin/<tool>` and **check the exit code**. The bare path is not enough — `node` itself is off `PATH`, so it exits 127 too. `mise trust` once per worktree |
+| **A pipe** | zsh reports the **last** element's status, so `npm install … \| tail` prints `command not found` and still exits 0 | Never pipe a command whose exit code matters. Capture to a file and read it, or check `${PIPESTATUS[0]}` |
 
 ## Corollaries
 

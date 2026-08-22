@@ -1,6 +1,5 @@
 import userEvent from '@testing-library/user-event'
 
-import { buildPool } from '../../data/seed.factory'
 import { buildDrawStructureEvent } from './draw-structure-section.factory'
 import { drawStructureSectionPage } from './draw-structure-section.page'
 
@@ -12,48 +11,47 @@ describe('DrawStructureSection', () => {
       'Set what matters. We’ll work out the rest.',
     )
     expect(drawStructureSectionPage.getSection()).toHaveTextContent(
-      'Pools play all-play-all. The top finishers move into a knockout bracket.',
+      'Groups play all-play-all. The top finishers move into a knockout bracket.',
     )
   })
 
   // The order is the reference's, and it is the order a director reads the draw in:
-  // how many pools, how big, who is in them, how many come out.
+  // how many groups, how big, who is in them, how many come out.
   it('lists the four settings in order', () => {
     drawStructureSectionPage.render()
 
     expect(drawStructureSectionPage.getSettingNames()).toEqual([
-      'Pool count',
-      'Pool size',
+      'Group count',
+      'Group size',
       'Membership',
-      'Qualifiers per pool',
+      'Qualifiers per group',
     ])
   })
 
   /**
-   * The reference's "Nothing set" state: 32 players over 4 pool reservations. Every
-   * value AND every source sentence, because the sentence is what makes the number
-   * checkable — `8` alone cannot tell a director whether the app divided their field or
-   * invented a target.
+   * The default state: a 20-player cap, nothing set. Every value AND every source
+   * sentence, because the sentence is what makes the number checkable — `5` alone
+   * cannot tell a director whether the app divided their field or invented a target.
    */
-  describe('the reference’s "Nothing set" state — 32 players, 4 reservations', () => {
-    it('derives 4 pools, and says the reservations are where that came from', () => {
+  describe('the default state — a 20-player cap, nothing set', () => {
+    it('derives 4 groups, and says the default divisor is where that came from', () => {
       drawStructureSectionPage.render()
 
-      const row = drawStructureSectionPage.setting('Pool count')
+      const row = drawStructureSectionPage.setting('Group count')
       expect(row.getValue()).toHaveTextContent('4')
-      expect(row.queryUnit()).toHaveTextContent('pools')
+      expect(row.queryUnit()).toHaveTextContent('groups')
       expect(row.getSource()).toHaveTextContent(
-        "4 pool reservations · today's behaviour",
+        '20 players ÷ about 5 per group',
       )
     })
 
-    it('derives 8 per pool, and shows the division it did', () => {
+    it('derives 5 per group, and shows the division it did', () => {
       drawStructureSectionPage.render()
 
-      const row = drawStructureSectionPage.setting('Pool size')
-      expect(row.getValue()).toHaveTextContent('8')
-      expect(row.queryUnit()).toHaveTextContent('players per pool')
-      expect(row.getSource()).toHaveTextContent('32 players ÷ 4 pools')
+      const row = drawStructureSectionPage.setting('Group size')
+      expect(row.getValue()).toHaveTextContent('5')
+      expect(row.queryUnit()).toHaveTextContent('players per group')
+      expect(row.getSource()).toHaveTextContent('20 players ÷ 4 groups')
     })
 
     it('deals membership by snake, and says how the seeds spread', () => {
@@ -66,14 +64,14 @@ describe('DrawStructureSection', () => {
       expect(row.queryUnit()).toBeNull()
     })
 
-    it('takes 2 through from each pool, aiming at the 8-player knockout', () => {
+    it('takes 2 through from each group, aiming at the 8-player knockout', () => {
       drawStructureSectionPage.render()
 
-      const row = drawStructureSectionPage.setting('Qualifiers per pool')
+      const row = drawStructureSectionPage.setting('Qualifiers per group')
       expect(row.getValue()).toHaveTextContent('2')
-      expect(row.queryUnit()).toHaveTextContent('through from each pool')
+      expect(row.queryUnit()).toHaveTextContent('through from each group')
       expect(row.getSource()).toHaveTextContent(
-        'Aiming at an 8-player knockout across 4 pools.',
+        'Aiming at an 8-player knockout across 4 groups.',
       )
     })
 
@@ -82,10 +80,10 @@ describe('DrawStructureSection', () => {
       drawStructureSectionPage.render()
 
       for (const name of [
-        'Pool count',
-        'Pool size',
+        'Group count',
+        'Group size',
         'Membership',
-        'Qualifiers per pool',
+        'Qualifiers per group',
       ]) {
         expect(
           drawStructureSectionPage.setting(name).getOwnershipBadge(),
@@ -98,29 +96,23 @@ describe('DrawStructureSection', () => {
   // field does not divide, and the row has to say so rather than round.
   it('reads an uneven split as a range, and says "uneven" in the unit', () => {
     drawStructureSectionPage.render({
-      event: buildDrawStructureEvent({
-        pools: [
-          buildPool({ id: 'p-a', name: 'Pool A', position: 0 }),
-          buildPool({ id: 'p-b', name: 'Pool B', position: 1 }),
-          buildPool({ id: 'p-c', name: 'Pool C', position: 2 }),
-        ],
-      }),
+      event: buildDrawStructureEvent({ maxPlayers: 22 }),
     })
 
-    // 32 across 3 is 11, 11, 10.
-    const row = drawStructureSectionPage.setting('Pool size')
-    expect(row.getValue()).toHaveTextContent('10–11')
+    // 22 under the default divisor is five groups of 5, 5, 4, 4, 4.
+    const row = drawStructureSectionPage.setting('Group size')
+    expect(row.getValue()).toHaveTextContent('4–5')
     expect(row.queryUnit()).toHaveTextContent('players · uneven')
   })
 
-  it('says "pool", singular, when the field runs in one', () => {
+  it('says "group", singular, when the field runs in one', () => {
     drawStructureSectionPage.render({
-      event: buildDrawStructureEvent({ pools: [buildPool()] }),
+      event: buildDrawStructureEvent({ maxPlayers: 4 }),
     })
 
-    const row = drawStructureSectionPage.setting('Pool count')
+    const row = drawStructureSectionPage.setting('Group count')
     expect(row.getValue()).toHaveTextContent('1')
-    expect(row.queryUnit()).toHaveTextContent('pool')
+    expect(row.queryUnit()).toHaveTextContent('group')
   })
 
   describe('the field the preview derives against', () => {
@@ -128,10 +120,10 @@ describe('DrawStructureSection', () => {
       drawStructureSectionPage.render()
 
       expect(drawStructureSectionPage.getPreviewFieldSize()).toHaveTextContent(
-        '32',
+        '20',
       )
       expect(drawStructureSectionPage.getPreviewBasis()).toHaveTextContent(
-        '32-player cap',
+        '20-player cap',
       )
     })
 
@@ -154,10 +146,10 @@ describe('DrawStructureSection', () => {
       expect(drawStructureSectionPage.getPreviewBasis()).not.toHaveTextContent(
         '16-player cap',
       )
-      // …and the whole tab is derived against it: 16 over 4 pools is 4 apiece.
+      // …and the whole tab is derived against it: 16 over 4 groups is 4 apiece.
       expect(
-        drawStructureSectionPage.setting('Pool size').getSource(),
-      ).toHaveTextContent('16 players ÷ 4 pools')
+        drawStructureSectionPage.setting('Group size').getSource(),
+      ).toHaveTextContent('16 players ÷ 4 groups')
     })
 
     it('sends the director to Basics to change it', async () => {
@@ -188,10 +180,10 @@ describe('DrawStructureSection', () => {
       drawStructureSectionPage.render()
 
       expect(drawStructureSectionPage.preview.getEquation()).toHaveTextContent(
-        '32 players ÷ 4 pools = 8 per pool',
+        '20 players ÷ 4 groups = 5 per group',
       )
       expect(
-        drawStructureSectionPage.preview.getFact('Pool reservations'),
+        drawStructureSectionPage.preview.getFact('Reservations'),
       ).toHaveTextContent('4')
     })
 
@@ -226,13 +218,13 @@ describe('DrawStructureSection', () => {
    * `draw-issue-panel.test.tsx`; what the tab owns is which notice appears, and where.
    */
   describe('the one notice', () => {
-    it('says nothing about a draw that divides — 32 across 4', () => {
+    it('says nothing about a draw that divides — 20 across 4', () => {
       drawStructureSectionPage.render()
 
       expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
     })
 
-    // The reference's "Uneven field" state: 22 across 4 is 6, 6, 5, 5.
+    // A 22-player cap under the default divisor is five groups of 5, 5, 4, 4, 4.
     it('reads out an uneven split, under the settings that produced it', () => {
       drawStructureSectionPage.render({
         event: buildDrawStructureEvent({ maxPlayers: 22 }),
@@ -240,7 +232,7 @@ describe('DrawStructureSection', () => {
 
       const panel = drawStructureSectionPage.issuePanel.getPanel()
       expect(drawStructureSectionPage.issuePanel.getTitle()).toHaveTextContent(
-        '2 pools of 6 · 2 pools of 5',
+        '2 groups of 5 · 3 groups of 4',
       )
       // The left column, beside the preview and not inside it.
       expect(drawStructureSectionPage.getPreviewSlot()).not.toContainElement(
@@ -249,26 +241,22 @@ describe('DrawStructureSection', () => {
     })
 
     /**
-     * ⚠️ The case the precedence exists for, and the reference's "Field too small" state:
-     * 8 players over 6 pool reservations splits `2, 2, 1, 1, 1, 1`. That is an uneven
-     * tally AND four pools nobody can play in, both reported at once — and
-     * `Legal, but uneven` is not the thing to say about a pool of one.
+     * ⚠️ The case the precedence exists for. A 7-player cap derives two groups of
+     * `4, 3`, and the automatic qualifier count — `ceil(8 / 2)` is four — takes more
+     * than the smaller group holds. That is an uneven tally AND an impossible
+     * competition, both reported at once — and `Legal, but uneven` is not the thing to
+     * say about a draw nobody can play.
      *
-     * The Pool size row proves the tally really is there. Without it this test would
+     * The Group size row proves the tally really is there. Without it this test would
      * also pass on a draw that is not uneven at all, and prove nothing about the order.
      */
-    it('drops the uneven notice when a pool cannot be played — 8 across 6', () => {
+    it('drops the uneven notice when the draw cannot be played — a 7-player cap', () => {
       drawStructureSectionPage.render({
-        event: buildDrawStructureEvent({
-          maxPlayers: 8,
-          pools: Array.from({ length: 6 }, (_, i) =>
-            buildPool({ id: `p-${i}`, name: `Pool ${i}`, position: i }),
-          ),
-        }),
+        event: buildDrawStructureEvent({ maxPlayers: 7 }),
       })
 
-      const row = drawStructureSectionPage.setting('Pool size')
-      expect(row.getValue()).toHaveTextContent('1–2')
+      const row = drawStructureSectionPage.setting('Group size')
+      expect(row.getValue()).toHaveTextContent('3–4')
       expect(row.queryUnit()).toHaveTextContent('players · uneven')
 
       expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()

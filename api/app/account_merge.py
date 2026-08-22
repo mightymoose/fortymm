@@ -41,6 +41,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     User,
     UserLeagueRating,
@@ -598,12 +599,12 @@ async def _resolve_entry_collisions(
     entries with ``ON DELETE CASCADE``, so step 2 alone would silently take any
     fixtures seating the guest's entry with it, punching holes in a cut draw. The
     tempting repair — re-point those fixtures onto the *surviving* entry — is
-    wrong, and dangerously so: it seats one human in two slots of the same pool
+    wrong, and dangerously so: it seats one human in two slots of the same group
     (everyone else plays them twice; drawn against themselves, the fixture is
     self-play), and because the go-live currency check compares entrant **sets**,
     the corrupted draw would satisfy that check and go live. So the draw is
     regenerated, never patched: it was cut from a field that double-counted a
-    human, so its pool sizes and snake seeding were computed against N+1 entrants
+    human, so its group sizes and snake seeding were computed against N+1 entrants
     and it is wrong throughout. The un-cut is scoped to the colliding events —
     another event of the same tournament keeps the draw it legitimately holds.
 
@@ -804,12 +805,18 @@ async def _resolve_entry_collisions(
     # whose draw was just destroyed from one that never had a draw. Only a
     # destroyed draw owes a solve (uncut_event_draw's ``had_draw`` read, in
     # bulk): a collided event with no cut has no scheduling inputs to change.
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage.
     drawn_unplayed_event_ids = set(
         (
             await db.execute(
-                select(TournamentFixture.event_id)
+                select(TournamentEventStage.event_id)
                 .distinct()
-                .where(TournamentFixture.event_id.in_(unplayed_event_ids))
+                .join(
+                    TournamentFixture,
+                    TournamentFixture.stage_id == TournamentEventStage.id,
+                )
+                .where(TournamentEventStage.event_id.in_(unplayed_event_ids))
             )
         )
         .scalars()

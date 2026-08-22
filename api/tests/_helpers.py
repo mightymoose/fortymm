@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient, Request
 from rq import Queue
-from sqlalchemy import event, select, text
+from sqlalchemy import Select, event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import schedule_solves, scheduling
@@ -29,9 +29,13 @@ from app.models import (
     Role,
     RolePermission,
     Tournament,
+    TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
-    TournamentEventPoolTable,
+    TournamentEventGroupReservation,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
+    TournamentEventStage,
+    TournamentEventStageGroup,
     User,
     UserLeagueRating,
     UserRole,
@@ -136,7 +140,7 @@ def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
     straight through the ORM, positioned in the order given.
 
     The ids are minted **here**, up front, rather than left to the column's
-    ``gen_random_uuid()`` default, for one reason: a pool's ``table_ids`` and a
+    ``gen_random_uuid()`` default, for one reason: a reservation's ``table_ids`` and a
     fixture's ``table_id`` name a table by id, so a test that seeds a placement needs
     the id before the row is flushed. Fresh ``uuid4``s per call, never module
     constants — the id is a primary key, so two tournaments in one test cannot share
@@ -155,7 +159,7 @@ def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:
 def event_draw_settings(
     draw_type: DrawType,
     *,
-    qualifiers_per_pool: int | None = None,
+    qualifiers_per_group: int | None = None,
     rounds: int | None = None,
 ) -> TournamentEventDrawSettings:
     """The draw-settings row for an event a test seeds straight through the ORM, built
@@ -173,51 +177,71 @@ def event_draw_settings(
     Both ``None`` is "this draw type takes no configuration", and it stores ``{}``.
     """
     settings: dict[str, int] = {}
-    if qualifiers_per_pool is not None:
-        settings["qualifiers_per_pool"] = qualifiers_per_pool
+    if qualifiers_per_group is not None:
+        settings["qualifiers_per_group"] = qualifiers_per_group
     if rounds is not None:
         settings["rounds"] = rounds
     return draw_settings_row(draw_settings_from_storage(draw_type, settings))
 
 
-def event_pools(
-    pools: Sequence[Mapping[str, Any]], *, tournament: Tournament | None = None
-) -> list[TournamentEventPool]:
-    """``TournamentEventPool`` rows for an event a test seeds straight through the ORM,
-    written from the ``{id, name, slot, table_ids}`` dict shape the pools JSONB used to
-    hold and positioned in the order given.
+def event_groups(
+    groups: Sequence[Mapping[str, Any]],
+    *,
+    event: TournamentEvent,
+    tournament: Tournament | None = None,
+) -> list[TournamentEventStageGroup]:
+    """The GROUP rows — each already mapped to its own reservation — for an event a test
+    seeds straight through the ORM, written from the ``{id, name, slot, table_ids}``
+    dict shape the wire's ``reservations`` list holds and positioned in the order given.
 
-    Pools are rows now (ADR 20260801), so ``TournamentEvent(pools=[{...}])`` is a
-    ``TypeError`` waiting to happen; this is the one translation from the shape the
-    tests already say a pool in, so a seed reads as the pool it is about rather than as
-    five keyword arguments. The ``slot``'s ``YYYY-MM-DD`` / ``HH:MM`` strings are
-    parsed into the row's ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly
-    as the write boundary parses them, so a seeded pool and a POSTed one are the same
-    row.
+    A group is two rows: a
+    :class:`~app.models.tournament_event_stage_group.TournamentEventStageGroup`
+    (identity and order, parented on a stage) and a
+    :class:`~app.models.tournament_event_reservation.TournamentEventReservation` (the
+    name, the window and the tables, parented on the event), joined by a
+    :class:`~app.models.tournament_event_group_reservation.TournamentEventGroupReservation`.
+    This helper builds all three from one dict, exactly as
+    ``app.tournament_reservations.stored_groups`` does from one payload entry, so a
+    seeded group and a POSTed one are the same rows — and so a seed cannot accidentally
+    create the group-without-reservation state no application path produces.
 
-    The ``id`` is a ``uuid.UUID`` and is **optional**: pass one when the test needs to
-    name the pool from somewhere else (a fixture's ``pool_id``, an assertion), and leave
-    it out when it does not care. A minted ``uuid4`` per call, never a module constant —
-    the id is a primary key, so two events in one test cannot share one. Minted *here*,
-    up front, rather than left to the column's ``gen_random_uuid()`` default, for the
-    reason :func:`venue_tables` mints table ids: a seed that names the pool needs the id
+    It returns the **groups**, with the reservations riding along inside them, so the
+    caller assigns one collection and gets the whole graph:
+    ``stages[0].groups = event_groups(..., event=event)``, mirroring
+    ``app.tournament_events.create_event``. Each reservation's ``event`` relationship is
+    set to ``event``, which populates its ``event_id`` at flush even when ``event`` has
+    no id yet.
+
+    The ``slot``'s ``YYYY-MM-DD`` / ``HH:MM`` strings are parsed into the reservation's
+    ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly as the write boundary
+    parses them.
+
+    The ``id`` is a ``uuid.UUID`` and is **optional**, and it is the **group's** — the
+    id a fixture's ``group_id`` holds. Pass one when the test needs to name the group
+    from somewhere else (a fixture's ``group_id``, an assertion), and leave it out when
+    it does not care. A minted ``uuid4`` per call, never a module constant — the id is a
+    primary key, so two events in one test cannot share one. Minted *here*, up front,
+    rather than left to the column's ``gen_random_uuid()`` default, for the reason
+    :func:`venue_tables` mints table ids: a seed that names the group needs the id
     before the row is flushed. Through the API the ids are the *server's* and there is
     no ``id`` on the create shape at all (ADR 20260801); this is the direct-to-database
     seam, which no HTTP caller can reach.
 
-    A pool's ``table_ids`` become ``TournamentEventPoolTable`` **rows** (ADR 20260801),
-    so naming any table needs the ``tournament`` — twice over. It supplies the alias
-    map, rewriting the positional aliases a test writes (``"t1"``, ``"t2"``, …) into the
-    real ids of that tournament's catalogue rows (1-based, in catalogue order), because
-    a table id is a server-minted UUID a seed cannot spell as a literal. And it supplies
-    the ``tournament_id`` every reservation row carries — the denormalized column the
-    composite foreign keys compare, without which the row is not one Postgres accepts.
-    It must already be flushed, since that id is the database's to mint.
+    A reservation's ``table_ids`` become
+    :class:`~app.models.tournament_event_reservation_table.TournamentEventReservationTable`
+    **rows** (ADR 20260801), so naming any table needs the ``tournament`` — twice over.
+    It supplies the alias map, rewriting the positional aliases a test writes (``"t1"``,
+    ``"t2"``, …) into the real ids of that tournament's catalogue rows (1-based, in
+    catalogue order), because a table id is a server-minted UUID a seed cannot spell as
+    a literal. And it supplies the ``tournament_id`` every row carries — the
+    denormalized column the composite foreign keys compare, without which the row is not
+    one Postgres accepts. It must already be flushed, since that id is the database's to
+    mint.
 
     Naming a table with no ``tournament`` is a ``ValueError`` rather than a silently
-    empty reservation list: a seed that means "this pool runs on two tables" and gets a
-    pool running on none would go on passing while testing something else. (A pool with
-    no ``table_ids`` at all needs no tournament, which is most of the suite.)
+    empty table list: a seed that means "this reservation books two tables" and gets one
+    running on none would go on passing while testing something else. (A reservation
+    with no ``table_ids`` at all needs no tournament, which is most of the suite.)
     """
     by_alias = (
         {
@@ -227,67 +251,138 @@ def event_pools(
         if tournament is not None
         else {}
     )
-    rows: list[TournamentEventPool] = []
-    for position, pool in enumerate(pools):
-        slot = pool.get("slot") or {}
-        table_ids = [str(table_id) for table_id in pool.get("table_ids", [])]
-        name = pool.get("name", f"Pool {position + 1}")
+    built: list[TournamentEventStageGroup] = []
+    for position, group in enumerate(groups):
+        slot = group.get("slot") or {}
+        table_ids = [str(table_id) for table_id in group.get("table_ids", [])]
+        name = group.get("name", f"Group {position + 1}")
         if table_ids and tournament is None:
             raise ValueError(
-                f"pool {name!r} reserves {table_ids} but no tournament was "
+                f"reservation {name!r} reserves {table_ids} but no tournament was "
                 "given: a reservation is a row carrying the tournament's id, so the "
                 "seed has to say which tournament's tables these are — pass "
-                "tournament=… (or with_table_aliases(tournament, pools))"
+                "tournament=… (or with_table_aliases(tournament, groups))"
             )
-        rows.append(
-            TournamentEventPool(
-                id=pool.get("id") or uuid.uuid4(),
-                name=name,
-                position=pool.get("position", position),
-                slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
-                slot_start=time.fromisoformat(slot.get("start", "09:00")),
-                slot_end=time.fromisoformat(slot.get("end", "18:00")),
-                tables=_reservations(tournament, table_ids, by_alias),
+        reservation = TournamentEventReservation(
+            name=name,
+            position=group.get("position", position),
+            slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
+            slot_start=time.fromisoformat(slot.get("start", "09:00")),
+            slot_end=time.fromisoformat(slot.get("end", "18:00")),
+            event=event,
+            tables=_reservation_tables(event, tournament, table_ids, by_alias),
+        )
+        built.append(
+            TournamentEventStageGroup(
+                id=group.get("id") or uuid.uuid4(),
+                position=group.get("position", position),
+                reservation_link=TournamentEventGroupReservation(
+                    reservation=reservation
+                ),
             )
         )
-    return rows
+    return built
 
 
-def _reservations(
-    tournament: Tournament | None, table_ids: Sequence[str], by_alias: Mapping[str, str]
-) -> list[TournamentEventPoolTable]:
-    """The reservation rows one seeded pool's ``table_ids`` become, aliases resolved and
+def _reservation_tables(
+    event: TournamentEvent,
+    tournament: Tournament | None,
+    table_ids: Sequence[str],
+    by_alias: Mapping[str, str],
+) -> list[TournamentEventReservationTable]:
+    """The rows one seeded reservation's ``table_ids`` become, aliases resolved and
     positioned in the order given.
 
-    Unlike the write path (``app.tournament_pools._reservations``), an id that no
-    catalogue row holds is **not** dropped — it is passed through to the database, which
-    refuses it. This is the direct-to-database seam, and a seed that names a table this
-    tournament does not have is a mistake in the seed; swallowing it here would hide the
-    very foreign keys these rows exist to have.
+    Unlike the write path (``app.tournament_reservations._reservation_tables``), an id
+    that no catalogue row holds is **not** dropped — it is passed through to the
+    database, which refuses it. This is the direct-to-database seam, and a seed that
+    names a table this tournament does not have is a mistake in the seed; swallowing it
+    here would hide the very foreign keys these rows exist to have.
     """
     if tournament is None:
         return []
     return [
-        TournamentEventPoolTable(
+        TournamentEventReservationTable(
             tournament_id=tournament.id,
             table_id=by_alias.get(table_id, table_id),
             position=position,
+            event=event,
         )
         for position, table_id in enumerate(table_ids)
     ]
 
 
 def with_table_aliases(
-    tournament: Tournament, pools: Sequence[Mapping[str, Any]]
-) -> list[TournamentEventPool]:
-    """:func:`event_pools` with the tournament bound — the spelling the seeds that name
-    tables already use.
+    event: TournamentEvent,
+    tournament: Tournament,
+    groups: Sequence[Mapping[str, Any]],
+) -> list[TournamentEventStageGroup]:
+    """:func:`event_groups` with the event and tournament bound — the spelling the seeds
+    that name tables already use.
 
-    Kept as its own name because it is what the call sites are *about*: "these pools
-    reserve this tournament's first two tables", said without threading a UUID through
-    every helper the pools are passed to.
+    Kept as its own name because it is what the call sites are *about*: "these
+    reservations book this tournament's first two tables", said without threading a
+    UUID through every helper the groups are passed to.
     """
-    return event_pools(pools, tournament=tournament)
+    return event_groups(groups, event=event, tournament=tournament)
+
+
+def joined_to_reservation(stmt: Select[Any]) -> Select[Any]:
+    """``stmt``, joined from :class:`TournamentEventStageGroup` through to its
+    :class:`TournamentEventReservation` — the one place the group→reservation walk is
+    spelled in the suite.
+
+    A group and its reservation are two rows joined by a third, so any assertion about
+    a reservation's NAME or WINDOW keyed by the id a fixture holds has to walk that
+    path. Seven call sites across four test files had written it out by hand, each
+    restating ON clauses the relationships already carry.
+
+    Joined through the **relationships** rather than by explicit ``onclause``, so the
+    foreign-key topology lives in the models and nowhere else: renaming a column breaks
+    one place instead of silently changing what seven joins mean.
+
+    It is one function rather than seven for a reason that is not tidiness. These are
+    INNER joins, and they are correct only while every group has a reservation. The
+    moment a group may exist without one, every one of them silently drops rows instead
+    of failing — and the fix is ``.outerjoin`` in exactly one place if this helper is
+    used, or a hunt through four files if it is not.
+
+    Usage::
+
+        rows = await db.execute(
+            joined_to_reservation(
+                select(TournamentEventStageGroup.id, TournamentEventReservation.name)
+            ).where(TournamentEventStageGroup.stage_id == stage_id)
+        )
+    """
+    return stmt.join(TournamentEventStageGroup.reservation_link).join(
+        TournamentEventGroupReservation.reservation
+    )
+
+
+async def stage_id_at(
+    db_session: AsyncSession, event_id: uuid.UUID, position: int
+) -> uuid.UUID:
+    """The id of ``event_id``'s stage at ``position`` — the awaited, single-stage
+    counterpart of ``app.tournament_queries.stage_ids_for_events`` (which returns an
+    unawaited ``.in_(...)``-embeddable subquery over *every* stage of one or more
+    events, not one stage by position).
+
+    Position 0 is the one a director's groups hang off (ADR 20260815 decision 3);
+    position 1 is the knockout half of an rr-then-ko template. ``scalar_one()``, not
+    ``scalar_one_or_none()``: every event holds its minted stages from the moment it
+    exists, so a miss here is a test-fixture bug (an event seeded straight through the
+    ORM, bypassing ``create_event``/``mint_stages``), not a state worth tolerating
+    silently.
+    """
+    return (
+        await db_session.execute(
+            select(TournamentEventStage.id).where(
+                TournamentEventStage.event_id == event_id,
+                TournamentEventStage.position == position,
+            )
+        )
+    ).scalar_one()
 
 
 async def table_ids_of(db_session: AsyncSession, tournament_id: uuid.UUID) -> list[str]:
@@ -297,7 +392,7 @@ async def table_ids_of(db_session: AsyncSession, tournament_id: uuid.UUID) -> li
     after the commits and ``expire_all``s these suites do between acting and
     asserting. Tests unpack it (``table_1, table_2 = await table_ids_of(...)``) where
     they used to write the literal ``"t1"``: the id is a server-minted UUID now
-    (ADR 20260801), so a placement or a pool has to be told which one it means.
+    (ADR 20260801), so a placement or a reservation has to be told which one it means.
     """
     return [
         str(table_id)

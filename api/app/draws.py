@@ -2,7 +2,7 @@
 
 A **draw** is the complete set of **fixtures** an event's draw type prescribes for
 its entrants; a **fixture** is one planned pairing (a round and a position, plus a
-**pool** when the draw is pooled), whose sides may still be unknown. This module
+**group** when the draw is grouped), whose sides may still be unknown. This module
 knows how to *plan* those fixtures. It does not persist them: it holds no session,
 issues no query, imports no FastAPI and no SQLAlchemy construct. Its inputs and
 outputs are small frozen value objects, so a strategy is testable with a literal
@@ -36,7 +36,7 @@ Two things the schema deliberately does not store, and this module therefore own
   recomputes what it needs from the rows.
 - **Byes.** A bye is the *absence of a fixture row*, never a row with a ``NULL``
   side. ``NULL`` means exactly one thing — "TBD, ``advance()`` will fill it" — so an
-  odd round-robin pool simply has fewer fixtures in some rounds.
+  odd round-robin group simply has fewer fixtures in some rounds.
 """
 
 from __future__ import annotations
@@ -49,13 +49,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import NewType, Protocol
 
-from app.models.tournament import DrawType, EventFormat
-from app.pool_finishing_order import (
+from app.group_finishing_order import (
     EntryTally,
     MatchOutcome,
     finishing_order,
     swiss_finishing_order,
 )
+from app.models.tournament import DrawType, EventFormat
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
     RoundRobinDrawSettingsWrite,
@@ -69,12 +69,43 @@ from app.schemas.tournament import (
 EntryId = NewType("EntryId", uuid.UUID)
 FixtureId = NewType("FixtureId", uuid.UUID)
 MatchId = NewType("MatchId", uuid.UUID)
-#: A pool is a row (``tournament_event_pools``, ADR 20260801) with a server-minted uuid
-#: primary key, and a fixture's ``pool_id`` is a real composite foreign key onto it — so
-#: this is a ``uuid.UUID``, exactly like the ids above. It was a ``str``, a dangling ref
-#: into ``TournamentEvent.pools`` JSONB, for as long as there was no pools table to
-#: point at and no server to mint one.
-PoolId = NewType("PoolId", uuid.UUID)
+#: A group is a row (``tournament_event_stage_groups``, ADR 20260801) with a
+#: server-minted uuid primary key, and a fixture's ``group_id`` is a real composite
+#: foreign key onto it — so this is a ``uuid.UUID``, exactly like the ids above. It was
+#: a ``str``, a dangling ref into ``TournamentEvent.groups`` JSONB, for as long as
+#: there was no groups table to point at and no server to mint one.
+GroupId = NewType("GroupId", uuid.UUID)
+
+
+def group_letter(position: int) -> str:
+    """``Group A``, ``Group B``, … and past ``Group Z`` the spreadsheet's ``AA`` — a
+    bijective base-26 label, so a hundred-group field names its groups instead of
+    printing punctuation.
+
+    Ported from ``web-client/src/components/tournaments/data/draw-structure.ts``'s
+    ``groupLetter`` (ADR 20260808, "draw-structure derivation runs on both sides and
+    shares its vectors"). The carry is ``n // 26 - 1``, not the naive ``n // 26``: the
+    naive form agrees with this one for positions 0 to 25 and disagrees at 26 and every
+    position after, because a bijective base-26 digit has no zero — position 26 is
+    ``AA``, not ``BA``. ``position`` is 0-based.
+    """
+    letters = ""
+    n = position
+    while n >= 0:
+        letters = chr(65 + (n % 26)) + letters
+        n = n // 26 - 1
+    return letters
+
+
+def group_label(position: int) -> str:
+    """``Group A``, ``Group B``, … — the director-facing label a group renders as
+    everywhere the app used to print a stored reservation name (ADR 20260808).
+
+    A thin wrapper over :func:`group_letter` so every caller that needs the full label
+    (the group-set freeze's 409, the dashboard's ``group_label``, a match call's
+    context) shares one spelling of "Group " + the letter, rather than composing the
+    prefix at each call site."""
+    return f"Group {group_letter(position)}"
 
 
 class DrawError(Exception):
@@ -99,8 +130,8 @@ class UnsupportedDrawType(DrawError):
     fully supported draw types, because the **preview** does not cover them.
 
     It is no longer the scheduler that cannot place them: a live solve places a fixture
-    belonging to no pool over its event's own window, on the tournament's tables (ADR
-    "a pool restricts scheduling, it does not enable it"). The reason the preview
+    belonging to no group over its event's own window, on the tournament's tables (ADR
+    "a group restricts scheduling, it does not enable it"). The reason the preview
     refuses is the preview's own, and :mod:`app.schedule_preview` states it in full.
 
     Carries the offending :class:`DrawType` **structurally**, so the HTTP/MCP layers
@@ -115,9 +146,9 @@ class UnsupportedDrawType(DrawError):
 class DegenerateDraw(DrawError):
     """The requested cut would produce a draw that isn't a competition.
 
-    A pool holding a single entrant has nobody to play (and a pool holding none is a
-    ghost), so we refuse the cut rather than silently emit a pool of one. The director
-    fixes the input — fewer pools, or more entrants — and re-cuts.
+    A group holding a single entrant has nobody to play (and a group holding none is a
+    ghost), so we refuse the cut rather than silently emit a group of one. The director
+    fixes the input — fewer groups, or more entrants — and re-cuts.
     """
 
 
@@ -145,8 +176,54 @@ class NonSinglesDraw(DrawError):
         )
 
 
+def draw_error_detail(error: DrawError) -> str:
+    """The director-facing sentence for a ``DrawError`` — the one mapper every caller
+    that turns a refused cut into words for a director goes through, so the copy for
+    "why can't this be cut" is written once.
+
+    A ``match`` over the error, not ``str(error)`` over whatever arrives:
+
+    * ``NonSinglesDraw`` carries its ``event_format`` **structurally**, so the sentence
+      is composed here from the fact rather than parsed out of a message written for a
+      developer.
+    * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**,
+      and it is passed through verbatim: only the strategy knows *which* degeneracy it
+      hit, and the numbers in that sentence are the numbers the director has to change.
+    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
+      reason ``NonSinglesDraw`` does.
+    * The fallback arm is a **generic** sentence, never the exception's own — a
+      ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
+      message nobody wrote for a human.
+
+    Shared by the cut/schedule-preview HTTP mapper (``app.tournaments._draw_refusal``)
+    and the ``published → live`` dry run (``app.tournament_lifecycle``), so the two
+    call sites' copy cannot drift apart — see each caller for what it does with the
+    string.
+    """
+    match error:
+        case NonSinglesDraw():
+            detail = (
+                f"A {error.event_format.value} event cannot be given a draw — only "
+                "singles events can. A fixture seats one entrant on each side, and "
+                "there is nowhere to record a doubles pairing or a team."
+            )
+        case DegenerateDraw():
+            detail = str(error)
+        case UnsupportedDrawType():
+            detail = (
+                f"A {error.draw_type.value} draw cannot be previewed, and this "
+                "tournament has no other event to preview. A draw of that kind is "
+                "decided round by round as it is played, so before anyone has "
+                "entered there is nothing to lay out. The scheduler does place it "
+                "once the tournament is live."
+            )
+        case _:
+            detail = "This event's draw cannot be cut as the event stands."
+    return detail
+
+
 class MissingFixtureGames(RuntimeError):
-    """A draw was advanced with decided pool fixtures but **no game counts anywhere** —
+    """A draw was advanced with decided group fixtures but **no game counts anywhere** —
     the caller never loaded them.
 
     Deliberately **not** a :class:`DrawError`. A ``DrawError`` is a director-facing
@@ -155,22 +232,23 @@ class MissingFixtureGames(RuntimeError):
     response to it is a loud 500 in the logs. Nothing a director can type causes it and
     there is no input they could correct.
 
-    It exists because the alternative failure is silent and wrong. A pools-then-knockout
-    draw picks its qualifiers with
-    :func:`~app.pool_finishing_order.finishing_order`, whose chain runs wins →
+    It exists because the alternative failure is silent and wrong. A
+    groups-then-knockout draw picks its qualifiers with
+    :func:`~app.group_finishing_order.finishing_order`, whose chain runs wins →
     head-to-head → game difference → games won; handed
     :attr:`FixtureState.games` of ``None`` it would still *produce an order* — one
     computed on wins alone, which silently disagrees with the standings table on screen
     at exactly the moment a director is looking hardest (a multi-way tie for the last
     qualifying spot). Every test in the suite would stay green, because nothing else
-    reads the field. So the strategy refuses to order a pool it cannot see the games of.
+    reads the field. So the strategy refuses to order a group it cannot see the games
+    of.
 
     The condition is scoped to "**no** fixture in this input carries games", which is
     precisely "the caller did not load them" and nothing else. A *single* fixture
     without games while its neighbours have them is an ordinary live state — a result
     under correction leaves the match un-``completed`` while the fixture's written-back
     ``winner_entry_id`` stays put — and that one is handled honestly by the strategy
-    (its pool is simply not finished yet), not raised at.
+    (its group is simply not finished yet), not raised at.
     """
 
 
@@ -192,6 +270,42 @@ class MissingBracketSlot(RuntimeError):
     playable — while the entrants who earned those places are simply missing from it.
     The 409 is the first line of defence, not a licence for the domain to be quiet when
     it has been breached.
+    """
+
+
+class MissingStageAssignment(RuntimeError):
+    """A fixture reached :meth:`RrThenKoStrategy.advance` with
+    :attr:`FixtureState.stage` either **unresolved** (``None``) or naming a stage
+    whose draw type is **neither** round-robin nor single-elim — either way, this
+    draw's group fixtures and its knockout fixtures cannot be told apart for it.
+
+    Two distinct wiring bugs share this one exception, because both leave the same
+    hole: a fixture that :func:`_stage_split` cannot place in either half.
+
+    * **Unresolved** — the caller projected the fixture without the event's stage order
+      at all (``stage=None``), i.e. skipped
+      :func:`~app.tournament_draws.fixture_state`'s ``stages`` plumbing.
+    * **Resolved, but the wrong shape** — the caller resolved a real
+      :class:`FixtureStage`, but its ``draw_type`` is neither of the two this
+      composite's own template mints (a swiss-typed or, in principle, an
+      rr-then-ko-typed stage attached to what claims to be an rr-then-ko event) — a
+      template/event mismatch that only a re-mint gone wrong could produce.
+
+    :class:`MissingFixtureGames`' and :class:`MissingBracketSlot`'s sibling, and
+    deliberately not a :class:`DrawError` for the same reason: nothing a director can
+    type reaches it. Every real fixture's ``stage_id`` is ``NOT NULL`` (ADR 20260815
+    decision 5) and every event's stages are minted in the same transaction as the
+    event itself (decision 3), so a caller that resolved its fixtures through the
+    ordinary seam (:func:`~app.tournament_draws.fixture_state`) always has this. Its
+    absence means a caller skipped that plumbing — a wiring bug, and the only useful
+    response is a loud 500, not a 422 nobody could act on.
+
+    It exists because the alternative failure is silent and wrong in the exact shape
+    :class:`MissingFixtureGames` warns about: a fixture :func:`_stage_split` cannot
+    place matches **neither** the group half nor the knockout half, so it drops out of
+    both of :meth:`RrThenKoStrategy.advance`'s stages — no qualifiers are ever seated,
+    no bracket fixture is ever ready, and nothing raises. The whole suite would stay
+    green, because nothing else reads the field.
     """
 
 
@@ -237,28 +351,28 @@ class OrderedEntrant:
 
 @dataclass(frozen=True, slots=True)
 class QualifierSeat:
-    """*Which* qualifier a knockout seed belongs to — a pool and a finishing place
+    """*Which* qualifier a knockout seed belongs to — a group and a finishing place
     within it, never an entry.
 
-    The whole point of this shape is what it **cannot** name. A pools-then-knockout
-    bracket is cut before a single pool game is played, so the seed → qualifier map
+    The whole point of this shape is what it **cannot** name. A groups-then-knockout
+    bracket is cut before a single group game is played, so the seed → qualifier map
     has to be expressible without knowing who won anything; keeping it as
-    ``(pool_index, place)`` is what makes it computable at cut time and what lets one
-    pool's qualifiers take their predetermined slots the moment *that* pool is
-    decided, with the other pools still playing.
+    ``(group_index, place)`` is what makes it computable at cut time and what lets one
+    group's qualifiers take their predetermined slots the moment *that* group is
+    decided, with the other groups still playing.
 
-    ``pool_index`` is 0-based into :attr:`DrawConfig.pool_ids` — the event's own pool
+    ``group_index`` is 0-based into :attr:`DrawConfig.group_ids` — the event's own group
     order, the same order the snake dealt against. ``place`` is 1-based within that
-    pool, so ``place=1`` is the pool winner.
+    group, so ``place=1`` is the group winner.
     """
 
-    pool_index: int
+    group_index: int
     place: int
 
 
 @dataclass(frozen=True, slots=True)
 class DrawConfig:
-    """What a cut needs to know about the event itself — which is its **pools**, and
+    """What a cut needs to know about the event itself — which is its **groups**, and
     nothing else.
 
     Deliberately **not** the draw type. The draw type is what chose the strategy
@@ -273,20 +387,20 @@ class DrawConfig:
     belief that it is authoritative, on an event whose real draw type is the one that
     picked the strategy. Its absence is what makes that unsayable.
 
-    ``pool_ids`` are the ids of the event's configured pools, **in the event's own pool
-    order** — ascending ``Pool.position``, which is what the caller
+    ``group_ids`` are the ids of the event's configured groups, **in the event's own
+    group order** — ascending ``Group.position``, which is what the caller
     (:func:`app.tournament_draws.draw_config`) sorts them by, and which this tuple then
     carries *as* its sequence. That order is what the snake seeds against, so nothing
-    downstream may re-sort it: a ``sorted(config.pool_ids)`` anywhere below here would
+    downstream may re-sort it: a ``sorted(config.group_ids)`` anywhere below here would
     seed the draw against the ids' own order, which under a random uuid is nobody's.
 
-    Empty for an un-pooled draw type (single-elim), where every fixture's ``pool_id``
-    is ``NULL``. The pool *id set* freezes while a draw exists
+    Empty for an un-grouped draw type (single-elim), where every fixture's ``group_id``
+    is ``NULL``. The group *id set* freezes while a draw exists
     (``app.tournament_events`` refuses a payload that moves it), and underneath that a
     composite foreign key holds the reference itself.
     """
 
-    pool_ids: tuple[PoolId, ...] = ()
+    group_ids: tuple[GroupId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,12 +412,12 @@ class PlannedFixture:
     It is *never* ``None`` to mean "bye": a bye is the absence of this object.
     """
 
-    #: ``None`` = the draw is un-pooled — single-elim today, and the knockout stage of a
-    #: pools-then-knockout draw type once #787 adds one.
-    pool_id: PoolId | None
+    #: ``None`` = the draw is un-grouped — single-elim today, and the knockout stage of
+    #: a groups-then-knockout draw type once #787 adds one.
+    group_id: GroupId | None
     #: 1-based.
     round: int
-    #: 1-based within its (pool, round).
+    #: 1-based within its (group, round).
     position: int
     entry_a_id: EntryId | None = None
     entry_b_id: EntryId | None = None
@@ -331,6 +445,36 @@ class FixtureGames:
 
 
 @dataclass(frozen=True, slots=True)
+class FixtureStage:
+    """Which of an event's stages a fixture belongs to, and what draw type that stage
+    itself runs — the pair :class:`RrThenKoStrategy` needs to tell its two stages
+    apart, carried as one fact on :attr:`FixtureState.stage`.
+
+    A value object, not two parallel optional fields on ``FixtureState``
+    (a ``stage_position: int | None`` and a hypothetical ``stage_draw_type: DrawType |
+    None`` beside it) — two independent optionals can disagree (a position resolved
+    with no draw type, or the reverse), which is the tri-state-by-another-name shape
+    api/CLAUDE.md's "make illegal states unrepresentable" rules out by name. Here,
+    either the whole fact is known (:class:`FixtureStage` built with both fields) or
+    none of it is (:attr:`FixtureState.stage` is ``None``); there is no representable
+    in-between, and :func:`_stage_split` reads exactly one attribute
+    (:attr:`draw_type`) to decide a fixture's half rather than reconciling two.
+
+    ``position`` is 0-based, mirroring :attr:`FixtureState.group_position`, and is the
+    event's own stage order (``TournamentEventStage.position``, ADR 20260815 decision
+    5) — carried for callers that want to sort or display by it, though
+    :class:`RrThenKoStrategy` itself no longer reads it (:attr:`draw_type` is what it
+    asks). ``draw_type`` is the stage's OWN draw type, one of the components
+    :func:`~app.tournament_event_stages.stage_template` mints for the composite that
+    owns it — never :attr:`~app.models.tournament.DrawType.rr_then_ko` itself, which is
+    refused as a stage's own type at the write boundary (decision 4).
+    """
+
+    position: int
+    draw_type: DrawType
+
+
+@dataclass(frozen=True, slots=True)
 class FixtureState:
     """A persisted fixture as it currently stands — the whole input to
     :meth:`DrawStrategy.advance`.
@@ -341,30 +485,47 @@ class FixtureState:
     """
 
     fixture_id: FixtureId
-    pool_id: PoolId | None
+    group_id: GroupId | None
     round: int
     position: int
     entry_a_id: EntryId | None
     entry_b_id: EntryId | None
-    #: Where this fixture's **pool** sits in its event's pool order — 0-based, the
-    #: ``Pool.position`` the write boundary stamped (ADR 20260801, "Pools carry an
+    #: Where this fixture's **group** sits in its event's group order — 0-based, the
+    #: ``Group.position`` the write boundary stamped (ADR 20260801, "Groups carry an
     #: explicit ``position``"). NOT to be confused with :attr:`position` above, which is
     #: this fixture's slot within its own round; the two are different axes of the same
     #: draw and the sort key below reads both.
     #:
-    #: ``None`` means "no pool order to sort on", which is true of an **un-pooled**
-    #: fixture (``pool_id is None``) and of a caller that did not resolve the event's
-    #: pools at all — a strategy test built straight from :class:`FixtureState`
+    #: ``None`` means "no group order to sort on", which is true of an **un-grouped**
+    #: fixture (``group_id is None``) and of a caller that did not resolve the event's
+    #: groups at all — a strategy test built straight from :class:`FixtureState`
     #: literals, or :func:`~app.tournament_draws.fixture_state` called with no
-    #: ``pool_positions`` map. A pool stored before the field existed still resolves to
-    #: a real int here — :func:`~app.tournament_draws.pool_order`'s stable sort leaves
-    #: it at its array index. It is deliberately not defaulted to ``0``: a real
-    #: position of ``0`` is the *first* pool, and "unknown" collapsing onto "first"
+    #: ``group_positions`` map. A group stored before the field existed still resolves
+    #: to a real int here — :func:`~app.tournament_draws.group_order`'s stable sort
+    #: leaves it at its array index. It is deliberately not defaulted to ``0``: a real
+    #: position of ``0`` is the *first* group, and "unknown" collapsing onto "first"
     #: would silently promote every unresolved fixture to the head of the draw.
-    #: Unknown sorts after every known pool instead, where the id tie-break decides it
+    #: Unknown sorts after every known group instead, where the id tie-break decides it
     #: — which is exactly the order :func:`ready_fixtures` had before positions
     #: existed.
-    pool_position: int | None = None
+    group_position: int | None = None
+    #: Which of this fixture's event's stages it belongs to, and that stage's OWN draw
+    #: type (:class:`FixtureStage`) — the discriminator :class:`RrThenKoStrategy` reads
+    #: to split one event's fixtures between its two stages, rather than re-deriving the
+    #: split from ``group_id is None``. That derivation happens to be correct for
+    #: rr-then-ko today (only its second stage is un-grouped), but it is an accident of
+    #: this one draw type's shape rather than a fact the strategy is entitled to lean on
+    #: — a swiss round is *also* ``group_id IS NULL`` (ADR 20260815's own Context: this
+    #: ambiguity already shipped a bug on the read side), and nothing in this module
+    #: stops a future composite from pairing two un-grouped stages.
+    #:
+    #: ``None`` is "no stage was resolved" — a caller (a test built straight from
+    #: literals) that never passed the event's stages through to
+    #: :func:`~app.tournament_draws.fixture_state`, or one of the three draw types
+    #: whose strategy never reads it at all. Only :class:`RrThenKoStrategy` asks, and
+    #: it asks loudly rather than silently seating nothing: see
+    #: :class:`MissingStageAssignment`.
+    stage: FixtureStage | None = None
     #: Set when the fixture's match completed — the fixture is then **decided**.
     winner_entry_id: EntryId | None = None
     #: Set once the fixture **materialized** into a real match. ``None`` before that.
@@ -381,7 +542,7 @@ class FixtureState:
     #: Derived from the match's games rather than from ``winner_entry_id``, so a
     #: correction re-shapes it the instant it lands — the same live-outcome view the
     #: standings are projected from (ADR-0788, ADR 20260727). Which is why a strategy
-    #: computing a pool's finishing order from these agrees with the table on screen
+    #: computing a group's finishing order from these agrees with the table on screen
     #: **structurally**, down to the game-difference and games-won tiebreakers, rather
     #: than by two implementations happening to concur.
     #:
@@ -400,11 +561,12 @@ class FixtureState:
     #: (:func:`app.tournament_draws.fixture_state`) answers that one question and the
     #: enum stays on its own side of the seam.
     #:
-    #: It is what stops a voided pairing wedging its pool: without it the pool would sit
-    #: one score short of "every fixture carries a score" forever — never finished, its
-    #: qualifiers never seated — while the standings, which already exclude voided
-    #: pairings from a pool's ``fixture_count`` (:class:`app.results.PoolInput`), showed
-    #: that same pool ``complete``. Two layers disagreeing about whether a pool is over.
+    #: It is what stops a voided pairing wedging its group: without it the group would
+    #: sit one score short of "every fixture carries a score" forever — never finished,
+    #: its qualifiers never seated — while the standings, which already exclude voided
+    #: pairings from a group's ``fixture_count`` (:class:`app.results.GroupInput`),
+    #: showed that same group ``complete``. Two layers disagreeing about whether a
+    #: group is over.
     match_voided: bool = False
 
     @property
@@ -549,7 +711,7 @@ class DrawStrategy(Protocol):
         parameters. A default here would let one implementation quietly leave the
         parameter off its signature and still satisfy the checker, and the one that did
         would be the one that needed it. The mirror case is
-        :func:`~app.pool_finishing_order.swiss_finishing_order`, a single free function
+        :func:`~app.group_finishing_order.swiss_finishing_order`, a single free function
         whose ``byes`` **is** defaulted: nothing implements it, so an omission there is
         a caller's choice at one call site rather than a hole in a seam.
         """
@@ -588,47 +750,47 @@ def order_entrants(entrants: Iterable[Entrant]) -> list[OrderedEntrant]:
 
 
 def qualifier_seed_assignment(
-    pool_count: int, qualifiers_per_pool: int
+    group_count: int, qualifiers_per_group: int
 ) -> dict[int, QualifierSeat]:
     """Which qualifier takes which knockout **seed number**, so that no round-one
-    fixture pairs two entrants out of the same pool (ADR "rr-then-ko cuts both stages
+    fixture pairs two entrants out of the same group (ADR "rr-then-ko cuts both stages
     upfront and seeds qualifiers rematch-free").
 
     Returns a map ``seed → QualifierSeat`` covering every seed ``1 .. P·K``. It is a
-    pure function of the pool count ``P`` and the qualifiers-per-pool ``K`` — it never
+    pure function of the group count ``P`` and the qualifiers-per-group ``K`` — it never
     sees an entry, a result or a standing, which is exactly what lets the bracket be
-    cut upfront and each pool's qualifiers be seated as that pool finishes. Bracket
+    cut upfront and each group's qualifiers be seated as that group finishes. Bracket
     size is *derived* here (``B`` = smallest power of two ≥ ``P·K``), never passed in,
     so it cannot contradict the qualifier count.
 
-    Qualifiers are ordered **place-major**: every pool winner outranks every runner-up,
-    so place block ``k`` (0-based) owns seeds ``kP+1 .. kP+P``. Within a block the pool
+    Qualifiers are ordered **place-major**: every group winner outranks every runner-up,
+    so place block ``k`` (0-based) owns seeds ``kP+1 .. kP+P``. Within a block the group
     order is *chosen*, not fixed, and that is the whole mechanism. Three facts make the
     guarantee provable rather than best-effort:
 
-    - a block holds each pool exactly once, so a round-one pair falling **inside** one
+    - a block holds each group exactly once, so a round-one pair falling **inside** one
       block is conflict-free for free;
     - round one is a perfect matching on seeds (:func:`_seed_slots` pairs ``s`` with
       ``B+1−s``), so a seed has **at most one** partner and therefore at most one
-      forbidden pool;
-    - assigning blocks in ascending order, one forbidden pool per seed leaves Hall's
+      forbidden group;
+    - assigning blocks in ascending order, one forbidden group per seed leaves Hall's
       condition exactly **one** way to fail — all ``P`` of a block's seeds forbidding
-      the *same* pool — and the block's own geometry closes it, so a conflict-free
+      the *same* group — and the block's own geometry closes it, so a conflict-free
       system of distinct representatives always exists. That last step is the one worth
       reading in full, and it is stated where it is relied on
-      (:func:`_assign_block_pools`), because "each admits at least ``P−1`` pools" is not
-      by itself the reason. The search below finds a representative system
-      deterministically — pools tried in ascending index order, augmenting when stuck —
+      (:func:`_assign_block_groups`), because "each admits at least ``P−1`` groups" is
+      not by itself the reason. The search below finds a representative system
+      deterministically — groups tried in ascending index order, augmenting when stuck —
       so a re-cut reproduces the same bracket, the same promise :func:`order_entrants`
       makes.
 
-    The two fixed orderings this replaces cannot work: place-then-pool pairs ``C1``
-    against ``C2`` at three pools, and reversing the runners-up fixes three pools while
-    breaking two, because *which* pairs are cross-block depends on ``B − P·K``, which
-    jumps around with ``P``.
+    The two fixed orderings this replaces cannot work: place-then-group pairs ``C1``
+    against ``C2`` at three groups, and reversing the runners-up fixes three groups
+    while breaking two, because *which* pairs are cross-block depends on ``B − P·K``,
+    which jumps around with ``P``.
 
-    **One pool is an explicit waiver, not a failure.** With ``P = 1`` every qualifier
-    shares the one pool, so every knockout match is necessarily a rematch — that is
+    **One group is an explicit waiver, not a failure.** With ``P = 1`` every qualifier
+    shares the one group, so every knockout match is necessarily a rematch — that is
     "league, then a playoff" working as intended. The assignment is then simply
     ``seed k+1 → place k+1``, and this function says so rather than raising.
 
@@ -637,59 +799,61 @@ def qualifier_seed_assignment(
     refusals are the caller's, raised as :class:`DegenerateDraw` at the cut, where the
     entrant count is in hand.
     """
-    if pool_count < 1:
-        raise ValueError(f"pool_count must be at least 1, got {pool_count}.")
-    if qualifiers_per_pool < 1:
+    if group_count < 1:
+        raise ValueError(f"group_count must be at least 1, got {group_count}.")
+    if qualifiers_per_group < 1:
         raise ValueError(
-            f"qualifiers_per_pool must be at least 1, got {qualifiers_per_pool}."
+            f"qualifiers_per_group must be at least 1, got {qualifiers_per_group}."
         )
-    qualifier_count = pool_count * qualifiers_per_pool
+    qualifier_count = group_count * qualifiers_per_group
     if qualifier_count < 2:
         raise ValueError(
             "A knockout stage needs at least 2 qualifiers, got "
-            f"{qualifier_count} ({pool_count} × {qualifiers_per_pool})."
+            f"{qualifier_count} ({group_count} × {qualifiers_per_group})."
         )
 
-    def seat(seed: int, pool_index: int) -> QualifierSeat:
+    def seat(seed: int, group_index: int) -> QualifierSeat:
         # Place-major: the block a seed sits in *is* its finishing place.
-        return QualifierSeat(pool_index=pool_index, place=(seed - 1) // pool_count + 1)
+        return QualifierSeat(
+            group_index=group_index, place=(seed - 1) // group_count + 1
+        )
 
-    if pool_count == 1:
-        # The waiver. Every qualifier is out of the same pool, so there is nothing to
+    if group_count == 1:
+        # The waiver. Every qualifier is out of the same group, so there is nothing to
         # avoid and no permutation to choose.
         return {seed: seat(seed, 0) for seed in range(1, qualifier_count + 1)}
 
     partners = _round_one_partners(qualifier_count)
-    pool_by_seed: dict[int, int] = {}
-    for block in range(qualifiers_per_pool):
-        seeds = [block * pool_count + offset + 1 for offset in range(pool_count)]
+    group_by_seed: dict[int, int] = {}
+    for block in range(qualifiers_per_group):
+        seeds = [block * group_count + offset + 1 for offset in range(group_count)]
         # A seed's only constraint is its round-one partner, and only once that partner
-        # has a pool — i.e. when it sits in an *earlier* block. A partner inside this
-        # block needs no constraint (the block holds each pool once, so they differ
+        # has a group — i.e. when it sits in an *earlier* block. A partner inside this
+        # block needs no constraint (the block holds each group once, so they differ
         # anyway); a partner in a later block will see *this* seed as its constraint.
         forbidden = {
-            seed: pool_by_seed[partners[seed]]
+            seed: group_by_seed[partners[seed]]
             for seed in seeds
-            if seed in partners and partners[seed] in pool_by_seed
+            if seed in partners and partners[seed] in group_by_seed
         }
-        pool_by_seed.update(_assign_block_pools(seeds, pool_count, forbidden))
+        group_by_seed.update(_assign_block_groups(seeds, group_count, forbidden))
 
-    return {seed: seat(seed, pool) for seed, pool in sorted(pool_by_seed.items())}
+    return {seed: seat(seed, group) for seed, group in sorted(group_by_seed.items())}
 
 
 @dataclass(frozen=True, slots=True)
 class RoundRobinStrategy:
-    """All-play-all within each pool: every pair in a pool meets exactly once, and
+    """All-play-all within each group: every pair in a group meets exactly once, and
     nobody plays twice in the same round.
 
     The cut is two steps. First the ordered entrants are **snaked** across the event's
-    pools — pool A takes seeds 1, 2P, 2P+1, …; pool B takes 2, 2P−1, … — which spreads
-    the strength evenly and leaves pool sizes differing by at most one. Then each pool's
-    fixtures are laid out by the **circle method**: fix one entrant, rotate the rest,
-    and every rotation is one round of simultaneous pairings. An odd pool rotates
-    against a phantom, and the pairing against it is simply **not emitted** — that is
-    what a bye is here (a row with a ``NULL`` side would mean "TBD", which is a lie
-    about a fixture that will never be played).
+    groups — group A takes seeds 1, 2P, 2P+1, …; group B takes 2, 2P−1, … — which
+    spreads the strength evenly and leaves group sizes differing by at most one. Then
+    each group's fixtures are laid out by the **circle method**: fix one entrant, rotate
+    the rest, and every rotation is one round of simultaneous pairings. An odd group
+    rotates against a phantom, and the pairing against it is simply **not emitted** —
+    that is what a bye is here (a row with a ``NULL`` side would mean "TBD", which is a
+    lie about a fixture that will never be played).
 
     Both sides of every fixture are known at cut time, so this draw has nothing to
     advance *into*: :meth:`advance` fills no sides, and only reports readiness.
@@ -698,11 +862,11 @@ class RoundRobinStrategy:
     def plan_initial(
         self, config: DrawConfig, ordered_entrants: Sequence[OrderedEntrant]
     ) -> list[PlannedFixture]:
-        pools = _snake(ordered_entrants, config.pool_ids)
+        groups = _snake(ordered_entrants, config.group_ids)
         return [
             fixture
-            for pool_id, members in pools
-            for fixture in _circle_method(pool_id, members)
+            for group_id, members in groups
+            for fixture in _circle_method(group_id, members)
         ]
 
     def advance(
@@ -715,7 +879,7 @@ class RoundRobinStrategy:
         report is which fixtures are ready to become matches — which, on a freshly cut
         draw, is all of them, and on an already-materialized one is none of them.
 
-        ``ordered_entrants`` is ignored: an odd pool's bye is a round this pool's own
+        ``ordered_entrants`` is ignored: an odd group's bye is a round this group's own
         fixtures seat its holder in every *other* round of, so the seated set already is
         the field and nothing here needs to be told it a second time."""
         return AdvancePlan(side_fills=(), ready_fixture_ids=ready_fixtures(fixtures))
@@ -750,10 +914,10 @@ class SingleElimStrategy:
         entrants = list(ordered_entrants)
         size = len(entrants)
         if size < 2:
-            # Mirrors round-robin's per-pool floor: a bracket of one has no fixtures and
-            # is not a competition. The message is director-facing copy (the endpoint's
-            # ``_draw_refusal`` passes a ``DegenerateDraw``'s message through),
-            # so it names the fix, not the internals.
+            # Mirrors round-robin's per-group floor: a bracket of one has no fixtures
+            # and is not a competition. The message is director-facing copy (the
+            # endpoint's ``_draw_refusal`` passes a ``DegenerateDraw``'s message
+            # through), so it names the fix, not the internals.
             raise DegenerateDraw(
                 "A single-elimination draw needs at least 2 entrants — a bracket of "
                 "one has nobody to play."
@@ -806,13 +970,64 @@ class SingleElimStrategy:
         )
 
 
+def _stage_split(
+    fixtures: Sequence[FixtureState],
+) -> tuple[list[FixtureState], list[FixtureState]]:
+    """Partition an rr-then-ko draw's fixtures into ``(group stage, knockout stage)``,
+    by each fixture's own :attr:`~FixtureState.stage`'s ``draw_type`` (ADR 20260815
+    decision 6, refined) — never by ``group_id is None`` (see
+    :attr:`FixtureState.stage`'s docstring for why), and not by the stage's bare
+    ``position`` either: this composite's two stages are told apart by what they
+    THEMSELVES run — round-robin vs single-elim, the exact pair
+    :func:`~app.tournament_event_stages.stage_template` mints for
+    ``DrawType.rr_then_ko`` — rather than by restating that template's positions as a
+    second, parallel pair of literals in this module.
+
+    **Total.** Every fixture lands in the group half, the knockout half, or is counted
+    toward a single :class:`MissingStageAssignment` — never silently dropped from both,
+    which is the one failure this module refuses to allow (see that class for the two
+    ways a fixture can reach neither). One pass; the unplaced fixtures are only ever
+    counted, never materialized into a list, since the message names no fixture
+    individually — the class's own docstring already says what "unplaced" means.
+    """
+    grouped: list[FixtureState] = []
+    knockout: list[FixtureState] = []
+    unplaced = 0
+    for fixture in fixtures:
+        match fixture.stage.draw_type if fixture.stage is not None else None:
+            case DrawType.round_robin:
+                grouped.append(fixture)
+            case DrawType.single_elim:
+                knockout.append(fixture)
+            case _:
+                unplaced += 1
+    if unplaced:
+        fixture_noun = "fixture" if unplaced == 1 else "fixtures"
+        raise MissingStageAssignment(
+            f"{unplaced} {fixture_noun} reached RrThenKoStrategy.advance() with a "
+            "stage that resolves to neither of this composite's own stages — see "
+            "MissingStageAssignment's docstring for the two ways that happens."
+        )
+    return grouped, knockout
+
+
 @dataclass(frozen=True, slots=True)
 class RrThenKoStrategy:
-    """Round-robin pools, then a knockout bracket seeded from the pool finishers — the
-    top :attr:`qualifiers_per_pool` out of each pool advance (ADR "rr-then-ko cuts both
-    stages upfront and seeds qualifiers rematch-free").
+    """Round-robin groups, then a knockout bracket seeded from the group finishers — the
+    top :attr:`qualifiers_per_group` out of each group advance (ADR "rr-then-ko cuts
+    both stages upfront and seeds qualifiers rematch-free").
 
-    **Both stages are cut in one stroke.** ``plan_initial`` emits every pool's
+    **Each stage runs the strategy its own draw type names, and this composite's only
+    remaining job is the template plus the inter-stage seam** (ADR 20260815 decision
+    6). The group stage *is* :class:`RoundRobinStrategy`'s own cut and its own
+    readiness (:func:`ready_fixtures` is shared, not re-implemented); the knockout
+    stage *is* :class:`SingleElimStrategy`'s own forward seating once it is under way.
+    What is left for this class to own is cutting both in one stroke (below) and the
+    one thing neither of those strategies can express on its own: seating a finished
+    group's qualifiers into the bracket the moment that group decides
+    (:func:`_stage_split`, :meth:`_qualifier_fills`).
+
+    **Both stages are cut in one stroke.** ``plan_initial`` emits every group's
     round-robin *and* the full bracket, all of the latter's sides TBD. That is not a
     convenience: :class:`AdvancePlan` can express only :class:`SideFill` — there is
     deliberately no way for an ``advance()`` to *create* a fixture — so a bracket that
@@ -822,52 +1037,53 @@ class RrThenKoStrategy:
     Bracket size is **derived, never configured**, so it cannot contradict the qualifier
     count.
 
-    **The pool stage is round-robin's, not a copy of it**: ``plan_initial`` calls
-    :class:`RoundRobinStrategy` for the pool fixtures, so "the pools of an rr-then-ko
+    **The group stage is round-robin's, not a copy of it**: ``plan_initial`` calls
+    :class:`RoundRobinStrategy` for the group fixtures, so "the groups of an rr-then-ko
     draw are laid out exactly as a round-robin draw's" is true structurally rather than
     by two implementations agreeing. The knockout stage is likewise
     :func:`_knockout_fixtures` — the same bracket shape :class:`SingleElimStrategy`
     cuts — and its ``advance`` reuses :meth:`SingleElimStrategy.advance` verbatim for
     the forward seating once the knockout is under way.
 
-    **Qualifiers are seated per-pool, as each pool finishes.** The seed → (pool, place)
-    map (:func:`qualifier_seed_assignment`) depends only on ``P`` and ``K`` — never on a
-    result — so pool A's qualifiers take their predetermined slots the moment *A* is
-    decided, with B and C still playing. A knockout fixture simply is not ``ready``
-    until both its sides are seated, which :func:`ready_fixtures` already handles.
+    **Qualifiers are seated per-group, as each group finishes.** The seed → (group,
+    place) map (:func:`qualifier_seed_assignment`) depends only on ``P`` and ``K`` —
+    never on a result — so group A's qualifiers take their predetermined slots the
+    moment *A* is decided, with B and C still playing. A knockout fixture simply is not
+    ``ready`` until both its sides are seated, which :func:`ready_fixtures` already
+    handles.
 
-    **A pool is finished when every one of its fixtures that can still produce a
+    **A group is finished when every one of its fixtures that can still produce a
     result has a score** — the live-outcome view (:attr:`FixtureState.games`), the
     same one the standings are projected from, not the written-back
     ``winner_entry_id`` that no read reads. So a result under correction un-finishes
-    its pool rather than freezing a stale qualifier list. A **voided** pairing is the
+    its group rather than freezing a stale qualifier list. A **voided** pairing is the
     one exception: it never will produce a result, so it is left out of the
     requirement rather than counted-but-missing, exactly as the standings leave it out
-    of a pool's ``fixture_count`` (:class:`app.results.PoolInput`). Counting it would
-    hold the pool one score short forever — never finished, its qualifiers never
+    of a group's ``fixture_count`` (:class:`app.results.GroupInput`). Counting it would
+    hold the group one score short forever — never finished, its qualifiers never
     seated, the knockout never ready, and no remedy a director could reach — while the
-    table on screen called that same pool ``complete``. See
-    :func:`_finished_pool_order`.
+    table on screen called that same group ``complete``. See
+    :func:`_finished_group_order`.
 
     **A correction that changes who qualified does not re-seat the bracket**,
-    knowingly (ADR): a :class:`SideFill` only ever fills an *empty* side, so a pool
+    knowingly (ADR): a :class:`SideFill` only ever fills an *empty* side, so a group
     match corrected after its qualifiers were seated leaves them in the bracket while
     the standings
     re-order beneath them — the same way single-elim never un-seats a winner. That
     property is also what makes ``advance`` idempotent.
     """
 
-    #: How many entrants qualify out of **each** pool. ``K ≥ 1`` is static — a Pydantic
+    #: How many entrants qualify out of **each** group. ``K ≥ 1`` is static — a Pydantic
     #: constraint at the request boundary — so a smaller value is a *programmer* error
     #: and is refused in the constructor; the refusals that depend on the entrant count
     #: (which moves) are :class:`DegenerateDraw`\\ s at the cut.
-    qualifiers_per_pool: int
+    qualifiers_per_group: int
 
     def __post_init__(self) -> None:
-        if self.qualifiers_per_pool < 1:
+        if self.qualifiers_per_group < 1:
             raise ValueError(
-                "qualifiers_per_pool must be at least 1, got "
-                f"{self.qualifiers_per_pool}."
+                "qualifiers_per_group must be at least 1, got "
+                f"{self.qualifiers_per_group}."
             )
 
     def plan_initial(
@@ -875,32 +1091,32 @@ class RrThenKoStrategy:
     ) -> list[PlannedFixture]:
         # The snake is run here for the refusals below — it is a pure function of the
         # same inputs, so running it again inside round-robin's own cut deals the
-        # identical pools, and the pool stage stays *literally* round-robin's rather
+        # identical groups, and the group stage stays *literally* round-robin's rather
         # than a second implementation that has to be kept in step.
-        pools = _snake(ordered_entrants, config.pool_ids)
-        # The snake has already refused a pool of fewer than two, so ``smallest`` is at
+        groups = _snake(ordered_entrants, config.group_ids)
+        # The snake has already refused a group of fewer than two, so ``smallest`` is at
         # least 2 and the noun below never needs inflecting.
-        smallest = min(len(members) for _, members in pools)
-        if self.qualifiers_per_pool > smallest:
+        smallest = min(len(members) for _, members in groups)
+        if self.qualifiers_per_group > smallest:
             raise DegenerateDraw(
-                f"Taking {self.qualifiers_per_pool} qualifiers from each pool is more "
-                f"than the {smallest} entrants in the smallest pool — take fewer "
-                "qualifiers from each pool, or add entrants."
+                f"Taking {self.qualifiers_per_group} qualifiers from each group is "
+                f"more than the {smallest} entrants in the smallest group — take "
+                "fewer qualifiers from each group, or add entrants."
             )
-        if len(pools) * self.qualifiers_per_pool < 2:
+        if len(groups) * self.qualifiers_per_group < 2:
             # ``K ≥ 1`` is static and the snake guarantees ``P ≥ 1``, so the *only* way
-            # to arrive here is one pool taking one qualifier: the sentence is fully
+            # to arrive here is one group taking one qualifier: the sentence is fully
             # determined, and interpolating the counts would only add branches no input
             # can reach.
             raise DegenerateDraw(
-                "Taking 1 qualifier from a single pool leaves one player in the "
+                "Taking 1 qualifier from a single group leaves one player in the "
                 "knockout stage, who would have nobody to play — take more qualifiers "
-                "from each pool, or configure more pools."
+                "from each group, or configure more groups."
             )
-        qualifier_count = len(pools) * self.qualifiers_per_pool
+        qualifier_count = len(groups) * self.qualifiers_per_group
         fixtures = RoundRobinStrategy().plan_initial(config, ordered_entrants)
-        # Cut in the same stroke: every side TBD (nobody has qualified), ``pool_id``
-        # ``None`` (the knockout stage *is* ``pool_id IS NULL``), rounds from 1.
+        # Cut in the same stroke: every side TBD (nobody has qualified), ``group_id``
+        # ``None`` (the knockout stage *is* ``group_id IS NULL``), rounds from 1.
         fixtures.extend(_knockout_fixtures(qualifier_count, {}))
         return fixtures
 
@@ -909,7 +1125,7 @@ class RrThenKoStrategy:
         fixtures: Sequence[FixtureState],
         ordered_entrants: Sequence[OrderedEntrant],
     ) -> AdvancePlan:
-        """Seat the qualifiers of every **finished** pool into their predetermined
+        """Seat the qualifiers of every **finished** group into their predetermined
         bracket slots, then seat the knockout's own decided winners forward.
 
         Idempotent, twice over: a qualifier is seated only into a still-empty side,
@@ -917,69 +1133,99 @@ class RrThenKoStrategy:
         Run it against a state its own last plan was applied to and it plans nothing.
 
         ``ordered_entrants`` is ignored for both halves, for the two reasons the halves
-        give themselves: the pools seat their whole field, and the bracket is seeded
+        give themselves: the groups seat their whole field, and the bracket is seeded
         from *results*, never from the field directly.
         """
-        knockout = [fixture for fixture in fixtures if fixture.pool_id is None]
+        grouped, knockout = _stage_split(fixtures)
         return AdvancePlan(
             side_fills=(
-                *self._qualifier_fills(fixtures, knockout),
+                *self._qualifier_fills(fixtures, grouped, knockout),
                 # The knockout stage, once it is under way, advances exactly as a
                 # single-elim bracket does — so it is advanced *by* single-elim, over
-                # the un-pooled fixtures alone. Passing the pool fixtures too would let
-                # a pool's ``(round, position)`` collide with the bracket's and seat a
-                # pool winner into a knockout slot.
+                # the un-grouped fixtures alone. Passing the group fixtures too would
+                # let a group's ``(round, position)`` collide with the bracket's and
+                # seat a group winner into a knockout slot.
                 *SingleElimStrategy().advance(knockout, ordered_entrants).side_fills,
             ),
             ready_fixture_ids=ready_fixtures(fixtures),
         )
 
     def _qualifier_fills(
-        self, fixtures: Sequence[FixtureState], knockout: Sequence[FixtureState]
+        self,
+        fixtures: Sequence[FixtureState],
+        grouped: Sequence[FixtureState],
+        knockout: Sequence[FixtureState],
     ) -> list[SideFill]:
-        """The qualifiers of every finished pool, seated into their bracket slots."""
-        pooled = [fixture for fixture in fixtures if fixture.pool_id is not None]
-        _refuse_gameless_pool_results(pooled, fixtures)
-        # The event's pool order is not recoverable from the fixtures (a fixture holds a
-        # pool *ref*, not an index), so the pools are indexed by their sorted ids — a
-        # deterministic labelling, stable across every re-run, which is all the seed
-        # assignment needs. Which pool is index 0 is genuinely arbitrary: within a
-        # finishing place pools are not ranked against each other, and relabelling them
-        # is a bijection, so the rematch-free guarantee holds under any labelling.
-        pool_ids = sorted(
-            {fixture.pool_id for fixture in pooled if fixture.pool_id is not None}
+        """The qualifiers of every finished group, seated into their bracket slots.
+
+        ``grouped`` and ``knockout`` are :func:`_stage_split`'s own halves of
+        ``fixtures``, computed once by :meth:`advance` and handed down rather than
+        re-split here — the guard :func:`_stage_split` raises has already run by the
+        time this is called.
+        """
+        _refuse_gameless_group_results(grouped, fixtures)
+        # The groups, in the DIRECTOR's own order (ADR 20260815 decision 7's rider):
+        # each group's own ``group_position`` (ADR 20260801), never
+        # ``sorted(group_ids)``. The two used to be conflated — a group's uuid has no
+        # relationship to its position, so "group index 0" silently named a different
+        # physical group from the one the director's own group listing and the snake
+        # both call the first group. Which group is index 0 is still free to *choose*
+        # (within a finishing place groups are not ranked against each other, and
+        # relabelling them is a bijection, so the rematch-free guarantee holds under any
+        # labelling) — this only pins *which* choice, so "group A" means the same group
+        # everywhere. A group whose position was not resolved (a caller that skipped
+        # that plumbing) sorts after every resolved one, by id —
+        # :func:`_group_sort_key`, the same fallback
+        # :func:`ready_fixtures` uses, so an under-wired caller degrades to the old
+        # order rather than crashes and "group A" cannot drift between the two sorts.
+        #
+        # A dict comprehension is LAST-wins where the old hand-rolled loop was
+        # first-wins; the two are equivalent only because every fixture of one group
+        # carries that group's SAME ``group_position`` (it is a fact of the group, not
+        # of the fixture it happens to be read off), so which of a group's many fixtures
+        # "wins" the comprehension never changes the value it contributes.
+        group_position_by_id: dict[GroupId, int | None] = {
+            fixture.group_id: fixture.group_position
+            for fixture in grouped
+            if fixture.group_id is not None
+        }
+        group_ids = sorted(
+            group_position_by_id,
+            key=lambda group_id: _group_sort_key(
+                group_id, group_position_by_id[group_id]
+            ),
         )
-        if not pool_ids:
+        if not group_ids:
             return []
         seed_by_seat = {
             seat: seed
             for seed, seat in qualifier_seed_assignment(
-                len(pool_ids), self.qualifiers_per_pool
+                len(group_ids), self.qualifiers_per_group
             ).items()
         }
-        seats = _knockout_seats(len(pool_ids) * self.qualifiers_per_pool)
+        seats = _knockout_seats(len(group_ids) * self.qualifiers_per_group)
         by_slot = {(fixture.round, fixture.position): fixture for fixture in knockout}
 
         fills: list[SideFill] = []
-        for pool_index, pool_id in enumerate(pool_ids):
-            order = _finished_pool_order(
-                [fixture for fixture in pooled if fixture.pool_id == pool_id]
+        for group_index, group_id in enumerate(group_ids):
+            order = _finished_group_order(
+                [fixture for fixture in grouped if fixture.group_id == group_id]
             )
             if order is None:
                 continue  # still playing (or a result in flux) — nothing to seat yet
-            for place, tally in enumerate(order[: self.qualifiers_per_pool], start=1):
-                seed = seed_by_seat[QualifierSeat(pool_index=pool_index, place=place)]
+            for place, tally in enumerate(order[: self.qualifiers_per_group], start=1):
+                seed = seed_by_seat[QualifierSeat(group_index=group_index, place=place)]
                 round_number, position, side = seats[seed]
                 slot = by_slot.get((round_number, position))
                 if slot is None:
                     raise MissingBracketSlot(
-                        f"Seed {seed} (place {place} in pool {pool_id!r}) qualifies "
+                        f"Seed {seed} (place {place} in group {group_id!r}) qualifies "
                         f"into knockout slot (round {round_number}, position "
                         f"{position}), which this draw has no fixture for: the bracket "
                         f"standing here holds {len(by_slot)} fixtures and was cut for "
                         "a different number of qualifiers than the "
-                        f"{len(pool_ids) * self.qualifiers_per_pool} "
-                        f"({len(pool_ids)} pools × {self.qualifiers_per_pool}) this "
+                        f"{len(group_ids) * self.qualifiers_per_group} "
+                        f"({len(group_ids)} groups × {self.qualifiers_per_group}) this "
                         "advance is seating."
                     )
                 already = slot.entry_a_id if side is Side.a else slot.entry_b_id
@@ -1046,11 +1292,12 @@ class SwissStrategy:
     already-existing rows in rank order, so a fixture's ``position`` *is* its pairing
     rank.
 
-    Fixtures are **un-pooled** (``pool_id=None``): swiss ranks the whole field in one
-    table. That no longer keeps them off the schedule — a live solve places an un-pooled
-    fixture over its event's own window (ADR "a pool restricts scheduling, it does not
-    enable it") — but the schedule **preview** still refuses a swiss event exactly as it
-    refuses a bracket, for the reason :mod:`app.schedule_preview` states in full.
+    Fixtures are **un-grouped** (``group_id=None``): swiss ranks the whole field in one
+    table. That no longer keeps them off the schedule — a live solve places an
+    un-grouped fixture over its event's own window (ADR "a group restricts scheduling,
+    it does not enable it") — but the schedule **preview** still refuses a swiss event
+    exactly as it refuses a bracket, for the reason :mod:`app.schedule_preview` states
+    in full.
     """
 
     #: How many rounds the event plays. ``R >= 1`` is static — a Pydantic constraint at
@@ -1094,7 +1341,7 @@ class SwissStrategy:
         pairs_per_round = size // 2
         fixtures = [
             PlannedFixture(
-                pool_id=None,
+                group_id=None,
                 round=1,
                 position=position,
                 # Top half against bottom half, in draw order. ``entrants`` is
@@ -1109,7 +1356,7 @@ class SwissStrategy:
         # pairing's rank in the standings when the round is paired; until then it is
         # only the row's identity within its round.
         fixtures.extend(
-            PlannedFixture(pool_id=None, round=round_number, position=position)
+            PlannedFixture(group_id=None, round=round_number, position=position)
             for round_number in range(2, self.rounds + 1)
             for position in range(1, pairs_per_round + 1)
         )
@@ -1448,11 +1695,11 @@ def _swiss_standings_order(
     :func:`_swiss_pairing_fills`) rather than being derived here, so that this and
     :func:`_swiss_bye` read one value instead of two derivations of it.
 
-    :func:`~app.pool_finishing_order.swiss_finishing_order` is the *shared* definition
+    :func:`~app.group_finishing_order.swiss_finishing_order` is the *shared* definition
     of that table — wins, guarded head-to-head, **Buchholz**, game difference, games
     won, entry id — and the same call the standings on screen are projected through, so
     the order a director reads and the order the pairing walks cannot disagree. It is
-    the swiss chain and not the pool one: pairing down a table ordered by margin rather
+    the swiss chain and not the group one: pairing down a table ordered by margin rather
     than by strength of schedule would seat the next round off an order nobody is
     looking at.
 
@@ -1566,41 +1813,42 @@ def _swiss_seated_pairings(
     ]
 
 
-def _finished_pool_order(
-    pool_fixtures: Sequence[FixtureState],
+def _finished_group_order(
+    group_fixtures: Sequence[FixtureState],
 ) -> list[EntryTally] | None:
-    """This pool's finishing order, or ``None`` if the pool is **not finished**.
+    """This group's finishing order, or ``None`` if the group is **not finished**.
 
     Finished = every fixture in it that can still produce a result carries a score. The
-    order itself is :func:`~app.pool_finishing_order.finishing_order` — *the* definition
-    of how a pool finished, the same call :class:`~app.results.RoundRobinResults` makes
-    for the standings table — so the qualifiers are exactly the top of the table a
-    director is reading, structurally and not by coincidence.
+    order itself is :func:`~app.group_finishing_order.finishing_order` — *the*
+    definition of how a group finished, the same call
+    :class:`~app.results.RoundRobinResults` makes for the standings table — so the
+    qualifiers are exactly the top of the table a director is reading, structurally and
+    not by coincidence.
 
     Which is why a **voided** fixture is skipped rather than treated as a missing score:
     it can never produce one (the match is terminal, and ``ready_fixtures`` will not
     re-materialize a fixture that has a ``match_id``), and the standings already exclude
-    it from the ``fixture_count`` they call a pool ``complete`` against
-    (:class:`app.results.PoolInput`). Requiring its score here would leave the pool
+    it from the ``fixture_count`` they call a group ``complete`` against
+    (:class:`app.results.GroupInput`). Requiring its score here would leave the group
     permanently un-finished and its qualifiers permanently unseated while the table on
-    screen said the pool was over — the two layers disagreeing about the one fact this
-    function exists to share. Its **entrants** still count: they are seated in the pool
+    screen said the group was over — the two layers disagreeing about the one fact this
+    function exists to share. Its **entrants** still count: they are seated in the group
     and appear in the standings, so a player whose only pairing was voided is in the
     order with a row of zeros, exactly as the table shows them.
 
-    A pool with **no** usable outcome at all — every fixture voided — is ``None``, not
+    A group with **no** usable outcome at all — every fixture voided — is ``None``, not
     an order. The only thing left to rank on would be the entry-id fallback at the end
     of the tiebreak chain, so "the qualifiers" would be arbitrary. This is the one
-    place the two layers part company on purpose: the standings call such a pool
+    place the two layers part company on purpose: the standings call such a group
     ``complete`` (0 outcomes of 0 countable fixtures) and show a table of zeros, which
     is honest to look at, and seating qualifiers off it would not be. It takes every
-    pairing in a pool being voided to reach, and voiding has exactly one producer today
+    pairing in a group being voided to reach, and voiding has exactly one producer today
     (an account merge's self-play collision, ADR-0013), so it is a shape to refuse
     rather than to serve.
     """
     entrants: dict[EntryId, None] = {}
     outcomes: list[MatchOutcome] = []
-    for fixture in pool_fixtures:
+    for fixture in group_fixtures:
         if fixture.entry_a_id is None or fixture.entry_b_id is None:
             return None
         entrants[fixture.entry_a_id] = None
@@ -1622,10 +1870,10 @@ def _finished_pool_order(
     return finishing_order(entrants, outcomes)
 
 
-def _refuse_gameless_pool_results(
-    pooled: Sequence[FixtureState], fixtures: Sequence[FixtureState]
+def _refuse_gameless_group_results(
+    grouped: Sequence[FixtureState], fixtures: Sequence[FixtureState]
 ) -> None:
-    """Raise :class:`MissingFixtureGames` when pool fixtures are decided and the whole
+    """Raise :class:`MissingFixtureGames` when group fixtures are decided and the whole
     input carries no game counts — see that class for why this is loud rather than
     tolerated.
 
@@ -1635,12 +1883,12 @@ def _refuse_gameless_pool_results(
     that fixture's ordinary settled state, not a projection that forgot to load them.
     Counting it would turn a single voided pairing in a draw nobody has scored yet into
     a 500. What the guard still catches is unchanged, because it needs a decided fixture
-    that *should* carry games: project a played-out pool without its counts and every
+    that *should* carry games: project a played-out group without its counts and every
     one of its scored fixtures lands in this list.
     """
     gameless = [
         fixture
-        for fixture in pooled
+        for fixture in grouped
         if fixture.winner_entry_id is not None
         and fixture.games is None
         and not fixture.match_voided
@@ -1649,12 +1897,35 @@ def _refuse_gameless_pool_results(
         return
     fixture_noun = "fixture" if len(gameless) == 1 else "fixtures"
     raise MissingFixtureGames(
-        f"{len(gameless)} decided pool {fixture_noun} reached advance() with no game "
+        f"{len(gameless)} decided group {fixture_noun} reached advance() with no game "
         "counts, and no fixture in this draw carries any — the caller projected the "
         "fixtures without loading their completed matches' games. Qualifiers are the "
         "top of the same standings the tiebreak chain produces (wins, head-to-head, "
-        "game difference, games won), so ordering a pool without games would pick "
+        "game difference, games won), so ordering a group without games would pick "
         "different qualifiers from the table on screen."
+    )
+
+
+def _group_sort_key(
+    group_id: GroupId | None, group_position: int | None
+) -> tuple[bool, int, str]:
+    """The group-ordering fragment shared by every sort that groups fixtures by group:
+    the event's own group order (``group_position``) first — with an unresolved position
+    sorting after every resolved one, never colliding with a real ``0`` — then the id,
+    as a comparable ``str``, the tie-break that keeps the whole key **total** when the
+    positions cannot decide it. A ``uuid`` is not comparable with the ``""`` an
+    un-grouped entry collapses to, so this is spelled as a ``str`` rather than left to
+    ``or``.
+
+    Shared by :func:`ready_fixtures` and :meth:`RrThenKoStrategy._qualifier_fills` so
+    "group A" cannot mean two different physical groups between the two sorts that group
+    fixtures by it — a hand-rolled second copy of this fragment is exactly the drift
+    this module's docstrings elsewhere warn a heuristic invites.
+    """
+    return (
+        group_position is None,
+        group_position or 0,
+        "" if group_id is None else str(group_id),
     )
 
 
@@ -1666,40 +1937,45 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     draw type. Excluding the already-materialized is what makes an ``advance()`` plan
     idempotent; excluding the decided keeps a fixture whose match was later unlinked
     (``match_id`` is ``ON DELETE SET NULL``) from rising from the dead and being played
-    twice. Ordered by ``(pool, round, position)`` so the plan itself is deterministic.
+    twice. Ordered by ``(stage/group, round, position)`` so the plan itself is
+    deterministic.
 
-    **"Pool" is the pool's** :attr:`~FixtureState.pool_position` — its place in the
-    event's own pool order — **not its id.** It was the id once, back when ids were
+    **"Group" is the group's** :attr:`~FixtureState.group_position` — its place in the
+    event's own group order — **not its id.** It was the id once, back when ids were
     client-minted strings (``p-1-…``, ``p-2-…``, ``p-10-…``) whose lexicographic order
-    was not the director's: ``p-10-`` sorts between ``p-1-`` and ``p-2-``, so a ten-pool
-    draw's plan ran pool 1, pool 10, pool 2. A minted uuid is worse still — its order is
-    nobody's at all — which is exactly why the explicit ``position`` column had to land
-    (ADR 20260801) before the ids could move. It is the same key the read path's
-    ``fixtures_by_event`` sorts on and the same one :attr:`DrawConfig.pool_ids` is
-    ordered by, so the sequence a director sees, the sequence the snake dealt against,
-    and the sequence matches are created in are one order rather than three that agree
-    by luck.
+    was not the director's: ``p-10-`` sorts between ``p-1-`` and ``p-2-``, so a
+    ten-group draw's plan ran group 1, group 10, group 2. A minted uuid is worse still —
+    its order is nobody's at all — which is exactly why the explicit ``position`` column
+    had to land (ADR 20260801) before the ids could move. It is the same key the read
+    path's ``fixtures_by_event`` sorts on and the same one :attr:`DrawConfig.group_ids`
+    is ordered by, so the sequence a director sees, the sequence the snake dealt
+    against, and the sequence matches are created in are one order rather than three
+    that agree by luck.
 
     The sort key asks three questions, in this order:
 
-    1. "Is it pooled?" — ``pool_id is None``, which sorts the un-pooled (single-elim,
-       swiss, or an rr-then-ko draw's KO stage) LAST, behind the pools that feed them —
-       except under swiss, whose draw is un-pooled end to end, so there are no pools for
-       it to sort behind and this key partitions nothing.
-    2. "Where in the event's order is its pool?" — ``pool_position``, with a ``None``
-       (an unresolved pool order; see the field) sorting after every pool that has one.
-    3. "Which pool?" — the id as text, the tie-break that keeps the order **total** when
-       the positions cannot decide it. A ``uuid`` is not comparable with the ``""`` the
-       un-pooled group collapses to, so this is spelled as a ``str`` rather than left to
-       ``or``; both halves are unobservable anyway, because the first key element has
-       already partitioned the un-pooled off. The ``or 0`` beside it is unobservable for
-       the same reason and by the same argument.
+    1. "Which of the event's own stages is it in — or, failing that, is it grouped?" —
+       :attr:`~FixtureState.stage`'s ``position`` where a caller resolved it (only
+       ``rr-then-ko``'s ``advance()`` ever asks for the plumbing that fills it),
+       falling back to ``group_id is None`` where it did not (every other draw type, and
+       an under-wired caller). Either way this sorts the un-grouped/knockout fixtures
+       LAST, behind the groups that feed them — except under swiss, whose draw is
+       un-grouped end to end, so there are no groups for it to sort behind and this key
+       partitions nothing.
+    2. "Where in the event's group order is its group?" — :func:`_group_sort_key`'s
+    first
+       two elements: ``group_position``, with an unresolved order sorting after every
+       group that has one.
+    3. "Which group?" — :func:`_group_sort_key`'s id tie-break, unobservable once (1)
+    has
+       already partitioned the un-grouped group off.
 
-    (1) and (3) can no longer disagree. They could: ``Pool.id`` was a bare ``str``, and
-    a fixture drawn into an *empty-id* pool answered "pooled" to the first question
-    while colliding with the un-pooled group's ``""`` in the third — one fixture, pooled
-    by one rule and un-pooled by the other. A ``min_length=1`` at the write boundary
-    held that off; a ``uuid`` cannot express it at all, which is the better kind of fix.
+    (1)'s fallback and (3) can no longer disagree the way an early version of this rule
+    could. ``Group.id`` was a bare ``str``, and a fixture drawn into an *empty-id* group
+    answered "grouped" to the fallback while colliding with the un-grouped group's
+    ``""`` in the tie-break — one fixture, grouped by one rule and un-grouped by the
+    other. A ``min_length=1`` at the write boundary held that off; a ``uuid`` cannot
+    express it at all, which is the better kind of fix.
     """
     ready = [
         f
@@ -1708,10 +1984,8 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     ]
     ready.sort(
         key=lambda f: (
-            f.pool_id is None,
-            f.pool_position is None,
-            f.pool_position or 0,
-            "" if f.pool_id is None else str(f.pool_id),
+            f.stage.position if f.stage is not None else f.group_id is None,
+            *_group_sort_key(f.group_id, f.group_position),
             f.round,
             f.position,
         )
@@ -1736,7 +2010,7 @@ def strategy_for(settings: DrawSettingsWriteArm) -> DrawStrategy:
     draw type's settings are one NOT NULL JSON object"). The pair was never really two
     values: ``rr-then-ko`` is the one draw type whose strategy is configured, and the
     arm is what carries the configuration each draw type actually has. So the old
-    ``qualifiers_per_pool=None`` refusal is **gone**, not moved: a
+    ``qualifiers_per_group=None`` refusal is **gone**, not moved: a
     :class:`RrThenKoDrawSettingsWrite` without its count is not a value that can be
     constructed, which is a stronger guarantee than a ``ValueError`` at the point of
     dispatch. Production callers do not build the arm themselves;
@@ -1749,7 +2023,7 @@ def strategy_for(settings: DrawSettingsWriteArm) -> DrawStrategy:
         case SingleElimDrawSettingsWrite():
             return SingleElimStrategy()
         case RrThenKoDrawSettingsWrite():
-            return RrThenKoStrategy(qualifiers_per_pool=settings.qualifiers_per_pool)
+            return RrThenKoStrategy(qualifiers_per_group=settings.qualifiers_per_group)
         case SwissDrawSettingsWrite():
             return SwissStrategy(rounds=settings.rounds)
 
@@ -1831,7 +2105,7 @@ def unseated_entrant_allowance(draw_type: DrawType, field_size: int) -> int:
 
     A draw's currency (:class:`~app.tournament_draws.DrawCurrency`) is "the fixtures
     seat exactly the active entrants", and for three of the four draw types that is
-    literally true. Not because they have no byes — an odd round-robin pool byes
+    literally true. Not because they have no byes — an odd round-robin group byes
     somebody every round — but because their byed entrants are **still seated
     somewhere**: a round-robin bye sits out one round of a schedule that seats them in
     every other, and a single-elim bye is seated directly onto its round-2 side at cut
@@ -1880,50 +2154,52 @@ def unseated_entrant_allowance(draw_type: DrawType, field_size: int) -> int:
 
 
 def _snake(
-    ordered_entrants: Sequence[OrderedEntrant], pool_ids: Sequence[PoolId]
-) -> list[tuple[PoolId, tuple[EntryId, ...]]]:
-    """Deal the ordered entrants across the pools in **snake** order — 1, 2, …, P, then
-    back P, P−1, …, 1 — so the top seeds are spread one per pool and the second tier
-    lands behind them in reverse. Pool sizes differ by at most one by construction: the
+    ordered_entrants: Sequence[OrderedEntrant], group_ids: Sequence[GroupId]
+) -> list[tuple[GroupId, tuple[EntryId, ...]]]:
+    """Deal the ordered entrants across the groups in **snake** order — 1, 2, …, P, then
+    back P, P−1, …, 1 — so the top seeds are spread one per group and the second tier
+    lands behind them in reverse. Group sizes differ by at most one by construction: the
     deal only ever fills a row before starting the next.
 
-    Refuses a pool of fewer than two: a lone entrant has nobody to play, and emitting
-    the pool anyway would hide a director's mistake behind a plausible-looking draw.
+    Refuses a group of fewer than two: a lone entrant has nobody to play, and emitting
+    the group anyway would hide a director's mistake behind a plausible-looking draw.
     """
-    pool_count = len(pool_ids)
-    if pool_count == 0:
-        raise DegenerateDraw("A round-robin draw needs at least one pool.")
+    group_count = len(group_ids)
+    if group_count == 0:
+        raise DegenerateDraw("A round-robin draw needs at least one group.")
 
-    members: list[list[EntryId]] = [[] for _ in pool_ids]
+    members: list[list[EntryId]] = [[] for _ in group_ids]
     for index, entrant in enumerate(ordered_entrants):
-        row, offset = divmod(index, pool_count)
+        row, offset = divmod(index, group_count)
         # Odd rows deal backwards — that is the snake.
-        column = offset if row % 2 == 0 else pool_count - 1 - offset
+        column = offset if row % 2 == 0 else group_count - 1 - offset
         members[column].append(entrant.entry_id)
 
-    # Asked of the dealt pools themselves, not of arithmetic on N and P: the refusal
+    # Asked of the dealt groups themselves, not of arithmetic on N and P: the refusal
     # should hold whatever the distribution does.
-    if any(len(pool_members) < 2 for pool_members in members):
+    if any(len(group_members) < 2 for group_members in members):
         entrant_count = len(ordered_entrants)
         entrant_noun = "entrant" if entrant_count == 1 else "entrants"
-        pool_noun = "pool" if pool_count == 1 else "pools"
+        group_noun = "group" if group_count == 1 else "groups"
         raise DegenerateDraw(
-            f"{entrant_count} {entrant_noun} across {pool_count} {pool_noun} would "
-            "leave a pool with fewer than 2 entrants, who would have nobody to play."
+            f"{entrant_count} {entrant_noun} across {group_count} {group_noun} would "
+            "leave a group with fewer than 2 entrants, who would have nobody to play."
         )
 
     return [
-        (pool_id, tuple(pool_members))
-        for pool_id, pool_members in zip(pool_ids, members, strict=True)
+        (group_id, tuple(group_members))
+        for group_id, group_members in zip(group_ids, members, strict=True)
     ]
 
 
-def _circle_method(pool_id: PoolId, members: Sequence[EntryId]) -> list[PlannedFixture]:
-    """Every pair in this pool exactly once, laid out in rounds in which nobody plays
+def _circle_method(
+    group_id: GroupId, members: Sequence[EntryId]
+) -> list[PlannedFixture]:
+    """Every pair in this group exactly once, laid out in rounds in which nobody plays
     twice — the circle method: pin the first entrant, rotate the others one seat per
     round, and pair across the circle.
 
-    An odd pool gets a **phantom** seat so the circle still has an even circumference;
+    An odd group gets a **phantom** seat so the circle still has an even circumference;
     whoever is drawn against the phantom that round sits out, and their pairing is not
     emitted. That is the whole of "byes are absence" — no ``is_bye`` flag, no ``NULL``
     side, just a round with one fewer fixture. ``position`` therefore stays contiguous
@@ -1944,7 +2220,7 @@ def _circle_method(pool_id: PoolId, members: Sequence[EntryId]) -> list[PlannedF
             position += 1
             fixtures.append(
                 PlannedFixture(
-                    pool_id=pool_id,
+                    group_id=group_id,
                     round=round_number,
                     position=position,
                     entry_a_id=home,
@@ -2013,7 +2289,7 @@ def _knockout_seats(field_size: int) -> dict[int, tuple[int, int, Side]]:
 
     One description of a bracket's shape, for the three questions that need it: *which
     fixtures exist* (:func:`_knockout_fixtures`), *where does a given seed sit*
-    (:meth:`RrThenKoStrategy.advance`, seating a qualifier the moment its pool
+    (:meth:`RrThenKoStrategy.advance`, seating a qualifier the moment its group
     finishes) and *who does a seed meet in round one* (:func:`_round_one_partners`, the
     constraint the rematch-free seeding is solved against). Keeping them one function is
     what stops a qualifier being seated into a slot the cut never emitted — and what
@@ -2050,7 +2326,7 @@ def _knockout_seats(field_size: int) -> dict[int, tuple[int, int, Side]]:
 def _knockout_fixtures(
     field_size: int, entry_for_seed: Mapping[int, EntryId]
 ) -> list[PlannedFixture]:
-    """The whole un-pooled bracket for ``field_size`` seeds, with each seed's entry
+    """The whole un-grouped bracket for ``field_size`` seeds, with each seed's entry
     taken from ``entry_for_seed`` — **or left TBD for every seed the map does not
     name**.
 
@@ -2058,8 +2334,8 @@ def _knockout_fixtures(
     map, because a single-elim cut knows its field. :class:`RrThenKoStrategy` passes an
     **empty** map, because its qualifiers have not played yet — and gets the identical
     shape with every side ``None``. That the shape is a pure function of ``field_size``
-    is exactly why a pools-then-knockout bracket can be cut in the same stroke as the
-    pools (ADR "rr-then-ko cuts both stages upfront"): the qualifier count ``P × K`` is
+    is exactly why a groups-then-knockout bracket can be cut in the same stroke as the
+    groups (ADR "rr-then-ko cuts both stages upfront"): the qualifier count ``P × K`` is
     known at cut time, so *which* slots exist and *which* seeds bye is settled before
     anybody has played.
 
@@ -2069,10 +2345,10 @@ def _knockout_fixtures(
     side a bye already makes known.
 
     Rounds are numbered from **1** for both callers. For the knockout stage of an
-    rr-then-ko draw that is a *restart*, not a continuation of the pool rounds: the
-    fixture uniqueness constraint is ``(event_id, pool_id, round, position)`` with
-    ``NULLS NOT DISTINCT``, so ``pool_id IS NULL`` is its own numbering namespace, and
-    "the round after the pools" is ill-defined anyway when pools may differ in size.
+    rr-then-ko draw that is a *restart*, not a continuation of the group rounds: the
+    fixture uniqueness constraint is ``(event_id, group_id, round, position)`` with
+    ``NULLS NOT DISTINCT``, so ``group_id IS NULL`` is its own numbering namespace, and
+    "the round after the groups" is ill-defined anyway when groups may differ in size.
     """
     bracket = _bracket_size(field_size)
     rounds = bracket.bit_length() - 1
@@ -2089,7 +2365,7 @@ def _knockout_fixtures(
 
     fixtures = [
         PlannedFixture(
-            pool_id=None,
+            group_id=None,
             round=1,
             position=position,
             entry_a_id=seated.get((1, position, Side.a)),
@@ -2104,7 +2380,7 @@ def _knockout_fixtures(
     # rule ("a side is known only where a seat says so"), which is how they drift.
     fixtures.extend(
         PlannedFixture(
-            pool_id=None,
+            group_id=None,
             round=round_number,
             position=position,
             entry_a_id=seated.get((round_number, position, Side.a)),
@@ -2128,7 +2404,7 @@ def _round_one_partners(qualifier_count: int) -> dict[int, int]:
     construction, so it never appears here at all, and the rematch-free guarantee
     (:func:`qualifier_seed_assignment`) is therefore built on the same bracket the cut
     emits rather than on a second opinion about it — the drift that would otherwise be
-    silent, because a partner map that thinks a seed byes admits the same-pool pairing
+    silent, because a partner map that thinks a seed byes admits the same-group pairing
     that seed actually plays.
     """
     by_position: dict[int, dict[Side, int]] = defaultdict(dict)
@@ -2150,84 +2426,84 @@ def _round_one_partners(qualifier_count: int) -> dict[int, int]:
     return partners
 
 
-def _assign_block_pools(
-    seeds: Sequence[int], pool_count: int, forbidden: dict[int, int]
+def _assign_block_groups(
+    seeds: Sequence[int], group_count: int, forbidden: dict[int, int]
 ) -> dict[int, int]:
-    """Hand each seed in one place block a distinct pool, avoiding each seed's one
-    forbidden pool — the bipartite matching at the heart of
+    """Hand each seed in one place block a distinct group, avoiding each seed's one
+    forbidden group — the bipartite matching at the heart of
     :func:`qualifier_seed_assignment`.
 
-    Kuhn's augmenting-path algorithm, walked in ascending seed then ascending pool
+    Kuhn's augmenting-path algorithm, walked in ascending seed then ascending group
     order, which makes the matching it lands on a *function of the inputs* rather than
     of dict iteration luck.
 
     **Why the failure arm below is unreachable**, stated the way it is actually true.
-    "Each seed forbids at most one pool, so each admits at least ``P−1``" is the fact,
-    but it is *not* the reason: a subset ``S`` of the block's seeds sees all ``P`` pools
-    the moment two of its members forbid different pools (or one forbids none), so the
-    only subset that can fail Hall's condition is the whole block — all ``P`` seeds
-    forbidding the **same** pool, leaving ``P−1`` pools for ``P`` seeds. Admitting
-    ``P−1`` each is exactly what does not rule that out.
+    "Each seed forbids at most one group, so each admits at least ``P−1``" is the fact,
+    but it is *not* the reason: a subset ``S`` of the block's seeds sees all ``P``
+    groups the moment two of its members forbid different groups (or one forbids none),
+    so the only subset that can fail Hall's condition is the whole block — all ``P``
+    seeds forbidding the **same** group, leaving ``P−1`` groups for ``P`` seeds.
+    Admitting ``P−1`` each is exactly what does not rule that out.
 
     What rules it out is the geometry of a block. A block is ``P`` **consecutive**
     seeds; round one pairs ``s`` with ``B+1−s`` (:func:`_seed_slots`, ``B`` the bracket
     size), an order-reversing pairing, so a block's partners are themselves ``P``
     consecutive seeds — a run spanning at most **two** blocks. Each block hands each
-    pool to exactly one seed, so at most two of a block's seeds can forbid one pool,
+    group to exactly one seed, so at most two of a block's seeds can forbid one group,
     which is fewer than ``P`` for every ``P ≥ 3``. ``P = 2`` is the one size where two
     would be enough, and there the partner run is ``{B−2b−1, B−2b}`` (block ``b``),
     whose lower member is odd because ``B`` is a power of two — so both partners sit in
-    the *same* block and necessarily hold different pools. Either way a block never
-    forbids one pool ``P`` times, Hall's condition holds, and a matching exists.
+    the *same* block and necessarily hold different groups. Either way a block never
+    forbids one group ``P`` times, Hall's condition holds, and a matching exists.
     (Measured over ``P`` 2..64 × ``K`` 1..40 the margin is wider still: no two seeds of
-    a block were ever seen to forbid the same pool at all.)
+    a block were ever seen to forbid the same group at all.)
 
-    A seed takes the **lowest free pool** it is allowed, and only displaces an incumbent
-    when every pool it admits is taken — the standard greedy initialization for Kuhn's.
-    Skipping it costs nothing in correctness (an augmenting path repairs any greedy
-    mistake) but a great deal in legibility: without it an *unconstrained* block still
-    shuffles, so a two-pool bracket seats pool B's winner at seed 1, which reads as a
-    bug to anyone printing the draw.
+    A seed takes the **lowest free group** it is allowed, and only displaces an
+    incumbent when every group it admits is taken — the standard greedy initialization
+    for Kuhn's. Skipping it costs nothing in correctness (an augmenting path repairs any
+    greedy mistake) but a great deal in legibility: without it an *unconstrained* block
+    still shuffles, so a two-group bracket seats group B's winner at seed 1, which reads
+    as a bug to anyone printing the draw.
     """
-    seed_by_pool: dict[int, int] = {}
+    seed_by_group: dict[int, int] = {}
     for seed in seeds:
         free = next(
             (
-                pool
-                for pool in range(pool_count)
-                if pool not in seed_by_pool and pool != forbidden.get(seed)
+                group
+                for group in range(group_count)
+                if group not in seed_by_group and group != forbidden.get(seed)
             ),
             None,
         )
         if free is not None:
-            seed_by_pool[free] = seed
+            seed_by_group[free] = seed
             continue
-        if not _augment_pool(seed, pool_count, forbidden, seed_by_pool, set()):
+        if not _augment_group(seed, group_count, forbidden, seed_by_group, set()):
             raise RuntimeError(  # pragma: no cover - Hall's condition forbids it
-                f"No conflict-free pool assignment for seed {seed} across "
-                f"{pool_count} pools, which Hall's condition says cannot happen."
+                f"No conflict-free group assignment for seed {seed} across "
+                f"{group_count} groups, which Hall's condition says cannot happen."
             )
-    return {seed: pool for pool, seed in seed_by_pool.items()}
+    return {seed: group for group, seed in seed_by_group.items()}
 
 
-def _augment_pool(
+def _augment_group(
     seed: int,
-    pool_count: int,
+    group_count: int,
     forbidden: dict[int, int],
-    seed_by_pool: dict[int, int],
+    seed_by_group: dict[int, int],
     visited: set[int],
 ) -> bool:
-    """Try to seat ``seed`` in some pool, displacing an incumbent that can move
-    elsewhere. ``True`` when ``seed_by_pool`` has been extended to cover it."""
-    for pool in range(pool_count):
-        if pool == forbidden.get(seed) or pool in visited:
+    """Try to seat ``seed`` in some group, displacing an incumbent that can move
+    elsewhere. ``True`` when ``seed_by_group`` has been extended to cover it."""
+    for group in range(group_count):
+        if group == forbidden.get(seed) or group in visited:
             continue
-        visited.add(pool)
-        incumbent = seed_by_pool.get(pool)
-        if incumbent is None or _augment_pool(
-            incumbent, pool_count, forbidden, seed_by_pool, visited
+        visited.add(group)
+        incumbent = seed_by_group.get(group)
+        if incumbent is None or _augment_group(
+            incumbent, group_count, forbidden, seed_by_group, visited
         ):
-            seed_by_pool[pool] = seed
+            seed_by_group[group] = seed
             return True
     return False
 

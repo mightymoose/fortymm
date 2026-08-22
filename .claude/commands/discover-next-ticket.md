@@ -1,5 +1,5 @@
 ---
-description: Take the top ticket from the GitHub Project To Do column, or a specific ticket when one is provided, run discovery using grill-me, rewrite the ticket into the canonical specification template, and move it to Ready for Planning.
+description: Take the top ticket from the GitHub Project To Do column, or a specific ticket when one is provided, run discovery using grill-me, rewrite the ticket into the canonical specification template, and move it to Ready For Planning.
 model: opus
 ---
 
@@ -11,7 +11,7 @@ The **To Do** column is an inbox. Tickets there are intentionally allowed to be 
 
 Discovery transforms that raw input into the durable specification used by downstream Planning, Implementation, Review, and Testing.
 
-Every successfully discovered ticket moves to **Ready for Planning**.
+Every successfully discovered ticket moves to **Ready For Planning**.
 
 Discovery does not decide whether the ticket is small enough to implement directly. Planning owns that decision.
 
@@ -43,7 +43,7 @@ Never silently skip the selected ticket because it appears difficult, ambiguous,
 5. Work with the user until the ticket is sufficiently understood.
 6. Rewrite the GitHub issue body using the exact canonical template below.
 7. Verify every section has been completed.
-8. Move the ticket to **Ready for Planning**.
+8. Move the ticket to **Ready For Planning**.
 9. Stop.
 
 Do not select another ticket after completing this one.
@@ -252,7 +252,7 @@ Before completing Discovery, verify:
 When all applicable checks pass:
 
 1. Replace the GitHub issue body with the completed canonical template.
-2. Move the ticket to **Ready for Planning**.
+2. Move the ticket to **Ready For Planning**.
 3. Report which ticket was discovered.
 4. Stop.
 
@@ -271,12 +271,12 @@ When all applicable checks pass:
 - Investigate available evidence before asking the user.
 - Ask the user when intent or requirements genuinely require human judgment.
 - Do not decide whether the ticket is small enough to implement.
-- Do not move the ticket directly to **In Progress** or **Ready for Implementation**.
+- Do not move the ticket directly to **In Progress** or **Ready For Implementation**.
 - Do not create subtickets.
 - Do not decompose the ticket.
 - Do not produce an implementation plan.
 - Do not implement code.
 - Planning owns sizing and decomposition.
-- Every successfully discovered ticket moves to **Ready for Planning**.
+- Every successfully discovered ticket moves to **Ready For Planning**.
 - Every Planning-generated subticket starts in **To Do** and must independently pass through Discovery.
 - Treat the rewritten issue body as the durable contract for downstream Planning, Implementation, Review, and Testing.

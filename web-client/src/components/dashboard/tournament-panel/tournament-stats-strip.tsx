@@ -7,7 +7,7 @@ export interface TournamentStatsStripProps {
 
 /**
  * The three-tile strip beside a tournament event's match card: the viewer's
- * win–loss record, where they stand in their pool, and what stage the event is
+ * win–loss record, where they stand in their group, and what stage the event is
  * at.
  *
  * The middle tile is the one that can be absent — an event whose draw has not

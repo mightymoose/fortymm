@@ -25,18 +25,19 @@ const nameTooLong = new ApiError(
   },
 )
 
-/** FastAPI's real 422 body for a pool whose name was cleared — the server's new floor
- * (`Pool.name`, `min_length=1`). The form now refuses this save before it is sent
- * (`poolNameSchema`), so an organizer should never meet it; a stale tab, or a
- * hand-crafted request, still can — and what comes back must not be read out to them.
+/** FastAPI's real 422 body for a reservation whose name was cleared — the server's new
+ * floor (`Reservation.name`, `min_length=1`). The form now refuses this save before it
+ * is sent (`reservationNameSchema`), so an organizer should never meet it; a stale tab,
+ * or a hand-crafted request, still can — and what comes back must not be read out to
+ * them.
  *
- * ⚠️ Note the `loc`: a pool's name is nested TWO levels down, through an array INDEX
- * (`["body", "pools", 0, "name"]`). `validationFields` drops the non-string parts and
- * keeps the first segment after `body`, so the field it blames is `pools` — which the
- * event's label table has a row for ("Table pools"). A 422 whose `loc` fell through to
- * no label at all would be worded generically, which is a worse answer than naming the
- * tab. */
-const poolNameBlank = new ApiError(
+ * ⚠️ Note the `loc`: a reservation's name is nested TWO levels down, through an array
+ * INDEX (`["body", "reservations", 0, "name"]`). `validationFields` drops the
+ * non-string parts and keeps the first segment after `body`, so the field it blames is
+ * `reservations` — which the event's label table has a row for ("Reservations"). A 422
+ * whose `loc` fell through to no label at all would be worded generically, which is a
+ * worse answer than naming the tab. */
+const reservationNameBlank = new ApiError(
   422,
   'String should have at least 1 character',
   'update event',
@@ -44,7 +45,7 @@ const poolNameBlank = new ApiError(
     detail: [
       {
         type: 'string_too_short',
-        loc: ['body', 'pools', 0, 'name'],
+        loc: ['body', 'reservations', 0, 'name'],
         msg: 'String should have at least 1 character',
       },
     ],
@@ -62,14 +63,15 @@ describe('saveFailure', () => {
     })
   })
 
-  /** The blank pool name (#786) — the schema mirrors it client-side now, but the
+  /** The blank reservation name (#786) — the schema mirrors it client-side now, but the
    * classifier is the backstop for the stale tab that does not know that yet. It is an
-   * `invalid`, its `loc` resolves to the `pools` field, and its `msg` — Pydantic's
-   * "String should have at least 1 character" — is thrown away, exactly like the name's. */
-  it('classifies a blank POOL name — through the array index in its loc', () => {
-    expect(saveFailure(poolNameBlank)).toEqual<SaveFailure>({
+   * `invalid`, its `loc` resolves to the `reservations` field, and its `msg` —
+   * Pydantic's "String should have at least 1 character" — is thrown away, exactly like
+   * the name's. */
+  it('classifies a blank RESERVATION name — through the array index in its loc', () => {
+    expect(saveFailure(reservationNameBlank)).toEqual<SaveFailure>({
       kind: 'invalid',
-      fields: ['pools'],
+      fields: ['reservations'],
     })
   })
 
@@ -234,11 +236,11 @@ describe('saveFailureMessage', () => {
  * noun, and the labels it prints over its rows). A second copy table would pass these
  * too, and would then drift, which is the failure ADR-0968 is about.
  */
-describe('saveFailureMessage · a pool the server refused', () => {
-  /** In OUR words, naming the tab the pool is on — never the wire's. */
-  it('names the Table pools tab, and never says “String”', () => {
-    const message = say(poolNameBlank)
-    expect(message).toContain('Table pools')
+describe('saveFailureMessage · a reservation the server refused', () => {
+  /** In OUR words, naming the tab the reservation is on — never the wire's. */
+  it('names the Reservations tab, and never says “String”', () => {
+    const message = say(reservationNameBlank)
+    expect(message).toContain('Reservations')
     expect(message).not.toContain('String')
     expect(message).not.toContain('at least 1 character')
   })

@@ -19,7 +19,7 @@ const scoped = (container: Container) => ({
   getTopline() {
     return container.getByText('Legal, but uneven')
   },
-  /** The size tally — `2 pools of 6 · 2 pools of 5`. */
+  /** The size tally — `2 groups of 6 · 2 groups of 5`. */
   getTitle() {
     return container.getByTestId('draw-issue-panel-title')
   },

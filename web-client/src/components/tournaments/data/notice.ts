@@ -7,8 +7,8 @@
 // - the **title** is the CLIENT's — the state, in a few words, in our voice;
 // - the **description** is, for the refusals that matter, the **SERVER's own sentence**,
 //   verbatim. Those sentences are authored for the director and they name the thing that
-//   has to change ("“Open Singles” has no draw yet…", "5 entrants across 3 pool(s) would
-//   leave a pool with fewer than 2 entrants…"). Replacing one with a generic string of
+//   has to change ("“Open Singles” has no draw yet…", "5 entrants across 3 groups would
+//   leave a group with fewer than 2 entrants…"). Replacing one with a generic string of
 //   ours would throw away the only actionable half of the refusal.
 //
 // That is not a licence to pipe raw API strings into the UI (`DEFINITION_OF_COMPLETE`:

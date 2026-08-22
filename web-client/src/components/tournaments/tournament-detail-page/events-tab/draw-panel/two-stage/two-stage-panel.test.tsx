@@ -10,8 +10,8 @@ const EVENT_ID = 'ev-two-stage'
 const EVENT_NAME = 'Two-stage Singles'
 
 describe('TwoStagePanel', () => {
-  it('shows the pool standings ABOVE the bracket finishes', () => {
-    // The order is the event's own story — pools, then the bracket they seeded. Both
+  it('shows the group standings ABOVE the bracket finishes', () => {
+    // The order is the event's own story — groups, then the bracket they seeded. Both
     // sections render either way round, so this reads the DOM order rather than presence.
     page.render()
 
@@ -20,16 +20,16 @@ describe('TwoStagePanel', () => {
     expect(page.queryFinishesPanel(EVENT_ID)).not.toBeNull()
   })
 
-  it('reuses the shared panels — both pools’ tables and the placement list, joined to names', () => {
+  it('reuses the shared panels — both groups’ tables and the placement list, joined to names', () => {
     page.render()
 
-    expect(page.getPoolRowNames('Pool A')).toEqual([
+    expect(page.getGroupRowNames('Group A')).toEqual([
       'player.5',
       'player.1',
       'player.4',
       'player.8',
     ])
-    expect(page.getPoolRowNames('Pool B')).toEqual([
+    expect(page.getGroupRowNames('Group B')).toEqual([
       'player.3',
       'player.2',
       'player.6',
@@ -44,7 +44,7 @@ describe('TwoStagePanel', () => {
   })
 
   it('crowns the BRACKET winner in a SINGLE champion banner', () => {
-    // `player.2` won the final. `player.5` tops Pool A and `player.3` tops Pool B — a banner
+    // `player.2` won the final. `player.5` tops Group A and `player.3` tops Group B — a banner
     // reading the standings would name one of them, and would still look like a champion,
     // which is exactly why this asserts the NAME and not merely that a banner exists.
     page.render()
@@ -57,8 +57,8 @@ describe('TwoStagePanel', () => {
     expect(page.getAllChampions()).toHaveLength(1)
   })
 
-  it('shows NO champion mid-flight — pools decided, the final still to play', () => {
-    // The state `ev-shield` is in: both pools complete, the final seated and unplayed. The
+  it('shows NO champion mid-flight — groups decided, the final still to play', () => {
+    // The state `ev-shield` is in: both groups complete, the final seated and unplayed. The
     // standings still render in full, the finishes list starts at position 3 (the two beaten
     // semifinalists), and nobody is crowned.
     page.render({
@@ -67,7 +67,7 @@ describe('TwoStagePanel', () => {
 
     expect(page.queryChampion(EVENT_ID)).toBeNull()
     expect(page.getAllChampions()).toHaveLength(0)
-    expect(page.getPoolRowNames('Pool A')).toEqual([
+    expect(page.getGroupRowNames('Group A')).toEqual([
       'player.5',
       'player.1',
       'player.4',

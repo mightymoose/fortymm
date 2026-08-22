@@ -128,11 +128,11 @@ describe('SolveStrip', () => {
         fixturesPlaced: null,
         fixturesPinned: null,
         infeasibilityReasons: [
-          { kind: 'pool_has_no_tables', poolName: 'Pool B', reservation: 'pool' },
+          { kind: 'reservation_has_no_tables', reservationName: 'Reservation B', reservation: 'booked' },
           {
-            kind: 'pool_over_capacity',
-            poolName: 'Pool A',
-            reservation: 'pool',
+            kind: 'reservation_over_capacity',
+            reservationName: 'Reservation A',
+            reservation: 'booked',
             windowStart: '09:00',
             windowEnd: '12:30',
             requiredMin: 480,
@@ -145,11 +145,11 @@ describe('SolveStrip', () => {
     const text = solveStripPage.getStateText('infeasible')
     expect(text).toContain("The day doesn't fit")
     // BOTH reasons' sentences, named specifically…
-    expect(text).toContain('Pool B has no tables assigned.')
-    expect(text).toContain("Pool A can't fit all its matches")
+    expect(text).toContain('Reservation B has no tables assigned.')
+    expect(text).toContain("Reservation A can't fit all its matches")
     // …AND both remedies.
-    expect(text).toContain('Assign at least one table to Pool B')
-    expect(text).toContain('Add a table to Pool A, widen its window, or trim the field.')
+    expect(text).toContain('Assign at least one table to Reservation B')
+    expect(text).toContain('Add a table to Reservation A, widen its window, or trim the field.')
     // The specific list REPLACES the generic sentence.
     expect(text).not.toContain('The matches can\'t all fit inside their windows')
     // The raw enum never reaches the UI.
@@ -185,12 +185,12 @@ describe('SolveStrip', () => {
     expect(text).toContain('dated in the past')
     expect(text).toContain('Move the event to a future date')
     // INSTEAD of the generic "doesn't fit" body — the whole point of naming it.
-    expect(text).not.toContain('Add tables, widen a pool window')
+    expect(text).not.toContain("Add tables, widen a reservation's window")
     // The raw wire code never reaches the UI.
     expect(text).not.toContain('past_window')
   })
 
-  it('names an over-subscribed PLAYER — the human, the pool, its window and the match count — and never tells the director to add tables', () => {
+  it('names an over-subscribed PLAYER — the human, the reservation, its window and the match count — and never tells the director to add tables', () => {
     solveStripPage.render({
       solve: buildScheduleSolve({
         status: 'infeasible',
@@ -201,8 +201,8 @@ describe('SolveStrip', () => {
           {
             kind: 'player_over_subscribed',
             playerName: 'spiked-frigatebird',
-            poolName: 'Pool A',
-            reservation: 'pool',
+            reservationName: 'Reservation A',
+            reservation: 'booked',
             windowStart: '09:00',
             windowEnd: '10:30',
             matchCount: 4,
@@ -216,17 +216,17 @@ describe('SolveStrip', () => {
     expect(text).toContain("The day doesn't fit")
     // The ticket's headline sentence: WHO, in HOW MANY matches, in WHICH window.
     expect(text).toContain('spiked-frigatebird is in 4 matches')
-    expect(text).toContain("Pool A's 09:00–10:30 window")
+    expect(text).toContain("Reservation A's 09:00–10:30 window")
     expect(text).toContain('they need about 2.5h')
     expect(text).toContain('the window is only 1.5h long')
     // The remedies that work for ONE human — and NOT the add-tables trap, which
     // would only let somebody else play in parallel.
-    expect(text).toContain('fewer matches in Pool A')
+    expect(text).toContain('fewer matches in Reservation A')
     expect(text).toContain('widen its window')
     expect(text).toContain("adding tables won't help one player")
-    expect(text).not.toContain('Add a table to Pool A')
+    expect(text).not.toContain('Add a table to Reservation A')
     // The generic body (which DOES say "Add tables") is replaced, not appended.
-    expect(text).not.toContain('Add tables, widen a pool window')
+    expect(text).not.toContain("Add tables, widen a reservation's window")
     // The raw wire code never reaches the UI.
     expect(text).not.toContain('player_over_subscribed')
   })
@@ -243,7 +243,7 @@ describe('SolveStrip', () => {
     })
     const text = solveStripPage.getStateText('infeasible')
     expect(text).toContain("The day doesn't fit")
-    expect(text).toContain('Add tables, widen a pool window')
+    expect(text).toContain("Add tables, widen a reservation's window")
   })
 
   it('renders a failed run under our headline, with the server\'s account as detail', () => {

@@ -238,7 +238,7 @@ the tooling is:
 - **`ReadOnlyValue`** (`src/components/tournaments/read-only-value.tsx`) is what
   `Field` renders in that branch, and stays usable directly for the controls that
   aren't a "label + one control + one value" row (a `Switch`, a `ToggleGroup`, the
-  pool table chips): the value as text, with the same row rhythm, and an em-dash
+  reservation table chips): the value as text, with the same row rhythm, and an em-dash
   (`EM_DASH`, `data/helpers.ts`) when it is unset. A read-only surface must put
   **no** `<input>` / `<select>` / `<textarea>` / `<switch>` in the accessibility
   tree.

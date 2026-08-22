@@ -30,8 +30,8 @@ const scoped = (container: Container) => ({
     return container.getByRole('button', { name: 'Change in Basics' })
   },
   /** Every setting's name, **in the order the rows render** — the claim that the four
-   * settings read top to bottom as Pool count, Pool size, Membership, Qualifiers per
-   * pool, which no name-addressed accessor can state. */
+   * settings read top to bottom as Group count, Group size, Membership, Qualifiers per
+   * group, which no name-addressed accessor can state. */
   getSettingNames(): string[] {
     return container
       .queryAllByTestId('draw-setting-name')

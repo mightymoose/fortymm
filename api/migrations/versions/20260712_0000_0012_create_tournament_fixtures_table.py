@@ -8,6 +8,7 @@ One table holds every draw type's fixtures (ADR-0786). Per the pre-deploy
 convention in api/CLAUDE.md, edits to this migration happen in place. No
 backfill — assumes a fresh / empty DB.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -30,18 +31,29 @@ def upgrade() -> None:
             primary_key=True,
             server_default=sa.text("gen_random_uuid()"),
         ),
+        # A fixture names its STAGE, not its event (ADR 20260815 decision 5: "a fixture
+        # names its stage"). The event is reachable through the stage, and ``ON DELETE
+        # CASCADE`` flows event -> stage -> fixture. Every fixture belongs to exactly
+        # one stage: a grouped fixture's stage is the stage owning its group (always
+        # position 0 — a director's groups never hang off any other stage, decision 3);
+        # an un-grouped fixture's stage is the event's single stage for every
+        # single-stage draw type, or the position-1 (knockout) stage for rr-then-ko —
+        # see ``app.tournament_draws.cut_draw``, the one write seam that decides it.
         sa.Column(
-            "event_id",
+            "stage_id",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("tournament_events.id", ondelete="CASCADE"),
+            sa.ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
             nullable=False,
         ),
         # Half of the composite foreign key declared at the bottom of this table: a
-        # fixture's pool is one of its OWN event's pools (ADR 20260801). NULL = the draw
-        # is un-pooled (single-elim), or this is the KO stage of an rr-then-ko event —
-        # and a composite FK with a NULL member is satisfied vacuously under MATCH
-        # SIMPLE, which is exactly what an un-pooled fixture wants.
-        sa.Column("pool_id", postgresql.UUID(as_uuid=True), nullable=True),
+        # fixture's group is one of its OWN stage's groups (ADR 20260801, re-parented
+        # onto the stage by ADR 20260815). NULL = the draw is un-grouped (single-elim),
+        # or this is the KO stage of an rr-then-ko event — and a composite FK with a
+        # NULL member is satisfied vacuously under MATCH SIMPLE, which is exactly what
+        # an un-grouped fixture wants. The column is deliberately still named
+        # ``group_id``: it is what the wire calls the field, and renaming the column
+        # and the wire field is one move that belongs to one change, not two.
+        sa.Column("group_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("round", sa.Integer(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
         # NULL means exactly one thing: TBD — ``advance()`` fills it when the feeding
@@ -55,7 +67,7 @@ def upgrade() -> None:
         # guest's duplicate active entry, which under this CASCADE would take its
         # fixtures with it — the merge path handles that by *un-cutting* the event's
         # draw, never by re-pointing these columns onto the survivor (that would seat one
-        # human in two pool slots and silently pass the go-live currency check). See
+        # human in two group slots and silently pass the go-live currency check). See
         # ADR-786 and the model docstring; separate chore.
         sa.Column(
             "entry_a_id",
@@ -92,8 +104,9 @@ def upgrade() -> None:
         # RESTRICT, not SET NULL: removing a table a fixture is placed at destroys
         # information on an unrelated write — the fixture would become
         # indistinguishable from one nobody ever placed — so the database refuses and
-        # the director opts in explicitly. A *pool* that merely reserves the table gets
-        # ON DELETE CASCADE on its own side instead; only a placement is loud.
+        # the director opts in explicitly. A *reservation* that merely reserves the
+        # table gets ON DELETE CASCADE on its own side instead; only a placement is
+        # loud.
         sa.Column(
             "table_id",
             postgresql.UUID(as_uuid=False),
@@ -134,42 +147,50 @@ def upgrade() -> None:
             server_default=sa.text("0"),
         ),
         # The identity a re-cut reconciles on. NULLS NOT DISTINCT (Postgres 15+):
-        # under the default, a NULL pool_id compares unequal to itself, which would
-        # leave un-pooled draws (single-elim — every row has pool_id IS NULL) with no
+        # under the default, a NULL group_id compares unequal to itself, which would
+        # leave un-grouped draws (single-elim — every row has group_id IS NULL) with no
         # uniqueness guard whatsoever. NULL is a real domain value here ("this draw has
-        # no pools"), so it is compared as one.
+        # no groups"), so it is compared as one. Keyed on ``stage_id`` rather than
+        # ``event_id`` (ADR 20260815 decision 5) — which is also what makes the
+        # knockout stage's round numbering restarting at 1 fall out of the key, rather
+        # than needing to be a documented namespace rule the way it was under a single
+        # event-wide identity.
         sa.UniqueConstraint(
-            "event_id",
-            "pool_id",
+            "stage_id",
+            "group_id",
             "round",
             "position",
-            name="uq_tournament_fixtures_event_id_pool_id_round_position",
+            name="uq_tournament_fixtures_stage_id_group_id_round_position",
             postgresql_nulls_not_distinct=True,
         ),
-        # "A fixture's pool belongs to that fixture's own event", as one line of DDL
-        # (ADR 20260801). It references ``tournament_event_pools (event_id, id)`` — a
-        # unique constraint that exists purely to be this FK's target, since a plain FK
-        # to the pool's ``id`` alone could not say the event part, which is the whole
-        # claim. Added here in place per the pre-deploy convention; the pools table is
-        # created by 0010, so it exists by the time this runs.
+        # "A fixture's group belongs to that fixture's own stage", as one line of DDL
+        # (ADR 20260801, re-parented onto the stage by ADR 20260815). It references
+        # ``tournament_event_stage_groups (stage_id, id)`` — a unique constraint that
+        # exists purely to be this FK's target, since a plain FK to the group's ``id``
+        # alone could not say the stage part, which is the whole claim. Added here in
+        # place per the pre-deploy convention; the groups table is created by 0010, so
+        # it exists by the time this runs.
         #
         # DEFERRABLE INITIALLY DEFERRED, with the default NO ACTION delete rule rather
-        # than RESTRICT: deleting an event removes its pools through the ORM and its
+        # than RESTRICT: deleting an event removes its groups through the ORM and its
         # fixtures through ``ON DELETE CASCADE``, in two separate statements, so an
         # immediately-checked constraint would fire between them on fixtures that are
         # about to be deleted anyway. Deferring checks the same pair, in full, before
         # COMMIT.
         sa.ForeignKeyConstraint(
-            ["event_id", "pool_id"],
-            ["tournament_event_pools.event_id", "tournament_event_pools.id"],
-            name="fk_tournament_fixtures_event_id_pool_id",
+            ["stage_id", "group_id"],
+            [
+                "tournament_event_stage_groups.stage_id",
+                "tournament_event_stage_groups.id",
+            ],
+            name="fk_tournament_fixtures_stage_id_group_id",
             deferrable=True,
             initially="DEFERRED",
         ),
     )
-    # Every read of a draw is "the fixtures of this event".
+    # Every read of a draw is "the fixtures of this stage".
     op.create_index(
-        "ix_tournament_fixtures_event_id", "tournament_fixtures", ["event_id"]
+        "ix_tournament_fixtures_stage_id", "tournament_fixtures", ["stage_id"]
     )
     # A completed match writes ``winner_entry_id`` back and re-runs ``advance()``; that
     # path arrives holding a match id, not a fixture id.
@@ -187,5 +208,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_tournament_fixtures_table_id", table_name="tournament_fixtures")
     op.drop_index("ix_tournament_fixtures_match_id", table_name="tournament_fixtures")
-    op.drop_index("ix_tournament_fixtures_event_id", table_name="tournament_fixtures")
+    op.drop_index("ix_tournament_fixtures_stage_id", table_name="tournament_fixtures")
     op.drop_table("tournament_fixtures")

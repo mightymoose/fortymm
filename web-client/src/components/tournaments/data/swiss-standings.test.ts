@@ -86,7 +86,7 @@ describe('eventSwissStandings', () => {
   it('shows a row naming a no-longer-listed entry as Withdrawn', () => {
     // A player who withdrew after playing: their completed matches still count toward the
     // numbers, but they are no longer an entrant, so the join has no username. It is the
-    // withdrawn word, never a blank and never the raw id — the SAME join the pool table
+    // withdrawn word, never a blank and never the raw id — the SAME join the group table
     // makes, which is why this selector reuses `nameOf` rather than forking it.
     const view = viewOf(
       buildSwissStandingsEvent({

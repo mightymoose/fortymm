@@ -458,7 +458,7 @@ function standingOf(
  * round 2, the last round for which "the standings, walked in pairs" is exactly the answer.
  *
  * **Buchholz**, and the ordering that puts it above game difference: a later slice. The
- * table these tests read is the shared pool finishing order.
+ * table these tests read is the shared standings finishing order.
  *
  * ## Seed vs UI split
  *
@@ -553,13 +553,13 @@ test.describe('Tournament — swiss draw', () => {
 
     // ----- the rounds view, NOT the bracket ----------------------------------
     // Both facts, because either alone passes against the view it is not about. Swiss and
-    // an `rr-then-ko` knockout stage share `pool_id IS NULL`, and routing on that null
+    // an `rr-then-ko` knockout stage share `group_id IS NULL`, and routing on that null
     // alone rendered a swiss draw through single-elimination's successor arithmetic —
     // columns named back from a Final that a format eliminating nobody does not have.
     await expect(detail.swissRounds(eventId)).toBeVisible()
     await expect(detail.bracket(eventId)).toHaveCount(0)
-    // A swiss draw is pool-less: the whole field is ranked in one table.
-    await expect(detail.poolDraws(eventId)).toHaveCount(0)
+    // A swiss draw is group-less: the whole field is ranked in one table.
+    await expect(detail.groupDraws(eventId)).toHaveCount(0)
 
     // ----- round 1 is PAIRED, with real players ------------------------------
     // One statement pinning the count, the order and the pairings: `⌊8/2⌋` = four
@@ -960,7 +960,7 @@ test.describe('Tournament — swiss draw', () => {
     // The trap, and the half of the rule that is easy to get backwards: the byed entrant
     // is already known — they are in no fixture — and their win is still a round away.
     const atCut = await readSwissStandings(director, tournamentId, eventId)
-    expect(atCut, 'the whole field is ranked in one pool-less table').toHaveLength(
+    expect(atCut, 'the whole field is ranked in one group-less table').toHaveLength(
       ODD_FIELD,
     )
     const idOf = entryIds(atCut)

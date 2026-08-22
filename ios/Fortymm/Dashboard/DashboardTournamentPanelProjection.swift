@@ -123,8 +123,8 @@ struct TournamentTabView: Equatable, Identifiable {
     /// `Your matches` — the path list's heading, in the draw type's vocabulary.
     let pathHeading: String
     let path: [TournamentPathRowView]
-    /// Names the pool the path belongs to, e.g. `Pool A · 4 players`. `nil` for
-    /// an un-pooled draw or before the viewer has been drawn into one.
+    /// Names the group the path belongs to, e.g. `Group A · 4 players`. `nil` for
+    /// an ungrouped draw or before the viewer has been drawn into one.
     let pathSubheading: String?
 }
 
@@ -271,10 +271,11 @@ private func projectMatch(
     )
 }
 
-/// Whether the draw seats players in a *pool* — a group with a standings table
-/// and a fixture per opponent — as opposed to a bracket, where a player has a
-/// path through rounds and no standing at all. This is the only distinction the
-/// panel's wording turns on, at all three sites below.
+/// Whether the draw seats players in a *group* — entrants who play round-robin
+/// together, with a standings table and a fixture per opponent — as opposed to
+/// a bracket, where a player has a path through rounds and no standing at all.
+/// This is the only distinction the panel's wording turns on, at all three
+/// sites below.
 ///
 /// Written as an exhaustive `switch` rather than the `== .roundRobin` this used
 /// to be so that adding a case to `TournamentDrawType` stops the build *here*,
@@ -282,8 +283,8 @@ private func projectMatch(
 /// silently inheriting the bracket wording. `.unknown` is grouped with the
 /// brackets on purpose: it's the lenient decoder's landing pad for a value this
 /// build doesn't know, and "path"/"Position" is the reading that doesn't claim
-/// a pool and a standings table that may not exist.
-private func isPooledDraw(_ drawType: TournamentDrawType) -> Bool {
+/// a group and a standings table that may not exist.
+private func isGroupedDraw(_ drawType: TournamentDrawType) -> Bool {
     switch drawType {
     case .roundRobin:
         return true
@@ -296,7 +297,7 @@ private func projectStats(_ event: DashboardTournamentEvent) -> TournamentStatsV
     TournamentStatsView(
         wins: event.wins,
         losses: event.losses,
-        positionLabel: isPooledDraw(event.drawType) ? "Group position" : "Position",
+        positionLabel: isGroupedDraw(event.drawType) ? "Group position" : "Position",
         // No standings is not a zeroth place: both tiles go quiet together.
         positionValue: event.position.map(ordinal),
         positionSuffix: event.position.map { _ in "of \(event.fieldSize)" },
@@ -314,7 +315,7 @@ private func projectTab(
         live: event.isLive,
         stats: projectStats(event),
         match: event.match.map { projectMatch($0, youName: youName) },
-        pathHeading: isPooledDraw(event.drawType) ? "Your matches" : "Your path",
+        pathHeading: isGroupedDraw(event.drawType) ? "Your matches" : "Your path",
         path: event.fixtures.enumerated().map { index, fixture in
             TournamentPathRowView(
                 id: "\(event.id.uuidString)-\(index)",
@@ -325,8 +326,8 @@ private func projectTab(
                 youWon: fixture.youWon
             )
         },
-        pathSubheading: event.poolLabel.map { pool in
-            event.fieldSize > 0 ? "\(pool) · \(event.fieldSize) players" : pool
+        pathSubheading: event.groupLabel.map { group in
+            event.fieldSize > 0 ? "\(group) · \(event.fieldSize) players" : group
         }
     )
 }
@@ -335,7 +336,7 @@ private func projectTab(
 /// bracket. Keyed off every tab because the header link is per-tournament — and
 /// "View draw" reads correctly for a mixed tournament either way.
 private func destinationLabel(_ events: [DashboardTournamentEvent]) -> String {
-    events.allSatisfy { isPooledDraw($0.drawType) }
+    events.allSatisfy { isGroupedDraw($0.drawType) }
         ? "View group & standings"
         : "View draw"
 }

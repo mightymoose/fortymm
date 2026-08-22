@@ -1,9 +1,9 @@
 """Pure tests for the results strategies (ADR-0788 round-robin, ADR-0785 single-elim,
 ADR 20260727 round-robin-then-knockout).
 
-No database: ``app.results`` is pure, so every rule about how a pool stands or a bracket
-finishes is exercised against literal :class:`~app.results.MatchOutcome` /
-:class:`~app.results.PoolInput` / :class:`~app.results.BracketFixture` value objects —
+No database: ``app.results`` is pure, so every rule about how a group stands or a
+bracket finishes is exercised against literal :class:`~app.results.MatchOutcome` /
+:class:`~app.results.GroupInput` / :class:`~app.results.BracketFixture` value objects —
 the same shape the BFF projects from completed matches. The ordering/placement is
 hand-computed in each test's docstring so a green assertion means the *table* (or the
 *finishes*) is right, not merely that some deterministic order came out.
@@ -11,13 +11,13 @@ hand-computed in each test's docstring so a green assertion means the *table* (o
 
 import uuid
 
-from app.draws import EntryId, PoolId
+from app.draws import EntryId, GroupId
 from app.models.tournament import DrawType
 from app.results import (
     BracketFixture,
     FieldInput,
+    GroupInput,
     MatchOutcome,
-    PoolInput,
     RoundRobinResults,
     RrThenKoResults,
     SingleElimResults,
@@ -32,16 +32,17 @@ def _eid(n: int) -> EntryId:
     return EntryId(uuid.UUID(int=n))
 
 
-def _pid(n: int) -> PoolId:
-    """A stable pool id. A pool id is a ``uuid`` (ADR 20260801) — the
-    ``tournament_event_pools`` primary key the server mints — so these stand in for it,
-    minted from a fixed integer so a failure names the same pool every run."""
-    return PoolId(uuid.UUID(int=0xB0000 + n))
+def _gid(n: int) -> GroupId:
+    """A stable group id. A group id is a ``uuid`` (ADR 20260801) — the
+    ``tournament_event_stage_groups`` primary key the server mints — so these stand
+    in for it, minted from a fixed integer so a failure names the same group every
+    run."""
+    return GroupId(uuid.UUID(int=0xB0000 + n))
 
 
-#: The pools these tests deal in, by the letters their comments call them.
-_POOL_A, _POOL_B = _pid(1), _pid(2)
-_POOL_P_ID, _POOL_Q_ID = _pid(3), _pid(4)
+#: The groups these tests deal in, by the letters their comments call them.
+_GROUP_A, _GROUP_B = _gid(1), _gid(2)
+_GROUP_P_ID, _GROUP_Q_ID = _gid(3), _gid(4)
 
 
 A, B, C, D, E, F = (_eid(n) for n in range(1, 7))
@@ -61,21 +62,21 @@ def _outcome(
     )
 
 
-def _single_pool(
+def _single_group(
     entrants: tuple[EntryId, ...],
     fixture_count: int,
     outcomes: list[MatchOutcome],
-) -> PoolInput:
-    return PoolInput(
-        pool_id=_POOL_A,
+) -> GroupInput:
+    return GroupInput(
+        group_id=_GROUP_A,
         entrants=entrants,
         fixture_count=fixture_count,
         outcomes=tuple(outcomes),
     )
 
 
-def _order(pool: PoolInput) -> list[EntryId]:
-    (standings,) = RoundRobinResults().tabulate([pool]).pools
+def _order(group: GroupInput) -> list[EntryId]:
+    (standings,) = RoundRobinResults().tabulate([group]).groups
     return [row.entry_id for row in standings.rows]
 
 
@@ -94,12 +95,12 @@ def test_results_for_returns_the_rr_then_ko_strategy() -> None:
 
 def test_results_for_returns_the_swiss_strategy() -> None:
     """The fourth arm (ADR "swiss pre-cuts every round and pairs each one on
-    advance") — a pool-less event reads out as one table over the whole field."""
+    advance") — a group-less event reads out as one table over the whole field."""
     assert isinstance(results_for(DrawType.swiss), SwissResults)
 
 
 def test_a_swiss_field_stands_in_one_table_ordered_by_the_swiss_chain() -> None:
-    """Four entrants over two rounds, no pools: A wins both, B wins one, C wins one, D
+    """Four entrants over two rounds, no groups: A wins both, B wins one, C wins one, D
     wins none. The table is one list, ordered by swiss's own chain — wins, then (B and C
     having never met, and being level on Buchholz at two apiece) B's better game
     difference.
@@ -165,7 +166,7 @@ def test_a_byed_entrant_is_credited_with_a_win_and_no_games() -> None:
     """The bye reaches the table as a **win worth zero games** (ADR "swiss standings
     add Buchholz"): C sat out round 1 and reads 1-0 with a game difference of zero.
 
-    The rule is pinned link by link in ``tests/test_pool_finishing_order.py``; what
+    The rule is pinned link by link in ``tests/test_group_finishing_order.py``; what
     this asserts is that the swiss table actually *passes its byes through*, which is
     the half a test of the chain alone cannot see.
     """
@@ -188,21 +189,21 @@ def test_a_byed_entrant_is_credited_with_a_win_and_no_games() -> None:
     assert [row.entry_id for row in standings.rows] == [A, C, B]
 
 
-def test_a_pool_scores_no_byes() -> None:
-    """A round-robin pool passes none, and that is a fact about the format rather than
+def test_a_group_scores_no_byes() -> None:
+    """A round-robin group passes none, and that is a fact about the format rather than
     an omission: its byed entrant sits out one round of a schedule that seats them in
     every other, so there is no result to credit. B has played nobody and reads a row
     of zeros."""
-    pool = _single_pool(entrants=(A, B), fixture_count=1, outcomes=[])
+    group = _single_group(entrants=(A, B), fixture_count=1, outcomes=[])
 
-    (standings,) = RoundRobinResults().tabulate([pool]).pools
+    (standings,) = RoundRobinResults().tabulate([group]).groups
 
     assert all((row.played, row.wins) == (0, 0) for row in standings.rows)
 
 
 def test_a_swiss_event_is_complete_and_crowned_when_every_round_is_decided() -> None:
     """A swiss ranks the whole field, so its complete table's top row is the champion —
-    no single-pool carve-out, because there are no pools to have more than one of."""
+    no single-group carve-out, because there are no groups to have more than one of."""
     field = FieldInput(
         entrants=(A, B),
         fixture_count=1,
@@ -260,7 +261,7 @@ def test_every_draw_type_reads_out_and_none_refuses() -> None:
 def test_orders_by_wins_descending() -> None:
     """Three players, all matches played, distinct win counts: A wins both, B wins one,
     C wins none. Order is purely by wins — A, B, C — no tiebreak needed."""
-    pool = _single_pool(
+    group = _single_group(
         (A, B, C),
         fixture_count=3,
         outcomes=[
@@ -269,8 +270,8 @@ def test_orders_by_wins_descending() -> None:
             _outcome(B, C, 2, 0),
         ],
     )
-    assert _order(pool) == [A, B, C]
-    (standings,) = RoundRobinResults().tabulate([pool]).pools
+    assert _order(group) == [A, B, C]
+    (standings,) = RoundRobinResults().tabulate([group]).groups
     assert [(r.wins, r.losses, r.rank) for r in standings.rows] == [
         (2, 0, 1),
         (1, 1, 2),
@@ -297,8 +298,8 @@ def test_two_way_tie_on_wins_is_broken_head_to_head_over_game_difference() -> No
         _outcome(B, D, 2, 0),  # B beat D
         _outcome(C, D, 2, 1),  # C beat D
     ]
-    pool = _single_pool((A, B, C, D), fixture_count=6, outcomes=outcomes)
-    (standings,) = RoundRobinResults().tabulate([pool]).pools
+    group = _single_group((A, B, C, D), fixture_count=6, outcomes=outcomes)
+    (standings,) = RoundRobinResults().tabulate([group]).groups
     assert [(r.entry_id, r.wins, r.game_difference) for r in standings.rows] == [
         (A, 2, 2),
         (B, 2, 3),
@@ -324,12 +325,12 @@ def test_three_way_tie_is_not_broken_head_to_head_and_falls_to_game_difference()
         _outcome(B, C, 2, 1),
         _outcome(C, A, 2, 0),
     ]
-    pool = _single_pool((A, B, C), fixture_count=3, outcomes=outcomes)
-    assert _order(pool) == [C, A, B]
+    group = _single_group((A, B, C), fixture_count=3, outcomes=outcomes)
+    assert _order(group) == [C, A, B]
 
 
 def test_game_difference_ties_break_on_games_won() -> None:
-    """Mid-pool, A and B each have one win and have **not** met — a two-way tie on wins
+    """Mid-group, A and B each have one win and have **not** met — a two-way tie on wins
     whose head-to-head is unplayed, so it falls to game difference, then to games won. A
     won 3–1, B won 2–0: both +2 game difference, but A took **3** games to B's **2**, so
     games won puts A first. (C and D, both winless and not yet met, tie behind them.)"""
@@ -337,8 +338,8 @@ def test_game_difference_ties_break_on_games_won() -> None:
         _outcome(A, C, 3, 1),
         _outcome(B, D, 2, 0),
     ]
-    pool = _single_pool((A, B, C, D), fixture_count=6, outcomes=outcomes)
-    (standings,) = RoundRobinResults().tabulate([pool]).pools
+    group = _single_group((A, B, C, D), fixture_count=6, outcomes=outcomes)
+    (standings,) = RoundRobinResults().tabulate([group]).groups
     assert [(r.entry_id, r.game_difference, r.games_won) for r in standings.rows] == [
         (A, 2, 3),
         (B, 2, 2),
@@ -348,20 +349,20 @@ def test_game_difference_ties_break_on_games_won() -> None:
 
 
 def test_partial_standings_seat_unplayed_entrants_and_are_incomplete() -> None:
-    """Mid-pool: only A–B has been played (A won 2–0); C has not played at all. Every
-    seated entrant still has a row — C appears with zeros — the pool is **not**
+    """Mid-group: only A–B has been played (A won 2–0); C has not played at all. Every
+    seated entrant still has a row — C appears with zeros — the group is **not**
     complete, and there is no champion yet.
 
     B and C are level on zero wins and have not met, so their two-way tie cannot be
     broken head-to-head; it falls to game difference, where C (0) sits above B (-2).
     Order: A, C, B."""
-    pool = _single_pool(
+    group = _single_group(
         (A, B, C),
         fixture_count=3,
         outcomes=[_outcome(A, B, 2, 0)],
     )
-    results = RoundRobinResults().tabulate([pool])
-    (standings,) = results.pools
+    results = RoundRobinResults().tabulate([group])
+    (standings,) = results.groups
     assert [r.entry_id for r in standings.rows] == [A, C, B]
     assert [(r.entry_id, r.played) for r in standings.rows] == [
         (A, 1),
@@ -373,10 +374,10 @@ def test_partial_standings_seat_unplayed_entrants_and_are_incomplete() -> None:
     assert results.champion is None
 
 
-def test_a_complete_single_pool_event_has_a_champion() -> None:
-    """Every fixture decided in a single pool → the event is complete and its leader is
+def test_a_complete_single_group_event_has_a_champion() -> None:
+    """Every fixture decided in a single group → the event is complete and its leader is
     champion. A wins both, so A is champion."""
-    pool = _single_pool(
+    group = _single_group(
         (A, B, C),
         fixture_count=3,
         outcomes=[
@@ -385,31 +386,32 @@ def test_a_complete_single_pool_event_has_a_champion() -> None:
             _outcome(B, C, 2, 0),
         ],
     )
-    results = RoundRobinResults().tabulate([pool])
+    results = RoundRobinResults().tabulate([group])
     assert results.complete is True
     assert results.champion == A
 
 
-def test_a_complete_multi_pool_event_crowns_no_single_champion() -> None:
-    """Two pools, both fully played: the event is complete, but a multi-pool round-robin
-    has no single champion (that needs a knockout stage to join the pool winners), so
-    ``champion`` is ``None`` while each pool still has its own leader."""
-    pool_a = PoolInput(
-        pool_id=_POOL_A,
+def test_a_complete_multi_group_event_crowns_no_single_champion() -> None:
+    """Two groups, both fully played: the event is complete, but a multi-group
+    round-robin has no single champion (that needs a knockout stage to join the
+    group winners), so
+    ``champion`` is ``None`` while each group still has its own leader."""
+    group_a = GroupInput(
+        group_id=_GROUP_A,
         entrants=(A, B),
         fixture_count=1,
         outcomes=(_outcome(A, B, 2, 0),),
     )
-    pool_b = PoolInput(
-        pool_id=_POOL_B,
+    group_b = GroupInput(
+        group_id=_GROUP_B,
         entrants=(C, D),
         fixture_count=1,
         outcomes=(_outcome(C, D, 2, 0),),
     )
-    results = RoundRobinResults().tabulate([pool_a, pool_b])
+    results = RoundRobinResults().tabulate([group_a, group_b])
     assert results.complete is True
     assert results.champion is None
-    assert [pool.rows[0].entry_id for pool in results.pools] == [A, C]
+    assert [group.rows[0].entry_id for group in results.groups] == [A, C]
 
 
 def test_a_corrected_result_re_orders_the_standings() -> None:
@@ -417,10 +419,10 @@ def test_a_corrected_result_re_orders_the_standings() -> None:
     outcomes (ADR-0788). A beats B → A leads; correct the match to B beating A and
     re-tabulate → B leads. The table follows the live result with no bookkeeping."""
     entrants = (A, B)
-    before = _single_pool(entrants, fixture_count=1, outcomes=[_outcome(A, B, 2, 0)])
+    before = _single_group(entrants, fixture_count=1, outcomes=[_outcome(A, B, 2, 0)])
     assert RoundRobinResults().tabulate([before]).champion == A
 
-    after = _single_pool(entrants, fixture_count=1, outcomes=[_outcome(A, B, 0, 2)])
+    after = _single_group(entrants, fixture_count=1, outcomes=[_outcome(A, B, 0, 2)])
     assert RoundRobinResults().tabulate([after]).champion == B
 
 
@@ -432,7 +434,7 @@ def _bracket_match(
 ) -> BracketFixture:
     """A decided bracket fixture: ``winner`` took 2 games, ``loser`` 0 (a decisive
     board), in the given round. Only the round and who-lost matter to the finishes; the
-    games merely decide the winner off the same :class:`MatchOutcome` the pools use."""
+    games merely decide the winner off the same :class:`MatchOutcome` the groups use."""
     return BracketFixture(
         round=round_number,
         outcome=MatchOutcome(
@@ -578,21 +580,21 @@ def test_a_corrected_final_re_crowns_the_champion() -> None:
 
 # ----- round-robin then knockout: both stages at once (ADR 20260727) ----------
 #
-# The two-stage event every test below reads (except the single-pool one) is the same
+# The two-stage event every test below reads (except the single-group one) is the same
 # one, at different moments:
 #
-#   pool P (A, B, C) and pool Q (D, E, F), K = 2 qualifiers each → a 4-slot bracket.
-#   Both pools are won on a clean sweep: A beats B and C, B beats C  → A, B, C;
+#   group P (A, B, C) and group Q (D, E, F), K = 2 qualifiers each → a 4-slot bracket.
+#   Both groups are won on a clean sweep: A beats B and C, B beats C  → A, B, C;
 #                                        D beats E and F, E beats F  → D, E, F.
 #   So the qualifiers are A and B out of P, D and E out of Q.
 #   Semifinals (round 1): A beats E, B beats D.   Final (round 2): **B beats A**.
 #
-# B is deliberately pool P's *runner-up*: the champion of this event is neither pool's
+# B is deliberately group P's *runner-up*: the champion of this event is neither group's
 # leader, which is the whole point — a champion read off the standings would name A
-# (or nobody, since a multi-pool round-robin crowns none), never B.
+# (or nobody, since a multi-group round-robin crowns none), never B.
 
-_POOL_P = PoolInput(
-    pool_id=_POOL_P_ID,
+_GROUP_P = GroupInput(
+    group_id=_GROUP_P_ID,
     entrants=(A, B, C),
     fixture_count=3,
     outcomes=(
@@ -601,8 +603,8 @@ _POOL_P = PoolInput(
         MatchOutcome(entry_a_id=B, entry_b_id=C, entry_a_games=2, entry_b_games=0),
     ),
 )
-_POOL_Q = PoolInput(
-    pool_id=_POOL_Q_ID,
+_GROUP_Q = GroupInput(
+    group_id=_GROUP_Q_ID,
     entrants=(D, E, F),
     fixture_count=3,
     outcomes=(
@@ -613,13 +615,13 @@ _POOL_Q = PoolInput(
 )
 
 
-def _part_played(pool: PoolInput) -> PoolInput:
-    """The same pool with only its first fixture decided — a live, mid-pool table."""
-    return PoolInput(
-        pool_id=pool.pool_id,
-        entrants=pool.entrants,
-        fixture_count=pool.fixture_count,
-        outcomes=pool.outcomes[:1],
+def _part_played(group: GroupInput) -> GroupInput:
+    """The same group with only its first fixture decided — a live, mid-group table."""
+    return GroupInput(
+        group_id=group.group_id,
+        entrants=group.entrants,
+        fixture_count=group.fixture_count,
+        outcomes=group.outcomes[:1],
     )
 
 
@@ -632,18 +634,18 @@ _FULL_BRACKET = [*_SEMIS_ONLY[:2], _bracket_match(2, B, A)]
 
 
 def test_rr_then_ko_reads_out_both_stages_in_one_tabulation() -> None:
-    """The headline claim: **one** tabulation returns the pool stage's standings *and*
+    """The headline claim: **one** tabulation returns the group stage's standings *and*
     the knockout stage's finishes.
 
-    Both pools stand exactly as a round-robin's do (A, B, C and D, E, F), and the
+    Both groups stand exactly as a round-robin's do (A, B, C and D, E, F), and the
     bracket places exactly as a single-elim's do — champion B (1), runner-up A (2), the
     two semifinal losers D and E tied 3rd. C and F never qualified, so they hold a
     standings row and **no finish**: a knockout finish is a fact about the bracket, not
     about the event's field."""
-    results = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _FULL_BRACKET)
+    results = RrThenKoResults().tabulate([_GROUP_P, _GROUP_Q], _FULL_BRACKET)
 
-    assert [pool.pool_id for pool in results.pools] == [_POOL_P_ID, _POOL_Q_ID]
-    assert [[row.entry_id for row in pool.rows] for pool in results.pools] == [
+    assert [group.group_id for group in results.groups] == [_GROUP_P_ID, _GROUP_Q_ID]
+    assert [[row.entry_id for row in group.rows] for group in results.groups] == [
         [A, B, C],
         [D, E, F],
     ]
@@ -655,51 +657,51 @@ def test_rr_then_ko_reads_out_both_stages_in_one_tabulation() -> None:
     }
 
 
-def test_rr_then_ko_champion_is_the_bracket_winner_not_the_pool_leader() -> None:
-    """The champion comes from the **bracket**, never from a pool (CONTEXT.md,
+def test_rr_then_ko_champion_is_the_bracket_winner_not_the_group_leader() -> None:
+    """The champion comes from the **bracket**, never from a group (CONTEXT.md,
     "Champion").
 
-    Every pool is won by somebody else: P by A, Q by D. B — P's *runner-up* — wins the
+    Every group is won by somebody else: P by A, Q by D. B — P's *runner-up* — wins the
     knockout, so B is the event's champion. A champion read off the standings would
-    name A or D (or ``None``, which is what a multi-pool round-robin crowns); only
+    name A or D (or ``None``, which is what a multi-group round-robin crowns); only
     reading the final's winner names B."""
-    results = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _FULL_BRACKET)
+    results = RrThenKoResults().tabulate([_GROUP_P, _GROUP_Q], _FULL_BRACKET)
 
     assert results.champion == B
-    pool_leaders = [pool.rows[0].entry_id for pool in results.pools]
-    assert pool_leaders == [A, D]
-    assert results.champion not in pool_leaders
+    group_leaders = [group.rows[0].entry_id for group in results.groups]
+    assert group_leaders == [A, D]
+    assert results.champion not in group_leaders
 
 
-def test_rr_then_ko_with_pools_part_played_stands_live_with_no_finishes() -> None:
-    """Pools mid-play, nobody qualified: the standings are live and partial, the bracket
-    is cut but empty.
+def test_rr_then_ko_with_groups_part_played_stands_live_with_no_finishes() -> None:
+    """Groups mid-play, nobody qualified: the standings are live and partial, the
+    bracket is cut but empty.
 
-    Only A–B has been played in each pool, so every seated entrant still has a row (C
-    and F on zeros) and neither pool is complete. No knockout fixture is decided, so
+    Only A–B has been played in each group, so every seated entrant still has a row (C
+    and F on zeros) and neither group is complete. No knockout fixture is decided, so
     there are no finishes, no champion, and the event is not complete."""
     results = RrThenKoResults().tabulate(
-        [_part_played(_POOL_P), _part_played(_POOL_Q)], _UNPLAYED_BRACKET
+        [_part_played(_GROUP_P), _part_played(_GROUP_Q)], _UNPLAYED_BRACKET
     )
 
-    assert [len(pool.rows) for pool in results.pools] == [3, 3]
-    assert [pool.complete for pool in results.pools] == [False, False]
+    assert [len(group.rows) for group in results.groups] == [3, 3]
+    assert [group.complete for group in results.groups] == [False, False]
     assert results.finishes == ()
     assert results.champion is None
     assert results.complete is False
 
 
 def test_rr_then_ko_with_the_bracket_part_played_has_finishes_but_no_champion() -> None:
-    """Pools decided, knockout mid-flight: standings complete, finishes partial, still
+    """Groups decided, knockout mid-flight: standings complete, finishes partial, still
     no champion.
 
     Both semifinals are in (A beat E, B beat D) but the final is not, so D and E are
     placed — tied 3rd, measured from the final round the TBD final fixes — while A and B
     are still alive and have no finish at all. The champion is the final's winner, so it
     is ``None`` until that final is decided, and the event is not complete."""
-    results = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _SEMIS_ONLY)
+    results = RrThenKoResults().tabulate([_GROUP_P, _GROUP_Q], _SEMIS_ONLY)
 
-    assert [pool.complete for pool in results.pools] == [True, True]
+    assert [group.complete for group in results.groups] == [True, True]
     assert {row.entry_id: row.position for row in results.finishes} == {D: 3, E: 3}
     assert results.champion is None
     assert results.complete is False
@@ -708,35 +710,36 @@ def test_rr_then_ko_with_the_bracket_part_played_has_finishes_but_no_champion() 
 def test_rr_then_ko_is_complete_only_when_both_stages_are() -> None:
     """``complete`` is **both stages decided**, asserted separately.
 
-    Three states of the same event: pools decided and the bracket mid-flight → not
-    complete; the bracket decided while a pool is not → **not complete either**, even
-    though the champion is already known, because the pool stage this shape was handed
+    Three states of the same event: groups decided and the bracket mid-flight → not
+    complete; the bracket decided while a group is not → **not complete either**, even
+    though the champion is already known, because the group stage this shape was handed
     has not finished; both decided → complete. (The middle state is unreachable
-    through ``RrThenKoStrategy``, which seats nobody out of an unfinished pool — which
+    through ``RrThenKoStrategy``, which seats nobody out of an unfinished group — which
     is exactly why ``complete`` must not lean on that invariant to hold.)"""
-    pools_only = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _SEMIS_ONLY)
-    assert pools_only.complete is False
+    groups_only = RrThenKoResults().tabulate([_GROUP_P, _GROUP_Q], _SEMIS_ONLY)
+    assert groups_only.complete is False
 
     bracket_only = RrThenKoResults().tabulate(
-        [_part_played(_POOL_P), _POOL_Q], _FULL_BRACKET
+        [_part_played(_GROUP_P), _GROUP_Q], _FULL_BRACKET
     )
     assert bracket_only.champion == B, "the knockout stage did finish"
-    assert bracket_only.complete is False, "but a pool has not, so the event has not"
+    assert bracket_only.complete is False, "but a group has not, so the event has not"
 
-    both = RrThenKoResults().tabulate([_POOL_P, _POOL_Q], _FULL_BRACKET)
+    both = RrThenKoResults().tabulate([_GROUP_P, _GROUP_Q], _FULL_BRACKET)
     assert both.complete is True
 
 
-def test_rr_then_ko_with_a_single_pool_is_a_league_then_a_playoff() -> None:
-    """One pool is legal (ADR 20260727) — a league, then a playoff — and it reads out
+def test_rr_then_ko_with_a_single_group_is_a_league_then_a_playoff() -> None:
+    """One group is legal (ADR 20260727) — a league, then a playoff — and it reads out
     like any other two-stage event.
 
-    A four-player pool, all six fixtures played on clean sweeps → A, B, C, D. The top
-    two qualify and meet in a one-fixture bracket, where **B beats A**. So the league
-    leader is A and the champion is B: the pool stage seeds the playoff, it does not win
-    it. (This is the case a pool-derived champion gets *wrong* rather than empty — a
-    complete single-pool round-robin does crown its leader, and that leader is A.)"""
-    pool = _single_pool(
+    A four-player group, all six fixtures played on clean sweeps → A, B, C, D. The top
+    two qualify and meet in a one-fixture bracket, where **B beats A**. So the
+    league leader is A and the champion is B: the group stage seeds the playoff,
+    it does not win it. (This is the case a group-derived champion gets *wrong*
+    rather than empty — a
+    complete single-group round-robin does crown its leader, and that leader is A.)"""
+    group = _single_group(
         (A, B, C, D),
         fixture_count=6,
         outcomes=[
@@ -748,12 +751,12 @@ def test_rr_then_ko_with_a_single_pool_is_a_league_then_a_playoff() -> None:
             _outcome(C, D, 2, 0),
         ],
     )
-    results = RrThenKoResults().tabulate([pool], [_bracket_match(1, B, A)])
+    results = RrThenKoResults().tabulate([group], [_bracket_match(1, B, A)])
 
-    (standings,) = results.pools
+    (standings,) = results.groups
     assert [row.entry_id for row in standings.rows] == [A, B, C, D]
-    assert RoundRobinResults().tabulate([pool]).champion == A, (
-        "the pool stage on its own would crown its leader"
+    assert RoundRobinResults().tabulate([group]).champion == A, (
+        "the group stage on its own would crown its leader"
     )
     assert results.champion == B, "but the event's champion is the playoff's winner"
     assert {row.entry_id: row.position for row in results.finishes} == {B: 1, A: 2}

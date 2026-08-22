@@ -124,7 +124,7 @@ async def cut_event_draw(
     actor: User,
 ) -> list[TournamentFixtureRead]:
     """Cut (or re-cut) the draw of the event ``actor`` owns, and return its fixtures
-    in the page's canonical **pool → round → position** order.
+    in the page's canonical **group → round → position** order.
 
     Runs the same orchestration the HTTP handler used to run inline, under the
     tournament row lock (:func:`_load_owned_event_for_draw`):

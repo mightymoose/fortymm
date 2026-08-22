@@ -1,7 +1,7 @@
 /**
- * The **standings** (ADR-0788), through the real browser: a played-out round-robin pool's
- * results table, rendered on the tournament detail below its fixtures, and the champion of
- * a decided event.
+ * The **standings** (ADR-0788), through the real browser: a played-out round-robin
+ * group's results table, rendered on the tournament detail below its fixtures, and the
+ * champion of a decided event.
  *
  * What only a browser proves here, and why the vitest suite could not:
  *
@@ -13,7 +13,7 @@
  *      client cannot see. A table of raw uuids, or one re-sorted here, would pass a "renders
  *      standings" check and be a lie; this asserts the names, in order.
  *
- *   2. **The champion is shown once the event is decided.** A complete single-pool
+ *   2. **The champion is shown once the event is decided.** A complete single-group
  *      round-robin has a champion; the callout names them (joined to a username, not an id).
  *
  *   3. **This whole surface runs with MSW OFF.** vitest exercises the component against the
@@ -26,7 +26,7 @@ import { expect, test } from '@playwright/test'
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
 import { EVENT } from '../page-objects/tournaments/tournaments-store'
 
-/** The drawable seed's JOURNEY event, with its one pool played out (`standings: true`):
+/** The drawable seed's JOURNEY event, with its one group played out (`standings: true`):
  * `player.1` (1–0, +2) over `player.2` (0–1, −2), so it is complete with `player.1` its
  * champion. The draw must be cut for the result to sit on a real draw, so JOURNEY is drawn
  * too. */
@@ -36,8 +36,8 @@ const STANDINGS_SEED = {
   standings: true,
 } as const
 
-test.describe('Tournaments · pool standings', () => {
-  test('renders a played-out pool’s standings table, named and in the server’s order, with the champion', async ({
+test.describe('Tournaments · group standings', () => {
+  test('renders a played-out group’s standings table, named and in the server’s order, with the champion', async ({
     page,
   }) => {
     const { pom, store } = await TournamentDetailPage.navigateTo(page, STANDINGS_SEED)
@@ -45,11 +45,11 @@ test.describe('Tournaments · pool standings', () => {
 
     // The results block is on the card…
     await expect(pom.standingsPanel(event)).toBeVisible()
-    await expect(pom.standingsTable(event, 'Pool A')).toBeVisible()
+    await expect(pom.standingsTable(event, 'Group A')).toBeVisible()
 
     // …with the entrants joined to their NAMES, in the finishing order the server sent —
     // `player.1` (the winner) first, `player.2` second. Not re-sorted, not raw ids.
-    await expect(pom.standingsRowNames(event, 'Pool A')).toHaveText([
+    await expect(pom.standingsRowNames(event, 'Group A')).toHaveText([
       'player.1',
       'player.2',
     ])
@@ -57,12 +57,12 @@ test.describe('Tournaments · pool standings', () => {
     // The four columns the chore asks for, found by the FULL word a screen reader hears —
     // the terse `W`/`L`/`Diff`/`GW` glyph on screen is aria-hidden, so a header that shipped
     // only the glyph would fail these.
-    const table = pom.standingsTable(event, 'Pool A')
+    const table = pom.standingsTable(event, 'Group A')
     for (const name of ['Wins', 'Losses', 'Game difference', 'Games won']) {
       await expect(table.getByRole('columnheader', { name })).toBeVisible()
     }
 
-    // The champion, named — `player.1`, not their entry id. Shown because the pool is
+    // The champion, named — `player.1`, not their entry id. Shown because the group is
     // complete and single (a decided pure round-robin has one).
     await expect(pom.standingsChampion(event)).toBeVisible()
     await expect(pom.standingsChampion(event)).toContainText('player.1')
@@ -74,15 +74,16 @@ test.describe('Tournaments · pool standings', () => {
   })
 
   test('a viewer sees the standings too — results are public', async ({ page }) => {
-    // A player wants to know how their pool finished. Standings are read-only for everyone,
-    // so a non-owner sees the same table (and never a control — the table carries none).
+    // A player wants to know how their group finished. Standings are read-only for
+    // everyone, so a non-owner sees the same table (and never a control — the table
+    // carries none).
     const { pom } = await TournamentDetailPage.navigateTo(page, {
       ...STANDINGS_SEED,
       canEdit: false,
     })
     const event = EVENT.JOURNEY
 
-    await expect(pom.standingsRowNames(event, 'Pool A')).toHaveText([
+    await expect(pom.standingsRowNames(event, 'Group A')).toHaveText([
       'player.1',
       'player.2',
     ])

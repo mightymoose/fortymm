@@ -81,7 +81,7 @@ export function buildDashboardTournamentEvent(
     position: 1,
     field_size: 4,
     stage_label: 'Group play',
-    pool_label: 'Pool B',
+    group_label: 'Group B',
     match: buildDashboardTournamentMatch(),
     fixtures: [
       buildDashboardTournamentFixtureRow(),

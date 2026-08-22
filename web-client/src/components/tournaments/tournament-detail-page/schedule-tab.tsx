@@ -111,12 +111,13 @@ const Side = ({ side }: { side: FixtureSide }) => {
   }
 }
 
-/** The director's placement editor for one match (owner only): pick a **table** (a pooled
- * match's own pool tables are marked as the natural suggestion) and a **time** within the
- * fixture's window, then Save — or Clear an existing placement.
+/** The director's placement editor for one match (owner only): pick a **table** (a
+ * booked-reservation match's own reservation tables are marked as the natural suggestion)
+ * and a **time** within the fixture's window, then Save — or Clear an existing placement.
  *
  * Only the **time** is asked: the placement's date is fixed by the match's reservation —
- * its pool's Slot, or its event's own Slot when it has no pool (ADR-0790, ADR 20260807) —
+ * its group's reservation Slot, or its event's own Slot when it has no group (ADR-0790,
+ * ADR 20260807) —
  * so the naive timestamp is composed from that date + this time (`composeScheduledStart`)
  * — no `Date`, no timezone. The control is a plain reveal-on-click panel, not a portal'd
  * popover, so what a director (and a test) sees is the DOM, in place. */
@@ -151,15 +152,15 @@ const PlacementControl = ({
     consequence: CallConsequence
   } | null>(null)
 
-  // The `pool table` mark is carried only by a POOLED match (ADR 20260807). A mark is
-  // information only when it discriminates: an un-pooled match is suggested every table
-  // in the tournament, so marking all of them would say nothing — and would name a pool
-  // the match does not have.
+  // The `reservation table` mark is carried only by a BOOKED-reservation match (ADR
+  // 20260807). A mark is information only when it discriminates: an event-wide match is
+  // suggested every table in the tournament, so marking all of them would say nothing —
+  // and would name a reservation the match does not have.
   const options = tables.map((t) => ({
     value: t.id,
     label:
-      match.reservation === 'pool' && match.suggestedTableIds.includes(t.id)
-        ? `${t.label} · pool table`
+      match.reservation === 'booked' && match.suggestedTableIds.includes(t.id)
+        ? `${t.label} · reservation table`
         : t.label,
   }))
   // A placement can name a table the catalogue no longer lists (a dangling ref, ADR-0790):
@@ -440,18 +441,18 @@ const MatchRow = ({
   )
 }
 
-/** The reserved pool windows — real, director-entered data (ADR-0790), kept visible as
- * lightweight context beneath the real matches: which pools reserve which tables, when.
+/** The reserved windows — real, director-entered data (ADR-0790), kept visible as
+ * lightweight context beneath the real matches: which reservations book which tables, when.
  * Not the schedule itself (that is the matches above); an *input* to it. */
 const ReservedWindows = ({ tournament }: { tournament: Tournament }) => {
   const rows = tournament.events.flatMap((event) =>
-    event.pools.map((pool) => ({
-      key: `${event.id}-${pool.id}`,
+    event.reservations.map((reservation) => ({
+      key: `${event.id}-${reservation.id}`,
       event: event.name,
-      pool: pool.name,
-      date: pool.slot.date,
-      window: fmtTimeWindow(pool.slot.start, pool.slot.end),
-      tables: pool.tableIds.length,
+      reservation: reservation.name,
+      date: reservation.slot.date,
+      window: fmtTimeWindow(reservation.slot.start, reservation.slot.end),
+      tables: reservation.tableIds.length,
     })),
   )
   if (rows.length === 0) return null
@@ -469,7 +470,7 @@ const ReservedWindows = ({ tournament }: { tournament: Tournament }) => {
           >
             <span className="font-semibold text-[color:var(--fg-1)]">{row.event}</span>
             <span className="text-[color:var(--fg-3)]">·</span>
-            <span className="text-[color:var(--fg-2)]">{row.pool}</span>
+            <span className="text-[color:var(--fg-2)]">{row.reservation}</span>
             <span className="ml-auto font-mono tabular-nums text-[color:var(--fg-3)]">
               {fmtDateShort(row.date)} · {row.window} · {row.tables}×
             </span>
@@ -587,9 +588,9 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
         subtitle={
           canEdit
             ? // The date's source is named for BOTH kinds of match (ADR 20260807): a
-              // pooled match takes its pool's window, and an un-pooled one — a bracket,
-              // a swiss round, a knockout stage — takes its event's own.
-              'Every match, by table. Place a match on a table and a predicted time — the date comes from its pool window, or from its event window when it has no pool.'
+              // booked-reservation match takes its reservation's window, and an event-wide
+              // one — a bracket, a swiss round, a knockout stage — takes its event's own.
+              'Every match, by table. Place a match on a table and a predicted time — the date comes from its reservation window, or from its event window when it has no reservation.'
             : 'Every match, by table, with its predicted start time.'
         }
         action={

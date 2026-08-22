@@ -216,8 +216,8 @@ export function buildFiveEntrantRounds(): DrawRound[] {
 
 /**
  * A single-elim `DrawState`, defaulting to the **eight-entrant, cut-but-not-live** bracket
- * — a realistic, non-degenerate scenario a `bare` build renders meaningfully. `pools: []`
- * because a single-elim draw is entirely un-pooled; pass `unpooled` (e.g.
+ * — a realistic, non-degenerate scenario a `bare` build renders meaningfully. `groups: []`
+ * because a single-elim draw is entirely ungrouped; pass `ungrouped` (e.g.
  * `buildFiveEntrantRounds()`, `buildEightEntrantLiveRounds()`) for the other shapes.
  */
 export function buildSingleElimDrawState(
@@ -225,12 +225,12 @@ export function buildSingleElimDrawState(
 ): DrawState {
   return {
     kind: 'drawn',
-    pools: [],
-    // A single-elim draw's un-pooled fixtures ARE its bracket (`unpooledShape`,
-    // `../../../data/draw`) — stated, because since swiss landed "un-pooled" no longer
+    groups: [],
+    // A single-elim draw's ungrouped fixtures ARE its bracket (`shapeForStage`,
+    // `../../../data/draw`) — stated, because since swiss landed "ungrouped" no longer
     // implies it.
-    unpooledShape: 'bracket',
-    unpooled: buildEightEntrantRounds(),
+    ungroupedShape: 'bracket',
+    ungrouped: buildEightEntrantRounds(),
     // A bracket byes nobody: an entrant in none of its fixtures is **eliminated**, which is
     // why `drawState` computes the map for swiss alone (`SwissByes`, `../../../data/draw`).
     swissByes: new Map(),

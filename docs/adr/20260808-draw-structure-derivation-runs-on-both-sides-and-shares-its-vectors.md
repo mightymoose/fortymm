@@ -8,6 +8,19 @@ concurrent worktrees. See `scripts/check-adr-numbering.sh`)
 Accepted. Decided during the grill for #1320. Builds on
 20260808-a-structural-setting-is-owned-by-the-director-or-derived-by-the-system.
 
+> **Amended by #1386 (2026-08-17).** The derivation now takes **seven inputs, not
+> eight**: the reservation row count is no longer one of them, so decisions 1 and 4
+> read "seven" where they say "eight". The automatic group count derives from a
+> default group size of five — `max(1, ceil(field / 5))`, sizes balanced across the
+> count (#1370 decision 1) — instead of counting the event's reservation rows.
+> Both sides now duplicate a **second constant**, `DEFAULT_GROUP_SIZE = 5`
+> (`web-client/src/components/tournaments/data/draw-structure.ts` and
+> `api/app/draw_structure.py`), pinned by both vector tables the way the
+> Consequences section already describes for `DEFAULT_UNCAPPED_FIELD`. The Python
+> derivation decision 2 requires now exists, but no request path calls it yet —
+> #1387 is its first production caller, so the refusals still fire only at cut
+> time until it lands.
+
 ## Context
 
 The Draw structure tab recomputes as the director types. Pool count, pool sizes,

@@ -60,8 +60,8 @@ class TournamentEventDrawSettings(Base):
 
     Two columns of configuration today: the draw type, and the ``settings`` object
     beside it — the serialized form of the draw type's own settings arm (ADR "a draw
-    type's settings are one NOT NULL JSON object"). The follow-on pools ticket moves
-    ``TournamentEvent.pools`` in here.
+    type's settings are one NOT NULL JSON object"). The follow-on groups ticket moves
+    ``TournamentEvent.groups`` in here.
     """
 
     __tablename__ = "tournament_event_draw_settings"
@@ -71,7 +71,7 @@ class TournamentEventDrawSettings(Base):
         # and mean nothing, so they are refused here rather than deep in a reader.
         #
         # It is deliberately weaker than the ``CASE`` constraint it replaces, which
-        # paired a nullable ``qualifiers_per_pool`` column with the one draw type that
+        # paired a nullable ``qualifiers_per_group`` column with the one draw type that
         # has one. Which settings belong to which draw type is no longer a storage
         # fact — it is the discriminated union at the request boundary
         # (``app.schemas.tournament.DrawSettingsWrite``), which refuses a qualifier
@@ -103,7 +103,7 @@ class TournamentEventDrawSettings(Base):
     # The draw type's settings, as one NOT NULL JSON object (ADR "a draw type's
     # settings are one NOT NULL JSON object"). ``{}`` for a draw type that takes no
     # configuration — ``round-robin`` and ``single-elim`` today —
-    # ``{"qualifiers_per_pool": K}`` for ``rr-then-ko``, and ``{"rounds": R}`` for
+    # ``{"qualifiers_per_group": K}`` for ``rr-then-ko``, and ``{"rounds": R}`` for
     # ``swiss``.
     #
     # This is the **serialized form of a union**: which keys are in here depends

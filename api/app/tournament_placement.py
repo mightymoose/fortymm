@@ -20,7 +20,7 @@ Per the tournament-verbs ADR (mirroring ``tournament_lifecycle`` /
 refusal with a **domain exception** from ``app.tournament_errors`` — never an
 ``HTTPException`` — and each adapter maps it back to the exact response it produced
 before. ``apply_manual_placement`` raises no refusal of its own (the placement is still
-soft everywhere ADR-0790 made it soft: an out-of-window time, an off-pool table and a
+soft everywhere ADR-0790 made it soft: an out-of-window time, an off-group table and a
 double-booking all SAVE), so all three coded refusals — a missing fixture
 (:class:`FixtureNotFoundError`), a played-out fixture
 (:class:`FixturePlacementFrozenError`), and a ``table_id`` that names no table in the
@@ -33,6 +33,7 @@ from typing import assert_never
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import contains_eager
 
 from app.match_calls import apply_manual_placement, enqueue_call_fanout
 from app.models import (
@@ -41,6 +42,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
+    TournamentEventStage,
     TournamentFixture,
     User,
 )
@@ -76,15 +78,26 @@ async def _load_fixture_for_placement(
     ``completed``/``voided`` is history and can no longer be moved. Never an
     ``HTTPException``.
     """
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
+    # is reachable through the stage. ``contains_eager(TournamentFixture.stage)`` tells
+    # the ORM this explicit join IS the eager load ``TournamentFixture.stage``
+    # (``lazy="joined"``) would otherwise add a second, aliased join for.
+    # ``TournamentEventStage.groups`` is deliberately NOT eager (see that
+    # relationship's docstring), so attaching a stage here costs nothing extra.
     row = (
         await db.execute(
             select(TournamentFixture, Match.status, TournamentEvent.timezone)
-            .join(TournamentEvent, TournamentEvent.id == TournamentFixture.event_id)
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(
                 TournamentFixture.id == fixture_id,
                 TournamentEvent.tournament_id == tournament_id,
             )
+            .options(contains_eager(TournamentFixture.stage))
         )
     ).one_or_none()
     if row is None:
@@ -184,8 +197,8 @@ async def place_fixture(
     * **422** — the hard rule about the body: the ``table_id`` must name a table in
       this tournament's catalogue (:func:`_enforce_table_exists`, raising
       :class:`PlacementTableNotFoundError`, ADR 20260801). Everything else still saves
-      — an out-of-window time, a table outside the fixture's pool and a double-booking
-      are flags derived on read, not refusals (ADR-0790).
+      — an out-of-window time, a table outside the fixture's group's reservation and a
+      double-booking are flags derived on read, not refusals (ADR-0790).
 
     Then the whole pin/notify transition runs through
     :func:`app.match_calls.apply_manual_placement` on this open transaction (a
@@ -220,7 +233,7 @@ async def place_fixture(
     # Judged second, because the freeze is the fact that will not change — a completed
     # fixture is never placeable again, whatever id is sent — where a bogus table id is
     # a request the director can fix and retry. Everything else about the placement
-    # still saves: an out-of-window start, an off-pool table and a double-booking are
+    # still saves: an out-of-window start, an off-group table and a double-booking are
     # flags derived on read, not refusals (ADR-0790).
     _enforce_table_exists(tournament, placement.table_id)
     # The whole pin/notify transition — columns, ``pinned_at``, in-app rows — on this

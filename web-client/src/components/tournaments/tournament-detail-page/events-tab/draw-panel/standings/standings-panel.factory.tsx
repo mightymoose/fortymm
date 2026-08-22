@@ -15,7 +15,7 @@ export type StandingsPanelScenario = Partial<StandingsPanelProps> & {
 
 /**
  * Props for `StandingsPanel`: by default a round-robin event **with results** — a complete
- * single pool and a champion (`buildStandingsEvent`).
+ * single group and a champion (`buildStandingsEvent`).
  *
  * The panel no longer takes an event, but a test still reasons in events, so this derives
  * the props from one **the same way `ResultsPanel` does at runtime** — `eventStandings`

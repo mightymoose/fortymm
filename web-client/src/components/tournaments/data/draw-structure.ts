@@ -1,6 +1,6 @@
-// The whole **round-robin-then-knockout draw structure**, derived from the eight numbers
-// a director can set (#1320). Pool count, pool sizes, qualifiers, the bracket, the byes,
-// the pool-match total, the source sentence under each row, and the three notices —
+// The whole **round-robin-then-knockout draw structure**, derived from the seven numbers
+// a director can set (#1320). Group count, group sizes, qualifiers, the bracket, the byes,
+// the group-match total, the source sentence under each row, and the three notices —
 // disagreement, uneven, impossible.
 //
 // **This module renders nothing and fetches nothing.** It is a pure function, and that is
@@ -17,18 +17,36 @@
 // vectors do not pin is drift waiting to happen**, which is why the result carries only
 // the fields the tab actually reads.
 //
-// The spec is `docs/designs/rr-then-ko-draw-structure/README.md` — its "The derivation"
-// section for the maths, its "Row copy" and "Impossible" sections for the strings. The
-// strings are **verbatim**, including the `÷` and `·` glyphs and including
-// `1 pool reservations`: this module does not pluralise copy the reference does not
-// pluralise, because a silent improvement here reds the Python vectors later and the diff
-// looks like a Python bug.
+// The starting point is `docs/designs/rr-then-ko-draw-structure/README.md` — its "The
+// derivation" section for the maths, its "Row copy" and "Impossible" sections for the
+// strings — but **not every string here is the reference's any more**. The automatic
+// group count departs from it (#1386): the count derives from `DEFAULT_GROUP_SIZE`, not
+// from the reservation rows, and the two group-count sentences are ours. The README's
+// "What the reference does not settle" section records the divergence. Reference copy
+// this module keeps is kept **verbatim**, `÷` and `·` glyphs included: a silent
+// improvement here reds the Python vectors later and the diff looks like a Python bug.
+//
+// ⚠️ **`groupLetter` is asserted against `api/tests/test_draws.py`**, which pins the
+// identical seven `(position, label)` pairs and carries a comment pointing back at this
+// file — the mutual citation is deliberate (ticket #1369), so the base-26 carry cannot
+// drift between the two implementations without both test suites failing.
 
 /** The knockout the automatic qualifier count aims at. **A constant, not stored state**
  * (ADR 20260808-a-structural-setting-is-owned-by-the-director-or-derived-by-the-system):
  * nothing in the reference writes it, so no UI exposes it. A director who wants a
  * different bracket sets the qualifiers themselves, which is a setting they own. */
 export const TARGET_BRACKET_SIZE = 8
+
+/** The group size the automatic group count divides by — `max(1, ceil(field / 5))`, with
+ * the sizes then balanced across that count. **A count divisor, not a size target**: a
+ * field of 16 gives four groups of four, where filling to five greedily would give
+ * `5, 5, 5, 1` and a group of one is a competition nobody can play (#1370 decision 1). A
+ * director who *types* a five keeps the greedy meaning — a typed number is theirs, and
+ * the app states its consequence rather than reshaping it. **A constant, not stored
+ * state**, like the bracket target above.
+ *
+ * ⚠️ Duplicated in `api/app/draw_structure.py`, and the shared vectors pin both copies. */
+export const DEFAULT_GROUP_SIZE = 5
 
 /** Who a structural setting belongs to: the system derived it, or the director typed it.
  * The row's `Automatic` / `Yours` badge is this, and nothing else. */
@@ -45,17 +63,17 @@ export interface SettingSource {
 /** The provenance of all three numeric settings. Membership is not here: it has no
  * number, so it is not derived — the row reads its mode straight off the event. */
 export interface DrawStructureSources {
-  poolCount: SettingSource
-  poolSize: SettingSource
+  groupCount: SettingSource
+  groupSize: SettingSource
   qualifiers: SettingSource
 }
 
-/** A run of same-sized pools, for the uneven notice's tally (`2 pools of 6 · 2 pools of
+/** A run of same-sized groups, for the uneven notice's tally (`2 groups of 6 · 2 groups of
  * 5`). Largest size first. */
-export interface PoolSizeTally {
-  /** How many pools hold this many players. */
-  pools: number
-  /** How many players those pools hold. */
+export interface GroupSizeTally {
+  /** How many groups hold this many players. */
+  groups: number
+  /** How many players those groups hold. */
   size: number
 }
 
@@ -70,11 +88,11 @@ export interface PoolSizeTally {
  * because the fixes are buttons and a button is not a derivation.
  */
 export interface DrawStructureDisagreement {
-  /** The manual pool count, as the derivation used it. */
-  poolCount: number
-  /** The manual pool size, as the derivation used it. */
-  poolSize: number
-  /** `poolCount * poolSize` — the seats the structure actually has. */
+  /** The manual group count, as the derivation used it. */
+  groupCount: number
+  /** The manual group size, as the derivation used it. */
+  groupSize: number
+  /** `groupCount * groupSize` — the seats the structure actually has. */
   seats: number
   /** The field the preview is derived against. */
   fieldSize: number
@@ -86,7 +104,7 @@ export interface DrawStructureDisagreement {
 }
 
 /** Which of the three impossible competitions a configuration produces. */
-export type ImpossibleProblemKind = 'pool' | 'bracket' | 'qualifier'
+export type ImpossibleProblemKind = 'group' | 'bracket' | 'qualifier'
 
 /** A competition that cannot be played, in the words the panel shows. The API refuses the
  * same three conditions in its own, longer copy (`api/app/draws.py`); this is the client's
@@ -97,57 +115,65 @@ export interface ImpossibleProblem {
   body: string
 }
 
-/** The eight inputs. Every one of them is stated at each call site and in every vector —
+/** The seven inputs. Every one of them is stated at each call site and in every vector —
  * there is no defaults builder, because the Python side transcribes this table by hand and
- * a hidden default is a guess waiting to be made wrong. */
+ * a hidden default is a guess waiting to be made wrong.
+ *
+ * The reservation count is deliberately **not** here (#1386): the automatic group count
+ * derives from `DEFAULT_GROUP_SIZE`, so adding or removing a reservation changes no
+ * derived number. */
 export interface DrawStructureOptions {
   /** The field the preview derives against: the event's cap, or the uncapped default. */
   previewFieldSize: number
-  /** How many pool rows the event already has — today's behaviour for the pool count. */
-  poolReservationCount: number
-  poolCountMode: SettingOwnership
-  manualPoolCount: number | null
-  poolSizeMode: SettingOwnership
-  manualPoolSize: number | null
+  groupCountMode: SettingOwnership
+  manualGroupCount: number | null
+  groupSizeMode: SettingOwnership
+  manualGroupSize: number | null
   qualifiersMode: SettingOwnership
   manualQualifiers: number | null
 }
 
 /** Everything the Draw structure tab renders, derived once. */
 export interface DrawStructure {
-  poolCount: number
-  /** One entry per pool, in pool order — **not** a single size, because the pools are
+  groupCount: number
+  /** One entry per group, in group order — **not** a single size, because the groups are
    * routinely unequal and the uneven case is a first-class state, not an edge. */
-  poolSizes: number[]
-  qualifiersPerPool: number
-  /** `poolCount * qualifiersPerPool`: how many players come out of the pool stage. */
+  groupSizes: number[]
+  qualifiersPerGroup: number
+  /** `groupCount * qualifiersPerGroup`: how many players come out of the group stage. */
   totalQualifiers: number
   /** The knockout's entry list. The same number as `totalQualifiers` by construction —
    * they are two different questions with one answer, and both are named because the tab
    * asks both. */
   knockoutBracketSize: number
   firstRoundByes: number
-  /** Every all-play-all match the pool stage plays, across all pools. */
-  poolMatchCount: number
+  /** Every all-play-all match the group stage plays, across all groups. */
+  groupMatchCount: number
   sources: DrawStructureSources
   // ⚠️ The next three are reported **independently**, and more than one can be non-empty
-  // at once — a pool of one is routinely also an uneven split. The reference shows only
+  // at once — a group of one is routinely also an uneven split. The reference shows only
   // ONE panel at a time (impossible, then disagreement, then uneven), and that precedence
   // belongs to whatever renders them. It is not encoded here: a derivation that suppressed
-  // the uneven tally because a pool was impossible would be deciding a layout question.
+  // the uneven tally because a group was impossible would be deciding a layout question.
   /** `null` when the numbers agree, or when only one of them is the director's. */
   disagreement: DrawStructureDisagreement | null
-  /** The size tally, largest first, or `null` when every pool is the same size. */
-  unevenDistribution: PoolSizeTally[] | null
-  /** **At most one problem**, and always the first in `pool` → `bracket` → `qualifier`
+  /** The size tally, largest first, or `null` when every group is the same size. */
+  unevenDistribution: GroupSizeTally[] | null
+  /** **At most one problem**, and always the first in `group` → `bracket` → `qualifier`
    * order. One impossible competition is one thing to fix; listing the two further
-   * conditions that a pool of one also trips would bury it. */
+   * conditions that a group of one also trips would bury it. */
   impossibleProblems: ImpossibleProblem[]
 }
 
-/** `Pool A`, `Pool B`, … and past `Pool Z` the spreadsheet's `AA`, so a hundred-pool field
- * names its pools instead of printing punctuation. */
-export function poolLetter(index: number): string {
+/** `Group A`, `Group B`, … and past `Group Z` the spreadsheet's `AA`, so a hundred-group
+ * field names its groups instead of printing punctuation.
+ *
+ * ⚠️ **Pinned against `api/tests/test_draws.py`** — the identical seven `(position,
+ * label)` pairs (0→"A", 1→"B", 25→"Z", 26→"AA", 27→"AB", 51→"AZ", 52→"BA") are asserted
+ * there too, with a comment pointing back at this file. Positions 26 and 52 are the ones
+ * worth keeping: the carry is `n // 26 - 1`, and a naive `n // 26` agrees for 0–25 then
+ * silently diverges. */
+export function groupLetter(index: number): string {
   let letters = ''
   for (let n = index; n >= 0; n = Math.floor(n / 26) - 1) {
     letters = String.fromCharCode(65 + (n % 26)) + letters
@@ -170,43 +196,43 @@ function nextPowerOfTwo(n: number): number {
 const atLeastOne = (value: number) => Math.max(1, value)
 
 /** The balanced split: `base = floor(field / count)`, and the remainder goes to the
- * EARLIEST pools. 22 across 4 is `6, 6, 5, 5`. */
-function balancedSizes(fieldSize: number, poolCount: number): number[] {
-  const base = Math.floor(fieldSize / poolCount)
-  const extra = fieldSize % poolCount
-  return Array.from({ length: poolCount }, (_, i) => base + (i < extra ? 1 : 0))
+ * EARLIEST groups. 22 across 4 is `6, 6, 5, 5`. */
+function balancedSizes(fieldSize: number, groupCount: number): number[] {
+  const base = Math.floor(fieldSize / groupCount)
+  const extra = fieldSize % groupCount
+  return Array.from({ length: groupCount }, (_, i) => base + (i < extra ? 1 : 0))
 }
 
 /**
- * The **greedy** fill, used when the director set the pool size but not the pool count:
- * each pool takes the target in turn and the last pool takes what is left.
+ * The **greedy** fill, used when the director set the group size but not the group count:
+ * each group takes the target in turn and the last group takes what is left.
  *
  * ⚠️ **This is deliberately not a balanced split, and must not be "fixed" into one.** 41
- * players in pools of 5 gives `5,5,5,5,5,5,5,5,1` — and that pool of one is then an
+ * players in groups of 5 gives `5,5,5,5,5,5,5,5,1` — and that group of one is then an
  * impossible competition the director is told about. Rebalancing to `5,5,5,5,5,5,5,4,4`
  * would silently reshape a number they typed, which is the exact behaviour #1320 exists to
  * remove: the app states the consequence of the input, it does not edit the input.
  */
-function greedySizes(fieldSize: number, poolCount: number, poolSize: number): number[] {
+function greedySizes(fieldSize: number, groupCount: number, groupSize: number): number[] {
   let remaining = fieldSize
-  return Array.from({ length: poolCount }, () => {
-    const take = Math.min(poolSize, remaining)
+  return Array.from({ length: groupCount }, () => {
+    const take = Math.min(groupSize, remaining)
     remaining -= take
     return take
   })
 }
 
-/** The size tally the uneven notice reads out, largest pool first. */
-function tallySizes(sizes: number[]): PoolSizeTally[] {
+/** The size tally the uneven notice reads out, largest group first. */
+function tallySizes(sizes: number[]): GroupSizeTally[] {
   const counts = new Map<number, number>()
   for (const size of sizes) counts.set(size, (counts.get(size) ?? 0) + 1)
   return [...counts.entries()]
     .sort(([a], [b]) => b - a)
-    .map(([size, pools]) => ({ pools, size }))
+    .map(([size, groups]) => ({ groups, size }))
 }
 
 /**
- * Derive the whole draw structure from the eight inputs.
+ * Derive the whole draw structure from the seven inputs.
  *
  * **A mode of `manual` with no number is automatic.** A director who clears the input has
  * not set anything, and the row must go on showing a real number rather than a blank or a
@@ -216,58 +242,57 @@ function tallySizes(sizes: number[]): PoolSizeTally[] {
 export function deriveDrawStructure(options: DrawStructureOptions): DrawStructure {
   const {
     previewFieldSize: fieldSize,
-    poolReservationCount,
-    poolCountMode,
-    manualPoolCount,
-    poolSizeMode,
-    manualPoolSize,
+    groupCountMode,
+    manualGroupCount,
+    groupSizeMode,
+    manualGroupSize,
     qualifiersMode,
     manualQualifiers,
   } = options
 
-  const setCount = poolCountMode === 'manual' && manualPoolCount !== null
-  const setSize = poolSizeMode === 'manual' && manualPoolSize !== null
+  const setCount = groupCountMode === 'manual' && manualGroupCount !== null
+  const setSize = groupSizeMode === 'manual' && manualGroupSize !== null
   const setQualifiers = qualifiersMode === 'manual' && manualQualifiers !== null
 
-  const targetSize = setSize ? atLeastOne(manualPoolSize) : null
+  const targetSize = setSize ? atLeastOne(manualGroupSize) : null
 
-  // Pool count: the director's, else derived from their pool size, else today's behaviour
-  // — one reservation row is one pool.
-  const poolCount = setCount
-    ? atLeastOne(manualPoolCount)
-    : targetSize !== null
-      ? atLeastOne(Math.ceil(fieldSize / targetSize))
-      : atLeastOne(poolReservationCount)
+  // Group count: the director's, else derived from a size — theirs when they typed one,
+  // the default divisor otherwise. One shape, one fallback chain. Named once so the
+  // sentence below reports the same divisor the arithmetic used, structurally.
+  const countDivisor = targetSize ?? DEFAULT_GROUP_SIZE
+  const groupCount = setCount
+    ? atLeastOne(manualGroupCount)
+    : atLeastOne(Math.ceil(fieldSize / countDivisor))
 
-  // Pool sizes. Both manual means both numbers stand, product be damned — that standoff is
-  // reported as a disagreement below, never resolved by moving one of them.
-  const poolSizes =
+  // Group sizes. Both manual means both numbers stand, product be damned — that standoff
+  // is reported as a disagreement below, never resolved by moving one of them.
+  const groupSizes =
     targetSize === null
-      ? balancedSizes(fieldSize, poolCount)
+      ? balancedSizes(fieldSize, groupCount)
       : setCount
-        ? Array.from({ length: poolCount }, () => targetSize)
-        : greedySizes(fieldSize, poolCount, targetSize)
+        ? Array.from({ length: groupCount }, () => targetSize)
+        : greedySizes(fieldSize, groupCount, targetSize)
 
-  const smallestPool = Math.min(...poolSizes)
-  const largestPool = Math.max(...poolSizes)
+  const smallestGroup = Math.min(...groupSizes)
+  const largestGroup = Math.max(...groupSizes)
 
-  const qualifiersPerPool = setQualifiers
+  const qualifiersPerGroup = setQualifiers
     ? atLeastOne(manualQualifiers)
-    : atLeastOne(Math.ceil(TARGET_BRACKET_SIZE / poolCount))
+    : atLeastOne(Math.ceil(TARGET_BRACKET_SIZE / groupCount))
 
-  const knockoutBracketSize = poolCount * qualifiersPerPool
+  const knockoutBracketSize = groupCount * qualifiersPerGroup
   // `max(2, …)` is what makes a one-player knockout report ONE bye rather than none: the
   // smallest bracket that can be drawn holds two, so the missing player is a bye.
   const firstRoundByes = nextPowerOfTwo(Math.max(2, knockoutBracketSize)) - knockoutBracketSize
-  const poolMatchCount = poolSizes.reduce((total, n) => total + (n * (n - 1)) / 2, 0)
+  const groupMatchCount = groupSizes.reduce((total, n) => total + (n * (n - 1)) / 2, 0)
 
-  const seats = poolCount * (targetSize ?? 0)
+  const seats = groupCount * (targetSize ?? 0)
   const conflict = setCount && setSize && seats !== fieldSize
   const disagreement: DrawStructureDisagreement | null =
     conflict && targetSize !== null
       ? {
-          poolCount,
-          poolSize: targetSize,
+          groupCount,
+          groupSize: targetSize,
           seats,
           fieldSize,
           direction: fieldSize > seats ? 'unseated' : 'empty-seats',
@@ -275,52 +300,54 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
         }
       : null
 
-  // The `not conflict` guard mirrors the README and the Python. No input can distinguish
-  // it: a disagreement needs both modes manual, and both manual gives every pool the same
-  // size, so `min === max` already. It stays because the two implementations must read the
-  // same, not because a vector reaches it.
+  // The `not conflict` guard mirrors the README. No input can distinguish it: a
+  // disagreement needs both modes manual, and both manual gives every group the same
+  // size, so `min === max` already. It stays to follow the README's shape, not because a
+  // vector reaches it. (The Python twin carries no uneven logic at all — the tally is
+  // client-only, outside the shared subset.)
   const unevenDistribution =
-    !conflict && smallestPool !== largestPool ? tallySizes(poolSizes) : null
+    !conflict && smallestGroup !== largestGroup ? tallySizes(groupSizes) : null
 
   return {
-    poolCount,
-    poolSizes,
-    qualifiersPerPool,
+    groupCount,
+    groupSizes,
+    qualifiersPerGroup,
     totalQualifiers: knockoutBracketSize,
     knockoutBracketSize,
     firstRoundByes,
-    poolMatchCount,
+    groupMatchCount,
     sources: {
-      poolCount: {
+      groupCount: {
         ownership: setCount ? 'manual' : 'automatic',
+        // One template for the whole automatic arm: the division that happened is
+        // `field / (typed size ?? default)`, so the sentence reports whichever divisor
+        // was actually used (#1370 decision 3).
         sentence: setCount
-          ? 'You set this. Each pool also gets a reservation.'
-          : targetSize !== null
-            ? `${fieldSize} players ÷ about ${targetSize} per pool`
-            : `${poolCount} pool reservations · today's behaviour`,
+          ? 'You set this.'
+          : `${fieldSize} players ÷ about ${countDivisor} per group`,
       },
-      poolSize: {
+      groupSize: {
         ownership: setSize ? 'manual' : 'automatic',
         sentence: setSize
           ? setCount
             ? 'You set this.'
-            : 'You set the target. We derived the pool count.'
-          : `${fieldSize} players ÷ ${poolCount} pools`,
+            : 'You set the target. We derived the group count.'
+          : `${fieldSize} players ÷ ${groupCount} groups`,
       },
       qualifiers: {
         ownership: setQualifiers ? 'manual' : 'automatic',
         sentence: setQualifiers
           ? 'You set this.'
-          : `Aiming at an ${TARGET_BRACKET_SIZE}-player knockout across ${poolCount} pools.`,
+          : `Aiming at an ${TARGET_BRACKET_SIZE}-player knockout across ${groupCount} groups.`,
       },
     },
     disagreement,
     unevenDistribution,
     impossibleProblems: impossibleProblemsFor({
-      poolSizes,
-      smallestPool,
+      groupSizes,
+      smallestGroup,
       knockoutBracketSize,
-      qualifiersPerPool,
+      qualifiersPerGroup,
     }),
   }
 }
@@ -328,56 +355,62 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
 /**
  * The three impossible competitions, **tested in order, first hit only**.
  *
- * The order is not arbitrary. A pool of one trips the qualifier rule too, and a field of
- * one trips all three — but "Pool C would have one player" is the fact the director can
+ * The order is not arbitrary. A group of one trips the qualifier rule too, and a field of
+ * one trips all three — but "Group C would have one player" is the fact the director can
  * act on, and the other two are echoes of it. Reporting the echoes alongside it would make
  * one mistake look like three.
  */
 function impossibleProblemsFor({
-  poolSizes,
-  smallestPool,
+  groupSizes,
+  smallestGroup,
   knockoutBracketSize,
-  qualifiersPerPool,
+  qualifiersPerGroup,
 }: {
-  poolSizes: number[]
-  smallestPool: number
+  groupSizes: number[]
+  smallestGroup: number
   knockoutBracketSize: number
-  qualifiersPerPool: number
+  qualifiersPerGroup: number
 }): ImpossibleProblem[] {
-  // 1. A pool nobody can play in. Named by the FIRST such pool, because that is the one a
-  //    director looking down the preview will see first.
-  const emptyIndex = poolSizes.findIndex((size) => size < 2)
+  // 1. A group nobody can play in. Named by the FIRST such group, because that is the one
+  //    a director looking down the preview will see first.
+  //
+  //    Inlined `Group ${groupLetter(...)}` rather than `./draw`'s `groupLabel` on
+  //    purpose: `./draw` imports this module (`groupLetter`), so calling back into it
+  //    from here would be a cycle. This is the one call site `groupLabel` cannot
+  //    replace for that reason (see `./standings.ts`, which uses `groupLabel` because it
+  //    only reaches this module transitively, never the reverse).
+  const emptyIndex = groupSizes.findIndex((size) => size < 2)
   if (emptyIndex !== -1) {
-    const size = poolSizes[emptyIndex]
+    const size = groupSizes[emptyIndex]
     return [
       {
-        kind: 'pool',
-        title: `Pool ${poolLetter(emptyIndex)} would have ${size === 1 ? 'one player' : 'no players'}`,
-        body: 'They would have nobody to play. Use fewer pools or raise the player limit.',
+        kind: 'group',
+        title: `Group ${groupLetter(emptyIndex)} would have ${size === 1 ? 'one player' : 'no players'}`,
+        body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
       },
     ]
   }
 
-  // 2. A knockout of one. Reachable only from one pool taking one qualifier, and the
-  //    winner of that pool would be handed a title without playing for it.
+  // 2. A knockout of one. Reachable only from one group taking one qualifier, and the
+  //    winner of that group would be handed a title without playing for it.
   if (knockoutBracketSize < 2) {
     return [
       {
         kind: 'bracket',
         title: 'The knockout would have one player',
-        body: 'One player has nobody to play. Take more qualifiers or run more pools.',
+        body: 'One player has nobody to play. Take more qualifiers or run more groups.',
       },
     ]
   }
 
-  // 3. More qualifiers than the smallest pool holds — the pool would advance players it
+  // 3. More qualifiers than the smallest group holds — the group would advance players it
   //    does not have.
-  if (qualifiersPerPool > smallestPool) {
+  if (qualifiersPerGroup > smallestGroup) {
     return [
       {
         kind: 'qualifier',
-        title: `You can't take ${qualifiersPerPool} qualifiers from a pool of ${smallestPool}`,
-        body: `Take ${smallestPool} or fewer, or make the smallest pool bigger.`,
+        title: `You can't take ${qualifiersPerGroup} qualifiers from a group of ${smallestGroup}`,
+        body: `Take ${smallestGroup} or fewer, or make the smallest group bigger.`,
       },
     ]
   }

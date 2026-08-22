@@ -8,7 +8,7 @@ import {
   addEvent,
   createTournament,
   findEventByName,
-  type PoolSpec,
+  type ReservationSpec,
 } from '../support/tournament-api'
 
 /** The two-stage event, and the handle every reading below finds it by. */
@@ -18,20 +18,26 @@ const RR_KO_EVENT = 'Two-stage Open'
 const ROUND_ROBIN_EVENT = 'One-stage Open'
 
 /** The event's **cap**, which is the field the tab derives against (a capped event
- * previews against its cap; an uncapped one against a synthetic 16). Thirty-two because
- * it is the reference's own "nothing set" state, and because it divides by four exactly —
- * so the uneven notice is absent and any `6–8` on screen is a real failure. */
-const FIELD_CAP = 32
-/** How many **pool rows** the event carries. Today's behaviour, and the automatic source
- * of the pool count: one reservation is one pool (ADR 20260808). */
-const POOL_COUNT = 4
-/** The four pool rows, reserving **no** tables — a draw is cut without regard to tables,
- * and an empty `table_ids` is what the editor's own pool section sends. Four tables
- * shared four ways would be scenery this spec never looks at. */
-const POOLS: ReadonlyArray<PoolSpec> = ['A', 'B', 'C', 'D'].map((letter) => ({
-  name: `Pool ${letter}`,
-  tableLabels: [],
-}))
+ * previews against its cap; an uncapped one against a synthetic 16). Twenty because it
+ * divides by the default group size of five exactly — so the uneven notice is absent
+ * and any `4–5` on screen is a real failure. */
+const FIELD_CAP = 20
+/** The derived group count: `ceil(20 / 5)` under the default divisor of five (#1386).
+ * NOT the reservation row count — the derivation stopped reading it. The four seeded
+ * rows below deliberately match this number, so every numeric assertion is stable under
+ * either rule and none of them discriminates the source. The one assertion that does is
+ * `GROUP_COUNT_SOURCE`, verbatim: the old rule's sentence named the reservation rows,
+ * and this one names the division. */
+const GROUP_COUNT = 4
+/** The four reservation rows, booking **no** tables — a draw is cut without regard to
+ * tables, and an empty `table_ids` is what the editor's own reservation section sends.
+ * Four tables shared four ways would be scenery this spec never looks at. */
+const RESERVATIONS: ReadonlyArray<ReservationSpec> = ['A', 'B', 'C', 'D'].map(
+  (letter) => ({
+    name: `Reservation ${letter}`,
+    tableLabels: [],
+  }),
+)
 
 /** **K as the event STORES it** — required with no default on the server's `rr-then-ko`
  * arm, so the seed must send it or the create is a 422 naming the field.
@@ -41,30 +47,31 @@ const POOLS: ReadonlyArray<PoolSpec> = ['A', 'B', 'C', 'D'].map((letter) => ({
  * an eight-player knockout and lands on `ceil(8 / 4)` = 2 for this event. The two agree
  * here, which is why the row is not asserted as proof of anything about storage. Chore 3e
  * moves the setting onto this tab for good and makes them one number. */
-const STORED_QUALIFIERS_PER_POOL = 2
+const STORED_QUALIFIERS_PER_GROUP = 2
 
-/** What the derivation makes of `32` across `4`, and the only numbers this spec asserts.
- * Worked from the reference's own arithmetic (`docs/designs/rr-then-ko-draw-structure`):
- * a balanced split of 32 into 4 is `8, 8, 8, 8`; the automatic qualifier count is
- * `ceil(8 / 4)` = 2; the bracket is `4 × 2` = 8, which is already a power of two and so
- * takes no byes; and the pool stage plays `4 × C(8,2)` = 112 matches. */
-const POOL_SIZE = 8
+/** What the derivation makes of a field of `20`, and the only numbers this spec asserts.
+ * Worked from the derivation's own arithmetic (`data/draw-structure.ts`, and the
+ * divergence note in `docs/designs/rr-then-ko-draw-structure`): `ceil(20 / 5)` = 4
+ * groups, balanced to `5, 5, 5, 5`; the automatic qualifier count is `ceil(8 / 4)` = 2;
+ * the bracket is `4 × 2` = 8, which is already a power of two and so takes no byes; and
+ * the group stage plays `4 × C(5,2)` = 40 matches. */
+const GROUP_SIZE = 5
 const QUALIFIERS_ADVANCING = 2
 const BRACKET_SIZE = 8
-const POOL_MATCHES = 112
+const GROUP_MATCHES = 40
 
 /** The equation, whole. Safe to assert as one string — unlike the cards below it, every
  * literal in that line carries its own spaces (`textContent` inserts none of its own, so
- * a pool card reads `Pool A8playerstop 2 advance` and is stated one fact at a time). */
-const EQUATION = `${FIELD_CAP} players ÷ ${POOL_COUNT} pools = ${POOL_SIZE} per pool`
+ * a group card reads `Group A8playerstop 2 advance` and is stated one fact at a time). */
+const EQUATION = `${FIELD_CAP} players ÷ ${GROUP_COUNT} groups = ${GROUP_SIZE} per group`
 
-/** The source line under the Pool count row, **verbatim**.
+/** The source line under the Group count row, **verbatim**.
  *
- * The glyphs are the reference's and are load-bearing: a middle dot (`·`, U+00B7), and a
- * **straight** apostrophe (U+0027) in `today's` — the one exception to the reference's
- * right-single-quote rule, which the design README states at the top and this string
- * exists to pin. A test that normalises either way is a test that stops noticing. */
-const POOL_COUNT_SOURCE = `${POOL_COUNT} pool reservations · today's behaviour`
+ * Ours, not the reference's (#1386): the automatic count divides the field by the
+ * default group size of five, and the sentence reports that division — the `÷` glyph
+ * (U+00F7) is load-bearing, and the divisor is the default the director never typed.
+ * The reference's reservation-count sentence is gone with the input it reported. */
+const GROUP_COUNT_SOURCE = `${FIELD_CAP} players ÷ about 5 per group`
 
 /** Where the preview field came from. `{n}-player cap` for a capped event — the honest
  * label an uncapped one gets instead is `preview-field.ts`'s deviation from the reference
@@ -75,9 +82,9 @@ const PREVIEW_BASIS = `${FIELD_CAP}-player cap`
  * **The Draw structure tab, through the whole composed stack** (#1320).
  *
  * A director opens a round-robin-then-knockout event they have already saved, and reads
- * the draw their four pool rows and their 32-player cap already imply: four pools of
- * eight, two out of each, an eight-player bracket with no byes, and 112 pool matches to
- * decide it.
+ * the draw their 20-player cap already implies under the default group size of five:
+ * four groups of five, two out of each, an eight-player bracket with no byes, and 40
+ * group matches to decide it.
  *
  * ## What only this suite can say
  *
@@ -86,12 +93,12 @@ const PREVIEW_BASIS = `${FIELD_CAP}-player cap`
  * the tab from a fixture. Both stop at the same edge: they hand the derivation numbers
  * that a *test* chose.
  *
- * This spec hands it numbers the **server** chose. The cap is a `max_players` column, the
- * pool count is four rows in `tournament_event_pools`, and both reach the tab only by
- * being serialized onto `GET /v1/tournaments/{id}`, parsed at the client's fetch
- * boundary, and mapped into the editor's draft. Every step of that is real here and
- * mocked everywhere else — so `112 pool matches` on this screen is the statement that the
- * real payload, decoded through the real fetch stack, produces the reference's number.
+ * This spec hands it numbers the **server** chose. The cap is a `max_players` column,
+ * and it reaches the tab only by being serialized onto `GET /v1/tournaments/{id}`,
+ * parsed at the client's fetch boundary, and mapped into the editor's draft. Every step
+ * of that is real here and mocked everywhere else — so `40 group matches` on this
+ * screen is the statement that the real payload, decoded through the real fetch stack,
+ * produces the derivation's number.
  *
  * ## …and the tab is CONDITIONAL, which is the regression worth a control
  *
@@ -111,7 +118,7 @@ const PREVIEW_BASIS = `${FIELD_CAP}-player cap`
  * that arc's 422 lived in. Every reading below is the browser's.
  */
 test.describe('Tournament — the rr-then-ko draw structure', () => {
-  test('a director reads the draw their pool rows already imply, and only this format offers it', async ({
+  test('a director reads the draw their player cap already implies, and only this format offers it', async ({
     page,
     baseURL,
   }) => {
@@ -129,24 +136,24 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     await addEvent(director, tournamentId, tables, {
       name: RR_KO_EVENT,
       drawType: 'rr-then-ko',
-      qualifiersPerPool: STORED_QUALIFIERS_PER_POOL,
+      qualifiersPerGroup: STORED_QUALIFIERS_PER_GROUP,
       maxPlayers: FIELD_CAP,
-      pools: POOLS,
+      reservations: RESERVATIONS,
     })
     // The control, and the reason it is on the SAME tournament: two events one click
     // apart is the sharpest form of "this format has the tab and that one does not".
     await addEvent(director, tournamentId, tables, {
       name: ROUND_ROBIN_EVENT,
-      pools: [{ name: 'Pool A', tableLabels: [] }],
+      reservations: [{ name: 'Reservation A', tableLabels: [] }],
     })
 
     // ----- the SERVER holds what the tab is about to be derived from ---------
     // Read back before a browser is involved, so a wrong number on screen below can only
     // be the client's doing. A 201 alone would also come back from a server that stored
-    // the event and dropped its cap or its pools.
+    // the event and dropped its cap or its reservations.
     const stored = await findEventByName(director, tournamentId, RR_KO_EVENT)
     expect(stored.draw_type).toBe('rr-then-ko')
-    expect(stored.qualifiers_per_pool).toBe(STORED_QUALIFIERS_PER_POOL)
+    expect(stored.qualifiers_per_group).toBe(STORED_QUALIFIERS_PER_GROUP)
 
     const detail = await TournamentDetailPage.navigateTo(page, tournamentId)
     // `toContainText`, not `toHaveText`: the hero sets its own full stop after the name.
@@ -172,17 +179,17 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     // ----- the equation: the whole draw in one line --------------------------
     await expect(drawStructure.previewEquation).toHaveText(EQUATION)
 
-    // ----- four pools of eight, two out of each ------------------------------
-    await expect(drawStructure.previewPoolCards).toHaveCount(POOL_COUNT)
+    // ----- four groups of eight, two out of each ------------------------------
+    await expect(drawStructure.previewGroupCards).toHaveCount(GROUP_COUNT)
     for (const letter of ['A', 'B', 'C', 'D']) {
-      const card = drawStructure.previewPoolCard(letter)
+      const card = drawStructure.previewGroupCard(letter)
       // One fact per assertion: `textContent` puts no space between block elements, so
-      // the card reads `Pool A8playerstop 2 advance` as one string and a whole-card
+      // the card reads `Group A8playerstop 2 advance` as one string and a whole-card
       // `toHaveText` would be pinning that concatenation instead of the copy.
-      await expect(card).toContainText(`${POOL_SIZE}`)
+      await expect(card).toContainText(`${GROUP_SIZE}`)
       await expect(card).toContainText('players')
       await expect(card).toContainText(`top ${QUALIFIERS_ADVANCING} advance`)
-      // The negative half: a pool that cannot be played says so in words, and none of
+      // The negative half: a group that cannot be played says so in words, and none of
       // these can be — eight players supplying two qualifiers is comfortable.
       await expect(card).not.toContainText('Too small')
     }
@@ -194,10 +201,9 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     // Eight qualifiers into an eight-slot bracket. The `No …` wording is the state, not
     // an absence of text: a bracket that took byes says `{n} first-round byes` here.
     await expect(drawStructure.previewKnockout).toContainText('No first-round byes')
-    // `4 × C(8,2)`. The one number on this screen that no other surface states, and the
-    // reference's own worked example.
+    // `4 × C(5,2)`. The one number on this screen that no other surface states.
     await expect(drawStructure.previewKnockout).toContainText(
-      `${POOL_MATCHES} pool matches`,
+      `${GROUP_MATCHES} group matches`,
     )
 
     // ----- the verdict, which is the tab's one summary -----------------------
@@ -206,22 +212,22 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     await expect(drawStructure.previewVerdict).toHaveText('Ready to save')
     await expect(drawStructure.previewBadge).toHaveText('Sound')
 
-    // ----- and the Pool count row says where its number came from ------------
+    // ----- and the Group count row says where its number came from -----------
     // The row a director looks at to learn that nobody chose this: the value, the badge
-    // that says the system owns it, and the sentence naming the pool rows it was read
-    // off. Addressed by the setting's name, which is the row's accessible name.
-    await expect(drawStructure.settingValue('Pool count')).toHaveText(
-      String(POOL_COUNT),
+    // that says the system owns it, and the sentence naming the division that produced
+    // it. Addressed by the setting's name, which is the row's accessible name.
+    await expect(drawStructure.settingValue('Group count')).toHaveText(
+      String(GROUP_COUNT),
     )
-    await expect(drawStructure.settingUnit('Pool count')).toHaveText('pools')
-    await expect(drawStructure.settingOwnership('Pool count')).toHaveText('Automatic')
-    await expect(drawStructure.settingSource('Pool count')).toHaveText(
-      POOL_COUNT_SOURCE,
+    await expect(drawStructure.settingUnit('Group count')).toHaveText('groups')
+    await expect(drawStructure.settingOwnership('Group count')).toHaveText('Automatic')
+    await expect(drawStructure.settingSource('Group count')).toHaveText(
+      GROUP_COUNT_SOURCE,
     )
-    // The pools are even, so the size row reads one number and not a `{min}–{max}` range
+    // The groups are even, so the size row reads one number and not a `{min}–{max}` range
     // — the fact that keeps the equation above from being an average.
-    await expect(drawStructure.settingValue('Pool size')).toHaveText(String(POOL_SIZE))
-    await expect(drawStructure.settingUnit('Pool size')).toHaveText('players per pool')
+    await expect(drawStructure.settingValue('Group size')).toHaveText(String(GROUP_SIZE))
+    await expect(drawStructure.settingUnit('Group size')).toHaveText('players per group')
 
     // ----- the control: a plain round-robin is offered NO such tab -----------
     // Reloaded rather than closing the sheet: the editor is a modal, so its overlay
@@ -232,7 +238,7 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     // FIRST that the sheet is open at all. Without this, a click that missed would leave
     // a page with no tabs on it, and "no Draw structure tab" would pass for free.
     await expect(plainEditor.tab('Basics')).toBeVisible()
-    await expect(plainEditor.tab('Table pools')).toBeVisible()
+    await expect(plainEditor.tab('Reservations')).toBeVisible()
     await expect(plainEditor.tab('Draw structure')).toHaveCount(0)
     // …and no panel left behind either: the trigger and its content are rendered
     // together, so a tab that vanished while its content stayed would be a blank fifth

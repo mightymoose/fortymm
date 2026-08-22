@@ -5,8 +5,9 @@ import {
   buildEntrant,
   buildEntrants,
   buildEvent,
-  buildPool,
+  buildReservation,
   buildPredicate,
+  groupIdFor,
 } from '../../data/seed.factory'
 import { DrawPanel } from './draw-panel'
 import { eventCardPage } from './event-card.page'
@@ -257,14 +258,15 @@ describe('EventCard', () => {
     expect(document.body).toHaveTextContent('Jun 13 · —')
   })
 
-  // "1 pool · 1 tables" — the table count was hardcoded plural while the pool
-  // count beside it pluralized correctly. (The counts are sibling spans laid out
-  // with a CSS gap, so the text runs together: "1 pool·1 table".)
+  // "1 reservation · 1 tables" — the table count was hardcoded plural while the
+  // reservation count beside it pluralized correctly. (The counts are sibling
+  // spans laid out with a CSS gap, so the text runs together: "1 reservation·1
+  // table".)
   it('renders a singular table count for a single-table event', () => {
     eventCardPage.render({
-      event: buildEvent({ pools: [buildPool({ tableIds: ['t1'] })] }),
+      event: buildEvent({ reservations: [buildReservation({ tableIds: ['t1'] })] }),
     })
-    expect(document.body).toHaveTextContent('1 pool·1 table')
+    expect(document.body).toHaveTextContent('1 reservation·1 table')
     // "1 table" is a substring of "1 tables", so the positive assertion alone
     // would pass against the bug.
     expect(document.body).not.toHaveTextContent('1 tables')
@@ -272,9 +274,9 @@ describe('EventCard', () => {
 
   it('renders a plural table count for a multi-table event', () => {
     eventCardPage.render({
-      event: buildEvent({ pools: [buildPool({ tableIds: ['t1', 't2'] })] }),
+      event: buildEvent({ reservations: [buildReservation({ tableIds: ['t1', 't2'] })] }),
     })
-    expect(document.body).toHaveTextContent('1 pool·2 tables')
+    expect(document.body).toHaveTextContent('1 reservation·2 tables')
   })
 
   it('opens the editor when clicked', async () => {
@@ -441,7 +443,7 @@ describe('EventCard', () => {
     expect(eventCardPage.queryAllButtons()).toHaveLength(1)
   })
 
-  // Wiring only — the draw's content (pools, rounds, the vs-lines, the refusals) is
+  // Wiring only — the draw's content (groups, rounds, the vs-lines, the refusals) is
   // pinned by `DrawPanel`'s own quartet. What the CARD owes it is a home that is not
   // underneath the stretched open target, and a hosted control that is a *sibling* of
   // that target rather than a button inside a button.
@@ -459,7 +461,7 @@ describe('EventCard', () => {
       })
 
       expect(eventCardPage.queryPanel('ev-u1200')).toBeInTheDocument()
-      expect(eventCardPage.getPoolLines('p-a')).toEqual([
+      expect(eventCardPage.getGroupLines(groupIdFor('res-a'))).toEqual([
         'player.1 vs player.4',
         'player.1 vs player.5',
         'player.4 vs player.5',

@@ -79,7 +79,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
-    TournamentEventPool,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -89,12 +89,15 @@ from app.models.tournament import DrawType, EventFormat
 from app.rate_limiting import RedisRateLimiter
 from app.rbac import user_has_permission
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
 from tests._helpers import (
     enqueued_notification_jobs,
-    event_pools,
+    event_groups,
     grant_permissions,
     make_user,
+    stage_id_at,
     start_session,
     table_ids_of,
     venue_tables,
@@ -1567,9 +1570,9 @@ def _event_payload() -> dict[str, object]:
         "slot": {"date": "2026-08-01", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
-        "pools": [
+        "reservations": [
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
                 "table_ids": ["t1"],
             }
@@ -1899,13 +1902,13 @@ async def _first_event_id(db_session: AsyncSession, tournament_id: str) -> uuid.
     ).scalar_one()
 
 
-async def _only_pool_id(db_session: AsyncSession, event_id: uuid.UUID) -> uuid.UUID:
-    """The id of the event's one pool — server-minted (ADR 20260801), so a seed that
+async def _only_group_id(db_session: AsyncSession, event_id: uuid.UUID) -> uuid.UUID:
+    """The id of the event's one group — server-minted (ADR 20260801), so a seed that
     puts a fixture in it has to look it up rather than spell it."""
     return (
         await db_session.execute(
-            select(TournamentEventPool.id).where(
-                TournamentEventPool.event_id == event_id
+            select(TournamentEventStageGroup.id).where(
+                TournamentEventStageGroup.stage_id.in_(stage_ids_for_events([event_id]))
             )
         )
     ).scalar_one()
@@ -1919,7 +1922,7 @@ async def _seed_placed_fixture(
     scheduled_start: datetime,
 ) -> TournamentFixture:
     """Cut a single PLACED fixture directly: two active entrants seated on it, in a
-    pool, with a table + predicted start (a naive wall-clock time, ADR-0790). The
+    group, with a table + predicted start (a naive wall-clock time, ADR-0790). The
     enter/cut/place routes would take several acts to reach this state; the read
     path just needs the state itself."""
     entry_a = TournamentEntry(
@@ -1935,8 +1938,8 @@ async def _seed_placed_fixture(
     db_session.add_all([entry_a, entry_b])
     await db_session.commit()
     fixture = TournamentFixture(
-        event_id=event_id,
-        pool_id=await _only_pool_id(db_session, event_id),
+        stage_id=await stage_id_at(db_session, event_id, 0),
+        group_id=await _only_group_id(db_session, event_id),
         round=1,
         position=1,
         entry_a_id=entry_a.id,
@@ -2010,7 +2013,7 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
         "local_label": "9:00 AM",
         "tz_abbrev": "CDT",
     }
-    assert placed["pool_id"] == str(fixture.pool_id)
+    assert placed["group_id"] == str(fixture.group_id)
     assert placed["round"] == 1
     assert placed["position"] == 1
     assert body["latest_schedule_solve"]["status"] == "succeeded"
@@ -2221,15 +2224,15 @@ async def test_edit_tournament_league_change_after_publish_raises_tool_error(
 
 # ----- build_cut / uncut draw tools ----------------------------------------
 #
-# Two pools, so the round-robin snake deals a clean draw a fixture's ``pool_id``
+# Two groups, so the round-robin snake deals a clean draw a fixture's ``group_id``
 # refs against — the same shape ``test_tournament_draw_service.py`` cuts across.
-_DRAW_POOL_A: dict[str, object] = {
-    "name": "Pool A",
+_DRAW_RESERVATION_A: dict[str, object] = {
+    "name": "Reservation A",
     "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
     "table_ids": ["t1"],
 }
-_DRAW_POOL_B: dict[str, object] = {
-    "name": "Pool B",
+_DRAW_RESERVATION_B: dict[str, object] = {
+    "name": "Reservation B",
     "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
     "table_ids": ["t2"],
 }
@@ -2246,7 +2249,7 @@ async def _seed_drawable_tournament(
 ) -> tuple[Tournament, TournamentEvent]:
     """A tournament + one event owned by ``owner`` (committed), seeded directly so a
     draw tool can be driven against its ``event_id`` alone. A round-robin singles event
-    with two pools and ``entrants`` seeded entries is cuttable; ``format`` /
+    with two groups and ``entrants`` seeded entries is cuttable; ``format`` /
     ``draw_type`` / ``entrants`` are knobbed to reach the un-cuttable cases (a doubles
     event, an unsupported draw type)."""
     tournament = Tournament(
@@ -2269,6 +2272,7 @@ async def _seed_drawable_tournament(
     db_session.add(tournament)
     await db_session.commit()
     await db_session.refresh(tournament)
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -2280,11 +2284,18 @@ async def _seed_drawable_tournament(
         slot={"date": "2026-08-01", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=with_table_aliases(tournament, [_DRAW_POOL_A, _DRAW_POOL_B]),
+        stages=stages,
+    )
+    stages[0].groups = with_table_aliases(
+        event, tournament, [_DRAW_RESERVATION_A, _DRAW_RESERVATION_B]
     )
     db_session.add(event)
     await db_session.commit()
-    await db_session.refresh(event)
+    # ``groups`` explicitly: a caller may hand this event straight to ``cut_draw``,
+    # which reads ``event.groups`` synchronously (``app.tournament_draws
+    # .event_groups``/``draw_config``) — a plain refresh leaves that VIEWONLY
+    # association unloaded (ADR 20260815), and the read would be an async lazy load.
+    await db_session.refresh(event, attribute_names=["groups"])
     db_session.add_all(
         [
             TournamentEntry(
@@ -2317,7 +2328,7 @@ async def test_build_cut_returns_fixtures_visible_via_schedule_then_uncut_remove
     default_league: League,
 ) -> None:
     """An owner cuts a singles event's draw via ``build_cut``: the fixtures come back
-    (4 entrants over 2 pools → one round-robin fixture per pool), they are visible via
+    (4 entrants over 2 groups → one round-robin fixture per group), they are visible via
     ``get_schedule``, and ``uncut`` then tears them down (``fixtures_remaining`` = 0 and
     the schedule shows ``[]``)."""
     owner = await make_user(db_session, "mcp-draw-owner")
@@ -2334,19 +2345,21 @@ async def test_build_cut_returns_fixtures_visible_via_schedule_then_uncut_remove
         assert cut.structuredContent is not None
         fixtures = cut.structuredContent["result"]
         assert len(fixtures) == 2
-        pool_ids = {
-            str(pool_id)
-            for pool_id in (
+        group_ids = {
+            str(group_id)
+            for group_id in (
                 await db_session.execute(
-                    select(TournamentEventPool.id).where(
-                        TournamentEventPool.event_id == event.id
+                    select(TournamentEventStageGroup.id).where(
+                        TournamentEventStageGroup.stage_id.in_(
+                            stage_ids_for_events([event.id])
+                        )
                     )
                 )
             )
             .scalars()
             .all()
         }
-        assert all(f["pool_id"] in pool_ids for f in fixtures)
+        assert all(f["group_id"] in group_ids for f in fixtures)
 
         # The cut draw is visible through the schedule projection.
         schedule = await client.call_tool_mcp(
@@ -2409,7 +2422,9 @@ async def test_build_cut_non_owner_raises_tool_error(
     remaining = (
         (
             await db_session.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
+                )
             )
         )
         .scalars()
@@ -2458,7 +2473,9 @@ async def test_build_cut_played_draw_raises_tool_error(
     fixtures = list(
         (
             await db_session.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event_id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
+                )
             )
         )
         .scalars()
@@ -2478,7 +2495,7 @@ async def test_build_cut_played_draw_raises_tool_error(
         (
             await db_session.execute(
                 select(TournamentFixture.id).where(
-                    TournamentFixture.event_id == event_id
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
                 )
             )
         )
@@ -2508,7 +2525,9 @@ async def test_build_cut_non_singles_event_raises_readable_tool_error(
     remaining = (
         (
             await db_session.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
+                )
             )
         )
         .scalars()
@@ -2548,10 +2567,10 @@ async def test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leak
     sentence an MCP client is handed.
 
     **The no-leak half is the point.** A ``DrawError`` raised deep in a strategy can
-    carry a table name, a pool ref, a column — internals that are a bug report when they
-    stay in the log and a defect the moment they reach a client. So the invented error's
-    message is deliberately full of them and the assertion is that *none* of it survives
-    into the ``ToolError``.
+    carry a table name, a group ref, a column — internals that are a bug report when
+    they stay in the log and a defect the moment they reach a client. So the invented
+    error's message is deliberately full of them and the assertion is that *none* of it
+    survives into the ``ToolError``.
 
     The only honest way to raise the base error is to invent the subclass the domain
     does not have yet — which is precisely the future this arm exists for. Patched at
@@ -2565,7 +2584,7 @@ async def test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leak
 
     # Every fragment of this is something a client must never be shown.
     leaked = (
-        "tournament_fixtures.pool_id='p-a' has a NULL seat at (round=2, position=1)"
+        "tournament_fixtures.group_id='g-a' has a NULL seat at (round=2, position=1)"
     )
 
     class SwissRoundNotSettled(DrawError):
@@ -2589,7 +2608,7 @@ async def test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leak
     # Asserted fragment by fragment, not just as the whole sentence: a partial leak
     # (the table name alone) is the same defect as the whole message.
     assert leaked not in message
-    for internals in ("tournament_fixtures", "pool_id", "NULL seat", "round=2"):
+    for internals in ("tournament_fixtures", "group_id", "NULL seat", "round=2"):
         assert internals not in message, (
             f"the refusal leaked {internals!r} from a DrawError nobody wrote copy "
             f"for: {message!r}"
@@ -2600,7 +2619,9 @@ async def test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leak
     remaining = (
         (
             await db_session.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event.id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event.id]))
+                )
             )
         )
         .scalars()
@@ -2795,7 +2816,7 @@ async def _seed_previewable_tournament(
     draw_type: DrawType = DrawType.round_robin,
 ) -> tuple[Tournament, TournamentEvent]:
     """A tournament owned by ``owner`` with one SMALL round-robin singles event
-    (capped at four, one pool over both tables), seeded directly. No
+    (capped at four, one reservation over both tables), seeded directly. No
     ``TournamentEntry`` rows — a preview draws a SYNTHETIC field, so the inline solve
     is a tiny four-player round-robin. ``draw_type`` is knobbed to reach the
     un-schedulable refusal (a non-round-robin event)."""
@@ -2819,6 +2840,7 @@ async def _seed_previewable_tournament(
     db_session.add(tournament)
     await db_session.commit()
     await db_session.refresh(tournament)
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -2830,20 +2852,22 @@ async def _seed_previewable_tournament(
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
         timezone="America/Los_Angeles",
-        pools=with_table_aliases(
-            tournament,
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {
-                        "date": "2030-01-01",
-                        "start": "09:00",
-                        "end": "17:00",
-                    },
-                    "table_ids": ["t1", "t2"],
-                }
-            ],
-        ),
+        stages=stages,
+    )
+    stages[0].groups = with_table_aliases(
+        event,
+        tournament,
+        [
+            {
+                "name": "Reservation A",
+                "slot": {
+                    "date": "2030-01-01",
+                    "start": "09:00",
+                    "end": "17:00",
+                },
+                "table_ids": ["t1", "t2"],
+            }
+        ],
     )
     db_session.add(event)
     await db_session.commit()
@@ -2869,8 +2893,9 @@ async def test_preview_mcp_owner_gets_result_synchronously(
 ) -> None:
     """An owner driving ``preview_schedule`` on a ``draft`` tournament gets the whole
     ``PreviewResult`` back in ONE call — a fitting verdict, the estimated duration,
-    the counts (four synthetic entrants over one pool → six round-robin matches), a
-    per-event breakdown, and the always-present honest-notes strip. No poll."""
+    the counts (four synthetic entrants over one reservation → six round-robin
+    matches), a per-event breakdown, and the always-present honest-notes strip. No
+    poll."""
     owner = await make_user(db_session, "preview-mcp-owner")
     raw = await _mint(db_session, owner)
     tournament, _ = await _seed_previewable_tournament(
@@ -2940,8 +2965,9 @@ async def test_preview_mcp_unsupported_draw_type_raises_tool_error(
     The sentence still names round-robin, because that is the actionable half: such an
     event beside a round-robin one is skipped now, not refused, and the preview covers
     the rest of the day. What it must NOT say any more is that the scheduler cannot
-    place a bracket — a live solve does (ADR "a pool restricts scheduling, it does not
-    enable it"). The refusal happens at snapshot build, before anything is queued."""
+    place a bracket — a live solve does (ADR "a reservation restricts scheduling, it
+    does not enable it"). The refusal happens at snapshot build, before anything is
+    queued."""
     owner = await make_user(db_session, "preview-mcp-ko-owner")
     raw = await _mint(db_session, owner)
     tournament, _ = await _seed_previewable_tournament(
@@ -3317,7 +3343,9 @@ async def test_transition_tournament_owner_walks_the_whole_lifecycle(
     fixtures = list(
         (
             await db_session.execute(
-                select(TournamentFixture).where(TournamentFixture.event_id == event_id)
+                select(TournamentFixture).where(
+                    TournamentFixture.stage_id.in_(stage_ids_for_events([event_id]))
+                )
             )
         )
         .scalars()
@@ -3470,7 +3498,7 @@ async def _seed_event(db: AsyncSession, tournament: Tournament) -> TournamentEve
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=[],
+        stages=mint_stages(DrawType.round_robin),
     )
     db.add(event)
     await db.commit()
@@ -3685,8 +3713,9 @@ async def test_delete_event_unknown_event_raises_tool_error(
 
 
 async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> TournamentEvent:
-    """Seed an event carrying one pool AND a fixture, so ``event_has_draw`` is True and
+    """Seed an event carrying one group AND a fixture, so ``event_has_draw`` is True and
     the two freezes are live — the target for the frozen-change ToolError round trip."""
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Cut Singles",
@@ -3698,26 +3727,34 @@ async def _seed_cut_event(db: AsyncSession, tournament: Tournament) -> Tournamen
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
-                    # No tables: this tournament is seeded without a catalogue, and a
-                    # reservation is a row foreign-keyed to a real one (ADR 20260801).
-                    # Nothing here is about the venue — the target is the draw-type
-                    # freeze.
-                    "table_ids": [],
-                }
-            ],
-        ),
+        stages=stages,
     )
+    groups = event_groups(
+        [
+            {
+                "name": "Reservation A",
+                "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+                # No tables: this tournament is seeded without a catalogue, and a
+                # reservation is a row foreign-keyed to a real one (ADR 20260801).
+                # Nothing here is about the venue — the target is the draw-type
+                # freeze.
+                "table_ids": [],
+            }
+        ],
+        event=event,
+    )
+    stages[0].groups = groups
     db.add(event)
     await db.commit()
+    # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
+    # re-reading ``stages[0].id``/``groups[0].id`` afterward would be an async lazy load
+    # on the now-expired child objects.
+    stage0_id, group0_id = stages[0].id, groups[0].id
     await db.refresh(event)
     fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stage0_id,
+        group_id=group0_id,
         round=1,
         position=1,
     )
@@ -3879,7 +3916,7 @@ async def _seed_published_singles_event(
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=[],
+        stages=mint_stages(DrawType.round_robin),
     )
     db.add(event)
     await db.commit()
@@ -4179,7 +4216,7 @@ async def _seed_placeable_fixture(
     """A ``draft`` tournament owned by ``owner`` with one singles event and one fixture
     seating two active entrants — the target the place-fixture tool needs, written
     straight to the database. The ``table_catalogue`` carries ``t1``/``t2`` so a
-    placement can name a real table, and the event's pool ``p-os-1`` anchors the
+    placement can name a real table, and the event's group ``g-os-1`` anchors the
     fixture."""
     tournament = Tournament(
         name="MCP Placement Cup",
@@ -4201,6 +4238,7 @@ async def _seed_placeable_fixture(
     db.add(tournament)
     await db.commit()
     await db.refresh(tournament)
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -4212,19 +4250,27 @@ async def _seed_placeable_fixture(
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=with_table_aliases(
-            tournament,
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
-                    "table_ids": ["t1"],
-                }
-            ],
-        ),
+        stages=stages,
     )
+    groups = with_table_aliases(
+        event,
+        tournament,
+        [
+            {
+                "name": "Reservation A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                "table_ids": ["t1"],
+            }
+        ],
+    )
+    stages[0].groups = groups
     db.add(event)
     await db.commit()
+    # Captured before ``db.refresh(event)`` below, which expires ``event.stages`` (a
+    # genuinely LOADED collection — unlike the VIEWONLY ``event.groups``) along with it;
+    # re-reading ``stages[0].id``/``groups[0].id`` afterward would be an async lazy load
+    # on the now-expired child objects.
+    stage0_id, group0_id = stages[0].id, groups[0].id
     await db.refresh(event)
     entry_a = TournamentEntry(
         event_id=event.id,
@@ -4239,8 +4285,8 @@ async def _seed_placeable_fixture(
     db.add_all([entry_a, entry_b])
     await db.commit()
     fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stage0_id,
+        group_id=group0_id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,

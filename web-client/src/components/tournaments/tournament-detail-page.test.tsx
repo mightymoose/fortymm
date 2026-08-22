@@ -323,6 +323,50 @@ describe('TournamentDetailPage', () => {
     ).toBeInTheDocument()
   })
 
+  /**
+   * The same precondition, refusing over an event no cut could ever fix (#1300).
+   *
+   * The page-level claim is the one the ticket is about: the director reads the whole
+   * refusal — each event, its own reason, its own fix — and reads **no instruction to cut
+   * a draw**, because for these two events that click can only fail a second time. Before
+   * #1300 the sentence ended "…so cut the draw for each event named", and the only escape
+   * the QA pass found was deleting the event.
+   *
+   * The detail is hard-coded, exactly as the refusal above is, and for the same reason: a
+   * test that read the copy out of the mock store it is testing against would pass
+   * whatever the copy became.
+   */
+  it('shows an all-undrawable refused Start — every reason, and no cut instruction', async () => {
+    const detail =
+      'This tournament cannot start yet: “Doubles Event”: A doubles event cannot be ' +
+      'given a draw — only singles events can. A fixture seats one entrant on each ' +
+      'side, and there is nowhere to record a doubles pairing or a team. Remove the ' +
+      'event. “Lone Event”: A single-elimination draw needs at least 2 entrants — a ' +
+      'bracket of one has nobody to play. Add entrants, or remove the event.'
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json({ detail }, { status: 409 }),
+    )
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ id: 't-1', status: 'published' }),
+    })
+
+    await userEvent.click(
+      tournamentDetailPagePage.getLifecycleButton(/Start tournament/),
+    )
+    await userEvent.click(tournamentDetailPagePage.lifecycleConfirm.getConfirmButton())
+
+    const notice = await tournamentDetailPagePage.findLifecycleNoticeText()
+    expect(notice).toContain("Couldn't start the tournament")
+    // Both events, each with the fix that actually works for it.
+    expect(notice).toContain('“Doubles Event”: A doubles event cannot be given a draw')
+    expect(notice).toContain('“Lone Event”: A single-elimination draw needs at least 2')
+    expect(notice).toContain('Add entrants, or remove the event.')
+    // …and the instruction that cannot be followed is absent.
+    expect(notice).not.toContain('cut the draw')
+
+    expect(tournamentDetailPagePage.getStatusBadge()).toHaveTextContent('Published')
+  })
+
   it('opens the event editor and creates a new event', async () => {
     const onCreateEvent = vi.fn().mockResolvedValue(undefined)
     tournamentDetailPagePage.render({
@@ -507,7 +551,6 @@ describe('TournamentDetailPage', () => {
         fixtures: [
           buildFixture({
             id: 'fx-a-1',
-            poolId: 'p-a',
             round: 1,
             position: 1,
             entryAId: 'entry-1',
@@ -517,7 +560,6 @@ describe('TournamentDetailPage', () => {
           }),
           buildFixture({
             id: 'fx-a-2',
-            poolId: 'p-a',
             round: 2,
             position: 1,
             entryAId: 'entry-1',

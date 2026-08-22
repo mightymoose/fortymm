@@ -17,11 +17,11 @@ describe('ResultsPanel', () => {
     expect(page.queryStandingsPanel('ev-u1200')).not.toBeNull()
     expect(page.queryFinishesPanel('ev-u1200')).toBeNull()
     // The panel is handed its data now, so this is where the wiring is checked: the event's
-    // OWN standings (champion `entry-1`, joined to a name) reached it, and its own pool.
+    // OWN standings (champion `entry-1`, joined to a name) reached it, and its own group.
     expect(page.getChampion('standings-champion-ev-u1200')).toHaveTextContent(
       'player.1',
     )
-    expect(page.getTableName()).toBe('Standings for Pool A')
+    expect(page.getTableName()).toBe('Standings for Group A')
   })
 
   it('renders the finishes list for a single-elimination event (kind: finishes)', () => {
@@ -40,7 +40,7 @@ describe('ResultsPanel', () => {
   it('renders BOTH stages for a two-stage event (kind: standings_then_finishes)', () => {
     // The third arm (ADR 20260727) routes to the composite, which reuses the same two
     // panels — so a two-stage card shows a standings block AND a finishes block, under one
-    // champion banner naming the BRACKET's winner (`player.2`), who tops neither pool.
+    // champion banner naming the BRACKET's winner (`player.2`), who tops neither group.
     page.render({ event: buildTwoStageEvent() })
 
     expect(page.queryStandingsPanel('ev-two-stage')).not.toBeNull()
@@ -54,7 +54,7 @@ describe('ResultsPanel', () => {
   })
 
   it('renders a mid-flight two-stage event with no champion at all', () => {
-    // Pools decided, final unplayed: the stages still render, and nothing is crowned.
+    // Groups decided, final unplayed: the stages still render, and nothing is crowned.
     page.render({
       event: buildTwoStageEvent({ results: buildMidFlightTwoStageResults() }),
     })
@@ -64,10 +64,11 @@ describe('ResultsPanel', () => {
     expect(page.queryTwoStageChampion('ev-two-stage')).toBeNull()
   })
 
-  it('renders ONE pool-less table for a swiss event (kind: swiss_standings)', () => {
-    // The fourth arm (the swiss ADR) routes to the pool-less panel. It is neither of the
-    // pooled blocks — a `standings-panel-…` here would mean a swiss event was routed into
-    // the arm that groups by pool, which for a format with no pools renders nothing at all.
+  it('renders ONE group-less table for a swiss event (kind: swiss_standings)', () => {
+    // The fourth arm (the swiss ADR) routes to the group-less panel. It is neither of the
+    // grouped blocks — a `standings-panel-…` here would mean a swiss event was routed into
+    // the arm that splits standings by group, which for a format with no groups renders
+    // nothing at all.
     page.render({ event: buildSwissStandingsEvent() })
 
     expect(page.querySwissPanel('ev-swiss')).not.toBeNull()

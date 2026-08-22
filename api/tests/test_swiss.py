@@ -49,6 +49,7 @@ from app.schemas.tournament import (
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_draws import DrawCurrency, draw_currency_by_event, fixture_state
 from app.tournament_materialization import materialize_event
+from app.tournament_queries import stage_ids_for_events
 from app.tournament_serialization import _field_input, _seated_pairings
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import (
@@ -101,8 +102,9 @@ def _tournament_payload() -> dict[str, Any]:
 def _event_payload(**overrides: Any) -> dict[str, Any]:
     """A swiss event of three rounds.
 
-    **No pools**: swiss is pool-less, and sending pools an un-pooled draw type ignores
-    would make every assertion below about a shape the format does not have.
+    **No groups**: swiss is group-less, and sending reservations an un-grouped draw
+    type ignores would make every assertion below about a shape the format does not
+    have.
     """
     payload: dict[str, Any] = {
         "name": "Open Singles",
@@ -115,7 +117,7 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": False, "length_games": 3},
         "predicates": [],
-        "pools": [],
+        "reservations": [],
     }
     payload.update(overrides)
     return payload
@@ -189,7 +191,11 @@ async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == uuid.UUID(event_id))
+                .where(
+                    TournamentFixture.stage_id.in_(
+                        stage_ids_for_events([uuid.UUID(event_id)])
+                    )
+                )
                 .order_by(TournamentFixture.round, TournamentFixture.position)
             )
         )
@@ -274,7 +280,7 @@ async def test_a_round_count_on_another_draw_type_is_422(
         tournament_id,
         draw_type=draw_type,
         rounds=3,
-        **({"qualifiers_per_pool": 2} if draw_type == "rr-then-ko" else {}),
+        **({"qualifiers_per_group": 2} if draw_type == "rr-then-ko" else {}),
     )
 
     assert response.status_code == 422, response.text
@@ -325,7 +331,7 @@ async def test_the_round_count_reads_back_flat_beside_the_draw_type(
     created = await _create_event(client, tournament_id, rounds=4)
 
     assert created.json()["rounds"] == 4
-    assert created.json()["qualifiers_per_pool"] is None
+    assert created.json()["qualifiers_per_group"] is None
     read = await _event_read(client, tournament_id)
     assert read["rounds"] == 4
     assert read["draw_type"] == SWISS
@@ -398,7 +404,7 @@ async def test_the_cut_writes_every_round_with_round_one_seated(
 
     Round 1 carries both sides, seeded from the draw order — top half against bottom
     half, so seed 1 meets seed 5. Rounds 2 and 3 exist with both sides NULL, which
-    means TBD and nothing else (ADR-0786). Every fixture is un-pooled, because swiss
+    means TBD and nothing else (ADR-0786). Every fixture is ungrouped, because swiss
     ranks one field in one table.
     """
     client, _ = authed_client
@@ -408,7 +414,7 @@ async def test_the_cut_writes_every_round_with_round_one_seated(
 
     fixtures = await _fixtures(db_session, event_id)
     assert len(fixtures) == 12
-    assert all(f.pool_id is None for f in fixtures)
+    assert all(f.group_id is None for f in fixtures)
 
     by_seed = {entry.seed: entry.id for entry in entries}
     round_one = [f for f in fixtures if f.round == 1]
@@ -457,7 +463,7 @@ async def test_an_odd_field_cuts_one_fewer_pairing_a_round(
 async def test_the_standings_carry_the_whole_field_including_the_byed_entrant(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
-    """A cut swiss event reads out as one pool-less table over **every** entrant.
+    """A cut swiss event reads out as one group-less table over **every** entrant.
 
     Seven entrants means one of them has no round-1 fixture at all — a bye is the
     absence of a row — so a table derived from the fixtures' sides would seat six and
@@ -1154,7 +1160,8 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
             [
                 TournamentFixtureRead(
                     id=uuid.uuid4(),
-                    pool_id=None,
+                    stage_id=uuid.uuid4(),
+                    group_id=None,
                     round=1,
                     position=1,
                     entry_a_id=entry_a_id,
@@ -1177,8 +1184,8 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
                 fixture_state(
                     TournamentFixture(
                         id=uuid.uuid4(),
-                        event_id=uuid.uuid4(),
-                        pool_id=None,
+                        stage_id=uuid.uuid4(),
+                        group_id=None,
                         round=1,
                         position=1,
                         entry_a_id=entry_a_id,
@@ -1242,7 +1249,10 @@ def _row(
     )
     return TournamentFixtureRead(
         id=uuid.UUID(int=2000 + round_number * 10 + position),
-        pool_id=None,
+        # A swiss event has exactly one stage; every row this helper builds belongs to
+        # it, so a fixed literal stands in for the real stage id.
+        stage_id=uuid.UUID(int=1),
+        group_id=None,
         round=round_number,
         position=position,
         entry_a_id=_entry(pairing[0]) if pairing else None,
@@ -1370,7 +1380,7 @@ def test_a_withdrawn_but_seated_entrant_is_not_given_a_bye_they_never_took() -> 
 async def test_a_swiss_event_has_no_schedule_preview(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
-    """The preview covers the **pool stage**, and swiss has no pools — so a director
+    """The preview covers the **group stage**, and swiss has no groups — so a director
     asking for one is told the format has no preview rather than shown an empty day
     (ADR). The pure refusal is asserted in ``test_schedule_preview_snapshot.py``; this
     is that refusal reaching the director as a 422 rather than a 500."""

@@ -10,10 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.draws import (
-    DegenerateDraw,
     DrawError,
-    NonSinglesDraw,
-    UnsupportedDrawType,
+    draw_error_detail,
 )
 from app.geocoding import AddressNotGeocodableError, Geocoder
 from app.geocoding.dependencies import get_geocoder
@@ -67,6 +65,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     FixtureNotFoundError,
     FixturePlacementFrozenError,
+    GroupSetFrozenError,
     IllegalTournamentTransitionError,
     LeagueNotEditableError,
     LeagueNotFoundError,
@@ -78,8 +77,7 @@ from app.tournament_errors import (
     NotTournamentOwnerError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
-    PoolNotInEventError,
-    PoolSetFrozenError,
+    ReservationNotInEventError,
     ScheduleQueueUnavailableError,
     TableInUseError,
     TableNotInCatalogueError,
@@ -518,8 +516,8 @@ async def update_tournament(
     `unplace_fixtures_on_removed_tables: true`: the table is removed and those matches
     are unplaced — table, predicted start and call all cleared — which is a thing worth
     saying on purpose rather than a silent side effect of editing the venue. Removing a
-    table that only a *pool* reserves needs no confirmation and produces no refusal; the
-    pool simply reserves one fewer.
+    table that only a *reservation* reserves needs no confirmation and produces no
+    refusal; the reservation simply reserves one fewer.
 
     **`address` has three cases and the value alone cannot tell them apart.** Omit it to
     leave the venue and its coordinates untouched; send a real address to move the venue
@@ -555,11 +553,11 @@ async def update_tournament(
         )
     except TableInUseError as exc:
         # The catalogue's named refusal: removing a table matches are placed at, with no
-        # opt-in. Bare prose, like the pool-set freeze and the league state rule on this
-        # same route — it carries the exact domain-authored sentence, rebuilt verbatim
-        # with ``str``. Nothing was written (the verb raises before the diff touches a
-        # row and long before the commit), so the same request with the opt-in is safe
-        # to send straight back.
+        # opt-in. Bare prose, like the group-set freeze and the league state rule on
+        # this same route — it carries the exact domain-authored sentence, rebuilt
+        # verbatim with ``str``. Nothing was written (the verb raises before the diff
+        # touches a row and long before the commit), so the same request with the opt-in
+        # is safe to send straight back.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except TableNotInCatalogueError as exc:
         # A catalogue entry cited an id this tournament does not have: a field refusal,
@@ -736,8 +734,10 @@ async def create_event(
     )
 
 
-def _pool_not_in_event(exc: PoolNotInEventError) -> RequestValidationError:
-    """The 422 for a ``pools`` entry citing an id this event does not have
+def _reservation_not_in_event(
+    exc: ReservationNotInEventError,
+) -> RequestValidationError:
+    """The 422 for a ``reservations`` entry citing an id this event does not have
     (ADR 20260801) — as a **validation error on that entry's field**, not a hand-rolled
     body.
 
@@ -749,17 +749,17 @@ def _pool_not_in_event(exc: PoolNotInEventError) -> RequestValidationError:
     app's own handler, so the body is byte-shape-identical to every other 422 this route
     can produce and no new response schema reaches the generated clients.
 
-    The ``loc`` carries the entry's **index** — ``["body", "pools", i, "id"]`` — because
-    the pools are a list and a client renders a validation error under the input that
-    caused it.
+    The ``loc`` carries the entry's **index** — ``["body", "reservations", i, "id"]`` —
+    because the reservations are a list and a client renders a validation error under
+    the input that caused it.
     """
     return RequestValidationError(
         [
             {
                 "type": "value_error",
-                "loc": ("body", "pools", exc.index, "id"),
+                "loc": ("body", "reservations", exc.index, "id"),
                 "msg": str(exc),
-                "input": exc.pool_id,
+                "input": exc.reservation_id,
             }
         ]
     )
@@ -779,34 +779,39 @@ async def update_event(
     """Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     sent.
 
-    **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
-    carries the `id` of a pool this event already has — keeping that pool, with the
+    **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
+    carries the `id` of a reservation this event already has — keeping it, with the
     `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
-    to add a new pool, whose id the server mints. **A pool no entry names is removed.**
-    Send back the pools you read, edited: the ids came from the read, and naming an id
-    this event does not have is a `422` on that entry. Citing the same pool twice is a
-    `422` too — a pool id identifies one pool, and the fixtures of a draw name their
-    pool by it.
+    to add a new reservation, whose id the server mints. **A reservation no entry names
+    is removed.** The server keeps one `groups` entry per reservation in lockstep, so
+    adding, removing or reordering a reservation adds, removes or reorders its mapped
+    group the same way. Send back the reservations you read, edited: the ids came from
+    the read, and naming an id this event does not have is a `422` on that entry.
+    Citing the same reservation twice is a `422` too — a reservation id identifies one
+    reservation, and a group's own reservation is one of them.
 
     **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     fixtures were derived from:
 
-    * **its set of pools.** A `pools` payload must cite exactly the pools the event
-      already has, or it is refused with a `409`: a removed pool would leave the
-      fixtures drawn into it pointing at nothing, and an added one would arrive with no
-      fixtures, since the draw was dealt across the pools that existed at the cut.
-      Re-ordering them, and editing each one, are still allowed.
+    * **its set of groups, in order.** A `reservations` payload must cite exactly the
+      reservations mapped to the groups the event already has, in the order they
+      already stand, or it is refused with a `409`: a removed group would leave the
+      fixtures drawn into it pointing at nothing, an added one would arrive with no
+      fixtures (the draw was dealt across the groups that existed at the cut), and a
+      reorder would relabel which group counts as "first" for a knockout bracket's
+      qualifier seats mid-draw. Editing each reservation's `name`, `slot` and
+      `table_ids` in place is still allowed.
     * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
       so changing it under a standing draw is a `409` too: the event would claim a shape
       its draw does not have. Re-sending the draw type the event already has is not a
       change, and is not refused.
 
     Nothing else freezes. The event's name, fee, rules and `max_players`, and each
-    pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
-    venues change under a running tournament, and recording that must never cost a
-    director the draw. To change the pools themselves or the draw type, remove the draw
-    (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
-    are ordinary fields.
+    reservation's `table_ids`, `slot` and `name`, all stay editable with a draw
+    standing — venues change under a running tournament, and recording that must never
+    cost a director the draw. To change the groups themselves or the draw type, remove
+    the draw (`DELETE …/draw`), edit, and cut again. With no draw cut, `reservations`
+    and `draw_type` are ordinary fields.
 
     Owner-only.
     """
@@ -820,7 +825,7 @@ async def update_event(
     #   TournamentNotFoundError  -> 404 "Tournament not found."
     #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
     #   EventNotFoundError       -> 404 "Event not found."
-    #   PoolSetFrozenError       -> 409 (its carried, domain-authored sentence)
+    #   GroupSetFrozenError       -> 409 (its carried, domain-authored sentence)
     #   DrawTypeFrozenError      -> 409 (its carried, domain-authored sentence)
     try:
         event, league_id = await update_event_core(
@@ -830,14 +835,14 @@ async def update_event(
             actor=current_user,
             updates=payload,
         )
-    except (PoolSetFrozenError, DrawTypeFrozenError) as exc:
+    except (GroupSetFrozenError, DrawTypeFrozenError) as exc:
         # Both freezes carry the exact 409 sentence the handler used to compose inline —
         # rebuilt verbatim with ``str(exc)``.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except PoolNotInEventError as exc:
-        # A pools entry cited an id this event does not have: a field refusal, shaped
-        # like every other 422 on this route (see ``_pool_not_in_event``).
-        raise _pool_not_in_event(exc) from exc
+    except ReservationNotInEventError as exc:
+        # A reservations entry cited an id this event does not have: a field refusal,
+        # shaped like every other 422 on this route (see ``_reservation_not_in_event``).
+        raise _reservation_not_in_event(exc) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's
@@ -1106,76 +1111,18 @@ def _draw_refusal(error: DrawError) -> HTTPException:
     A ``DrawError`` is not a bug: it is the domain saying that what was asked for is not
     a competition (``DegenerateDraw``) or is not a shape a fixture can seat
     (``NonSinglesDraw``). So it is a 422 — the request is well-formed and
-    authorized, but its *content* (this event's pools, this event's field, this event's
+    authorized, but its *content* (this event's groups, this event's field, this event's
     draw type) cannot be turned into a draw — rather than the 500 an uncaught exception
     would be, and rather than a 409, which would invite a retry that will fail
     identically until the director changes the event.
 
-    A ``match`` over the error, not ``str(error)`` over whatever arrives:
-
-    * ``NonSinglesDraw`` carries its ``event_format`` **structurally**, so the sentence
-      is composed here from the fact rather than parsed out of a message written for a
-      developer — the director needs to be told which of *their* events cannot be cut,
-      and that the rest of the tournament is unaffected.
-    * ``DegenerateDraw`` is the one error whose message is **domain-authored copy**, and
-      it is passed through on purpose: only the strategy knows *which* degeneracy it hit
-      — no pools at all, or a snake that would leave some pool with one player and
-      nobody to play — and the numbers in that sentence ("5 entrants across 3 pool(s)")
-      are the numbers the director has to change. Recomposing it here would be a second
-      copy of a rule this route does not own, and the copy that drifts is the one a
-      director reads. From the **schedule-preview** route it arrives only when the
-      tournament has no other event to preview: one event the draw refuses beside a
-      healthy one is skipped, and the honest-notes strip carries this same sentence.
-    * ``UnsupportedDrawType`` carries its ``draw_type`` **structurally**, for the same
-      reason. It can no longer arrive from the **cut** route — ``strategy_for`` is total
-      now that the enum holds only what runs (ADR 20260726) — but this mapper is shared
-      with the **schedule-preview** route below, and ``app.schedule_preview`` raises it
-      when *no* event of a tournament can be previewed and the first such event is a
-      single-elim or a swiss draw. One such event beside a round-robin no longer
-      refuses anything: the builder skips it, previews the rest, and the honest-notes
-      strip names it. A
-      director previewing a bracket-only tournament must be told it is the *draw type*
-      that cannot be previewed, not left with the generic sentence, which says the
-      event's own state is at fault and would send them hunting through pools and
-      entrants that are perfectly fine. The sentence blames the right thing now: not
-      the scheduler, which does place a bracket over its event's own window (ADR "a
-      pool restricts scheduling, it does not enable it"), but the preview, which runs
-      before anyone has entered and so has no field to lay a played-out draw over.
-    * The fallback arm is a **generic** sentence, never the exception's own. A
-      ``DrawError`` subclass added tomorrow gets a vague refusal rather than leaking a
-      message nobody wrote for a human — refusing vaguely is a bug report; leaking
-      internals is a defect that reaches the UI. (Its author gives it its own arm, the
-      same way ``_registration_refusal_detail`` buys its totality.)
+    The ``match`` over the error that composes the director-facing sentence now lives
+    in :func:`app.draws.draw_error_detail` — shared with the ``published → live`` dry
+    run in ``app.tournament_lifecycle``, which hits the same errors when it plans a
+    cut ahead of time to see whether it would succeed, so the two call sites' copy
+    cannot drift apart. See that function's docstring for what each error composes to.
     """
-    match error:
-        case NonSinglesDraw():
-            # Composed from the structural ``event_format``: a doubles/teams event can
-            # never be cut in any state (an entry is
-            # one row per player, with nowhere to record a partner or a team, ADR-0788),
-            # so a director is told which event is un-drawable and why — a permanent
-            # fact, not a retryable one.
-            detail = (
-                f"A {error.event_format.value} event cannot be given a draw — only "
-                "singles events can. A fixture seats one entrant on each side, and "
-                "there is nowhere to record a doubles pairing or a team."
-            )
-        case DegenerateDraw():
-            detail = str(error)
-        case UnsupportedDrawType():
-            # Reachable from the SCHEDULE-PREVIEW route only (the cut route's
-            # ``strategy_for`` is total), and only when the tournament has no
-            # previewable event at all. Named from the structural ``draw_type`` so the
-            # sentence says which format cannot be previewed.
-            detail = (
-                f"A {error.draw_type.value} draw cannot be previewed, and this "
-                "tournament has no other event to preview. A draw of that kind is "
-                "decided round by round as it is played, so before anyone has "
-                "entered there is nothing to lay out. The scheduler does place it "
-                "once the tournament is live."
-            )
-        case _:
-            detail = "This event's draw cannot be cut as the event stands."
-    return HTTPException(status_code=422, detail=detail)
+    return HTTPException(status_code=422, detail=draw_error_detail(error))
 
 
 # The play-evidence gate, the owner-scoped locking load, and the ``cut_draw`` /
@@ -1203,7 +1150,7 @@ async def cut_event_draw(
     with them.
 
     Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
-    status: a draw may be cut and re-cut freely while a director inspects the pools and
+    status: a draw may be cut and re-cut freely while a director inspects the groups and
     the seeding. Nothing else creates fixtures, and going live requires every event to
     have one (ADR-0786).
 
@@ -1211,7 +1158,7 @@ async def cut_event_draw(
     fresh set is planned from the event's *current* active entrants — the old ones are
     not patched, and their ids do not survive. That is the point: a draw is a plan made
     against a field, and once the field has changed (somebody entered, somebody
-    withdrew) the whole plan is re-made, pool sizes and seeding included.
+    withdrew) the whole plan is re-made, group sizes and seeding included.
 
     Entrants are ordered by **seed** ascending where one is set, then by **registration
     order**. Nothing is random, so the same field always cuts the same draw.
@@ -1221,17 +1168,17 @@ async def cut_event_draw(
     those away, and a draw must never silently eat a score.
 
     Refused with a `422` when this event cannot produce a draw at all: it has
-    **no pools** configured for a pooled draw type, its field is too small for the
-    pools it has — a pool with fewer than two players has nobody to play — or a
+    **no groups** configured for a grouped draw type, its field is too small for the
+    groups it has — a group with fewer than two players has nobody to play — or a
     bracket has fewer than two entrants. The message names what to change.
 
     There is no longer a "this draw type has no generator" refusal here: every
     draw type a director can pick is one that has a strategy, because the pickable
     set *is* the seeded `draw_types` rows, and those are the types that run
     (ADR 20260726). Every `422` this route can raise is now about the event's
-    **field or pools**, not its type.
+    **field or groups**, not its type.
 
-    Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    Owner-only. Fixtures come back in group → round → position order, exactly as the
     tournament-detail page carries them.
     """
     # Thin adapter over the transport-neutral ``cut_event_draw`` verb: it owns the
@@ -1275,7 +1222,7 @@ async def uncut_event_draw(
 
     The way back from a draw the director does not want. The event, its entrants and the
     rest of the tournament are untouched — only the fixtures go — and the director is
-    free to change the pools and cut again.
+    free to change the groups and cut again.
 
     Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
     fixture with a recorded winner, or one that has become a real match. Undoing a draw
@@ -1317,10 +1264,11 @@ async def uncut_event_draw(
 # on ``TournamentFixtureRead``), so there is deliberately no ``GET …/placement``.
 #
 # The write is **soft** where ADR-0790 made it soft: the table belongs to the fixture's
-# pool, the time falls inside the pool's window, nothing is double-booked — all three
+# group's reservation, the time falls inside that reservation's window, nothing is
+# double-booked — all three
 # are flags derived on read, NOT invariants, so this route stores an out-of-window time
-# and an off-pool table without complaint. What it does NOT store is a ``table_id`` that
-# names no table: "the placement names a real table" became an invariant when the
+# and an off-group table without complaint. What it does NOT store is a ``table_id``
+# that names no table: "the placement names a real table" became an invariant when the
 # catalogue became rows (ADR 20260801), so that is a 422 naming the field. Plus the
 # freeze below.
 #
@@ -1418,9 +1366,10 @@ async def place_fixture(
 
     **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
     pinned, and the placement's other constraints — the table belongs to the fixture's
-    pool, the time falls inside the pool's window, nothing is double-booked — are flags
-    derived on read, **not** invariants. So an out-of-window time, or a table outside
-    the fixture's pool, is **stored, not rejected**; the queued re-solve is what judges
+    group's reservation, the time falls inside that reservation's window, nothing is
+    double-booked — are flags derived on read, **not** invariants. So an out-of-window
+    time, or a table outside the fixture's group's reservation, is **stored, not
+    rejected**; the queued re-solve is what judges
     the consequences.
 
     **The one hard rule about the fixture:** a fixture whose linked match is `completed`

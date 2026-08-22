@@ -13,33 +13,35 @@ it stays cycle-free, mirroring ``app/match_serialization.py``.
 
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Any, assert_never
+from collections.abc import Mapping, Sequence
+from typing import Any, assert_never, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
     EntryId,
-    PoolId,
+    GroupId,
     SeatedPairing,
     swiss_byes,
     swiss_pairable_rows,
 )
 from app.models import (
+    DrawType,
     MatchStatus,
     ScheduleSolve,
     Tournament,
     TournamentEvent,
 )
+from app.models.draw_type import StageDrawType
 from app.results import (
     BracketFinishes,
     BracketFixture,
     EventResults,
     FieldInput,
     FinishRow,
+    GroupInput,
+    GroupStandings,
     MatchOutcome,
-    PoolInput,
-    PoolStandings,
     RoundRobinResults,
     RrThenKoResults,
     SingleElimResults,
@@ -61,7 +63,7 @@ from app.schemas.tournament import (
     EventStageRead,
     FinishesResultsRead,
     FinishRowRead,
-    PoolStandingsRead,
+    GroupStandingsRead,
     ScheduleSolveRead,
     StandingRowRead,
     StandingsResultsRead,
@@ -75,13 +77,13 @@ from app.schemas.tournament import (
     TournamentRead,
 )
 from app.tournament_draw_settings import draw_settings_of
+from app.tournament_draws import event_groups, event_reservations
 from app.tournament_eligibility import (
     Eligible,
     RatingIneligible,
     evaluate_rating_eligibility,
     event_is_full,
 )
-from app.tournament_pools import pool_read
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
@@ -230,20 +232,42 @@ def event_results(
     entrants: Sequence[TournamentEntrantRead],
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType],
 ) -> EventResultsRead | None:
     """The event's results, projected from its fixtures' completed matches, or ``None``
     when there are none to compute — a **discriminated union tagged by shape**
     (ADR-0785): ``kind: "standings"`` for a round-robin (ADR-0788), ``kind: "finishes"``
     for a single-elimination bracket, ``kind: "standings_then_finishes"`` for a
     round-robin-then-knockout event, which carries one block per stage (ADR 20260727),
-    and ``kind: "swiss_standings"`` for a swiss event's one pool-less table.
+    and ``kind: "swiss_standings"`` for a swiss event's one group-less table.
 
-    ``entrants`` is the event's **active** field, and only the pool-less swiss shape
-    reads it: a pool's membership is defined by its own fixtures, but a swiss entrant
+    ``entrants`` is the event's **active** field, and only the group-less swiss shape
+    reads it: a group's membership is defined by its own fixtures, but a swiss entrant
     with a **bye** has no fixture that round at all (a bye is the absence of a row,
     ADR-0786), so a field derived from fixtures alone would drop them from the table
-    they belong at the top of. The pooled shapes are deliberately left fixture-derived,
+    they belong at the top of. The grouped shapes are deliberately left fixture-derived,
     unchanged.
+
+    ``stage_draw_types`` maps this event's own stage ids to each stage's OWN draw type
+    (ADR 20260815) — the map ``RrThenKoResults``' arm reads to tell the group stage's
+    fixtures from the knockout stage's, in place of the ``group_id IS NULL`` proxy this
+    used to read. **Required, with no default**: the two callers that do not serve a
+    ``stages`` array on the wire (the single-event create/update reads) still load it
+    for this computation — see ``app.tournament_serialization.shape_event_read`` — so a
+    default here would be the one call site that quietly forgets to, and it would be the
+    one an rr-then-ko event's edit page silently mis-projects.
+
+    It is **not** true that ``round_robin`` never reads the map: every arm here that
+    calls ``_group_inputs`` (``round_robin`` and ``rr_then_ko``'s group half alike)
+    reads it, because that is where a fixture's own group-stage-ness is decided now (ADR
+    20260815). It is a no-op for ``round_robin`` only in the sense that every one of a
+    round-robin event's fixtures shares the one stage the map already has to name —
+    ``single_elim`` is the arm that truly never reads it at all (``_bracket_fixtures``
+    takes no ``stage_draw_types`` argument), and ``swiss`` never has a knockout half to
+    split out either. The map is required precisely because it is read for every grouped
+    shape: an unknown ``stage_id`` is a loud failure (a fixture and the map it is
+    projected against were built off two different stage sets), never a fixture quietly
+    dropped from the table.
 
     ``None`` in exactly one case, meaning "no results here" rather than an empty table:
     an event whose draw has not been cut (no fixtures to stand). There used to be a
@@ -267,7 +291,9 @@ def event_results(
     match strategy:
         case RoundRobinResults():
             return _serialize_standings(
-                strategy.tabulate(_pool_inputs(fixtures, game_counts))
+                strategy.tabulate(
+                    _group_inputs(fixtures, game_counts, stage_draw_types)
+                )
             )
         case SingleElimResults():
             return _serialize_finishes(
@@ -275,20 +301,28 @@ def event_results(
             )
         case RrThenKoResults():
             # The one arm whose ``tabulate`` takes TWO stage inputs, because a two-stage
-            # event has two stages to project. ``pool_id IS NULL`` is the stage
-            # discriminator (ADR-0786), and it is applied to the bracket half only:
-            # ``_pool_inputs`` already drops the un-pooled fixtures itself, so the pool
-            # half needs no filter and asking twice would let the two disagree.
+            # event has two stages to project. Each fixture's OWN stage (``stage_id``,
+            # ADR 20260815) — read here through ``stage_draw_types`` rather than through
+            # ``group_id IS NULL`` — is the discriminator, and it is applied to the
+            # bracket half only: ``_group_inputs`` already selects the group-stage
+            # fixtures itself, so the group half needs no filter here and asking twice
+            # would let the two disagree.
             return _serialize_standings_then_finishes(
                 strategy.tabulate(
-                    _pool_inputs(fixtures, game_counts),
+                    _group_inputs(fixtures, game_counts, stage_draw_types),
                     _bracket_fixtures(
-                        [f for f in fixtures if f.pool_id is None], game_counts
+                        [
+                            f
+                            for f in fixtures
+                            if _stage_draw_type_of(stage_draw_types, f.stage_id)
+                            is DrawType.single_elim
+                        ],
+                        game_counts,
                     ),
                 )
             )
         case SwissResults():
-            # One table over the whole field: swiss is pool-less, so there is no
+            # One table over the whole field: swiss is group-less, so there is no
             # grouping to do and every fixture in the event feeds the same input.
             return _serialize_swiss_standings(
                 strategy.tabulate(_field_input(entrants, fixtures, game_counts))
@@ -297,48 +331,83 @@ def event_results(
             assert_never(strategy)
 
 
-def _pool_inputs(
+def _stage_draw_type_of(
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType], stage_id: uuid.UUID
+) -> StageDrawType:
+    """The fixture's own stage's draw type — a loud failure, never a silent
+    ``.get(...)``, when ``stage_id`` is missing from the map.
+
+    A fixture's ``stage_id`` always names one of its own event's stages (the
+    composite FK, ADR 20260815), so a miss here means the caller built
+    ``stage_draw_types`` off a different, stale set of stages than the fixtures it
+    is projecting against it — a bug in how the two were assembled, worth
+    surfacing loudly at the seam that found it, not a fixture quietly vanishing
+    from a director's results table with no error anywhere."""
+    try:
+        return stage_draw_types[stage_id]
+    except KeyError:
+        raise RuntimeError(
+            f"fixture's stage {stage_id} is missing from stage_draw_types — the map "
+            "and the fixtures it is projecting were built from two different stage "
+            "sets (ADR 20260815)"
+        ) from None
+
+
+def _group_inputs(
     fixtures: list[TournamentFixtureRead],
     game_counts: dict[uuid.UUID, tuple[int, int]],
-) -> list[PoolInput]:
-    by_pool: dict[uuid.UUID, list[TournamentFixtureRead]] = defaultdict(list)
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType],
+) -> list[GroupInput]:
+    by_group: dict[uuid.UUID, list[TournamentFixtureRead]] = defaultdict(list)
     for f in fixtures:
-        # A round-robin fixture is always pooled; a NULL pool would be a different draw
-        # type's fixture and has no pool table to stand in. Skip it rather than key a
-        # pool on ``None``.
-        if f.pool_id is not None:
-            by_pool[f.pool_id].append(f)
-    pool_inputs: list[PoolInput] = []
-    for pool_id, pool_fixtures in by_pool.items():
+        # The group stage's fixtures — this fixture's OWN stage runs round-robin
+        # (ADR 20260815), read through ``stage_draw_types`` rather than inferred from
+        # ``group_id`` plus the event's overall draw type. ``group_id`` stays on as a
+        # within-stage invariant narrowing, not the stage discriminator: a round-robin
+        # stage's fixtures are always grouped, so this can never actually skip a fixture
+        # ``stage_draw_types`` already selected — it only tells the type checker
+        # ``f.group_id`` is not ``None`` before it is used as a dict key below.
+        if (
+            _stage_draw_type_of(stage_draw_types, f.stage_id)
+            is not DrawType.round_robin
+        ):
+            continue
+        if f.group_id is None:
+            continue
+        by_group[f.group_id].append(f)
+    group_inputs: list[GroupInput] = []
+    for group_id, group_fixtures in by_group.items():
         entrants = {
             entry_id
-            for f in pool_fixtures
+            for f in group_fixtures
             for entry_id in (f.entry_a_id, f.entry_b_id)
             if entry_id is not None
         }
         outcomes: list[MatchOutcome] = []
-        for f in pool_fixtures:
+        for f in group_fixtures:
             outcome = _fixture_outcome(f, game_counts)
             if outcome is not None:
                 outcomes.append(outcome)
-        pool_inputs.append(
-            PoolInput(
-                pool_id=PoolId(pool_id),
+        group_inputs.append(
+            GroupInput(
+                group_id=GroupId(group_id),
                 entrants=tuple(EntryId(entry_id) for entry_id in entrants),
                 # Count only the pairings that can still produce a result. A **voided**
                 # fixture never will — its match is terminal and ``ready_fixtures`` will
                 # not re-materialize it — so it is excluded, not counted-but-missing.
                 # Without this, a played-event account-merge collision (which voids the
-                # guest-vs-survivor self-play match) would hold the pool one outcome
+                # guest-vs-survivor self-play match) would hold the group one outcome
                 # short of ``fixture_count`` forever: permanently un-``complete``, no
                 # champion — the opposite of ADR-0788's live-standings guarantee.
                 fixture_count=sum(
-                    1 for f in pool_fixtures if f.match_status is not MatchStatus.voided
+                    1
+                    for f in group_fixtures
+                    if f.match_status is not MatchStatus.voided
                 ),
                 outcomes=tuple(outcomes),
             )
         )
-    return pool_inputs
+    return group_inputs
 
 
 def _field_input(
@@ -347,18 +416,18 @@ def _field_input(
     game_counts: dict[uuid.UUID, tuple[int, int]],
 ) -> FieldInput:
     """The whole field as one standings input — the swiss projection of
-    :func:`_pool_inputs`, with nothing to group by.
+    :func:`_group_inputs`, with nothing to group by.
 
     The field is the event's **active entrants**, not the entries its fixtures seat.
-    That difference is the whole reason this takes an argument :func:`_pool_inputs` does
-    not: a swiss entrant with a **bye** has no fixture that round (a bye is the absence
-    of a row, ADR-0786), and every later round is cut with both sides unknown, so a
-    seven-player draw derived from fixtures alone would stand a six-player table.
+    That difference is the whole reason this takes an argument :func:`_group_inputs`
+    does not: a swiss entrant with a **bye** has no fixture that round (a bye is the
+    absence of a row, ADR-0786), and every later round is cut with both sides unknown,
+    so a seven-player draw derived from fixtures alone would stand a six-player table.
 
     The entries seated in fixtures are **unioned in** rather than assumed to be a
     subset, for the **rows** only. A player who withdraws after the draw is cut leaves
     the active list while their played fixtures stay, and
-    :func:`~app.pool_finishing_order.swiss_finishing_order` indexes its tallies by
+    :func:`~app.group_finishing_order.swiss_finishing_order` indexes its tallies by
     entrant — so dropping them would be a ``KeyError`` on the first outcome that names
     them, on the detail page of any event that had a withdrawal. Somebody who played
     real matches belongs in the table.
@@ -385,7 +454,7 @@ def _field_input(
     nothing will ever seat, and counting those holds the event one outcome short of
     complete forever. :func:`~app.draws.swiss_pairable_rows` is that count, per round,
     over the same active field; a **voided** pairing comes off it exactly as it does
-    for a pool, for the same reason."""
+    for a group, for the same reason."""
     active = tuple(EntryId(entrant.id) for entrant in entrants)
     field = set(active) | {
         EntryId(entry_id)
@@ -516,23 +585,24 @@ def _fixture_outcome(
     )
 
 
-def _pool_standings_read(pools: Sequence[PoolStandings]) -> list[PoolStandingsRead]:
-    """The per-pool standings block, shared by the two shapes that carry one — the
-    round-robin arm and the pool stage of the rr-then-ko arm — so a table means the same
+def _group_standings_read(groups: Sequence[GroupStandings]) -> list[GroupStandingsRead]:
+    """The per-group standings block, shared by the two shapes that carry one — the
+    round-robin arm and the group stage of the rr-then-ko arm — so a table means the
+    same
     thing whichever event it is read off."""
     return [
-        PoolStandingsRead(
-            pool_id=pool.pool_id,
-            rows=_standing_rows_read(pool.rows),
-            complete=pool.complete,
+        GroupStandingsRead(
+            group_id=group.group_id,
+            rows=_standing_rows_read(group.rows),
+            complete=group.complete,
         )
-        for pool in pools
+        for group in groups
     ]
 
 
 def _standing_rows_read(rows: Sequence[StandingRow]) -> list[StandingRowRead]:
-    """A pool's standings rows, shared by the two shapes that carry one — the
-    round-robin arm and the pool stage of the rr-then-ko arm."""
+    """A group's standings rows, shared by the two shapes that carry one — the
+    round-robin arm and the group stage of the rr-then-ko arm."""
     return [StandingRowRead(**_standing_read_columns(row)) for row in rows]
 
 
@@ -560,11 +630,11 @@ def _standing_read_columns(row: StandingRow) -> StandingRowColumns:
 def _swiss_standing_rows_read(
     rows: Sequence[SwissStandingRow],
 ) -> list[SwissStandingRowRead]:
-    """A swiss table's rows: the same columns a pool's row carries plus ``buchholz``,
+    """A swiss table's rows: the same columns a group's row carries plus ``buchholz``,
     the figure that ordered them (ADR "swiss standings add Buchholz, and head-to-head is
     guarded on having met").
 
-    The shared columns come from :func:`_standing_read_columns`, the same call a pool
+    The shared columns come from :func:`_standing_read_columns`, the same call a group
     row's do, rather than being spelled out a second time here: the shapes match on both
     sides of the wire — :class:`SwissStandingRowRead` extends
     :class:`~app.schemas.tournament.StandingRowRead` exactly as
@@ -591,7 +661,7 @@ def _finish_rows_read(finishes: Sequence[FinishRow]) -> list[FinishRowRead]:
 
 def _serialize_standings(results: EventResults) -> StandingsResultsRead:
     return StandingsResultsRead(
-        pools=_pool_standings_read(results.pools),
+        groups=_group_standings_read(results.groups),
         complete=results.complete,
         champion=results.champion,
     )
@@ -606,7 +676,7 @@ def _serialize_finishes(results: BracketFinishes) -> FinishesResultsRead:
 
 
 def _serialize_swiss_standings(results: SwissStandings) -> SwissStandingsResultsRead:
-    """The swiss table — a pool's columns plus the Buchholz figure each row was ordered
+    """The swiss table — a group's columns plus the Buchholz figure each row was ordered
     by."""
     return SwissStandingsResultsRead(
         rows=_swiss_standing_rows_read(results.rows),
@@ -619,15 +689,33 @@ def _serialize_standings_then_finishes(
     results: StandingsThenFinishes,
 ) -> StandingsThenFinishesResultsRead:
     """Both stages, each serialized by the same helper its one-stage sibling uses — so
-    "an rr-then-ko event's pools cross the wire exactly as a round-robin's do, and its
+    "an rr-then-ko event's groups cross the wire exactly as a round-robin's do, and its
     bracket exactly as a single-elim's" is true structurally and not by three
     serializers happening to agree (ADR 20260727)."""
     return StandingsThenFinishesResultsRead(
-        pools=_pool_standings_read(results.pools),
+        groups=_group_standings_read(results.groups),
         finishes=_finish_rows_read(results.finishes),
         complete=results.complete,
         champion=results.champion,
     )
+
+
+def _stage_draw_types(
+    stages: Sequence[EventStageRead],
+) -> dict[uuid.UUID, StageDrawType]:
+    """Stage id → that stage's own draw type — the map :func:`event_results` reads
+    to tell a two-stage event's group-stage fixtures from its knockout-stage ones
+    (ADR 20260815), built off whatever ``stages`` a caller has in hand rather than
+    fetched again here.
+
+    ``EventStageRead.draw_type`` is typed ``DrawType`` on the wire (unchanged: it is a
+    served field, and narrowing it would change the OpenAPI schema), but its only
+    source is ``TournamentEventStage.draw_type`` — already
+    :data:`~app.models.draw_type.StageDrawType`-narrowed at the model boundary, whose
+    setter refuses ``rr_then_ko`` outright — so the cast below is safe, not a
+    suppression: this value can never actually be that member.
+    """
+    return {stage.id: cast(StageDrawType, stage.draw_type) for stage in stages}
 
 
 def serialize_event(
@@ -655,13 +743,19 @@ def serialize_event(
     # identical. It would also fire one SELECT per event, on the LIST endpoint that
     # returns every event of every tournament — an N+1 that no assertion about the
     # body can see. It is loaded once, in a batch, by ``fixtures_by_event``, which
-    # also owns the pool → round → position ordering, so the serializer never sorts
+    # also owns the group → round → position ordering, so the serializer never sorts
     # and no two call sites can order a bracket differently.
     #
     # The draw configuration is parsed ONCE, here, off the settings row that rides along
     # with the event (``lazy="joined"``): both wire fields below come off this one arm,
     # so the type and the count cannot be read from two different places and disagree.
     draw_settings = draw_settings_of(e.draw_settings)
+    # The eager (``lazy="selectin"``) stages collection, validated once: served on
+    # the wire below AND the source of the stage → draw-type map ``event_results``
+    # splits a two-stage event's fixtures with (ADR 20260815) — one origin, so the
+    # served stages and the results' stage-split cannot disagree.
+    stage_reads = [EventStageRead.model_validate(s) for s in e.stages]
+    stage_draw_types = _stage_draw_types(stage_reads)
     return TournamentEventRead.model_validate(
         {
             "id": e.id,
@@ -682,7 +776,7 @@ def serialize_event(
             # from this line assuming it. **Flat beside ``draw_type`` on the wire**,
             # exactly as before: the settings object is a storage shape, not a wire one
             # (ADR "a draw type's settings are one NOT NULL JSON object").
-            "qualifiers_per_pool": draw_settings.qualifiers_per_pool,
+            "qualifiers_per_group": draw_settings.qualifiers_per_group,
             # And **R**, the swiss round count, off the same parsed arm and by the same
             # rule: a property on the arms that have no round count, so this line asks
             # every arm one question rather than deciding which draw types have one.
@@ -696,18 +790,28 @@ def serialize_event(
             "slot": e.slot,
             "match_settings": e.match_settings,
             "predicates": e.predicates,
-            # Projected from the event's pool ROWS (ADR 20260801), not handed over as a
-            # JSONB column. They ride on the event's own eager ``selectin`` load, so
-            # this costs the page no statement of its own — the same arrangement the
-            # venue catalogue has.
-            "pools": [pool_read(pool) for pool in e.pools],
-            # Read straight off the relationship, exactly as ``pools`` above is:
+            # Projected from the event's GROUP rows and the reservations they map to
+            # (ADR 20260801), not handed over as a JSONB column — ``group_read`` is the
+            # join that keeps this wire field exactly what it was. Both sides ride on
+            # the event's own eager ``selectin`` loads, so this costs the page no
+            # statement of its own — the same arrangement the venue catalogue has.
+            # Both arrays through the ``app.tournament_draws`` seam, not inlined here.
+            # They read ``event.groups`` themselves — the same eager collection this
+            # loop already holds, so going through the seam costs nothing — and being
+            # the one spelling is what matters: when #1370 lets two groups share a
+            # reservation, ``event_reservations`` has to dedupe, and a second copy
+            # living in the BFF's own payload would go on emitting the duplicate.
+            "groups": event_groups(e),
+            "reservations": event_reservations(e),
+            # Read straight off the relationship, exactly as ``groups`` above is:
             # ``TournamentEvent.stages`` is ``lazy="selectin"`` now, so every event this
             # serializer reaches already carries its stages, however it was loaded — no
             # separate batch, no sentinel for "not on this page" (ADR 20260815).
-            # ``model_validate`` directly rather than a helper: unlike ``pool_read``,
-            # nothing composes a stage row from more than itself.
-            "stages": [EventStageRead.model_validate(s) for s in e.stages],
+            # ``model_validate`` directly rather than a helper: unlike ``group_read``,
+            # nothing composes a stage row from more than itself. The same eager
+            # collection feeds ``_stage_draw_types`` for the results projection below,
+            # so the served stages and the stage-split of the results cannot disagree.
+            "stages": stage_reads,
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,
@@ -732,6 +836,7 @@ def serialize_event(
                     entrants=entrants,
                     fixtures=fixtures,
                     game_counts=game_counts,
+                    stage_draw_types=stage_draw_types,
                 )
             ),
         }
@@ -854,7 +959,9 @@ async def shape_event_read(
     rating = await entrant_rating(db, league_id, viewer_id)
     # Its stages ride along for free, same as ``shape_created_event_read`` above:
     # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
-    # collection, so ``serialize_event`` reads real rows off ``event.stages``.
+    # collection, so ``serialize_event`` reads real rows off ``event.stages`` — and
+    # ``event_results``' stage-split reads the same rows, so an edited two-stage
+    # event's group/knockout split is always the live one (ADR 20260815).
     return serialize_event(
         event,
         entrants=entrants,

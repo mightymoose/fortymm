@@ -30,6 +30,8 @@ import {
   type DrawPlan,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
+  groupIdFor,
+  groupsFor,
   manualPlacementPin,
   NO_DRAWN_EVENTS_MESSAGE,
   queuedSolveRow,
@@ -49,6 +51,7 @@ import {
 } from '@/mocks/factories/tournaments/tournament-ids'
 import { conjoinWithAnd, hasVenue } from '@/components/tournaments/data/helpers'
 import type { TournamentsNearMe } from '@/components/tournaments/data/api'
+import { groupLetter } from '@/components/tournaments/data/draw-structure'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
@@ -72,25 +75,33 @@ type TournamentTableWrite = components['schemas']['TournamentTableWrite']
  * means "this existing one". A stored table no entry names is removed. */
 type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
-/** The **read** pool — it carries the `id` the server minted and the `position` it
- * stamped. Its two write twins below deliberately carry neither; see `mintPool`. */
-type Pool = components['schemas']['Pool']
-/** A pool as a **create** body carries it: no `id` (the server mints it, ADR 20260801)
- * and no `position` (the server assigns it from the pool's index in the list).
- * `extra="forbid"`, so either key on the way in is a 422 that names the field. */
-type PoolWrite = components['schemas']['PoolWrite']
-/** A pool as a **PATCH** body carries it: the write shape plus an *optional* `id` naming
- * a pool the event already has. Omitted means "add this one"; supplied means "this
- * existing one". A stored pool no entry names is removed. */
-type PoolUpsert = components['schemas']['PoolUpsert']
+/** The **read** reservation — it carries the `id` the server minted and the `position`
+ * it stamped. Its two write twins below deliberately carry neither; see
+ * `mintReservation`. */
+type Reservation = components['schemas']['Reservation']
+/** A reservation as a **create** body carries it: no `id` (the server mints it, ADR
+ * 20260801) and no `position` (the server assigns it from the reservation's index in
+ * the list). `extra="forbid"`, so either key on the way in is a 422 that names the
+ * field. */
+type ReservationWrite = components['schemas']['ReservationWrite']
+/** A reservation as a **PATCH** body carries it: the write shape plus an *optional* `id`
+ * naming a reservation the event already has. Omitted means "add this one"; supplied
+ * means "this existing one". A stored reservation no entry names is removed. */
+type ReservationUpsert = components['schemas']['ReservationUpsert']
+// `GroupRead` has no type alias here: it is never authored or held by this store
+// (ticket #1369) — `groupIdFor`/`groupsFor` (`solver-sim.ts`, shared with the Playwright
+// stub) derive it from `StoredEvent.reservations` at read time, so the 1:1 this slice
+// keeps can never drift out of step by itself.
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 
 /** What the store actually holds for an event: everything the wire shape has
- * *except* the two fields the server DERIVES at read time — the `entered` count
- * and the caller-aware `entry_state`. Deriving them on read (rather than storing
- * them) makes "the counter says 52, the list has 51" — and its twin, "the event
- * says `open` while holding all 64 of its 64 entrants" — unrepresentable. It is
- * the same reason the API has no `entered` column.
+ * *except* the three fields the server DERIVES at read time — the `entered` count,
+ * the caller-aware `entry_state`, and `groups` (ticket #1369: server-minted, one per
+ * reservation, at the same position — never a second array a mutation could let drift
+ * out of the 1:1). Deriving them on read (rather than storing them) makes "the counter
+ * says 52, the list has 51" — and its twin, "the event says `open` while holding all 64
+ * of its 64 entrants" — unrepresentable. It is the same reason the API has no `entered`
+ * column, and `groupsFor` (below) is the same discipline applied to `groups`.
  *
  * The one thing the store DOES hold is `ineligible`: whether the dev user's rating
  * fails one of this event's rules is a fact about a player's rating on the
@@ -105,10 +116,10 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  * PATCH deliberately leaves it alone — a director editing an event's name has not
  * thrown their draw away.
  *
- * `qualifiers_per_pool` is stored too, and it has to be: it is what sizes an
+ * `qualifiers_per_group` is stored too, and it has to be: it is what sizes an
  * `rr-then-ko` draw's bracket at the cut (`P × K`, ADR 20260727). Before it had a home
  * here, `planEventDraw` passed nothing and every two-stage event was cut at one qualifier
- * per pool — a well-formed bracket of the wrong size, for an event the director had
+ * per group — a well-formed bracket of the wrong size, for an event the director had
  * configured otherwise, with nothing reporting the substitution.
  *
  * **It is `null` for every draw type but `rr-then-ko`** (ADR 20260727), which is why the
@@ -121,10 +132,11 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  * every draw type but `swiss`, and `null` is not "unset" there either — a round-robin's
  * rounds come off the circle method and a bracket's depth follows from the field, so
  * neither is a number anybody chooses. */
-type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
+type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state' | 'groups'> & {
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
 }
+
 /** What the store holds for a tournament: the wire shape minus its events (which are
  * stored in their own reduced form above) and minus `draw_type_catalogue`.
  *
@@ -189,57 +201,59 @@ function otherEntrants(eventId: string, count: number): TournamentEntrantRead[] 
   }))
 }
 
-/** A seeded pool's id — a **uuid**, because that is what the wire says a pool id is
- * (`Pool.id` is `format: uuid`, minted by the server: ADR 20260801), derived from a
- * readable label so the seed stays greppable and the same tournament comes back the same
- * on every reset.
+/** A seeded reservation's id — a **uuid**, because that is what the wire says a
+ * reservation id is (`Reservation.id` is `format: uuid`, minted by the server: ADR
+ * 20260801), derived from a readable label so the seed stays greppable and the same
+ * tournament comes back the same on every reset.
  *
- * Not the mint below (`mintPool`): these rows are not created through a write verb, and
- * routing them through the counter would make a seeded pool's id depend on how many
- * pools the *previous* test happened to create. Distinct labels keep the two id spaces
- * from ever colliding. */
-function seedPoolId(label: string): string {
-  return mockUuid(`tournament-event-pool:${label}`)
+ * Not the mint below (`mintReservation`): these rows are not created through a write
+ * verb, and routing them through the counter would make a seeded reservation's id depend
+ * on how many reservations the *previous* test happened to create. Distinct labels keep
+ * the two id spaces from ever colliding. */
+function seedReservationId(label: string): string {
+  return mockUuid(`tournament-event-reservation:${label}`)
 }
 
-/** The two pools the seed's ONE drawn event is cut across (`ev-u1200` below). Pulled
- * out of the seed so the fixtures it is seeded with can be planned across the very same
- * pool ids: a fixture's `pool_id` names a pool of its own event (ADR-0786; a foreign key
- * into `tournament_event_pools` since ADR 20260801), so a seed that spelled the ids
- * twice could spell them differently, and every fixture would point at a pool that does
- * not exist. Every reference below reads the id off this list rather than restating it,
- * which is what makes that impossible rather than merely unlikely. */
-const U1200_POOLS: Pool[] = [
+/** The two reservations the seed's ONE drawn event is cut across (`ev-u1200` below).
+ * Pulled out of the seed so the fixtures it is seeded with can be planned across the
+ * very same GROUP ids (`groupIdFor`, derived from these): a fixture's `group_id` names a
+ * group of its own event (ADR-0786; a composite foreign key since ADR 20260801), so a
+ * seed that spelled the ids twice could spell them differently, and every fixture would
+ * point at a group that does not exist. Every reference below reads the id off this list
+ * rather than restating it, which is what makes that impossible rather than merely
+ * unlikely. */
+const U1200_RESERVATIONS: Reservation[] = [
   {
-    id: seedPoolId('u1200-a'),
-    name: 'Pool A',
+    id: seedReservationId('u1200-a'),
+    name: 'Reservation A',
     slot: { date: '2026-06-14', start: '09:00', end: '10:30' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: seedPoolId('u1200-b'),
-    name: 'Pool B',
+    id: seedReservationId('u1200-b'),
+    name: 'Reservation B',
     slot: { date: '2026-06-14', start: '10:30', end: '12:00' },
     table_ids: ['t3', 't4'],
     position: 1,
   },
 ]
 
-/** The pools of Summer Slam's one event — the seed's **ready-to-start** tournament (see
- * below). Pulled out for the same reason `U1200_POOLS` is: the fixtures are planned
- * against these very ids, so they cannot be spelled twice and spelled differently. */
-const SLAM_POOLS: Pool[] = [
+/** The reservations of Summer Slam's one event — the seed's **ready-to-start**
+ * tournament (see below). Pulled out for the same reason `U1200_RESERVATIONS` is: the
+ * fixtures are planned against these very (derived) group ids, so they cannot be spelled
+ * twice and spelled differently. */
+const SLAM_RESERVATIONS: Reservation[] = [
   {
-    id: seedPoolId('slam-a'),
-    name: 'Pool A',
+    id: seedReservationId('slam-a'),
+    name: 'Reservation A',
     slot: { date: '2026-08-22', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: seedPoolId('slam-b'),
-    name: 'Pool B',
+    id: seedReservationId('slam-b'),
+    name: 'Reservation B',
     slot: { date: '2026-08-22', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
     position: 1,
@@ -249,8 +263,9 @@ const SLAM_POOLS: Pool[] = [
 // ----- the seed's TWO-STAGE events (`rr-then-ko`, ADR 20260727) -------------------
 //
 // Two of them, on their own tournament (`GOLDEN_STATE` below): the **Challenge Cup**,
-// played out to a champion, and the **Shield**, whose pools are decided while its bracket
-// is still mid-flight. Between them they are the only place the results union's third arm
+// played out to a champion, and the **Shield**, whose groups are decided while its
+// bracket is still mid-flight. Between them they are the only place the results union's
+// third arm
 // (`kind: "standings_then_finishes"`) exists outside the server — complete and partial.
 //
 // They are hand-seeded, and that is not laziness: **this store derives no results at
@@ -272,9 +287,9 @@ const SLAM_POOLS: Pool[] = [
 // with a hand-built row — the suite was green about a stub. `npm run dev` was not.)
 //
 // The numbers below are consistent by construction and `tournaments-store.test.ts` holds
-// them to it: the standings' wins and losses are the ones the POOL FIXTURES record, the
+// them to it: the standings' wins and losses are the ones the GROUP FIXTURES record, the
 // finishes follow single-elimination's tie shape, and the champion is the FINAL's winner
-// — never a pool leader.
+// — never a group leader.
 
 /** The tournament both two-stage events run at: **live**, mid-weekend, with one event
  * finished and one still playing. It is also the seed's only `live` row, so `npm run dev`
@@ -295,62 +310,62 @@ const SHIELD_ENTRY_IDS = otherEntrants(SHIELD_EVENT_ID, 6).map((e) => e.id)
 const cup = (n: number): string => CUP_ENTRY_IDS[n - 1]
 const shield = (n: number): string => SHIELD_ENTRY_IDS[n - 1]
 
-/** The Challenge Cup's two pools. Pulled out of the seed for the reason `U1200_POOLS` is
- * — the fixtures are planned against these very ids, so they cannot be spelled twice and
- * spelled differently. */
-const CUP_POOLS: Pool[] = [
+/** The Challenge Cup's two reservations. Pulled out of the seed for the reason
+ * `U1200_RESERVATIONS` is — the fixtures are planned against these very (derived) group
+ * ids, so they cannot be spelled twice and spelled differently. */
+const CUP_RESERVATIONS: Reservation[] = [
   {
-    id: seedPoolId('cup-a'),
-    name: 'Pool A',
+    id: seedReservationId('cup-a'),
+    name: 'Reservation A',
     slot: { date: '2026-06-06', start: '09:00', end: '11:00' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: seedPoolId('cup-b'),
-    name: 'Pool B',
+    id: seedReservationId('cup-b'),
+    name: 'Reservation B',
     slot: { date: '2026-06-06', start: '11:00', end: '13:00' },
     table_ids: ['t3', 't4'],
     position: 1,
   },
 ]
 
-/** The Shield's two pools — a day later and on the other four tables, so the tournament
- * raises no double-booking diagnostic (`findPoolConflicts`). */
-const SHIELD_POOLS: Pool[] = [
+/** The Shield's two reservations — a day later and on the other four tables, so the
+ * tournament raises no double-booking diagnostic (`findReservationConflicts`). */
+const SHIELD_RESERVATIONS: Reservation[] = [
   {
-    id: seedPoolId('shield-a'),
-    name: 'Pool A',
+    id: seedReservationId('shield-a'),
+    name: 'Reservation A',
     slot: { date: '2026-06-07', start: '09:00', end: '10:30' },
     table_ids: ['t5', 't6'],
     position: 0,
   },
   {
-    id: seedPoolId('shield-b'),
-    name: 'Pool B',
+    id: seedReservationId('shield-b'),
+    name: 'Reservation B',
     slot: { date: '2026-06-07', start: '10:30', end: '12:00' },
     table_ids: ['t7', 't8'],
     position: 1,
   },
 ]
 
-/** One played pool match: `[winner, loser, winner's games, loser's games]` over an
+/** One played group match: `[winner, loser, winner's games, loser's games]` over an
  * event's `player.N` numbering. Best-of-three throughout (`length_games: 3`), so every
  * score is `2–0` or `2–1`. */
-type PoolPlay = readonly [number, number, number, number]
+type GroupPlay = readonly [number, number, number, number]
 
 /**
- * Every pool match the **Challenge Cup** played — the play its standings block reports.
+ * Every group match the **Challenge Cup** played — the play its standings block reports.
  *
  * Written out as OUTCOMES rather than as the standings themselves, because the two are
- * the seed's two independent statements about the same pool stage: this table stamps each
- * planned pool fixture with its `winner_entry_id`, the results block states the table a
+ * the seed's two independent statements about the same group stage: this table stamps each
+ * planned group fixture with its `winner_entry_id`, the results block states the table a
  * director reads, and the store's test derives the first into the second and fails if they
  * disagree. A single hand-written standings block with nothing to check it against is a
  * block whose arithmetic rots the first time somebody edits a row.
  */
-const CUP_POOL_PLAY: readonly PoolPlay[] = [
-  // Pool A (`player.1`, `.4`, `.5`, `.8` — the snake's deal): `player.5` unbeaten,
+const CUP_GROUP_PLAY: readonly GroupPlay[] = [
+  // Group A (`player.1`, `.4`, `.5`, `.8` — the snake's deal): `player.5` unbeaten,
   // `player.1` second on 2–1, then `player.4`, then a winless `player.8`. No tie, so the
   // finishing order is wins alone.
   [5, 1, 2, 1],
@@ -359,10 +374,10 @@ const CUP_POOL_PLAY: readonly PoolPlay[] = [
   [5, 4, 2, 0],
   [4, 8, 2, 1],
   [5, 8, 2, 0],
-  // Pool B (`player.2`, `.3`, `.6`, `.7`): TWO ties, both broken by **two-way
+  // Group B (`player.2`, `.3`, `.6`, `.7`): TWO ties, both broken by **two-way
   // head-to-head** — the first tiebreak the finishing order falls through to
   // (`player.3` over `player.2` at 2–1 each, `player.6` over `player.7` at 1–2 each).
-  // Seeded deliberately: a pool where wins alone settle everything leaves the chain the
+  // Seeded deliberately: a group where wins alone settle everything leaves the chain the
   // qualifiers are chosen by completely unexercised. The game difference agrees with
   // head-to-head in both cases, so the table still reads top-to-bottom without a director
   // having to know why.
@@ -375,31 +390,31 @@ const CUP_POOL_PLAY: readonly PoolPlay[] = [
 ]
 
 /**
- * Every pool match the **Shield** played. Both pools are decided; the knockout stage is
+ * Every group match the **Shield** played. Both groups are decided; the knockout stage is
  * not (see `SHIELD_KNOCKOUT_FIXTURES`).
  *
- * Pool A is a **three-way tie** — everybody 1–1 — which head-to-head cannot break (it
+ * Group A is a **three-way tie** — everybody 1–1 — which head-to-head cannot break (it
  * only settles a *two*-way one), so the order falls through to game difference:
  * `player.1` (+1), `player.5` (0), `player.4` (−1). That is the next link of the same
- * chain the Cup's Pool B exercises, and between them the two events cover it.
+ * chain the Cup's Group B exercises, and between them the two events cover it.
  */
-const SHIELD_POOL_PLAY: readonly PoolPlay[] = [
-  // Pool A — `player.1`, `.4`, `.5`.
+const SHIELD_GROUP_PLAY: readonly GroupPlay[] = [
+  // Group A — `player.1`, `.4`, `.5`.
   [1, 4, 2, 0],
   [5, 1, 2, 1],
   [4, 5, 2, 1],
-  // Pool B — `player.2`, `.3`, `.6`: no tie at all. `player.2` unbeaten, `player.6`
+  // Group B — `player.2`, `.3`, `.6`: no tie at all. `player.2` unbeaten, `player.6`
   // winless.
   [2, 3, 2, 1],
   [3, 6, 2, 0],
   [2, 6, 2, 0],
 ]
 
-/** `entry id | entry id` (sorted) → the winner's entry id, for every pool match of one
- * event. The lookup `stampPoolWinners` uses to record play on the PLANNED fixtures, so
+/** `entry id | entry id` (sorted) → the winner's entry id, for every group match of one
+ * event. The lookup `stampGroupWinners` uses to record play on the PLANNED fixtures, so
  * the draw the store would have cut and the play the results report are one thing. */
-function poolWinnersOf(
-  play: readonly PoolPlay[],
+function groupWinnersOf(
+  play: readonly GroupPlay[],
   entryOf: (n: number) => string,
 ): Map<string, string> {
   return new Map(
@@ -410,14 +425,14 @@ function poolWinnersOf(
   )
 }
 
-const CUP_POOL_WINNERS = poolWinnersOf(CUP_POOL_PLAY, cup)
-const SHIELD_POOL_WINNERS = poolWinnersOf(SHIELD_POOL_PLAY, shield)
+const CUP_GROUP_WINNERS = groupWinnersOf(CUP_GROUP_PLAY, cup)
+const SHIELD_GROUP_WINNERS = groupWinnersOf(SHIELD_GROUP_PLAY, shield)
 
-/** Record an event's play on its planned pool fixtures — the state a decided pool's
+/** Record an event's play on its planned group fixtures — the state a decided group's
  * fixtures are really in. The play table names every pairing exactly once, so a fixture
  * with no entry in the map is a planner/seed disagreement rather than an unplayed match,
- * and it throws here rather than seeding a half-played pool nobody notices. */
-function stampPoolWinners(
+ * and it throws here rather than seeding a half-played group nobody notices. */
+function stampGroupWinners(
   fixtures: TournamentFixtureRead[],
   winners: ReadonlyMap<string, string>,
 ): TournamentFixtureRead[] {
@@ -425,7 +440,7 @@ function stampPoolWinners(
     const key = [fixture.entry_a_id, fixture.entry_b_id].sort().join('|')
     const winner = winners.get(key)
     if (winner === undefined) {
-      throw new Error(`seed: no pool result for fixture ${fixture.id}`)
+      throw new Error(`seed: no group result for fixture ${fixture.id}`)
     }
     return { ...fixture, winner_entry_id: winner }
   })
@@ -433,45 +448,48 @@ function stampPoolWinners(
 
 /**
  * The Challenge Cup's knockout stage, **played out** — the state the bracket reaches once
- * every pool has finished, `advance()` has seated its qualifiers, and all three matches
+ * every group has finished, `advance()` has seated its qualifiers, and all three matches
  * have been won.
  *
  * Written out rather than planned, because seating a qualifier and carrying a winner
  * forward are `advance()`'s job on the server and this store implements neither. What
- * keeps it honest is a test: the seeded bracket's `(id, pool_id, round, position)` shape
+ * keeps it honest is a test: the seeded bracket's `(id, group_id, round, position)` shape
  * is asserted equal to the one `planDraw('rr-then-ko', …)` cuts for this very field, so
  * this is that bracket with its sides filled in — never a differently-shaped one.
  *
  * **Who plays whom is the ADR's seeding, not a choice made here.** Qualifiers are ordered
- * place-major — both pool winners (`player.5`, `player.3`) outrank both runners-up
- * (`player.1`, `player.2`) — and the pool order *within* a place is picked so round one
- * pairs nobody with a pool-mate: seeds 1–4 are `player.5`, `player.3`, `player.1`,
+ * place-major — both group winners (`player.5`, `player.3`) outrank both runners-up
+ * (`player.1`, `player.2`) — and the group order *within* a place is picked so round one
+ * pairs nobody with a group-mate: seeds 1–4 are `player.5`, `player.3`, `player.1`,
  * `player.2`, and a 4-bracket pairs 1 v 4 and 2 v 3, i.e. A-winner v B-runner-up and
  * B-winner v A-runner-up.
  *
- * **And both pool winners lose in round one.** That is the point of the fixture: the
- * champion is `player.2`, who came SECOND in pool B, and the two entrants who topped
- * their pools finish tied 3rd. Crown the pool leader instead and nothing on screen can
+ * **And both group winners lose in round one.** That is the point of the fixture: the
+ * champion is `player.2`, who came SECOND in group B, and the two entrants who topped
+ * their groups finish tied 3rd. Crown the group leader instead and nothing on screen can
  * tell "champion from the bracket" (the ADR's decision) from "champion from the
  * standings".
  */
 const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
-  // Semifinal 1 — seed 1 (`player.5`, pool A's winner) v seed 4 (`player.2`, pool B's
-  // runner-up). The runner-up wins.
+  // Semifinal 1 — seed 1 (`player.5`, group A's winner) v seed 4 (`player.2`, group B's
+  // runner-up). The runner-up wins. `stage_id: 's-2'` — `mintStageReads`'s knockout
+  // stage of this `rr-then-ko` event (ADR 20260815), never the group stage's `'s-1'`.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
-    pool_id: null,
+    stage_id: 's-2',
+    group_id: null,
     round: 1,
     position: 1,
     entry_a_id: cup(5),
     entry_b_id: cup(2),
     winner_entry_id: cup(2),
   }),
-  // Semifinal 2 — seed 2 (`player.3`, pool B's winner) v seed 3 (`player.1`, pool A's
+  // Semifinal 2 — seed 2 (`player.3`, group B's winner) v seed 3 (`player.1`, group A's
   // runner-up). The runner-up wins again.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
-    pool_id: null,
+    stage_id: 's-2',
+    group_id: null,
     round: 1,
     position: 2,
     entry_a_id: cup(3),
@@ -482,7 +500,8 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // event's champion; the standings have no say in it.
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
-    pool_id: null,
+    stage_id: 's-2',
+    group_id: null,
     round: 2,
     position: 1,
     entry_a_id: cup(2),
@@ -497,31 +516,34 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
  *
  * This is the state the two-stage results shape spends most of a tournament in, and the
  * reason it is seeded alongside the finished Cup: `complete` is false because the SECOND
- * stage is undecided even though every pool is done, `champion` is `null` because no
+ * stage is undecided even though every group is done, `champion` is `null` because no
  * final has been won, and `finishes` holds only the two entrants the bracket has actually
  * placed — the beaten semifinalists, tied 3rd. A results panel built solely against the
  * finished event would never meet a finishes list that starts at position 3.
  *
- * Seeds 1–4 are `player.1`, `player.2` (the pool winners) then `player.5`, `player.3`
- * (the runners-up), by the same place-major, pool-mate-avoiding rule the Cup uses.
+ * Seeds 1–4 are `player.1`, `player.2` (the group winners) then `player.5`, `player.3`
+ * (the runners-up), by the same place-major, group-mate-avoiding rule the Cup uses.
  */
 const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
-  // Semifinal 1 — seed 1 (`player.1`, pool A) v seed 4 (`player.3`, pool B). The top
-  // seed holds.
+  // Semifinal 1 — seed 1 (`player.1`, group A) v seed 4 (`player.3`, group B). The top
+  // seed holds. `stage_id: 's-2'` — `mintStageReads`'s knockout stage of this
+  // `rr-then-ko` event (ADR 20260815), never the group stage's `'s-1'`.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
-    pool_id: null,
+    stage_id: 's-2',
+    group_id: null,
     round: 1,
     position: 1,
     entry_a_id: shield(1),
     entry_b_id: shield(3),
     winner_entry_id: shield(1),
   }),
-  // Semifinal 2 — seed 2 (`player.2`, pool B's winner) v seed 3 (`player.5`, pool A's
+  // Semifinal 2 — seed 2 (`player.2`, group B's winner) v seed 3 (`player.5`, group A's
   // runner-up), and the runner-up takes it.
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
-    pool_id: null,
+    stage_id: 's-2',
+    group_id: null,
     round: 1,
     position: 2,
     entry_a_id: shield(2),
@@ -533,7 +555,8 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   // event has no champion yet.
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
-    pool_id: null,
+    stage_id: 's-2',
+    group_id: null,
     round: 2,
     position: 1,
     entry_a_id: shield(1),
@@ -580,8 +603,10 @@ function seed(): StoredTournament[] {
           name: 'Open Singles',
           format: 'singles',
           draw_type: 'round-robin',
+          // System-minted, never authored (ADR 20260815) — `mintStageReads` keeps every
+          // seeded event's `stages` agreeing with its own `draw_type`, one place.
           stages: mintStageReads('round-robin'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 64,
           entry_fee: 45,
@@ -590,17 +615,17 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
           match_settings: { rated: true, length_games: 5 },
           predicates: [],
-          pools: [
+          reservations: [
             {
               id: 'p-os-1',
-              name: 'Pool A',
+              name: 'Reservation A',
               slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
               table_ids: ['t1', 't2', 't3', 't4'],
               position: 0,
             },
             {
               id: 'p-os-2',
-              name: 'Pool B',
+              name: 'Reservation B',
               slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
               table_ids: ['t1', 't2', 't3', 't4', 't5', 't6'],
               position: 1,
@@ -619,18 +644,19 @@ function seed(): StoredTournament[] {
           // whose count a dev demo ticks from 0 to 1.
           //
           // It is ALSO the seed's **uncuttable** event, and it stays uncuttable for a
-          // reason that survives (ADR 20260726): round-robin with **NO POOLS**. It used
+          // reason that survives (ADR 20260726): round-robin with **NO GROUPS**. It used
           // to be `rr-then-ko`, refused because nothing could plan that type — but "an
           // unplannable type" is no longer a state a valid event can be in (that slug is
-          // back, with a strategy, since #1227). `pools: []` replaces it, and it is
-          // permanent: "A round-robin draw needs at least one pool." Do not give it pools.
+          // back, with a strategy, since #1227). `reservations: []` replaces it, and it is
+          // permanent: "A round-robin draw needs at least one group." Do not give it
+          // reservations.
           id: 'ev-u1500',
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1500 Singles',
           format: 'singles',
           draw_type: 'round-robin',
           stages: mintStageReads('round-robin'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 48,
           entry_fee: 30,
@@ -639,7 +665,7 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-06-14', start: '09:00', end: '16:00' },
           match_settings: { rated: true, length_games: 3 },
           predicates: [{ id: 'pr-2', field: 'rating', op: '<', value: 1500 }],
-          pools: [],
+          reservations: [],
           fixtures: [],
           results: null,
           created_at: '2026-06-01T09:06:00Z',
@@ -656,7 +682,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'single-elim',
           stages: mintStageReads('single-elim'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 16,
           entry_fee: 60,
@@ -665,7 +691,7 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-06-14', start: '13:00', end: '18:00' },
           match_settings: { rated: true, length_games: 7 },
           predicates: [],
-          pools: [],
+          reservations: [],
           fixtures: [],
           results: null,
           created_at: '2026-06-01T09:06:30Z',
@@ -680,11 +706,11 @@ function seed(): StoredTournament[] {
           //
           // It is ALSO the seed's one **drawn** event (ADR-0786) — the only one that
           // arrives with fixtures already, so `npm run dev` can show a cut draw without
-          // anyone clicking Generate. Round-robin, because a POOLED draw is the one whose
-          // scaffold (pools, rounds, the sit-out) needs seeing without anybody clicking;
+          // anyone clicking Generate. Round-robin, because a GROUPED draw is the one whose
+          // scaffold (groups, rounds, the sit-out) needs seeing without anybody clicking;
           // the bracket is one Generate click away on any single-elim event, both types
-          // being cuttable here now. Nine entrants across two pools
-          // (5 + 4 by the snake) — an ODD pool, so Pool A's rounds have a player
+          // being cuttable here now. Nine entrants across two groups
+          // (5 + 4 by the snake) — an ODD group, so Group A's rounds have a player
           // sitting out, and a bye is visible for what it is: the ABSENCE of a fixture,
           // not a fixture with an empty side.
           id: 'ev-u1200',
@@ -693,7 +719,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           stages: mintStageReads('round-robin'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 24,
           entry_fee: 20,
@@ -703,28 +729,30 @@ function seed(): StoredTournament[] {
           match_settings: { rated: true, length_games: 3 },
           predicates: [{ id: 'pr-u1200', field: 'rating', op: '<', value: 1200 }],
           ineligible: { predicate_id: 'pr-u1200', rating: DEV_USER_RATING },
-          pools: U1200_POOLS,
+          reservations: U1200_RESERVATIONS,
           // Planned by the same function the store's `cutDraw` uses, from the same
-          // entrants and the same pools — so the seeded draw is one this store could
-          // have cut, rather than a hand-written list that no cut would ever produce.
+          // entrants and the same (derived) group ids — so the seeded draw is one this
+          // store could have cut, rather than a hand-written list that no cut would ever
+          // produce.
           fixtures: planRoundRobinFixtures(
             otherEntrants('ev-u1200', 9).map((e) => e.id),
-            U1200_POOLS.map((p) => p.id),
+            U1200_RESERVATIONS.map((r) => groupIdFor(r.id)),
           ),
-          // Representative RESULTS (ADR-0788) so `npm run dev` shows standings live: Pool
+          // Representative RESULTS (ADR-0788) so `npm run dev` shows standings live: Group
           // A still being played (`complete: false` — the table fills in as matches land),
-          // Pool B decided. Multi-pool, so there is no single champion without a knockout
-          // stage (a later slice) — `champion: null` even where a pool is done. The entry
-          // ids match this event's entrants (`entry-ev-u1200-N`) and its pool ids (read
-          // off `U1200_POOLS`, never respelled), so the name and pool joins land; the
-          // rows are in finishing order, which the client renders untouched.
+          // Group B decided. Multi-group, so there is no single champion without a
+          // knockout stage (a later slice) — `champion: null` even where a group is done.
+          // The entry ids match this event's entrants (`entry-ev-u1200-N`) and its group
+          // ids (`groupIdFor`, off `U1200_RESERVATIONS`, never respelled), so the name and
+          // group joins land; the rows are in finishing order, which the client renders
+          // untouched.
           results: {
             kind: 'standings',
             complete: false,
             champion: null,
-            pools: [
+            groups: [
               {
-                pool_id: U1200_POOLS[0].id,
+                group_id: groupIdFor(U1200_RESERVATIONS[0].id),
                 complete: false,
                 rows: [
                   { entry_id: 'entry-ev-u1200-1', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 },
@@ -735,7 +763,7 @@ function seed(): StoredTournament[] {
                 ],
               },
               {
-                pool_id: U1200_POOLS[1].id,
+                group_id: groupIdFor(U1200_RESERVATIONS[1].id),
                 complete: true,
                 rows: [
                   { entry_id: 'entry-ev-u1200-2', rank: 1, played: 3, wins: 3, losses: 0, games_won: 6, games_lost: 2, game_difference: 4 },
@@ -759,7 +787,7 @@ function seed(): StoredTournament[] {
           format: 'doubles',
           draw_type: 'single-elim',
           stages: mintStageReads('single-elim'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 32,
           entry_fee: 25,
@@ -768,7 +796,7 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-06-14', start: '10:00', end: '15:00' },
           match_settings: { rated: false, length_games: 3 },
           predicates: [],
-          pools: [],
+          reservations: [],
           fixtures: [],
           results: null,
           created_at: '2026-06-01T09:07:00Z',
@@ -810,7 +838,7 @@ function seed(): StoredTournament[] {
           // `live` and `archived` unreachable in `npm run dev` and in the store's own
           // tests, and would leave the whole precondition unexercised on its happy path.
           //
-          // Round-robin with pools and a draw cut from its own entrants, so it is
+          // Round-robin with groups and a draw cut from its own entrants, so it is
           // `current` by the same set-comparison the server makes. Publish this
           // tournament and Start works; publish the Bay Area Open — four of whose five
           // events have no draw — and Start is refused, by name. The seed holds both.
@@ -820,7 +848,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           stages: mintStageReads('round-robin'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 16,
           entry_fee: 20,
@@ -829,10 +857,10 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-08-22', start: '09:00', end: '13:00' },
           match_settings: { rated: true, length_games: 5 },
           predicates: [],
-          pools: SLAM_POOLS,
+          reservations: SLAM_RESERVATIONS,
           fixtures: planRoundRobinFixtures(
             otherEntrants('ev-slam-open', 8).map((e) => e.id),
-            SLAM_POOLS.map((p) => p.id),
+            SLAM_RESERVATIONS.map((r) => groupIdFor(r.id)),
           ),
           // Drawn but unplayed — go-live materializes its fixtures into matches, but no
           // result has landed, so there is nothing to stand yet (ADR-0788).
@@ -884,7 +912,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'single-elim',
           stages: mintStageReads('single-elim'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 32,
           entry_fee: 40,
@@ -906,11 +934,11 @@ function seed(): StoredTournament[] {
             { id: 'pr-cc-2', field: 'rating', op: '>=', value: 1200 },
             { id: 'pr-cc-3', field: 'rating', op: 'between', value: [1200, 2400] },
           ],
-          // Two group-stage pools on disjoint tables, then a knockout that
+          // Two group-stage reservations on disjoint tables, then a knockout that
           // reuses the show tables once the groups are done. No pair both
           // overlaps in time and shares a table, so this seed raises no
-          // double-booking diagnostic (see `findPoolConflicts`).
-          pools: [
+          // double-booking diagnostic (see `findReservationConflicts`).
+          reservations: [
             {
               id: 'p-cc-1',
               name: 'Group A',
@@ -983,7 +1011,7 @@ function seed(): StoredTournament[] {
           format: 'singles',
           draw_type: 'round-robin',
           stages: mintStageReads('round-robin'),
-          qualifiers_per_pool: null,
+          qualifiers_per_group: null,
           rounds: null,
           max_players: 8,
           entry_fee: 0,
@@ -992,7 +1020,7 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-09-12', start: '13:00', end: '17:00' },
           match_settings: { rated: false, length_games: 3 },
           predicates: [],
-          pools: [],
+          reservations: [],
           fixtures: [],
           results: null,
           created_at: '2026-06-13T18:01:00Z',
@@ -1005,17 +1033,17 @@ function seed(): StoredTournament[] {
       //
       // Both of its events are `rr-then-ko`, and between them they hold the two states
       // the results union's third arm (`kind: "standings_then_finishes"`) has: the
-      // Challenge Cup finished on the Saturday and has a champion; the Shield's pools are
-      // decided and its final is still to be played. Everything they are built from — the
-      // pools, the play, the brackets, and why the champion is who it is — is in the
-      // block above `seed()`.
+      // Challenge Cup finished on the Saturday and has a champion; the Shield's groups
+      // are decided and its final is still to be played. Everything they are built from
+      // — the groups, the play, the brackets, and why the champion is who it is — is in
+      // the block above `seed()`.
       //
       // It is Los Angeles, ~345 miles from Berkeley, on purpose: every near-me test in
       // the suite searches around Berkeley at 10 or 35 miles, so a venue placed anywhere
       // in the Bay would silently join their expected result sets.
       id: GOLDEN_STATE_ID,
       name: 'Golden State Classic 2026',
-      description: 'Pools on the Saturday, knockout on the Sunday.',
+      description: 'Groups on the Saturday, knockout on the Sunday.',
       status: 'live',
       start_date: '2026-06-06',
       end_date: '2026-06-07',
@@ -1039,7 +1067,7 @@ function seed(): StoredTournament[] {
       latest_schedule_solve: null,
       events: [
         {
-          // FINISHED: both pools decided, the bracket run to a final, a champion crowned.
+          // FINISHED: both groups decided, the bracket run to a final, a champion crowned.
           //
           // FULL (8 of 8), deliberately: a finished event must not offer the dev user an
           // Enter button, and an entry would make its draw *stale* — a decided event
@@ -1049,12 +1077,15 @@ function seed(): StoredTournament[] {
           name: 'Challenge Cup',
           format: 'singles',
           draw_type: 'rr-then-ko',
+          // TWO stages — `mintStageReads('rr-then-ko')` mints `'s-1'` (round-robin, the
+          // groups below) then `'s-2'` (single-elim, the knockout fixtures below), the
+          // ids `CUP_KNOCKOUT_FIXTURES` and the group-stage plan below both name.
           stages: mintStageReads('rr-then-ko'),
-          // TWO qualifiers per pool — the number that sizes the bracket at the cut
+          // TWO qualifiers per group — the number that sizes the bracket at the cut
           // (`P × K` = 2 × 2 = 4, derived and never configured, ADR 20260727). Unlike
           // every other event in this seed it is NOT null: a knockout stage to qualify
           // for is exactly what this draw type has.
-          qualifiers_per_pool: 2,
+          qualifiers_per_group: 2,
           rounds: null,
           max_players: 8,
           entry_fee: 35,
@@ -1063,39 +1094,39 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-06-06', start: '09:00', end: '16:00' },
           match_settings: { rated: true, length_games: 3 },
           predicates: [],
-          pools: CUP_POOLS,
-          // BOTH STAGES, in the order the wire sends them: the pool fixtures planned by
+          reservations: CUP_RESERVATIONS,
+          // BOTH STAGES, in the order the wire sends them: the group fixtures planned by
           // the same function `cutDraw` uses — then stamped with the winners they were
           // actually played to — followed by the knockout bracket, seated and decided.
           // `tournaments-store.test.ts` asserts this whole list has the shape
           // `planDraw('rr-then-ko', …)` cuts for this very field, so it is that draw
           // played out rather than a hand-drawn one no cut would produce.
           fixtures: [
-            ...stampPoolWinners(
+            ...stampGroupWinners(
               planRoundRobinFixtures(
                 CUP_ENTRY_IDS,
-                CUP_POOLS.map((p) => p.id),
+                CUP_RESERVATIONS.map((r) => groupIdFor(r.id)),
               ),
-              CUP_POOL_WINNERS,
+              CUP_GROUP_WINNERS,
             ),
             ...CUP_KNOCKOUT_FIXTURES,
           ],
           // The third arm of the results union (ADR 20260727), tagged
-          // `standings_then_finishes`: ONE standings block per pool and ONE finishes
+          // `standings_then_finishes`: ONE standings block per group and ONE finishes
           // block for the bracket — the very models the round-robin and single-elim arms
           // send, so each stage renders with the panel that already exists.
           //
-          // `complete: true` is BOTH stages decided, not either: every pool says
+          // `complete: true` is BOTH stages decided, not either: every group says
           // `complete`, and the bracket has run to a final. `champion` is that final's
-          // winner (`player.2`) — and `player.2` tops NO pool, which is the whole point.
-          // Topping a pool wins nothing here; the pool stage only seeds the bracket.
+          // winner (`player.2`) — and `player.2` tops NO group, which is the whole point.
+          // Topping a group wins nothing here; the group stage only seeds the bracket.
           results: {
             kind: 'standings_then_finishes',
             complete: true,
             champion: cup(2),
-            pools: [
+            groups: [
               {
-                pool_id: CUP_POOLS[0].id,
+                group_id: groupIdFor(CUP_RESERVATIONS[0].id),
                 complete: true,
                 rows: [
                   { entry_id: cup(5), rank: 1, played: 3, wins: 3, losses: 0, games_won: 6, games_lost: 1, game_difference: 5 },
@@ -1105,10 +1136,10 @@ function seed(): StoredTournament[] {
                 ],
               },
               {
-                // Both of this pool's ties are broken by two-way head-to-head, so the
+                // Both of this group's ties are broken by two-way head-to-head, so the
                 // rank column is NOT a re-reading of the wins column: `player.3` and
                 // `player.2` both went 2–1, and `player.3` won the match between them.
-                pool_id: CUP_POOLS[1].id,
+                group_id: groupIdFor(CUP_RESERVATIONS[1].id),
                 complete: true,
                 rows: [
                   { entry_id: cup(3), rank: 1, played: 3, wins: 2, losses: 1, games_won: 5, games_lost: 3, game_difference: 2 },
@@ -1121,7 +1152,7 @@ function seed(): StoredTournament[] {
             // Single-elimination's own placement shape (`2 ** (final_round − round) + 1`):
             // 1st, 2nd, then the two semifinal losers **tied 3rd** — same round out, same
             // position, because the bracket never played them off. Those two losers are
-            // the pool winners.
+            // the group winners.
             finishes: [
               { entry_id: cup(2), position: 1, eliminated_in_round: null },
               { entry_id: cup(1), position: 2, eliminated_in_round: 2 },
@@ -1133,7 +1164,7 @@ function seed(): StoredTournament[] {
           updated_at: '2026-06-06T17:12:00Z',
         },
         {
-          // MID-FLIGHT: the same shape, one round from home. Every pool is decided and
+          // MID-FLIGHT: the same shape, one round from home. Every group is decided and
           // the final is seated and unplayed, so `complete` is false, `champion` is null,
           // and `finishes` holds only what the bracket has actually settled.
           id: SHIELD_EVENT_ID,
@@ -1141,11 +1172,12 @@ function seed(): StoredTournament[] {
           name: 'Shield Singles',
           format: 'singles',
           draw_type: 'rr-then-ko',
+          // TWO stages, the same convention the Cup uses above — `'s-1'`/`'s-2'`.
           stages: mintStageReads('rr-then-ko'),
-          // Two pools of three, two qualifiers from each — `K = ⌊N/P⌋`, the legal
-          // maximum, where everyone but the pool's last qualifies and the pool stage
+          // Two groups of three, two qualifiers from each — `K = ⌊N/P⌋`, the legal
+          // maximum, where everyone but the group's last qualifies and the group stage
           // exists purely to seed (ADR 20260727).
-          qualifiers_per_pool: 2,
+          qualifiers_per_group: 2,
           rounds: null,
           max_players: 6,
           entry_fee: 25,
@@ -1154,18 +1186,18 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-06-07', start: '09:00', end: '16:00' },
           match_settings: { rated: true, length_games: 3 },
           predicates: [],
-          pools: SHIELD_POOLS,
+          reservations: SHIELD_RESERVATIONS,
           fixtures: [
-            ...stampPoolWinners(
+            ...stampGroupWinners(
               planRoundRobinFixtures(
                 SHIELD_ENTRY_IDS,
-                SHIELD_POOLS.map((p) => p.id),
+                SHIELD_RESERVATIONS.map((r) => groupIdFor(r.id)),
               ),
-              SHIELD_POOL_WINNERS,
+              SHIELD_GROUP_WINNERS,
             ),
             ...SHIELD_KNOCKOUT_FIXTURES,
           ],
-          // The PARTIAL two-stage read. Note what is and is not true of it: both pools
+          // The PARTIAL two-stage read. Note what is and is not true of it: both groups
           // say `complete`, and the event still does not — `complete` is *both* stages
           // decided, and one final stands between this event and its champion. The
           // finishes list therefore starts at position **3**: the two beaten
@@ -1175,11 +1207,11 @@ function seed(): StoredTournament[] {
             kind: 'standings_then_finishes',
             complete: false,
             champion: null,
-            pools: [
+            groups: [
               {
                 // A THREE-way tie — everyone 1–1 — which two-way head-to-head cannot
                 // break, so the order is game difference: +1, 0, −1.
-                pool_id: SHIELD_POOLS[0].id,
+                group_id: groupIdFor(SHIELD_RESERVATIONS[0].id),
                 complete: true,
                 rows: [
                   { entry_id: shield(1), rank: 1, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 2, game_difference: 1 },
@@ -1188,7 +1220,7 @@ function seed(): StoredTournament[] {
                 ],
               },
               {
-                pool_id: SHIELD_POOLS[1].id,
+                group_id: groupIdFor(SHIELD_RESERVATIONS[1].id),
                 complete: true,
                 rows: [
                   { entry_id: shield(2), rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 },
@@ -1273,12 +1305,18 @@ function entryState(event: StoredEvent): TournamentEventRead['entry_state'] {
 }
 
 /** Project a stored event onto the wire shape, deriving the `entered` count from
- * the entrants — the one place the count comes from — and the caller-aware
- * `entry_state` from the entrants and the seeded rating verdict. */
+ * the entrants — the one place the count comes from — the caller-aware `entry_state`
+ * from the entrants and the seeded rating verdict, and `groups` from `reservations`
+ * (`groupsFor`, ticket #1369). */
 function readEvent(event: StoredEvent): TournamentEventRead {
   const { ineligible, ...wire } = event
   void ineligible
-  return { ...wire, entered: event.entrants.length, entry_state: entryState(event) }
+  return {
+    ...wire,
+    groups: groupsFor(event.reservations),
+    entered: event.entrants.length,
+    entry_state: entryState(event),
+  }
 }
 
 function readDetail(t: StoredTournament): TournamentDetailRead {
@@ -1603,11 +1641,12 @@ type CatalogueResult =
  * (`apply_table_catalogue`, `api/app/tournament_tables.py`), judging both refusals
  * **before** anything changes so a refused edit leaves the tournament byte-identical.
  *
- * The asymmetry between a pool and a placement is the ADR's whole point, and it is
- * mirrored here rather than smoothed over. A table a **pool** merely reserves is removed
- * with no ceremony — a pool's `table_ids` are a reservation, and the pool simply
- * reserves one fewer (the stored ids still list the dead one; pruning them is a later
- * slice, on the server too). A table a fixture is **placed at** is refused, because
+ * The asymmetry between a reservation and a placement is the ADR's whole point, and it is
+ * mirrored here rather than smoothed over. A table a **reservation** merely holds is
+ * removed with no ceremony — a reservation's `table_ids` ARE the hold, and the
+ * reservation simply holds one fewer (the stored ids still list the dead one; pruning
+ * them is a later slice, on the server too). A table a fixture is **placed at** is
+ * refused, because
  * clearing a placement destroys information on an unrelated write: the fixture stops
  * being "placed at a table that vanished" and becomes indistinguishable from "nobody
  * ever placed this".
@@ -1675,7 +1714,7 @@ function applyTableCatalogue(
   return {
     ok: true,
     // The list's ORDER is the catalogue's order — a cited row keeps its id (and every
-    // pool `table_ids` and fixture `table_id` that names it) while taking this
+    // reservation `table_ids` and fixture `table_id` that names it) while taking this
     // payload's words and place; an entry with no id is an insert.
     tables: submitted.map((entry) =>
       entry.id == null
@@ -1735,20 +1774,21 @@ export type StoreResult =
   | { ok: false; status: 422; index: number; tableId: string; detail: string }
 
 /** An event write fails four ways: 404 (no such tournament/event), 403 (not the
- * creator), a **409** on a PATCH that would move the pools out from under a cut draw
- * (ADR-0786's pool-set freeze; see `poolSetFrozenDetail`), and a **422** naming the
- * `pools` entry that cited an id this event does not have (ADR 20260801's minted ids;
- * see `applyEventPools`). A create can hit neither: a new event has no draw, and
- * `PoolWrite` has no id to cite.
+ * creator), a **409** on a PATCH that would move the groups out from under a cut draw
+ * (ADR-0786's group-set freeze; see `groupSetFrozenDetail`), and a **422** naming the
+ * `reservations` entry that cited an id this event does not have (ADR 20260801's minted
+ * ids; see `applyEventReservations`). A create can hit neither: a new event has no draw,
+ * and `ReservationWrite` has no id to cite.
  *
  * The 422 carries the offending entry's `index` so the handler can build the `loc`
- * (`["body", "pools", i, "id"]`) the real route sends — the pools are a list, and a
- * refusal a client cannot attribute to a row is a refusal it cannot render. */
+ * (`["body", "reservations", i, "id"]`) the real route sends — the reservations are a
+ * list, and a refusal a client cannot attribute to a row is a refusal it cannot
+ * render. */
 export type EventResult =
   | { ok: true; event: TournamentEventRead }
   | { ok: false; status: 403 | 404 }
   | { ok: false; status: 409; detail: string }
-  | { ok: false; status: 422; index: number; poolId: string; detail: string }
+  | { ok: false; status: 422; index: number; reservationId: string; detail: string }
 
 export type DeleteResult = { ok: true } | { ok: false; status: 403 | 404 }
 
@@ -1939,8 +1979,8 @@ const NOTHING_TO_START =
   'This tournament has no events, so there is nothing to start. Add an event and cut ' +
   'its draw, then start the tournament.'
 
-/** The things a refusal is about, as a human would say them: `“Pool B”`, or
- * `“Pool B” and “Pool C”` (`named_list`, `api/app/schemas/tournament.py`). */
+/** The things a refusal is about, as a human would say them: `“Group B”`, or
+ * `“Group B” and “Group C”` (`named_list`, `api/app/schemas/tournament.py`). */
 export function namedList(names: string[]): string {
   return conjoinWithAnd(names.map((name) => `“${name}”`))
 }
@@ -1971,27 +2011,67 @@ function drawCurrency(event: StoredEvent): 'current' | 'uncut' | 'stale' {
   return same ? 'current' : 'stale'
 }
 
-/** Why this tournament cannot start yet, in the server's own words — or `null` when it
- * can. **It names the events**, because a refusal a director cannot act on is barely
- * better than a 500: "some event has no draw" leaves them clicking through a ten-event
- * tournament looking for it.
+/** Why one at-fault event can never be cut as it stands, or `null` when a cut would
+ * actually fix it — the store's mirror of the go-live **dry run** (#1300,
+ * `_enforce_ready_to_go_live`).
+ *
+ * Two judgements, in the server's order:
+ *
+ * 1. **Format first**, before anything is planned — `cut_draw`'s own ordering. A
+ *    doubles/teams event is undrawable on this fact alone, and permanently: entry is
+ *    refused for a non-singles event, so its field can never reach two, and the only fix
+ *    is removing the event. This arm is local rather than a `planEventDraw` result
+ *    because `planDraw` takes no format at all — the cut route judges format ahead of the
+ *    strategy, and so does this.
+ * 2. **The dry run** — `planEventDraw`, the same planner `cutDraw` uses, planning
+ *    fixtures and throwing them away. Its refusal sentence goes through **verbatim**:
+ *    only the planner knows which degeneracy it hit, and the numbers in that sentence are
+ *    the numbers the director has to change.
+ *
+ * The fix is appended for a field under two entrants and for nothing else, exactly as the
+ * server appends it. Every other degenerate message (no groups, too many qualifiers, too
+ * many rounds) already names its own fix inline, so a second one would contradict it. */
+function undrawableReason(
+  event: StoredEvent,
+): { reason: string; fix: string | null } | null {
+  if (event.format !== 'singles') {
+    return {
+      reason:
+        `A ${event.format} event cannot be given a draw — only singles events can. ` +
+        'A fixture seats one entrant on each side, and there is nowhere to record a ' +
+        'doubles pairing or a team.',
+      fix: 'Remove the event.',
+    }
+  }
+  const plan = planEventDraw(event)
+  if (plan.ok) return null
+  return {
+    reason: plan.detail,
+    fix: event.entrants.length < 2 ? 'Add entrants, or remove the event.' : null,
+  }
+}
+
+/** One undrawable event's sentence: its name, its own reason, and its own fix. The reason
+ * already ends in a period, so the fix is joined with a leading space rather than the
+ * sentence gaining a second period (or a trailing space when there is no fix). */
+function undrawableSentence(
+  name: string,
+  reason: string,
+  fix: string | null,
+): string {
+  return `“${name}”: ${reason}` + (fix ? ` ${fix}` : '')
+}
+
+/** The "cut the draw" half of the refusal — every `uncut`/`stale` event, plus the trailing
+ * instruction. **Byte-identical to what `goLiveRefusal` produced before `undrawable`
+ * existed**, which is the regression this shape guarantees for every tournament with no
+ * undrawable event in it.
  *
  * The two failures are kept apart in the sentence, because they are two different jobs:
  * an **uncut** event needs a first cut, while a **stale** one has a draw the director may
  * well have reviewed and approved — it is merely older than the field — and needs
  * re-cutting. */
-function goLiveRefusal(tournament: StoredTournament): string | null {
-  if (tournament.events.length === 0) return NOTHING_TO_START
-
-  const uncut: string[] = []
-  const stale: string[] = []
-  for (const event of tournament.events) {
-    const currency = drawCurrency(event)
-    if (currency === 'uncut') uncut.push(event.name)
-    else if (currency === 'stale') stale.push(event.name)
-  }
-  if (uncut.length === 0 && stale.length === 0) return null
-
+function uncutStaleBody(uncut: string[], stale: string[]): string {
   const clauses: string[] = []
   if (uncut.length > 0) {
     clauses.push(
@@ -2008,13 +2088,75 @@ function goLiveRefusal(tournament: StoredTournament): string | null {
     )
   }
   return (
-    'This tournament cannot start yet: ' +
     clauses.join('; and ') +
     '. A draw is cut from the field as it stands at the time, and registration stays ' +
     'open right up to the moment a tournament goes live — so cut the draw for each ' +
     'event named (again, if somebody entered or withdrew since it was last cut), then ' +
     'start the tournament.'
   )
+}
+
+/** Why this tournament cannot start yet, in the server's own words — or `null` when it
+ * can. **It names the events**, because a refusal a director cannot act on is barely
+ * better than a 500: "some event has no draw" leaves them clicking through a ten-event
+ * tournament looking for it.
+ *
+ * **Two bodies, joined with a space** (#1300), because they answer two different
+ * questions:
+ *
+ * * the `undrawable` body, one sentence per event, for events no cut could ever fix as
+ *   they stand: a field under two entrants, or a non-singles event; and
+ * * the `uncut`/`stale` body, for events a cut (or a re-cut) would genuinely fix — the
+ *   sentence this refusal has always been.
+ *
+ * **`undrawable` is emitted first, and the order is load-bearing.** The `uncut`/`stale`
+ * body ends in "so cut the draw for each event named …, then start the tournament". Put
+ * that body first and the undrawable sentences trail *after* the instruction, so "each
+ * event named" reads as covering them too — and a director who follows it clicks
+ * Generate draw on an event the cut refuses. QA walked exactly that circle.
+ *
+ * **When every at-fault event is undrawable the `uncut`/`stale` body is absent**, so the
+ * refusal never contains the "cut the draw for each event named" instruction. That is the
+ * whole defect #1300 closes: telling a director to cut a draw the system will refuse a
+ * second time is an instruction they cannot follow, and the only escape the QA pass found
+ * was deleting the event.
+ *
+ * Two lists rather than one appended in place, because the bodies are ordered (undrawable
+ * first) while the events inside each keep the tournament's own order — an event listed
+ * first can still be reported last. */
+function goLiveRefusal(tournament: StoredTournament): string | null {
+  if (tournament.events.length === 0) return NOTHING_TO_START
+
+  const undrawable: string[] = []
+  const uncut: string[] = []
+  const stale: string[] = []
+  for (const event of tournament.events) {
+    const currency = drawCurrency(event)
+    // A current draw is not at fault, and is never dry-run: the cut it already has is
+    // the proof that one succeeds.
+    if (currency === 'current') continue
+    const undrawableFor = undrawableReason(event)
+    if (undrawableFor !== null) {
+      undrawable.push(
+        undrawableSentence(event.name, undrawableFor.reason, undrawableFor.fix),
+      )
+    } else if (currency === 'uncut') uncut.push(event.name)
+    else stale.push(event.name)
+  }
+  if (undrawable.length === 0 && uncut.length === 0 && stale.length === 0) {
+    return null
+  }
+
+  // `undrawable` FIRST, mirroring the server. The `uncut`/`stale` body ends in "so cut
+  // the draw for each event named …" — trailing the undrawable sentences after that
+  // instruction makes "each event named" read as covering them too, and sends the
+  // director to a Generate draw the cut refuses (#1300 QA).
+  const segments: string[] = []
+  if (undrawable.length > 0) segments.push(undrawable.join(' '))
+  if (uncut.length > 0 || stale.length > 0) {
+    segments.push(uncutStaleBody(uncut, stale))
+  }
+  return 'This tournament cannot start yet: ' + segments.join(' ')
 }
 
 /** Materialize an event's ready fixtures into real matches — the go-live step (#788,
@@ -2081,9 +2223,9 @@ export function transitionTournament(
     if (detail) return { ok: false, status: 409, detail }
   }
   // Go-live materializes every event's ready fixtures into real `in_progress` matches
-  // (#788) — the same act that makes each pool pairing playable and gives the draw panel
-  // its "View match" links. Only on `published → live`; publishing and archiving touch no
-  // fixtures.
+  // (#788) — the same act that makes each group pairing playable and gives the draw
+  // panel its "View match" links. Only on `published → live`; publishing and archiving
+  // touch no fixtures.
   const events =
     to === 'live' ? existing.events.map(materializeFixtures) : existing.events
   const next: StoredTournament = {
@@ -2122,49 +2264,58 @@ export function deleteTournament(id: string): DeleteResult {
   return { ok: true }
 }
 
-// ----- an event's pools: server-minted ids, and an id-keyed diff ------------------
+// ----- an event's reservations: server-minted ids, and an id-keyed diff -----------
 //
-// A pool is a ROW now (ADR 20260801, `api/app/tournament_pools.py`) and its id is **the
-// server's to mint** — `PoolWrite` (create) has no `id` at all, and `PoolUpsert` (patch)
-// has an optional one that *cites* a pool rather than authoring it. So this store mints
-// too, exactly as it does for the venue catalogue one resource over (`mintTable`): a pool
-// that arrives without an id is a new pool and gets one here.
+// A reservation is a ROW (ADR 20260801, `api/app/tournament_reservations.py`) and its id
+// is **the server's to mint** — `ReservationWrite` (create) has no `id` at all, and
+// `ReservationUpsert` (patch) has an optional one that *cites* a reservation rather than
+// authoring it. So this store mints too, exactly as it does for the venue catalogue one
+// resource over (`mintTable`): a reservation that arrives without an id is a new
+// reservation and gets one here.
 //
-// And the patch is a **diff**, not an assignment: an entry citing an id keeps that pool
-// (re-named, re-timed, re-tabled, re-positioned), an entry with no id adds one, and a
-// stored pool no entry cites is REMOVED. Keying on the id is what makes a reorder move
-// pools instead of swapping labels between ids — and what keeps a fixture's `pool_id`
-// pointing at the pool it was dealt into.
+// And the patch is a **diff**, not an assignment: an entry citing an id keeps that
+// reservation (re-named, re-timed, re-tabled, re-positioned), an entry with no id adds
+// one, and a stored reservation no entry cites is REMOVED. Keying on the id is what makes
+// a reorder move reservations instead of swapping labels between ids.
+//
+// **Groups are not part of this diff at all** (ticket #1369): they are server-owned and
+// never authored, so a client cannot cite one here. `groupsFor` (above) mints exactly one
+// per reservation, at the same position, purely as a function of the reservations this
+// diff produces — which is what keeps a fixture's `group_id` pointing at the group its
+// reservation was dealt into without this diff ever having to think about groups itself.
 
-let poolCounter = 0
+let reservationCounter = 0
 
 /**
- * A brand-new pool for an entry that carries no `id` — the mock's `gen_random_uuid()`,
- * stamped with the **position of its index in the list the client sent**.
+ * A brand-new reservation for an entry that carries no `id` — the mock's
+ * `gen_random_uuid()`, stamped with the **position of its index in the list the client
+ * sent**.
  *
- * UUID-shaped (`mockUuid`) because the wire says so (`Pool.id` is `format: uuid`), and
- * counter-derived rather than name-derived because two pools may legitimately share a
- * name (every event has a “Pool A”) — and two rows sharing an id is the one thing an
- * id-keyed diff cannot survive. The counter deliberately does NOT reset with the store:
- * a fresh seed re-creates the seeded rows, and an id minted for a *previous* test's pool
- * must never be handed out again.
+ * UUID-shaped (`mockUuid`) because the wire says so (`Reservation.id` is `format:
+ * uuid`), and counter-derived rather than name-derived because two reservations may
+ * legitimately share a name (every event has a “Reservation A”) — and two rows sharing
+ * an id is the one thing an id-keyed diff cannot survive. The counter deliberately does
+ * NOT reset with the store: a fresh seed re-creates the seeded rows, and an id minted
+ * for a *previous* test's reservation must never be handed out again.
  *
- * The `position` is the server's rule (`stored_pools`/`apply_event_pools`,
- * `api/app/tournament_pools.py`), reproduced because a mock that is more permissive than
- * the server it stands in for is a trap. Neither write shape has a `position` — both are
- * `extra="forbid"`, so sending one is a 422 naming the field — and **the order of the
- * array is the only thing that says which pool comes first**. Defaulting to `0`, or
- * casting a write shape through, would make the mock disagree with the API about a rule
- * the app reads on every load: the pools editor seeds its cards from `position` and the
- * draw renders in it, so every pool would come back tied for first.
+ * The `position` is the server's rule (`stored_reservations`/`apply_event_reservations`,
+ * `api/app/tournament_reservations.py`), reproduced because a mock that is more
+ * permissive than the server it stands in for is a trap. Neither write shape has a
+ * `position` — both are `extra="forbid"`, so sending one is a 422 naming the field — and
+ * **the order of the array is the only thing that says which reservation comes first**.
+ * Defaulting to `0`, or casting a write shape through, would make the mock disagree with
+ * the API about a rule the app reads on every load: the reservations editor seeds its
+ * cards from `position`, and it is also what `groupsFor` (above) numbers a group's
+ * position by — so every reservation, and every group mapped to one, would come back
+ * tied for first.
  *
  * The fields are named rather than spread for the same reason `mintTable` names them: a
  * payload carrying a key the write shape forbids must not leak into the stored row.
  */
-function mintPool(entry: PoolWrite, position: number): Pool {
-  poolCounter += 1
+function mintReservation(entry: ReservationWrite, position: number): Reservation {
+  reservationCounter += 1
   return {
-    id: mockUuid(`tournament-event-pool-${poolCounter}`),
+    id: mockUuid(`tournament-event-reservation-${reservationCounter}`),
     name: entry.name,
     slot: entry.slot,
     table_ids: entry.table_ids,
@@ -2172,58 +2323,59 @@ function mintPool(entry: PoolWrite, position: number): Pool {
   }
 }
 
-/** Every pool of a **created** event: all new, all minted, positioned by index
- * (`stored_pools`). `TournamentEventCreate.pools` is `PoolWrite[]` — an event being born
- * has no pools to cite, so there is no id arm here at all. */
-function mintPools(submitted: PoolWrite[]): Pool[] {
-  return submitted.map((entry, index) => mintPool(entry, index))
+/** Every reservation of a **created** event: all new, all minted, positioned by index
+ * (`stored_reservations`). `TournamentEventCreate.reservations` is `ReservationWrite[]`
+ * — an event being born has no reservations to cite, so there is no id arm here at
+ * all. */
+function mintReservations(submitted: ReservationWrite[]): Reservation[] {
+  return submitted.map((entry, index) => mintReservation(entry, index))
 }
 
 /** The server's message for an entry citing an id this **event** does not hold
- * (`PoolNotInEventError`, `api/app/tournament_errors.py`) — a **422 on that entry's
- * `id`**, never a silently minted pool: quietly minting one would hand the client back a
- * different id than it asked for while *removing* the pool it meant to keep, which are
- * the two failures a diff must never confuse. */
-const POOL_NOT_IN_EVENT = 'This event has no pool with that id.'
+ * (`ReservationNotInEventError`, `api/app/tournament_errors.py`) — a **422 on that
+ * entry's `id`**, never a silently minted reservation: quietly minting one would hand
+ * the client back a different id than it asked for while *removing* the reservation it
+ * meant to keep, which are the two failures a diff must never confuse. */
+const RESERVATION_NOT_IN_EVENT = 'This event has no reservation with that id.'
 
-/** What the pools diff produced, or the refusal that stopped it before anything was
- * assigned. */
-type PoolsResult =
-  | { ok: true; pools: Pool[] }
-  | { ok: false; status: 422; index: number; poolId: string; detail: string }
+/** What the reservations diff produced, or the refusal that stopped it before anything
+ * was assigned. */
+type ReservationsResult =
+  | { ok: true; reservations: Reservation[] }
+  | { ok: false; status: 422; index: number; reservationId: string; detail: string }
 
-/** Apply a submitted pool list to `stored` as an id-keyed diff (`apply_event_pools`),
- * judging the unknown-id refusal **before** anything is assigned so a refused write
- * leaves the event byte-identical.
+/** Apply a submitted reservation list to `stored` as an id-keyed diff
+ * (`apply_event_reservations`), judging the unknown-id refusal **before** anything is
+ * assigned so a refused write leaves the event byte-identical.
  *
- * Judged first and over the whole payload, for the reason the catalogue's twin is: a pool
- * list naming a pool this event does not have is not a pool list, and every subsequent
- * question (what is kept, and therefore what is removed) would be answered against a list
- * the client did not mean. */
-function applyEventPools(
-  stored: Pool[],
-  submitted: PoolUpsert[],
-): PoolsResult {
-  const byId = new Map(stored.map((pool) => [pool.id, pool]))
+ * Judged first and over the whole payload, for the reason the catalogue's twin is: a
+ * reservation list naming a reservation this event does not have is not a reservation
+ * list, and every subsequent question (what is kept, and therefore what is removed)
+ * would be answered against a list the client did not mean. */
+function applyEventReservations(
+  stored: Reservation[],
+  submitted: ReservationUpsert[],
+): ReservationsResult {
+  const byId = new Map(stored.map((reservation) => [reservation.id, reservation]))
   for (const [index, entry] of submitted.entries()) {
     if (entry.id != null && !byId.has(entry.id)) {
       return {
         ok: false,
         status: 422,
         index,
-        poolId: entry.id,
-        detail: POOL_NOT_IN_EVENT,
+        reservationId: entry.id,
+        detail: RESERVATION_NOT_IN_EVENT,
       }
     }
   }
   return {
     ok: true,
-    // The list's ORDER is the event's pool order — a cited pool keeps its id (and every
-    // fixture drawn into it) while taking this payload's words and place; an entry with
-    // no id is an insert.
-    pools: submitted.map((entry, position) =>
+    // The list's ORDER is the event's reservation order — a cited reservation keeps its
+    // id (and every group, and therefore every fixture, mapped to it) while taking this
+    // payload's words and place; an entry with no id is an insert.
+    reservations: submitted.map((entry, position) =>
       entry.id == null
-        ? mintPool(entry, position)
+        ? mintReservation(entry, position)
         : {
             id: entry.id,
             name: entry.name,
@@ -2253,22 +2405,25 @@ export function createEvent(
     name: body.name,
     format: body.format,
     draw_type: body.draw_type,
+    // Minted from the event's own draw type the moment its draw settings are configured
+    // (ADR 20260815 decision 3) — at CREATE, here, which is the earliest an event has a
+    // draw type at all. `mintStageReads` is the one place this template lives; the
+    // domain-side seed factory (`data/seed.factory.ts`'s `mintStages`) mints the SAME ids
+    // for the SAME draw type, deliberately, so a component test built off one and this
+    // store's own events agree on what an `rr-then-ko` event's knockout stage is called.
+    stages: mintStageReads(body.draw_type),
     // **K**, stored beside the draw type it belongs to (ADR 20260727). Absent means the
     // draw type has no knockout stage to qualify for, which is `null` — the value the
     // settings row really holds — never `undefined`, and never an invented `1`: the day
     // this event's draw is cut, this is the number the bracket is sized from
     // (`planEventDraw` below), so a fallback here would deal a bracket for a K the
     // director never chose.
-    qualifiers_per_pool: body.qualifiers_per_pool ?? null,
+    qualifiers_per_group: body.qualifiers_per_group ?? null,
     // **R**, stored beside the draw type it belongs to (the swiss ADR), on exactly the same
     // terms as the qualifier count above: absent means the draw type has no round count to
     // choose, which is `null`, never `undefined` and never an invented number — the day
     // this event's draw is cut, this is how many rounds get written.
     rounds: body.rounds ?? null,
-    // Minted from the event's own draw type, the way the server mints them
-    // (`mintStageReads`) — never a hand-written literal that could drift from
-    // `draw_type`.
-    stages: mintStageReads(body.draw_type),
     // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
     max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
@@ -2281,11 +2436,13 @@ export function createEvent(
     slot: body.slot,
     match_settings: body.match_settings,
     predicates: body.predicates ?? [],
-    // Every pool on a create body is a NEW pool — `PoolWrite` has no `id` at all — so the
-    // store mints one for each and stamps the position of its index, exactly as the
-    // server does (`mintPools`). The order the editor sent its pools in IS the order, and
-    // this is where that becomes an id and a number.
-    pools: mintPools(body.pools ?? []),
+    // Every reservation on a create body is a NEW reservation — `ReservationWrite` has no
+    // `id` at all — so the store mints one for each and stamps the position of its
+    // index, exactly as the server does (`mintReservations`). The order the editor sent
+    // its reservations in IS the order, and this is where that becomes an id and a
+    // number. `groups` is not set here at all — `readEvent` derives it from
+    // `reservations` on the way out (`groupsFor`, ticket #1369).
+    reservations: mintReservations(body.reservations ?? []),
     // A brand-new event has NO DRAW (ADR-0786). Cutting one is an explicit act against
     // a field that does not exist yet — there is nobody entered to draw.
     fixtures: [],
@@ -2300,25 +2457,29 @@ export function createEvent(
 
 /** Patch an event (full replace of the provided fields). Creator-only.
  *
- * The `pools` payload is an **id-keyed diff** (`applyEventPools`), and it is judged
- * twice:
+ * The `reservations` payload is an **id-keyed diff** (`applyEventReservations`), and it
+ * is judged twice:
  *
- * **The pool SET freezes while a draw exists** (ADR-0786): a payload that would add or
- * remove a pool on an event whose draw is cut is refused with a 409, because a fixture
- * names the pool it was dealt into and the edit would orphan it. Everything ELSE about a
- * pool — its tables, its window, its name — stays editable with a draw standing, because
- * venues change under running tournaments and recording that must not cost a director
- * their draw. (Re-*identifying* a pool is no longer one of the things this refuses,
- * because it is no longer a payload a client can send: a pool id is minted here, so an
- * entry either cites one this event has or carries none at all.)
+ * **The GROUP set freezes while a draw exists** (ADR-0786), even though the payload the
+ * client sends is `reservations` — a group is server-owned, minted 1:1 with a
+ * reservation (ticket #1369), so removing or adding a reservation on an event whose draw
+ * is cut removes or adds the group mapped to it, and a fixture names the group it was
+ * dealt into. `groupSetFrozenDetail` runs this comparison in reservation-id space (the
+ * only space the payload speaks) while it reports and refuses in the group's own terms —
+ * the terms a fixture, and a director, actually recognise. Everything ELSE about a
+ * reservation — its tables, its window, its name — stays editable with a draw standing,
+ * because venues change under running tournaments and recording that must not cost a
+ * director their draw. (Re-*identifying* a reservation is no longer one of the things
+ * this refuses, because it is no longer a payload a client can send: a reservation id is
+ * minted here, so an entry either cites one this event has or carries none at all.)
  *
  * **An entry citing an id this event does not have is a 422** on that entry (ADR
  * 20260801), judged *after* the freeze so a cut event answers the 409 that names its
- * pools.
+ * groups.
  *
  * The mock enforces both because a mock that is more permissive than the server it stands
- * in for is a trap: a pools editor that silently orphans a draw would look perfect in
- * `npm run dev` and 409 in production. */
+ * in for is a trap: a reservations editor that silently orphans a draw would look perfect
+ * in `npm run dev` and 409 in production. */
 export function updateEvent(
   tournamentId: string,
   eventId: string,
@@ -2333,29 +2494,43 @@ export function updateEvent(
   // reason a stranger's request is refused. (The *schema's* 422s come before all of it —
   // the handler asks them at the boundary; see `validateEventBody`. The diff's own 422,
   // below, comes after, so a cut event answers the freeze.)
-  const frozen = poolSetFrozenDetail(event, patch) ?? drawTypeFrozenDetail(event, patch)
+  const frozen = groupSetFrozenDetail(event, patch) ?? drawTypeFrozenDetail(event, patch)
   if (frozen !== null) return { ok: false, status: 409, detail: frozen }
   // The diff runs BEFORE anything is written, so an entry citing an unknown id leaves the
   // event exactly as it was — never written, not merely rolled back.
-  const pools =
-    patch.pools == null ? null : applyEventPools(event.pools, patch.pools)
-  if (pools !== null && !pools.ok) return pools
+  const reservations =
+    patch.reservations == null
+      ? null
+      : applyEventReservations(event.reservations, patch.reservations)
+  if (reservations !== null && !reservations.ok) return reservations
   const next: StoredEvent = {
     ...event,
     name: patch.name ?? event.name,
     format: patch.format ?? event.format,
     draw_type: patch.draw_type ?? event.draw_type,
+    // **Re-minted on a draw-type change, in place** (ADR 20260815 decision 3): a patch
+    // naming a new draw type re-applies the template, same as create. This can only be
+    // reached with no draw standing — `drawTypeFrozenDetail` above already 409s a
+    // draw-type change while one exists — so there is no fixture yet to leave pointing at
+    // a stage this mints away, and a full re-mint is the read this store's simpler model
+    // can give (the ADR's "stage 1 keeps its identity" nuance matters once a group is
+    // stage-scoped, which this store's groups are not yet — ADR 20260815, "Sequencing with
+    // #1338"). A patch naming no draw type leaves the stages exactly as they stood.
+    stages:
+      patch.draw_type === undefined || patch.draw_type === null
+        ? event.stages
+        : mintStageReads(patch.draw_type),
     // **The draw configuration is patched as a UNIT** (ADR 20260727): the server refuses
-    // a `qualifiers_per_pool` with no `draw_type` beside it (422), so a patch that names
+    // a `qualifiers_per_group` with no `draw_type` beside it (422), so a patch that names
     // a draw type carries the whole pair — including the `null` that *removes* a count
     // when the type moves to one that has no knockout stage. Reading it with `??` would
     // strand the old K on the new type, which is precisely the contradiction the union
     // exists to make unrepresentable. A patch that names no draw type is not touching the
     // configuration at all, and leaves both halves alone.
-    qualifiers_per_pool:
+    qualifiers_per_group:
       patch.draw_type === undefined || patch.draw_type === null
-        ? event.qualifiers_per_pool
-        : (patch.qualifiers_per_pool ?? null),
+        ? event.qualifiers_per_group
+        : (patch.qualifiers_per_group ?? null),
     // …and **R** moves with the very same unit, for the very same reason (the swiss ADR).
     // Reading it with `??` would strand a swiss event's round count on a round-robin it was
     // just re-typed as — the contradiction the union exists to make unrepresentable.
@@ -2363,13 +2538,6 @@ export function updateEvent(
       patch.draw_type === undefined || patch.draw_type === null
         ? event.rounds
         : (patch.rounds ?? null),
-    // The stages move with the draw type they describe (`mintStageReads`): a patch
-    // that re-types the event re-mints them so `stages` never drifts from
-    // `draw_type`; a patch that leaves the draw type alone leaves them alone too.
-    stages:
-      patch.draw_type === undefined || patch.draw_type === null
-        ? event.stages
-        : mintStageReads(patch.draw_type),
     // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
     // the stored cap untouched. `??` would conflate the two, silently keeping a
     // cap the editor meant to remove.
@@ -2385,12 +2553,13 @@ export function updateEvent(
     slot: patch.slot ?? event.slot,
     match_settings: patch.match_settings ?? event.match_settings,
     predicates: patch.predicates ?? event.predicates,
-    // The diff's answer: cited pools kept (with their ids, and therefore their fixtures),
-    // id-less entries minted, stored pools no entry cited dropped — and every one of them
-    // RE-POSITIONED from the array index, which is what makes "send them in the order you
-    // want" the whole reordering API. An absent `pools` is not touching them at all, and
-    // the stored positions stand.
-    pools: pools === null ? event.pools : pools.pools,
+    // The diff's answer: cited reservations kept (with their ids, and therefore the
+    // group — and every fixture — mapped to them), id-less entries minted, stored
+    // reservations no entry cited dropped — and every one of them RE-POSITIONED from the
+    // array index, which is what makes "send them in the order you want" the whole
+    // reordering API. An absent `reservations` is not touching them at all, and the
+    // stored positions stand.
+    reservations: reservations === null ? event.reservations : reservations.reservations,
     // The DRAW survives an edit (ADR-0786): a PATCH is not a re-cut. `fixtures` is not
     // in the write body at all, and answering `[]` here would tell the director their
     // draw had just been thrown away by a rename.
@@ -2449,85 +2618,102 @@ function drawHasPlay(event: StoredEvent): boolean {
   )
 }
 
-/** Why this event's pool SET may not be replaced right now, or `null` when it may be
- * (`_enforce_pool_set_frozen`, ADR-0786). Frozen only while a draw EXISTS — not while it
+/** Why this event's GROUP set may not be replaced right now, or `null` when it may be
+ * (`_enforce_group_set_frozen`, ADR-0786). Frozen only while a draw EXISTS — not while it
  * has been *played*: the two are different questions, and the morning of a tournament
  * (a draw cut, nothing played yet) is exactly when a blunt play-guard would wave through
  * an edit that orphans every fixture.
  *
+ * **What is frozen is the group set, but what the payload diffs is reservations**
+ * (ticket #1369) — a group is server-owned and never reaches a client, so this guard
+ * runs the comparison in the reservation's id space (the one the payload actually
+ * speaks) while it still reports and refuses in the group's own terms: `Group B`-style
+ * labels derived from the POSITION the group (equivalently, its mapped reservation)
+ * already holds, because that is what a fixture actually names and what a director
+ * actually recognises. Under this slice's 1:1 the two id spaces are in exact bijection,
+ * so the comparison is sound.
+ *
  * **The freeze shrank when the ids were minted** (ADR 20260801). Two categories still
- * reach it — *removing* a pool the draw was dealt across, and *adding* one that would
- * arrive with no fixtures — and the third, *re-identifying* a pool, is no longer
- * expressible at all: a client cannot author a pool id, so an entry either cites one this
- * event has (which keeps that pool) or carries none (which adds one).
+ * reach it — *removing* a reservation the draw was dealt across (which removes the group
+ * mapped to it), and *adding* one that would arrive with a group that has no fixtures —
+ * and the third, *re-identifying* a reservation, is no longer expressible at all: a
+ * client cannot author a reservation id, so an entry either cites one this event has
+ * (which keeps that reservation, and its group) or carries none (which adds one).
  *
- * Identity is all that is frozen. A `pools` payload citing exactly the pools the event
- * has, in a different order, with different tables, different windows or different names,
- * is fine — that is the case this guard exists to *permit*.
+ * Identity is all that is frozen. A `reservations` payload citing exactly the
+ * reservations the event has, in a different order, with different tables, different
+ * windows or different names, is fine — that is the case this guard exists to *permit*.
  *
- * The sentence is the server's, verbatim (`_pool_set_frozen_detail`,
+ * The sentence is the server's, verbatim (`_group_set_frozen_detail`,
  * `api/app/tournament_events.py`), because the client shows it verbatim: it names the
- * pools on both sides and it names the way out. */
-function poolSetFrozenDetail(
+ * groups on both sides, it states that a reservation's tables/time/name stay editable,
+ * and it names the way out. */
+function groupSetFrozenDetail(
   event: StoredEvent,
   patch: TournamentEventUpdate,
 ): string | null {
-  if (patch.pools === undefined || patch.pools === null) return null
+  if (patch.reservations === undefined || patch.reservations === null) return null
   if (event.fixtures.length === 0) return null
-  const existing = new Set(event.pools.map((p) => p.id))
+  const existing = new Set(event.reservations.map((r) => r.id))
   // An entry with no `id` is an addition and contributes nothing to the incoming SET —
-  // which is what makes the comparison below "you cited exactly the pools you have"
-  // rather than "you sent the same number of them".
+  // which is what makes the comparison below "you cited exactly the reservations you
+  // have" rather than "you sent the same number of them".
   const incoming = new Set(
-    patch.pools.map((p) => p.id).filter((id): id is string => id != null),
+    patch.reservations.map((r) => r.id).filter((id): id is string => id != null),
   )
-  const cites = patch.pools.length === incoming.size
+  const cites = patch.reservations.length === incoming.size
   const same =
     existing.size === incoming.size && [...existing].every((id) => incoming.has(id))
   if (same && cites) return null
-  // Named from whichever side of the change still knows the name: a pool being removed is
-  // only described by the row we hold, one being added only by the payload. An entry
+  // Removed groups are NAMED, from the row we hold: the label its stored position
+  // derives, which is the label the director is looking at right now. Added groups are
+  // COUNTED, not named — they have no position yet, and the label they would land on is
+  // one an existing group currently wears, so naming them makes the sentence contradict
+  // itself ("Group A already has fixtures…; and Group A would arrive with no fixtures").
+  // Mirrors `app.tournament_events._group_set_frozen_detail` byte for byte. An entry
   // citing an id this event does not have counts as an addition here — it is one in
-  // effect, and past this guard it is the 422 `applyEventPools` answers.
-  const removed = event.pools
-    .filter((p) => !incoming.has(p.id))
-    .map((p) => p.name)
-  const added = patch.pools
-    .filter((p) => p.id == null || !existing.has(p.id))
-    .map((p) => p.name)
+  // effect, and past this guard it is the 422 `applyEventReservations` answers.
+  const removed = event.reservations
+    .map((r, position) => ({ r, position }))
+    .filter(({ r }) => !incoming.has(r.id))
+    .map(({ position }) => `Group ${groupLetter(position)}`)
+  const added = patch.reservations.filter(
+    (r) => r.id == null || !existing.has(r.id),
+  ).length
   const clauses: string[] = []
   if (removed.length > 0) {
     clauses.push(
       `${namedList(removed)} already has fixtures drawn into it, ` +
-        'which this change would leave pointing at a pool that no longer exists',
+        'which this change would leave pointing at a group that no longer exists',
     )
   }
-  if (added.length > 0) {
+  if (added > 0) {
     clauses.push(
-      `${namedList(added)} would arrive with no fixtures in it, ` +
-        'because the draw was cut across the pools this event had at the time',
+      `${added} new ${added === 1 ? 'group' : 'groups'} would arrive with no ` +
+        `fixtures in ${added === 1 ? 'it' : 'them'}, because the draw was cut ` +
+        'across the groups this event had at the time',
     )
   }
   return (
-    "This event's draw is already cut, so its set of pools is frozen: " +
+    "This event's draw is already cut, so its set of groups is frozen: " +
     clauses.join('; and ') +
-    ". A pool's tables, its time and its name can all still be changed. " +
-    'To add or remove a pool, remove the draw first, then cut it again.'
+    ". A reservation's tables, its time and its name can all still be changed. " +
+    'To add or remove a group, remove the draw first, then cut it again.'
   )
 }
 
 /** Why this event's `draw_type` may not be replaced right now, or `null` when it may be
- * (`_enforce_draw_type_frozen`, ADR-0786). The pool-set freeze's sibling, one field over:
- * a draw type is not a label on an event, it is the strategy that DEALT its fixtures, and
- * re-labelling it under a standing draw leaves the event claiming a shape its draw does
- * not have (a `single-elim` event holding pooled round-robin fixtures — the PATCH the
- * server used to answer **200**).
+ * (`_enforce_draw_type_frozen`, ADR-0786). The group-set freeze's sibling, one field
+ * over: a draw type is not a label on an event, it is the strategy that DEALT its
+ * fixtures, and re-labelling it under a standing draw leaves the event claiming a shape
+ * its draw does not have (a `single-elim` event holding grouped round-robin fixtures —
+ * the PATCH the server used to answer **200**).
  *
  * **Presence is not enough — the CHANGE is what is refused.** The editor PATCHes the
- * whole form back, `draw_type` included, to move a pool's tables; a mock that fired on
- * the mere presence of the key would refuse the very edit the freeze exists to permit,
- * and the pools editor would look broken in `npm run dev` against a server that allows
- * it. */
+ * whole form back, `draw_type` included, to move a reservation's tables; a mock that
+ * fired on the mere presence of the key would refuse the very edit the freeze exists to
+ * permit, and the reservations editor would look broken in `npm run dev` against a
+ * server that allows it. */
 function drawTypeFrozenDetail(
   event: StoredEvent,
   patch: TournamentEventUpdate,
@@ -2559,7 +2745,10 @@ function planEventDraw(event: StoredEvent): DrawPlan {
   return planDraw(
     event.draw_type,
     ordered.map((e) => e.id),
-    event.pools.map((p) => p.id),
+    // The event's own GROUP ids (`groupIdFor`, derived from its reservations — this
+    // slice's 1:1, ticket #1369) — never the reservation ids themselves, which is what a
+    // fixture's `group_id` must end up naming.
+    event.reservations.map((r) => groupIdFor(r.id)),
     // **The event's own K** (ADR 20260727) — the stored number, passed through unchanged.
     // `null` is the honest answer for a count-less draw type, and only the `rr-then-ko`
     // arm reads it at all; an `rr-then-ko` event always has one (its create/patch body is
@@ -2568,11 +2757,15 @@ function planEventDraw(event: StoredEvent): DrawPlan {
     // ⚠️ Substituting anything here is the whole bug this argument closes, and it is a
     // SILENT one: an event configured at K=2 would be cut into a `P × 1` bracket — a
     // perfectly well-formed draw of the wrong size, with nothing anywhere reporting it.
-    event.qualifiers_per_pool,
+    event.qualifiers_per_group,
     // **The event's own R** (the swiss ADR) — the stored number, passed through unchanged,
     // for exactly the reasons the qualifier count above is. Only the `swiss` arm reads it,
     // and a swiss event always has one, so that arm never meets the null.
     event.rounds,
+    // **The event's own stages** (ADR 20260815) — never `planDraw`'s
+    // `mintStageReads(drawType)` default, which is for a caller with no event to read
+    // stages off of. A fixture this cuts must name a stage `event.stages` actually holds.
+    event.stages,
   )
 }
 
@@ -2581,11 +2774,11 @@ function planEventDraw(event: StoredEvent): DrawPlan {
  * **A re-cut replaces the draw wholesale**: the old fixtures are dropped and a fresh set
  * is planned from the event's *current* active entrants, so their ids do not survive.
  * That is the point — a draw is a plan made against a field, and once the field has
- * changed the whole plan is re-made, pool sizes and seeding included.
+ * changed the whole plan is re-made, group sizes and seeding included.
  *
  * The 422s are the planner's (see `planDraw` in the tournament factory, shared with the
  * Playwright store), and they are the ones a director actually meets: a round-robin with
- * no pools, a pool the snake would leave with fewer than two entrants, a bracket of
+ * no groups, a group the snake would leave with fewer than two entrants, a bracket of
  * fewer than two, and a two-stage draw whose knockout would hold one player.
  * **There is no draw-TYPE refusal**: every member of `DrawType` has a strategy on the
  * server (ADR 20260726) and a planner here, so a mock that still refused one would be
@@ -2686,7 +2879,8 @@ const PLACEMENT_FROZEN_DETAIL =
  * any of the tournament's events.
  *
  * **One hard rule, everything else soft.** An out-of-window time, a table outside the
- * fixture's pool, and a double-booking are all *stored*, not refused — those stay
+ * fixture's group's reservation, and a double-booking are all *stored*, not refused —
+ * those stay
  * flags-on-read (ADR-0790, undisturbed). The **one** invariant is that `table_id` must
  * name a table in this tournament's own catalogue (`_enforce_table_exists`,
  * `api/app/tournament_placement.py`, ADR 20260801) — a **422 on `table_id`**, judged
@@ -2764,7 +2958,8 @@ export function placeFixture(
 // The mock has no worker, so the ledger row is walked forward BY THE READS
 // (`tickScheduleSolve` below): the POST answers 202 with a `queued` row, the next
 // detail read shows it `running`, and the read after that lands it `succeeded` with
-// every unplaced fixture placed onto its pool's tables. Two reads is the demo loop —
+// every unplaced fixture placed onto its group's reservation's tables. Two reads is the
+// demo loop —
 // with the client's in-flight polling (~3s) the strip visibly resolves in `npm run
 // dev` without anyone reloading.
 //

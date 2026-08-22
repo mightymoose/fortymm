@@ -262,6 +262,25 @@ struct MatchService {
         return youAreSide1 ? (a, b) : (b, a)
     }
 
+    /// Map a side's wire `RatingChangeDTO` onto the view model's `established`
+    /// vs. `moved` union — `nil` when the side carries no rating change at
+    /// all (unrated, undecided, or voided; the caller further gates this on
+    /// `rated && decided && viewerIsParticipant`).
+    ///
+    /// `before` and `delta` are narrowed **together**: a null `before` implies
+    /// a null `delta` on the wire (a first rated match has neither — nothing
+    /// to measure a movement from), so treat either being absent as
+    /// `established` rather than assuming only one is ever nil. `after` is
+    /// always present when a change is present at all.
+    private static func ratingOutcome(_ change: RatingChangeDTO?) -> MatchRatingOutcome? {
+        guard let change else { return nil }
+        let after = Int(change.after.rounded())
+        guard let before = change.before, let delta = change.delta else {
+            return .established(after: after)
+        }
+        return .moved(before: Int(before.rounded()), after: after, delta: Int(delta.rounded()))
+    }
+
     /// Map the wire negotiation onto the view model: re-orient the standing
     /// board so `a` = you, and pre-format the `corrected`-phase diff (canonical
     /// side-1–side-2, like the web's ScoreDiff).
@@ -361,7 +380,7 @@ struct MatchService {
 
         let decided = status == .completed
         let rated = ratedHint ?? (mine?.ratingChange != nil)
-        let delta = mine?.ratingChange.map { Int($0.delta.rounded()) }
+        let ratingOutcome = Self.ratingOutcome(mine?.ratingChange)
         // The negotiation block is populated on both the detail and list shapes,
         // so the negotiation flags (`awaitingAcceptance`, `canAccept`) are
         // derived from it on `FinalMatch` itself — authoritative everywhere, no
@@ -378,9 +397,9 @@ struct MatchService {
             rated: rated,
             setsWon: SetScore(a: mine?.gamesWon ?? 0, b: theirs?.gamesWon ?? 0),
             win: mine?.won ?? false,
-            // Rating delta is the viewer's own change — only meaningful when the
-            // viewer actually played in this match.
-            ratingDelta: (rated && decided && viewerIsParticipant) ? delta : nil,
+            // The rating outcome is the viewer's own change — only meaningful
+            // when the viewer actually played in this match.
+            ratingOutcome: (rated && decided && viewerIsParticipant) ? ratingOutcome : nil,
             when: relativeWhen(createdAt),
             context: rated ? "Rated · \(league.name)" : "Casual",
             statusLabel: statusLabel,

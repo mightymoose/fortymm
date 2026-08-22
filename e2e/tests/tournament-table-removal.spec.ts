@@ -12,16 +12,16 @@ import {
   seedEntrants,
   seedTournament,
   transitionTournament,
-  type PoolSpec,
+  type ReservationSpec,
   type TableSpec,
 } from '../support/tournament-api'
 
 /** The table the director tries to remove — the one a match is placed at. */
 const DOOMED = 'Table 1'
-/** A second table, in the catalogue but reserved by no pool. It is the witness that the
- * confirmed removal removed **that** table and not the catalogue: a one-table venue
- * could not tell "the diff removed the table I cited" from "the write replaced the
- * catalogue wholesale". */
+/** A second table, in the catalogue but booked by no reservation. It is the witness
+ * that the confirmed removal removed **that** table and not the catalogue: a one-table
+ * venue could not tell "the diff removed the table I cited" from "the write replaced
+ * the catalogue wholesale". */
 const SPARE = 'Table 2'
 
 /** A two-table venue, sent with **no ids** — the server mints them (ADR 20260801). */
@@ -31,7 +31,7 @@ const TABLES: ReadonlyArray<TableSpec> = [
 ]
 
 /**
- * One pool, reserving **only the doomed table**.
+ * One reservation, booking **only the doomed table**.
  *
  * That is not scene-setting, it is what makes the last assertion of this spec a fact
  * rather than a race. A catalogue edit that changes the *set* of tables on a tournament
@@ -40,14 +40,15 @@ const TABLES: ReadonlyArray<TableSpec> = [
  * the read that checks the fixture came back unplaced, a solve could otherwise land and
  * re-place it, and the spec would flake on correct behaviour.
  *
- * A pool's `table_ids` are intersected with the catalogue when the solver's inputs are
- * loaded ("a stale ref is a table the pool cannot use"), so once `Table 1` is gone this
- * pool has **zero** usable tables and its one fixture has nowhere to go: the solve is
- * honestly infeasible and applies nothing. `Table 2` stays in the catalogue as a table
- * no pool reserves — a spare, which is a perfectly ordinary thing for a venue to have.
+ * A reservation's `table_ids` are intersected with the catalogue when the solver's
+ * inputs are loaded ("a stale ref is a table the reservation cannot use"), so once
+ * `Table 1` is gone this reservation's group has **zero** usable tables and its one
+ * fixture has nowhere to go: the solve is honestly infeasible and applies nothing.
+ * `Table 2` stays in the catalogue as a table no reservation books — a spare, which is
+ * a perfectly ordinary thing for a venue to have.
  */
-const POOLS: ReadonlyArray<PoolSpec> = [
-  { name: 'Pool A', tableLabels: [DOOMED] },
+const RESERVATIONS: ReadonlyArray<ReservationSpec> = [
+  { name: 'Reservation A', tableLabels: [DOOMED] },
 ]
 
 /** A uuid — what a table id is now that the catalogue is a real table with a
@@ -96,8 +97,8 @@ const UUID =
  *
  * The tournament is left **published**, never live. Going live would materialize the
  * fixture into a real match and auto-enqueue a solve that places every fixture for us,
- * which buys no part of this claim and costs the determinism the pool above was shaped
- * to get. What the server counts and calls "matches placed at" a table is the fixture's
+ * which buys no part of this claim and costs the determinism the reservation above was
+ * shaped to get. What the server counts and calls "matches placed at" a table is the fixture's
  * placement, which is exactly what is seeded here.
  *
  * ## RBAC
@@ -122,11 +123,11 @@ test.describe('Tournament — removing a table that is in use', () => {
     const director = await guestFromContext(page.request)
     grantBetaTester(director.username)
 
-    // ----- seed: a two-table venue, one pool over the doomed table ------------
+    // ----- seed: a two-table venue, one reservation over the doomed table -----
     const name = `Tables ${faker.string.alphanumeric(8)}`
     const { tournamentId, eventId, tables } = await seedTournament(director, name, {
       tables: TABLES,
-      pools: POOLS,
+      reservations: RESERVATIONS,
     })
     const doomed = tables.find((table) => table.label === DOOMED)!
     const spare = tables.find((table) => table.label === SPARE)!

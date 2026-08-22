@@ -297,22 +297,22 @@ async def test_migration_creates_the_settings_column(
     assert "'{}'" in column.column_default, column
 
 
-async def test_migration_no_longer_creates_the_qualifiers_per_pool_column(
+async def test_migration_no_longer_creates_the_qualifiers_per_group_column(
     migrated_database_url: str,
 ) -> None:
     """The column the settings object replaced is **gone** from a migrated database.
 
     The half of an edit-in-place that is easy to leave half-done: adding ``settings``
-    to migration 0010 and forgetting to delete ``qualifiers_per_pool`` beside it leaves
+    to migration 0010 and forgetting to delete ``qualifiers_per_group`` beside it leaves
     a database with two homes for one fact, and every other test in this repo — built
     by ``create_all`` from the model, which has only one — stays green over it.
     """
     assert (
-        await _draw_settings_column(migrated_database_url, "qualifiers_per_pool")
+        await _draw_settings_column(migrated_database_url, "qualifiers_per_group")
         is None
     ), (
         "migrated database still has tournament_event_draw_settings."
-        "qualifiers_per_pool — migration 0010 replaced it with the settings object,"
+        "qualifiers_per_group — migration 0010 replaced it with the settings object,"
         " so the column is a second, stale home for the qualifier count"
     )
 
@@ -363,7 +363,7 @@ async def test_migration_moves_the_draw_type_fk_from_key_to_id(
     RESTRICT`` — is what replaced ``draw_type_key`` (ADR 20260815, "draw_types
     gains a surrogate id primary key").
 
-    The column alone is the same shape as the ``qualifiers_per_pool`` test above,
+    The column alone is the same shape as the ``qualifiers_per_group`` test above,
     but api/CLAUDE.md asks more of a migration test that touches a foreign key:
     the constraint itself, not merely the column it sits on, has to be inspected
     on a database Alembic actually built — a ``create_all`` schema gets its FK
@@ -411,7 +411,7 @@ SETTINGS_VALUE_CASES: list[tuple[str, bool]] = [
     # populated one is what ``rr-then-ko`` stores. Both must be accepted, or the
     # refusals below would also be satisfied by a constraint that rejects everything.
     ("'{}'::jsonb", True),
-    ("'{\"qualifiers_per_pool\": 2}'::jsonb", True),
+    ("'{\"qualifiers_per_group\": 2}'::jsonb", True),
     # Everything that is JSON but not an object. Each is asked, because a constraint
     # mistakenly written as ``settings IS NOT NULL`` accepts all four and would look
     # green on any one of them alone.

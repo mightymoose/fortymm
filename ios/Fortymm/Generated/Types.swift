@@ -597,8 +597,8 @@ internal protocol APIProtocol: Sendable {
     /// `unplace_fixtures_on_removed_tables: true`: the table is removed and those matches
     /// are unplaced — table, predicted start and call all cleared — which is a thing worth
     /// saying on purpose rather than a silent side effect of editing the venue. Removing a
-    /// table that only a *pool* reserves needs no confirmation and produces no refusal; the
-    /// pool simply reserves one fewer.
+    /// table that only a *reservation* reserves needs no confirmation and produces no
+    /// refusal; the reservation simply reserves one fewer.
     ///
     /// **`address` has three cases and the value alone cannot tell them apart.** Omit it to
     /// leave the venue and its coordinates untouched; send a real address to move the venue
@@ -655,34 +655,39 @@ internal protocol APIProtocol: Sendable {
     /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     /// sent.
     ///
-    /// **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
-    /// carries the `id` of a pool this event already has — keeping that pool, with the
+    /// **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
+    /// carries the `id` of a reservation this event already has — keeping it, with the
     /// `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
-    /// to add a new pool, whose id the server mints. **A pool no entry names is removed.**
-    /// Send back the pools you read, edited: the ids came from the read, and naming an id
-    /// this event does not have is a `422` on that entry. Citing the same pool twice is a
-    /// `422` too — a pool id identifies one pool, and the fixtures of a draw name their
-    /// pool by it.
+    /// to add a new reservation, whose id the server mints. **A reservation no entry names
+    /// is removed.** The server keeps one `groups` entry per reservation in lockstep, so
+    /// adding, removing or reordering a reservation adds, removes or reorders its mapped
+    /// group the same way. Send back the reservations you read, edited: the ids came from
+    /// the read, and naming an id this event does not have is a `422` on that entry.
+    /// Citing the same reservation twice is a `422` too — a reservation id identifies one
+    /// reservation, and a group's own reservation is one of them.
     ///
     /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     /// fixtures were derived from:
     ///
-    /// * **its set of pools.** A `pools` payload must cite exactly the pools the event
-    ///   already has, or it is refused with a `409`: a removed pool would leave the
-    ///   fixtures drawn into it pointing at nothing, and an added one would arrive with no
-    ///   fixtures, since the draw was dealt across the pools that existed at the cut.
-    ///   Re-ordering them, and editing each one, are still allowed.
+    /// * **its set of groups, in order.** A `reservations` payload must cite exactly the
+    ///   reservations mapped to the groups the event already has, in the order they
+    ///   already stand, or it is refused with a `409`: a removed group would leave the
+    ///   fixtures drawn into it pointing at nothing, an added one would arrive with no
+    ///   fixtures (the draw was dealt across the groups that existed at the cut), and a
+    ///   reorder would relabel which group counts as "first" for a knockout bracket's
+    ///   qualifier seats mid-draw. Editing each reservation's `name`, `slot` and
+    ///   `table_ids` in place is still allowed.
     /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
     ///   so changing it under a standing draw is a `409` too: the event would claim a shape
     ///   its draw does not have. Re-sending the draw type the event already has is not a
     ///   change, and is not refused.
     ///
     /// Nothing else freezes. The event's name, fee, rules and `max_players`, and each
-    /// pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
-    /// venues change under a running tournament, and recording that must never cost a
-    /// director the draw. To change the pools themselves or the draw type, remove the draw
-    /// (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
-    /// are ordinary fields.
+    /// reservation's `table_ids`, `slot` and `name`, all stay editable with a draw
+    /// standing — venues change under a running tournament, and recording that must never
+    /// cost a director the draw. To change the groups themselves or the draw type, remove
+    /// the draw (`DELETE …/draw`), edit, and cut again. With no draw cut, `reservations`
+    /// and `draw_type` are ordinary fields.
     ///
     /// Owner-only.
     ///
@@ -778,7 +783,7 @@ internal protocol APIProtocol: Sendable {
     /// with them.
     ///
     /// Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
-    /// status: a draw may be cut and re-cut freely while a director inspects the pools and
+    /// status: a draw may be cut and re-cut freely while a director inspects the groups and
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
@@ -786,7 +791,7 @@ internal protocol APIProtocol: Sendable {
     /// fresh set is planned from the event's *current* active entrants — the old ones are
     /// not patched, and their ids do not survive. That is the point: a draw is a plan made
     /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, pool sizes and seeding included.
+    /// withdrew) the whole plan is re-made, group sizes and seeding included.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
@@ -796,17 +801,17 @@ internal protocol APIProtocol: Sendable {
     /// those away, and a draw must never silently eat a score.
     ///
     /// Refused with a `422` when this event cannot produce a draw at all: it has
-    /// **no pools** configured for a pooled draw type, its field is too small for the
-    /// pools it has — a pool with fewer than two players has nobody to play — or a
+    /// **no groups** configured for a grouped draw type, its field is too small for the
+    /// groups it has — a group with fewer than two players has nobody to play — or a
     /// bracket has fewer than two entrants. The message names what to change.
     ///
     /// There is no longer a "this draw type has no generator" refusal here: every
     /// draw type a director can pick is one that has a strategy, because the pickable
     /// set *is* the seeded `draw_types` rows, and those are the types that run
     /// (ADR 20260726). Every `422` this route can raise is now about the event's
-    /// **field or pools**, not its type.
+    /// **field or groups**, not its type.
     ///
-    /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    /// Owner-only. Fixtures come back in group → round → position order, exactly as the
     /// tournament-detail page carries them.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
@@ -818,7 +823,7 @@ internal protocol APIProtocol: Sendable {
     ///
     /// The way back from a draw the director does not want. The event, its entrants and the
     /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the pools and cut again.
+    /// free to change the groups and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
     /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
@@ -869,9 +874,10 @@ internal protocol APIProtocol: Sendable {
     ///
     /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
     /// pinned, and the placement's other constraints — the table belongs to the fixture's
-    /// pool, the time falls inside the pool's window, nothing is double-booked — are flags
-    /// derived on read, **not** invariants. So an out-of-window time, or a table outside
-    /// the fixture's pool, is **stored, not rejected**; the queued re-solve is what judges
+    /// group's reservation, the time falls inside that reservation's window, nothing is
+    /// double-booked — are flags derived on read, **not** invariants. So an out-of-window
+    /// time, or a table outside the fixture's group's reservation, is **stored, not
+    /// rejected**; the queued re-solve is what judges
     /// the consequences.
     ///
     /// **The one hard rule about the fixture:** a fixture whose linked match is `completed`
@@ -2067,8 +2073,8 @@ extension APIProtocol {
     /// `unplace_fixtures_on_removed_tables: true`: the table is removed and those matches
     /// are unplaced — table, predicted start and call all cleared — which is a thing worth
     /// saying on purpose rather than a silent side effect of editing the venue. Removing a
-    /// table that only a *pool* reserves needs no confirmation and produces no refusal; the
-    /// pool simply reserves one fewer.
+    /// table that only a *reservation* reserves needs no confirmation and produces no
+    /// refusal; the reservation simply reserves one fewer.
     ///
     /// **`address` has three cases and the value alone cannot tell them apart.** Omit it to
     /// leave the venue and its coordinates untouched; send a real address to move the venue
@@ -2163,34 +2169,39 @@ extension APIProtocol {
     /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     /// sent.
     ///
-    /// **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
-    /// carries the `id` of a pool this event already has — keeping that pool, with the
+    /// **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
+    /// carries the `id` of a reservation this event already has — keeping it, with the
     /// `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
-    /// to add a new pool, whose id the server mints. **A pool no entry names is removed.**
-    /// Send back the pools you read, edited: the ids came from the read, and naming an id
-    /// this event does not have is a `422` on that entry. Citing the same pool twice is a
-    /// `422` too — a pool id identifies one pool, and the fixtures of a draw name their
-    /// pool by it.
+    /// to add a new reservation, whose id the server mints. **A reservation no entry names
+    /// is removed.** The server keeps one `groups` entry per reservation in lockstep, so
+    /// adding, removing or reordering a reservation adds, removes or reorders its mapped
+    /// group the same way. Send back the reservations you read, edited: the ids came from
+    /// the read, and naming an id this event does not have is a `422` on that entry.
+    /// Citing the same reservation twice is a `422` too — a reservation id identifies one
+    /// reservation, and a group's own reservation is one of them.
     ///
     /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     /// fixtures were derived from:
     ///
-    /// * **its set of pools.** A `pools` payload must cite exactly the pools the event
-    ///   already has, or it is refused with a `409`: a removed pool would leave the
-    ///   fixtures drawn into it pointing at nothing, and an added one would arrive with no
-    ///   fixtures, since the draw was dealt across the pools that existed at the cut.
-    ///   Re-ordering them, and editing each one, are still allowed.
+    /// * **its set of groups, in order.** A `reservations` payload must cite exactly the
+    ///   reservations mapped to the groups the event already has, in the order they
+    ///   already stand, or it is refused with a `409`: a removed group would leave the
+    ///   fixtures drawn into it pointing at nothing, an added one would arrive with no
+    ///   fixtures (the draw was dealt across the groups that existed at the cut), and a
+    ///   reorder would relabel which group counts as "first" for a knockout bracket's
+    ///   qualifier seats mid-draw. Editing each reservation's `name`, `slot` and
+    ///   `table_ids` in place is still allowed.
     /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
     ///   so changing it under a standing draw is a `409` too: the event would claim a shape
     ///   its draw does not have. Re-sending the draw type the event already has is not a
     ///   change, and is not refused.
     ///
     /// Nothing else freezes. The event's name, fee, rules and `max_players`, and each
-    /// pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
-    /// venues change under a running tournament, and recording that must never cost a
-    /// director the draw. To change the pools themselves or the draw type, remove the draw
-    /// (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
-    /// are ordinary fields.
+    /// reservation's `table_ids`, `slot` and `name`, all stay editable with a draw
+    /// standing — venues change under a running tournament, and recording that must never
+    /// cost a director the draw. To change the groups themselves or the draw type, remove
+    /// the draw (`DELETE …/draw`), edit, and cut again. With no draw cut, `reservations`
+    /// and `draw_type` are ordinary fields.
     ///
     /// Owner-only.
     ///
@@ -2322,7 +2333,7 @@ extension APIProtocol {
     /// with them.
     ///
     /// Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
-    /// status: a draw may be cut and re-cut freely while a director inspects the pools and
+    /// status: a draw may be cut and re-cut freely while a director inspects the groups and
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
@@ -2330,7 +2341,7 @@ extension APIProtocol {
     /// fresh set is planned from the event's *current* active entrants — the old ones are
     /// not patched, and their ids do not survive. That is the point: a draw is a plan made
     /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, pool sizes and seeding included.
+    /// withdrew) the whole plan is re-made, group sizes and seeding included.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
@@ -2340,17 +2351,17 @@ extension APIProtocol {
     /// those away, and a draw must never silently eat a score.
     ///
     /// Refused with a `422` when this event cannot produce a draw at all: it has
-    /// **no pools** configured for a pooled draw type, its field is too small for the
-    /// pools it has — a pool with fewer than two players has nobody to play — or a
+    /// **no groups** configured for a grouped draw type, its field is too small for the
+    /// groups it has — a group with fewer than two players has nobody to play — or a
     /// bracket has fewer than two entrants. The message names what to change.
     ///
     /// There is no longer a "this draw type has no generator" refusal here: every
     /// draw type a director can pick is one that has a strategy, because the pickable
     /// set *is* the seeded `draw_types` rows, and those are the types that run
     /// (ADR 20260726). Every `422` this route can raise is now about the event's
-    /// **field or pools**, not its type.
+    /// **field or groups**, not its type.
     ///
-    /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    /// Owner-only. Fixtures come back in group → round → position order, exactly as the
     /// tournament-detail page carries them.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
@@ -2370,7 +2381,7 @@ extension APIProtocol {
     ///
     /// The way back from a draw the director does not want. The event, its entrants and the
     /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the pools and cut again.
+    /// free to change the groups and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
     /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
@@ -2429,9 +2440,10 @@ extension APIProtocol {
     ///
     /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
     /// pinned, and the placement's other constraints — the table belongs to the fixture's
-    /// pool, the time falls inside the pool's window, nothing is double-booked — are flags
-    /// derived on read, **not** invariants. So an out-of-window time, or a table outside
-    /// the fixture's pool, is **stored, not rejected**; the queued re-solve is what judges
+    /// group's reservation, the time falls inside that reservation's window, nothing is
+    /// double-booked — are flags derived on read, **not** invariants. So an out-of-window
+    /// time, or a table outside the fixture's group's reservation, is **stored, not
+    /// rejected**; the queued re-solve is what judges
     /// the consequences.
     ///
     /// **The one hard rule about the fixture:** a fixture whose linked match is `completed`
@@ -3106,10 +3118,10 @@ internal enum Components {
                 case pastWindow(Components.Schemas.PastWindowReasonRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PlayerOverSubscribedRead`.
                 case playerOverSubscribed(Components.Schemas.PlayerOverSubscribedRead)
-                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
-                case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
-                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
-                case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/ReservationHasNoTablesRead`.
+                case reservationHasNoTables(Components.Schemas.ReservationHasNoTablesRead)
+                /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/ReservationOverCapacityRead`.
+                case reservationOverCapacity(Components.Schemas.ReservationOverCapacityRead)
                 /// - Remark: Generated from `#/components/schemas/AdminScheduleSolveRead/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
                 case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
                 internal enum CodingKeys: String, CodingKey {
@@ -3128,10 +3140,10 @@ internal enum Components {
                         self = .pastWindow(try .init(from: decoder))
                     case "player_over_subscribed":
                         self = .playerOverSubscribed(try .init(from: decoder))
-                    case "pool_has_no_tables":
-                        self = .poolHasNoTables(try .init(from: decoder))
-                    case "pool_over_capacity":
-                        self = .poolOverCapacity(try .init(from: decoder))
+                    case "reservation_has_no_tables":
+                        self = .reservationHasNoTables(try .init(from: decoder))
+                    case "reservation_over_capacity":
+                        self = .reservationOverCapacity(try .init(from: decoder))
                     case "window_too_short_for_match":
                         self = .windowTooShortForMatch(try .init(from: decoder))
                     default:
@@ -3150,9 +3162,9 @@ internal enum Components {
                         try value.encode(to: encoder)
                     case let .playerOverSubscribed(value):
                         try value.encode(to: encoder)
-                    case let .poolHasNoTables(value):
+                    case let .reservationHasNoTables(value):
                         try value.encode(to: encoder)
-                    case let .poolOverCapacity(value):
+                    case let .reservationOverCapacity(value):
                         try value.encode(to: encoder)
                     case let .windowTooShortForMatch(value):
                         try value.encode(to: encoder)
@@ -4209,8 +4221,8 @@ internal enum Components {
             internal var fieldSize: Swift.Int
             /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/stage_label`.
             internal var stageLabel: Swift.String
-            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/pool_label`.
-            internal var poolLabel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/group_label`.
+            internal var groupLabel: Swift.String?
             /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/match`.
             internal struct MatchPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/DashboardTournamentEvent/match/value1`.
@@ -4245,7 +4257,7 @@ internal enum Components {
             ///   - position:
             ///   - fieldSize:
             ///   - stageLabel:
-            ///   - poolLabel:
+            ///   - groupLabel:
             ///   - match:
             ///   - fixtures:
             internal init(
@@ -4258,7 +4270,7 @@ internal enum Components {
                 position: Swift.Int? = nil,
                 fieldSize: Swift.Int,
                 stageLabel: Swift.String,
-                poolLabel: Swift.String? = nil,
+                groupLabel: Swift.String? = nil,
                 match: Components.Schemas.DashboardTournamentEvent.MatchPayload? = nil,
                 fixtures: [Components.Schemas.DashboardTournamentFixtureRow]
             ) {
@@ -4271,7 +4283,7 @@ internal enum Components {
                 self.position = position
                 self.fieldSize = fieldSize
                 self.stageLabel = stageLabel
-                self.poolLabel = poolLabel
+                self.groupLabel = groupLabel
                 self.match = match
                 self.fixtures = fixtures
             }
@@ -4285,7 +4297,7 @@ internal enum Components {
                 case position
                 case fieldSize = "field_size"
                 case stageLabel = "stage_label"
-                case poolLabel = "pool_label"
+                case groupLabel = "group_label"
                 case match
                 case fixtures
             }
@@ -4999,6 +5011,84 @@ internal enum Components {
                     "longitude",
                     "formatted"
                 ])
+            }
+        }
+        /// One competitive group of an event's draw, as it is **read**: server-minted
+        /// identity and order, plus which reservation it plays under.
+        ///
+        /// Server-owned, unlike :class:`Reservation` — there is no write shape, because a
+        /// client never authors a group directly. The server mints exactly one group per
+        /// reservation (the 1:1, ``app.tournament_reservations``), so a ``reservations`` write
+        /// is the only way a group comes to exist, is re-ordered, or goes away.
+        ///
+        /// ``reservation_id`` names an entry of the event's own ``reservations`` array. It is
+        /// never a dangling ref in this slice: the join column behind it is ``NOT NULL`` and a
+        /// real foreign key, so a group with no mapped reservation is a state the database
+        /// cannot produce. A future slice may relax that (#1370), which is why the client is
+        /// expected to look the id up rather than assume it always resolves.
+        ///
+        /// - Remark: Generated from `#/components/schemas/GroupRead`.
+        internal struct GroupRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GroupRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/GroupRead/position`.
+            internal var position: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/GroupRead/reservation_id`.
+            internal var reservationId: Swift.String
+            /// Creates a new `GroupRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - position:
+            ///   - reservationId:
+            internal init(
+                id: Swift.String,
+                position: Swift.Int,
+                reservationId: Swift.String
+            ) {
+                self.id = id
+                self.position = position
+                self.reservationId = reservationId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case position
+                case reservationId = "reservation_id"
+            }
+        }
+        /// One group's standings: its rows in finishing order, and whether every one of its
+        /// fixtures has been decided.
+        ///
+        /// ``group_id`` names a group of this same event — the id a fixture also carries — so a
+        /// client titles the table from the group it already holds.
+        ///
+        /// - Remark: Generated from `#/components/schemas/GroupStandingsRead`.
+        internal struct GroupStandingsRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GroupStandingsRead/group_id`.
+            internal var groupId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/GroupStandingsRead/rows`.
+            internal var rows: [Components.Schemas.StandingRowRead]
+            /// - Remark: Generated from `#/components/schemas/GroupStandingsRead/complete`.
+            internal var complete: Swift.Bool
+            /// Creates a new `GroupStandingsRead`.
+            ///
+            /// - Parameters:
+            ///   - groupId:
+            ///   - rows:
+            ///   - complete:
+            internal init(
+                groupId: Swift.String,
+                rows: [Components.Schemas.StandingRowRead],
+                complete: Swift.Bool
+            ) {
+                self.groupId = groupId
+                self.rows = rows
+                self.complete = complete
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case groupId = "group_id"
+                case rows
+                case complete
             }
         }
         /// - Remark: Generated from `#/components/schemas/HTTPValidationError`.
@@ -6450,7 +6540,7 @@ internal enum Components {
             }
         }
         /// CP-SAT proved the day infeasible yet no structural arm explains it — the
-        /// whole-day residual. No pool: it carries only the day aggregate,
+        /// whole-day residual. No reservation: it carries only the day aggregate,
         /// ``required_min`` against ``available_min``, as integer minutes.
         ///
         /// - Remark: Generated from `#/components/schemas/NoSingleCauseRead`.
@@ -6988,14 +7078,14 @@ internal enum Components {
                 case description
             }
         }
-        /// A pool whose **entire** planned window is already in the past — the day
-        /// was dated behind ``now`` (most easily via the silent "today" default on an
-        /// event now a day old), so it cannot run until it is moved to a future day
-        /// (ADR "a past day is named, not disguised"). The most specific pre-live cause,
-        /// fixed by "move the date", not "add tables/time". Resolved: the offending
-        /// ``date`` — the venue-local calendar day the director gave a window for, in
-        /// the event's own timezone frame — so the client says which day to move with
-        /// no timezone math of its own. The DB-aware mirror of
+        /// A reservation whose **entire** planned window is already in the past —
+        /// the day was dated behind ``now`` (most easily via the silent "today"
+        /// default on an event now a day old), so it cannot run until it is moved to
+        /// a future day (ADR "a past day is named, not disguised"). The most specific
+        /// pre-live cause, fixed by "move the date", not "add tables/time". Resolved:
+        /// the offending ``date`` — the venue-local calendar day the director gave a
+        /// window for, in the event's own timezone frame — so the client says which
+        /// day to move with no timezone math of its own. The DB-aware mirror of
         /// :class:`app.scheduling.PastWindow`.
         ///
         /// - Remark: Generated from `#/components/schemas/PastWindowReasonRead`.
@@ -7736,14 +7826,15 @@ internal enum Components {
                 case ratingChange = "rating_change"
             }
         }
-        /// One human with more match-time in a pool than its window can hold: their
-        /// ``match_count`` matches plus the rest between them need ``required_min``
-        /// minutes of *their* time, against a window spanning only ``window_span_min``.
-        /// A pigeonhole over one person, so adding tables cannot fix it — the remedy is
-        /// fewer matches for them in this pool, or a longer window. Resolved: the
-        /// human's display ``player_name``, the pool's ``name`` + ``HH:MM`` bounds, and
-        /// which kind of ``reservation`` that name is — "a smaller pool" is not a remedy
-        /// an event-wide reservation has; the minutes stay integers for the client to
+        /// One human with more match-time in a reservation than its window can
+        /// hold: their ``match_count`` matches plus the rest between them need
+        /// ``required_min`` minutes of *their* time, against a window spanning only
+        /// ``window_span_min``. A pigeonhole over one person, so adding tables cannot
+        /// fix it — the remedy is fewer matches for them in this reservation, or a
+        /// longer window. Resolved: the human's display ``player_name``, the
+        /// reservation's ``name`` + ``HH:MM`` bounds, and which kind of
+        /// ``reservation`` that name is — "a smaller reservation" is not a remedy an
+        /// event-wide reservation has; the minutes stay integers for the client to
         /// format.
         ///
         /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead`.
@@ -7756,11 +7847,11 @@ internal enum Components {
             internal var kind: Components.Schemas.PlayerOverSubscribedRead.KindPayload?
             /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/player_name`.
             internal var playerName: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/pool_name`.
-            internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/reservation_name`.
+            internal var reservationName: Swift.String
             /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/reservation`.
             internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case pool = "pool"
+                case booked = "booked"
                 case event = "event"
             }
             /// - Remark: Generated from `#/components/schemas/PlayerOverSubscribedRead/reservation`.
@@ -7780,7 +7871,7 @@ internal enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - playerName:
-            ///   - poolName:
+            ///   - reservationName:
             ///   - reservation:
             ///   - windowStart:
             ///   - windowEnd:
@@ -7790,7 +7881,7 @@ internal enum Components {
             internal init(
                 kind: Components.Schemas.PlayerOverSubscribedRead.KindPayload? = nil,
                 playerName: Swift.String,
-                poolName: Swift.String,
+                reservationName: Swift.String,
                 reservation: Components.Schemas.PlayerOverSubscribedRead.ReservationPayload? = nil,
                 windowStart: Swift.String,
                 windowEnd: Swift.String,
@@ -7800,7 +7891,7 @@ internal enum Components {
             ) {
                 self.kind = kind
                 self.playerName = playerName
-                self.poolName = poolName
+                self.reservationName = reservationName
                 self.reservation = reservation
                 self.windowStart = windowStart
                 self.windowEnd = windowEnd
@@ -7811,7 +7902,7 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case kind
                 case playerName = "player_name"
-                case poolName = "pool_name"
+                case reservationName = "reservation_name"
                 case reservation
                 case windowStart = "window_start"
                 case windowEnd = "window_end"
@@ -7950,410 +8041,6 @@ internal enum Components {
                 case losses
                 case form
                 case rank
-            }
-        }
-        /// A pool as it is **read back**: everything a client wrote, plus the ``id`` the
-        /// server minted for it and the ``position`` it stamped on it.
-        ///
-        /// It is also the model every interior read of an event's pools arrives through —
-        /// ``_ordered_pools``, ``draw_config``, ``event_pools``, the schedule snapshots — which
-        /// is why moving pools from a JSONB array into ``tournament_event_pools`` rows changed
-        /// nothing above ``app.tournament_pools.pool_read``: the projection composes this same
-        /// model out of typed columns where it used to validate it out of untyped dicts.
-        /// Deriving it from :class:`PoolWrite` is what keeps the two shapes one shape plus two
-        /// fields, exactly as :class:`TournamentTable` derives from
-        /// :class:`TournamentTableWrite`: a column added to the write side is readable without
-        /// a second edit, and the two can never disagree about what a pool *is*.
-        ///
-        /// ``position`` keeps its ``0`` default even though the column is NOT NULL and every
-        /// row carries a real one: the default is what lets a **literal** ``Pool`` be built in
-        /// a test or a REPL without spelling an order out, and a read boundary that
-        /// hard-required it would gain nothing — the projection always supplies it. ``id`` has
-        /// no default, because there is no id a literal pool could sensibly default to.
-        ///
-        /// - Remark: Generated from `#/components/schemas/Pool`.
-        internal struct Pool: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/Pool/name`.
-            internal var name: Swift.String
-            /// - Remark: Generated from `#/components/schemas/Pool/slot`.
-            internal var slot: Components.Schemas.Slot
-            /// - Remark: Generated from `#/components/schemas/Pool/table_ids`.
-            internal var tableIds: [Swift.String]
-            /// - Remark: Generated from `#/components/schemas/Pool/id`.
-            internal var id: Swift.String
-            /// Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Pool/position`.
-            internal var position: Swift.Int?
-            /// Creates a new `Pool`.
-            ///
-            /// - Parameters:
-            ///   - name:
-            ///   - slot:
-            ///   - tableIds:
-            ///   - id:
-            ///   - position: Where this pool sits in its event's pool order: 0-based, contiguous, and **assigned by the server** from the pool's index in the `pools` list it arrived in. Read-only, and not merely by convention — it is absent from the pool shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's pools, send them in the order you want. Two pools of one event never share a position.
-            internal init(
-                name: Swift.String,
-                slot: Components.Schemas.Slot,
-                tableIds: [Swift.String],
-                id: Swift.String,
-                position: Swift.Int? = nil
-            ) {
-                self.name = name
-                self.slot = slot
-                self.tableIds = tableIds
-                self.id = id
-                self.position = position
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case name
-                case slot
-                case tableIds = "table_ids"
-                case id
-                case position
-            }
-            internal init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.name = try container.decode(
-                    Swift.String.self,
-                    forKey: .name
-                )
-                self.slot = try container.decode(
-                    Components.Schemas.Slot.self,
-                    forKey: .slot
-                )
-                self.tableIds = try container.decode(
-                    [Swift.String].self,
-                    forKey: .tableIds
-                )
-                self.id = try container.decode(
-                    Swift.String.self,
-                    forKey: .id
-                )
-                self.position = try container.decodeIfPresent(
-                    Swift.Int.self,
-                    forKey: .position
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "name",
-                    "slot",
-                    "table_ids",
-                    "id",
-                    "position"
-                ])
-            }
-        }
-        /// A pool with active fixtures but no tables at all — nowhere to place them.
-        /// Resolved: the pool's display ``name`` (never the namespaced solver id) and
-        /// which kind of ``reservation`` that name belongs to.
-        ///
-        /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead`.
-        internal struct PoolHasNoTablesRead: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/kind`.
-            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case poolHasNoTables = "pool_has_no_tables"
-            }
-            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/kind`.
-            internal var kind: Components.Schemas.PoolHasNoTablesRead.KindPayload?
-            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/pool_name`.
-            internal var poolName: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/reservation`.
-            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case pool = "pool"
-                case event = "event"
-            }
-            /// - Remark: Generated from `#/components/schemas/PoolHasNoTablesRead/reservation`.
-            internal var reservation: Components.Schemas.PoolHasNoTablesRead.ReservationPayload?
-            /// Creates a new `PoolHasNoTablesRead`.
-            ///
-            /// - Parameters:
-            ///   - kind:
-            ///   - poolName:
-            ///   - reservation:
-            internal init(
-                kind: Components.Schemas.PoolHasNoTablesRead.KindPayload? = nil,
-                poolName: Swift.String,
-                reservation: Components.Schemas.PoolHasNoTablesRead.ReservationPayload? = nil
-            ) {
-                self.kind = kind
-                self.poolName = poolName
-                self.reservation = reservation
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case kind
-                case poolName = "pool_name"
-                case reservation
-            }
-        }
-        /// A pool whose aggregate match-time (``required_min``) exceeds the
-        /// table-minutes its window offers (``capacity_min`` = window span ×
-        /// ``table_count``). Resolved: the pool ``name``, which kind of ``reservation``
-        /// it is, and its ``HH:MM`` bounds; the minutes stay integers.
-        ///
-        /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead`.
-        internal struct PoolOverCapacityRead: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/kind`.
-            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case poolOverCapacity = "pool_over_capacity"
-            }
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/kind`.
-            internal var kind: Components.Schemas.PoolOverCapacityRead.KindPayload?
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/pool_name`.
-            internal var poolName: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/reservation`.
-            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case pool = "pool"
-                case event = "event"
-            }
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/reservation`.
-            internal var reservation: Components.Schemas.PoolOverCapacityRead.ReservationPayload?
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/window_start`.
-            internal var windowStart: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/window_end`.
-            internal var windowEnd: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/required_min`.
-            internal var requiredMin: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/capacity_min`.
-            internal var capacityMin: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/PoolOverCapacityRead/table_count`.
-            internal var tableCount: Swift.Int
-            /// Creates a new `PoolOverCapacityRead`.
-            ///
-            /// - Parameters:
-            ///   - kind:
-            ///   - poolName:
-            ///   - reservation:
-            ///   - windowStart:
-            ///   - windowEnd:
-            ///   - requiredMin:
-            ///   - capacityMin:
-            ///   - tableCount:
-            internal init(
-                kind: Components.Schemas.PoolOverCapacityRead.KindPayload? = nil,
-                poolName: Swift.String,
-                reservation: Components.Schemas.PoolOverCapacityRead.ReservationPayload? = nil,
-                windowStart: Swift.String,
-                windowEnd: Swift.String,
-                requiredMin: Swift.Int,
-                capacityMin: Swift.Int,
-                tableCount: Swift.Int
-            ) {
-                self.kind = kind
-                self.poolName = poolName
-                self.reservation = reservation
-                self.windowStart = windowStart
-                self.windowEnd = windowEnd
-                self.requiredMin = requiredMin
-                self.capacityMin = capacityMin
-                self.tableCount = tableCount
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case kind
-                case poolName = "pool_name"
-                case reservation
-                case windowStart = "window_start"
-                case windowEnd = "window_end"
-                case requiredMin = "required_min"
-                case capacityMin = "capacity_min"
-                case tableCount = "table_count"
-            }
-        }
-        /// One pool's standings: its rows in finishing order, and whether every one of its
-        /// fixtures has been decided.
-        ///
-        /// ``pool_id`` names a pool of this same event — the id a fixture also carries — so a
-        /// client titles the table from the pool it already holds.
-        ///
-        /// - Remark: Generated from `#/components/schemas/PoolStandingsRead`.
-        internal struct PoolStandingsRead: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PoolStandingsRead/pool_id`.
-            internal var poolId: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PoolStandingsRead/rows`.
-            internal var rows: [Components.Schemas.StandingRowRead]
-            /// - Remark: Generated from `#/components/schemas/PoolStandingsRead/complete`.
-            internal var complete: Swift.Bool
-            /// Creates a new `PoolStandingsRead`.
-            ///
-            /// - Parameters:
-            ///   - poolId:
-            ///   - rows:
-            ///   - complete:
-            internal init(
-                poolId: Swift.String,
-                rows: [Components.Schemas.StandingRowRead],
-                complete: Swift.Bool
-            ) {
-                self.poolId = poolId
-                self.rows = rows
-                self.complete = complete
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case poolId = "pool_id"
-                case rows
-                case complete
-            }
-        }
-        /// One pool of an event a client **edits** (``PATCH …/events/{id}``): everything
-        /// :class:`PoolWrite` carries, plus an **optional** ``id`` naming a pool the event
-        /// already has.
-        ///
-        /// The exact twin of :class:`TournamentTableUpsert`, one resource over, and the two
-        /// cases are exhaustive:
-        ///
-        /// * ``id`` **present** — "this is the pool you already have, with these words". The
-        ///   row keeps its id, and therefore every fixture drawn into it and every table it
-        ///   reserves, and takes the new ``name``/``slot``/``table_ids``; its place in the list
-        ///   is its new place in the event's pool order.
-        /// * ``id`` **omitted** (or ``null``) — "add a pool". The server mints its id, exactly
-        ///   as on create.
-        /// * a stored pool **no entry names** — "remove it".
-        ///
-        /// ``X | None = None`` and never a non-null default: an optional field on a *write*
-        /// schema whose default is not ``None`` generates as **required** in the TypeScript
-        /// client, which would make "omit the id to add a pool" unsayable there.
-        ///
-        /// An id that names no pool of *this* event is a 422 on the field
-        /// (:class:`~app.tournament_errors.PoolNotInEventError`), not a quietly minted new
-        /// pool. Until this chore that arm was an *addition*, because the id was the client's
-        /// and an id the server had never seen still named the pool the client meant. It is the
-        /// server's now, so an id it did not mint names nothing — and minting a fresh one would
-        /// hand the client back a different id than it asked for while *removing* the pool it
-        /// meant to keep, which is the pair of failures a diff must never confuse.
-        ///
-        /// - Remark: Generated from `#/components/schemas/PoolUpsert`.
-        internal struct PoolUpsert: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PoolUpsert/name`.
-            internal var name: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PoolUpsert/slot`.
-            internal var slot: Components.Schemas.Slot
-            /// - Remark: Generated from `#/components/schemas/PoolUpsert/table_ids`.
-            internal var tableIds: [Swift.String]
-            /// - Remark: Generated from `#/components/schemas/PoolUpsert/id`.
-            internal var id: Swift.String?
-            /// Creates a new `PoolUpsert`.
-            ///
-            /// - Parameters:
-            ///   - name:
-            ///   - slot:
-            ///   - tableIds:
-            ///   - id:
-            internal init(
-                name: Swift.String,
-                slot: Components.Schemas.Slot,
-                tableIds: [Swift.String],
-                id: Swift.String? = nil
-            ) {
-                self.name = name
-                self.slot = slot
-                self.tableIds = tableIds
-                self.id = id
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case name
-                case slot
-                case tableIds = "table_ids"
-                case id
-            }
-            internal init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.name = try container.decode(
-                    Swift.String.self,
-                    forKey: .name
-                )
-                self.slot = try container.decode(
-                    Components.Schemas.Slot.self,
-                    forKey: .slot
-                )
-                self.tableIds = try container.decode(
-                    [Swift.String].self,
-                    forKey: .tableIds
-                )
-                self.id = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .id
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "name",
-                    "slot",
-                    "table_ids",
-                    "id"
-                ])
-            }
-        }
-        /// A slice of tables reserved for a window of time within an event, as a client
-        /// **creates** it.
-        ///
-        /// It has **no** ``id``, and that absence is the whole content of the chore that minted
-        /// them: a pool's id is a uuid the database mints (ADR 20260801's ``id uuid PRIMARY
-        /// KEY``), so it is not the client's to author and there is nothing here for it to
-        /// author. Sending one is a 422 for an unknown field — the same treatment
-        /// :class:`TournamentTableWrite` gives a venue table's id, and for the same reason. A
-        /// client that *cites* an id it was given is patching, not creating, and the shape for
-        /// that is :class:`PoolUpsert`.
-        ///
-        /// Its ``name`` has a floor for the plainer reason: a pool is *called* something — it
-        /// is what the director clicks, what the conflict warnings quote, and what a player
-        /// reads off a wall. ``""`` is not a name, and an event whose pools list is three blank
-        /// rows is not a thing anyone could act on.
-        ///
-        /// ``position`` is absent for the same reason the id is: it is the server's to assign
-        /// (:data:`PoolPosition`), so it is simply not a field of this model, and
-        /// ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
-        /// the treatment ``entered`` already gets on the event schemas — a server-managed value
-        /// is kept **off** the write shape rather than accepted and then ignored. Accepting it
-        /// would be worse than useless in both directions: a client cannot tell from the schema
-        /// that the number it sent decided nothing, and a boundary that silently discards half
-        /// of a payload has to be documented to be understood. The order a client *does*
-        /// control is the order of the list itself.
-        ///
-        /// - Remark: Generated from `#/components/schemas/PoolWrite`.
-        internal struct PoolWrite: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PoolWrite/name`.
-            internal var name: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PoolWrite/slot`.
-            internal var slot: Components.Schemas.Slot
-            /// - Remark: Generated from `#/components/schemas/PoolWrite/table_ids`.
-            internal var tableIds: [Swift.String]
-            /// Creates a new `PoolWrite`.
-            ///
-            /// - Parameters:
-            ///   - name:
-            ///   - slot:
-            ///   - tableIds:
-            internal init(
-                name: Swift.String,
-                slot: Components.Schemas.Slot,
-                tableIds: [Swift.String]
-            ) {
-                self.name = name
-                self.slot = slot
-                self.tableIds = tableIds
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case name
-                case slot
-                case tableIds = "table_ids"
-            }
-            internal init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.name = try container.decode(
-                    Swift.String.self,
-                    forKey: .name
-                )
-                self.slot = try container.decode(
-                    Components.Schemas.Slot.self,
-                    forKey: .slot
-                )
-                self.tableIds = try container.decode(
-                    [Swift.String].self,
-                    forKey: .tableIds
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "name",
-                    "slot",
-                    "table_ids"
-                ])
             }
         }
         /// An eligibility rule. ``field`` names the one fact we actually hold about a
@@ -8542,9 +8229,9 @@ internal enum Components {
         ///
         /// ``matches`` is the drawn pairing count (stable regardless of verdict — the draw
         /// is instant and always completes); ``byes`` is the round-robin sit-outs the
-        /// field incurs (a pool of an odd number of players gives one bye per round —
-        /// every player byes exactly once — so an odd pool of ``P`` contributes ``P``,
-        /// an even pool ``0``). ``duration_min`` is the event's own makespan span (last
+        /// field incurs (a group of an odd number of players gives one bye per round —
+        /// every player byes exactly once — so an odd group of ``P`` contributes ``P``,
+        /// an even group ``0``). ``duration_min`` is the event's own makespan span (last
         /// placement end minus first placement start, in minutes) — ``None`` when the
         /// solve produced no plan (infeasible / unknown), where there is nothing to
         /// span.
@@ -8621,12 +8308,15 @@ internal enum Components {
         /// One drawn synthetic pairing, known the instant the draw runs (before the
         /// solve returns) so a caller can render the grid skeleton immediately. The
         /// synthetic ids are opaque stand-ins (``Placeholder N`` on the surface); both
-        /// sides are always known (the pool stage of a round-robin draw).
+        /// sides are always known (the group stage of a round-robin draw).
         ///
-        /// ``pool_id`` is the namespaced ``f"{event_id}:{pool_id}"`` composite the solver
-        /// keys a pool by (unique across events); ``pool_name`` is the human label from the
-        /// event's pool config (e.g. ``"Pool A"``) so the grid can head a column with a name
-        /// a director recognizes rather than the raw composite.
+        /// ``reservation_id`` is the namespaced ``f"{event_id}:{reservation_id}"``
+        /// composite the solver keys a reservation by (unique across events) —
+        /// scheduling is reservation-scoped, so this is the reservation the fixture's
+        /// group is confined to, not the group's own id. ``reservation_name`` is the
+        /// human label from the event's reservation config (e.g. ``"Reservation A"``)
+        /// so the grid can head a column with a name a director recognizes rather than
+        /// the raw composite.
         ///
         /// - Remark: Generated from `#/components/schemas/PreviewFixture`.
         internal struct PreviewFixture: Codable, Hashable, Sendable {
@@ -8634,10 +8324,10 @@ internal enum Components {
             internal var fixtureId: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/event_id`.
             internal var eventId: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PreviewFixture/pool_id`.
-            internal var poolId: Swift.String
-            /// - Remark: Generated from `#/components/schemas/PreviewFixture/pool_name`.
-            internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/reservation_id`.
+            internal var reservationId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/reservation_name`.
+            internal var reservationName: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_a_id`.
             internal var playerAId: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_b_id`.
@@ -8647,30 +8337,30 @@ internal enum Components {
             /// - Parameters:
             ///   - fixtureId:
             ///   - eventId:
-            ///   - poolId:
-            ///   - poolName:
+            ///   - reservationId:
+            ///   - reservationName:
             ///   - playerAId:
             ///   - playerBId:
             internal init(
                 fixtureId: Swift.String,
                 eventId: Swift.String,
-                poolId: Swift.String,
-                poolName: Swift.String,
+                reservationId: Swift.String,
+                reservationName: Swift.String,
                 playerAId: Swift.String,
                 playerBId: Swift.String
             ) {
                 self.fixtureId = fixtureId
                 self.eventId = eventId
-                self.poolId = poolId
-                self.poolName = poolName
+                self.reservationId = reservationId
+                self.reservationName = reservationName
                 self.playerAId = playerAId
                 self.playerBId = playerBId
             }
             internal enum CodingKeys: String, CodingKey {
                 case fixtureId = "fixture_id"
                 case eventId = "event_id"
-                case poolId = "pool_id"
-                case poolName = "pool_name"
+                case reservationId = "reservation_id"
+                case reservationName = "reservation_name"
                 case playerAId = "player_a_id"
                 case playerBId = "player_b_id"
             }
@@ -8841,10 +8531,10 @@ internal enum Components {
                 case pastWindow(Components.Schemas.PastWindowReasonRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PlayerOverSubscribedRead`.
                 case playerOverSubscribed(Components.Schemas.PlayerOverSubscribedRead)
-                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
-                case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
-                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
-                case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/ReservationHasNoTablesRead`.
+                case reservationHasNoTables(Components.Schemas.ReservationHasNoTablesRead)
+                /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/ReservationOverCapacityRead`.
+                case reservationOverCapacity(Components.Schemas.ReservationOverCapacityRead)
                 /// - Remark: Generated from `#/components/schemas/PreviewResult/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
                 case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
                 internal enum CodingKeys: String, CodingKey {
@@ -8863,10 +8553,10 @@ internal enum Components {
                         self = .pastWindow(try .init(from: decoder))
                     case "player_over_subscribed":
                         self = .playerOverSubscribed(try .init(from: decoder))
-                    case "pool_has_no_tables":
-                        self = .poolHasNoTables(try .init(from: decoder))
-                    case "pool_over_capacity":
-                        self = .poolOverCapacity(try .init(from: decoder))
+                    case "reservation_has_no_tables":
+                        self = .reservationHasNoTables(try .init(from: decoder))
+                    case "reservation_over_capacity":
+                        self = .reservationOverCapacity(try .init(from: decoder))
                     case "window_too_short_for_match":
                         self = .windowTooShortForMatch(try .init(from: decoder))
                     default:
@@ -8885,9 +8575,9 @@ internal enum Components {
                         try value.encode(to: encoder)
                     case let .playerOverSubscribed(value):
                         try value.encode(to: encoder)
-                    case let .poolHasNoTables(value):
+                    case let .reservationHasNoTables(value):
                         try value.encode(to: encoder)
-                    case let .poolOverCapacity(value):
+                    case let .reservationOverCapacity(value):
                         try value.encode(to: encoder)
                     case let .windowTooShortForMatch(value):
                         try value.encode(to: encoder)
@@ -9429,6 +9119,380 @@ internal enum Components {
                 case fmmHpToken = "fmm_hp_token"
             }
         }
+        /// A reservation as it is **read back**: everything a client wrote, plus the ``id``
+        /// the server minted for it and the ``position`` it stamped on it.
+        ///
+        /// It is also the model every interior read of an event's reservations arrives
+        /// through — ``_ordered_reservations``, ``draw_config``, ``event_reservations``, the
+        /// schedule snapshots — which is why moving reservations from a JSONB array into
+        /// ``tournament_event_reservations`` rows changed nothing above
+        /// ``app.tournament_reservations.reservation_read``: the projection composes this same
+        /// model out of typed columns where it used to validate it out of untyped dicts.
+        /// Deriving it from :class:`ReservationWrite` is what keeps the two shapes one shape
+        /// plus two fields, exactly as :class:`TournamentTable` derives from
+        /// :class:`TournamentTableWrite`: a column added to the write side is readable without
+        /// a second edit, and the two can never disagree about what a reservation *is*.
+        ///
+        /// ``position`` keeps its ``0`` default even though the column is NOT NULL and every
+        /// row carries a real one: the default is what lets a **literal** ``Reservation`` be
+        /// built in a test or a REPL without spelling an order out, and a read boundary that
+        /// hard-required it would gain nothing — the projection always supplies it. ``id`` has
+        /// no default, because there is no id a literal reservation could sensibly default
+        /// to.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Reservation`.
+        internal struct Reservation: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/Reservation/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Reservation/slot`.
+            internal var slot: Components.Schemas.Slot
+            /// - Remark: Generated from `#/components/schemas/Reservation/table_ids`.
+            internal var tableIds: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/Reservation/id`.
+            internal var id: Swift.String
+            /// Where this reservation sits in its event's reservation order: 0-based, contiguous, and **assigned by the server** from the reservation's index in the `reservations` list it arrived in. Read-only, and not merely by convention — it is absent from the reservation shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's reservations, send them in the order you want. Two reservations of one event never share a position.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Reservation/position`.
+            internal var position: Swift.Int?
+            /// Creates a new `Reservation`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - slot:
+            ///   - tableIds:
+            ///   - id:
+            ///   - position: Where this reservation sits in its event's reservation order: 0-based, contiguous, and **assigned by the server** from the reservation's index in the `reservations` list it arrived in. Read-only, and not merely by convention — it is absent from the reservation shape the write verbs take, so sending one is a `422` for an unknown field. To reorder an event's reservations, send them in the order you want. Two reservations of one event never share a position.
+            internal init(
+                name: Swift.String,
+                slot: Components.Schemas.Slot,
+                tableIds: [Swift.String],
+                id: Swift.String,
+                position: Swift.Int? = nil
+            ) {
+                self.name = name
+                self.slot = slot
+                self.tableIds = tableIds
+                self.id = id
+                self.position = position
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case name
+                case slot
+                case tableIds = "table_ids"
+                case id
+                case position
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.slot = try container.decode(
+                    Components.Schemas.Slot.self,
+                    forKey: .slot
+                )
+                self.tableIds = try container.decode(
+                    [Swift.String].self,
+                    forKey: .tableIds
+                )
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.position = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .position
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "slot",
+                    "table_ids",
+                    "id",
+                    "position"
+                ])
+            }
+        }
+        /// A reservation with active fixtures but no tables at all — nowhere to
+        /// place them. Resolved: the reservation's display ``name`` (never the
+        /// namespaced solver id) and which kind of ``reservation`` that name belongs
+        /// to.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReservationHasNoTablesRead`.
+        internal struct ReservationHasNoTablesRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReservationHasNoTablesRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case reservationHasNoTables = "reservation_has_no_tables"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReservationHasNoTablesRead/kind`.
+            internal var kind: Components.Schemas.ReservationHasNoTablesRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/ReservationHasNoTablesRead/reservation_name`.
+            internal var reservationName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReservationHasNoTablesRead/reservation`.
+            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case booked = "booked"
+                case event = "event"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReservationHasNoTablesRead/reservation`.
+            internal var reservation: Components.Schemas.ReservationHasNoTablesRead.ReservationPayload?
+            /// Creates a new `ReservationHasNoTablesRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - reservationName:
+            ///   - reservation:
+            internal init(
+                kind: Components.Schemas.ReservationHasNoTablesRead.KindPayload? = nil,
+                reservationName: Swift.String,
+                reservation: Components.Schemas.ReservationHasNoTablesRead.ReservationPayload? = nil
+            ) {
+                self.kind = kind
+                self.reservationName = reservationName
+                self.reservation = reservation
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case reservationName = "reservation_name"
+                case reservation
+            }
+        }
+        /// A reservation whose aggregate match-time (``required_min``) exceeds the
+        /// table-minutes its window offers (``capacity_min`` = window span ×
+        /// ``table_count``). Resolved: the reservation ``name``, which kind of
+        /// ``reservation`` it is, and its ``HH:MM`` bounds; the minutes stay
+        /// integers.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead`.
+        internal struct ReservationOverCapacityRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case reservationOverCapacity = "reservation_over_capacity"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/kind`.
+            internal var kind: Components.Schemas.ReservationOverCapacityRead.KindPayload?
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/reservation_name`.
+            internal var reservationName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/reservation`.
+            internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case booked = "booked"
+                case event = "event"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/reservation`.
+            internal var reservation: Components.Schemas.ReservationOverCapacityRead.ReservationPayload?
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/window_start`.
+            internal var windowStart: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/window_end`.
+            internal var windowEnd: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/required_min`.
+            internal var requiredMin: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/capacity_min`.
+            internal var capacityMin: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/table_count`.
+            internal var tableCount: Swift.Int
+            /// Creates a new `ReservationOverCapacityRead`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - reservationName:
+            ///   - reservation:
+            ///   - windowStart:
+            ///   - windowEnd:
+            ///   - requiredMin:
+            ///   - capacityMin:
+            ///   - tableCount:
+            internal init(
+                kind: Components.Schemas.ReservationOverCapacityRead.KindPayload? = nil,
+                reservationName: Swift.String,
+                reservation: Components.Schemas.ReservationOverCapacityRead.ReservationPayload? = nil,
+                windowStart: Swift.String,
+                windowEnd: Swift.String,
+                requiredMin: Swift.Int,
+                capacityMin: Swift.Int,
+                tableCount: Swift.Int
+            ) {
+                self.kind = kind
+                self.reservationName = reservationName
+                self.reservation = reservation
+                self.windowStart = windowStart
+                self.windowEnd = windowEnd
+                self.requiredMin = requiredMin
+                self.capacityMin = capacityMin
+                self.tableCount = tableCount
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case reservationName = "reservation_name"
+                case reservation
+                case windowStart = "window_start"
+                case windowEnd = "window_end"
+                case requiredMin = "required_min"
+                case capacityMin = "capacity_min"
+                case tableCount = "table_count"
+            }
+        }
+        /// One reservation of an event a client **edits** (``PATCH …/events/{id}``):
+        /// everything :class:`ReservationWrite` carries, plus an **optional** ``id`` naming a
+        /// reservation the event already has.
+        ///
+        /// The exact twin of :class:`TournamentTableUpsert`, one resource over, and the two
+        /// cases are exhaustive:
+        ///
+        /// * ``id`` **present** — "this is the reservation you already have, with these
+        ///   words". The row keeps its id, and therefore every fixture drawn into it and every
+        ///   table it reserves, and takes the new ``name``/``slot``/``table_ids``; its place in
+        ///   the list is its new place in the event's reservation order.
+        /// * ``id`` **omitted** (or ``null``) — "add a reservation". The server mints its id,
+        ///   exactly as on create.
+        /// * a stored reservation **no entry names** — "remove it".
+        ///
+        /// ``X | None = None`` and never a non-null default: an optional field on a *write*
+        /// schema whose default is not ``None`` generates as **required** in the TypeScript
+        /// client, which would make "omit the id to add a reservation" unsayable there.
+        ///
+        /// An id that names no reservation of *this* event is a 422 on the field
+        /// (:class:`~app.tournament_errors.ReservationNotInEventError`), not a quietly minted
+        /// new reservation. Until this chore that arm was an *addition*, because the id was the
+        /// client's and an id the server had never seen still named the reservation the client
+        /// meant. It is the server's now, so an id it did not mint names nothing — and minting
+        /// a fresh one would hand the client back a different id than it asked for while
+        /// *removing* the reservation it meant to keep, which is the pair of failures a diff
+        /// must never confuse.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReservationUpsert`.
+        internal struct ReservationUpsert: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReservationUpsert/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReservationUpsert/slot`.
+            internal var slot: Components.Schemas.Slot
+            /// - Remark: Generated from `#/components/schemas/ReservationUpsert/table_ids`.
+            internal var tableIds: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/ReservationUpsert/id`.
+            internal var id: Swift.String?
+            /// Creates a new `ReservationUpsert`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - slot:
+            ///   - tableIds:
+            ///   - id:
+            internal init(
+                name: Swift.String,
+                slot: Components.Schemas.Slot,
+                tableIds: [Swift.String],
+                id: Swift.String? = nil
+            ) {
+                self.name = name
+                self.slot = slot
+                self.tableIds = tableIds
+                self.id = id
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case name
+                case slot
+                case tableIds = "table_ids"
+                case id
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.slot = try container.decode(
+                    Components.Schemas.Slot.self,
+                    forKey: .slot
+                )
+                self.tableIds = try container.decode(
+                    [Swift.String].self,
+                    forKey: .tableIds
+                )
+                self.id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "slot",
+                    "table_ids",
+                    "id"
+                ])
+            }
+        }
+        /// A slice of tables reserved for a window of time within an event, as a client
+        /// **creates** it.
+        ///
+        /// It has **no** ``id``, and that absence is the whole content of the chore that minted
+        /// them: a reservation's id is a uuid the database mints (ADR 20260801's ``id uuid
+        /// PRIMARY KEY``), so it is not the client's to author and there is nothing here for it
+        /// to author. Sending one is a 422 for an unknown field — the same treatment
+        /// :class:`TournamentTableWrite` gives a venue table's id, and for the same reason. A
+        /// client that *cites* an id it was given is patching, not creating, and the shape for
+        /// that is :class:`ReservationUpsert`.
+        ///
+        /// Its ``name`` has a floor for the plainer reason: a reservation is *called*
+        /// something — it is what the director clicks, what the conflict warnings quote, and
+        /// what a player reads off a wall. ``""`` is not a name, and an event whose
+        /// reservations list is three blank rows is not a thing anyone could act on.
+        ///
+        /// ``position`` is absent for the same reason the id is: it is the server's to assign
+        /// (:data:`ReservationPosition`), so it is simply not a field of this model, and
+        /// ``extra="forbid"`` turns an attempt to send one into a 422 that names it. This is
+        /// the treatment ``entered`` already gets on the event schemas — a server-managed value
+        /// is kept **off** the write shape rather than accepted and then ignored. Accepting it
+        /// would be worse than useless in both directions: a client cannot tell from the schema
+        /// that the number it sent decided nothing, and a boundary that silently discards half
+        /// of a payload has to be documented to be understood. The order a client *does*
+        /// control is the order of the list itself.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReservationWrite`.
+        internal struct ReservationWrite: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReservationWrite/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReservationWrite/slot`.
+            internal var slot: Components.Schemas.Slot
+            /// - Remark: Generated from `#/components/schemas/ReservationWrite/table_ids`.
+            internal var tableIds: [Swift.String]
+            /// Creates a new `ReservationWrite`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - slot:
+            ///   - tableIds:
+            internal init(
+                name: Swift.String,
+                slot: Components.Schemas.Slot,
+                tableIds: [Swift.String]
+            ) {
+                self.name = name
+                self.slot = slot
+                self.tableIds = tableIds
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case name
+                case slot
+                case tableIds = "table_ids"
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.slot = try container.decode(
+                    Components.Schemas.Slot.self,
+                    forKey: .slot
+                )
+                self.tableIds = try container.decode(
+                    [Swift.String].self,
+                    forKey: .tableIds
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "slot",
+                    "table_ids"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/RoleCreate`.
         internal struct RoleCreate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/RoleCreate/name`.
@@ -9572,7 +9636,7 @@ internal enum Components {
         /// * ``error`` — why a ``failed`` run failed; ``null`` on every other status.
         ///
         /// ``overrunning`` is a *success qualifier*, not a status of its own: ``true`` only
-        /// on a ``succeeded`` run whose plan ran a fixture past its pool's **planned** window
+        /// on a ``succeeded`` run whose plan ran a fixture past its group's **planned** window
         /// end while the tournament is **live** — the window went soft so the day keeps being
         /// scheduled into the overrun instead of wedging "doesn't fit" (ADR "the solver stops
         /// wedging"). Always ``false`` pre-live (the window is a hard constraint) and on any
@@ -9582,7 +9646,7 @@ internal enum Components {
         /// ``infeasibility_reasons`` is **never null** — it is always a list, empty on
         /// every row that is not ``infeasible`` (so a client never null-checks it). An
         /// ``infeasible`` verdict carries the resolved, DB-humanized reasons the day
-        /// could not be scheduled (pool names, ``HH:MM`` window bounds, the integer
+        /// could not be scheduled (group names, ``HH:MM`` window bounds, the integer
         /// minutes to format) — including the pre-live ``past_window`` cause (ADR "a
         /// past day is named, not disguised"), which carries the offending venue-local
         /// ``date`` to move; every other row carries ``[]``. Parsed from the ledger's
@@ -9649,10 +9713,10 @@ internal enum Components {
                 case pastWindow(Components.Schemas.PastWindowReasonRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PlayerOverSubscribedRead`.
                 case playerOverSubscribed(Components.Schemas.PlayerOverSubscribedRead)
-                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolHasNoTablesRead`.
-                case poolHasNoTables(Components.Schemas.PoolHasNoTablesRead)
-                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/PoolOverCapacityRead`.
-                case poolOverCapacity(Components.Schemas.PoolOverCapacityRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/ReservationHasNoTablesRead`.
+                case reservationHasNoTables(Components.Schemas.ReservationHasNoTablesRead)
+                /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/ReservationOverCapacityRead`.
+                case reservationOverCapacity(Components.Schemas.ReservationOverCapacityRead)
                 /// - Remark: Generated from `#/components/schemas/ScheduleSolveRead/InfeasibilityReasonsPayload/WindowTooShortForMatchRead`.
                 case windowTooShortForMatch(Components.Schemas.WindowTooShortForMatchRead)
                 internal enum CodingKeys: String, CodingKey {
@@ -9671,10 +9735,10 @@ internal enum Components {
                         self = .pastWindow(try .init(from: decoder))
                     case "player_over_subscribed":
                         self = .playerOverSubscribed(try .init(from: decoder))
-                    case "pool_has_no_tables":
-                        self = .poolHasNoTables(try .init(from: decoder))
-                    case "pool_over_capacity":
-                        self = .poolOverCapacity(try .init(from: decoder))
+                    case "reservation_has_no_tables":
+                        self = .reservationHasNoTables(try .init(from: decoder))
+                    case "reservation_over_capacity":
+                        self = .reservationOverCapacity(try .init(from: decoder))
                     case "window_too_short_for_match":
                         self = .windowTooShortForMatch(try .init(from: decoder))
                     default:
@@ -9693,9 +9757,9 @@ internal enum Components {
                         try value.encode(to: encoder)
                     case let .playerOverSubscribed(value):
                         try value.encode(to: encoder)
-                    case let .poolHasNoTables(value):
+                    case let .reservationHasNoTables(value):
                         try value.encode(to: encoder)
-                    case let .poolOverCapacity(value):
+                    case let .reservationOverCapacity(value):
                         try value.encode(to: encoder)
                     case let .windowTooShortForMatch(value):
                         try value.encode(to: encoder)
@@ -10049,16 +10113,17 @@ internal enum Components {
             case feasible = "feasible"
             case infeasible = "infeasible"
         }
-        /// One entry's line in a pool's standings (ADR-0788), at its settled rank.
+        /// One entry's line in a group's standings (ADR-0788), at its settled rank.
         ///
         /// The entry is carried as an **id only**, exactly as a fixture carries its sides: the
         /// username behind ``entry_id`` is on the event's ``entrants`` list already, keyed by
         /// that same id, so a client joins the two rather than reading a copy that could drift.
         ///
-        /// ``rank`` is 1-based and distinct per row — the pool's order is total (wins → two-way
-        /// head-to-head → game difference → games won → id), so position 1 is the leader.
-        /// ``game_difference`` (``games_won - games_lost``) rides along because it is the third
-        /// tiebreaker and a client shows it in the table; it is a pure function of the two game
+        /// ``rank`` is 1-based and distinct per row — the group's order is total (wins →
+        /// two-way head-to-head → game difference → games won → id), so position 1 is the
+        /// leader. ``game_difference`` (``games_won - games_lost``) rides along because it is
+        /// the third tiebreaker and a client shows it in the table; it is a pure function of
+        /// the two game
         /// counts beside it, computed once on the server so the two cannot disagree.
         ///
         /// - Remark: Generated from `#/components/schemas/StandingRowRead`.
@@ -10126,15 +10191,15 @@ internal enum Components {
         /// The **standings** shape of an event's results (ADR-0788) — the round-robin arm
         /// of the ``results`` discriminated union, tagged ``kind: "standings"``.
         ///
-        /// A standings table per pool, whether the whole event is decided, and its champion
+        /// A standings table per group, whether the whole event is decided, and its champion
         /// when there is one. It rides on the tournament-detail payload (one endpoint per page)
         /// and is **derived live** from the fixtures' currently-completed matches — never a
         /// snapshot — so a corrected or voided match re-orders the standings the instant it
         /// leaves ``completed``.
         ///
-        /// ``champion`` is the leader of a **complete, single-pool** event — a pure
-        /// round-robin's winner. A multi-pool round-robin has no single champion without a
-        /// knockout stage to join its pool winners, so it is ``null`` there even when
+        /// ``champion`` is the leader of a **complete, single-group** event — a pure
+        /// round-robin's winner. A multi-group round-robin has no single champion without a
+        /// knockout stage to join its group winners, so it is ``null`` there even when
         /// ``complete``; and ``null`` while any fixture is still to be played. An event that
         /// *does* have a knockout stage to join them is a ``rr-then-ko`` draw, which reads out
         /// as the ``standings_then_finishes`` arm below and is crowned from its bracket — a
@@ -10148,8 +10213,8 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/kind`.
             internal var kind: Components.Schemas.StandingsResultsRead.KindPayload?
-            /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/pools`.
-            internal var pools: [Components.Schemas.PoolStandingsRead]
+            /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/groups`.
+            internal var groups: [Components.Schemas.GroupStandingsRead]
             /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/complete`.
             internal var complete: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/StandingsResultsRead/champion`.
@@ -10158,23 +10223,23 @@ internal enum Components {
             ///
             /// - Parameters:
             ///   - kind:
-            ///   - pools:
+            ///   - groups:
             ///   - complete:
             ///   - champion:
             internal init(
                 kind: Components.Schemas.StandingsResultsRead.KindPayload? = nil,
-                pools: [Components.Schemas.PoolStandingsRead],
+                groups: [Components.Schemas.GroupStandingsRead],
                 complete: Swift.Bool,
                 champion: Swift.String? = nil
             ) {
                 self.kind = kind
-                self.pools = pools
+                self.groups = groups
                 self.complete = complete
                 self.champion = champion
             }
             internal enum CodingKeys: String, CodingKey {
                 case kind
-                case pools
+                case groups
                 case complete
                 case champion
             }
@@ -10183,8 +10248,8 @@ internal enum Components {
         /// round-robin-then-knockout arm of the ``results`` discriminated union, tagged
         /// ``kind: "standings_then_finishes"``.
         ///
-        /// One block per stage: ``pools`` is the pool stage's standings, exactly the
-        /// :class:`PoolStandingsRead` a round-robin event reads out, and ``finishes`` is the
+        /// One block per stage: ``groups`` is the group stage's standings, exactly the
+        /// :class:`GroupStandingsRead` a round-robin event reads out, and ``finishes`` is the
         /// knockout stage's ranked :class:`FinishRowRead`\ s, exactly the ones a
         /// single-elimination event reads out. They are the *same* models rather than
         /// two-stage-flavoured near-copies, so a client renders each stage with the panel it
@@ -10195,10 +10260,10 @@ internal enum Components {
         /// existing two arms are read, forcing round-robin and single-elim client changes that
         /// buy nothing.
         ///
-        /// ``champion`` is the **knockout final's winner, never a pool leader** — the pool
-        /// stage only seeds the bracket, so topping a pool wins nothing — and ``null`` until
+        /// ``champion`` is the **knockout final's winner, never a group leader** — the group
+        /// stage only seeds the bracket, so topping a group wins nothing — and ``null`` until
         /// that final is decided. ``complete`` is **both stages decided**. Live and partial
-        /// like every other results shape: the pool tables fill in as pool matches land, and
+        /// like every other results shape: the group tables fill in as group matches land, and
         /// the finishes list grows as the bracket is played out.
         ///
         /// - Remark: Generated from `#/components/schemas/StandingsThenFinishesResultsRead`.
@@ -10209,8 +10274,8 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/StandingsThenFinishesResultsRead/kind`.
             internal var kind: Components.Schemas.StandingsThenFinishesResultsRead.KindPayload?
-            /// - Remark: Generated from `#/components/schemas/StandingsThenFinishesResultsRead/pools`.
-            internal var pools: [Components.Schemas.PoolStandingsRead]
+            /// - Remark: Generated from `#/components/schemas/StandingsThenFinishesResultsRead/groups`.
+            internal var groups: [Components.Schemas.GroupStandingsRead]
             /// - Remark: Generated from `#/components/schemas/StandingsThenFinishesResultsRead/finishes`.
             internal var finishes: [Components.Schemas.FinishRowRead]
             /// - Remark: Generated from `#/components/schemas/StandingsThenFinishesResultsRead/complete`.
@@ -10221,26 +10286,26 @@ internal enum Components {
             ///
             /// - Parameters:
             ///   - kind:
-            ///   - pools:
+            ///   - groups:
             ///   - finishes:
             ///   - complete:
             ///   - champion:
             internal init(
                 kind: Components.Schemas.StandingsThenFinishesResultsRead.KindPayload? = nil,
-                pools: [Components.Schemas.PoolStandingsRead],
+                groups: [Components.Schemas.GroupStandingsRead],
                 finishes: [Components.Schemas.FinishRowRead],
                 complete: Swift.Bool,
                 champion: Swift.String? = nil
             ) {
                 self.kind = kind
-                self.pools = pools
+                self.groups = groups
                 self.finishes = finishes
                 self.complete = complete
                 self.champion = champion
             }
             internal enum CodingKeys: String, CodingKey {
                 case kind
-                case pools
+                case groups
                 case finishes
                 case complete
                 case champion
@@ -10252,7 +10317,7 @@ internal enum Components {
             case live = "live"
             case final = "final"
         }
-        /// One entry's line in a **swiss** table: every column a pool's row carries, plus
+        /// One entry's line in a **swiss** table: every column a group's row carries, plus
         /// the **Buchholz** figure that ordered it.
         ///
         /// ``buchholz`` is the sum of this entrant's opponents' win counts — the wins column
@@ -10338,14 +10403,14 @@ internal enum Components {
                 case gameDifference = "game_difference"
             }
         }
-        /// The **pool-less standings** shape of an event's results — the swiss arm of the
+        /// The **group-less standings** shape of an event's results — the swiss arm of the
         /// ``results`` discriminated union, tagged ``kind: "swiss_standings"`` (ADR "swiss
         /// pre-cuts every round and pairs each one on advance").
         ///
-        /// One table over the whole field, because swiss has no pools: everybody is ranked
+        /// One table over the whole field, because swiss has no groups: everybody is ranked
         /// against everybody, which is what pairing by score is for. The rows are a
         /// :class:`StandingRowRead` plus one column (:class:`SwissStandingRowRead`), and they
-        /// arrive as one list rather than grouped under a pool — both facts about the format
+        /// arrive as one list rather than grouped under a group — both facts about the format
         /// rather than a second row shape.
         ///
         /// The order is swiss's own chain: wins, head-to-head when exactly two are tied **and
@@ -10357,7 +10422,7 @@ internal enum Components {
         /// ``complete`` is every round decided, including the later rounds that are cut up
         /// front with their sides still unknown. ``champion`` is the leader of a complete
         /// event — a swiss ranks its whole field, so unlike the round-robin arm there is no
-        /// multi-pool carve-out — and ``null`` until then. Derived live from the fixtures'
+        /// multi-group carve-out — and ``null`` until then. Derived live from the fixtures'
         /// completed matches like every other results shape.
         ///
         /// - Remark: Generated from `#/components/schemas/SwissStandingsResultsRead`.
@@ -10864,8 +10929,8 @@ internal enum Components {
             internal var format: Components.Schemas.EventFormat
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/draw_type`.
             internal var drawType: Components.Schemas.DrawType
-            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/qualifiers_per_pool`.
-            internal var qualifiersPerPool: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/qualifiers_per_group`.
+            internal var qualifiersPerGroup: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/rounds`.
             internal var rounds: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/max_players`.
@@ -10880,15 +10945,15 @@ internal enum Components {
             internal var matchSettings: Components.Schemas.MatchSettings
             /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/predicates`.
             internal var predicates: [Components.Schemas.Predicate]?
-            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/pools`.
-            internal var pools: [Components.Schemas.PoolWrite]?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventCreate/reservations`.
+            internal var reservations: [Components.Schemas.ReservationWrite]?
             /// Creates a new `TournamentEventCreate`.
             ///
             /// - Parameters:
             ///   - name:
             ///   - format:
             ///   - drawType:
-            ///   - qualifiersPerPool:
+            ///   - qualifiersPerGroup:
             ///   - rounds:
             ///   - maxPlayers:
             ///   - entryFee:
@@ -10896,12 +10961,12 @@ internal enum Components {
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
-            ///   - pools:
+            ///   - reservations:
             internal init(
                 name: Swift.String,
                 format: Components.Schemas.EventFormat,
                 drawType: Components.Schemas.DrawType,
-                qualifiersPerPool: Swift.Int? = nil,
+                qualifiersPerGroup: Swift.Int? = nil,
                 rounds: Swift.Int? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
@@ -10909,12 +10974,12 @@ internal enum Components {
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate]? = nil,
-                pools: [Components.Schemas.PoolWrite]? = nil
+                reservations: [Components.Schemas.ReservationWrite]? = nil
             ) {
                 self.name = name
                 self.format = format
                 self.drawType = drawType
-                self.qualifiersPerPool = qualifiersPerPool
+                self.qualifiersPerGroup = qualifiersPerGroup
                 self.rounds = rounds
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
@@ -10922,13 +10987,13 @@ internal enum Components {
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
-                self.pools = pools
+                self.reservations = reservations
             }
             internal enum CodingKeys: String, CodingKey {
                 case name
                 case format
                 case drawType = "draw_type"
-                case qualifiersPerPool = "qualifiers_per_pool"
+                case qualifiersPerGroup = "qualifiers_per_group"
                 case rounds
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
@@ -10936,7 +11001,7 @@ internal enum Components {
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
-                case pools
+                case reservations
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -10952,9 +11017,9 @@ internal enum Components {
                     Components.Schemas.DrawType.self,
                     forKey: .drawType
                 )
-                self.qualifiersPerPool = try container.decodeIfPresent(
+                self.qualifiersPerGroup = try container.decodeIfPresent(
                     Swift.Int.self,
-                    forKey: .qualifiersPerPool
+                    forKey: .qualifiersPerGroup
                 )
                 self.rounds = try container.decodeIfPresent(
                     Swift.Int.self,
@@ -10984,15 +11049,15 @@ internal enum Components {
                     [Components.Schemas.Predicate].self,
                     forKey: .predicates
                 )
-                self.pools = try container.decodeIfPresent(
-                    [Components.Schemas.PoolWrite].self,
-                    forKey: .pools
+                self.reservations = try container.decodeIfPresent(
+                    [Components.Schemas.ReservationWrite].self,
+                    forKey: .reservations
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "format",
                     "draw_type",
-                    "qualifiers_per_pool",
+                    "qualifiers_per_group",
                     "rounds",
                     "max_players",
                     "entry_fee",
@@ -11000,7 +11065,7 @@ internal enum Components {
                     "slot",
                     "match_settings",
                     "predicates",
-                    "pools"
+                    "reservations"
                 ])
             }
         }
@@ -11016,8 +11081,8 @@ internal enum Components {
             internal var format: Components.Schemas.EventFormat
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/draw_type`.
             internal var drawType: Components.Schemas.DrawType
-            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/qualifiers_per_pool`.
-            internal var qualifiersPerPool: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/qualifiers_per_group`.
+            internal var qualifiersPerGroup: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/rounds`.
             internal var rounds: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/max_players`.
@@ -11032,8 +11097,10 @@ internal enum Components {
             internal var matchSettings: Components.Schemas.MatchSettings
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/predicates`.
             internal var predicates: [Components.Schemas.Predicate]
-            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/pools`.
-            internal var pools: [Components.Schemas.Pool]
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/groups`.
+            internal var groups: [Components.Schemas.GroupRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/reservations`.
+            internal var reservations: [Components.Schemas.Reservation]
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/stages`.
             internal var stages: [Components.Schemas.EventStageRead]
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/created_at`.
@@ -11156,7 +11223,7 @@ internal enum Components {
             ///   - name:
             ///   - format:
             ///   - drawType:
-            ///   - qualifiersPerPool:
+            ///   - qualifiersPerGroup:
             ///   - rounds:
             ///   - maxPlayers:
             ///   - entryFee:
@@ -11164,7 +11231,8 @@ internal enum Components {
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
-            ///   - pools:
+            ///   - groups:
+            ///   - reservations:
             ///   - stages:
             ///   - createdAt:
             ///   - updatedAt:
@@ -11179,7 +11247,7 @@ internal enum Components {
                 name: Swift.String,
                 format: Components.Schemas.EventFormat,
                 drawType: Components.Schemas.DrawType,
-                qualifiersPerPool: Swift.Int? = nil,
+                qualifiersPerGroup: Swift.Int? = nil,
                 rounds: Swift.Int? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double,
@@ -11187,7 +11255,8 @@ internal enum Components {
                 slot: Components.Schemas.Slot,
                 matchSettings: Components.Schemas.MatchSettings,
                 predicates: [Components.Schemas.Predicate],
-                pools: [Components.Schemas.Pool],
+                groups: [Components.Schemas.GroupRead],
+                reservations: [Components.Schemas.Reservation],
                 stages: [Components.Schemas.EventStageRead],
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
@@ -11202,7 +11271,7 @@ internal enum Components {
                 self.name = name
                 self.format = format
                 self.drawType = drawType
-                self.qualifiersPerPool = qualifiersPerPool
+                self.qualifiersPerGroup = qualifiersPerGroup
                 self.rounds = rounds
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
@@ -11210,7 +11279,8 @@ internal enum Components {
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
-                self.pools = pools
+                self.groups = groups
+                self.reservations = reservations
                 self.stages = stages
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
@@ -11226,7 +11296,7 @@ internal enum Components {
                 case name
                 case format
                 case drawType = "draw_type"
-                case qualifiersPerPool = "qualifiers_per_pool"
+                case qualifiersPerGroup = "qualifiers_per_group"
                 case rounds
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
@@ -11234,7 +11304,8 @@ internal enum Components {
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
-                case pools
+                case groups
+                case reservations
                 case stages
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
@@ -11247,9 +11318,9 @@ internal enum Components {
         }
         /// Partial update for an event. Absent fields are unchanged. Every column
         /// these fields back except ``max_players`` — ``name``/``format``/``draw_type``/
-        /// ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
+        /// ``entry_fee``/``slot``/``match_settings``/``predicates``/``reservations`` — is NOT
         /// NULL, so an explicit ``null`` on any of *those* is rejected (422).
-        /// ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
+        /// ``predicates``/``reservations`` replace wholesale when present. ``entered`` is not
         /// updatable — it is derived from the event's active entries, not stored — so
         /// sending it is a 422 via ``extra="forbid"``.
         ///
@@ -11309,8 +11380,8 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/draw_type`.
             internal var drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload?
-            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/qualifiers_per_pool`.
-            internal var qualifiersPerPool: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/qualifiers_per_group`.
+            internal var qualifiersPerGroup: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/rounds`.
             internal var rounds: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/max_players`.
@@ -11361,15 +11432,15 @@ internal enum Components {
             internal var matchSettings: Components.Schemas.TournamentEventUpdate.MatchSettingsPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/predicates`.
             internal var predicates: [Components.Schemas.Predicate]?
-            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/pools`.
-            internal var pools: [Components.Schemas.PoolUpsert]?
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/reservations`.
+            internal var reservations: [Components.Schemas.ReservationUpsert]?
             /// Creates a new `TournamentEventUpdate`.
             ///
             /// - Parameters:
             ///   - name:
             ///   - format:
             ///   - drawType:
-            ///   - qualifiersPerPool:
+            ///   - qualifiersPerGroup:
             ///   - rounds:
             ///   - maxPlayers:
             ///   - entryFee:
@@ -11377,12 +11448,12 @@ internal enum Components {
             ///   - slot:
             ///   - matchSettings:
             ///   - predicates:
-            ///   - pools:
+            ///   - reservations:
             internal init(
                 name: Swift.String? = nil,
                 format: Components.Schemas.TournamentEventUpdate.FormatPayload? = nil,
                 drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload? = nil,
-                qualifiersPerPool: Swift.Int? = nil,
+                qualifiersPerGroup: Swift.Int? = nil,
                 rounds: Swift.Int? = nil,
                 maxPlayers: Swift.Int? = nil,
                 entryFee: Swift.Double? = nil,
@@ -11390,12 +11461,12 @@ internal enum Components {
                 slot: Components.Schemas.TournamentEventUpdate.SlotPayload? = nil,
                 matchSettings: Components.Schemas.TournamentEventUpdate.MatchSettingsPayload? = nil,
                 predicates: [Components.Schemas.Predicate]? = nil,
-                pools: [Components.Schemas.PoolUpsert]? = nil
+                reservations: [Components.Schemas.ReservationUpsert]? = nil
             ) {
                 self.name = name
                 self.format = format
                 self.drawType = drawType
-                self.qualifiersPerPool = qualifiersPerPool
+                self.qualifiersPerGroup = qualifiersPerGroup
                 self.rounds = rounds
                 self.maxPlayers = maxPlayers
                 self.entryFee = entryFee
@@ -11403,13 +11474,13 @@ internal enum Components {
                 self.slot = slot
                 self.matchSettings = matchSettings
                 self.predicates = predicates
-                self.pools = pools
+                self.reservations = reservations
             }
             internal enum CodingKeys: String, CodingKey {
                 case name
                 case format
                 case drawType = "draw_type"
-                case qualifiersPerPool = "qualifiers_per_pool"
+                case qualifiersPerGroup = "qualifiers_per_group"
                 case rounds
                 case maxPlayers = "max_players"
                 case entryFee = "entry_fee"
@@ -11417,7 +11488,7 @@ internal enum Components {
                 case slot
                 case matchSettings = "match_settings"
                 case predicates
-                case pools
+                case reservations
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -11433,9 +11504,9 @@ internal enum Components {
                     Components.Schemas.TournamentEventUpdate.DrawTypePayload.self,
                     forKey: .drawType
                 )
-                self.qualifiersPerPool = try container.decodeIfPresent(
+                self.qualifiersPerGroup = try container.decodeIfPresent(
                     Swift.Int.self,
-                    forKey: .qualifiersPerPool
+                    forKey: .qualifiersPerGroup
                 )
                 self.rounds = try container.decodeIfPresent(
                     Swift.Int.self,
@@ -11465,15 +11536,15 @@ internal enum Components {
                     [Components.Schemas.Predicate].self,
                     forKey: .predicates
                 )
-                self.pools = try container.decodeIfPresent(
-                    [Components.Schemas.PoolUpsert].self,
-                    forKey: .pools
+                self.reservations = try container.decodeIfPresent(
+                    [Components.Schemas.ReservationUpsert].self,
+                    forKey: .reservations
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "format",
                     "draw_type",
-                    "qualifiers_per_pool",
+                    "qualifiers_per_group",
                     "rounds",
                     "max_players",
                     "entry_fee",
@@ -11481,7 +11552,7 @@ internal enum Components {
                     "slot",
                     "match_settings",
                     "predicates",
-                    "pools"
+                    "reservations"
                 ])
             }
         }
@@ -11493,10 +11564,11 @@ internal enum Components {
         ///
         /// **Soft, deliberately — with one exception.** ``scheduled_start`` is a *prediction*,
         /// not a commitment, and three of the placement's four constraints — the table belongs
-        /// to the fixture's pool, the time falls inside the pool's window, nothing is
-        /// double-booked — are **flags derived on read, not invariants** (ADR-0790). So this
-        /// write does **not** reject an out-of-window time or an off-pool table. They save.
-        /// Conflict detection is the scheduler's business, not this boundary's.
+        /// to the fixture's group's reservation, the time falls inside that reservation's
+        /// window, nothing is double-booked — are **flags derived on read, not invariants**
+        /// (ADR-0790). So this write does **not** reject an out-of-window time or an off-group
+        /// table. They save. Conflict detection is the scheduler's business, not this
+        /// boundary's.
         ///
         /// The exception is the fourth claim: **the table has to exist**. ``table_id`` names a
         /// ``TournamentTable.id`` in the tournament's ``table_catalogue``, and since the
@@ -11510,10 +11582,10 @@ internal enum Components {
         /// is a dangling pointer nothing downstream can render.
         ///
         /// The field carries the id's canonical **text** rather than a typed UUID, which is
-        /// also what a pool's ``table_ids`` carry — one representation for a table id, moved in
-        /// one piece rather than a field at a time. A value that is not a well-formed id is
-        /// therefore refused by the same 422 as an unknown one: there is one question here
-        /// ("does this name a table of this tournament?") and it gets one answer.
+        /// also what a reservation's ``table_ids`` carry — one representation for a table id,
+        /// moved in one piece rather than a field at a time. A value that is not a well-formed
+        /// id is therefore refused by the same 422 as an unknown one: there is one question
+        /// here ("does this name a table of this tournament?") and it gets one answer.
         ///
         /// The one thing the *route* refuses is moving a fixture whose linked match is
         /// ``completed`` or ``voided``: its placement is history (409). A fixture with no match
@@ -11565,11 +11637,23 @@ internal enum Components {
             }
         }
         /// One planned pairing of an event's draw (ADR-0786): a round and a position —
-        /// plus a pool, when the draw is pooled — whose sides may still be unknown.
+        /// plus a group, when the draw is grouped — whose sides may still be unknown.
         ///
         /// A fixture is **not** a match. It materializes into one at go-live (#788): once the
         /// tournament is ``live``, every ready fixture becomes a real ``in_progress`` match and
         /// gains a ``match_id``. Until then ``match_id`` (and ``match_status``) is ``null``.
+        ///
+        /// ``stage_id`` names the **stage** (``EventStageRead``, on the event's ``stages``
+        /// array) this fixture belongs to (ADR 20260815 decision 5) — **never** ``null``, the
+        /// same NOT NULL guarantee the column carries in the database. A client no longer
+        /// infers a fixture's stage from ``group_id`` plus the event's overall ``draw_type``:
+        /// that inference is exactly what once rendered a swiss draw's rounds as a knockout
+        /// bracket, because both are un-grouped and indistinguishable by ``group_id`` alone.
+        /// Join this id against the matching entry in ``stages`` to read that stage's own
+        /// ``draw_type`` — which is always one of the single-stage kinds (``round-robin`` /
+        /// ``single-elim`` / ``swiss``), never ``rr-then-ko`` (a template name, not a runnable
+        /// stage's own type) — and that answers "is this un-grouped block a bracket or a set of
+        /// swiss rounds?" without guessing from the event's shape.
         ///
         /// **Every ``null`` on this model is a fact, not a missing field**, and a client that
         /// dropped them would lose the draw's whole point:
@@ -11587,16 +11671,19 @@ internal enum Components {
         ///   fixture has not materialized. It rides on the fixture so a bracket shows a slot's
         ///   state without a per-slot round-trip; it is the match's *current* status, read
         ///   live, not a copy frozen at go-live.
-        /// * ``pool_id`` — ``null`` means this fixture belongs to no pool: the draw is
-        ///   un-pooled (single-elim), or this is the KO stage of an rr-then-ko event. When
-        ///   set, it names a pool of **this same event**, and it is guaranteed to: the column
-        ///   is half of a composite foreign key onto ``tournament_event_pools (event_id, id)``,
-        ///   so it is neither a dangling ref nor another event's pool (ADR 20260801).
+        /// * ``group_id`` — ``null`` means this fixture belongs to no group: **which stage
+        ///   leaves fixtures un-grouped is no longer this field's business to say** — read
+        ///   ``stage_id`` against the event's ``stages`` array for that (ADR 20260815). When
+        ///   set, it names a group of **this fixture's own stage**, and it is guaranteed to:
+        ///   the column is half of a composite foreign key onto
+        ///   ``tournament_event_stage_groups (stage_id, id)``, so it is neither a dangling ref
+        ///   nor another stage's group (ADR 20260801, re-parented onto the stage by ADR
+        ///   20260815).
         /// * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
         ///   **unassigned to a table**. When set, it names a ``TournamentTable`` in the
         ///   tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
         ///   foreign key, so this is never a dangling ref (ADR 20260801). Carried as the id's
-        ///   text, the same form a pool's ``table_ids`` carry.
+        ///   text, the same form a group's ``table_ids`` carry.
         /// * ``scheduled_start`` — the placement's **predicted** start: ``null`` means
         ///   **unscheduled**. When set, a :class:`FixtureTimeRead` (see it) — a venue-local
         ///   label + tz abbrev for display, plus the raw UTC instant for geometry — composed
@@ -11629,8 +11716,10 @@ internal enum Components {
         internal struct TournamentFixtureRead: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/id`.
             internal var id: Swift.String
-            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pool_id`.
-            internal var poolId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/stage_id`.
+            internal var stageId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/group_id`.
+            internal var groupId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/round`.
             internal var round: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/position`.
@@ -11731,7 +11820,8 @@ internal enum Components {
             ///
             /// - Parameters:
             ///   - id:
-            ///   - poolId:
+            ///   - stageId:
+            ///   - groupId:
             ///   - round:
             ///   - position:
             ///   - entryAId:
@@ -11746,7 +11836,8 @@ internal enum Components {
             ///   - completedAt:
             internal init(
                 id: Swift.String,
-                poolId: Swift.String? = nil,
+                stageId: Swift.String,
+                groupId: Swift.String? = nil,
                 round: Swift.Int,
                 position: Swift.Int,
                 entryAId: Swift.String? = nil,
@@ -11761,7 +11852,8 @@ internal enum Components {
                 completedAt: Components.Schemas.TournamentFixtureRead.CompletedAtPayload? = nil
             ) {
                 self.id = id
-                self.poolId = poolId
+                self.stageId = stageId
+                self.groupId = groupId
                 self.round = round
                 self.position = position
                 self.entryAId = entryAId
@@ -11777,7 +11869,8 @@ internal enum Components {
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
-                case poolId = "pool_id"
+                case stageId = "stage_id"
+                case groupId = "group_id"
                 case round
                 case position
                 case entryAId = "entry_a_id"
@@ -11916,13 +12009,13 @@ internal enum Components {
         /// plus the ``id`` the server minted for it.
         ///
         /// Deriving it from :class:`TournamentTableWrite` keeps the two shapes one shape plus
-        /// a field, exactly as :class:`Pool` derives from :class:`PoolWrite`: a column added to
-        /// the write side is readable without a second edit, and the two can never disagree
-        /// about what a table *is*.
+        /// a field, exactly as :class:`Reservation` derives from :class:`ReservationWrite`: a
+        /// column added to the write side is readable without a second edit, and the two can
+        /// never disagree about what a table *is*.
         ///
-        /// ``id`` is a UUID — the ``tournament_tables`` row's primary key. It is what a pool's
-        /// ``table_ids`` and a fixture's ``table_id`` name, and (from the fixture side) what a
-        /// foreign key will hold.
+        /// ``id`` is a UUID — the ``tournament_tables`` row's primary key. It is what a
+        /// reservation's ``table_ids`` and a fixture's ``table_id`` name, and (from the fixture
+        /// side) what a foreign key will hold.
         ///
         /// - Remark: Generated from `#/components/schemas/TournamentTable`.
         internal struct TournamentTable: Codable, Hashable, Sendable {
@@ -11982,9 +12075,9 @@ internal enum Components {
         /// The two cases are exhaustive and mean different things:
         ///
         /// * ``id`` **present** — "this is the table you already have, with these words". The
-        ///   row keeps its id (and therefore every pool ``table_ids`` entry and every fixture
-        ///   ``table_id`` that names it) and takes the new ``label``/``court``, and its place
-        ///   in the list is its new place in the catalogue's order.
+        ///   row keeps its id (and therefore every reservation's ``table_ids`` entry and every
+        ///   fixture ``table_id`` that names it) and takes the new ``label``/``court``, and its
+        ///   place in the list is its new place in the catalogue's order.
         /// * ``id`` **omitted** (or ``null``) — "add a table". The server mints its id, exactly
         ///   as on create.
         /// * a stored table **no entry names** — "remove it". Which is the whole reason this
@@ -12064,7 +12157,7 @@ internal enum Components {
         /// A table is a row now (ADR 20260801, "a placement names a real table"), and its id
         /// is minted by the database (``gen_random_uuid()``). So the id is simply not a field
         /// of this model, and ``extra="forbid"`` turns an attempt to send one into a 422 that
-        /// names it — the treatment :class:`PoolWrite` gives ``position`` and the event
+        /// names it — the treatment :class:`ReservationWrite` gives ``position`` and the event
         /// schemas give ``entered``. A server-managed value is kept **off** the write shape
         /// rather than accepted and then ignored: a client cannot tell from the schema that the
         /// id it sent decided nothing, and a boundary that silently discards half of a payload
@@ -12185,7 +12278,8 @@ internal enum Components {
         /// whole edit is refused with a ``409`` naming the table, and nothing is written. Set
         /// ``true``, the removal goes through and those matches are unplaced — table, predicted
         /// start and pin all cleared — which is why it is said on purpose (ADR 20260801). A
-        /// table that only a *pool* reserves needs no opt-in: the pool reserves one fewer.
+        /// table that only a *reservation* reserves needs no opt-in: the reservation reserves
+        /// one fewer.
         ///
         /// ``league_id`` is updatable, but **only while the tournament is ``draft``**
         /// (ADR-0783): once it is published, registration is open and eligibility is live,
@@ -12495,9 +12589,9 @@ internal enum Components {
                 case meetings
             }
         }
-        /// A single fixture whose pool window cannot hold even one match: its
-        /// ``best_of`` match needs ``needed_min`` minutes but the window spans only
-        /// ``window_span_min``. Resolved: the pool ``name``, which kind of
+        /// A single fixture whose reservation window cannot hold even one match:
+        /// its ``best_of`` match needs ``needed_min`` minutes but the window spans
+        /// only ``window_span_min``. Resolved: the reservation ``name``, which kind of
         /// ``reservation`` it is, and its ``HH:MM`` window bounds; the minutes pass
         /// through as integers for the client to format.
         ///
@@ -12509,11 +12603,11 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/kind`.
             internal var kind: Components.Schemas.WindowTooShortForMatchRead.KindPayload?
-            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/pool_name`.
-            internal var poolName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/reservation_name`.
+            internal var reservationName: Swift.String
             /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/reservation`.
             internal enum ReservationPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case pool = "pool"
+                case booked = "booked"
                 case event = "event"
             }
             /// - Remark: Generated from `#/components/schemas/WindowTooShortForMatchRead/reservation`.
@@ -12539,7 +12633,7 @@ internal enum Components {
             ///
             /// - Parameters:
             ///   - kind:
-            ///   - poolName:
+            ///   - reservationName:
             ///   - reservation:
             ///   - windowStart:
             ///   - windowEnd:
@@ -12548,7 +12642,7 @@ internal enum Components {
             ///   - windowSpanMin:
             internal init(
                 kind: Components.Schemas.WindowTooShortForMatchRead.KindPayload? = nil,
-                poolName: Swift.String,
+                reservationName: Swift.String,
                 reservation: Components.Schemas.WindowTooShortForMatchRead.ReservationPayload? = nil,
                 windowStart: Swift.String,
                 windowEnd: Swift.String,
@@ -12557,7 +12651,7 @@ internal enum Components {
                 windowSpanMin: Swift.Int
             ) {
                 self.kind = kind
-                self.poolName = poolName
+                self.reservationName = reservationName
                 self.reservation = reservation
                 self.windowStart = windowStart
                 self.windowEnd = windowEnd
@@ -12567,7 +12661,7 @@ internal enum Components {
             }
             internal enum CodingKeys: String, CodingKey {
                 case kind
-                case poolName = "pool_name"
+                case reservationName = "reservation_name"
                 case reservation
                 case windowStart = "window_start"
                 case windowEnd = "window_end"
@@ -23165,8 +23259,8 @@ internal enum Operations {
     /// `unplace_fixtures_on_removed_tables: true`: the table is removed and those matches
     /// are unplaced — table, predicted start and call all cleared — which is a thing worth
     /// saying on purpose rather than a silent side effect of editing the venue. Removing a
-    /// table that only a *pool* reserves needs no confirmation and produces no refusal; the
-    /// pool simply reserves one fewer.
+    /// table that only a *reservation* reserves needs no confirmation and produces no
+    /// refusal; the reservation simply reserves one fewer.
     ///
     /// **`address` has three cases and the value alone cannot tell them apart.** Omit it to
     /// leave the venue and its coordinates untouched; send a real address to move the venue
@@ -23981,34 +24075,39 @@ internal enum Operations {
     /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     /// sent.
     ///
-    /// **`pools` is an id-keyed diff, sent in full and in order.** Each entry either
-    /// carries the `id` of a pool this event already has — keeping that pool, with the
+    /// **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
+    /// carries the `id` of a reservation this event already has — keeping it, with the
     /// `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
-    /// to add a new pool, whose id the server mints. **A pool no entry names is removed.**
-    /// Send back the pools you read, edited: the ids came from the read, and naming an id
-    /// this event does not have is a `422` on that entry. Citing the same pool twice is a
-    /// `422` too — a pool id identifies one pool, and the fixtures of a draw name their
-    /// pool by it.
+    /// to add a new reservation, whose id the server mints. **A reservation no entry names
+    /// is removed.** The server keeps one `groups` entry per reservation in lockstep, so
+    /// adding, removing or reordering a reservation adds, removes or reorders its mapped
+    /// group the same way. Send back the reservations you read, edited: the ids came from
+    /// the read, and naming an id this event does not have is a `422` on that entry.
+    /// Citing the same reservation twice is a `422` too — a reservation id identifies one
+    /// reservation, and a group's own reservation is one of them.
     ///
     /// **Once the event's draw is cut, two things freeze** (ADR-0786) — the facts its
     /// fixtures were derived from:
     ///
-    /// * **its set of pools.** A `pools` payload must cite exactly the pools the event
-    ///   already has, or it is refused with a `409`: a removed pool would leave the
-    ///   fixtures drawn into it pointing at nothing, and an added one would arrive with no
-    ///   fixtures, since the draw was dealt across the pools that existed at the cut.
-    ///   Re-ordering them, and editing each one, are still allowed.
+    /// * **its set of groups, in order.** A `reservations` payload must cite exactly the
+    ///   reservations mapped to the groups the event already has, in the order they
+    ///   already stand, or it is refused with a `409`: a removed group would leave the
+    ///   fixtures drawn into it pointing at nothing, an added one would arrive with no
+    ///   fixtures (the draw was dealt across the groups that existed at the cut), and a
+    ///   reorder would relabel which group counts as "first" for a knockout bracket's
+    ///   qualifier seats mid-draw. Editing each reservation's `name`, `slot` and
+    ///   `table_ids` in place is still allowed.
     /// * **its `draw_type`.** The draw type chose the strategy that dealt those fixtures,
     ///   so changing it under a standing draw is a `409` too: the event would claim a shape
     ///   its draw does not have. Re-sending the draw type the event already has is not a
     ///   change, and is not refused.
     ///
     /// Nothing else freezes. The event's name, fee, rules and `max_players`, and each
-    /// pool's `table_ids`, `slot` and `name`, all stay editable with a draw standing —
-    /// venues change under a running tournament, and recording that must never cost a
-    /// director the draw. To change the pools themselves or the draw type, remove the draw
-    /// (`DELETE …/draw`), edit, and cut again. With no draw cut, `pools` and `draw_type`
-    /// are ordinary fields.
+    /// reservation's `table_ids`, `slot` and `name`, all stay editable with a draw
+    /// standing — venues change under a running tournament, and recording that must never
+    /// cost a director the draw. To change the groups themselves or the draw type, remove
+    /// the draw (`DELETE …/draw`), edit, and cut again. With no draw cut, `reservations`
+    /// and `draw_type` are ordinary fields.
     ///
     /// Owner-only.
     ///
@@ -24837,7 +24936,7 @@ internal enum Operations {
     /// with them.
     ///
     /// Cutting is an explicit, reviewable act, and it is **not** tied to the tournament's
-    /// status: a draw may be cut and re-cut freely while a director inspects the pools and
+    /// status: a draw may be cut and re-cut freely while a director inspects the groups and
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
@@ -24845,7 +24944,7 @@ internal enum Operations {
     /// fresh set is planned from the event's *current* active entrants — the old ones are
     /// not patched, and their ids do not survive. That is the point: a draw is a plan made
     /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, pool sizes and seeding included.
+    /// withdrew) the whole plan is re-made, group sizes and seeding included.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
@@ -24855,17 +24954,17 @@ internal enum Operations {
     /// those away, and a draw must never silently eat a score.
     ///
     /// Refused with a `422` when this event cannot produce a draw at all: it has
-    /// **no pools** configured for a pooled draw type, its field is too small for the
-    /// pools it has — a pool with fewer than two players has nobody to play — or a
+    /// **no groups** configured for a grouped draw type, its field is too small for the
+    /// groups it has — a group with fewer than two players has nobody to play — or a
     /// bracket has fewer than two entrants. The message names what to change.
     ///
     /// There is no longer a "this draw type has no generator" refusal here: every
     /// draw type a director can pick is one that has a strategy, because the pickable
     /// set *is* the seeded `draw_types` rows, and those are the types that run
     /// (ADR 20260726). Every `422` this route can raise is now about the event's
-    /// **field or pools**, not its type.
+    /// **field or groups**, not its type.
     ///
-    /// Owner-only. Fixtures come back in pool → round → position order, exactly as the
+    /// Owner-only. Fixtures come back in group → round → position order, exactly as the
     /// tournament-detail page carries them.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/draw`.
@@ -25058,7 +25157,7 @@ internal enum Operations {
     ///
     /// The way back from a draw the director does not want. The event, its entrants and the
     /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the pools and cut again.
+    /// free to change the groups and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
     /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
@@ -25274,9 +25373,10 @@ internal enum Operations {
     ///
     /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
     /// pinned, and the placement's other constraints — the table belongs to the fixture's
-    /// pool, the time falls inside the pool's window, nothing is double-booked — are flags
-    /// derived on read, **not** invariants. So an out-of-window time, or a table outside
-    /// the fixture's pool, is **stored, not rejected**; the queued re-solve is what judges
+    /// group's reservation, the time falls inside that reservation's window, nothing is
+    /// double-booked — are flags derived on read, **not** invariants. So an out-of-window
+    /// time, or a table outside the fixture's group's reservation, is **stored, not
+    /// rejected**; the queued re-solve is what judges
     /// the consequences.
     ///
     /// **The one hard rule about the fixture:** a fixture whose linked match is `completed`

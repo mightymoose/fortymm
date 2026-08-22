@@ -12,6 +12,7 @@ import {
   buildEntrant,
   buildEntrants,
   buildEvent,
+  groupIdFor,
 } from '../data/seed.factory'
 import { eventsTabPage } from './events-tab.page'
 
@@ -195,7 +196,7 @@ describe('EventsTab', () => {
 
   // The draw hangs off the EVENT (ADR-0786) — there is no Draw tab, because a draw
   // belongs to one event and a tab would have to ask which. Wiring only: the panel's own
-  // quartet pins the pools, the rounds, the refusals and the empty state.
+  // quartet pins the groups, the rounds, the refusals and the empty state.
   describe('the draw on each card', () => {
     it('gives every event its own draw panel, fed that event’s tournament', async () => {
       eventsTabPage.render({
@@ -205,8 +206,8 @@ describe('EventsTab', () => {
         }),
       })
 
-      // The drawn event expands into its pools…
-      expect(eventsTabPage.getPoolLines('p-a')).toEqual([
+      // The drawn event expands into its groups…
+      expect(eventsTabPage.getGroupLines(groupIdFor('res-a'))).toEqual([
         'player.1 vs player.4',
         'player.1 vs player.5',
         'player.4 vs player.5',

@@ -48,8 +48,8 @@ import {
 } from '@/mocks/tournaments-store'
 import { ApiError, validationFields } from '@/api/client'
 import type { components } from '@/api/schema'
-import { addedPool, keepPools } from './pool-entries'
-import { buildEditedEvent, buildTenPools } from './seed.factory'
+import { addedReservation, keepReservations } from './reservation-entries'
+import { buildEditedEvent, buildTenReservations } from './seed.factory'
 import {
   apiToEvent,
   eventToUpdateBody,
@@ -358,7 +358,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
           return HttpResponse.json(
             buildTournamentEventRead({
               draw_type: 'rr-then-ko',
-              qualifiers_per_pool: 2,
+              qualifiers_per_group: 2,
             }),
           )
         },
@@ -375,14 +375,14 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
     result.current.mutate({
       eventId: 'ev-1',
       body: eventToUpdateBody(
-        buildEditedEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
+        buildEditedEvent({ drawType: 'rr-then-ko', qualifiersPerGroup: 2 }),
       ),
     })
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
     expect(sent.body).toMatchObject({
       draw_type: 'rr-then-ko',
-      qualifiers_per_pool: 2,
+      qualifiers_per_group: 2,
     })
   })
 
@@ -401,11 +401,11 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
     expect(sent.body).toHaveProperty('draw_type', 'round-robin')
-    expect(sent.body && 'qualifiers_per_pool' in sent.body).toBe(false)
+    expect(sent.body && 'qualifiers_per_group' in sent.body).toBe(false)
   })
 
   // The round trip, across the real decode: what the handler answered comes back through
-  // `apiToEvent` as the domain's `qualifiersPerPool`.
+  // `apiToEvent` as the domain's `qualifiersPerGroup`.
   it('reads the stored count back off the response', async () => {
     captureEventPatch()
     const { wrapper } = setupClient()
@@ -414,43 +414,43 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
     result.current.mutate({
       eventId: 'ev-1',
       body: eventToUpdateBody(
-        buildEditedEvent({ drawType: 'rr-then-ko', qualifiersPerPool: 2 }),
+        buildEditedEvent({ drawType: 'rr-then-ko', qualifiersPerGroup: 2 }),
       ),
     })
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
-    expect(apiToEvent(result.current.data!).qualifiersPerPool).toBe(2)
+    expect(apiToEvent(result.current.data!).qualifiersPerGroup).toBe(2)
   })
 
   /**
-   * **A pool's `position` must not leave the client.** It is the server's to assign —
-   * from the index of the pool in this very array — and `PoolWrite` is `extra="forbid"`,
-   * so a `position` key here is a 422 naming the field and the director's whole save is
-   * refused.
+   * **A reservation's `position` must not leave the client.** It is the server's to
+   * assign — from the index of the reservation in this very array — and
+   * `ReservationWrite` is `extra="forbid"`, so a `position` key here is a 422 naming the
+   * field and the director's whole save is refused.
    *
    * Asserted on the bytes rather than on `eventToUpdateBody`'s return value for the same
-   * reason the qualifier count is: the `Pool` these entries were built from *does* carry a
-   * position, so a spread anywhere between the mapper and `openapi-fetch` would put it
-   * back, and nothing else in the suite would notice.
+   * reason the qualifier count is: the `Reservation` these entries were built from *does*
+   * carry a position, so a spread anywhere between the mapper and `openapi-fetch` would
+   * put it back, and nothing else in the suite would notice.
    */
-  it('sends each pool WITHOUT a position — the server assigns it from the order', async () => {
+  it('sends each reservation WITHOUT a position — the server assigns it from the order', async () => {
     const sent = captureEventPatch()
     const { wrapper } = setupClient()
 
     const { result } = renderHookRaw(() => useUpdateEvent('t-1'), { wrapper })
     result.current.mutate({
       eventId: 'ev-1',
-      // Ten pools, so a dropped position could not hide behind a single `0`.
+      // Ten reservations, so a dropped position could not hide behind a single `0`.
       body: eventToUpdateBody(
-        buildEditedEvent({ pools: keepPools(buildTenPools()) }),
+        buildEditedEvent({ reservations: keepReservations(buildTenReservations()) }),
       ),
     })
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
-    const pools = sent.body?.pools as Record<string, unknown>[]
-    expect(pools).toHaveLength(10)
-    for (const pool of pools) {
-      expect(Object.keys(pool).sort()).toEqual([
+    const reservations = sent.body?.reservations as Record<string, unknown>[]
+    expect(reservations).toHaveLength(10)
+    for (const reservation of reservations) {
+      expect(Object.keys(reservation).sort()).toEqual([
         'id',
         'name',
         'slot',
@@ -461,18 +461,18 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
 })
 
 /**
- * **A pool's id, round trip** (ADR 20260801) — the client's write judged by the store
- * that stands in for the server, rather than by an assertion about itself.
+ * **A reservation's id, round trip** (ADR 20260801) — the client's write judged by the
+ * store that stands in for the server, rather than by an assertion about itself.
  *
  * This is the one claim of the chore that no mapper test can make: the mock applies the
- * same id-keyed diff the route does (`applyEventPools`, `mocks/tournaments-store`), so a
- * body that minted its own pool id is a **422 naming that entry** here exactly as it is
- * in production — while every assertion about `eventToUpdateBody`'s return value would go
- * on passing. The seeded tournament is used rather than a stubbed handler for that very
- * reason: a stub would answer whatever it was told to.
+ * same id-keyed diff the route does (`applyEventReservations`, `mocks/tournaments-store`),
+ * so a body that minted its own reservation id is a **422 naming that entry** here
+ * exactly as it is in production — while every assertion about `eventToUpdateBody`'s
+ * return value would go on passing. The seeded tournament is used rather than a stubbed
+ * handler for that very reason: a stub would answer whatever it was told to.
  */
-describe('an added pool, through the mock’s id-keyed diff', () => {
-  // The seed's owned, published tournament and its two-pool event.
+describe('an added reservation, through the mock’s id-keyed diff', () => {
+  // The seed's owned, published tournament and its two-reservation event.
   const TOURNAMENT = BAY_AREA_OPEN_ID
   const EVENT = 'ev-open-singles'
 
@@ -488,10 +488,10 @@ describe('an added pool, through the mock’s id-keyed diff', () => {
       eventId: EVENT,
       body: eventToUpdateBody({
         ...stored,
-        pools: [
-          ...keepPools(stored.pools),
-          addedPool({
-            name: 'Pool Z',
+        reservations: [
+          ...keepReservations(stored.reservations),
+          addedReservation({
+            name: 'Reservation Z',
             slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
             tableIds: ['t7'],
           }),
@@ -501,24 +501,25 @@ describe('an added pool, through the mock’s id-keyed diff', () => {
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
     const saved = apiToEvent(result.current.data!)
-    // The pools it already had kept their ids — which is what keeps the fixtures dealt
-    // into them — and the new one came back with an id this client never authored.
-    expect(saved.pools.map((p) => p.id).slice(0, 2)).toEqual(
-      stored.pools.map((p) => p.id),
+    // The reservations it already had kept their ids — which is what keeps the groups
+    // (and therefore the fixtures) mapped to them — and the new one came back with an id
+    // this client never authored.
+    expect(saved.reservations.map((r) => r.id).slice(0, 2)).toEqual(
+      stored.reservations.map((r) => r.id),
     )
-    const added = saved.pools[2]
-    expect(added.name).toBe('Pool Z')
+    const added = saved.reservations[2]
+    expect(added.name).toBe('Reservation Z')
     expect(added.id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     )
     // …and the server, not the array, decided where it sits.
-    expect(saved.pools.map((p) => p.position)).toEqual([0, 1, 2])
+    expect(saved.reservations.map((r) => r.position)).toEqual([0, 1, 2])
   })
 
   /** The other half of the diff, and the reason a client may never mint: an id the event
-   * does not hold is refused ON THAT ENTRY (`['body','pools',i,'id']`) rather than
+   * does not hold is refused ON THAT ENTRY (`['body','reservations',i,'id']`) rather than
    * quietly minted — which would hand back a different id than was asked for while
-   * removing the pool the director meant to keep. */
+   * removing the reservation the director meant to keep. */
   it('refuses a body that cites an id this event does not have', async () => {
     const { wrapper } = setupClient()
     const stored = apiToEvent(findTournament(TOURNAMENT)!.events[0])
@@ -528,7 +529,9 @@ describe('an added pool, through the mock’s id-keyed diff', () => {
       eventId: EVENT,
       body: eventToUpdateBody({
         ...stored,
-        pools: keepPools([{ ...stored.pools[0], id: 'p-invented' }]),
+        reservations: keepReservations([
+          { ...stored.reservations[0], id: 'res-invented' },
+        ]),
       }),
     })
 
@@ -538,8 +541,8 @@ describe('an added pool, through the mock’s id-keyed diff', () => {
     // A per-field Pydantic body, not a sentence — so `saveFailure` classifies it as
     // `invalid` and the editor says so in its own words rather than reading a
     // validator's prose out to the director. The entry's index is in the `loc`
-    // (`['body','pools',0,'id']`), which is what a surface would blame the card by.
-    expect(validationFields(error)).toEqual(['pools'])
+    // (`['body','reservations',0,'id']`), which is what a surface would blame the card by.
+    expect(validationFields(error)).toEqual(['reservations'])
   })
 })
 
@@ -1254,7 +1257,7 @@ function drawnPair(): TournamentFixtureRead[] {
   return [
     buildTournamentFixtureRead({
       id: 'fx-1',
-      pool_id: 'p-1',
+      group_id: 'p-1',
       round: 1,
       position: 1,
       entry_a_id: 'entry-1',
@@ -1282,7 +1285,8 @@ describe('useCutDraw', () => {
     expect(fixtures).toEqual([
       {
         id: 'fx-1',
-        poolId: 'p-1',
+        stageId: 's-1',
+        groupId: 'p-1',
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -1304,7 +1308,7 @@ describe('useCutDraw', () => {
   it('rejects a malformed fixture in its OWN response', async () => {
     mockEventCutDrawEndpoint(server, () =>
       HttpResponse.json(
-        [{ id: 'fx-1', pool_id: 'p-1' } as unknown as TournamentFixtureRead],
+        [{ id: 'fx-1', group_id: 'p-1' } as unknown as TournamentFixtureRead],
         { status: 201 },
       ),
     )
@@ -1363,7 +1367,7 @@ describe('useCutDraw', () => {
   })
 
   // The 422 is the director's to act on, and its SENTENCE is the answer: it names the
-  // numbers they have to change ("5 entrants across 3 pool(s)…" — no code could carry
+  // numbers they have to change ("5 entrants across 3 groups…" — no code could carry
   // that). So the hook does not swallow it and does not decorate it: it REJECTS with the
   // `ApiError`, sentence intact, and the panel that awaited `mutateAsync` renders it
   // inline where the button was (`DrawPanel`, `data/draw.ts`).
@@ -1372,7 +1376,7 @@ describe('useCutDraw', () => {
       HttpResponse.json(
         {
           detail:
-            '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants, who would have nobody to play.',
+            '5 entrants across 3 groups would leave a group with fewer than 2 entrants, who would have nobody to play.',
         },
         { status: 422 },
       ),
@@ -1387,7 +1391,7 @@ describe('useCutDraw', () => {
     const error = result.current.error as ApiError
     expect(error.status).toBe(422)
     expect(error.detail).toBe(
-      '5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants, who would have nobody to play.',
+      '5 entrants across 3 groups would leave a group with fewer than 2 entrants, who would have nobody to play.',
     )
     // …and NO toast. The draw verbs carry no global `onError`, deliberately: their
     // refusals are surfaced inline by the panel, and a toast would tell the director the
@@ -1645,14 +1649,15 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
 
   const TOURNAMENT = BAY_AREA_OPEN_ID
   /** The seed's ONE cuttable event: round-robin (the only draw type with a generator),
-   * two pools, nine entrants — and seeded already drawn. */
+   * two groups, nine entrants — and seeded already drawn. */
   const DRAWN = 'ev-u1200'
-  /** Seeded round-robin with **no pools** and nobody entered — the event a cut REFUSES,
-   * and (ADR 20260726) the refusal that survives: an unplannable draw type left the enum,
-   * a pool-less round-robin has nowhere to deal the field forever. */
+  /** Seeded round-robin with **no reservations (and therefore no groups)** and nobody
+   * entered — the event a cut REFUSES, and (ADR 20260726) the refusal that survives: an
+   * unplannable draw type left the enum, a groupless round-robin has nowhere to deal the
+   * field forever. */
   const UNCUTTABLE = 'ev-u1500'
 
-  it('the seeded draw arrives on the detail read, pooled, with no draw on the other events', async () => {
+  it('the seeded draw arrives on the detail read, grouped, with no draw on the other events', async () => {
     const { wrapper } = setupClient()
     const { result } = renderHookRaw(() => useTournament(TOURNAMENT), { wrapper })
 
@@ -1661,15 +1666,15 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
     const drawn = events.find((e) => e.id === DRAWN)!
 
     expect(drawn.fixtures.length).toBeGreaterThan(0)
-    // Every fixture names one of its own event's pools — a `pool_id` is a string ref
-    // into that JSONB, so a draw pointing at a pool the event does not have would be a
+    // Every fixture names one of its own event's groups — a `group_id` is a string ref
+    // into that array, so a draw pointing at a group the event does not have would be a
     // draw nothing could render.
-    const poolIds = drawn.pools.map((p) => p.id)
-    expect(poolIds.length).toBe(2)
+    const groupIds = drawn.groups.map((g) => g.id)
+    expect(groupIds.length).toBe(2)
     for (const fixture of drawn.fixtures) {
-      expect(poolIds).toContain(fixture.poolId)
+      expect(groupIds).toContain(fixture.groupId)
       // Nothing has been played: no winner, no match, both sides known (round-robin
-      // never has a TBD side — every pairing is known the moment the pools are dealt).
+      // never has a TBD side — every pairing is known the moment the groups are dealt).
       expect(fixture.winnerEntryId).toBeNull()
       expect(fixture.matchId).toBeNull()
       expect(fixture.entryAId).not.toBeNull()
@@ -1702,7 +1707,7 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
     await waitForRaw(() => expect(event().fixtures).toEqual([]))
 
     await act(() => result.current.cut.mutateAsync(DRAWN))
-    // The same field and the same pools cut the same draw — nothing is random
+    // The same field and the same groups cut the same draw — nothing is random
     // (ADR-0786), which is what makes a re-cut a reviewable act rather than a gamble.
     await waitForRaw(() => expect(event().fixtures).toHaveLength(cutSize))
   })
@@ -1716,11 +1721,11 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
   })
 
-  it('refuses to cut an event that cannot be planned — a pool-less draw is a 422', async () => {
+  it('refuses to cut an event that cannot be planned — a groupless draw is a 422', async () => {
     const { wrapper } = setupClient()
     const { result } = renderHookRaw(() => useCutDraw(TOURNAMENT), { wrapper })
 
-    // `ev-u1500` is a round-robin with no pools — there is nowhere to deal the field, so
+    // `ev-u1500` is a round-robin with no reservations — there is nowhere to deal the field, so
     // the cut is refused before the entrants are even looked at. The refusal a director
     // meets today, and the one the mock must not be more permissive about than the API.
     result.current.mutate(UNCUTTABLE)
@@ -1826,7 +1831,7 @@ describe('a malformed fixture on the detail payload', () => {
           id: 'ev-1',
           // No `round`, no `position` — a shape `schema.d.ts` swears cannot arrive.
           fixtures: [
-            { id: 'fx-1', pool_id: 'p-1' } as unknown as TournamentFixtureRead,
+            { id: 'fx-1', group_id: 'p-1' } as unknown as TournamentFixtureRead,
           ],
         }),
       ],

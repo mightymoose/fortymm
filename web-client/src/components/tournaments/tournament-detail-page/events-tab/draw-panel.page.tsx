@@ -4,7 +4,7 @@ import { render, screen, type Container } from '@/test/utilities'
 import { confirmIrreversibleActDialogPage } from '../confirm-irreversible-act-dialog.page'
 import { DrawPanel, type DrawPanelProps } from './draw-panel'
 import { buildDrawPanelProps } from './draw-panel.factory'
-import { poolDrawPage } from './draw-panel/pool-draw.page'
+import { groupDrawPage } from './draw-panel/group-draw.page'
 import { swissRoundsPage } from './draw-panel/swiss-rounds.page'
 
 const scoped = (container: Container) => ({
@@ -36,7 +36,7 @@ const scoped = (container: Container) => ({
   findRecutButton(eventName: string) {
     return container.findByRole('button', { name: `Re-cut draw for ${eventName}` })
   },
-  /** **Delete draw** — un-cuts it, and unfreezes the pool set. */
+  /** **Delete draw** — un-cuts it, and unfreezes the group set. */
   queryDeleteButton(eventName: string) {
     return container.queryByRole('button', { name: `Delete draw for ${eventName}` })
   },
@@ -63,7 +63,7 @@ const scoped = (container: Container) => ({
    * click happened.
    *
    * Addressed by its own testid, not by `role="alert"`. The freeze notice below is an
-   * `Alert` too, so "the alert" never named one of them — the same lesson `pools-section`
+   * `Alert` too, so "the alert" never named one of them — the same lesson `reservations-section`
    * wrote down one surface over. (The freeze is a `status` now and this one is still an
    * `alert`, and the panel shows only one of them at a time: the freeze supersedes a
    * standing refusal. A testid still says *which* notice a test means, which is what an
@@ -100,16 +100,17 @@ const scoped = (container: Container) => ({
     return interactiveElementsIn(container.getByTestId(`draw-panel-${eventId}`))
   },
 
-  /** The un-pooled group **as a bracket** — a single-elim draw, or the knockout stage of an
+  /** The ungrouped block **as a bracket** — a single-elim draw, or the knockout stage of an
    * `rr-then-ko` one. `query…` because "this draw did NOT get the bracket" is half of the
    * routing claim. */
-  queryUnpooled() {
-    return container.queryByTestId('draw-unpooled')
+  queryUngrouped() {
+    return container.queryByTestId('draw-ungrouped')
   },
 
-  /** The un-pooled group **as swiss rounds**. The other half of the same claim: a swiss draw
-   * is un-pooled exactly as a bracket is, so the two hooks are what tell "routed on the draw
-   * type" from "routed on the null pool id" (`unpooledShape`, `../../data/draw`). */
+  /** The ungrouped block **as swiss rounds**. The other half of the same claim: a swiss draw
+   * is ungrouped exactly as a bracket is, so the two hooks are what tell "routed on the
+   * fixtures' own STAGE" from "routed on the null group id" (`shapeForStage`,
+   * `../../data/draw`). */
   querySwissRounds() {
     return container.queryByTestId('draw-swiss-rounds')
   },
@@ -117,8 +118,8 @@ const scoped = (container: Container) => ({
     return container.getByTestId('draw-swiss-rounds')
   },
 
-  /** The un-pooled group as **nothing in particular** — the plain list a fixture gets when
-   * the event's format has no view that can place it (a round-robin fixture naming a pool
+  /** The ungrouped block as **nothing in particular** — the plain list a fixture gets when
+   * the event's format has no view that can place it (a round-robin fixture naming a group
    * the event does not list). The third hook of the same routing claim: it is what says the
    * fixture was shown *without* being called a bracket. */
   queryOrphaned() {
@@ -128,9 +129,9 @@ const scoped = (container: Container) => ({
     return container.getByTestId('draw-orphaned')
   },
 
-  // Pools, rounds and fixture lines come from the child page objects; the swiss rounds'
+  // Groups, rounds and fixture lines come from the child page objects; the swiss rounds'
   // own accessors (a paired round's lines, a forthcoming round's copy) from theirs.
-  ...poolDrawPage.within(container),
+  ...groupDrawPage.within(container),
   swiss: swissRoundsPage.within(container),
 })
 

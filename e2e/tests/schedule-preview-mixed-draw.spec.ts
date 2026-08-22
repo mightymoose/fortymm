@@ -47,7 +47,7 @@ const SKIPPED_EVENT_NOTE =
 
 /**
  * **One unpreviewable event no longer costs the whole tournament its preview**
- * (#1228; ADR 20260807 "a pool restricts scheduling, it does not enable it",
+ * (#1228; ADR 20260807 "a group restricts scheduling, it does not enable it",
  * *Consequences* → "Preview is unchanged").
  *
  * A director whose tournament holds a round-robin **and** a single-elimination event
@@ -55,7 +55,7 @@ const SKIPPED_EVENT_NOTE =
  * builder sits inside a per-event loop, so the `UnsupportedDrawType` it raised for the
  * bracket aborted the build of the whole tournament, and the modal rendered its refusal
  * alert where the plan should have been. The round-robin beside it — perfectly
- * previewable, pooled, and the reason they opened the modal — went down with it.
+ * previewable, grouped, and the reason they opened the modal — went down with it.
  *
  * Now the bracket is **skipped and named**, and everything else is previewed as usual.
  *
@@ -129,32 +129,32 @@ test.describe('Tournament — schedule preview with a mixed draw', () => {
     grantBetaTester(director.username)
 
     // ----- a DRAFT tournament holding TWO events, over the API -----------------
-    // First the round-robin, pooled and capped — the event that must survive.
+    // First the round-robin, grouped and capped — the event that must survive.
     const name = `Mixed ${faker.string.alphanumeric(8)}`
     const {
       tournamentId,
       eventId: roundRobinEventId,
       tables,
-      pools,
+      groups,
     } = await seedTournament(director, name, {
       tables: TABLES,
       maxPlayers: FIELD_SIZE,
     })
-    expect(pools, 'the round-robin needs a pool to be drawn into').toHaveLength(1)
+    expect(groups, 'the round-robin needs a group to be drawn into').toHaveLength(1)
 
-    // Then the bracket, beside it — un-pooled end to end (ADR-0786), which is how a
+    // Then the bracket, beside it — un-grouped end to end (ADR-0786), which is how a
     // director really configures one. Same catalogue, so the two events share a venue.
-    const { eventId: bracketEventId, pools: bracketPools } = await addEvent(
+    const { eventId: bracketEventId, groups: bracketGroups } = await addEvent(
       director,
       tournamentId,
       tables,
-      { name: KO_EVENT_NAME, drawType: 'single-elim', pools: [] },
+      { name: KO_EVENT_NAME, drawType: 'single-elim', reservations: [] },
     )
     // THE PREMISE, both halves. Two distinct events on one tournament, and the second
-    // is the un-pooled draw type the preview covers nothing of. Without this a green
+    // is the un-grouped draw type the preview covers nothing of. Without this a green
     // run could not rule out that the seed had quietly made one event, or two
     // round-robins.
-    expect(bracketPools, 'a bracket is un-pooled end to end').toEqual([])
+    expect(bracketGroups, 'a bracket is un-grouped end to end').toEqual([])
     expect(bracketEventId).not.toBe(roundRobinEventId)
 
     // ----- the browser: the director opens the preview -------------------------

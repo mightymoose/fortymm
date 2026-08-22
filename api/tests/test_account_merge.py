@@ -46,8 +46,10 @@ from app.models import (
 from app.roles import grant_default_role
 from app.sessions import SESSION_TOKEN_CONTEXT
 from app.tournament_draws import cut_draw
+from app.tournament_event_stages import mint_stages
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
-    event_pools,
+    event_groups,
     start_session,
     venue_tables,
 )
@@ -431,7 +433,7 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
             slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
             match_settings={"rated": True, "length_games": 5},
             predicates=[],
-            pools=[],
+            stages=mint_stages(DrawType.single_elim),
         )
     )
     db_session.add(tournament)
@@ -492,7 +494,7 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=[],
+        stages=mint_stages(DrawType.single_elim),
     )
     db.add(event)
     await db.commit()
@@ -936,7 +938,7 @@ async def test_merge_repoints_active_entry_over_survivors_withdrawn_row(
 # HARD-DELETES the guest's duplicate active entry. Left alone, that silently
 # cascades away every fixture seating the guest — holes in a cut draw. The merge
 # instead un-cuts the event's draw, because a draw cut from a field that
-# double-counted a human is wrong throughout (its pool sizes and snake seeding
+# double-counted a human is wrong throughout (its group sizes and snake seeding
 # were computed against N+1 entrants), and carries the guest's earlier
 # registration onto the surviving entry, because registration order is the draw's
 # ordering tie-break.
@@ -949,11 +951,11 @@ async def _make_rr_event(
     tournament: Tournament | None = None,
     name: str = "Open Singles",
 ) -> TournamentEvent:
-    """A **cuttable-into-pools** event: round-robin with one pool. ``_make_event`` above
-    is single-elim, which cuts an un-pooled bracket instead — no pool for every entrant
-    to meet every other in.
+    """A **cuttable-into-groups** event: round-robin with one group. ``_make_event``
+    above is single-elim, which cuts an ungrouped bracket instead — no group for every
+    entrant to meet every other in.
 
-    One pool, not two, so that *every* entrant is seated in a fixture against every
+    One group, not two, so that *every* entrant is seated in a fixture against every
     other — which is what makes "the guest's entry is in this draw" true by
     construction rather than by luck of the snake. Pass ``tournament`` to hang a
     second event off the same tournament (the un-cut must be scoped to the event
@@ -977,14 +979,15 @@ async def _make_rr_event(
             tables=venue_tables(("Table 1", "A")),
         )
     db.add(tournament)
-    # Flushed before the event is composed, because the pool below reserves a table and
-    # a reservation row carries the tournament's id — which is the database's to mint
-    # (ADR 20260801).
+    # Flushed before the event is composed, because the reservation below reserves a
+    # table and a reservation row carries the tournament's id — which is the
+    # database's to mint (ADR 20260801).
     await db.flush()
     slot = {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         # By id rather than by ``tournament.events.append``: the tournament is flushed
-        # above (its pool reservations need its id), and appending to a *persistent*
+        # above (its reservations need its id), and appending to a *persistent*
         # tournament's un-loaded ``events`` collection is a lazy load in sync context.
         tournament_id=tournament.id,
         name=name,
@@ -996,14 +999,19 @@ async def _make_rr_event(
         slot=slot,
         match_settings={"rated": True, "length_games": 5},
         predicates=[],
-        pools=event_pools(
-            [{"name": "Pool A", "slot": slot, "table_ids": ["t1"]}],
-            tournament=tournament,
-        ),
+        stages=stages,
+    )
+    stages[0].groups = event_groups(
+        [{"name": "Reservation A", "slot": slot, "table_ids": ["t1"]}],
+        event=event,
+        tournament=tournament,
     )
     db.add(event)
     await db.commit()
-    await db.refresh(event)
+    # ``groups`` explicitly: ``_cut`` below hands this event straight to ``cut_draw``,
+    # which reads ``event.groups`` synchronously — a plain refresh leaves that VIEWONLY
+    # association unloaded (ADR 20260815), and the read would be an async lazy load.
+    await db.refresh(event, attribute_names=["groups"])
     return event
 
 
@@ -1026,7 +1034,7 @@ async def _fixtures_for(
         (
             await db.execute(
                 select(TournamentFixture)
-                .where(TournamentFixture.event_id == event.id)
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event.id])))
                 .execution_options(populate_existing=True)
             )
         )
@@ -1039,7 +1047,7 @@ def _seats(fixtures: list[TournamentFixture]) -> set[tuple]:
     """The identity + contents of each fixture — what a re-point onto the survivor
     (or a cascade hole) would change, and a genuinely untouched draw would not."""
     return {
-        (f.id, f.pool_id, f.round, f.position, f.entry_a_id, f.entry_b_id)
+        (f.id, f.group_id, f.round, f.position, f.entry_a_id, f.entry_b_id)
         for f in fixtures
     }
 
@@ -1069,13 +1077,13 @@ async def test_merge_uncuts_the_draw_when_the_collision_double_counted_a_human(
 ):
     """The whole point (ADR-0786). Guest and survivor are BOTH actively entered in an
     event whose draw is already cut — so the cut draw seats one human twice, and every
-    pool size and seeding decision in it was computed against a field of N+1.
+    group size and seeding decision in it was computed against a field of N+1.
 
     The dedup deletes the guest's duplicate entry, and ``tournament_fixtures`` cascades
     on that delete — so doing nothing else would leave the draw **holed**: fixtures
     silently gone from a draw the director still believes is cut. The tempting repair
     (re-point the guest's fixtures onto the surviving entry) is worse than the holes: it
-    seats one person in two slots of the same pool, and because the go-live currency
+    seats one person in two slots of the same group, and because the go-live currency
     check compares entrant *sets*, the corrupted draw would satisfy it and go live.
 
     So the draw is **un-cut**: zero fixtures, and the director re-cuts from the field
@@ -1094,7 +1102,7 @@ async def test_merge_uncuts_the_draw_when_the_collision_double_counted_a_human(
     await _enter(db_session, event, other, created_at=earlier + timedelta(hours=3))
 
     before = await _cut(db_session, event)
-    assert len(before) == 3, "a one-pool round-robin of three seats three fixtures"
+    assert len(before) == 3, "a one-group round-robin of three seats three fixtures"
     assert await _fixtures_referencing(db_session, guest_entry.id) == 2, (
         "precondition: the guest's entry really is in this draw — without it the "
         "assertions below would pass against a draw that never seated them"
@@ -1213,7 +1221,7 @@ async def test_a_merge_without_a_collision_leaves_a_cut_draw_completely_intact(
     await _enter(db_session, event, other)
 
     before = await _cut(db_session, event)
-    assert len(before) == 1, "two entrants in one pool meet exactly once"
+    assert len(before) == 1, "two entrants in one group meet exactly once"
     before_seats = _seats(before)
 
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)

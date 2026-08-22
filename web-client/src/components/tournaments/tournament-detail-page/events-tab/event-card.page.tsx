@@ -12,7 +12,7 @@ const scoped = (container: Container) => ({
   // clash.
   ...entrantsListPage.within(container),
   // The draw the card hosts in its `draw` slot (`DrawPanel`): `queryPanel`,
-  // `getPoolLines`, `queryGenerateButton`, … The card only wires it in — the panel's
+  // `getGroupLines`, `queryGenerateButton`, … The card only wires it in — the panel's
   // own quartet pins its content.
   ...drawPanelPage.within(container),
 

@@ -44,7 +44,7 @@ export interface EventCardProps {
    */
   action?: ReactNode
   /**
-   * The event's **draw** (`DrawPanel`) — the pools it was cut across, and the
+   * The event's **draw** (`DrawPanel`) — the groups it was cut across, and the
    * director's cut / re-cut / delete verbs (ADR-0786). A slot, like `action`, and
    * for the same reason: it reads the session and owns two mutations, and this
    * card is a pure view over its props.
@@ -58,7 +58,7 @@ export interface EventCardProps {
 }
 
 /** A row card for one event on the tournament's Events tab: title with rated /
- * best-of badges, eligibility chips, the time slot, pool/table counts, the
+ * best-of badges, eligibility chips, the time slot, reservation/table counts, the
  * entries the event holds against its cap (with how many places that leaves), and
  * the roster of entrants those numbers count. The whole card opens the editor.
  *
@@ -101,7 +101,7 @@ export const EventCard = ({
   // plausible enough to survive review. An em-dash says "unknown" without lying, and
   // still keeps the row's shape.
   const drawLabel = labelFor(drawTypes, ev.drawType, EM_DASH)
-  const tableCount = new Set(ev.pools.flatMap((p) => p.tableIds)).size
+  const tableCount = new Set(ev.reservations.flatMap((r) => r.tableIds)).size
   // The card opens the editor, which is read-only for a non-owner — so the
   // affordance reads "View" (not "Edit") when the viewer can't mutate.
   const actionLabel = canEdit ? 'Edit' : 'View'
@@ -155,7 +155,8 @@ export const EventCard = ({
             <div className="mt-1.5 flex items-center gap-1.5 text-[11px] whitespace-nowrap text-[color:var(--fg-3)]">
               <Layers size={12} />
               <span>
-                {ev.pools.length} {ev.pools.length === 1 ? 'pool' : 'pools'}
+                {ev.reservations.length}{' '}
+                {ev.reservations.length === 1 ? 'reservation' : 'reservations'}
               </span>
               <span>·</span>
               <span className="font-mono">

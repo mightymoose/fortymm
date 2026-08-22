@@ -22,6 +22,17 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.draws import (
+    EntryId,
+    FixtureGames,
+    FixtureId,
+    FixtureStage,
+    FixtureState,
+    GroupId,
+    RrThenKoStrategy,
+    Side,
+    SideFill,
+)
 from app.models import (
     DrawType,
     EventFormat,
@@ -45,6 +56,7 @@ from tests._helpers import (
     event_draw_settings,
     grant_permissions,
     make_user,
+    stage_id_at,
     start_session,
     venue_tables,
 )
@@ -90,7 +102,7 @@ def _event_body(**overrides: Any) -> dict[str, Any]:
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [],
-        "pools": [],
+        "reservations": [],
     }
     body.update(overrides)
     return body
@@ -100,14 +112,15 @@ def _event_payload(**overrides: Any) -> TournamentEventCreate:
     return TournamentEventCreate.model_validate(_event_body(**overrides))
 
 
-def _pooled(**overrides: Any) -> dict[str, Any]:
-    """A create-event body carrying one empty-reservation pool — what a pooled draw
-    type (``round-robin``, ``rr-then-ko``) is seeded with here. The reservation list is
-    empty on purpose: this file is about stage rows, not table placements."""
+def _grouped(**overrides: Any) -> dict[str, Any]:
+    """A create-event body carrying one empty-table reservation — what a grouped
+    draw type (``round-robin``, ``rr-then-ko``) is seeded with here. The reservation
+    list's ``table_ids`` is empty on purpose: this file is about stage rows, not table
+    placements."""
     return _event_body(
-        pools=[
+        reservations=[
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
                 "table_ids": [],
             }
@@ -150,9 +163,17 @@ def _positions(
 async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     """Give ``event`` a fixture, which is all ``event_has_draw`` looks at — the same
     minimal cut simulation ``test_tournament_events._add_cut_event`` uses, without a
-    real pool to point the fixture at (single-elim/swiss fixtures carry no pool
-    either)."""
-    db.add(TournamentFixture(event_id=event.id, pool_id=None, round=1, position=1))
+    real group to point the fixture at (single-elim/swiss fixtures carry no group
+    either).
+
+    Named by its stage 0, resolved through ``stage_id_at`` rather than
+    ``event.stages[0]`` — not because ``TournamentEvent.stages`` would fail (it is
+    eager, ``lazy="selectin"``), but because ``event`` here may be a Python-built
+    object this helper's caller never re-queried, so its collection may not be
+    populated at all. The single-stage draw types this file drives never need
+    position 1."""
+    stage_id = await stage_id_at(db, event.id, 0)
+    db.add(TournamentFixture(stage_id=stage_id, group_id=None, round=1, position=1))
     await db.commit()
 
 
@@ -191,6 +212,78 @@ def test_mint_stages_positions_from_zero() -> None:
         (0, DrawType.round_robin),
         (1, DrawType.single_elim),
     ]
+
+
+def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
+    """The lockstep pin for ADR 20260815 decisions 3 and 6: what
+    :func:`~app.tournament_event_stages.stage_template` mints for ``rr-then-ko`` (the
+    WRITER — ``app.tournament_draws.cut_draw`` hangs every grouped planned fixture off
+    position 0 and the ungrouped bracket off the template's LAST position,
+    unconditionally) and what :class:`~app.draws.RrThenKoStrategy` reads back through
+    :attr:`~app.draws.FixtureState.stage` (the READER — its ``_stage_split`` matches on
+    ``draw_type``, never on a position literal) have to be the SAME two facts, or a
+    real cut's fixtures would land on stages the strategy cannot place.
+
+    Restated in up to four places before this test existed — the template itself,
+    ``cut_draw``'s positional write, this composite's own (now-removed)
+    ``_RR_THEN_KO_GROUP_STAGE``/``_RR_THEN_KO_KNOCKOUT_STAGE`` position literals, and
+    the ``app.draws`` test suite's own copy of that same pair — with nothing checking
+    that
+    they agreed. This drives a REAL split through ``advance()`` using
+    :class:`~app.draws.FixtureStage`\\ s built straight off ``mint_stages``'s own rows
+    (never a position literal of its own), so a template reorder (say, knockout before
+    group) reds this test for the stated reason, not merely a tuple-equality check.
+    """
+    stages = mint_stages(DrawType.rr_then_ko)
+    fixture_stage_at = {
+        stage.position: FixtureStage(position=stage.position, draw_type=stage.draw_type)
+        for stage in stages
+    }
+    # cut_draw's own assumption (app.tournament_draws.cut_draw): every GROUPED planned
+    # fixture is hung off position 0, and the ungrouped bracket off the template's
+    # LAST position — restated here as data pulled off the real mint, not trusted
+    # silently to still be true.
+    group_stage = fixture_stage_at[0]
+    knockout_stage = fixture_stage_at[len(stages) - 1]
+
+    entry_1, entry_2 = EntryId(uuid.uuid4()), EntryId(uuid.uuid4())
+    group_fixture = FixtureState(
+        fixture_id=FixtureId(uuid.uuid4()),
+        group_id=GroupId(uuid.uuid4()),
+        stage=group_stage,
+        round=1,
+        position=1,
+        entry_a_id=entry_1,
+        entry_b_id=entry_2,
+        winner_entry_id=entry_1,
+        games=FixtureGames(entry_a_games=2, entry_b_games=0),
+    )
+    knockout_fixture_id = FixtureId(uuid.uuid4())
+    knockout_fixture = FixtureState(
+        fixture_id=knockout_fixture_id,
+        group_id=None,
+        stage=knockout_stage,
+        round=1,
+        position=1,
+        entry_a_id=None,
+        entry_b_id=None,
+    )
+
+    plan = RrThenKoStrategy(qualifiers_per_group=2).advance(
+        [group_fixture, knockout_fixture], ()
+    )
+
+    # The one-group waiver (ADR "one group is an explicit waiver, not a failure"): both
+    # of the group's entrants qualify, seed 1 (the winner) to side a and seed 2 to side
+    # b of the bracket's only fixture. Seeing this fill at all is only possible if the
+    # GROUP fixture (stage 0) was read as the group half its result feeds standings
+    # from, and the KNOCKOUT fixture (the template's last position) as the half that
+    # receives the seating — i.e. only if the writer's template and the reader's split
+    # agree on which position means what.
+    assert set(plan.side_fills) == {
+        SideFill(fixture_id=knockout_fixture_id, side=Side.a, entry_id=entry_1),
+        SideFill(fixture_id=knockout_fixture_id, side=Side.b, entry_id=entry_2),
+    }
 
 
 def test_rr_then_ko_is_unmintable_as_a_stages_own_draw_type() -> None:
@@ -239,7 +332,7 @@ async def test_create_event_mints_two_stages_for_rr_then_ko(
         tournament_id=tournament.id,
         actor=owner,
         payload=TournamentEventCreate.model_validate(
-            _pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+            _grouped(draw_type="rr-then-ko", qualifiers_per_group=2)
         ),
     )
 
@@ -281,10 +374,10 @@ async def test_update_event_remint_grows_one_stage_to_two_preserving_stage_zero(
         updates=TournamentEventUpdate.model_validate(
             {
                 "draw_type": "rr-then-ko",
-                "qualifiers_per_pool": 2,
-                "pools": [
+                "qualifiers_per_group": 2,
+                "reservations": [
                     {
-                        "name": "Pool A",
+                        "name": "Reservation A",
                         "slot": {
                             "date": "2026-06-13",
                             "start": "09:00",
@@ -322,7 +415,7 @@ async def test_update_event_remint_shrinks_two_stages_to_one_preserving_stage_ze
         tournament_id=tournament.id,
         actor=owner,
         payload=TournamentEventCreate.model_validate(
-            _pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+            _grouped(draw_type="rr-then-ko", qualifiers_per_group=2)
         ),
     )
     before = await _stages(db_session, event.id)
@@ -381,7 +474,7 @@ async def test_remint_retypes_every_retained_position_not_just_stage_zero(
         tournament_id=tournament.id,
         actor=owner,
         payload=TournamentEventCreate.model_validate(
-            _pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+            _grouped(draw_type="rr-then-ko", qualifiers_per_group=2)
         ),
     )
     before = await _stages(db_session, event.id)
@@ -429,7 +522,7 @@ async def test_update_event_remint_mints_fresh_when_no_stage_rows_exist(
         slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
         predicates=[],
-        pools=[],
+        groups=[],
     )
     db_session.add(event)
     await db_session.commit()
@@ -613,7 +706,7 @@ async def test_the_tournament_detail_serves_an_rr_then_ko_events_two_stages_in_o
     authed_client: tuple[AsyncClient, User],
 ) -> None:
     """The one composite template reads back as two stages, in ``position`` order:
-    the pool stage (``round-robin``) at 0, the knockout stage (``single-elim``) at 1
+    the group stage (``round-robin``) at 0, the knockout stage (``single-elim``) at 1
     (ADR 20260815 decisions 3/7) — never the reverse, and never collapsed to one row
     or to ``rr-then-ko`` itself.
 
@@ -623,7 +716,7 @@ async def test_the_tournament_detail_serves_an_rr_then_ko_events_two_stages_in_o
     worth pinning here."""
     client, _ = authed_client
     tournament_id, event_id = await _tournament_with_event(
-        client, **_pooled(draw_type="rr-then-ko", qualifiers_per_pool=2)
+        client, **_grouped(draw_type="rr-then-ko", qualifiers_per_group=2)
     )
 
     event = await _event_of(client, tournament_id, event_id)
@@ -640,7 +733,7 @@ async def test_the_tournaments_list_carries_per_event_stages_too(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
     """The tournament LIST is no longer a special case: ``TournamentEvent.stages`` is
-    ``lazy="selectin"`` now (matching ``pools``), so every event the LIST returns
+    ``lazy="selectin"`` now (matching ``groups``), so every event the LIST returns
     carries its real stages, the same shape the tournament-DETAIL read serves for the
     very same event — unlike ``draw_type_catalogue``/``latest_schedule_solve``, which
     stay genuinely list-BFF-scoped sentinels (``tests/test_tournaments.py``'s

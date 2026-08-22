@@ -184,12 +184,12 @@ export const mockEventEnterEndpoint = (
 
 /** Resolver for the **cut-draw** endpoint (ADR-0786) — the created fixtures (201), or an
  * error envelope: 403 (not the owner), 409 (the draw shows evidence of play), 422 (this
- * event cannot be planned: an unsupported draw type, no pools, or a pool that would get
+ * event cannot be planned: an unsupported draw type, no groups, or a group that would get
  * fewer than two entrants), 404.
  *
  * The refusals are plain-string `detail`s, not coded ones — deliberately, because that
  * is what the route sends: the 422's sentence names what the director must CHANGE
- * ("5 entrants across 3 pool(s) would leave a pool with fewer than 2 entrants"), and
+ * ("5 entrants across 3 groups would leave a group with fewer than 2 entrants"), and
  * those numbers are not derivable from a code. There is no request body: the event is
  * the whole request. */
 export type EventCutDrawResolver = HttpResponseResolver<

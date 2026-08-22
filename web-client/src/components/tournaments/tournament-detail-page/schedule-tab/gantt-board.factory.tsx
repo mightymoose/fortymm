@@ -39,7 +39,7 @@ export function buildTimelinePlayerRow(
 /**
  * A **morning board with all three tiers on it**: `T1` holds an estimate
  * (`fx-a-1`, 09:00) and an in-progress match (`fx-a-3`, 11:00), `T2` holds a
- * called match (`fx-a-2`, 10:00), `T3` is honestly empty, and Pool B's fixture
+ * called match (`fx-a-2`, 10:00), `T3` is honestly empty, and Group B's fixture
  * (`fx-b-1`) waits in the rail. Window 09:00–12:30 on 2026-06-13. Both players'
  * rows mirror the same bars, so one factory feeds both boards.
  */

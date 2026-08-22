@@ -14,9 +14,9 @@ and leaves this module with only the three things a database is actually needed 
   ``order_entrants`` wants. Withdrawal is a soft-delete, so a withdrawn entry is not an
   entrant (ADR-0016) and has no place in a draw.
 - **the guard** (``draw_has_play``) — whether this draw shows any evidence of play.
-- **the freeze** (``event_has_draw`` / ``event_pools``) — whether a draw exists at
-  all, and the pools it was cut across. The two facts the event ``PATCH`` needs to
-  refuse a pools payload that would orphan the fixtures (there is no FK to stop it).
+- **the freeze** (``event_has_draw`` / ``event_groups``) — whether a draw exists at
+  all, and the groups it was cut across. The two facts the event ``PATCH`` needs to
+  refuse a groups payload that would orphan the fixtures (there is no FK to stop it).
 - **the currency** (``draw_currency_by_event``) — whether each event's draw still
   describes the field it was cut from. The fact the ``published → live`` precondition
   is decided on (ADR-0786).
@@ -30,6 +30,7 @@ that field must not be separated by another writer's entry (see the route).
 import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
+from types import MappingProxyType
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,10 +42,11 @@ from app.draws import (
     EntryId,
     FixtureGames,
     FixtureId,
+    FixtureStage,
     FixtureState,
+    GroupId,
     MatchId,
     NonSinglesDraw,
-    PoolId,
     order_entrants,
     strategy_for,
     unseated_entrant_allowance,
@@ -56,12 +58,14 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStage,
     TournamentFixture,
 )
 from app.models.draw_type import DRAW_TYPES_BY_ID
-from app.schemas.tournament import Pool
+from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_settings import draw_settings_of
-from app.tournament_pools import pool_read
+from app.tournament_queries import stage_ids_for_events
+from app.tournament_reservations import group_read, reservation_read
 
 
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
@@ -71,7 +75,7 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
     Withdrawn entries are filtered out here, at the one place the cut reads them, for
     the same reason the entrants list filters them (ADR-0016): a withdrawn player is not
     an entrant, and a draw cut from a field that included them would seat a person who
-    has left the event — and every pool's size would be computed against a field that
+    has left the event — and every group's size would be computed against a field that
     does not exist.
 
     Only the three columns the ordering rule reads (``order_entrants``: seed ascending
@@ -98,45 +102,104 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
     ]
 
 
-def pool_order(event: TournamentEvent) -> dict[PoolId, int]:
-    """Each of this event's pool ids mapped to its **0-based place in the event's pool
-    order** — the lookup :func:`fixture_state` resolves a fixture's ``pool_id`` through.
+async def active_draw_entrants_by_event(
+    db: AsyncSession, event_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[Entrant]]:
+    """The batched sibling of :func:`active_draw_entrants`: every id in ``event_ids``'
+    active field, keyed by event id, in ONE statement whatever the number of events.
 
-    Computed once per event rather than per fixture: a fixture carries its pool's *id*,
+    Exists for the ``published → live`` dry run (``app.tournament_lifecycle``), which
+    plans a cut ahead of time for every at-fault event to learn whether it would
+    succeed — reading one event's field at a time there would turn a batched
+    precondition back into a per-event query, growing the time the tournament's row
+    lock is held with the tournament's size. Same query shape as the single-event
+    version (the three columns ``order_entrants`` reads, filtered to active entries),
+    widened to an ``IN``.
+
+    Every id in ``event_ids`` is a key in the result, even one with no active entrants
+    (an empty list) — mirroring :func:`draw_currency_by_event`'s pre-seeded dict, so a
+    caller never has to guard a missing key with ``.get``.
+
+    Empty input returns ``{}`` without a query, same as :func:`draw_currency_by_event` —
+    an ``IN ()`` is never worth asking the database.
+    """
+    if not event_ids:
+        return {}
+    entrants: dict[uuid.UUID, list[Entrant]] = {event_id: [] for event_id in event_ids}
+    rows = (
+        await db.execute(
+            select(
+                TournamentEntry.event_id,
+                TournamentEntry.id,
+                TournamentEntry.seed,
+                TournamentEntry.created_at,
+            ).where(
+                TournamentEntry.event_id.in_(event_ids),
+                TournamentEntry.status == TournamentEntryStatus.entered,
+            )
+        )
+    ).all()
+    for event_id, entry_id, seed, created_at in rows:
+        entrants[event_id].append(
+            Entrant(entry_id=EntryId(entry_id), seed=seed, created_at=created_at)
+        )
+    return entrants
+
+
+def group_order(event: TournamentEvent) -> dict[GroupId, int]:
+    """Each of this event's group ids mapped to its **0-based place in the event's group
+    order** — the lookup :func:`fixture_state` resolves a fixture's ``group_id``
+    through.
+
+    Computed once per event rather than per fixture: a fixture carries its group's *id*,
     not its index, so somebody has to do the join and a 200-fixture round-robin should
-    not project the pools 200 times.
+    not project the groups 200 times.
 
-    The rank is the pool's index *after* sorting on ``Pool.position`` (ADR 20260801),
+    The rank is the group's index *after* sorting on ``Group.position`` (ADR 20260801),
     not the stored ``position`` read straight off: it is then the same sequence
     :func:`draw_config` hands the snake, by construction and not by two functions
-    agreeing — including on an event whose pools predate the field, where every stored
+    agreeing — including on an event whose groups predate the field, where every stored
     position is ``0`` and the stable sort leaves the array order standing.
     """
-    return {PoolId(pool.id): index for index, pool in enumerate(_ordered_pools(event))}
+    return {
+        GroupId(group.id): index for index, group in enumerate(_ordered_groups(event))
+    }
 
 
-def _ordered_pools(event: TournamentEvent) -> list[Pool]:
-    """This event's pools, projected, in the director's order — ascending ``position``.
+def _ordered_groups(event: TournamentEvent) -> list[GroupRead]:
+    """This event's groups, projected, in the director's order — ascending ``position``.
 
-    One definition of "the event's pool order", shared by :func:`draw_config` (which
-    seeds the snake against it) and :func:`pool_order` (which the read of a persisted
+    One definition of "the event's group order", shared by :func:`draw_config` (which
+    seeds the snake against it) and :func:`group_order` (which the read of a persisted
     fixture resolves through), so a draw is cut in the same order it is advanced in.
 
-    The ``sorted`` is belt-and-braces rather than the mechanism: the ``pools``
-    relationship carries ``order_by=TournamentEventPool.position``, so the rows arrive
-    in this order already, and ``UNIQUE (event_id, position)`` makes it a total one. It
-    is kept because this function is *the* statement of what "the event's pool order"
+    The ``sorted`` is belt-and-braces rather than the mechanism: the ``groups``
+    relationship carries ``order_by=TournamentEventStageGroup.position``, so the rows
+    arrive in this order already, and ``UNIQUE (stage_id, position)`` makes it a total
+    one. It
+    is kept because this function is *the* statement of what "the event's group order"
     means, and a caller who builds a ``TournamentEvent`` in memory (a test, a REPL)
     never went through that ``ORDER BY``.
     """
-    return sorted(event_pools(event), key=lambda pool: pool.position)
+    return sorted(event_groups(event), key=lambda group: group.position)
+
+
+#: The one spelling of "no stage was resolved" :func:`fixture_state`'s ``stages``
+#: parameter accepts — a real, empty mapping rather than ``None``, exactly as
+#: ``app.models.tournament_event_draw_settings.NO_SETTINGS`` is for the same reason: a
+#: ``.get()`` against an empty dict and a ``.get()`` guarded by ``is not None`` return
+#: the identical ``None``, so carrying both spellings bought nothing but a branch to
+#: keep in sync. ``MappingProxyType`` so the shared default cannot be mutated by
+#: whoever receives it.
+_NO_STAGES: Mapping[uuid.UUID, FixtureStage] = MappingProxyType({})
 
 
 def fixture_state(
     fixture: TournamentFixture,
     game_counts: Mapping[uuid.UUID, tuple[int, int]] | None = None,
     voided_match_ids: frozenset[uuid.UUID] = frozenset(),
-    pool_positions: Mapping[PoolId, int] | None = None,
+    group_positions: Mapping[GroupId, int] | None = None,
+    stages: Mapping[uuid.UUID, FixtureStage] = _NO_STAGES,
 ) -> FixtureState:
     """Project a persisted :class:`~app.models.tournament_fixture.TournamentFixture` row
     into the pure :class:`~app.draws.FixtureState` a strategy's ``advance()`` reads.
@@ -173,38 +236,56 @@ def fixture_state(
     strategy a mirrored scoreline that still looks like a plausible result, which is
     what ``tests/test_tournament_draws.py`` asserts with an asymmetric one.
 
-    ``pool_positions`` maps this event's pool ids to their places in the event's pool
-    order (:func:`pool_order`), and is what fills
-    :attr:`~app.draws.FixtureState.pool_position` — the key ``ready_fixtures`` groups a
+    ``group_positions`` maps this event's group ids to their places in the event's group
+    order (:func:`group_order`), and is what fills
+    :attr:`~app.draws.FixtureState.group_position` — the key ``ready_fixtures`` groups a
     plan by. It rides in from the caller for the same reason the games do: it is one
-    fact about the *event*, and resolving it here would mean re-parsing the pools JSONB
-    once per fixture. Passing nothing means "the pool order was not resolved", which
-    projects a ``None`` position — the fixture is then ordered by its pool *id*, the
-    order this had before positions existed. Un-pooled fixtures resolve to ``None``
-    whatever is passed: there is no pool to place.
+    fact about the *event*, and resolving it here would mean re-parsing the groups JSONB
+    once per fixture. Passing nothing means "the group order was not resolved", which
+    projects a ``None`` position — the fixture is then ordered by its group *id*, the
+    order this had before positions existed. Un-grouped fixtures resolve to ``None``
+    whatever is passed: there is no group to place.
 
     It is the caller — not this function — that loads the counts, because
     ``advance()``'s current caller
     (:func:`app.tournament_materialization.materialize_event`) loads fixtures and
     nothing else. Reading the games here would mean a query per fixture inside the
     projection; the batched load belongs at the seam, alongside the fixture load.
+
+    ``stages`` maps this event's stage ids to a :class:`~app.draws.FixtureStage`
+    carrying that stage's place in the event's stage order AND its own draw type
+    (``app.tournament_materialization.materialize_event`` builds it straight off the
+    already-eager ``TournamentEvent.stages``, the sibling of what ``group_order``
+    resolves for ``group_positions``), and is what fills
+    :attr:`~app.draws.FixtureState.stage` — the discriminator
+    :class:`~app.draws.RrThenKoStrategy` reads to split one event's fixtures between
+    its two stages, in place of re-deriving the split from ``group_id is None`` (ADR
+    20260815 decision 6). It rides in from the caller for the same reason
+    ``group_positions`` does: it is one fact about the *event*, resolved once rather
+    than reconstructed per fixture. **Always a real mapping, never** ``None`` — the
+    empty default (:data:`_NO_STAGES`) and an event's real stage map read identically
+    through ``.get()``, so there is exactly one spelling of "no stage resolved" rather
+    than two. Passing the default projects ``stage=None`` — harmless for the three draw
+    types that never read it, and refused loudly by :class:`~app.draws.RrThenKoStrategy`
+    (:class:`~app.draws.MissingStageAssignment`) for the one that does.
     """
     games = (
         game_counts.get(fixture.match_id)
         if game_counts is not None and fixture.match_id is not None
         else None
     )
-    pool_id = PoolId(fixture.pool_id) if fixture.pool_id is not None else None
+    group_id = GroupId(fixture.group_id) if fixture.group_id is not None else None
     return FixtureState(
         fixture_id=FixtureId(fixture.id),
-        pool_id=pool_id,
+        group_id=group_id,
         round=fixture.round,
         position=fixture.position,
-        pool_position=(
-            pool_positions.get(pool_id)
-            if pool_positions is not None and pool_id is not None
+        group_position=(
+            group_positions.get(group_id)
+            if group_positions is not None and group_id is not None
             else None
         ),
+        stage=stages.get(fixture.stage_id),
         entry_a_id=(
             EntryId(fixture.entry_a_id) if fixture.entry_a_id is not None else None
         ),
@@ -229,8 +310,8 @@ def fixture_state(
 
 
 def draw_config(event: TournamentEvent) -> DrawConfig:
-    """What the cut needs to know about the event itself: the ids of the pools it has
-    configured — **in the event's own pool order**, which is the order the snake seeds
+    """What the cut needs to know about the event itself: the ids of the groups it has
+    configured — **in the event's own group order**, which is the order the snake seeds
     against.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
@@ -239,27 +320,29 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
 
-    The pools arrive as typed :class:`Pool` values, never as raw rows or dicts
-    (:func:`app.tournament_pools.pool_read`) — the same model the write boundary
-    validated them with, whose ``min_length=1`` id is why a ``PoolId`` reaching the
+    The groups arrive as typed :class:`Group` values, never as raw rows or dicts
+    (:func:`app.tournament_reservations.group_read`) — the same model the write boundary
+    validated them with, whose ``min_length=1`` id is why a ``GroupId`` reaching the
     domain is never ``""``.
 
-    Every configured pool is passed, whatever the draw type. An un-pooled strategy
-    (single-elim, #785, and swiss) ignores them and writes ``NULL`` pool refs; a pooled
-    one deals the field across exactly these ids — which is what makes a fixture's
-    ``pool_id`` a string ref that resolves against the event the client is already
-    holding.
+    Every configured group is passed, whatever the draw type. An un-grouped strategy
+    (single-elim, #785, and swiss) ignores them and writes ``NULL`` group refs; a
+    grouped one deals the field across exactly these ids — which is what makes a
+    fixture's ``group_id`` a string ref that resolves against the event the client is
+    already holding.
 
-    The order is read off each pool's ``position`` (ADR 20260801, "Pools carry an
+    The order is read off each group's ``position`` (ADR 20260801, "Groups carry an
     explicit ``position``") rather than taken from the JSONB array's incidental
     sequence. Both say the same thing today — the position *is* stamped from the array
     index at the write boundary — and saying it out loud is the point: this order is
-    what the snake seeds against, so once pools become rows the order has to come from
+    what the snake seeds against, so once groups become rows the order has to come from
     the column that carries it, not from whatever sequence a query happened to return
-    them in. A ``sorted`` is stable, so pools stored before the field existed (every
+    them in. A ``sorted`` is stable, so groups stored before the field existed (every
     ``position`` defaulting to ``0``) keep the array order they have always had.
     """
-    return DrawConfig(pool_ids=tuple(PoolId(pool.id) for pool in _ordered_pools(event)))
+    return DrawConfig(
+        group_ids=tuple(GroupId(group.id) for group in _ordered_groups(event))
+    )
 
 
 def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
@@ -283,18 +366,18 @@ def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
 async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
     """Whether this event has a draw at all — whether the cut has happened.
 
-    The question the **pool-set freeze** turns on (ADR-0786). Nothing in the database
-    stops a ``PATCH`` from *adding* a pool to an event whose draw was dealt across the
-    pools it had at the cut — the removal half is a foreign-key violation now
-    (ADR 20260801), but an empty new pool breaks no constraint, and the removal's
+    The question the **group-set freeze** turns on (ADR-0786). Nothing in the database
+    stops a ``PATCH`` from *adding* a group to an event whose draw was dealt across the
+    groups it had at the cut — the removal half is a foreign-key violation now
+    (ADR 20260801), but an empty new group breaks no constraint, and the removal's
     violation is a deferred 500 rather than something a director can act on. This is the
     read both halves of that refusal are built on.
 
     Deliberately **not** ``draw_has_play``. Play is the gate on *destroying* a draw
     (re-cutting, un-cutting); the mere *existence* of one is the gate on moving the
-    pools under it. The two are different questions with different answers, and a draw
+    groups under it. The two are different questions with different answers, and a draw
     that has been cut but not yet played — the ordinary state of a tournament on the
-    morning of — is exactly where the pool-set freeze does its work: nothing has been
+    morning of — is exactly where the group-set freeze does its work: nothing has been
     played, so the play guard would wave the change through, and every fixture would
     still be orphaned.
 
@@ -305,33 +388,55 @@ async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
         await db.execute(
             select(func.count())
             .select_from(TournamentFixture)
-            .where(TournamentFixture.event_id == event_id)
+            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
         )
     ).scalar_one()
     return fixtures > 0
 
 
-def event_pools(event: TournamentEvent) -> list[Pool]:
-    """The pools this event *currently* has, projected — the ones the freeze protects.
+def event_groups(event: TournamentEvent) -> list[GroupRead]:
+    """The groups this event *currently* has, projected — the ones the freeze protects.
 
-    Every reader of an event's pools comes through here (or through
-    :func:`_ordered_pools`, which is this plus the order), which is why moving pools out
-    of a JSONB column and into ``tournament_event_pools`` rows was invisible above this
-    line: :func:`app.tournament_pools.pool_read` composes the same :class:`Pool` out of
-    typed columns that this used to validate out of untyped dicts.
+    Every reader that needs a group's **identity** (id, position) comes through here (or
+    through :func:`_ordered_groups`, which is this plus the order): the freeze
+    (``app.tournament_events._enforce_group_set_frozen``), :func:`group_order`,
+    :func:`draw_config`. :func:`app.tournament_reservations.group_read` is the
+    projection, and it is what makes a group's ``id`` the same id a fixture's
+    ``group_id`` holds.
 
-    Returns the **pools**, not just their ids, though identity is all the freeze
-    compares: a refusal has to *name* the pools it is about (``named_list``), and a
-    caller handed a bare ``set[PoolId]`` has no way back to the names — it would parse
-    every pool a second time to recover them. One parse, and the id set is a
-    comprehension away.
-
-    The ids are the only load-bearing part after the cut, because the ids are what the
-    fixtures hold. Everything else here — a pool's tables, its window, its name, and
-    the ORDER of the list (read only at the cut, where it seeds the snake) — is free to
-    change under a standing draw.
+    Deliberately thin — no name, no window, no tables. A caller that needs those reads
+    :func:`event_reservations` instead: the two used to be one joined projection
+    (slice 1's read-side wire shape), and splitting the read in two is what stops a
+    caller that only needs identity from paying for — or accidentally depending on — a
+    reservation's editable fields.
     """
-    return [pool_read(pool) for pool in event.pools]
+    return [group_read(group) for group in event.groups]
+
+
+def event_reservations(event: TournamentEvent) -> list[Reservation]:
+    """The reservations this event *currently* has, projected — the venue side a
+    caller consults for a window, a table set, or a display name.
+
+    The scheduler's inputs (``app.schedule_preview``, ``app.schedule_preview_solve``,
+    ``app.schedule_solves``) and the event-update verb's re-solve trigger
+    (``app.tournament_events._event_scheduling_facts``) all read through here: what they
+    need is a reservation's identity, window and tables, never a group's. A caller that
+    wants a **label** for a fixture's group does not come through here either — see
+    ``app.draws.group_label`` — because a group's label is derived from its position,
+    not read off its reservation's editable name (ADR 20260808).
+
+    Reads through ``event.groups[].reservation_link.reservation``, deliberately NOT
+    through ``TournamentEvent.reservations`` — that collection is loaded eagerly
+    nowhere except the one write path that populates it explicitly
+    (``app.tournament_reservations.apply_event_reservations``), and a read through it
+    here would be a lazy load under async, i.e. a ``MissingGreenlet``. The group chain
+    (``TournamentEvent.groups`` → ``reservation_link`` → ``reservation`` → ``tables``)
+    is eager end to end (``selectin`` / ``joined`` / ``joined`` / ``selectin``), because
+    it rides along with every load of ``event.groups`` already. The order matches
+    ``event.groups``' own (``position``), which is the reservations' order too under
+    this slice's 1:1.
+    """
+    return [reservation_read(group.reservation) for group in event.groups]
 
 
 async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
@@ -361,7 +466,7 @@ async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
             select(func.count())
             .select_from(TournamentFixture)
             .where(
-                TournamentFixture.event_id == event_id,
+                TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])),
                 or_(
                     TournamentFixture.winner_entry_id.is_not(None),
                     TournamentFixture.match_id.is_not(None),
@@ -486,13 +591,22 @@ async def draw_currency_by_event(
     for event_id, entry_id in entries:
         active[event_id].add(entry_id)
 
+    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5), so this
+    # joins ``tournament_event_stages`` for it rather than reading
+    # ``TournamentFixture.event_id`` — the one column that dropped, in the one query
+    # here that needs the event id back rather than merely filtering by it.
     fixtures = (
         await db.execute(
             select(
-                TournamentFixture.event_id,
+                TournamentEventStage.event_id,
                 TournamentFixture.entry_a_id,
                 TournamentFixture.entry_b_id,
-            ).where(TournamentFixture.event_id.in_(seated.keys()))
+            )
+            .join(
+                TournamentEventStage,
+                TournamentEventStage.id == TournamentFixture.stage_id,
+            )
+            .where(TournamentEventStage.event_id.in_(seated.keys()))
         )
     ).all()
     for event_id, entry_a_id, entry_b_id in fixtures:
@@ -586,9 +700,9 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     placement is frozen at the cut (ADR-0786), so the fixtures of the *previous* draw
     are not something to be patched into agreement with the new field — they are a plan
     that was made against a field that no longer exists, and every one of them may have
-    moved. Matching on ``(pool, round, position)`` and updating the sides in place would
-    keep the old rows' ids while silently changing who they seat, which is the same
-    thing with a worse audit trail.
+    moved. Matching on ``(group, round, position)`` and updating the sides in place
+    would keep the old rows' ids while silently changing who they seat, which is the
+    same thing with a worse audit trail.
 
     One transaction is what makes "wholesale" true rather than aspirational: the DELETE
     and the INSERTs commit together, so there is no instant in which the event holds
@@ -632,11 +746,33 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
         draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
     )
     await uncut_draw(db, [event.id])
+    # This event's stage ids keyed by ``position`` — what a planned fixture's
+    # ``stage_id`` is resolved against below (ADR 20260815 decision 5's write seam).
+    # Built from the already-eager ``TournamentEvent.stages`` collection
+    # (``lazy="selectin"``) rather than a query of its own: the caller already loaded
+    # ``event`` with its stages, so re-selecting them here would be a second
+    # statement for a collection already in hand.
+    stage_ids = {stage.position: stage.id for stage in event.stages}
+    # A planned fixture's STAGE (ADR 20260815 decision 5) — the write seam this chore
+    # adds, the strategy layer above knows nothing about it. Grouped fixtures always
+    # belong to the event's stage 0: a director's groups never hang off any other stage
+    # (decision 3), so every grouped draw type (round-robin, and rr-then-ko's group
+    # stage) resolves there. An un-grouped fixture belongs to the position-1 (knockout)
+    # stage only for rr-then-ko — the one draw type with a second stage — and to
+    # stage 0 for every single-stage draw type (single-elim, swiss) otherwise.
+    ungrouped_stage_position = (
+        1
+        if draw_settings_of(event.draw_settings).draw_type is DrawType.rr_then_ko
+        else 0
+    )
     db.add_all(
         [
             TournamentFixture(
-                event_id=event.id,
-                pool_id=fixture.pool_id,
+                stage_id=_stage_id_at(
+                    stage_ids,
+                    0 if fixture.group_id is not None else ungrouped_stage_position,
+                ),
+                group_id=fixture.group_id,
                 round=fixture.round,
                 position=fixture.position,
                 entry_a_id=fixture.entry_a_id,
@@ -645,6 +781,30 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
             for fixture in planned
         ]
     )
+
+
+def _stage_id_at(stage_ids: Mapping[int, uuid.UUID], position: int) -> uuid.UUID:
+    """The id of this event's stage at ``position``, or a loud failure — never a
+    silent ``IndexError``/``KeyError`` — when the event's minted stages and its draw
+    settings' draw type disagree about how many there should be.
+
+    The template (``app.tournament_event_stages``) is the only writer of an event's
+    stages, and it keeps them in lockstep with the draw type on ``draw_settings`` by
+    construction: an rr-then-ko event always has a stage at position 1, everything
+    else always has one at position 0. This can only fire if that invariant has
+    already broken elsewhere — a re-mint that ran stale, a draw type changed without
+    remint — in which case a fixture minted onto a nonexistent stage would be a worse
+    failure, raised somewhere with no context linking it back to the cause.
+    """
+    try:
+        return stage_ids[position]
+    except KeyError:
+        raise RuntimeError(
+            f"cut_draw needs a stage at position {position} but the event has none "
+            f"(stages at {sorted(stage_ids)}) — its stages and its draw settings' "
+            "draw type have drifted out of the template's lockstep (ADR 20260815 "
+            "decision 3)"
+        ) from None
 
 
 async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None:
@@ -657,6 +817,11 @@ async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None
     ``TournamentEvent`` rows purely to hand them back one attribute apiece — and then
     issue a DELETE per event where one suffices. Unordered, because a DELETE ... IN has
     no order to respect.
+
+    The fixtures are addressed by ``stage_id`` now, not ``event_id`` (ADR 20260815
+    decision 5), so the ``event_id.in_(...)`` filter this docstring's title still
+    describes is a ``stage_id.in_(subquery)`` against :func:`_stage_ids` underneath —
+    mechanical, not a change of what this deletes.
 
     A bulk DELETE rather than ``event.fixtures.clear()`` on the ``delete-orphan``
     relationship: the collection would have to be loaded first (a SELECT of every
@@ -675,5 +840,7 @@ async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None
     if not event_ids:
         return
     await db.execute(
-        delete(TournamentFixture).where(TournamentFixture.event_id.in_(event_ids))
+        delete(TournamentFixture).where(
+            TournamentFixture.stage_id.in_(stage_ids_for_events(event_ids))
+        )
     )

@@ -117,7 +117,7 @@ export const EVENT_SAVE_TARGET: SaveTarget = {
     slot: 'Time slot',
     match_settings: 'Match settings',
     predicates: 'Eligibility rules',
-    pools: 'Table pools',
+    reservations: 'Reservations',
   },
 }
 

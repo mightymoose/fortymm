@@ -4,18 +4,17 @@ import {
 } from '../../../data/draw-structure'
 import { drawIssueFor } from './draw-issue'
 
-/** The eight derivation inputs, all-automatic, so a case states only what it changes.
- * Structures are **derived, never hand-written**: a `DrawStructure` typed out by hand can
- * hold a tally the arithmetic never produces, and then the precedence is proved against a
- * state no director can reach. */
+/** The seven derivation inputs, all-automatic over a field that divides, so a case
+ * states only what it changes. Structures are **derived, never hand-written**: a
+ * `DrawStructure` typed out by hand can hold a tally the arithmetic never produces, and
+ * then the precedence is proved against a state no director can reach. */
 const structureFor = (overrides: Partial<DrawStructureOptions>) =>
   deriveDrawStructure({
-    previewFieldSize: 32,
-    poolReservationCount: 4,
-    poolCountMode: 'automatic',
-    manualPoolCount: null,
-    poolSizeMode: 'automatic',
-    manualPoolSize: null,
+    previewFieldSize: 20,
+    groupCountMode: 'automatic',
+    manualGroupCount: null,
+    groupSizeMode: 'automatic',
+    manualGroupSize: null,
     qualifiersMode: 'automatic',
     manualQualifiers: null,
     ...overrides,
@@ -28,29 +27,30 @@ const structureFor = (overrides: Partial<DrawStructureOptions>) =>
  * renderer and leave this alone.
  */
 describe('drawIssueFor', () => {
-  it('has nothing to say about a draw that divides — 32 across 4', () => {
+  it('has nothing to say about a draw that divides — 20 across 4', () => {
     expect(drawIssueFor(structureFor({}))).toBeNull()
   })
 
-  it('reports the uneven tally when that is all that is wrong — 22 across 4', () => {
+  it('reports the uneven tally when that is all that is wrong — 22 across 5', () => {
     expect(drawIssueFor(structureFor({ previewFieldSize: 22 }))).toEqual({
       kind: 'uneven',
       distribution: [
-        { pools: 2, size: 6 },
-        { pools: 2, size: 5 },
+        { groups: 2, size: 5 },
+        { groups: 3, size: 4 },
       ],
     })
   })
 
   /**
-   * ⚠️ The case the ordering exists for. 8 across 6 reservations splits `2, 2, 1, 1, 1,
-   * 1`, so the derivation reports an uneven tally AND a pool nobody can play in — both
-   * non-empty, at once. "Legal, but uneven" is not the thing to say about a pool of one.
+   * ⚠️ The case the ordering exists for. 8 across 6 manual groups splits `2, 2, 1, 1, 1,
+   * 1`, so the derivation reports an uneven tally AND a group nobody can play in — both
+   * non-empty, at once. "Legal, but uneven" is not the thing to say about a group of one.
    */
-  it('puts an unplayable pool ahead of the uneven tally it comes with', () => {
+  it('puts an unplayable group ahead of the uneven tally it comes with', () => {
     const structure = structureFor({
       previewFieldSize: 8,
-      poolReservationCount: 6,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
     })
     // Both really are set — otherwise this asserts precedence against a state that never
     // had two answers to choose between.
@@ -64,18 +64,18 @@ describe('drawIssueFor', () => {
   })
 
   /**
-   * The reference's "Numbers disagree" state: 6 manual pools of 5 manual against a field
+   * The reference's "Numbers disagree" state: 6 manual groups of 5 manual against a field
    * of 40. No input can put a disagreement and an uneven tally on screen together — both
-   * modes manual gives every pool the same size — so this pins the middle rung of the
+   * modes manual gives every group the same size — so this pins the middle rung of the
    * order rather than a contest, and it is what chore 5a extends.
    */
   it('reports the disagreement when the director’s two numbers do not multiply out', () => {
     const structure = structureFor({
       previewFieldSize: 40,
-      poolCountMode: 'manual',
-      manualPoolCount: 6,
-      poolSizeMode: 'manual',
-      manualPoolSize: 5,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
+      groupSizeMode: 'manual',
+      manualGroupSize: 5,
     })
 
     expect(drawIssueFor(structure)).toEqual({

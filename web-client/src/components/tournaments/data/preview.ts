@@ -79,18 +79,18 @@ export interface PreviewFieldSummary {
 
 /** One drawn synthetic pairing, known the instant the draw runs (before the solve
  * returns) so the modal renders the grid skeleton immediately. Both sides are
- * always known (the pool stage of a round-robin draw); the synthetic ids are
+ * always known (the group stage of a round-robin draw); the synthetic ids are
  * opaque stand-ins the surface shows as `Placeholder N`.
  *
- * `poolId` is the namespaced `{event_id}:{pool_id}` composite the solver keys a
- * pool by (unique across events); `poolName` is the human label from the event's
- * pool config (e.g. `"Pool A"`) — the one the grid heads a column with, so a
- * director reads a name, not the raw composite. */
+ * `reservationId` is the namespaced `{event_id}:{reservation_id}` composite the solver
+ * keys a reservation by (unique across events); `reservationName` is the human label
+ * from the event's reservation config (e.g. `"Reservation A"`) — the one the grid heads
+ * a column with, so a director reads a name, not the raw composite. */
 export interface PreviewFixture {
   fixtureId: string
   eventId: string
-  poolId: string
-  poolName: string
+  reservationId: string
+  reservationName: string
   playerAId: string
   playerBId: string
 }
@@ -103,8 +103,8 @@ const previewFieldSummaryWireSchema = z.object({
 const previewFixtureWireSchema = z.object({
   fixture_id: z.string(),
   event_id: z.string(),
-  pool_id: z.string(),
-  pool_name: z.string(),
+  reservation_id: z.string(),
+  reservation_name: z.string(),
   player_a_id: z.string(),
   player_b_id: z.string(),
 }) satisfies z.ZodType<PreviewFixtureWire>
@@ -119,8 +119,8 @@ function previewFixtureFromWire(f: PreviewFixtureWire): PreviewFixture {
   return {
     fixtureId: f.fixture_id,
     eventId: f.event_id,
-    poolId: f.pool_id,
-    poolName: f.pool_name,
+    reservationId: f.reservation_id,
+    reservationName: f.reservation_name,
     playerAId: f.player_a_id,
     playerBId: f.player_b_id,
   }

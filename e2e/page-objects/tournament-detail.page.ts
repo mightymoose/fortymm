@@ -224,7 +224,7 @@ export class TournamentDetailPage {
   /** The **full-card open target** for one event — a stretched `<button>` sibling of the
    * card, named `Edit {event}` for the director and `View {event}` for everyone else.
    *
-   * `exact`, for the reason `publishButton` and `poolDrawNamed` are: `getByRole`'s name
+   * `exact`, for the reason `publishButton` and `groupDrawNamed` are: `getByRole`'s name
    * option is a *substring* match, so `Edit Open` would also resolve `Edit Open Singles`
    * — and a spec that seeds two events on one tournament (the only way to state "this
    * format has the tab and that one does not") is exactly where two events' names overlap. */
@@ -292,76 +292,83 @@ export class TournamentDetailPage {
     return this.drawPanel(eventId).getByTestId('fixture-match-status')
   }
 
-  /** **Every pool section** of a cut draw, so a spec can count them and read their order.
-   * Addressed by the testid *pattern* rather than by pool id, because "how many pools the
+  /** **Every group section** of a cut draw, so a spec can count them and read their order.
+   * Addressed by the testid *pattern* rather than by group id, because "how many groups the
    * draw was dealt across, in what order" is a fact about the draw that holds whatever the
-   * pools are called or keyed by. Use `poolDraw` when the point is the key itself. */
-  poolDraws(eventId: string): Locator {
-    return this.drawPanel(eventId).getByTestId(/^pool-draw-/)
+   * groups are called or keyed by. Use `groupDraw` when the point is the key itself.
+   *
+   * ⚠️ **Assumed testid** (`group-draw-{groupId}`), not yet confirmed against a landed
+   * web-client rename — see the e2e-agent report for #1369. */
+  groupDraws(eventId: string): Locator {
+    return this.drawPanel(eventId).getByTestId(/^group-draw-/)
   }
 
-  /** One pool section **by the pool's own id** — the uuid the server minted for it (ADR
+  /** One group section **by the group's own id** — the uuid the server minted for it (ADR
    * 20260801), never a name.
    *
-   * The seam that says the section on screen is keyed by the *server's* pool and not by
+   * The seam that says the section on screen is keyed by the *server's* group and not by
    * something the client re-derived: a spec reads the ids off the create response and
    * asks for them here, so a stack that keyed its sections any other way finds nothing. */
-  poolDraw(eventId: string, poolId: string): Locator {
-    return this.drawPanel(eventId).getByTestId(`pool-draw-${poolId}`)
+  groupDraw(eventId: string, groupId: string): Locator {
+    return this.drawPanel(eventId).getByTestId(`group-draw-${groupId}`)
   }
 
-  /** One pool section of a cut draw, by the pool's displayed name ("Pool A").
+  /** One group section of a cut draw, by the group's rendered label ("Group A") — a
+   * computed label (`groupLabel` in `support/tournament-api.ts`), not a director-typed
+   * name: a group carries no name of its own (ADR 20260808).
    *
    * **`exact`** is load-bearing, not tidiness: `getByRole`'s name match is a substring
-   * match by default, so "Pool 1" also selects "Pool 10" — and a ten-pool event is
-   * precisely where this accessor gets used (`tournament-pool-order.spec.ts`). Without
-   * it the locator quietly resolves to two sections and every assertion scoped through
-   * it is measuring both. */
-  poolDrawNamed(eventId: string, poolName: string): Locator {
-    return this.poolDraws(eventId).filter({
-      has: this.page.getByRole('heading', { name: poolName, level: 4, exact: true }),
+   * match by default, so "Group A" also selects "Group AA" — and a large-field event is
+   * precisely where this accessor's callers push past `Group Z`. Without it the locator
+   * quietly resolves to two sections and every assertion scoped through it is measuring
+   * both. */
+  groupDrawNamed(eventId: string, groupLabel: string): Locator {
+    return this.groupDraws(eventId).filter({
+      has: this.page.getByRole('heading', { name: groupLabel, level: 4, exact: true }),
     })
   }
 
-  /** **Every pool's heading, in the order the page lays them out** — the draw's pool
+  /** **Every group's heading, in the order the page lays them out** — the draw's group
    * order as a director reads it, top to bottom.
    *
-   * Scoped *inside* the pool sections rather than to the panel's `h4`s at large, so the
+   * Scoped *inside* the group sections rather than to the panel's `h4`s at large, so the
    * bracket's own "Bracket" heading (a sibling `h4`, present for any draw with a
    * knockout stage) can never join the list and turn an ordering assertion into a
    * position-of-the-bracket assertion.
    *
    * Asserted with `toHaveText([...])`, which pins the count AND the order in one
-   * statement — the only shape that can catch a draw rendering `Pool 1, Pool 10,
-   * Pool 2 …`, the bug that pool ids being client-minted `p-1-…`, `p-10-…` used to
-   * cause (`p-10-` sorts between `p-1-` and `p-2-`), and that ADR 20260801 ended by
-   * making pool ids server-minted UUIDs sorted by an explicit `position`. */
-  poolDrawHeadings(eventId: string): Locator {
-    return this.poolDraws(eventId).getByRole('heading', { level: 4 })
+   * statement — the only shape that can catch a draw rendering `Group A, Group J,
+   * Group B …`, the bug that group ids (like the reservation ids they map from) being
+   * ordered by id rather than an explicit `position` would cause (ADR 20260801). */
+  groupDrawHeadings(eventId: string): Locator {
+    return this.groupDraws(eventId).getByRole('heading', { level: 4 })
   }
 
-  /** One pool's entrant chips — the pool's *membership*, derived from its own fixtures
-   * (ADR-0786) and listed in draw order. What the deal put in this pool, which is a
-   * different fact from where the pool sits on the page: a draw dealt against the wrong
-   * pool order renders the right headings over the wrong fields. */
-  poolEntrants(eventId: string, poolName: string): Locator {
-    return this.poolDrawNamed(eventId, poolName)
-      // `exact` for the same reason as `poolDrawNamed`: "Entrants in Pool 1" is a
-      // substring of "Entrants in Pool 10".
-      .getByRole('list', { name: `Entrants in ${poolName}`, exact: true })
+  /** One group's entrant chips — the group's *membership*, derived from its own fixtures
+   * (ADR-0786) and listed in draw order. What the deal put in this group, which is a
+   * different fact from where the group sits on the page: a draw dealt against the wrong
+   * group order renders the right headings over the wrong fields. */
+  groupEntrants(eventId: string, groupLabel: string): Locator {
+    return this.groupDrawNamed(eventId, groupLabel)
+      // `exact` for the same reason as `groupDrawNamed`: "Entrants in Group A" is a
+      // substring of "Entrants in Group AA".
+      .getByRole('list', { name: `Entrants in ${groupLabel}`, exact: true })
       .getByRole('listitem')
   }
 
-  /** The **knockout bracket** — the fixtures belonging to no pool, rendered as
+  /** The **knockout bracket** — the fixtures belonging to no group, rendered as
    * rounds-as-columns.
    *
    * For an `rr-then-ko` draw this must be present the moment the draw is cut, with its
    * sides still unknown: both stages are cut in one stroke (ADR 20260727), because an
    * `advance()` can only ever FILL a side of an existing fixture and so could never
-   * bring a bracket into being later. Pools without this is not a selector problem — it
-   * is the second stage genuinely missing. */
+   * bring a bracket into being later. Groups without this is not a selector problem — it
+   * is the second stage genuinely missing.
+   *
+   * ⚠️ **Assumed testid** (`draw-ungrouped`, renamed off the old un-grouped testid) —
+   * see the e2e-agent report for #1369. */
   bracket(eventId: string): Locator {
-    return this.drawPanel(eventId).getByTestId('draw-unpooled')
+    return this.drawPanel(eventId).getByTestId('draw-ungrouped')
   }
 
   /** One round-column of the bracket. Its fixtures are `<li>`s, so a spec counts them
@@ -375,11 +382,11 @@ export class TournamentDetailPage {
   // ----- swiss rounds (event card) ------------------------------------------
 
   /** The **swiss rounds** view — a flat, numbered list of rounds, which is what a
-   * pool-less swiss draw's fixtures render as (ADR "swiss pre-cuts every round and pairs
+   * group-less swiss draw's fixtures render as (ADR "swiss pre-cuts every round and pairs
    * each one on advance").
    *
    * A *different* block from `bracket`, and the difference is the point: both draw types
-   * put their fixtures in `pool_id IS NULL`, and routing on that null alone rendered a
+   * put their fixtures in `group_id IS NULL`, and routing on that null alone rendered a
    * swiss draw through single-elimination's successor arithmetic — columns named back
    * from a Final ("Semifinals", "Quarterfinals") that a format eliminating nobody does
    * not have. So a spec asserts this is visible AND that `bracket` is absent; either
@@ -440,27 +447,30 @@ export class TournamentDetailPage {
     return this.page.getByTestId(`standings-panel-${eventId}`)
   }
 
-  /** The champion callout — shown only for a **complete, single-pool** event, so
+  /** The champion callout — shown only for a **complete, single-group** event, so
    * its presence *is* the "there is a rank-#1 champion" fact. Its text carries the
    * champion's username. */
   standingsChampion(eventId: string): Locator {
     return this.page.getByTestId(`standings-champion-${eventId}`)
   }
 
-  /** A pool's standings table, by pool id — its rows are in finishing order, so
-   * the first data row is rank 1. */
-  poolStandings(poolId: string): Locator {
-    return this.page.getByTestId(`pool-standings-${poolId}`)
+  /** A group's standings table, by group id — its rows are in finishing order, so
+   * the first data row is rank 1.
+   *
+   * ⚠️ **Assumed testid** (`group-standings-{groupId}`, renamed off the old
+   * reservation-keyed standings testid) — see the e2e-agent report for #1369. */
+  groupStandings(groupId: string): Locator {
+    return this.page.getByTestId(`group-standings-${groupId}`)
   }
 
   // ----- swiss standings (event card) ---------------------------------------
 
   /** A **swiss** event's standings — *one* table over the whole field, because swiss has
-   * no pools (ADR "swiss pre-cuts every round and pairs each one on advance").
+   * no groups (ADR "swiss pre-cuts every round and pairs each one on advance").
    *
-   * A different section from `standingsPanel`, which groups its tables under pools: a
-   * swiss event ranks everybody against everybody, and reading the pooled one would be a
-   * spec that could not tell "the field is ranked" from "there are no pools to show". */
+   * A different section from `standingsPanel`, which groups its tables under groups: a
+   * swiss event ranks everybody against everybody, and reading the grouped one would be a
+   * spec that could not tell "the field is ranked" from "there are no groups to show". */
   swissStandings(eventId: string): Locator {
     return this.page.getByTestId(`swiss-standings-panel-${eventId}`)
   }
@@ -525,10 +535,10 @@ export class TournamentDetailPage {
    * crowns (ADR 20260727).
    *
    * A different callout from `standingsChampion`, and deliberately so: that one belongs to
-   * a complete **single-pool** round-robin and never renders for this format, while this
-   * one names the **knockout final's** winner and never a pool leader. Reading the wrong
+   * a complete **single-group** round-robin and never renders for this format, while this
+   * one names the **knockout final's** winner and never a group leader. Reading the wrong
    * one would be a spec that could not tell "the bracket was played out" from "somebody
-   * topped a pool". It appears only once BOTH stages are decided. */
+   * topped a group". It appears only once BOTH stages are decided. */
   twoStageChampion(eventId: string): Locator {
     return this.page.getByTestId(`two-stage-champion-${eventId}`)
   }

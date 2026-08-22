@@ -41,11 +41,11 @@ const TABLES = [
  * fixtures (pin + notify in one transaction), a completed match triggers a
  * re-solve — and the called fixture's placement survives it, byte for byte.
  *
- * ## Venue-frame timing — why the pool window brackets NOW
+ * ## Venue-frame timing — why the reservation window brackets NOW
  *
  * Placements are naive wall-clock in the venue's frame, and the worker's
  * call-ahead judgment compares them to its own `datetime.now()` — UTC in the
- * compose stack's containers. The pool window is therefore seeded on TODAY'S
+ * compose stack's containers. The reservation window is therefore seeded on TODAY'S
  * UTC date, spanning the whole day: the solver never places before "now", so
  * the first round lands minutes from now — inside the ~10-minute call-ahead
  * window — and the apply CALLS it naturally, no manual placement, no waiting
@@ -95,7 +95,7 @@ test.describe('Tournament — solver schedule', () => {
     const director = await guestFromContext(page.request)
     grantBetaTester(director.username)
 
-    // ----- seed: tournament + event whose pool window brackets NOW ----------
+    // ----- seed: tournament + event whose reservation window brackets NOW ---
     const slot = {
       date: now.toISOString().slice(0, 10),
       start: '00:00',
@@ -168,7 +168,7 @@ test.describe('Tournament — solver schedule', () => {
     }
 
     // ----- the call: imminent fixtures were PINNED at apply ------------------
-    // The pool window brackets now, so the first round's projected start is
+    // The reservation window brackets now, so the first round's projected start is
     // inside the ~10-minute call-ahead window and the apply calls it in the
     // same transaction it writes placements (the pin tick is the backstop —
     // the poll outlasts a full tick interval either way).

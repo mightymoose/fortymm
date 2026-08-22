@@ -6,7 +6,7 @@ loaded tournament's config, persisting nothing (ADR "a schedule preview is a
 non-persistent solve over a synthetic field"). These tests prove:
 
 * a round-robin event with a cap of ``N`` yields ``N`` disjoint synthetic
-  entrants and exactly the round-robin fixture set (``C(N, 2)`` in one pool);
+  entrants and exactly the round-robin fixture set (``C(N, 2)`` in one group);
 * the field is disjoint across events (no synthetic player is in two events);
 * a per-event count override changes the field size and the fixture count;
 * an event the preview lays out nothing of — for its draw type (today: single-elim,
@@ -48,6 +48,7 @@ from app.schedule_preview import (
     UnpreviewableDrawType,
     build_preview_snapshot,
 )
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_draw_settings,
     make_user,
@@ -55,18 +56,19 @@ from tests._helpers import (
     with_table_aliases,
 )
 
-# A venue with two tables, so a pool can be given one or both. Built per tournament,
-# never as a module constant: a catalogue is ``tournament_tables`` rows now
-# (ADR 20260801), and rows belong to one tournament and one session. The pools below
-# name them by the positional ``t1``/``t2`` aliases ``with_table_aliases`` resolves.
+# A venue with two tables, so a reservation can be given one or both. Built per
+# tournament, never as a module constant: a catalogue is ``tournament_tables`` rows
+# now (ADR 20260801), and rows belong to one tournament and one session. The
+# reservations below name them by the positional ``t1``/``t2`` aliases
+# ``with_table_aliases`` resolves.
 TABLE_CATALOGUE = (("Table 1", "A"), ("Table 2", "A"))
 
 
-def _one_pool(table_ids: list[str]) -> dict[str, object]:
-    """A single pool over ``table_ids`` — one pool keeps the round-robin fixture
-    count exactly ``C(N, 2)`` so a test can assert it precisely."""
+def _one_reservation(table_ids: list[str]) -> dict[str, object]:
+    """A single reservation over ``table_ids`` — one group keeps the round-robin
+    fixture count exactly ``C(N, 2)`` so a test can assert it precisely."""
     return {
-        "name": "Pool A",
+        "name": "Reservation A",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "table_ids": table_ids,
     }
@@ -103,30 +105,34 @@ async def _add_event(
     tournament: Tournament,
     *,
     draw_type: DrawType = DrawType.round_robin,
-    qualifiers_per_pool: int | None = None,
+    qualifiers_per_group: int | None = None,
     rounds: int | None = None,
     max_players: int | None = 6,
-    pools: list[dict[str, object]] | None = None,
+    reservations: list[dict[str, object]] | None = None,
     length_games: int = 5,
     name: str = "Open Singles",
     timezone: str = "America/Los_Angeles",
 ) -> TournamentEvent:
+    stages = mint_stages(draw_type)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=name,
         format=EventFormat.singles,
         draw_settings=event_draw_settings(
-            draw_type, qualifiers_per_pool=qualifiers_per_pool, rounds=rounds
+            draw_type, qualifiers_per_group=qualifiers_per_group, rounds=rounds
         ),
         max_players=max_players,
         entry_fee=Decimal("0"),
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": length_games},
         predicates=[],
-        pools=with_table_aliases(
-            tournament, [_one_pool(["t1"])] if pools is None else pools
-        ),
+        stages=stages,
         timezone=timezone,
+    )
+    stages[0].groups = with_table_aliases(
+        event,
+        tournament,
+        [_one_reservation(["t1"])] if reservations is None else reservations,
     )
     db.add(event)
     await db.commit()
@@ -166,7 +172,7 @@ async def test_preview_snapshot_round_robin_synthesizes_full_draw(
     preview = build_preview_snapshot(loaded)
 
     # Six disjoint synthetic players, and exactly the round-robin fixture set:
-    # C(6, 2) = 15 pairings in the single pool, every pair meeting once.
+    # C(6, 2) = 15 pairings in the single group, every pair meeting once.
     players = _players(preview.snapshot)
     assert len(players) == 6
     assert len(preview.snapshot.fixtures) == len(list(combinations(range(6), 2))) == 15
@@ -199,10 +205,11 @@ async def test_preview_snapshot_base_is_the_earliest_window_start(
     db_session: AsyncSession, default_league: League
 ) -> None:
     """The builder returns the wall-clock ``base`` its minute frame is offset from —
-    the earliest pool window start across every event — so the enqueue verb reads it
-    off the snapshot instead of re-walking the pools. Two pools with different starts
-    pin that it is the *earliest*, and an event's own pool slots (not the event slot)
-    anchor it — as a **timezone-aware instant** in the event's venue zone."""
+    the earliest reservation window start across every event — so the enqueue verb
+    reads it off the snapshot instead of re-walking the reservations. Two
+    reservations with different starts pin that it is the *earliest*, and an
+    event's own reservation slots (not the event slot) anchor it — as a
+    **timezone-aware instant** in the event's venue zone."""
     owner = await make_user(db_session, "prev-base")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     await _add_event(
@@ -210,14 +217,14 @@ async def test_preview_snapshot_base_is_the_earliest_window_start(
         tournament,
         max_players=4,
         timezone="America/Los_Angeles",
-        pools=[
+        reservations=[
             {
-                "name": "Pool A",
+                "name": "Reservation A",
                 "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
                 "table_ids": ["t1"],
             },
             {
-                "name": "Pool B",
+                "name": "Reservation B",
                 "slot": {"date": "2026-06-13", "start": "08:15", "end": "18:00"},
                 "table_ids": ["t2"],
             },
@@ -243,7 +250,8 @@ async def test_preview_snapshot_places_events_from_two_timezones_on_one_axis(
     """Two events in **different venue timezones**, both nominally opening at 09:00
     local, must land on ONE instant axis (the gap #1152 closes). New York 09:00
     (13:00Z) precedes Los Angeles 09:00 (16:00Z) by 180 minutes, so ``base`` is the
-    NY instant and the LA pool's window opens 180 minutes into the minute frame. A
+    NY instant and the LA reservation's window opens 180 minutes into the minute
+    frame. A
     naive builder that ignored the zones would open both windows at offset 0 — this
     assertion is red against it."""
     owner = await make_user(db_session, "prev-multitz")
@@ -254,7 +262,7 @@ async def test_preview_snapshot_places_events_from_two_timezones_on_one_axis(
         max_players=4,
         name="East",
         timezone="America/New_York",
-        pools=[_one_pool(["t1"])],
+        reservations=[_one_reservation(["t1"])],
     )
     await _add_event(
         db_session,
@@ -262,7 +270,7 @@ async def test_preview_snapshot_places_events_from_two_timezones_on_one_axis(
         max_players=4,
         name="West",
         timezone="America/Los_Angeles",
-        pools=[_one_pool(["t2"])],
+        reservations=[_one_reservation(["t2"])],
     )
     loaded = await _load(db_session, tournament.id)
 
@@ -272,15 +280,18 @@ async def test_preview_snapshot_places_events_from_two_timezones_on_one_axis(
     assert preview.base == datetime(
         2026, 6, 13, 9, 0, tzinfo=ZoneInfo("America/New_York")
     )
-    # The two pools' window starts on the shared frame: NY at offset 0, LA at +180.
-    starts = sorted(pool.window.start_min for pool in preview.snapshot.pools)
+    # The two reservations' window starts on the shared frame: NY at offset 0, LA
+    # at +180.
+    starts = sorted(
+        reservation.window.start_min for reservation in preview.snapshot.reservations
+    )
     assert starts == [0, 180]
 
 
 async def test_preview_snapshot_past_dated_window_reports_past_window(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    """A pool dated in the **past** relative to the injected ``now`` (the stale
+    """A reservation dated in the **past** relative to the injected ``now`` (the stale
     "today"-default-gone-a-day-old case, #1101) previews **infeasible with a
     ``PastWindow`` reason** — exactly what the live pre-solve reports. The builder
     stamps a real ``now_min`` (``now``'s offset from the frame origin), so a window
@@ -290,7 +301,10 @@ async def test_preview_snapshot_past_dated_window_reports_past_window(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     # Window is 2026-06-13 09:00–18:00 America/Los_Angeles (ends 2026-06-14 01:00Z).
     await _add_event(
-        db_session, tournament, max_players=4, pools=[_one_pool(["t1", "t2"])]
+        db_session,
+        tournament,
+        max_players=4,
+        reservations=[_one_reservation(["t1", "t2"])],
     )
     loaded = await _load(db_session, tournament.id)
 
@@ -301,7 +315,9 @@ async def test_preview_snapshot_past_dated_window_reports_past_window(
     # ``now_min`` is a real, large positive offset (not the old hardcoded 0), past
     # every window end — so the guard fires.
     assert preview.snapshot.now_min > 0
-    window_end = max(pool.window.end_min for pool in preview.snapshot.pools)
+    window_end = max(
+        reservation.window.end_min for reservation in preview.snapshot.reservations
+    )
     assert preview.snapshot.now_min > window_end
 
     result = scheduling.solve(preview.snapshot, time_cap_s=5.0)
@@ -322,7 +338,7 @@ async def test_preview_snapshot_future_dated_window_clips_now_min_and_stays_feas
         db_session,
         tournament,
         max_players=4,
-        pools=[_one_pool(["t1", "t2"])],
+        reservations=[_one_reservation(["t1", "t2"])],
         length_games=1,
     )
     loaded = await _load(db_session, tournament.id)
@@ -341,10 +357,11 @@ async def test_preview_snapshot_future_dated_window_clips_now_min_and_stays_feas
     assert not any(isinstance(r, scheduling.PastWindow) for r in result.reasons)
 
 
-async def test_preview_snapshot_base_is_none_without_any_pool_window(
+async def test_preview_snapshot_base_is_none_without_any_reservation_window(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    """With no event (so no pool window to anchor on) the builder reports ``base``
+    """With no event (so no reservation window to anchor on) the builder reports
+    ``base``
     as ``None`` — the signal a caller uses to report a duration in minutes but no
     wall-clock finish."""
     owner = await make_user(db_session, "prev-nobase")
@@ -364,7 +381,10 @@ async def test_preview_snapshot_uncapped_event_uses_default_field(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     # NULL cap (ADR-0935: no cap) — the builder falls back to the default field.
     await _add_event(
-        db_session, tournament, max_players=None, pools=[_one_pool(["t1"])]
+        db_session,
+        tournament,
+        max_players=None,
+        reservations=[_one_reservation(["t1"])],
     )
     loaded = await _load(db_session, tournament.id)
 
@@ -418,12 +438,12 @@ async def test_preview_snapshot_count_override_resizes_field(
 @pytest.mark.parametrize(
     "draw_type",
     # The two draw types a preview lays out NOTHING of: both *can* be cut and a live
-    # solve now places both (ADR "a pool restricts scheduling, it does not enable
+    # solve now places both (ADR "a group restricts scheduling, it does not enable
     # it"), but a preview runs before anyone has registered, so a draw decided as it
     # is played has nothing to lay out. Single-elim is the bracket (#785); swiss
     # pre-cuts a round and pairs it only on advance. ``rr-then-ko`` is deliberately
-    # NOT here: it has a pool stage that schedules perfectly well, so it is previewed
-    # in part (see the tests below).
+    # NOT here: it has a group stage that schedules perfectly well, so it is
+    # previewed in part (see the tests below).
     [DrawType.single_elim, DrawType.swiss],
 )
 async def test_a_tournament_with_no_previewable_event_at_all_is_refused(
@@ -471,9 +491,10 @@ async def test_an_unpreviewable_event_does_not_abort_the_tournaments_whole_previ
     event's own 15 fixtures are asserted present, which is the claim a bare "it did
     not raise" would miss.
 
-    The skipped event's **pool** is asserted absent too, and that is the part a
-    fixture-count test would wave through: a pool of a skipped event reaching the
-    snapshot would be solved over, so an empty or past-dated window on an event that
+    The skipped event's **reservation** is asserted absent too, and that is the
+    part a fixture-count test would wave through: a reservation of a skipped event
+    reaching the snapshot would be solved over, so an empty or past-dated window on
+    an event that
     was never drawn could report the whole day infeasible.
     """
     owner = await make_user(db_session, f"prev-beside-{draw_type.value}")
@@ -488,7 +509,7 @@ async def test_an_unpreviewable_event_does_not_abort_the_tournaments_whole_previ
         draw_type=draw_type,
         rounds=3 if draw_type is DrawType.swiss else None,
         max_players=8,
-        pools=[_one_pool(["t2"])],
+        reservations=[_one_reservation(["t2"])],
     )
     loaded = await _load(db_session, tournament.id)
 
@@ -501,11 +522,12 @@ async def test_an_unpreviewable_event_does_not_abort_the_tournaments_whole_previ
         by_event[fixture.event_id] = by_event.get(fixture.event_id, 0) + 1
     assert by_event == {scheduling.EventId(str(round_robin.id)): 15}
 
-    # Nothing of the skipped event reaches the solver: no pool window (which would
-    # move the frame origin and be solved over), and no event settings.
+    # Nothing of the skipped event reaches the solver: no reservation window
+    # (which would move the frame origin and be solved over), and no event
+    # settings.
     assert all(
-        not pool.id.startswith(f"{unpreviewable.id}:")
-        for pool in preview.snapshot.pools
+        not reservation.id.startswith(f"{unpreviewable.id}:")
+        for reservation in preview.snapshot.reservations
     )
     assert [e.id for e in preview.snapshot.events] == [
         scheduling.EventId(str(round_robin.id))
@@ -523,21 +545,23 @@ async def test_an_unpreviewable_event_does_not_abort_the_tournaments_whole_previ
     assert (skipped.field_size, skipped.knockout_fixtures) == (0, 0)
 
 
-async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
+async def test_preview_snapshot_previews_an_rr_then_ko_events_group_stage_only(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    """An ``rr-then-ko`` event is previewed, and what is previewed is its **pools**.
+    """An ``rr-then-ko`` event is previewed, and what is previewed is its
+    **groups**.
 
-    The knockout fixtures the cut emits alongside them (``pool_id IS NULL``) are
-    dropped: at preview time a freshly cut bracket is entirely TBD-sided, so there is
-    no field to lay out. A live solve *does* place them — over the event's own window
-    on the tournament's tables, once their pools decide who is in them (ADR "a pool
-    restricts scheduling, it does not enable it") — which is #1228.
+    The knockout fixtures the cut emits alongside them (``group_id IS NULL``) are
+    dropped: at preview time a freshly cut bracket is entirely TBD-sided, so there
+    is no field to lay out. A live solve *does* place them — over the event's own
+    window on the tournament's tables, once their groups decide who is in them
+    (ADR "a group restricts scheduling, it does not enable it") — which is #1228.
 
-    Six synthetic entrants in one pool, so the pool stage is C(6, 2) = 15 pairings and
-    the bracket for the top 2 would add 1 more fixture on top. The count is what
-    discriminates: a builder that passed the un-pooled fixtures through would answer 16
-    here and then trip ``_schedule_fixture``'s pool assertion.
+    Six synthetic entrants in one group, so the group stage is C(6, 2) = 15
+    pairings and the bracket for the top 2 would add 1 more fixture on top. The
+    count is what discriminates: a builder that passed the ungrouped fixtures
+    through would answer 16 here and then trip ``_schedule_fixture``'s reservation
+    assertion.
     """
     owner = await make_user(db_session, "prev-rrko")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
@@ -545,7 +569,7 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
         db_session,
         tournament,
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=2,
+        qualifiers_per_group=2,
         max_players=6,
     )
     loaded = await _load(db_session, tournament.id)
@@ -553,16 +577,20 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_pool_stage_only(
     preview = build_preview_snapshot(loaded)
 
     assert len(preview.snapshot.fixtures) == 15
-    # The solver's key is still ``{event}:{pool}`` (see
-    # ``app.schedule_preview.preview_pool_key`` for why the namespace stayed once the
-    # pool ids became globally unique uuids); the pool half is looked up, not spelled.
-    (pool,) = loaded.events[0].pools
-    assert {f.pool_id for f in preview.snapshot.fixtures} == {
-        scheduling.PoolId(f"{loaded.events[0].id}:{pool.id}")
+    # The PREVIEW's key is ``{event}:{reservation}`` (see
+    # ``app.schedule_preview.preview_reservation_key``), the same namespace the
+    # live solve keys on — a ``PlannedFixture`` carries only a GROUP id, so the
+    # builder crosses it into its mapped reservation's id
+    # (``group_reservation_ids`` in ``build_preview_snapshot``) before composing
+    # the ref, exactly as ``app.schedule_solves`` does for a real solve.
+    (group,) = loaded.events[0].groups
+    assert {f.reservation_id for f in preview.snapshot.fixtures} == {
+        scheduling.ReservationId(f"{loaded.events[0].id}:{group.reservation.id}")
     }
     assert preview.field_summaries[0].field_size == 6
-    # What was dropped is *counted*, not silently discarded: the top 2 of the single
-    # pool make a 2-slot bracket, so one knockout fixture was left out. This is the
+    # What was dropped is *counted*, not silently discarded: the top 2 of the
+    # single group make a 2-slot bracket, so one knockout fixture was left out.
+    # This is the
     # fact the honest-notes strip turns into "the knockout stage is not scheduled" —
     # a builder that dropped the bracket without counting it would report 0 here and
     # leave the director reading a partial schedule with nothing to say so.
@@ -575,9 +603,10 @@ async def test_an_rr_then_ko_event_does_not_abort_the_tournaments_whole_preview(
     """The reason it is skipped rather than refused.
 
     This builder runs a **per-event loop inside a whole-tournament build**, so a
-    refusal is not scoped to the event that raised it — it takes the preview of every
-    event beside it. A director previewing a day that happens to contain one
-    pools-then-knockout event would get no schedule at all, including for their plain
+    refusal is not scoped to the event that raised it — it takes the preview of
+    every event beside it. A director previewing a day that happens to contain one
+    groups-then-knockout event would get no schedule at all, including for their
+    plain
     round-robin events. The round-robin event's own 15 fixtures are asserted present,
     which is the claim a bare "it did not raise" would miss.
     """
@@ -589,9 +618,9 @@ async def test_an_rr_then_ko_event_does_not_abort_the_tournaments_whole_preview(
         tournament,
         name="Second Singles",
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=2,
+        qualifiers_per_group=2,
         max_players=6,
-        pools=[_one_pool(["t2"])],
+        reservations=[_one_reservation(["t2"])],
     )
     loaded = await _load(db_session, tournament.id)
 
@@ -606,14 +635,14 @@ async def test_an_rr_then_ko_event_does_not_abort_the_tournaments_whole_preview(
 
 
 #: The domain's own refusal for the degeneracy a real director hit: an rr-then-ko
-#: event whose single pool takes one qualifier. Pinned whole because it is the
+#: event whose single group takes one qualifier. Pinned whole because it is the
 #: *point* of skipping such an event rather than refusing the tournament — this
 #: sentence names the two numbers the director has to change, and a generic "could
 #: not be previewed" would name nothing.
 _ONE_QUALIFIER_REFUSAL = (
-    "Taking 1 qualifier from a single pool leaves one player in the knockout "
-    "stage, who would have nobody to play — take more qualifiers from each pool, "
-    "or configure more pools."
+    "Taking 1 qualifier from a single group leaves one player in the knockout "
+    "stage, who would have nobody to play — take more qualifiers from each group, "
+    "or configure more groups."
 )
 
 
@@ -627,8 +656,8 @@ async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
     letting it propagate took the preview of every healthy event beside it — one
     misconfigured event and the director saw no schedule at all. The round-robin's own
     15 fixtures are asserted present, which is the claim a bare "it did not raise"
-    would miss, and the skipped event's pool is asserted absent because a window of an
-    event that was never drawn would otherwise be solved over.
+    would miss, and the skipped event's reservation is asserted absent because a
+    window of an event that was never drawn would otherwise be solved over.
 
     The skipped event carries the strategy's own sentence, not a generic one: the
     reason is the actionable part, and only the strategy knows which degeneracy it hit.
@@ -645,11 +674,11 @@ async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
         tournament,
         name="Championship",
         draw_type=DrawType.rr_then_ko,
-        # One pool taking one qualifier: the knockout stage would hold a single
+        # One group taking one qualifier: the knockout stage would hold a single
         # player with nobody to play, so ``RrThenKoStrategy.plan_initial`` refuses.
-        qualifiers_per_pool=1,
+        qualifiers_per_group=1,
         max_players=6,
-        pools=[_one_pool(["t2"])],
+        reservations=[_one_reservation(["t2"])],
     )
     round_robin = await _add_event(
         db_session, tournament, name="Open Singles", max_players=6
@@ -668,10 +697,12 @@ async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
     # no field, so it consumed none of the id space either.
     assert _players(preview.snapshot) == {f"placeholder-{n}" for n in range(1, 7)}
 
-    # Nothing of the skipped event reaches the solver: no pool window (which would
-    # move the frame origin and be solved over), and no event settings.
+    # Nothing of the skipped event reaches the solver: no reservation window
+    # (which would move the frame origin and be solved over), and no event
+    # settings.
     assert all(
-        not pool.id.startswith(f"{degenerate.id}:") for pool in preview.snapshot.pools
+        not reservation.id.startswith(f"{degenerate.id}:")
+        for reservation in preview.snapshot.reservations
     )
     assert [e.id for e in preview.snapshot.events] == [
         scheduling.EventId(str(round_robin.id))
@@ -689,16 +720,16 @@ async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
     assert (skipped.field_size, skipped.knockout_fixtures) == (0, 0)
 
 
-async def test_preview_snapshot_event_without_pools_refuses(
+async def test_preview_snapshot_event_without_reservations_refuses(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    owner = await make_user(db_session, "prev-nopools")
+    owner = await make_user(db_session, "prev-noreservations")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    await _add_event(db_session, tournament, pools=[])
+    await _add_event(db_session, tournament, reservations=[])
     loaded = await _load(db_session, tournament.id)
 
-    # No pools to schedule against: the round-robin strategy refuses an empty
-    # pool set — a clear domain error, never a partial snapshot.
+    # No reservations to schedule against: the round-robin strategy refuses an
+    # empty group set — a clear domain error, never a partial snapshot.
     with pytest.raises(DegenerateDraw):
         build_preview_snapshot(loaded)
 
@@ -721,7 +752,7 @@ async def test_a_tournament_whose_only_event_is_degenerate_is_still_refused(
         tournament,
         name="Championship",
         draw_type=DrawType.rr_then_ko,
-        qualifiers_per_pool=1,
+        qualifiers_per_group=1,
         max_players=6,
     )
     loaded = await _load(db_session, tournament.id)
@@ -754,9 +785,9 @@ async def test_a_wholly_unpreviewable_tournament_speaks_its_first_events_reason(
             tournament,
             name="Championship",
             draw_type=DrawType.rr_then_ko,
-            qualifiers_per_pool=1,
+            qualifiers_per_group=1,
             max_players=6,
-            pools=[_one_pool(["t2"])],
+            reservations=[_one_reservation(["t2"])],
         )
 
     async def add_bracket() -> None:
@@ -819,7 +850,7 @@ async def test_preview_snapshot_is_solver_ready(
         db_session,
         tournament,
         max_players=4,
-        pools=[_one_pool(["t1", "t2"])],
+        reservations=[_one_reservation(["t1", "t2"])],
         length_games=1,
     )
     loaded = await _load(db_session, tournament.id)

@@ -3,13 +3,19 @@
 // consistent default (a published two-day open, an Open Singles event, etc.)
 // that callers tweak via overrides.
 
-import { DRAW_TYPE_CATALOGUE } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  DRAW_TYPE_CATALOGUE,
+  mintStageReads,
+} from '@/mocks/factories/tournaments/tournament.factory'
 
+import { groupLetter } from './draw-structure'
 import { parseDrawTypeCatalogue } from './draw-types'
 import type { ConflictFixture, PlacementConflict, ScheduleSolve } from './solve'
-import { keepPools } from './pool-entries'
+import { keepReservations } from './reservation-entries'
+import { parseStages } from './stages'
 import type {
   Address,
+  DrawType,
   DrawTypeOption,
   EditedEvent,
   Entrant,
@@ -18,10 +24,12 @@ import type {
   FinishRow,
   Fixture,
   FixtureTime,
-  Pool,
-  PoolEntry,
-  PoolStandings,
+  Group,
+  GroupStandings,
   Predicate,
+  Reservation,
+  ReservationEntry,
+  Stage,
   StandingRow,
   StandingsResults,
   StandingsThenFinishesResults,
@@ -31,6 +39,27 @@ import type {
   TournamentEvent,
   TournamentTable,
 } from './types'
+
+/** A reservation's derived group id (ticket #1369, this slice's 1:1) —
+ * deterministic, so a fixture built against `buildReservation({ id: 'res-a' })` and
+ * one built against `groupIdFor('res-a')` always agree, without this factory ever
+ * storing a group id alongside a reservation the way the server never does either. */
+export function groupIdFor(reservationId: string): string {
+  return `grp-${reservationId}`
+}
+
+/** This slice's whole 1:1 (ticket #1369, `Group`'s own doc, `./types`): the server
+ * mints exactly one group per reservation, at the same position. Domain-side test
+ * fixtures derive it the same way the mock stores do (`groupsFor`,
+ * `mocks/factories/tournaments/solver-sim.ts`) rather than storing a second array a
+ * fixture could let drift out of the 1:1. */
+export function groupsFor(reservations: Reservation[]): Group[] {
+  return reservations.map((r, position) => ({
+    id: groupIdFor(r.id),
+    position,
+    reservationId: r.id,
+  }))
+}
 
 /** The seeded venue address. Every part is optional in the domain (blank =
  * `''`), so the partial and wholly-blank cases are expressed by overriding
@@ -76,17 +105,48 @@ export function buildPredicate(overrides: Partial<Predicate> = {}): Predicate {
   return { id: 'pr-1', field: 'rating', op: '<', value: 1500, ...overrides }
 }
 
-/** A four-table morning pool, **first** in its event (`position: 0`).
+/** One stage of an event's draw (ADR 20260815) — stage 1, `round-robin`, the shape a
+ * single-stage round-robin event's own (system-minted) stage has. Pass `drawType` for
+ * the other single-stage kinds, and `id`/`position` for a later stage of a multi-stage
+ * event (`buildStage({ id: 's-2', position: 1, drawType: 'single-elim' })`, the shape
+ * of an `rr-then-ko` event's knockout stage). */
+export function buildStage(overrides: Partial<Stage> = {}): Stage {
+  return { id: 's-1', position: 0, drawType: 'round-robin', ...overrides }
+}
+
+/**
+ * The stages the system mints for an event of the given `drawType` (ADR 20260815
+ * decision 3, the template `app.tournament_event_stages.mint_stages` applies): every
+ * single-stage draw type gets its own one stage running itself, and `rr-then-ko` gets
+ * the two its template names, `round-robin` then `single-elim` — in that order, at
+ * `position` 0 and 1, matching what the server always cuts an `rr-then-ko` bracket
+ * from (`buildRrThenKoEvent`'s doc, and `planKnockoutFixtures` in the MSW factory).
  *
- * `position` is 0-based and server-assigned from the pool's index in the list a write
- * sent, so a fixture with several pools must number them 0, 1, 2 … in the order it means
- * them — and must NOT let them collide. Nothing orders by id (`poolsInOrder`,
- * `data/helpers`), so a second pool left on the default `0` is not "second", it is tied
- * for first and lands wherever a stable sort leaves it. */
-export function buildPool(overrides: Partial<Pool> = {}): Pool {
+ * Derived, not re-implemented: `mintStageReads` (the MSW factory's wire-shape mirror)
+ * already carries this switch, so this is just that same template read through the
+ * domain's own parser (`parseStages`, `./stages`) — one switch, not two kept in sync by
+ * a comment. A test that wants the wire shape directly still has `mintStageReads`.
+ *
+ * `buildEvent` calls this for its own default, so a fixture that only overrides
+ * `drawType` gets stages that agree with it for free — the trap this factory exists to
+ * avoid is a fixture whose EVENT says `swiss` while its STAGE still says `round-robin`,
+ * which is exactly the disagreement `ungroupedShapeOf` (`./draw`) now reads through.
+ */
+function mintStages(drawType: DrawType): Stage[] {
+  return parseStages(mintStageReads(drawType))
+}
+
+/** A four-table morning reservation, **first** in its event (`position: 0`).
+ *
+ * `position` is 0-based and server-assigned from the reservation's index in the list a
+ * write sent, so a fixture with several reservations must number them 0, 1, 2 … in the
+ * order it means them — and must NOT let them collide. Nothing orders by id
+ * (`inPositionOrder`, `data/helpers`), so a second reservation left on the default `0`
+ * is not "second", it is tied for first and lands wherever a stable sort leaves it. */
+export function buildReservation(overrides: Partial<Reservation> = {}): Reservation {
   return {
-    id: 'p-1',
-    name: 'Pool A',
+    id: 'res-1',
+    name: 'Reservation A',
     slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
     tableIds: ['t1', 't2', 't3', 't4'],
     position: 0,
@@ -132,7 +192,7 @@ export function buildEntrants(
   )
 }
 
-/** A rated Bo5 Open Singles event, half full (52 of 64), one pool — and
+/** A rated Bo5 Open Singles event, half full (52 of 64), one reservation — and
  * therefore `entryState: { state: 'open' }`.
  *
  * `entered` is NOT an override: it is derived from `entrants`, exactly as the
@@ -152,7 +212,7 @@ export function buildEvent(
     id: 'ev-open-singles',
     name: 'Open Singles',
     format: 'singles',
-    // Round-robin, and pooled to match — see the wire-side twin in
+    // Round-robin, and grouped to match — see the wire-side twin in
     // `mocks/factories/tournaments/tournament.factory.ts`. `DrawType` holds only the two
     // types the server can plan (ADR 20260726).
     drawType: 'round-robin',
@@ -164,10 +224,10 @@ export function buildEvent(
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
     predicates: [],
     match: { rated: true, lengthGames: 5 },
-    pools: [buildPool()],
+    reservations: [buildReservation()],
     // NO DRAW CUT (ADR-0786) — `[]` is the designed state of an event whose director
     // has not cut one, and it is the state every event starts in. An override, not a
-    // derivation: the same field makes a different draw across two pools than across
+    // derivation: the same field makes a different draw across two groups than across
     // three, so a fixture that quietly cut one would be inventing a decision.
     fixtures: [],
     // NO RESULTS (ADR-0788) — `null` is the designed state of an event with no draw (and
@@ -181,13 +241,24 @@ export function buildEvent(
     // admit, and it is not "unset". Stated AFTER the spread because `Partial<…>` admits an
     // explicit `undefined` while the field is required-and-nullable (`number | null`) —
     // the same reason `entryState` is computed below rather than spread.
-    qualifiersPerPool: overrides.qualifiersPerPool ?? null,
+    qualifiersPerGroup: overrides.qualifiersPerGroup ?? null,
     // **No chosen round count** either (the swiss ADR) — a round-robin's rounds are dealt by
     // the circle method and a bracket's depth follows from the field, so `null` is the only
     // value those draw types' settings admit. Stated AFTER the spread for the same reason
     // the qualifier count is: `Partial<…>` admits an explicit `undefined` while the field is
     // required-and-nullable (`number | null`).
     rounds: overrides.rounds ?? null,
+    // **Minted from the event's own (post-override) draw type** (ADR 20260815 decision
+    // 3), stated AFTER the spread so it reads the drawType the caller actually asked
+    // for — never the base literal's `'round-robin'`. An explicit `stages` override
+    // wins outright, for the one test that needs a stage disagreeing with its event
+    // (`draw.test.ts`'s falsification for the stage-based derivation).
+    stages: overrides.stages ?? mintStages(overrides.drawType ?? 'round-robin'),
+    // **Minted 1:1 with reservations** (ticket #1369), stated AFTER the spread so it
+    // reads the FINAL (post-override) reservations array, never the base literal's. An
+    // explicit `groups` override wins outright, for a test that needs a group naming a
+    // reservation its event does not (hand-authored) or otherwise disagreeing on purpose.
+    groups: overrides.groups ?? groupsFor(overrides.reservations ?? [buildReservation()]),
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
   // the server guarantees it, and so does the fixture. The null check is the whole
@@ -203,37 +274,39 @@ export function buildEvent(
 }
 
 /**
- * The same event as the **editor** would hand it back with nothing about its pools
- * changed: every stored pool cited by the id the server minted (`keepPools`,
- * `data/pool-entries`).
+ * The same event as the **editor** would hand it back with nothing about its
+ * reservations changed: every stored reservation cited by the id the server minted
+ * (`keepReservations`, `data/reservation-entries`).
  *
  * This is the shape the write mappers take (`EditedEvent`), and building it through the
  * production constructor is the point: a test that hand-wrote `kind: 'kept'` entries
- * could keep passing after `keepPools` stopped citing ids, which is the exact regression
- * — a no-op diff read as "remove every pool" — that shape exists to prevent.
+ * could keep passing after `keepReservations` stopped citing ids, which is the exact
+ * regression — a no-op diff read as "remove every reservation" — that shape exists to
+ * prevent.
  *
- * Pass `pools` to state a real edit: `[...keepPools(event.pools), addedPool({…})]` adds
- * one, a shorter list removes one.
+ * Pass `reservations` to state a real edit:
+ * `[...keepReservations(event.reservations), addedReservation({…})]` adds one, a
+ * shorter list removes one.
  */
 export function buildEditedEvent(
-  overrides: Partial<Omit<TournamentEvent, 'entered' | 'pools'>> & {
-    pools?: PoolEntry[]
+  overrides: Partial<Omit<TournamentEvent, 'entered' | 'reservations'>> & {
+    reservations?: ReservationEntry[]
   } = {},
 ): EditedEvent {
-  const { pools, ...eventOverrides } = overrides
-  // `pools: undefined` still triggers `asEditedEvent`'s own default (`keepPools`)
-  // — passing it through rather than repeating the default here is what keeps the
-  // no-op-diff default in the one place `asEditedEvent` already states it.
-  return asEditedEvent(buildEvent(eventOverrides), pools)
+  const { reservations, ...eventOverrides } = overrides
+  // `reservations: undefined` still triggers `asEditedEvent`'s own default
+  // (`keepReservations`) — passing it through rather than repeating the default here is
+  // what keeps the no-op-diff default in the one place `asEditedEvent` already states it.
+  return asEditedEvent(buildEvent(eventOverrides), reservations)
 }
 
 /** One read event, re-expressed as the editor's no-op diff — `buildEditedEvent` for a
  * test that already holds the event it means. */
 export function asEditedEvent(
   event: TournamentEvent,
-  pools: PoolEntry[] = keepPools(event.pools),
+  reservations: ReservationEntry[] = keepReservations(event.reservations),
 ): EditedEvent {
-  return { ...event, pools }
+  return { ...event, reservations }
 }
 
 /** An event with **no entrant cap** (`max_players: null`, ADR-0935): open to
@@ -270,15 +343,15 @@ export function buildFullEvent(
 }
 
 /**
- * A **round-robin-then-knockout** event (ADR 20260727): two pools, and **two** qualifiers
- * out of each into the bracket.
+ * A **round-robin-then-knockout** event (ADR 20260727): two reservations, and **two**
+ * qualifiers out of each group into the bracket.
  *
- * `qualifiersPerPool: 2` rather than the smallest legal `1`, deliberately. One is the
+ * `qualifiersPerGroup: 2` rather than the smallest legal `1`, deliberately. One is the
  * value any dropped-count bug lands on — the smallest legal K, and the shape of a bracket
  * cut for a count nobody supplied — so a fixture built on it could not tell "the
  * director's count was threaded through" from "something substituted the minimum": the
  * exact mock/server mismatch that would cut a K=1 bracket for an event configured at K=2.
- * Two pools, likewise, because `P × K` is what sizes the bracket and a single pool would
+ * Two groups, likewise, because `P × K` is what sizes the bracket and a single group would
  * make the product ambiguous between the two factors.
  */
 export function buildRrThenKoEvent(
@@ -288,18 +361,19 @@ export function buildRrThenKoEvent(
     id: 'ev-two-stage',
     name: 'Two-stage Singles',
     drawType: 'rr-then-ko',
-    qualifiersPerPool: 2,
+    qualifiersPerGroup: 2,
     maxPlayers: 32,
     entrants: buildEntrants(8),
-    pools: [
-      buildPool({ id: 'p-a', name: 'Pool A' }),
-      buildPool({
-        id: 'p-b',
-        name: 'Pool B',
+    reservations: [
+      buildReservation({ id: 'res-a', name: 'Reservation A' }),
+      buildReservation({
+        id: 'res-b',
+        name: 'Reservation B',
         slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
-        // SECOND, said out loud. Pool B does not follow Pool A because it is written
-        // second or because `p-b` sorts after `p-a` — nothing reads either (`poolsInOrder`,
-        // `data/helpers`). Left on the factory's default `0` it would tie with Pool A.
+        // SECOND, said out loud. Reservation B does not follow Reservation A because it
+        // is written second or because `res-b` sorts after `res-a` — nothing reads
+        // either (`inPositionOrder`, `data/helpers`). Left on the factory's default `0`
+        // it would tie with Reservation A.
         position: 1,
       }),
     ],
@@ -309,7 +383,7 @@ export function buildRrThenKoEvent(
 
 /**
  * A **swiss** event (ADR "swiss pre-cuts every round and pairs each one on advance"): eight
- * entrants over **three** rounds, and **no pools at all**.
+ * entrants over **three** rounds, and **no reservations at all**.
  *
  * `rounds: 3` rather than the smallest legal `1`, deliberately, and for the reason
  * `buildRrThenKoEvent` gives about its qualifier count: `1` is where any dropped-setting
@@ -317,8 +391,9 @@ export function buildRrThenKoEvent(
  * through" from "something substituted the minimum". It is also a legal R for this field —
  * the cut refuses `R > n - 1 + n % 2`, and 3 is comfortably under 7.
  *
- * `pools: []` is the format, not an omission: swiss ranks the whole field in one table, so
- * an event carrying pools would be describing a shape the draw does not have.
+ * `reservations: []` is the format, not an omission: swiss ranks the whole field in one
+ * table, so an event carrying reservations (and therefore groups) would be describing a
+ * shape the draw does not have.
  */
 export function buildSwissEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
@@ -330,7 +405,7 @@ export function buildSwissEvent(
     rounds: 3,
     maxPlayers: 32,
     entrants: buildEntrants(8),
-    pools: [],
+    reservations: [],
     ...overrides,
   })
 }
@@ -413,20 +488,27 @@ type FixtureOverrides = Partial<
   completedAt?: FixtureTimeInput
 }
 
-/** One fixture of a cut draw (ADR-0786): round 1, position 1 of `Pool A`, between the
+/** One fixture of a cut draw (ADR-0786): round 1, position 1 of `Group A`, between the
  * first two entrants, undecided and not yet a match.
  *
  * Every `null` is a fact, so none of them is a default worth having *silently*: pass
  * `entryBId: null` for a **TBD** side (never a bye — a bye is the ABSENCE of a fixture),
- * `poolId: null` for an un-pooled (knockout) fixture. Placement (ADR-0790) defaults
+ * `groupId: null` for an ungrouped (knockout) fixture. Placement (ADR-0790) defaults
  * empty: `tableId: null` unassigned, `scheduledStart: null` unscheduled. The three
  * placement times take a naive wall-clock string for convenience (`buildFixtureTime`
- * shapes it into the `FixtureTime` the wire now sends) or a full `FixtureTime`. */
+ * shapes it into the `FixtureTime` the wire now sends) or a full `FixtureTime`.
+ *
+ * `stageId` defaults to `'s-1'` (ADR 20260815) — `buildStage`'s own default id, and the
+ * id `buildEvent`'s minted single-stage draws use. A fixture of a multi-stage event's
+ * SECOND stage (an `rr-then-ko` bracket) must override it to `'s-2'`, matching
+ * `mintStages`'s own numbering — `buildTwoStageDrawnEvent` does this for its knockout
+ * fixtures. */
 export function buildFixture(overrides: FixtureOverrides = {}): Fixture {
   const { scheduledStart, pinnedAt, completedAt, ...rest } = overrides
   return {
     id: 'fx-1',
-    poolId: 'p-a',
+    stageId: 's-1',
+    groupId: groupIdFor('res-a'),
     round: 1,
     position: 1,
     entryAId: 'entry-1',
@@ -599,19 +681,19 @@ export function buildMaterializedDrawnEvent(
 
 /**
  * An event whose draw **is cut**: a round-robin U1200 Singles, five entrants
- * (`player.1`…`player.5`) dealt across two pools by the snake the API uses, and the
+ * (`player.1`…`player.5`) dealt across two groups by the snake the API uses, and the
  * fixtures that field really produces.
  *
- *     Pool A — player.1, player.4, player.5   (ODD: 3 rounds of ONE fixture)
- *     Pool B — player.2, player.3             (1 round of one fixture)
+ *     Group A — player.1, player.4, player.5   (ODD: 3 rounds of ONE fixture)
+ *     Group B — player.2, player.3             (1 round of one fixture)
  *
- * The odd pool is the point of the fixture. Pool A's rounds hold one fixture each
+ * The odd group is the point of the fixture. Group A's rounds hold one fixture each
  * because the third player **sits that round out** — and that is all a bye is
- * (ADR-0786: "a bye is modeled as absence"; an odd round-robin pool simply has fewer
- * fixtures per round). A factory that dealt two even pools could not tell a renderer
+ * (ADR-0786: "a bye is modeled as absence"; an odd round-robin group simply has fewer
+ * fixtures per round). A factory that dealt two even groups could not tell a renderer
  * that invents a "bye" row from one that doesn't.
  *
- * The fixtures are listed in the server's order (pool → round → position). A test that
+ * The fixtures are listed in the server's order (group → round → position). A test that
  * wants to prove the panel *sorts* rather than trusting that order passes a shuffled
  * `fixtures` override.
  */
@@ -624,24 +706,25 @@ export function buildDrawnEvent(
     drawType: 'round-robin',
     maxPlayers: 24,
     entrants: buildEntrants(5),
-    pools: [
-      buildPool({ id: 'p-a', name: 'Pool A' }),
-      buildPool({
-        id: 'p-b',
-        name: 'Pool B',
+    reservations: [
+      buildReservation({ id: 'res-a', name: 'Reservation A' }),
+      buildReservation({
+        id: 'res-b',
+        name: 'Reservation B',
         slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
-        // SECOND, said out loud. Pool B does not follow Pool A because it is written
-        // second or because `p-b` sorts after `p-a` — nothing reads either (`poolsInOrder`,
-        // `data/helpers`). Left on the factory's default `0` it would tie with Pool A.
+        // SECOND, said out loud. Reservation B does not follow Reservation A because it
+        // is written second or because `res-b` sorts after `res-a` — nothing reads
+        // either (`inPositionOrder`, `data/helpers`). Left on the factory's default `0`
+        // it would tie with Reservation A.
         position: 1,
       }),
     ],
     fixtures: [
-      // Pool A: the all-play-all of players 1, 4 and 5 — one fixture a round, the third
+      // Group A: the all-play-all of players 1, 4 and 5 — one fixture a round, the third
       // player sitting out each time.
       buildFixture({
         id: 'fx-a-1',
-        poolId: 'p-a',
+        groupId: groupIdFor('res-a'),
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -649,7 +732,7 @@ export function buildDrawnEvent(
       }),
       buildFixture({
         id: 'fx-a-2',
-        poolId: 'p-a',
+        groupId: groupIdFor('res-a'),
         round: 2,
         position: 1,
         entryAId: 'entry-1',
@@ -657,16 +740,16 @@ export function buildDrawnEvent(
       }),
       buildFixture({
         id: 'fx-a-3',
-        poolId: 'p-a',
+        groupId: groupIdFor('res-a'),
         round: 3,
         position: 1,
         entryAId: 'entry-4',
         entryBId: 'entry-5',
       }),
-      // Pool B: two players, so one fixture, and the draw is done.
+      // Group B: two players, so one fixture, and the draw is done.
       buildFixture({
         id: 'fx-b-1',
-        poolId: 'p-b',
+        groupId: groupIdFor('res-b'),
         round: 1,
         position: 1,
         entryAId: 'entry-2',
@@ -687,7 +770,7 @@ export function buildDrawnEvent(
  * `entry-3 v entry-6`). Rounds 2 and 3 carry **both sides null** — TBD, waiting on
  * `advance()`, and *not* byes.
  *
- * Every fixture is `poolId: null`, and that is the trap this fixture exists to catch: it is
+ * Every fixture is `groupId: null`, and that is the trap this fixture exists to catch: it is
  * byte-identical in shape to a single-elimination bracket, so a panel routing on the null
  * renders this as one. Only the DRAW TYPE tells them apart.
  *
@@ -700,7 +783,7 @@ export function buildSwissDrawnEvent(
   const pairing = (round: number, position: number, a: string | null, b: string | null) =>
     buildFixture({
       id: `fx-sw-r${round}-p${position}`,
-      poolId: null,
+      groupId: null,
       round,
       position,
       entryAId: a,
@@ -746,7 +829,7 @@ export function buildSwissMidEvent(
       ...cut.fixtures.slice(0, 3),
       buildFixture({
         id: 'fx-sw-r2-p1',
-        poolId: null,
+        groupId: null,
         round: 2,
         position: 1,
         entryAId: 'entry-1',
@@ -754,7 +837,7 @@ export function buildSwissMidEvent(
       }),
       buildFixture({
         id: 'fx-sw-r2-p2',
-        poolId: null,
+        groupId: null,
         round: 2,
         position: 2,
         entryAId: 'entry-3',
@@ -762,7 +845,7 @@ export function buildSwissMidEvent(
       }),
       buildFixture({
         id: 'fx-sw-r2-p3',
-        poolId: null,
+        groupId: null,
         round: 2,
         position: 3,
         entryAId: 'entry-5',
@@ -823,7 +906,7 @@ export function buildSwissOddMidEvent(
   const pairing = (position: number, a: string, b: string) =>
     buildFixture({
       id: `fx-sw-r2-p${position}`,
-      poolId: null,
+      groupId: null,
       round: 2,
       position,
       entryAId: a,
@@ -842,14 +925,17 @@ export function buildSwissOddMidEvent(
 }
 
 /**
- * An **rr-then-ko** event whose draw is cut: both pools' round-robin fixtures **and** the
- * knockout bracket, all in one stroke (ADR 20260727) — the bracket entirely TBD-sided,
- * because nobody has qualified yet.
+ * An **rr-then-ko** event whose draw is cut: both groups' round-robin fixtures **and**
+ * the knockout bracket, all in one stroke (ADR 20260727) — the bracket entirely
+ * TBD-sided, because nobody has qualified yet.
  *
- * The regression pin for the routing. Its knockout fixtures are `poolId: null`, exactly as
- * a swiss draw's are, and they must keep rendering as a **bracket**: for this draw type the
- * null really is the stage discriminator, which is the meaning the swiss fix must not
- * disturb.
+ * The regression pin for the routing. Its knockout fixtures are `groupId: null`,
+ * exactly as a swiss draw's are, and they must keep rendering as a **bracket** — which
+ * is now their `stageId: 's-2'` naming `mintStages`'s own single-elim stage (ADR
+ * 20260815), rather than the event's `drawType` being read whole. That is the meaning
+ * the swiss fix must not disturb: `s-2`'s fixtures route through
+ * `shapeForStage('single-elim')` exactly as a plain single-elim event's ungrouped
+ * fixtures do.
  */
 export function buildTwoStageDrawnEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
@@ -857,11 +943,11 @@ export function buildTwoStageDrawnEvent(
   return buildRrThenKoEvent({
     entrants: buildEntrants(8),
     fixtures: [
-      // The pool stage — one fixture per pool is enough to prove the pools still render
-      // above the bracket; the snake's full circle is `buildDrawnEvent`'s business.
+      // The group stage — one fixture per group is enough to prove the groups still
+      // render above the bracket; the snake's full circle is `buildDrawnEvent`'s business.
       buildFixture({
         id: 'fx-pa-1',
-        poolId: 'p-a',
+        groupId: groupIdFor('res-a'),
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -869,17 +955,19 @@ export function buildTwoStageDrawnEvent(
       }),
       buildFixture({
         id: 'fx-pb-1',
-        poolId: 'p-b',
+        groupId: groupIdFor('res-b'),
         round: 1,
         position: 1,
         entryAId: 'entry-2',
         entryBId: 'entry-4',
       }),
       // The knockout stage: `P × K` = 2 × 2 = 4 slots, so two semifinals and a final, every
-      // side TBD until the pools decide their qualifiers.
+      // side TBD until the groups decide their qualifiers. `stageId: 's-2'` — `mintStages`'s
+      // second stage of an `rr-then-ko` event, the single-elim one.
       buildFixture({
         id: 'fx-ko-r1-p1',
-        poolId: null,
+        stageId: 's-2',
+        groupId: null,
         round: 1,
         position: 1,
         entryAId: null,
@@ -887,7 +975,8 @@ export function buildTwoStageDrawnEvent(
       }),
       buildFixture({
         id: 'fx-ko-r1-p2',
-        poolId: null,
+        stageId: 's-2',
+        groupId: null,
         round: 1,
         position: 2,
         entryAId: null,
@@ -895,7 +984,8 @@ export function buildTwoStageDrawnEvent(
       }),
       buildFixture({
         id: 'fx-ko-r2-p1',
-        poolId: null,
+        stageId: 's-2',
+        groupId: null,
         round: 2,
         position: 1,
         entryAId: null,
@@ -910,8 +1000,8 @@ export function buildTwoStageDrawnEvent(
  * A **single-elimination** event whose draw is cut: four entrants, two semifinals with
  * their seeds named and a TBD final.
  *
- * The other regression pin. Un-pooled like a swiss draw and like the knockout stage above,
- * and it must keep rendering as a bracket.
+ * The other regression pin. Ungrouped like a swiss draw and like the knockout stage
+ * above, and it must keep rendering as a bracket.
  */
 export function buildBracketDrawnEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
@@ -921,12 +1011,12 @@ export function buildBracketDrawnEvent(
     name: 'Championship Singles',
     drawType: 'single-elim',
     entrants: buildEntrants(4),
-    // A bracket is un-pooled — the event's pools are not consulted at all (ADR-0786).
-    pools: [],
+    // A bracket is ungrouped — the event's groups are not consulted at all (ADR-0786).
+    reservations: [],
     fixtures: [
       buildFixture({
         id: 'fx-se-r1-p1',
-        poolId: null,
+        groupId: null,
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -934,7 +1024,7 @@ export function buildBracketDrawnEvent(
       }),
       buildFixture({
         id: 'fx-se-r1-p2',
-        poolId: null,
+        groupId: null,
         round: 1,
         position: 2,
         entryAId: 'entry-3',
@@ -942,7 +1032,7 @@ export function buildBracketDrawnEvent(
       }),
       buildFixture({
         id: 'fx-se-r2-p1',
-        poolId: null,
+        groupId: null,
         round: 2,
         position: 1,
         entryAId: null,
@@ -953,38 +1043,39 @@ export function buildBracketDrawnEvent(
   })
 }
 
-/** How many pools `buildTenPools` builds — ten, because ten is the smallest count at
- * which a legacy client-minted id (`p-10-…`) sorts into the middle of the single digits.
- * Nine pools would order identically by id and by position, and prove nothing. */
+/** How many reservations `buildTenReservations` builds — ten, because ten is the
+ * smallest count at which a legacy client-minted id (`p-10-…`) sorts into the middle of
+ * the single digits. Nine reservations would order identically by id and by position,
+ * and prove nothing. */
 const TEN = 10
 
 /**
- * **Ten pools whose ids sort differently from their positions** — the fixture the whole
- * ordering rule is about, and the only pool fixture that can falsify it.
+ * **Ten reservations whose ids sort differently from their positions** — the fixture the
+ * whole ordering rule is about, and the only reservation fixture that can falsify it.
  *
- * The ids reproduce the legacy shape the editor used to mint before pool ids became
- * server-minted UUIDs (`genId('p')` — `p-1-<ts>`, `p-2-<ts>` … `p-10-<ts>`, one
+ * The ids reproduce the legacy shape the editor used to mint before reservation ids
+ * became server-minted UUIDs (`genId('p')` — `p-1-<ts>`, `p-2-<ts>` … `p-10-<ts>`, one
  * timestamp for the burst), and as strings `p-10-` falls between `p-1-` and `p-2-`. So
  * anything that sorted these by id renders **1, 10, 2, 3 … 9** — which is not a
- * hypothetical: it is exactly what a ten-pool event's draw did before pools carried a
- * position.
+ * hypothetical: it is exactly what a ten-reservation event's draw did before reservations
+ * carried a position.
  *
  * They are returned **in that wrong order on purpose**, positions 0–9 telling the truth
  * underneath. A fixture handed over already sorted cannot tell "orders by position" from
  * "inherited the order it was given", so it would keep passing after the sort was
  * deleted. This one reds for both.
  *
- * Each pool gets its own table and its own half-hour window, so ten pools raise no
- * double-booking diagnostic — the claim under test is the order, and a warning banner
+ * Each reservation gets its own table and its own half-hour window, so ten of them raise
+ * no double-booking diagnostic — the claim under test is the order, and a warning banner
  * would be noise inside it.
  */
-export function buildTenPools(): Pool[] {
+export function buildTenReservations(): Reservation[] {
   const inPositionOrder = Array.from({ length: TEN }, (_, i) => {
     const n = i + 1
-    return buildPool({
+    return buildReservation({
       // The legacy `genId('p')` shape: index, then the shared base-36 timestamp.
       id: `p-${n}-mkq1x`,
-      name: `Pool ${n}`,
+      name: `Reservation ${n}`,
       position: i,
       tableIds: [`t${n}`],
       slot: {
@@ -999,44 +1090,65 @@ export function buildTenPools(): Pool[] {
   return [...inPositionOrder].sort((a, b) => (a.id < b.id ? -1 : 1))
 }
 
-/** The ten pools' names in **position** order — `Pool 1` … `Pool 10`. What every surface
- * that lays them out must show. */
-export const TEN_POOLS_BY_POSITION = Array.from(
+/** The ten reservations' names in **position** order — `Reservation 1` …
+ * `Reservation 10`. What the reservations editor, which shows a director's own typed
+ * names, must lay its cards out in. */
+export const TEN_RESERVATIONS_BY_POSITION = Array.from(
   { length: TEN },
-  (_, i) => `Pool ${i + 1}`,
+  (_, i) => `Reservation ${i + 1}`,
 )
 
-/** The same ten names in **id** order — `Pool 1`, `Pool 10`, `Pool 2` … The wrong answer,
- * named, so a test can assert it is not the one being given. */
-export const TEN_POOLS_BY_ID = buildTenPools().map((p) => p.name)
+/** The same ten names in **id** order — `Reservation 1`, `Reservation 10`,
+ * `Reservation 2` … The wrong answer, named, so a test can assert it is not the one
+ * being given. */
+export const TEN_RESERVATIONS_BY_ID = buildTenReservations().map((r) => r.name)
+
+/** The ten reservations' MAPPED GROUPS' labels, in **position** order — `Group A` …
+ * `Group J` (`groupLetter`, `./draw-structure`). What the draw panel — which never
+ * prints a stored name, only the position-derived label (ticket #1369) — must lay its
+ * group cards out in. */
+export const TEN_GROUPS_BY_POSITION = Array.from(
+  { length: TEN },
+  (_, i) => `Group ${groupLetter(i)}`,
+)
+
+/** The same ten labels, in the reservations' **id** order — each group's label still
+ * follows its OWN (unchanged) position, so this is `Group A`, `Group J`, `Group B` … The
+ * wrong answer for the draw panel, named for the same reason `TEN_RESERVATIONS_BY_ID`
+ * is. */
+export const TEN_GROUPS_BY_ID = buildTenReservations().map(
+  (r) => `Group ${groupLetter(r.position)}`,
+)
 
 /**
- * A **drawn** ten-pool event: `buildTenPools`, each pool holding one fixture between two
- * entrants of its own (20 entrants, `player.1`…`player.20`).
+ * A **drawn** ten-group event: `buildTenReservations`, each group holding one fixture
+ * between two entrants of its own (20 entrants, `player.1`…`player.20`).
  *
- * One fixture per pool because `drawState` renders only the pools the draw actually used
- * — a pool with no fixtures is not part of the draw and would simply vanish, taking the
- * ordering claim with it. Two players a pool is the smallest thing that makes a fixture.
+ * One fixture per group because `drawState` renders only the groups the draw actually
+ * used — a group with no fixtures is not part of the draw and would simply vanish,
+ * taking the ordering claim with it. Two players a group is the smallest thing that
+ * makes a fixture.
  */
-export function buildTenPoolDrawnEvent(
+export function buildTenGroupDrawnEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
 ): TournamentEvent {
-  const pools = buildTenPools()
+  const reservations = buildTenReservations()
   return buildEvent({
-    id: 'ev-ten-pools',
-    name: 'Ten-pool Singles',
+    id: 'ev-ten-groups',
+    name: 'Ten-group Singles',
     drawType: 'round-robin',
     maxPlayers: 32,
     entrants: buildEntrants(TEN * 2),
-    pools,
-    // Built off the pools **in position order**, so the fixture list is in the server's
-    // own order (pool → round → position) and the panel is never handed a hint.
-    fixtures: [...pools]
+    reservations,
+    // Built off the reservations **in position order**, so the fixture list is in the
+    // server's own order (group → round → position) and the panel is never handed a
+    // hint.
+    fixtures: [...reservations]
       .sort((a, b) => a.position - b.position)
-      .map((pool, i) =>
+      .map((reservation, i) =>
         buildFixture({
-          id: `fx-${pool.id}`,
-          poolId: pool.id,
+          id: `fx-${reservation.id}`,
+          groupId: groupIdFor(reservation.id),
           round: 1,
           position: 1,
           entryAId: `entry-${i * 2 + 1}`,
@@ -1047,7 +1159,7 @@ export function buildTenPoolDrawnEvent(
   })
 }
 
-/** One line of a pool's standings (ADR-0788): entry `entry-1`, sitting 1st with a clean
+/** One line of a group's standings (ADR-0788): entry `entry-1`, sitting 1st with a clean
  * 2–0 record and a +3 game difference. `gameDifference` is `gamesWon - gamesLost`; the
  * factory keeps them consistent by default, but a test that wants an inconsistent wire
  * (to prove the client SHOWS the server's figure rather than recomputing it) overrides it
@@ -1067,7 +1179,7 @@ export function buildStandingRow(overrides: Partial<StandingRow> = {}): Standing
 }
 
 /**
- * One line of a **swiss** table: a pool's row plus the `buchholz` figure that ordered it.
+ * One line of a **swiss** table: a group's row plus the `buchholz` figure that ordered it.
  *
  * `buchholz: 5` rather than a number that could be confused with one of its neighbours —
  * not `2` (the wins), not `3` (the game difference), not `4` (the games won). A column
@@ -1080,15 +1192,15 @@ export function buildSwissStandingRow(
   return { ...buildStandingRow(), buchholz: 5, ...overrides }
 }
 
-/** One pool's standings — a **complete** three-player pool in finishing order:
+/** One group's standings — a **complete** three-player group in finishing order:
  * `entry-1` (2–0) over `entry-4` (1–1) over `entry-5` (0–2). In the server's order, which
  * the view renders untouched (ADR-0788 — the order *is* the result), so a factory that
  * returned them sorted would let a re-sorting bug pass. */
-export function buildPoolStandings(
-  overrides: Partial<PoolStandings> = {},
-): PoolStandings {
+export function buildGroupStandings(
+  overrides: Partial<GroupStandings> = {},
+): GroupStandings {
   return {
-    poolId: 'p-a',
+    groupId: groupIdFor('res-a'),
     complete: true,
     rows: [
       buildStandingRow({
@@ -1123,16 +1235,16 @@ export function buildPoolStandings(
   }
 }
 
-/** An event's results (ADR-0788): one **complete single pool** with a champion —
- * `entry-1`, who won it. Single-pool so `champion` is meaningful (a multi-pool event has
- * no single champion without a knockout stage yet — pass `pools` + `champion: null` for
- * that case). */
+/** An event's results (ADR-0788): one **complete single group** with a champion —
+ * `entry-1`, who won it. Single-group so `champion` is meaningful (a multi-group event
+ * has no single champion without a knockout stage yet — pass `groups` + `champion: null`
+ * for that case). */
 export function buildEventResults(
   overrides: Partial<StandingsResults> = {},
 ): StandingsResults {
   return {
     kind: 'standings',
-    pools: [buildPoolStandings()],
+    groups: [buildGroupStandings()],
     complete: true,
     champion: 'entry-1',
     ...overrides,
@@ -1186,22 +1298,22 @@ export function buildFinishesEvent(
     drawType: 'single-elim',
     maxPlayers: 16,
     entrants: buildEntrants(4),
-    pools: [],
+    reservations: [],
     results: buildFinishesResults(),
     ...overrides,
   })
 }
 
 /**
- * A **two-stage** event's results (ADR 20260727) — a played-out `rr-then-ko`: two pools
+ * A **two-stage** event's results (ADR 20260727) — a played-out `rr-then-ko`: two groups
  * decided, the bracket run to a final, one champion.
  *
  * The numbers are arranged around the claim the format turns on: **the champion is the
- * bracket's, never a pool's.** `entry-2` wins the final, and `entry-2` tops NO pool —
- * `entry-5` leads Pool A and `entry-3` leads Pool B, and both of them lose their semifinal
- * (they are the two tied 3rd). A fixture whose champion also happened to top the first
- * standings table could not tell a banner that reads the bracket from one that reads the
- * standings, and that is exactly the bug worth catching.
+ * bracket's, never a group's.** `entry-2` wins the final, and `entry-2` tops NO group —
+ * `entry-5` leads Group A and `entry-3` leads Group B, and both of them lose their
+ * semifinal (they are the two tied 3rd). A fixture whose champion also happened to top
+ * the first standings table could not tell a banner that reads the bracket from one that
+ * reads the standings, and that is exactly the bug worth catching.
  *
  * The finishes follow single-elimination's own shape, unchanged: 1st, 2nd, then the two
  * same-round losers **tied 3rd**. A mid-flight event is built by overriding
@@ -1213,9 +1325,9 @@ export function buildTwoStageResults(
 ): StandingsThenFinishesResults {
   return {
     kind: 'standings_then_finishes',
-    pools: [
-      buildPoolStandings({
-        poolId: 'p-a',
+    groups: [
+      buildGroupStandings({
+        groupId: groupIdFor('res-a'),
         complete: true,
         rows: [
           buildStandingRow({ entryId: 'entry-5', rank: 1, played: 3, wins: 3, losses: 0, gamesWon: 6, gamesLost: 1, gameDifference: 5 }),
@@ -1224,8 +1336,8 @@ export function buildTwoStageResults(
           buildStandingRow({ entryId: 'entry-8', rank: 4, played: 3, wins: 0, losses: 3, gamesWon: 1, gamesLost: 6, gameDifference: -5 }),
         ],
       }),
-      buildPoolStandings({
-        poolId: 'p-b',
+      buildGroupStandings({
+        groupId: groupIdFor('res-b'),
         complete: true,
         rows: [
           buildStandingRow({ entryId: 'entry-3', rank: 1, played: 3, wins: 2, losses: 1, gamesWon: 5, gamesLost: 3, gameDifference: 2 }),
@@ -1247,7 +1359,7 @@ export function buildTwoStageResults(
   }
 }
 
-/** The **mid-flight** two-stage read: the same pools, all decided, and a bracket one match
+/** The **mid-flight** two-stage read: the same groups, all decided, and a bracket one match
  * from home — the final seated and unplayed. So `complete` is `false` (both stages decided
  * is the bar, and one is not), `champion` is `null`, and the finishes list **starts at
  * position 3**: the two beaten semifinalists are the only entrants the bracket has placed,
@@ -1317,13 +1429,13 @@ export function twoStageResultsOf(
   return results
 }
 
-/** A **two-stage** (`rr-then-ko`) event **with results**: the two-pool event
+/** A **two-stage** (`rr-then-ko`) event **with results**: the two-group event
  * `buildRrThenKoEvent` seeds, played out to a champion (`buildTwoStageResults`). Its eight
  * entrants (`entry-1`…`entry-8`) are the ones both stages name, so every id joins to a
- * username; its two pools (`p-a`, `p-b`) are the ones the standings name, so both tables
- * title themselves.
+ * username; its two groups (`groupIdFor('res-a')`, `groupIdFor('res-b')`) are the ones
+ * the standings name, so both tables title themselves.
  *
- * The mid-flight state — pools done, final unplayed, no champion — is
+ * The mid-flight state — groups done, final unplayed, no champion — is
  * `buildTwoStageEvent({ results: buildMidFlightTwoStageResults() })`. */
 export function buildTwoStageEvent(
   overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
@@ -1354,7 +1466,7 @@ export function swissStandingsResultsOf(
  * A **swiss** event's results (the swiss ADR): **one complete table over the whole field** —
  * five entrants over three rounds, `entry-1` on top and crowned.
  *
- * No pools, which is the whole shape: a swiss ranks everybody against everybody. The live
+ * No groups, which is the whole shape: a swiss ranks everybody against everybody. The live
  * state (rounds still to play) is
  * `buildSwissStandingsResults({ complete: false, champion: null })`.
  *
@@ -1462,7 +1574,7 @@ export function buildSwissStandingsResults(
   }
 }
 
-/** A **swiss** event **with results**: the pool-less swiss event `buildSwissEvent` seeds,
+/** A **swiss** event **with results**: the group-less swiss event `buildSwissEvent` seeds,
  * played out to a champion.
  *
  * **Five entrants, not the eight `buildSwissEvent` defaults to**, because a swiss table
@@ -1480,8 +1592,8 @@ export function buildSwissStandingsEvent(
   })
 }
 
-/** A round-robin event **with results**: the drawn U1200 pool play (`buildDrawnEvent`)
- * projected forward to a finished single pool whose standings and champion the panel
+/** A round-robin event **with results**: the drawn U1200 group play (`buildDrawnEvent`)
+ * projected forward to a finished single group whose standings and champion the panel
  * renders. The entrant ids the results name (`entry-1`, `entry-4`, `entry-5`) are the ones
  * the drawn event lists, so the name join lands. */
 export function buildStandingsEvent(
@@ -1493,7 +1605,7 @@ export function buildStandingsEvent(
     drawType: 'round-robin',
     maxPlayers: 24,
     entrants: buildEntrants(5),
-    pools: [buildPool({ id: 'p-a', name: 'Pool A' })],
+    reservations: [buildReservation({ id: 'res-a', name: 'Reservation A' })],
     results: buildEventResults(),
     ...overrides,
   })

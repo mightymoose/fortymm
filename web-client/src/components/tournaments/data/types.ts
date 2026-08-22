@@ -6,7 +6,7 @@
 // here, but nothing crosses back at runtime.
 import type { MatchStatus } from '@/api/matches'
 
-import type { DrawType, DrawTypeOption } from './draw-types'
+import type { DrawType, DrawTypeOption, StageDrawType } from './draw-types'
 import type { PredicateOp } from './options'
 import type { ScheduleSolve } from './solve'
 
@@ -18,7 +18,7 @@ export type EventFormat = 'singles' | 'doubles' | 'teams'
  * catalogue parser (`./draw-types`), the way `./solve` declares its enums. Re-exported
  * here so the domain modules that read every tournament type from `./types` keep doing
  * so — there is no second declaration to drift. */
-export type { DrawType, DrawTypeOption }
+export type { DrawType, DrawTypeOption, StageDrawType }
 
 export type MatchLength = 1 | 3 | 5 | 7
 
@@ -85,101 +85,156 @@ export interface MatchSettings {
   lengthGames: MatchLength
 }
 
-/** A slice of tables reserved for a window of time within an event, **as it is read
+/** One competitive **group** of an event's draw — an ordered set of entrants who play
+ * all-play-all — as it is **read**: server-minted identity and order, plus which
+ * reservation it plays under (ticket #1369, "group and reservation").
+ *
+ * Server-owned, unlike `Reservation` below — there is no write shape, because a client
+ * never authors a group directly. The server mints exactly one group per reservation
+ * (the 1:1 this ticket keeps; a later ticket breaks it), so a `reservations` write is
+ * the only way a group comes to exist, is re-ordered, or goes away.
+ *
+ * `reservationId` names an entry of this same event's `reservations`. It is never a
+ * dangling ref in this slice — the join column behind it is `NOT NULL` and a real
+ * foreign key, so a group with no mapped reservation is a state the database cannot
+ * produce — but the client still looks it up rather than assuming it always resolves
+ * (`eventSchema`/`apiToEvent`, `./api`, reject a payload where it does not). */
+export interface Group {
+  id: string
+  /** Where this group sits in its event's ordering — 0-based, and assigned by the
+   * server from its reservation's position (`groupLetter`, `./draw-structure`, is what
+   * turns this into `Group A`, `Group B`, …). */
+  position: number
+  /** The reservation this group plays under — the id to look up in this same event's
+   * `reservations` for its tables, its window and the name a director typed. */
+  reservationId: string
+}
+
+/** A slice of tables reserved for a window of time within an event — the **venue**
+ * face of what used to be one overloaded concept (ticket #1369) — **as it is read
  * back**: the words a client wrote, plus the two fields the server owns.
  *
- * This is the READ shape. What goes *out* is `PoolEntry` below — the same distinction
- * `TournamentTable`/`TournamentTableEntry` draw one resource over, and for the same
- * reason: since ADR 20260801 a pool is a row with a uuid primary key, so neither of the
- * two fields here is the client's to author. */
-export interface Pool {
-  /** The SERVER's uuid — the `tournament_event_pools` row's primary key (ADR 20260801).
-   * A client never mints one: the create shape (`PoolWrite`) has no `id` field at all
-   * and `extra="forbid"` turns a supplied one into a 422, and the patch shape
-   * (`PoolUpsert`) takes an id only to *cite* a pool the event already has. An id this
-   * event does not hold is a 422 naming that entry — never a quietly minted pool. */
+ * This is the READ shape. What goes *out* is `ReservationDraft` below — the same
+ * distinction `TournamentTable`/`TournamentTableEntry` draw one resource over, and for
+ * the same reason: since ADR 20260801 a reservation is a row with a uuid primary key,
+ * so neither of the two fields here is the client's to author. */
+export interface Reservation {
+  /** The SERVER's uuid — the `tournament_reservations` row's primary key (ADR
+   * 20260801). A client never mints one: the create shape (`ReservationWrite`) has no
+   * `id` field at all and `extra="forbid"` turns a supplied one into a 422, and the
+   * patch shape (`ReservationUpsert`) takes an id only to *cite* a reservation the
+   * event already has. An id this event does not hold is a 422 naming that entry —
+   * never a quietly minted reservation. */
   id: string
   name: string
   slot: Slot
   tableIds: string[]
   /**
-   * Where this pool sits in its event's ordering — **0-based, and assigned by the
-   * server** from the index of the pool in the list a write body sent. To reorder
-   * pools you send them in the order you want; you never send a position (both write
-   * schemas are `extra="forbid"`, so a `position` key on a write body is a 422 that
-   * names the field — see `poolEntriesToApi`, `data/api`).
+   * Where this reservation sits in its event's ordering — **0-based, and assigned by
+   * the server** from the index of the reservation in the list a write body sent. To
+   * reorder reservations you send them in the order you want; you never send a
+   * position (both write schemas are `extra="forbid"`, so a `position` key on a write
+   * body is a 422 that names the field — see `reservationEntriesToApi`, `data/api`).
    *
-   * It exists because **pool ids do not order pools**, and that was true of the
-   * client-minted ids it was introduced against (`p-10-…` sorted between `p-1-…` and
-   * `p-2-…`, so a ten-pool event read its draw back as 1, 10, 2, 3 — a live bug) and is
-   * even more true of the uuids that replaced them, which sort by nothing at all.
-   * Everything that puts pools in an order therefore orders them by THIS field
-   * (`poolsInOrder`, `data/helpers`) — never by id, and never by whatever order the
-   * array happened to arrive in.
+   * It exists because **reservation ids do not order reservations**, and that was true
+   * of the client-minted ids it was introduced against (`p-10-…` sorted between
+   * `p-1-…` and `p-2-…`, so a ten-reservation event read its draw back as 1, 10, 2, 3 —
+   * a live bug) and is even more true of the uuids that replaced them, which sort by
+   * nothing at all. Everything that puts reservations in an order therefore orders
+   * them by THIS field (`inPositionOrder`, `data/helpers`) — never by id, and never by
+   * whatever order the array happened to arrive in.
    */
   position: number
 }
 
-/** The part of a pool a client actually **authors**: what it is called, when it runs,
- * and which tables it holds. Exactly `PoolWrite` on the wire — no `id`, no `position`,
- * because neither is the client's (see `Pool` above). It is also all a `PoolCard` is
- * given, so the editor's one pool control literally cannot touch an identity. */
-export interface PoolDraft {
+/** The part of a reservation a client actually **authors**: what it is called, when it
+ * runs, and which tables it holds. Exactly `ReservationWrite` on the wire — no `id`, no
+ * `position`, because neither is the client's (see `Reservation` above). It is also all
+ * a reservation card is given, so the editor's one reservation control literally cannot
+ * touch an identity. */
+export interface ReservationDraft {
   name: string
   slot: Slot
   tableIds: string[]
 }
 
 /**
- * One pool of an **edited** event — what the editor's pools tab holds and
- * `poolEntriesToApi` (`./api`) puts on the wire as a `PoolUpsert`.
+ * One reservation of an **edited** event — what the editor's Reservations tab holds
+ * and `reservationEntriesToApi` (`./api`) puts on the wire as a `ReservationUpsert`.
  *
- * A pools write is an **id-keyed diff**, not a replace (ADR 20260801), and the two
- * things an entry can mean are opposite:
+ * A reservations write is an **id-keyed diff**, not a replace (ADR 20260801), and the
+ * two things an entry can mean are opposite:
  *
- * - **`kept`** — "this is the pool you already have, with these words." It carries the
- *   `id` the server minted, so the row keeps its identity and therefore every fixture
- *   drawn into it.
+ * - **`kept`** — "this is the reservation you already have, with these words." It
+ *   carries the `id` the server minted, so the row keeps its identity — and, with it,
+ *   the group mapped 1:1 onto it, and every fixture drawn into that group.
  * - **`added`** — "mint me one." It has no `id` **field at all**, so a client-minted id
- *   is not a value this type can hold — which is the point: `PoolWrite` is
- *   `extra="forbid"`, so an `id` on a new pool is a 422, and an entry citing an id the
- *   event does not have is a 422 on that entry (`['body','pools',i,'id']`).
+ *   is not a value this type can hold — which is the point: `ReservationWrite` is
+ *   `extra="forbid"`, so an `id` on a new reservation is a 422, and an entry citing an
+ *   id the event does not have is a 422 on that entry (`['body','reservations',i,'id']`).
  *
- * (And a stored pool **no entry cites** is a *removal* — which is why this is a tagged
- * union rather than the obvious `id?: string`. With one optional field, a draft pool
- * that had somehow acquired an id and a saved pool that had lost one are both
- * representable, and each is a silent data-loss bug: the first is a 422 at best and a
- * duplicate pool at worst, the second deletes the pool — and its fixtures' home — that
- * the director only meant to rename. It is the shape `TournamentTableEntry` already
- * has, one resource over.)
+ * (And a stored reservation **no entry cites** is a *removal* — which is why this is a
+ * tagged union rather than the obvious `id?: string`. With one optional field, a draft
+ * reservation that had somehow acquired an id and a saved reservation that had lost one
+ * are both representable, and each is a silent data-loss bug: the first is a 422 at
+ * best and a duplicate reservation at worst, the second deletes the reservation — and
+ * its mapped group's fixtures' home — that the director only meant to rename. It is
+ * the shape `TournamentTableEntry` already has, one resource over.)
  *
  * `key` on the `added` arm is a **React key and nothing else**: it is never sent, never
  * read by the server, and never mistaken for an id, because the arm that has an id is a
  * different arm. The cards need a stable key across re-renders — `useFieldArray`
  * regenerates its own key on every `update()`, which would remount the card mid-keystroke
- * and drop focus — and a pool the server has never seen has nothing else to be keyed on.
+ * and drop focus — and a reservation the server has never seen has nothing else to be
+ * keyed on.
  */
-export type PoolEntry =
-  | ({ kind: 'kept'; id: string } & PoolDraft)
-  | ({ kind: 'added'; key: string } & PoolDraft)
+export type ReservationEntry =
+  | ({ kind: 'kept'; id: string } & ReservationDraft)
+  | ({ kind: 'added'; key: string } & ReservationDraft)
 
 /**
  * An event as the **editor** hands it back: every read field of the event it was opened
- * on, with the pools replaced by the diff the organizer built (`PoolEntry`).
+ * on, with the reservations replaced by the diff the organizer built (`ReservationEntry`).
  *
  * It is a distinct type from `TournamentEvent` rather than a loosened one so that the
  * two directions cannot be confused at a call site: what comes *back* from the API has
- * pools with server ids and positions, and what goes *out* has entries that either cite
- * an id or carry none. `eventToCreateBody` / `eventToUpdateBody` take this, so an event
- * read straight off a query can no longer be posted back as-is — which is exactly the
- * 422 (`extra_forbidden` on `body.pools[i].id`) that this shape exists to make
- * unsayable.
+ * reservations with server ids and positions, and what goes *out* has entries that
+ * either cite an id or carry none. `eventToCreateBody` / `eventToUpdateBody` take this,
+ * so an event read straight off a query can no longer be posted back as-is — which is
+ * exactly the 422 (`extra_forbidden` on `body.reservations[i].id`) that this shape
+ * exists to make unsayable.
+ *
+ * `groups` rides along unchanged from the read event — a director never edits it
+ * directly, and it is not part of the diff a save sends. */
+export type EditedEvent = Omit<TournamentEvent, 'reservations'> & {
+  reservations: ReservationEntry[]
+}
+
+/**
+ * One stage of an event's draw (ADR 20260815 decision 1): a row the event owns, never
+ * authored by a director. The system mints an event's stages from a template keyed on
+ * its (possibly composite) `drawType` the moment its draw settings are configured:
+ * `round-robin → [round-robin]`, `single-elim → [single-elim]`, `swiss → [swiss]`,
+ * `rr-then-ko → [round-robin, single-elim]` — so every event holds at least one stage
+ * from the moment it exists, and stages freeze the same instant a draw does (the groups
+ * freeze, decision 3).
+ *
+ * `drawType` is the stage's OWN draw type — the strategy it runs — and it is one of the
+ * three **single-stage** kinds, never `rr-then-ko`: that member names a template, a
+ * sequence of stages, not a runnable stage's own type (decision 4). This is what lets
+ * `shapeForStage` (`./draw`) be a three-arm exhaustive switch with nothing to guess at.
  */
-export type EditedEvent = Omit<TournamentEvent, 'pools'> & { pools: PoolEntry[] }
+export interface Stage {
+  id: string
+  /** 0-based order among this event's stages — `round-robin` before `single-elim` for
+   * an `rr-then-ko` event's two. */
+  position: number
+  drawType: StageDrawType
+}
 
 /**
  * One planned pairing of an event's **draw** (ADR-0786): a round and a position —
- * plus a pool, when the draw is pooled — whose sides may still be unknown.
+ * plus a group, when the draw is grouped — whose sides may still be unknown.
  *
  * A fixture is **not a match**. It materializes into one later (#788), and until it
  * does `matchId` is `null`. The whole set of an event's fixtures is its draw; an event
@@ -200,12 +255,23 @@ export type EditedEvent = Omit<TournamentEvent, 'pools'> & { pools: PoolEntry[] 
  *   no match yet. It moves in lockstep with `matchId` (both `null` before go-live, both
  *   set after), and it is the match's *current* status read live, never a copy frozen at
  *   go-live.
- * - `poolId` — this fixture belongs to no pool: the draw is un-pooled (single-elim), or
- *   this is the knockout stage of a combined draw type (#787, not an enum member today).
- *   When set, it names a `Pool` in this same event's `pools`.
+ * - `stageId` — the **stage** (ADR 20260815 decision 5) this fixture belongs to —
+ *   `NOT NULL`, and never inferred: it names an entry in this same event's `stages`.
+ *   Read that stage's own `drawType` to answer "is this fixture's un-grouped block a
+ *   bracket or a set of swiss rounds?" (`shapeForStage`, `./draw`) — a client no longer
+ *   guesses that from `groupId` plus the event's overall `drawType`, which is exactly
+ *   the inference that once rendered a swiss draw's rounds as a knockout bracket,
+ *   because both are un-grouped and indistinguishable by `groupId` alone.
+ * - `groupId` — this fixture belongs to no group: the draw is un-grouped (single-elim,
+ *   swiss), or this is the knockout stage of an `rr-then-ko` draw. Which one is no
+ *   longer this field's business to say — read `stageId` against `stages` for that.
+ *   When set, it names a `Group` of **this fixture's own stage**, in this same event's
+ *   `groups` — but a fixture whose `groupId` names no entry of `groups` is still shown,
+ *   never dropped and never a parse failure (the domain allows a knockout fixture that
+ *   simply names no group): see `drawState`, `./draw`.
  * - `tableId` — the fixture's **placement** table (ADR-0790): `null` means **unassigned
  *   to a table**. When set, it names a `TournamentTable` in the tournament's table
- *   catalogue — a string ref, the same pattern as `poolId`.
+ *   catalogue — a string ref, the same pattern as `groupId`.
  * - `scheduledStart` — the placement's **predicted** start (ADR "tournament times are
  *   timezone-aware instants"): `null` means **unscheduled**. When set, a `FixtureTime`
  *   — a venue-local `localLabel`/`tzAbbrev` for display plus the raw UTC `instant` for
@@ -224,7 +290,10 @@ export type EditedEvent = Omit<TournamentEvent, 'pools'> & { pools: PoolEntry[] 
  */
 export interface Fixture {
   id: string
-  poolId: string | null
+  /** The stage (`Stage`, ADR 20260815) this fixture belongs to — never `null`, an
+   * entry in this same event's `stages`. */
+  stageId: string
+  groupId: string | null
   round: number
   position: number
   entryAId: string | null
@@ -235,7 +304,7 @@ export interface Fixture {
    * lockstep with `matchId`. */
   matchStatus: MatchStatus | null
   /** The placement table this fixture is assigned to (ADR-0790), or `null` when
-   * **unassigned**. A string ref into the tournament's table catalogue, like `poolId`. */
+   * **unassigned**. A string ref into the tournament's table catalogue, like `groupId`. */
   tableId: string | null
   /** The placement's predicted start (ADR "tournament times are timezone-aware
    * instants"): a `FixtureTime`, or `null` when **unscheduled**. A prediction, not a
@@ -280,7 +349,7 @@ export interface FixtureTime {
 }
 
 /**
- * One entry's line in a pool's standings (ADR-0788), at the rank the **server**
+ * One entry's line in a group's standings (ADR-0788), at the rank the **server**
  * settled it at.
  *
  * The entry is an **id only** — exactly as a fixture carries its sides — and the
@@ -299,7 +368,7 @@ export interface FixtureTime {
  */
 export interface StandingRow {
   entryId: string
-  /** 1-based and distinct per row — position 1 is the pool leader. */
+  /** 1-based and distinct per row — position 1 is the group leader. */
   rank: number
   played: number
   wins: number
@@ -310,12 +379,12 @@ export interface StandingRow {
 }
 
 /**
- * One entry's line in a **swiss** table: every column a pool's row carries, plus the
+ * One entry's line in a **swiss** table: every column a group's row carries, plus the
  * **Buchholz** figure that ordered it (ADR "swiss standings add Buchholz, and head-to-head
  * is guarded on having met").
  *
  * It **extends** `StandingRow` rather than restating it, exactly as `SwissStandingRowRead`
- * extends `StandingRowRead` on the wire: swiss's rows are a pool's rows plus one column,
+ * extends `StandingRowRead` on the wire: swiss's rows are a group's rows plus one column,
  * which is a fact about the format and not a second row shape. So one table renders both.
  */
 export interface SwissStandingRow extends StandingRow {
@@ -343,18 +412,19 @@ export interface SwissStandingRow extends StandingRow {
   buchholz: number
 }
 
-/** One pool's standings: its rows in the server's finishing order (**never re-sorted on
- * the client**), and whether every one of the pool's fixtures is decided. `poolId` names
- * a `Pool` in this same event's `pools`, so the table titles itself from the pool the
- * page already holds. */
-export interface PoolStandings {
-  poolId: string
+/** One group's standings: its rows in the server's finishing order (**never re-sorted on
+ * the client**), and whether every one of the group's fixtures is decided. `groupId` names
+ * a `Group` in this same event's `groups`, so the table titles itself from the group the
+ * page already holds — via `groupLetter` (`./draw-structure`), since a group carries no
+ * name of its own. */
+export interface GroupStandings {
+  groupId: string
   rows: StandingRow[]
   complete: boolean
 }
 
 /**
- * A round-robin event's **results** (ADR-0788): a standings table per pool, whether the
+ * A round-robin event's **results** (ADR-0788): a standings table per group, whether the
  * whole event is decided, and its champion when there is one. The `standings` arm of the
  * `EventResults` discriminated union (ADR-0785), tagged `kind: 'standings'`.
  *
@@ -365,12 +435,12 @@ export interface PoolStandings {
  */
 export interface StandingsResults {
   kind: 'standings'
-  pools: PoolStandings[]
-  /** True when every fixture of every pool is decided. */
+  groups: GroupStandings[]
+  /** True when every fixture of every group is decided. */
   complete: boolean
-  /** The winning **entry id** of a complete, single-pool event — a pure round-robin's
-   * winner. `null` while any fixture is unplayed, and `null` for a multi-pool event,
-   * which has no single champion without a knockout stage to join its pool winners
+  /** The winning **entry id** of a complete, single-group event — a pure round-robin's
+   * winner. `null` while any fixture is unplayed, and `null` for a multi-group event,
+   * which has no single champion without a knockout stage to join its group winners
    * (a later slice). Joined to a username at render, like a row's `entryId`. */
   champion: string | null
 }
@@ -425,35 +495,35 @@ export interface FinishesResults {
 
 /**
  * A **round-robin-then-knockout** event's results (ADR 20260727): both stages at once —
- * the pool stage's standings and the knockout stage's finishes. The
+ * the group stage's standings and the knockout stage's finishes. The
  * `standings_then_finishes` arm of the `EventResults` discriminated union.
  *
- * Its two blocks are the **same models** the other two arms send (`PoolStandings[]`,
+ * Its two blocks are the **same models** the other two arms send (`GroupStandings[]`,
  * `FinishRow[]`), not two-stage-flavoured near-copies, so each stage renders through the
  * panel that already exists and the shapes cannot drift apart. That is also why this is a
  * third arm rather than a restructuring of the union into a composite: making `standings`
  * and `finishes` sub-objects of one wrapper would change how the existing two arms are
  * read, forcing round-robin and single-elim changes that buy nothing.
  *
- * Live and partial like every other results shape: the pool tables fill in as pool matches
- * land, and the finishes list grows as the bracket is played out — so a mid-flight event
- * has complete pools and a finishes list that **starts below 1st** (only the entrants the
- * bracket has actually placed).
+ * Live and partial like every other results shape: the group tables fill in as group
+ * matches land, and the finishes list grows as the bracket is played out — so a mid-flight
+ * event has complete groups and a finishes list that **starts below 1st** (only the
+ * entrants the bracket has actually placed).
  */
 export interface StandingsThenFinishesResults {
   kind: 'standings_then_finishes'
-  /** The **pool stage**: one standings table per pool, in the server's finishing order. */
-  pools: PoolStandings[]
+  /** The **group stage**: one standings table per group, in the server's finishing order. */
+  groups: GroupStandings[]
   /** The **knockout stage**: the placements so far, position ascending, ties sharing a
    * position — exactly what a single-elimination event reads out. Empty until the bracket
    * settles its first fixture. */
   finishes: FinishRow[]
-  /** True when **both** stages are decided — every pool played out *and* the bracket run to
-   * its final. Not either one: a two-stage event with decided pools and an unplayed final
-   * is not complete. */
+  /** True when **both** stages are decided — every group played out *and* the bracket run
+   * to its final. Not either one: a two-stage event with decided groups and an unplayed
+   * final is not complete. */
   complete: boolean
-  /** The winning **entry id** — the **knockout final's winner, never a pool leader**. The
-   * pool stage only seeds the bracket, so topping a pool wins nothing here. `null` until
+  /** The winning **entry id** — the **knockout final's winner, never a group leader**. The
+   * group stage only seeds the bracket, so topping a group wins nothing here. `null` until
    * that final is decided. Joined to a username at render, like a row's `entryId`. */
   champion: string | null
 }
@@ -463,13 +533,13 @@ export interface StandingsThenFinishesResults {
  * advance"): **one standings table over the whole field**, whether every round is decided,
  * and the leader once it is. The `swiss_standings` arm of the `EventResults` union.
  *
- * The rows are a round-robin pool's rows **plus one column** (`SwissStandingRow`), not a
+ * The rows are a round-robin group's rows **plus one column** (`SwissStandingRow`), not a
  * swiss-flavoured near-copy — so the same table renders them and the two shapes cannot
  * drift apart. The two differences are both facts about the format: they arrive as **one
- * list rather than grouped under a pool** (swiss is pool-less — everybody is ranked against
- * everybody, which is what pairing by score is for), and each carries the **Buchholz**
- * figure that ordered it, which a round-robin has no use for because its entrants all face
- * the same opposition.
+ * list rather than grouped under a group** (swiss is group-less — everybody is ranked
+ * against everybody, which is what pairing by score is for), and each carries the
+ * **Buchholz** figure that ordered it, which a round-robin has no use for because its
+ * entrants all face the same opposition.
  *
  * Live and partial like every other results shape: the table fills in as matches land, and
  * the later rounds — cut up front with their sides still unknown — contribute nothing until
@@ -478,14 +548,14 @@ export interface StandingsThenFinishesResults {
 export interface SwissStandingsResults {
   kind: 'swiss_standings'
   /** The whole field in the server's finishing order, **never re-sorted here** (the order
-   * *is* the result — ADR-0788). One list, because there is no pool to group by; and each
+   * *is* the result — ADR-0788). One list, because there is no group to group by; and each
    * row carries its `buchholz`, because that is the step of the chain the other columns
    * cannot show. */
   rows: SwissStandingRow[]
   /** True when **every round** is decided, the later ones included. */
   complete: boolean
   /** The leader's **entry id** once the event is complete, else `null`. A swiss ranks its
-   * whole field, so unlike the round-robin arm there is no multi-pool carve-out: a complete
+   * whole field, so unlike the round-robin arm there is no multi-group carve-out: a complete
    * swiss always has one. Joined to a username at render, like a row's `entryId`. */
   champion: string | null
 }
@@ -585,7 +655,7 @@ export interface TournamentEvent {
   name: string
   format: EventFormat
   drawType: DrawType
-  /** **K** — how many of each pool's finishers advance into the knockout stage of an
+  /** **K** — how many of each group's finishers advance into the knockout stage of an
    * `rr-then-ko` draw, or `null` for a draw type that has no knockout stage to qualify
    * for (ADR 20260727).
    *
@@ -603,7 +673,7 @@ export interface TournamentEvent {
    * sizes the bracket (`P × K`), which is why it is carried on the read model at all —
    * the mock planner and every reader take the director's real value rather than a
    * default. */
-  qualifiersPerPool: number | null
+  qualifiersPerGroup: number | null
   /** **R** — how many rounds a `swiss` event plays, or `null` for a draw type whose round
    * count is not a thing anybody chooses (ADR "swiss pre-cuts every round and pairs each
    * one on advance").
@@ -647,8 +717,20 @@ export interface TournamentEvent {
   slot: Slot
   predicates: Predicate[]
   match: MatchSettings
-  pools: Pool[]
-  /** This event's **draw** — every fixture the cut produced, in pool → round → position
+  /** This event's **groups** (ticket #1369) — the competitive face: server-minted
+   * identity and order, one per reservation. Read-only; a client edits `reservations`
+   * below and the server keeps this array in lockstep, one entry per reservation. */
+  groups: Group[]
+  /** This event's **reservations** (ticket #1369) — the venue face: the tables and
+   * time window a director books, and the name they typed. What a client actually
+   * edits (`ReservationEntry`, `EditedEvent`). */
+  reservations: Reservation[]
+  /** This event's **stages** (ADR 20260815) — one row per single-stage kind the event's
+   * `drawType` template names, in `position` order. System-minted, never authored by a
+   * director, and present from the moment the event exists (so an *undrawn* event still
+   * has these). Frozen the instant a draw exists, the same moment the groups freeze. */
+  stages: Stage[]
+  /** This event's **draw** — every fixture the cut produced, in group → round → position
    * order, as the server sends them (ADR-0786).
    *
    * **`[]` is the designed "no draw cut" state**, and it is the state every event is
@@ -657,7 +739,7 @@ export interface TournamentEvent {
    * draw verbs, never through an event PATCH (which is why `eventToUpdateBody` omits
    * it, exactly as it omits the server-derived `entered`). */
   fixtures: Fixture[]
-  /** This event's **results** — its pool standings, whether it is complete, and its
+  /** This event's **results** — its group standings, whether it is complete, and its
    * champion (ADR-0788) — or `null` for an uncut or non-round-robin event (nothing to
    * stand). Server-derived, live, from the fixtures' completed matches; read it, never
    * write it, and never re-sort or recompute it (the order and the numbers *are* the
@@ -666,7 +748,7 @@ export interface TournamentEvent {
 }
 
 /** A physical table in the venue catalogue, referenced by id from a
- * tournament's `tableIds` and a pool's `tableIds`.
+ * tournament's `tableIds` and a reservation's `tableIds`.
  *
  * The `id` is the SERVER's — a uuid it minted for the `tournament_tables` row
  * (ADR 20260801). A client never authors one: this shape is what comes *back*, and

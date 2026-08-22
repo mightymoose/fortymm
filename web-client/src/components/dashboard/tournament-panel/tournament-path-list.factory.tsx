@@ -11,7 +11,7 @@ export function buildTournamentPathListProps(
 ): TournamentPathListProps {
   return {
     heading: 'Your matches',
-    subheading: 'Pool A · 4 players',
+    subheading: 'Group A · 4 players',
     rows: [
       buildTournamentPathRowView({ key: 'r1', label: 'M1' }),
       buildTournamentPathRowView({

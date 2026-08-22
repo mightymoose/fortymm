@@ -157,8 +157,8 @@ async def list_tournament_details(
     active entrants in one batch, all those events' fixtures in one batch
     (ADR-0786), the caller's rating on every distinct league those tournaments run
     on (which every event's ``entry_state`` is judged against, ADR-0783), plus the
-    venue tables / pools / pool-table-reservations / stages that ride eagerly on
-    ``Tournament``/``TournamentEvent``/``TournamentEventPool`` themselves
+    venue tables / groups / group-table-reservations / stages that ride eagerly on
+    ``Tournament``/``TournamentEvent``/``TournamentEventStageGroup`` themselves
     (``lazy="selectin"`` each — see ``EXPECTED_TOURNAMENT_LIST_STATEMENTS`` in
     ``tests/test_tournaments.py`` for the full, currently-measured breakdown). A
     per-event entry count, a per-event draw, or a per-tournament rating would be the

@@ -50,8 +50,9 @@ from app.models import (
     User,
 )
 from app.realtime import EventKind, RealtimeBroker
+from app.tournament_event_stages import mint_stages
 from tests._helpers import (
-    event_pools,
+    event_groups,
     make_user,
     venue_tables,
 )
@@ -60,7 +61,7 @@ from tests._realtime import watch_hints
 DATE = "2030-01-01"
 VENUE_TZ_NAME = "America/Chicago"
 VENUE_TZ = ZoneInfo(VENUE_TZ_NAME)
-#: The pool window's start, as a timezone-aware instant in the venue's frame —
+#: The reservation window's start, as a timezone-aware instant in the venue's frame —
 #: the fixed "now" every clock in this module is frozen to.
 BASE = datetime(2030, 1, 1, 9, 0, tzinfo=VENUE_TZ)
 #: Far enough out that the second fixture is nowhere near the call-ahead window,
@@ -123,6 +124,7 @@ async def _stage(
     await db.flush()
     table_ids = tuple(str(table.id) for table in tournament.tables)
 
+    stages = mint_stages(DrawType.round_robin)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Open Singles",
@@ -133,17 +135,20 @@ async def _stage(
         timezone=VENUE_TZ_NAME,
         slot={"date": DATE, "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
-        pools=event_pools(
-            [
-                {
-                    "name": "Pool A",
-                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
-                    "table_ids": ["t1", "t2"],
-                }
-            ],
-            tournament=tournament,
-        ),
+        stages=stages,
     )
+    groups = event_groups(
+        [
+            {
+                "name": "Reservation A",
+                "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                "table_ids": ["t1", "t2"],
+            }
+        ],
+        event=event,
+        tournament=tournament,
+    )
+    stages[0].groups = groups
     db.add(event)
     await db.flush()
 
@@ -160,16 +165,16 @@ async def _stage(
     await db.flush()
 
     called_fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stages[0].id,
+        group_id=groups[0].id,
         round=1,
         position=1,
         entry_a_id=entry_a.id,
         entry_b_id=entry_b.id,
     )
     later_fixture = TournamentFixture(
-        event_id=event.id,
-        pool_id=event.pools[0].id,
+        stage_id=stages[0].id,
+        group_id=groups[0].id,
         round=1,
         position=2,
         entry_a_id=entry_c.id,
@@ -239,7 +244,7 @@ async def test_a_player_called_to_a_table_is_hinted_and_one_playing_later_is_not
 ) -> None:
     """The pin tick calls the imminent fixture: its two entrants each get one
     ``dashboard.changed``, and the two entrants of the 13:00 fixture — same
-    tournament, same pool, same event — get none, as does an uninvolved
+    tournament, same group, same event — get none, as does an uninvolved
     signed-in user."""
     staged = await _stage(db_session)
     bystander = await _bystander(db_session)

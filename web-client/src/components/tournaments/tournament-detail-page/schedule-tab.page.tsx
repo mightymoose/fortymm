@@ -40,7 +40,7 @@ const scoped = (container: Container) => ({
     return container.getByTestId('schedule-awaiting')
   },
 
-  /** The reserved pool windows shown as lightweight context. */
+  /** The reserved windows shown as lightweight context. */
   queryWindows() {
     return container.queryByTestId('schedule-windows')
   },
@@ -100,7 +100,7 @@ const scoped = (container: Container) => ({
   },
   /** The table picker in an open editor. It is a radix `Select`, whose listbox only
    * exists once opened — but its TRIGGER already renders the chosen option's label,
-   * which is where the `· pool table` mark shows up. So this reads what the director
+   * which is where the `· reservation table` mark shows up. So this reads what the director
    * actually sees on the closed control, with no portal to open. */
   getPlaceTable(fixtureId: string) {
     return within(container.getByTestId(`place-editor-${fixtureId}`)).getByRole(

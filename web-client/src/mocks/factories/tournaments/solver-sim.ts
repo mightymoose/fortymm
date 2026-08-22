@@ -12,11 +12,34 @@
 // TYPES only, no MSW, nothing that cannot load in a bare Node context.
 
 import type { components } from '@/api/schema'
+import { mockUuid } from '@/mocks/mock-uuid'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 type FixtureTimeRead = components['schemas']['FixtureTimeRead']
-type Pool = components['schemas']['Pool']
+type Reservation = components['schemas']['Reservation']
+type Group = components['schemas']['GroupRead']
+
+/** A seeded reservation's derived group id — deterministic and stable across reads,
+ * because it is a pure function of the reservation's own id rather than a counter
+ * (ticket #1369). Lives here, not in either store, because both stores' fixtures name a
+ * `group_id` this way and the two worlds must derive the identical id from the identical
+ * reservation or their fixtures would point at different groups for the same seed. */
+export function groupIdFor(reservationId: string): string {
+  return mockUuid(`tournament-event-group:${reservationId}`)
+}
+
+/** This slice's whole 1:1 (ticket #1369, `GroupRead`'s own doc): the server mints
+ * exactly one group per reservation, at the same position. Neither store STORES this —
+ * both derive it from `reservations` at read time (`groupIdFor`, above), so the 1:1 can
+ * never drift out of step by itself. */
+export function groupsFor(reservations: readonly Reservation[]): Group[] {
+  return reservations.map((r, position) => ({
+    id: groupIdFor(r.id),
+    position,
+    reservation_id: r.id,
+  }))
+}
 
 /** Shape a **naive venue wall-clock** stamp (`YYYY-MM-DDTHH:MM[:SS]`) into the wire
  * `FixtureTimeRead` the server now sends (ADR "tournament times are timezone-aware
@@ -47,9 +70,14 @@ function naiveOf(t: FixtureTimeRead): string {
 }
 
 /** The slice of an event the sim reads — both stores' event shapes satisfy it
- * structurally, so the functions stay generic over whichever they hold. */
+ * structurally, so the functions stay generic over whichever they hold.
+ *
+ * `reservations`, not `groups` (ticket #1369): a fixture's `group_id` names a group, but
+ * a group carries no tables or window of its own — those live on the reservation it maps
+ * to 1:1, which is what the placement pass below actually needs. `groupsFor` (above)
+ * bridges the two. */
 interface SimEvent {
-  pools: Pool[]
+  reservations: Reservation[]
   fixtures: TournamentFixtureRead[]
 }
 
@@ -114,7 +142,7 @@ function placedStarts(events: readonly SimEvent[]): string[] {
  * moment the venue's day opens — `fallback` included (it covers the first
  * placement of the day judging before it lands). The seeds' slots live on fixed
  * calendar dates, so the machine's real clock can never be "10 minutes before
- * Pool A"; the day's own first ball is the only honest clock a mock has. */
+ * Group A"; the day's own first ball is the only honest clock a mock has. */
 export function wallNow(events: readonly SimEvent[], fallback: string): string {
   const starts = placedStarts(events)
   starts.push(fallback)
@@ -122,9 +150,9 @@ export function wallNow(events: readonly SimEvent[], fallback: string): string {
 }
 
 /** The mock solver's own placement pass: every fixture with no table yet is dealt
- * onto its **pool's** tables — round-robin across them, 30 minutes apart from the
- * pool window's start — in the same naive wall-clock frame the Slot is in (no
- * `Date`, ADR-0790). Un-pooled fixtures and already-placed ones are left alone: a
+ * onto its **group's reservation's** tables — round-robin across them, 30 minutes apart
+ * from the reservation window's start — in the same naive wall-clock frame the Slot is
+ * in (no `Date`, ADR-0790). Ungrouped fixtures and already-placed ones are left alone: a
  * real solve respects pins, and this mock has nothing smarter to say about a
  * fixture with no window. Returns the placed events plus how many placements were
  * written — what the ledger row reports as `fixtures_placed`. */
@@ -133,17 +161,24 @@ export function placeUnplacedFixtures<E extends SimEvent>(
 ): { events: E[]; placed: number } {
   let placed = 0
   const next = events.map((event) => {
-    const poolById = new Map(event.pools.map((p) => [p.id, p]))
-    const perPool = new Map<string, number>()
+    // The two-hop lookup this event's own groups derive (`groupIdFor`): a fixture names
+    // a GROUP, and a group's tables/window are its mapped RESERVATION's. Keyed straight
+    // off each reservation's own derived group id — the loop already holds the
+    // reservation, so there is nothing to re-find.
+    const reservationByGroupId = new Map(
+      event.reservations.map((r) => [groupIdFor(r.id), r]),
+    )
+    const perReservation = new Map<string, number>()
     const fixtures = event.fixtures.map((fixture) => {
       if (fixture.table_id !== null) return fixture
-      const pool = fixture.pool_id !== null ? poolById.get(fixture.pool_id) : undefined
-      if (!pool || pool.table_ids.length === 0) return fixture
-      const index = perPool.get(pool.id) ?? 0
-      perPool.set(pool.id, index + 1)
-      const table = pool.table_ids[index % pool.table_ids.length]
-      const wave = Math.floor(index / pool.table_ids.length)
-      const [hours, minutes] = pool.slot.start.split(':').map(Number)
+      const reservation =
+        fixture.group_id !== null ? reservationByGroupId.get(fixture.group_id) : undefined
+      if (!reservation || reservation.table_ids.length === 0) return fixture
+      const index = perReservation.get(reservation.id) ?? 0
+      perReservation.set(reservation.id, index + 1)
+      const table = reservation.table_ids[index % reservation.table_ids.length]
+      const wave = Math.floor(index / reservation.table_ids.length)
+      const [hours, minutes] = reservation.slot.start.split(':').map(Number)
       const total = hours * 60 + minutes + wave * 30
       const hh = String(Math.floor(total / 60) % 24).padStart(2, '0')
       const mm = String(total % 60).padStart(2, '0')
@@ -151,7 +186,7 @@ export function placeUnplacedFixtures<E extends SimEvent>(
       return {
         ...fixture,
         table_id: table,
-        scheduled_start: simFixtureTime(`${pool.slot.date}T${hh}:${mm}:00`),
+        scheduled_start: simFixtureTime(`${reservation.slot.date}T${hh}:${mm}:00`),
       }
     })
     return { ...event, fixtures }

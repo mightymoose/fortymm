@@ -6,24 +6,24 @@ import {
   entryFeeSchema,
   maxPlayersSchema,
   nameSchema,
-  poolNameSchema,
-  qualifiersPerPoolSchema,
+  reservationNameSchema,
+  qualifiersPerGroupSchema,
   swissRoundsSchema,
   type EventSection,
 } from '../data/event-validation'
-import { browserTimezone, poolsInOrder } from '../data/helpers'
+import { browserTimezone, inPositionOrder } from '../data/helpers'
 import { PRED_OPS_BY_TYPE, type PredicateOp } from '../data/options'
-import { keepPools } from '../data/pool-entries'
+import { keepReservations } from '../data/reservation-entries'
 import { eligibilityIssues } from '../data/predicate-validation'
 import type {
-  PoolEntry,
+  ReservationEntry,
   Predicate,
   PredicateValue,
   TournamentEvent,
 } from '../data/types'
 
 /** A `YYYY-MM-DD` date with `HH:MM` start/end — the shape both an event and a
- * pool carry (mirrors `Slot` in `data/types`). */
+ * reservation carry (mirrors `Slot` in `data/types`). */
 const slotSchema = z.object({
   date: z.string(),
   start: z.string(),
@@ -75,43 +75,45 @@ const predicateSchema: z.ZodType<Predicate, Predicate> = z.object({
   value: predicateValueSchema,
 })
 
-/** The three fields of a pool a director actually types — the `PoolDraft` both arms of
- * `poolEntrySchema` carry, spelled once so the two arms cannot drift into disagreeing
- * about what a pool *is*.
+/** The three fields of a reservation a director actually types — the `ReservationDraft`
+ * both arms of `reservationEntrySchema` carry, spelled once so the two arms cannot drift
+ * into disagreeing about what a reservation *is*.
  *
- * `name` carries the server's floor (`poolNameSchema`, `data/event-validation`) — the
- * one field of a pool the organizer can *clear*, and a `min_length=1` 422 if they do. */
-const POOL_DRAFT_FIELDS = {
-  name: poolNameSchema,
+ * `name` carries the server's floor (`reservationNameSchema`, `data/event-validation`) —
+ * the one field of a reservation the organizer can *clear*, and a `min_length=1` 422 if
+ * they do. */
+const RESERVATION_DRAFT_FIELDS = {
+  name: reservationNameSchema,
   slot: slotSchema,
   tableIds: z.array(z.string()),
 }
 
 /**
- * One pool of the edited event — the domain's `PoolEntry` (`data/types`), which is a
- * **tagged union and not a pool with an optional id**, because the editor is building an
- * id-keyed diff (ADR 20260801):
+ * One reservation of the edited event — the domain's `ReservationEntry` (`data/types`),
+ * which is a **tagged union and not a reservation with an optional id**, because the
+ * editor is building an id-keyed diff (ADR 20260801):
  *
- * - `kept` cites the uuid the server minted, so the pool keeps its identity and the
- *   fixtures dealt into it;
+ * - `kept` cites the uuid the server minted, so the reservation keeps its identity —
+ *   and, with it, the group mapped 1:1 onto it, and every fixture dealt into that group;
  * - `added` has no `id` field at all, so a client-minted one is not a value this form can
- *   hold. That absence is the whole chore: `PoolWrite` is `extra="forbid"`, so an `id` on
- *   a new pool is a 422 naming it.
+ *   hold. That absence is the whole chore: `ReservationWrite` is `extra="forbid"`, so an
+ *   `id` on a new reservation is a 422 naming it.
  *
  * There is no `position` on either arm, for the same reason there is no id on one of
  * them: it is the SERVER's to assign, from the index of each entry in the list that is
- * sent (`poolEntriesToApi`, `data/api` — a `position` on a write body is a 422). **The
- * order of the field array IS the ordering**, which is why `eventToFormValues` seeds it
- * in position order below.
+ * sent (`reservationEntriesToApi`, `data/api` — a `position` on a write body is a 422).
+ * **The order of the field array IS the ordering**, which is why `eventToFormValues`
+ * seeds it in position order below.
  *
- * Typed as `PoolEntry` for the same reason `predicateSchema` is typed as `Predicate`:
- * the pools section hands a form field straight back as one, and a mirror that were
- * merely *similar* would need a cast to cross that seam.
+ * Typed as `ReservationEntry` for the same reason `predicateSchema` is typed as
+ * `Predicate`: the reservations section hands a form field straight back as one, and a
+ * mirror that were merely *similar* would need a cast to cross that seam.
  */
-const poolEntrySchema: z.ZodType<PoolEntry, PoolEntry> = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('kept'), id: z.string(), ...POOL_DRAFT_FIELDS }),
-  z.object({ kind: z.literal('added'), key: z.string(), ...POOL_DRAFT_FIELDS }),
-])
+const reservationEntrySchema: z.ZodType<ReservationEntry, ReservationEntry> =
+  z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('kept'), id: z.string(), ...RESERVATION_DRAFT_FIELDS }),
+    z.object({ kind: z.literal('added'), key: z.string(), ...RESERVATION_DRAFT_FIELDS }),
+  ])
 
 /**
  * The one schema the editor's `zodResolver` runs — the whole event, scalars and
@@ -130,10 +132,10 @@ const poolEntrySchema: z.ZodType<PoolEntry, PoolEntry> = z.discriminatedUnion('k
  *   no server-side twin to mirror: the API is deliberately MORE permissive about a
  *   half-written rule than the product is (it accepts `Rating < ?`, a restriction on
  *   nobody, and renders it on the card as though it were real).
- * - `pools` carries the newest of the server's floors: a pool's `name` may not be
- *   blank (`poolNameSchema`). The pools editor mints the default name, so only the *box*
- *   could ever author a blank one — and it did. (The id it no longer mints at all; see
- *   `poolEntrySchema`.)
+ * - `reservations` carries the newest of the server's floors: a reservation's `name` may
+ *   not be blank (`reservationNameSchema`). The reservations editor mints the default
+ *   name, so only the *box* could ever author a blank one — and it did. (The id it no
+ *   longer mints at all; see `reservationEntrySchema`.)
  */
 export const eventSchema = z.object({
   name: nameSchema,
@@ -148,9 +150,9 @@ export const eventSchema = z.object({
   // shape rule only (ADR 20260727). `null` is the honest value for the three draw types
   // that have no knockout stage, and it is the *blank box* for the one that does; which
   // of those two things it is depends on `drawType`, which a field-level rule cannot
-  // see. See `qualifiersPerPoolSchema` (`data/event-validation`) for why the pair, and
+  // see. See `qualifiersPerGroupSchema` (`data/event-validation`) for why the pair, and
   // not the field, carries the bound.
-  qualifiersPerPool: z.number().nullable(),
+  qualifiersPerGroup: z.number().nullable(),
   // **R**, held the same way and judged in the same place, beside the draw type that
   // decides whether it is asked at all (the swiss ADR). `null` is the honest value for the
   // three draw types whose round count nobody chooses, and it is the *blank box* for the
@@ -190,30 +192,30 @@ export const eventSchema = z.object({
       message: 'Every rule needs a value the server can evaluate.',
     })
   }),
-  pools: z.array(poolEntrySchema),
+  reservations: z.array(reservationEntrySchema),
 })
   // The **draw configuration** is judged as a pair, because that is what it is: the
-  // server parses `(draw_type, qualifiers_per_pool)` into a union tagged by the draw
+  // server parses `(draw_type, qualifiers_per_group)` into a union tagged by the draw
   // type, one arm of which requires a count and two of which forbid the key outright
   // (ADR 20260727). So the count's bound is asked here, where both halves are in scope,
   // rather than on the field.
   //
-  // Only the `rr-then-ko` arm is asked at all: for the other two, `qualifiersPerPool` is
+  // Only the `rr-then-ko` arm is asked at all: for the other two, `qualifiersPerGroup` is
   // `null`, there is no control on screen (the Basics tab renders it only for the
   // two-stage type), and the write body omits the key entirely (`eventToApiFields`,
   // `data/api`) — so a rule that fired there would refuse a save for a reason the
   // director cannot see, let alone fix. The issue is raised **at the field's own path**,
-  // so React-Hook-Form reports it as `errors.qualifiersPerPool` and the red lands under
+  // so React-Hook-Form reports it as `errors.qualifiersPerGroup` and the red lands under
   // the box, exactly as a field-level rule's would.
   .superRefine((values, ctx) => {
     if (values.drawType !== 'rr-then-ko') return
-    const result = qualifiersPerPoolSchema.safeParse(values.qualifiersPerPool)
+    const result = qualifiersPerGroupSchema.safeParse(values.qualifiersPerGroup)
     if (result.success) return
     ctx.addIssue({
       code: 'custom',
-      path: ['qualifiersPerPool'],
+      path: ['qualifiersPerGroup'],
       // The schema's own sentence, never a second one typed beside it — the same rule
-      // `poolNameIssues` follows for the pool names.
+      // `reservationNameIssues` follows for the reservation names.
       message: result.error.issues[0].message,
     })
   })
@@ -239,9 +241,9 @@ export const eventSchema = z.object({
     })
   })
 
-// The schema mirrors the domain types (`Predicate`, `PoolEntry`) so the nested-array
+// The schema mirrors the domain types (`Predicate`, `ReservationEntry`) so the nested-array
 // sub-forms are validated by this one resolver; the section code that rebuilds a
-// clean `Predicate`/`PoolEntry` from each `useFieldArray` field is the compile-time
+// clean `Predicate`/`ReservationEntry` from each `useFieldArray` field is the compile-time
 // check that the mirror holds.
 export type EventFormValues = z.infer<typeof eventSchema>
 
@@ -249,9 +251,9 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   name: '',
   format: 'singles',
   drawType: 'single-elim',
-  // …and a bracket has no pools to qualify out of, so no qualifier count (ADR 20260727).
+  // …and a bracket has no groups to qualify out of, so no qualifier count (ADR 20260727).
   // `null` is the only value the server's `single-elim` arm admits.
-  qualifiersPerPool: null,
+  qualifiersPerGroup: null,
   // …and a bracket's depth follows from the field rather than from a setting, so no round
   // count either (the swiss ADR). `null` is the only value the server's `single-elim` arm
   // admits.
@@ -272,7 +274,7 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   slot: { date: '', start: '', end: '' },
   match: { rated: true, lengthGames: 5 },
   predicates: [],
-  pools: [],
+  reservations: [],
 }
 
 /** Project an event onto the editable form fields (the id, entrant list, and
@@ -284,8 +286,8 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     format: event.format,
     drawType: event.drawType,
     // The count the SERVER sent back, straight onto the control — this projection is the
-    // near half of the round trip the read shape's `qualifiers_per_pool` exists for.
-    qualifiersPerPool: event.qualifiersPerPool,
+    // near half of the round trip the read shape's `qualifiers_per_group` exists for.
+    qualifiersPerGroup: event.qualifiersPerGroup,
     // …and the round count the same way, the near half of the round trip the read shape's
     // `rounds` exists for.
     rounds: event.rounds,
@@ -295,24 +297,25 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     slot: event.slot,
     match: event.match,
     predicates: event.predicates,
-    // Every stored pool, **cited by the id the server minted** (`keepPools`,
-    // `data/pool-entries`) — the "change nothing about the set" diff the organizer then
-    // edits by adding to it, removing from it, or re-wording it. Seeding it any other way
-    // would be seeding a removal: under an id-keyed diff, a stored pool no entry cites is
-    // deleted, and its fixtures with it.
+    // Every stored reservation, **cited by the id the server minted**
+    // (`keepReservations`, `data/reservation-entries`) — the "change nothing about the
+    // set" diff the organizer then edits by adding to it, removing from it, or
+    // re-wording it. Seeding it any other way would be seeding a removal: under an
+    // id-keyed diff, a stored reservation no entry cites is deleted, and its mapped
+    // group's fixtures with it.
     //
-    // …and **in POSITION order** (`poolsInOrder`, `data/helpers`), which is the ONE place
-    // the pools editor's order is decided. From here on the field array's order IS the
-    // order: the cards render in it, `addPool` appends to the end of it, and — the reason
-    // it has to be settled here rather than at render time — a save serializes it, from
-    // which the server re-derives each pool's position (`poolEntriesToApi`, `data/api`).
-    // The sort is the last thing that reads `position`; an entry does not carry one,
-    // because a client does not assign one.
+    // …and **in POSITION order** (`inPositionOrder`, `data/helpers`), which is the ONE
+    // place the reservations editor's order is decided. From here on the field array's
+    // order IS the order: the cards render in it, `addReservation` appends to the end of
+    // it, and — the reason it has to be settled here rather than at render time — a save
+    // serializes it, from which the server re-derives each reservation's position
+    // (`reservationEntriesToApi`, `data/api`). The sort is the last thing that reads
+    // `position`; an entry does not carry one, because a client does not assign one.
     //
     // So sorting for *display* alone would be a bug with a delay on it: the director
     // would see A, B, C, save, and get back whatever order the array was really in. The
     // list they were looking at has to be the list that goes on the wire.
-    pools: keepPools(poolsInOrder(event.pools)),
+    reservations: keepReservations(inPositionOrder(event.reservations)),
   }
 }
 
@@ -324,7 +327,7 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
  * A message on a tab you cannot see is indistinguishable from a button that does
  * nothing, which is exactly what Save looked like before this existed.
  *
- * Basics before Eligibility before Table pools, deliberately: that is the order the
+ * Basics before Eligibility before Reservations, deliberately: that is the order the
  * tabs are in, and with more than one broken, the name is the field they are most
  * likely to have simply not filled in — landing on a *later* tab would leave the empty
  * name behind them, unseen.
@@ -332,12 +335,12 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
 export function firstInvalidSection(
   errors: FieldErrors<EventFormValues>,
 ): EventSection | null {
-  // `qualifiersPerPool` and `rounds` both live on Basics beside the draw type that decides
+  // `qualifiersPerGroup` and `rounds` both live on Basics beside the draw type that decides
   // whether either is asked at all, so a refused two-stage or swiss save opens the tab
   // holding the empty box.
   if (
     errors.name ||
-    errors.qualifiersPerPool ||
+    errors.qualifiersPerGroup ||
     errors.rounds ||
     errors.maxPlayers ||
     errors.entryFee ||
@@ -345,10 +348,11 @@ export function firstInvalidSection(
   )
     return 'basics'
   if (errors.predicates) return 'eligibility'
-  // A pool with a cleared name (`poolNameSchema`). RHF reports it per row
-  // (`errors.pools[2].name`) *and* sets the array key, so the truthiness of `pools` is
-  // the whole question here — which row it is, the card itself says, in red, under the
-  // box. Match settings has no arm: every control on it is a closed picker.
-  if (errors.pools) return 'pools'
+  // A reservation with a cleared name (`reservationNameSchema`). RHF reports it per row
+  // (`errors.reservations[2].name`) *and* sets the array key, so the truthiness of
+  // `reservations` is the whole question here — which row it is, the card itself says,
+  // in red, under the box. Match settings has no arm: every control on it is a closed
+  // picker.
+  if (errors.reservations) return 'reservations'
   return null
 }

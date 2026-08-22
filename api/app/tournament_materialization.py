@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import (
+    FixtureStage,
     OrderedEntrant,
     Side,
     SideFill,
@@ -46,10 +47,10 @@ from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.tournament_draws import (
     active_draw_entrants,
     fixture_state,
-    pool_order,
+    group_order,
     strategy_for_event,
 )
-from app.tournament_queries import game_counts_by_match
+from app.tournament_queries import game_counts_by_match, stage_ids_for_events
 
 
 async def materialize_live_draw(db: AsyncSession, tournament: Tournament) -> None:
@@ -57,7 +58,7 @@ async def materialize_live_draw(db: AsyncSession, tournament: Tournament) -> Non
     ``advance()`` of every event's draw, turning each **ready** fixture into a scheduled
     ``pending`` match (it goes live when the schedule calls it — see chore 1b).
 
-    For round-robin this is the whole pool at once — every pairing is known at the cut,
+    For round-robin this is the whole group at once — every pairing is known at the cut,
     so a freshly-cut draw's ``advance()`` reports every fixture ready — and it is a
     one-time crossing: a fixture that already has a ``match_id`` is never ready again
     (``app.draws.ready_fixtures`` excludes it), so materialization is **idempotent** on
@@ -106,13 +107,13 @@ async def materialize_event(
 
     **The projection loads the fixtures' game counts — but only for the draw types that
     read them**, and that is load-bearing rather than defensive.
-    ``FixtureState.games`` is what a pools-then-knockout draw picks its
+    ``FixtureState.games`` is what a groups-then-knockout draw picks its
     qualifiers by — the same tiebreak chain (wins → head-to-head → game difference →
     games won) the standings on screen are ordered by (ADR 20260727) — and this seam is
     the *only* place its ``advance()`` is ever run. Projected without them, every
     fixture reaching ``advance()`` carries ``games=None``: the strategy refuses loudly
     (``MissingFixtureGames``) rather than seating qualifiers computed on wins alone, so
-    the failure is not silent — but the correct outcome is that a pool finishes and its
+    the failure is not silent — but the correct outcome is that a group finishes and its
     qualifiers are seated, and that needs the counts. One batched load for the event,
     beside the fixture load, exactly as the read path batches it per page
     (``app.tournament_queries.game_counts_by_match``); reading them inside
@@ -150,10 +151,23 @@ async def materialize_event(
         if reads_fixture_games(event.draw_settings.draw_type)
         else {}
     )
-    # The event's pool order, resolved once and handed to every projection: it is what
-    # fills ``FixtureState.pool_position``, and so what makes an ``advance()`` plan's
-    # ready list run pool 1, 2, … 10 rather than the ids' 1, 10, 2 (ADR 20260801).
-    pools = pool_order(event)
+    # The event's group order, resolved once and handed to every projection: it is what
+    # fills ``FixtureState.group_position``, and so what makes an ``advance()`` plan's
+    # ready list run group 1, 2, … 10 rather than the ids' 1, 10, 2 (ADR 20260801).
+    groups = group_order(event)
+    # The event's stages, resolved once and handed to every projection: it fills
+    # ``FixtureState.stage``, which is what lets ``RrThenKoStrategy`` split its event's
+    # fixtures between its two stages without re-deriving the split from ``group_id is
+    # None`` (ADR 20260815 decision 6). ``group_order``'s sibling, not gated the way
+    # ``group_order``'s own game-counts/entrants neighbours above are — ``event.stages``
+    # is EAGER (``lazy="selectin"``, populated on every plain load of ``event``, this
+    # function's own caller's included), so building this dict costs nothing beyond the
+    # Python loop: there is no round trip left to gate. The other three draw types are
+    # one stage each and simply never read the field this fills.
+    stages: dict[uuid.UUID, FixtureStage] = {
+        stage.id: FixtureStage(position=stage.position, draw_type=stage.draw_type)
+        for stage in event.stages
+    }
     # The **field**, beside the fixtures, for the one draw type that cannot recover it
     # from them: a swiss bye is the absence of a fixture row, so pairing the next round
     # from the seated set alone would drop the byed entrant out of the event. Read
@@ -169,7 +183,10 @@ async def materialize_event(
         else ()
     )
     plan = strategy.advance(
-        [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures],
+        [
+            fixture_state(f, game_counts, voided_match_ids, groups, stages)
+            for f in fixtures
+        ],
         entrants,
     )
     # Apply the side-fills a decided fixture implies BEFORE the readiness pass, so a
@@ -189,7 +206,10 @@ async def materialize_event(
     # plan's and needs no second side-fill pass beyond the loop above.
     ready = set(
         ready_fixtures(
-            [fixture_state(f, game_counts, voided_match_ids, pools) for f in fixtures]
+            [
+                fixture_state(f, game_counts, voided_match_ids, groups, stages)
+                for f in fixtures
+            ]
         )
     )
     ready_fixture_rows = [f for f in fixtures if f.id in ready]
@@ -241,8 +261,8 @@ async def _fixtures_with_match_statuses(
 
     The ``completed`` filter is the contract, not an optimization. An in-progress
     match's part-scored board is not a result; a fixture whose match has not completed
-    projects ``games=None`` and its pool is simply not finished yet, which is exactly
-    how a result under correction un-finishes the pool it was in rather than freezing a
+    projects ``games=None`` and its group is simply not finished yet, which is exactly
+    how a result under correction un-finishes the group it was in rather than freezing a
     stale qualifier list (ADR 20260727).
 
     The completed ids are handed to
@@ -254,34 +274,36 @@ async def _fixtures_with_match_statuses(
     The **voided** ids are the other half of the same fact, and they are collected
     unconditionally: they cost nothing (the status is already in hand), and no draw type
     can afford to be blind to them. A voided pairing can never produce a result, so a
-    strategy that treated it as a missing score would hold its pool permanently
+    strategy that treated it as a missing score would hold its group permanently
     unfinished — one score short forever — while the standings, which exclude voided
-    pairings from a pool's ``fixture_count``, showed that same pool ``complete``
+    pairings from a group's ``fixture_count``, showed that same group ``complete``
     (:attr:`app.draws.FixtureState.match_voided`).
     """
     rows = (
         await db.execute(
             select(TournamentFixture, Match.status)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
-            .where(TournamentFixture.event_id == event_id)
+            # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the
+            # event is reachable through the stage.
+            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
             # Ordered for **stability**, not for presentation: an unordered ``SELECT``
             # has no guarantee even between two runs against unchanged data, and the
             # rows go on to be projected into the outcomes a draw type ranks its field
             # by. Nothing downstream may depend on that order — the tiebreak chain is
-            # sums and counts (``app.pool_finishing_order``), and a plan's ready list is
-            # sorted by ``app.draws.ready_fixtures`` — but "no caller depends on it" is
-            # cheaper to keep true when the order is fixed.
+            # sums and counts (``app.group_finishing_order``), and a plan's ready list
+            # is sorted by ``app.draws.ready_fixtures`` — but "no caller depends on it"
+            # is cheaper to keep true when the order is fixed.
             #
-            # ``(pool_id, round, position)`` is total within one event: it is the
-            # fixture's identity there, declared NULLS NOT DISTINCT so the un-pooled
+            # ``(group_id, round, position)`` is total within one event: it is the
+            # fixture's identity there, declared NULLS NOT DISTINCT so the un-grouped
             # draws are covered too
-            # (``uq_tournament_fixtures_event_id_pool_id_round_position``). It is the
+            # (``uq_tournament_fixtures_event_id_group_id_round_position``). It is the
             # read path's key (``app.tournament_queries.fixtures_by_event``) minus the
-            # pool's *position*, which that path sorts on to render the draw in the
-            # director's pool order — presentation this seam has no use for, and would
+            # group's *position*, which that path sorts on to render the draw in the
+            # director's group order — presentation this seam has no use for, and would
             # pay a correlated subquery for.
             .order_by(
-                TournamentFixture.pool_id.asc().nulls_last(),
+                TournamentFixture.group_id.asc().nulls_last(),
                 TournamentFixture.round,
                 TournamentFixture.position,
             )

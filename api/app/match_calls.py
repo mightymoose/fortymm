@@ -68,9 +68,14 @@ one write site that publishes directly rather than staging on the session.
 
 **Exactly-once.** Both call paths re-check the due predicate — ``pinned_at IS
 NULL`` for the call, ``call_notified_count = 0`` for the notify-without-re-pin
-transition — while holding the fixture's row lock (``FOR UPDATE``, ordered by
-id, behind the tournament row lock — the exact lock order of the guarded
-apply). A concurrent tick and apply therefore serialize: whichever transaction
+transition — while holding the fixture's row lock (``FOR UPDATE OF
+tournament_fixtures``, ordered by id, behind the tournament row lock — the
+exact lock order of the guarded apply, ``app.schedule_solves``' module
+docstring). ``OF tournament_fixtures`` on purpose: ``tournament_event_stages``
+rides along on every fixture query as the eagerly-joined
+``TournamentFixture.stage`` (``lazy="joined"``, ``innerjoin=True``), and stages
+are deliberately **not** locked here — nothing on this path writes one. A
+concurrent tick and apply therefore serialize: whichever transaction
 commits first sets ``pinned_at`` (or, for a silent pin, bumps the count), and
 the other re-reads under the lock and skips. The count re-check is the *only*
 guard for the silent-pin transition — the solve fingerprint deliberately
@@ -112,6 +117,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import db as db_module
 from app import queue as queue_module
+from app.draws import group_label
 from app.models import (
     Match,
     MatchGame,
@@ -143,7 +149,8 @@ from app.realtime import EventKind, publish_event
 from app.rq_async import run_async_db_job
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import TournamentTable
-from app.tournament_draws import event_pools
+from app.tournament_draws import event_groups
+from app.tournament_queries import stage_ids_for_tournament
 from app.venue_time import anchor_wallclock, venue_local
 
 log = logging.getLogger(__name__)
@@ -172,7 +179,7 @@ def _wall_now() -> datetime:
     """The call's ``now`` as a timezone-aware **instant** (UTC) — the real
     moment a pin is made or a fixture is judged due. Since the 2026-07-19 ADR
     "tournament times are timezone-aware instants" moved ``scheduled_start``,
-    ``pinned_at`` and the composed pool windows onto one instant axis, ``now``
+    ``pinned_at`` and the composed reservation windows onto one instant axis, ``now``
     is a real instant too: an aware UTC ``now`` and the venue-anchored windows
     compare correctly whatever the venue's offset (the #1068 fix). One
     definition for both halves of the pipeline: ``app.schedule_solves`` imports
@@ -216,11 +223,7 @@ def _due_fixture_clauses(
     :func:`_due_for_call` re-check under the row lock remains the
     authoritative exactly-once guard."""
     return (
-        TournamentFixture.event_id.in_(
-            select(TournamentEvent.id).where(
-                TournamentEvent.tournament_id == tournament_id
-            )
-        ),
+        TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
         or_(
             TournamentFixture.pinned_at.is_(None),
             TournamentFixture.call_notified_count == 0,
@@ -326,11 +329,7 @@ async def _held_resources(
             )
             .join(Match, Match.id == TournamentFixture.match_id)
             .where(
-                TournamentFixture.event_id.in_(
-                    select(TournamentEvent.id).where(
-                        TournamentEvent.tournament_id == tournament_id
-                    )
-                ),
+                TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
                 Match.status == MatchStatus.in_progress,
             )
         )
@@ -466,7 +465,7 @@ async def call_due_fixtures(
             # A dangling ref (entry/event deleted under a stale placement) is
             # broken-pin territory — don't promise a match that can't run.
             continue
-        context = ingredients.context_for(tournament, event, fixture.pool_id)
+        context = ingredients.context_for(tournament, event, fixture.group_id)
         # A removed table under a stale placement can't be labeled; fall back
         # to the raw id rather than dropping the call (the *next* solve's
         # snapshot detects the broken pin and repairs it).
@@ -601,7 +600,7 @@ async def notify_pin_repairs(
             or fixture.scheduled_start is None
         ):
             continue
-        context = ingredients.context_for(tournament, event, fixture.pool_id)
+        context = ingredients.context_for(tournament, event, fixture.group_id)
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
         build = _moved_copy(
             table_label,
@@ -618,7 +617,7 @@ async def notify_pin_repairs(
         event = ingredients.events.get(fixture.event_id)
         if event is None:
             continue
-        context = ingredients.context_for(tournament, event, fixture.pool_id)
+        context = ingredients.context_for(tournament, event, fixture.group_id)
         recipients: list[tuple[User, User]] = []
         for entry_id, opponent_entry_id in (
             (fixture.entry_a_id, fixture.entry_b_id),
@@ -867,7 +866,7 @@ async def _tell_both_entrants(
     user_b = ingredients.user_for_entry(fixture.entry_b_id)
     if event is None or user_a is None or user_b is None:
         return []
-    context = ingredients.context_for(tournament, event, fixture.pool_id)
+    context = ingredients.context_for(tournament, event, fixture.group_id)
     in_app_ids = await _in_app_allowed(db, (user_a, user_b))
     fanout: list[NotificationJob] = []
     _tell_pair(
@@ -973,8 +972,8 @@ def _tell_pair(
 @dataclass(frozen=True)
 class CopyIngredients:
     """The batch-loaded ingredients every match-call message is built from:
-    entrant→user resolution, the events (names + pool labels, the latter
-    parsed once per event into ``pool_names``), and the venue's table labels.
+    entrant→user resolution, the events (names + group labels, the latter
+    parsed once per event into ``group_labels``), and the venue's table labels.
     Loaded once per batch, parsed with the same models the write boundary
     validated them with (parse, don't validate)."""
 
@@ -982,10 +981,13 @@ class CopyIngredients:
     users: dict[uuid.UUID, User]
     events: dict[uuid.UUID, TournamentEvent]
     table_labels: dict[str, str]
-    #: Per event, its pools' id → display name. Both keys are uuids: the outer one is
-    #: the event's, the inner one the pool's own ``tournament_event_pools`` primary key
-    #: (ADR 20260801), which is exactly what a fixture's ``pool_id`` holds.
-    pool_names: dict[uuid.UUID, dict[uuid.UUID, str]]
+    #: Per event, its groups' id → display label — ``group_label(position)``, derived,
+    #: never a stored name (ADR 20260808: a group renders as "Group A" everywhere the
+    #: app used to print a stored reservation name). Both keys are uuids: the outer
+    #: one is the event's, the inner one the group's own
+    #: ``tournament_event_stage_groups`` primary key (ADR 20260801), which is exactly
+    #: what a fixture's ``group_id`` holds.
+    group_labels: dict[uuid.UUID, dict[uuid.UUID, str]]
 
     def user_for_entry(self, entry_id: uuid.UUID | None) -> User | None:
         if entry_id is None:
@@ -997,16 +999,16 @@ class CopyIngredients:
         self,
         tournament: Tournament,
         event: TournamentEvent,
-        pool_id: uuid.UUID | None,
+        group_id: uuid.UUID | None,
     ) -> MatchCallContext:
         """The fixture's whereabouts in the player's terms."""
-        pool_name: str | None = None
-        if pool_id is not None:
-            pool_name = self.pool_names.get(event.id, {}).get(pool_id)
+        label: str | None = None
+        if group_id is not None:
+            label = self.group_labels.get(event.id, {}).get(group_id)
         return MatchCallContext(
             tournament_name=tournament.name,
             event_name=event.name,
-            pool_name=pool_name,
+            group_label=label,
         )
 
 
@@ -1058,8 +1060,10 @@ async def load_copy_ingredients(
         str(table.id): table.label
         for table in (TournamentTable.model_validate(row) for row in tournament.tables)
     }
-    pool_names = {
-        event.id: {pool.id: pool.name for pool in event_pools(event)}
+    group_labels = {
+        event.id: {
+            group.id: group_label(group.position) for group in event_groups(event)
+        }
         for event in events.values()
     }
     return CopyIngredients(
@@ -1067,7 +1071,7 @@ async def load_copy_ingredients(
         users=users,
         events=events,
         table_labels=table_labels,
-        pool_names=pool_names,
+        group_labels=group_labels,
     )
 
 
@@ -1194,7 +1198,14 @@ async def execute_pin_tick(
                     select(TournamentFixture)
                     .where(*due_clauses)
                     .order_by(TournamentFixture.id)
-                    .with_for_update()
+                    # ``of=TournamentFixture``: a bare ``FOR UPDATE`` would also lock
+                    # ``tournament_event_stages``, which rides along on every fixture
+                    # query as the eagerly-joined ``TournamentFixture.stage``
+                    # (``lazy="joined"``, ``innerjoin=True``). Stages are deliberately
+                    # NOT part of this lock — nothing here writes one, and no writer of
+                    # a stage row takes a fixture lock first, so locking it would only
+                    # widen the row set contended for no benefit.
+                    .with_for_update(of=TournamentFixture)
                 )
             )
             .scalars()

@@ -77,9 +77,9 @@ describe('useEnqueueSchedulePreview', () => {
       fixtureId: expect.any(String),
       eventId: 'ev-1',
       // The namespaced composite the solver keys by is carried, but the human
-      // pool name is what the grid renders.
-      poolId: 'ev-1:pool-1',
-      poolName: 'Pool A',
+      // reservation name is what the grid renders.
+      reservationId: 'ev-1:res-1',
+      reservationName: 'Reservation A',
       playerAId: 'placeholder-1',
       playerBId: 'placeholder-2',
     })
@@ -186,9 +186,13 @@ describe('schedulePreviewQueryOptions', () => {
       estimatedFinish: null,
     })
     // The reason is mapped snake→camel through `./solve`'s discriminated union —
-    // `pool_name` → `poolName`, the `kind` discriminant preserved.
+    // `reservation_name` → `reservationName`, the `kind` discriminant preserved.
     expect(preview.infeasibilityReasons).toEqual([
-      { kind: 'pool_has_no_tables', poolName: 'Pool A', reservation: 'pool' },
+      {
+        kind: 'reservation_has_no_tables',
+        reservationName: 'Reservation A',
+        reservation: 'booked',
+      },
     ])
   })
 

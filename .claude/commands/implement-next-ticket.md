@@ -1,23 +1,29 @@
 ---
-description: Implement a specific Ready for Implementation ticket, or the top Ready for Implementation ticket when none is specified. Leave structured implementation notes and move successful work to In Review.
+description: Implement one specified Ready For Implementation ticket. Claim it, implement, open the PR, leave structured implementation notes, and stop at In Review. Requires the ticket number, which the implement-ticket-end-to-end orchestrator selects and passes.
 model: sonnet
 ---
 
 # Implement Next Ticket
 
-Implement exactly one GitHub ticket from the project's **Ready for Implementation** column.
+Implement exactly one GitHub ticket from the project's **Ready For Implementation** column.
 
 The ticket has completed Discovery and Planning. Treat the GitHub issue body as the authoritative specification and the Planning note as implementation guidance.
 
 Implementation owns writing and verifying the code. It does not approve its own work for testing or merge.
 
-## Select the Ticket
+## The Ticket
 
-If `$ARGUMENTS` contains a ticket number, use that issue, verify it is in **Ready for Implementation**, and work on it only.
+`$ARGUMENTS` must contain a ticket number. Verify that issue is in **Ready For Implementation** and work on it only.
 
-If `$ARGUMENTS` is empty, select the **topmost ticket according to the Project's current ordering** in **Ready for Implementation**.
+If `$ARGUMENTS` is empty, stop and report: this command does not select tickets. `implement-ticket-end-to-end` selects the next ticket and passes its number here.
 
-If no eligible ticket exists, report that there is nothing to implement and stop.
+## Claim the Ticket
+
+As soon as the ticket is selected, and before you read the ticket in full or touch any code, move it to **In Progress**.
+
+Move it first so the board shows the work is claimed. Many agent sessions run against this board at once. A ticket that stays in **Ready For Implementation** while an agent works it can be picked up a second time by another run.
+
+If the move fails, stop and report. Do not implement a ticket you could not claim.
 
 ## Prepare
 
@@ -106,39 +112,27 @@ Only after implementation and relevant verification succeed:
 1. Append Implementation Notes.
 2. Ensure the PR is linked.
 3. Move the ticket to **In Review**.
-4. Stop.
+4. Stop, and report the next command: `review-next-ticket <ticket-number>`.
 
-Do not begin Review in this command.
+`implement-ticket-end-to-end` is the orchestrator. It dispatches Review as its next stage, in a fresh context, and the fresh context is what makes the review a review: a reviewer that just wrote the code is not a reviewer. Do not review your own implementation, and do not invoke `review-next-ticket` yourself.
+
+**Do not wait for CI before stopping.** `review-next-ticket` waits for green itself, as a step of its own. A red build is Review's finding to report, not a reason to sit on a finished implementation.
+
+Run standalone, this command still stops here. Nothing watches an In Review ticket — no cron, no GitHub Action, no hook — so say so in the final report and name the resume command.
 
 ## Escalation Contract
 
-Work autonomously when the path forward is clear.
-
-Stop and involve the user when continuing requires judgment rather than execution, including when:
-
-- acceptance criteria are materially ambiguous or contradictory;
-- a Discovery or Planning assumption is materially wrong;
-- satisfying the ticket requires changing approved scope or behavior;
-- multiple materially different product, UX, data-model, or architectural choices have no clear approved answer;
-- proceeding requires an unexpectedly destructive, irreversible, security-sensitive, or otherwise high-risk action;
-- required credentials, services, environments, or external dependencies are unavailable;
-- repository state makes it unsafe to determine which changes belong to the ticket;
-- an autonomous repair loop has failed twice for the same underlying problem;
-- the stage cannot be completed honestly.
-
-Do not escalate merely because implementation is harder than expected, understandable tests fail, or ordinary tooling checks fail for a clear reason.
-
-When escalating, stop before the unresolved decision, explain what was discovered and why it blocks safe progress, and present the smallest useful set of choices or specific question. Never weaken acceptance criteria, skip a required stage, or redefine success.
+`.claude/rules/escalation.md` is the contract — when to stop, when not to, and how.
 
 ## Hard Rules
 
-- Process exactly one ticket per invocation.
-- With no argument, use the topmost ticket in **Ready for Implementation**.
-- With a ticket number, use that eligible ticket only.
-- Treat acceptance criteria as authoritative and Planning notes as guidance.
-- Never silently change scope.
-- Never include unrelated user changes.
+- Process exactly one ticket per invocation, and only the ticket number given. Never select from the board.
+- Move the ticket to **In Progress** at selection time, before any other work.
+- Never silently change scope, and never include unrelated user changes.
 - Verify before handing to Review.
 - Always leave structured Implementation Notes with explicit `N/A` where appropriate.
-- Move successful implementation to **In Review**.
-- Do not review, test, or merge in this command.
+- Move successful implementation to **In Review**, then stop. The orchestrator dispatches Review.
+- Do not review your own implementation, and do not invoke `review-next-ticket` yourself.
+- Do not wait for CI before stopping. Review owns that wait.
+- Never set **In Testing**, and never post the release signal on your own pull request. A human releases Review to Testing (`.claude/rules/the-review-gate.md`).
+- Do not test or merge in this command.

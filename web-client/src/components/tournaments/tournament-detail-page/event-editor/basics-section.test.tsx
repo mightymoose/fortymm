@@ -61,14 +61,14 @@ describe('BasicsSection', () => {
             {
               key: 'round-robin',
               name: 'Round robin',
-              description: 'Everyone in a pool plays everyone else in that pool.',
+              description: 'Everyone in a group plays everyone else in that group.',
               display_order: 1,
             },
             {
               key: 'rr-then-ko',
               name: 'Round-robin then knockout',
               description:
-                'Pools play all-play-all, then the top finishers from each pool ' +
+                'Groups play all-play-all, then the top finishers from each group ' +
                 'meet in a knockout bracket.',
               display_order: 3,
             },
@@ -194,8 +194,8 @@ describe('BasicsSection', () => {
     // …and the trigger POINTS at that reason. Rendering the sentence under the control
     // puts it *beside* the control on screen and nowhere at all in the accessibility
     // tree: a disabled trigger is not focusable and holds no tooltip, so
-    // `aria-describedby` is the only channel it has left. The pools section one tab over
-    // wired exactly this freeze correctly (`pools-frozen-notice`), while here the
+    // `aria-describedby` is the only channel it has left. The reservations section one
+    // tab over wired exactly this freeze correctly (`reservations-frozen-notice`), while here the
     // `Field` hint had no `id` to point at and the trigger's description was `null` —
     // the same dead end, said out loud to sighted directors only.
     it('points the disabled select at the reason (aria-describedby)', () => {
@@ -249,7 +249,7 @@ describe('BasicsSection', () => {
    */
   describe('the qualifier count (rr-then-ko only)', () => {
     it('renders the control for a two-stage event', () => {
-      basicsSectionPage.render({ event: buildRrThenKoEvent({ qualifiersPerPool: 2 }) })
+      basicsSectionPage.render({ event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }) })
 
       expect(basicsSectionPage.getQualifiersInput()).toHaveValue(2)
     })
@@ -259,7 +259,7 @@ describe('BasicsSection', () => {
       'does not render it at all for %s — a format with no knockout stage to qualify for',
       (drawType) => {
         basicsSectionPage.render({
-          event: buildEvent({ drawType, qualifiersPerPool: null }),
+          event: buildEvent({ drawType, qualifiersPerGroup: null }),
         })
 
         expect(basicsSectionPage.queryQualifiersInput()).toBeNull()
@@ -283,12 +283,12 @@ describe('BasicsSection', () => {
     // `rerenderWith` → 1 root and 0 inputs.
     it('appears and disappears with the draw type the director picks', () => {
       const { rerenderWith } = basicsSectionPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }),
       })
       expect(basicsSectionPage.getQualifiersInput()).toBeInTheDocument()
 
       rerenderWith({
-        event: buildRrThenKoEvent({ drawType: 'round-robin', qualifiersPerPool: null }),
+        event: buildRrThenKoEvent({ drawType: 'round-robin', qualifiersPerGroup: null }),
       })
 
       expect(basicsSectionPage.queryQualifiersInput()).toBeNull()
@@ -299,7 +299,7 @@ describe('BasicsSection', () => {
     it('emits the typed count', () => {
       const onChange = vi.fn()
       basicsSectionPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }),
         onChange,
       })
 
@@ -308,7 +308,7 @@ describe('BasicsSection', () => {
       })
 
       expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({ qualifiersPerPool: 3 }),
+        expect.objectContaining({ qualifiersPerGroup: 3 }),
       )
     })
 
@@ -319,7 +319,7 @@ describe('BasicsSection', () => {
     it('emits null — never 0 — when the box is cleared', () => {
       const onChange = vi.fn()
       basicsSectionPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }),
         onChange,
       })
 
@@ -328,7 +328,7 @@ describe('BasicsSection', () => {
       })
 
       expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({ qualifiersPerPool: null }),
+        expect.objectContaining({ qualifiersPerGroup: null }),
       )
     })
 
@@ -336,7 +336,7 @@ describe('BasicsSection', () => {
       basicsSectionPage.render({
         event: buildRrThenKoEvent(),
         errors: {
-          qualifiersPerPool: 'At least 1 player must advance from each pool.',
+          qualifiersPerGroup: 'At least 1 player must advance from each group.',
         },
       })
 
@@ -346,7 +346,7 @@ describe('BasicsSection', () => {
       )
       expect(
         basicsSectionPage.queryFieldError(
-          'At least 1 player must advance from each pool.',
+          'At least 1 player must advance from each group.',
         ),
       ).toBeInTheDocument()
     })
@@ -408,7 +408,7 @@ describe('BasicsSection', () => {
           event: buildEvent({
             drawType,
             rounds: null,
-            qualifiersPerPool: drawType === 'rr-then-ko' ? 2 : null,
+            qualifiersPerGroup: drawType === 'rr-then-ko' ? 2 : null,
           }),
         })
 
@@ -731,7 +731,7 @@ describe('BasicsSection', () => {
     // behind it. The DOM sweep over a two-stage event is what actually covers it.
     it('renders no interactive controls for a two-stage event either', () => {
       basicsSectionPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerPool: 2 }),
+        event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }),
         canEdit: false,
       })
 

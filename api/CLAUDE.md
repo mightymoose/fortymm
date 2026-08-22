@@ -253,7 +253,7 @@ interior should never traffic in `Any` or untyped `dict`.
 
   If a field is genuinely server-assigned, the stronger move is to keep it off
   the write schema altogether — a read model that extends the write model
-  (`class Pool(PoolWrite)`) makes "the client cannot send this" a fact of the
+  (`class Reservation(ReservationWrite)`) makes "the client cannot send this" a fact of the
   schema rather than a promise in a docstring, and `extra="forbid"` turns an
   attempt into a 422 naming the field.
 
@@ -280,7 +280,7 @@ interior should never traffic in `Any` or untyped `dict`.
 
   Omitted, `false` and `null` are one answer — nobody opted in — and they are
   merged where they arrive, so no caller downstream can ask and get three.
-  `RoundRobinDrawSettingsWrite.qualifiers_per_pool` is the same shape. Optional
+  `RoundRobinDrawSettingsWrite.qualifiers_per_group` is the same shape. Optional
   on the wire, total inside.
 
 - **Don't use `assert x is not None` as control flow after a DB load.** A

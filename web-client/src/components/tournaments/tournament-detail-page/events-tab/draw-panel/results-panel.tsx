@@ -16,7 +16,7 @@ export interface ResultsPanelProps {
  * An event's **results** on its card in the Events tab — the one render path that switches on
  * the results shape (ADR-0785, widened by ADR 20260727 and by the swiss ADR): a **standings**
  * table for round-robin, a **finishes** placement list for single-elimination, **both** —
- * pools above bracket, one champion — for round-robin-then-knockout, and **one pool-less
+ * groups above bracket, one champion — for round-robin-then-knockout, and **one group-less
  * table over the whole field** for swiss. The results are a
  * discriminated union tagged by `kind`, parsed at the boundary (`../../../data/results`), so
  * this switch is exhaustive: a future draw type's shape is a **type error here** until it is
@@ -56,7 +56,7 @@ export const ResultsPanel = ({ event }: ResultsPanelProps) => {
         />
       )
     case 'standings_then_finishes':
-      // Both stages, on one card (ADR 20260727): the pool standings above the bracket
+      // Both stages, on one card (ADR 20260727): the group standings above the bracket
       // finishes, under a single champion banner naming the BRACKET's winner. The two
       // panels above are reused as they stand — the composite only selects and arranges.
       return (
@@ -67,9 +67,9 @@ export const ResultsPanel = ({ event }: ResultsPanelProps) => {
         />
       )
     case 'swiss_standings':
-      // One table over the whole field (the swiss ADR): swiss has no pools, so there is
+      // One table over the whole field (the swiss ADR): swiss has no groups, so there is
       // nothing to group by and nothing to title each block with. The table itself is the
-      // one a pool renders.
+      // one a group renders.
       return (
         <SwissStandingsPanel
           eventId={event.id}

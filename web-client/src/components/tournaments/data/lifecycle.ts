@@ -10,7 +10,7 @@ import { Radio, Rocket, Square, type LucideIcon } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { formatRating } from '@/lib/rating'
 
-import { drawSeating } from './draw'
+import { drawRefusalScope } from './draw'
 import { ENTRY_REFUSAL_NOTICE } from './entry-refusal'
 import { myEntrant, predicateSentence } from './helpers'
 import { fallbackNotice, type Notice } from './notice'
@@ -171,8 +171,29 @@ export interface LifecycleRefusal extends Notice {
  *
  * It is deliberately **narrow**, and this list is the place to think before adding to it.
  * Only `start` has a precondition (ADR-0786), and the precondition is exactly: there is at
- * least one event, and every event's draw still **seats exactly its entrants**. So the
- * scope is, per event, its identity, its **name**, and its seating (`drawSeating`).
+ * least one event, every event's draw still **seats exactly its entrants**, and every
+ * event that still needs a cut is one a cut could actually produce (#1300). So the scope
+ * is, per event, its identity, its **name**, and everything a *draw* refusal is about —
+ * `drawRefusalScope`.
+ *
+ * ## Why it composes `drawRefusalScope` instead of listing the facts again
+ *
+ * Since #1300 the go-live guard **dry-runs the cut** for every at-fault event and quotes
+ * the planner's own refusal back at the director: "A doubles event cannot be given a
+ * draw…", "1 entrant across 1 group would leave a group with fewer than 2 entrants…",
+ * "Taking 3 qualifiers from each group is more than the 2 entrants in the smallest group…",
+ * "play fewer rounds". Those are the *panel's* sentences, arriving in the *header's*
+ * refusal — so the header's scope has to read every fact the panel's does: the format, the
+ * draw type and its settings (`drawConfig`), the group ids, and the seating.
+ *
+ * Restating that list here is the failure mode, not the safe option. Two hand-written
+ * copies of "what a draw refusal is about" drift the moment one of them gains a fact —
+ * and the drift is silent, because the scope that fell behind still returns a perfectly
+ * good string. It just stops moving when the director does the thing the sentence asked,
+ * which is #1123 wearing a new sentence. Composing `drawRefusalScope` makes the two the
+ * same list by construction: a fifth draw type acquires a setting in one place, and both
+ * scopes read it. (It is also a strict superset of the seating this used to read, so
+ * every refusal this scope already retired is still retired.)
  *
  * The **name** is here for a different reason from the rest, and it is the one entry that
  * is not about whether the refusal is still *true*. This 409's sentence **quotes the
@@ -217,7 +238,7 @@ export interface LifecycleRefusal extends Notice {
  */
 export function lifecycleRefusalScope(tournament: Tournament): string {
   return tournament.events
-    .map((ev) => `${ev.id}:${ev.name}:${drawSeating(ev)}`)
+    .map((ev) => `${ev.id}:${ev.name}:${drawRefusalScope(ev)}`)
     .join('|')
 }
 

@@ -4,23 +4,23 @@ describe('SettingRow', () => {
   it('reads out the setting, what it means, what it says and where that came from', () => {
     settingRowPage.render()
 
-    expect(settingRowPage.getName()).toHaveTextContent('Pool count')
+    expect(settingRowPage.getName()).toHaveTextContent('Group count')
     expect(settingRowPage.getHint()).toHaveTextContent(
-      'How many pools the field splits into. Each pool also books its tables and time window.',
+      'How many groups the field splits into. Each group’s reservation also books its tables and time window.',
     )
     expect(settingRowPage.getValue()).toHaveTextContent('4')
-    expect(settingRowPage.queryUnit()).toHaveTextContent('pools')
+    expect(settingRowPage.queryUnit()).toHaveTextContent('groups')
     expect(settingRowPage.getSource()).toHaveTextContent(
-      "4 pool reservations · today's behaviour",
+      '20 players ÷ about 5 per group',
     )
   })
 
   // The row is addressable by the thing it sets, not by its position in the list — four
   // rows of identical markup are otherwise indistinguishable to a screen reader.
   it('names the region after the setting', () => {
-    settingRowPage.render({ name: 'Qualifiers per pool' })
+    settingRowPage.render({ name: 'Qualifiers per group' })
 
-    expect(settingRowPage.getRow()).toHaveAccessibleName('Qualifiers per pool')
+    expect(settingRowPage.getRow()).toHaveAccessibleName('Qualifiers per group')
   })
 
   // ADR 20260808: the owner is stated in WORDS. A badge that differed only by colour

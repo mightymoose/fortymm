@@ -2,9 +2,9 @@ import { render, screen, within, type Container } from '@/test/utilities'
 
 import { StandingsTable } from './standings-table'
 import {
-  buildPoolStandingsTableProps,
+  buildGroupStandingsTableProps,
   buildSwissStandingsTableProps,
-  type PoolOverrides,
+  type GroupOverrides,
   type SwissOverrides,
 } from './standings-table.factory'
 
@@ -37,7 +37,7 @@ const scoped = (container: Container) => ({
    * One column of body cells, top to bottom, addressed by its **header's full word**
    * ("Player", "Buchholz", "Wins") rather than by index.
    *
-   * The index is exactly what a Buchholz column changes — a pool table runs `#`, Player, W,
+   * The index is exactly what a Buchholz column changes — a group table runs `#`, Player, W,
    * L, Diff, GW and a swiss table inserts **Buc** between L and Diff — so an index-addressed
    * assertion would move under this feature and, worse, could silently start reading the
    * neighbour it displaced. Asking by header ties the cells to the heading above them, which
@@ -64,7 +64,7 @@ const scoped = (container: Container) => ({
       .map((row) => (within(row).getAllByRole('cell')[index].textContent ?? '').trim())
   },
 
-  /** Whether a column with this header exists at all — for the claim that a **pool** table
+  /** Whether a column with this header exists at all — for the claim that a **group** table
    * has no Buchholz column, which is half of what `format` decides. */
   hasColumn(ariaLabel: string, header: string) {
     return within(this.getTable(ariaLabel))
@@ -92,18 +92,18 @@ const scoped = (container: Container) => ({
 })
 
 /**
- * Test page-object for `StandingsTable` — the table shared by the pooled and the pool-less
+ * Test page-object for `StandingsTable` — the table shared by the grouped and the group-less
  * standings blocks.
  *
  * **Two renders, one per arm of `StandingsTableRows`**, rather than one `render` taking a
  * `format`: the tag decides which columns exist *and* which row type is legal, so a single
  * entry point would have to take a half-typed union and would let a test ask for a swiss
- * table over pool rows — the exact state the component's props were shaped to forbid.
+ * table over group rows — the exact state the component's props were shaped to forbid.
  */
 export const standingsTablePage = {
-  /** A **pool** table: no Buchholz column. */
-  renderPool(overrides: PoolOverrides = {}) {
-    render(<StandingsTable {...buildPoolStandingsTableProps(overrides)} />)
+  /** A **group** table: no Buchholz column. */
+  renderGroup(overrides: GroupOverrides = {}) {
+    render(<StandingsTable {...buildGroupStandingsTableProps(overrides)} />)
   },
 
   /** A **swiss** table: the same columns plus Buchholz. */

@@ -14,7 +14,7 @@ const FIXTURE_LINE_TESTID = /^fixture-line-/
 const lineText = (el: HTMLElement) =>
   (el.textContent ?? '').replace(/\s+/g, ' ').trim()
 
-/** The fixture lines inside one DOM node (a round's `<ul>`, a pool's `<section>`), in
+/** The fixture lines inside one DOM node (a round's `<ul>`, a group's `<section>`), in
  * DOM order, as text. The **sequence** is half of what a draw means, so it is the shape
  * every draw assertion reads. */
 export function fixtureLineTexts(scope: HTMLElement): string[] {

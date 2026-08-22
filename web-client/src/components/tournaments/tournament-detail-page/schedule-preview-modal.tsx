@@ -131,7 +131,7 @@ function serverSentence(error: ApiError): string | null {
  * domain-authored copy"). Only the strategy knows *which* refusal fired and which
  * numbers the director has to change, so a hardcoded sentence here can only be a
  * guess, and it was a wrong one: a round-robin-then-knockout event taking one
- * qualifier per pool was told its draw type is unsupported, hiding a two-click fix
+ * qualifier per group was told its draw type is unsupported, hiding a two-click fix
  * (`web-client/CLAUDE.md`: "surface server 4xx inline, don't swallow it"). The title
  * stays **cause-neutral** for the same reason — it must not contradict a detail it
  * has not read.
@@ -193,9 +193,12 @@ function fixtureToRailItem(
   return {
     fixtureId: fixture.fixtureId,
     eventName: eventName(fixture.eventId),
-    // The human pool name (`"Pool A"`), never the namespaced `{event}:{pool}`
-    // composite the solver keys by — the card heads with a name a director reads.
-    poolName: fixture.poolName,
+    // The human reservation name (`"Reservation A"`), never the namespaced
+    // `{event}:{reservation}` composite the solver keys by — the card heads
+    // with a name a director reads. A preview has no materialized group yet
+    // (that is a solved fact), so the rail's venue-neutral `contextLabel` slot
+    // carries the reservation's name instead — the closest thing the preview knows.
+    contextLabel: fixture.reservationName,
     label: `${placeholderName(fixture.playerAId)} vs ${placeholderName(fixture.playerBId)}`,
     tableLabel: null,
     statusLabel: '',

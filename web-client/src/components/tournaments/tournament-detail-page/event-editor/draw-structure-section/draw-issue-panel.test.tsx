@@ -12,32 +12,32 @@ describe('DrawIssuePanel', () => {
     })
 
     // The reference's "Uneven field" state: 22 across 4 is 6, 6, 5, 5.
-    it('reads the tally out largest pool first', () => {
+    it('reads the tally out largest group first', () => {
       drawIssuePanelPage.render()
 
       expect(drawIssuePanelPage.getTitle()).toHaveTextContent(
-        '2 pools of 6 · 2 pools of 5',
+        '2 groups of 6 · 2 groups of 5',
       )
     })
 
     /**
-     * A deviation from the reference, which shows only a two-and-two tally. `1 pool` is
-     * reachable today — a field of 7 over 2 pool reservations splits 4, 3 — and unlike
-     * the `1 pool reservations` sentence next door this title has no Python twin
+     * A deviation from the reference, which shows only a two-and-two tally. `1 group` is
+     * reachable today — a field of 7 over 2 reservations splits 4, 3 — and unlike
+     * the `1 reservations` sentence next door this title has no Python twin
      * transcribing it against shared vectors, so pluralising it drifts nothing.
      */
-    it('says "pool", singular, for a run of one', () => {
+    it('says "group", singular, for a run of one', () => {
       drawIssuePanelPage.render({
         issue: buildUnevenDrawIssue({
           distribution: [
-            { pools: 1, size: 4 },
-            { pools: 1, size: 3 },
+            { groups: 1, size: 4 },
+            { groups: 1, size: 3 },
           ],
         }),
       })
 
       expect(drawIssuePanelPage.getTitle()).toHaveTextContent(
-        '1 pool of 4 · 1 pool of 3',
+        '1 group of 4 · 1 group of 3',
       )
     })
 
@@ -45,7 +45,7 @@ describe('DrawIssuePanel', () => {
       drawIssuePanelPage.render()
 
       expect(drawIssuePanelPage.getBody()).toHaveTextContent(
-        'The bigger pools play more matches. Nothing has been silently reshaped.',
+        'The bigger groups play more matches. Nothing has been silently reshaped.',
       )
     })
 
@@ -79,9 +79,9 @@ describe('DrawIssuePanel', () => {
         issue: {
           kind: 'impossible',
           problem: {
-            kind: 'pool',
-            title: 'Pool C would have one player',
-            body: 'They would have nobody to play. Use fewer pools or raise the player limit.',
+            kind: 'group',
+            title: 'Group C would have one player',
+            body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
           },
         },
       })
@@ -94,8 +94,8 @@ describe('DrawIssuePanel', () => {
         issue: {
           kind: 'disagreement',
           disagreement: {
-            poolCount: 6,
-            poolSize: 5,
+            groupCount: 6,
+            groupSize: 5,
             seats: 30,
             fieldSize: 40,
             direction: 'unseated',

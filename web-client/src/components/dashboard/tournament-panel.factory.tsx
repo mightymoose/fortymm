@@ -21,7 +21,7 @@ export function buildTournamentTabView(
     stats: buildTournamentStatsView(),
     match: buildTournamentMatchCardView(),
     pathHeading: 'Your matches',
-    pathSubheading: 'Pool B · 4 players',
+    pathSubheading: 'Group B · 4 players',
     path: [
       buildTournamentPathRowView({ key: 'e-1-0', label: 'M1' }),
       buildTournamentPathRowView({

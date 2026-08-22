@@ -223,8 +223,8 @@ async def edit_tournament(
       :class:`~app.tournament_errors.TableInUseError`, naming the table by label, unless
       the payload carries ``unplace_fixtures_on_removed_tables``. With the opt-in the
       removal goes through and those fixtures are unplaced (table, start and pin all
-      cleared) and their events' entrants are hinted. A table only a **pool** reserves
-      needs no opt-in and produces no refusal: the pool quietly reserves one fewer. The
+      cleared) and their events' entrants are hinted. A table only a **group** reserves
+      needs no opt-in and produces no refusal: the group quietly reserves one fewer. The
       asymmetry is the ADR's point — clearing a placement destroys information on an
       unrelated write, so the database refuses by default and the director says yes on
       purpose.

@@ -18,7 +18,7 @@ materializer and the solve-request seam (``app.schedule_solves``); nothing in th
 draw or scheduling domain imports it, and it is imported only by
 ``app.result_acceptance``, so there is no cycle.
 
-For round-robin — the only draw type with a strategy today — the pool is already whole
+For round-robin — the only draw type with a strategy today — the group is already whole
 at go-live, so ``advance()`` after a completion is empty and nothing new materializes:
 the seam records the winner and does no more. That is the uniform seam being *honestly*
 empty, not dead code — the same call seats a single-elim winner into the next round the
@@ -52,7 +52,7 @@ async def on_match_completed(db: AsyncSession, match: Match) -> None:
 
     Every **active entrant of the event** — not merely the two who played — gets a
     staged ``dashboard.changed`` hint, because the panel's standings are projected
-    from the whole pool, so a completion moves the position of players who were not
+    from the whole group, so a completion moves the position of players who were not
     in it (:func:`app.tournament_realtime.stage_event_entrant_hints`). It is staged
     rather than published for the same reason the function does not commit: the
     caller owns the transaction boundary, and only a commit makes the advance true.
@@ -124,7 +124,7 @@ async def on_match_completed(db: AsyncSession, match: Match) -> None:
     await materialize_event(db, tournament, event)
     # The advance moved everyone's panel in this event, not just the two who played
     # it: the standings table the panel shows is projected from the event's whole
-    # pool (ADR-0788), so a third player's position can change without them
+    # group (ADR-0788), so a third player's position can change without them
     # touching a bat. Their participants-only hint (``finalize_match`` stages that
     # one) would never reach them. Staged, not published — this function runs in
     # the caller's transaction and deliberately does not commit, so publishing here

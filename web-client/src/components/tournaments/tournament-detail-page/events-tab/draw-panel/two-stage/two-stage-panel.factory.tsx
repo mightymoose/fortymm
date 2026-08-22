@@ -14,8 +14,8 @@ export type TwoStagePanelScenario = Partial<TwoStagePanelProps> & {
 }
 
 /**
- * Props for `TwoStagePanel`: by default a played-out `rr-then-ko` event — two decided pools,
- * a bracket run to a final, and a champion who tops **no** pool (`buildTwoStageEvent`).
+ * Props for `TwoStagePanel`: by default a played-out `rr-then-ko` event — two decided groups,
+ * a bracket run to a final, and a champion who tops **no** group (`buildTwoStageEvent`).
  *
  * The props are derived from the event **the same way `ResultsPanel` does at runtime** —
  * `eventStandingsThenFinishes` over the event's own two-stage block — so a test that hands

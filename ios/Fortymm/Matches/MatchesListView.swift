@@ -391,7 +391,12 @@ private struct MatchRow: View {
                         }
                         .font(FMFont.mono(18, weight: .bold))
                         .foregroundStyle(FMColor.fg1)
-                        if let delta = match.ratingDelta {
+                        // The row's delta chip belongs to a rating that MOVED.
+                        // An established rating (the viewer's first rated
+                        // match) has nothing to be up or down from, so it
+                        // gets no chip here either (#1180) — mirrors the
+                        // match-detail rating section right below it.
+                        if case let .moved(_, _, delta) = match.ratingOutcome {
                             Text("\(delta >= 0 ? "+" : "")\(delta)")
                                 .font(FMFont.mono(12, weight: .semibold))
                                 .foregroundStyle(delta >= 0 ? FMColor.serve500 : FMColor.loss)
@@ -403,6 +408,10 @@ private struct MatchRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // Keyed by the match's own id, so a spec that just created a
+            // match over the API (and holds its id) can find the exact row
+            // without a text-content query — e.g. `matches.row.<uuid>`.
+            .accessibilityIdentifier("matches.row.\(match.id)")
 
             trailing
                 .padding(.trailing, 14)

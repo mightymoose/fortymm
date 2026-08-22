@@ -26,9 +26,9 @@ from app.db import Base
 if TYPE_CHECKING:
     from app.models.tournament_entry import TournamentEntry
     from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
-    from app.models.tournament_event_pool import TournamentEventPool
+    from app.models.tournament_event_reservation import TournamentEventReservation
     from app.models.tournament_event_stage import TournamentEventStage
-    from app.models.tournament_fixture import TournamentFixture
+    from app.models.tournament_event_stage_group import TournamentEventStageGroup
     from app.models.tournament_table import VenueTable
 
 
@@ -201,10 +201,11 @@ class Tournament(Base):
 
 class TournamentEvent(Base):
     """An event (a draw) within a tournament — its own format, draw type, entry
-    rules, schedule slot, and pool layout. The value-objects (``slot``,
+    rules, schedule slot, and groups/reservations. The value-objects (``slot``,
     ``match_settings``, ``predicates``) are typed JSONB decoded to Pydantic models at
-    the API boundary; the pool layout is **not** — it is ``pools``, a real child table
-    (ADR 20260801 "a pool belongs to its event")."""
+    the API boundary; the groups and reservations are **not** — they are real child
+    tables, ``groups`` and ``reservations`` below (ADR 20260801, on what belongs to an
+    event rather than to its draw settings)."""
 
     __tablename__ = "tournament_events"
     __table_args__ = (
@@ -224,12 +225,12 @@ class TournamentEvent(Base):
             "entry_fee >= 0", name="ck_tournament_events_entry_fee_non_negative"
         ),
         # Redundant against the primary key, and there for exactly one purpose: it is
-        # the target ``tournament_event_pool_tables`` foreign-keys
-        # ``(tournament_id, event_id)`` against, which is the leg that forces a
-        # reservation's denormalized ``tournament_id`` to be the tournament its pool's
-        # event actually belongs to (ADR 20260801). Without it the other two legs of
-        # that row are satisfiable by a cross-tournament reservation — see
-        # ``TournamentEventPoolTable``.
+        # the target ``tournament_event_reservation_tables`` foreign-keys
+        # ``(tournament_id, event_id)`` against, which is the leg that forces that row's
+        # denormalized ``tournament_id`` to be the tournament its reservation's event
+        # actually belongs to (ADR 20260801). Without it the other two legs are
+        # satisfiable by a cross-tournament reservation — see
+        # ``TournamentEventReservationTable``.
         UniqueConstraint(
             "tournament_id", "id", name="uq_tournament_events_tournament_id_id"
         ),
@@ -299,11 +300,12 @@ class TournamentEvent(Base):
     predicates: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    # There is deliberately no ``pools`` JSONB column. An event's pools were a NOT NULL
-    # JSONB list of ``{id, name, slot, table_ids}`` value-objects keyed by
-    # client-supplied strings; they are the ``pools`` relationship below now, so a
-    # fixture can foreign-key the pool it names — and name one of its OWN event's pools
-    # (ADR 20260801 "a pool belongs to its event").
+    # There is deliberately no JSONB column for either. An event's groups and their
+    # reservations were once a NOT NULL JSONB list of ``{id, name, slot, table_ids}``
+    # value-objects keyed by client-supplied strings; they are the ``groups`` and
+    # ``reservations`` relationships below now, so a fixture can foreign-key the group
+    # it names — and name one of its OWN event's groups (ADR 20260801, on what belongs
+    # to an event rather than to its draw settings).
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -359,30 +361,78 @@ class TournamentEvent(Base):
         order_by="TournamentEntry.created_at",
     )
 
-    # The event's pools, as rows (ADR 20260801), in the director's own order — which is
-    # what ``TournamentEventPool.position`` carries, and what the snake seeds against.
+    # The event's GROUPS, in the director's own order — which is what
+    # ``TournamentEventStageGroup.position`` carries, and what the snake seeds against.
     #
-    # ``lazy="selectin"``, and declared here rather than as an option at each call site,
-    # for the reason ``Tournament.tables`` and ``draw_settings`` are eager: async
-    # SQLAlchemy raises instead of emitting a lazy load, so each of the ~8 readers of an
-    # event's pools (``event_pools`` and everything through it — the serializer, the
-    # draw config, the solver's input load, the preview, the call copy, the dashboard)
-    # would have to remember one. ``selectin`` and not ``joined`` because this is a
-    # one-to-many: a joined load would multiply the event rows, which the tournament
-    # list's LIMIT/OFFSET could not survive. It batches over the whole result set, so a
-    # page of events costs ONE extra statement however many events it holds.
+    # This relationship carried one combined name until a single wire-level slot split
+    # into a group row and a reservation row. A group is the half a fixture names; the
+    # tables and the window are a reservation, which hangs off this event directly
+    # (``reservations`` below). The wire now serves the two as separate arrays —
+    # :func:`app.tournament_reservations.group_read` projects a group,
+    # :func:`~app.tournament_reservations.reservation_read` its mapped reservation.
     #
-    # ``delete-orphan`` is what the pools *write* leans on — a pool dropped from the
-    # submitted list is removed by taking it out of this collection — and
-    # ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` is the delete path for
-    # everything that does not load the collection first (the tournament delete's single
-    # cascading statement, a raw DELETE, psql).
-    pools: Mapped[list["TournamentEventPool"]] = relationship(
+    # VIEWONLY, reachable through the event's stages, not the real parent-child
+    # relationship: ADR 20260815's "Sequencing with #1338" consequence parents a group
+    # on its stage (always stage 0 — decision 3), because
+    # ``tournament_fixtures.event_id`` is dropped in the same ADR and a group must share
+    # a column with the fixtures whose composite FK targets it. Writes go through
+    # ``app.tournament_reservations``, which resolves the event's first stage and
+    # assigns ``stage.groups`` (the real relationship, declared on
+    # :class:`~app.models.tournament_event_stage.TournamentEventStage`) — never this
+    # one, which SQLAlchemy refuses to flush from.
+    # ``secondary="tournament_event_stages"`` is an unusual use of that argument (the
+    # "secondary" table is a full mapped entity here, not a bare association table), and
+    # ``viewonly=True`` is what makes it safe: SQLAlchemy never attempts to
+    # INSERT/DELETE through this relationship, so it only ever uses the table for the
+    # join. The ``primaryjoin`` pins that join to stage 0 specifically, so this stays
+    # exactly the list a reader expects even on an rr-then-ko event, which has a second
+    # stage with no groups of its own. ``lazy="selectin"``, for the reason every
+    # collection on this path is eager: a joined load would multiply the event rows,
+    # which the tournament list's LIMIT/OFFSET could not survive.
+    groups: Mapped[list["TournamentEventStageGroup"]] = relationship(
+        secondary="tournament_event_stages",
+        primaryjoin=(
+            "and_(TournamentEvent.id == TournamentEventStage.event_id, "
+            "TournamentEventStage.position == 0)"
+        ),
+        secondaryjoin="TournamentEventStage.id == TournamentEventStageGroup.stage_id",
+        viewonly=True,
+        lazy="selectin",
+        order_by="TournamentEventStageGroup.position",
+    )
+
+    # The event's RESERVATIONS — the tables-and-window half of what one wire-level
+    # slot used to be, parented here rather than on a stage (see
+    # :class:`~app.models.tournament_event_reservation.TournamentEventReservation` for
+    # why: nothing names a reservation through a fixture's composite key, and an
+    # event-parented one is what lets an rr-then-ko draw's two stages read one set).
+    #
+    # A REAL relationship, not a viewonly one, unlike ``groups`` above — this is the
+    # collection ``app.tournament_reservations`` writes, and ``delete-orphan`` is what
+    # removes a reservation when its own entry leaves the payload. The 1:1 with
+    # ``groups`` is maintained by that module on every write path, not by anything here.
+    #
+    # Deliberately **NOT eager**, unlike almost every other collection on this model,
+    # and the reason is a statement count. No reader goes through here: a caller
+    # reaches a group's reservation from the group itself (``TournamentEventStageGroup
+    # .reservation``), so making this eager would load every reservation a SECOND time —
+    # and chain a second load of their ``tables`` off it — on every page that touches an
+    # event. That is two statements per page bought for nothing, on the tournament list,
+    # the detail read and the dashboard panel alike, all three of which pin their
+    # counts.
+    #
+    # The one writer loads it explicitly instead, with ``await
+    # event.awaitable_attrs.reservations``
+    # (``app.tournament_reservations.apply_event_reservations``) — the async-safe way to
+    # populate a lazy collection, and the seam that keeps this cost on the write path
+    # where it belongs. Assigning to an unloaded ``delete-orphan`` collection would
+    # otherwise emit a lazy load mid-assignment, which under async raises
+    # ``MissingGreenlet`` rather than querying.
+    reservations: Mapped[list["TournamentEventReservation"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        lazy="selectin",
-        order_by="TournamentEventPool.position",
+        order_by="TournamentEventReservation.position",
     )
 
     # The event's stages, as rows the system mints from a template keyed on the
@@ -392,13 +442,13 @@ class TournamentEvent(Base):
     # construction time (``stages=mint_stages(...)``), in the same transaction as the
     # event itself.
     #
-    # ``lazy="selectin"``, matching ``pools`` above and for the same reason: async
+    # ``lazy="selectin"``, matching ``groups`` above and for the same reason: async
     # SQLAlchemy raises rather than emitting a lazy load, so every reader of an event's
     # stages — the tournament-detail/list serializers today, and whatever reads them
     # next — would otherwise have to remember its own loader option. ``selectin`` and
     # not ``joined`` because this is a one-to-many, batching over the whole result set
     # in ONE extra statement however many events a page holds (the same reasoning
-    # ``pools`` gives). ``app.tournament_event_stages`` still reaches these rows
+    # ``groups`` gives). ``app.tournament_event_stages`` still reaches these rows
     # through explicit queries of its own on the mint/re-mint path — it never reads
     # this attribute — but every OTHER reader (the serializer chief among them) now
     # gets a populated collection for free.
@@ -415,39 +465,15 @@ class TournamentEvent(Base):
         order_by="TournamentEventStage.position",
     )
 
-    # The event's draw: every fixture the cut produced (ADR-0786). Empty until the
-    # draw is cut; a re-cut replaces the set wholesale, which is what
-    # ``delete-orphan`` buys.
-    #
-    # Ordered pool → round → position — the same total order the read path's
-    # ``fixtures_by_event`` loader applies, and the one the fixtures' own
-    # ``UNIQUE (event_id, pool_id, round, position)`` makes a total order at all. The
-    # ``pool_id`` used to be missing from this list, which left the relationship
-    # ordering a *pooled* draw by round and position alone: pool A's round 1 and pool
-    # B's round 1 would interleave, so the same draw would come back in two different
-    # sequences depending on which of the two ways a caller happened to read it. A
-    # bracket has one order, and there is no reader that wants the other one.
-    #
-    # NULLs last, explicitly, rather than relying on Postgres' ASC default: a NULL
-    # ``pool_id`` is a real value here ("this fixture belongs to no pool" —
-    # single-elim or swiss, or this is the KO stage of an rr-then-ko event), and it
-    # belongs after the pools that feed it — where a swiss event has none, every
-    # fixture of one being un-pooled.
-    #
-    # It orders the pools by ``pool_id``, where ``fixtures_by_event`` orders them by the
-    # pool's ``position`` in the event's own pool order (ADR 20260801) — a relationship
-    # ``order_by`` is an expression over *this* table, so saying it here would still
-    # take a correlated subquery in a string, even now that the position is a column on
-    # ``tournament_event_pools`` and joinable. The two agree wherever the ids sort as
-    # the director ordered them and part company where they do not (``p-10-`` sorts
-    # between ``p-1-`` and ``p-2-``). Nothing in the app reads this relationship's order
-    # today — every draw a client sees comes through the loader.
-    fixtures: Mapped[list["TournamentFixture"]] = relationship(
-        back_populates="event",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        order_by=(
-            "TournamentFixture.pool_id.asc().nulls_last(), "
-            "TournamentFixture.round, TournamentFixture.position"
-        ),
-    )
+    # There is deliberately no ``fixtures`` relationship here any more. A fixture
+    # names its stage, not its event (ADR 20260815 decision 5, "a fixture names its
+    # stage"; ``tournament_fixtures.event_id`` is dropped outright) —
+    # :attr:`~app.models.tournament_event_stage.TournamentEventStage.fixtures` is the
+    # real relationship, one stage at a time; an rr-then-ko event's draw spans BOTH of
+    # its stages, unlike ``groups`` above, because both the group stage and the
+    # knockout stage hold fixtures. This model carried a VIEWONLY shim spanning both
+    # stages, ordered group → round → position, for the one test that walked it
+    # directly; that test now walks a stage's own ``fixtures`` instead (the same order,
+    # declared on that relationship). Every production read of a draw goes through the
+    # batched ``app.tournament_queries.fixtures_by_event`` loader, never through either
+    # relationship.

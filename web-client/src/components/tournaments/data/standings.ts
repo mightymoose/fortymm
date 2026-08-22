@@ -1,9 +1,9 @@
 // What an event's **results** look like to a reader (ADR-0788) — the pure derivation
 // behind the Events tab's standings tables, the twin of `./draw` for the results block.
 //
-// The wire gives us `EventResults` (parsed at the boundary by `./results`): pool
-// standings keyed by pool id, rows keyed by entry id, and a champion that is an entry id.
-// A director reads standings as a **named** table per pool, with a **named** champion.
+// The wire gives us `EventResults` (parsed at the boundary by `./results`): group
+// standings keyed by group id, rows keyed by entry id, and a champion that is an entry id.
+// A director reads standings as a **named** table per group, with a **named** champion.
 // Nothing on the wire is shaped that way, and deliberately so — the same two joins the
 // draw makes:
 //
@@ -11,17 +11,21 @@
 //   already on the event (`entrants` is keyed by that id), so the join happens here, once.
 //   Copying the username onto the row would carry a field and its own derivation, and the
 //   two copies would drift the moment a player is renamed.
-// - **Pool names are not on a pool's standings.** They carry a `poolId`, a string ref into
-//   the event's own `pools` — so the table titles itself from the pool the page holds.
+// - **A group carries no name of its own** (ticket #1369 — a group is server-owned and
+//   read-only; only its `position` is a fact about it). The table titles itself from
+//   `groupLabel(group)` (`./draw`) — `Group A`, `Group B`, … — never from a
+//   reservation's director-typed name, which names the venue booking, not the
+//   competitive group.
 //
 // What it deliberately does **not** do is re-order or recompute anything: the server owns
 // the finishing order and every number (ADR-0788 — "the order *is* the result"), so the
-// rows are mapped **in the order they arrive**, untouched. This module only joins the two
-// ids to names.
+// rows are mapped **in the order they arrive**, untouched. This module only joins the ids
+// to names/labels.
 //
 // All of it is a pure function of one event, so it is unit-tested (`./standings.test.ts`)
 // rather than asserted through a DOM.
 
+import { groupLabel } from './draw'
 import { nameByEntryId, nameOf } from './entrant-names'
 import type { StandingRow, StandingsResults, TournamentEvent } from './types'
 
@@ -36,20 +40,23 @@ export interface StandingLine extends StandingRow {
   name: string
 }
 
-/** One pool's standings table, named and joined: the pool's name (from the event's
- * `pools`), its rows in the server's finishing order, and whether it is decided. */
-export interface PoolStandingsView {
-  poolId: string
-  name: string
+/** One group's standings table, labelled and joined: the group's position-derived label
+ * (`Group A`, `Group B`, …), its rows in the server's finishing order, and whether it is
+ * decided. */
+export interface GroupStandingsView {
+  groupId: string
+  /** `Group A`, `Group B`, … — `groupLabel(group)` (`./draw`), never a stored name (a
+   * group carries none). */
+  label: string
   rows: StandingLine[]
   complete: boolean
 }
 
 /**
- * The fields `eventStandings` actually reads — a **standings block**: the pool tables,
+ * The fields `eventStandings` actually reads — a **standings block**: the group tables,
  * whether that block is decided, and its champion when it has one.
  *
- * A whole round-robin event's `StandingsResults` is one of these; so is the **pool stage**
+ * A whole round-robin event's `StandingsResults` is one of these; so is the **group stage**
  * of a two-stage event, which is not a `StandingsResults` at all (`./two-stage`). The
  * parameter is this rather than the tagged arm precisely so a composite can hand over the
  * block it genuinely holds instead of minting a `kind: 'standings'` value the server would
@@ -58,17 +65,17 @@ export interface PoolStandingsView {
  */
 export type StandingsBlock = Omit<StandingsResults, 'kind'>
 
-/** A standings block, shaped for the reader: named pool tables, whether the block is
+/** A standings block, shaped for the reader: labelled group tables, whether the block is
  * complete, and the champion's *name* (joined) when there is one. */
 export interface StandingsView {
-  pools: PoolStandingsView[]
-  /** True when **this standings block** is decided — every fixture of every pool played.
-   * For a round-robin event that is the event itself; for the pool stage of a two-stage
+  groups: GroupStandingsView[]
+  /** True when **this standings block** is decided — every fixture of every group played.
+   * For a round-robin event that is the event itself; for the group stage of a two-stage
    * event it is that *stage*, which is decided long before the event is (`./two-stage`). */
   complete: boolean
-  /** The champion's username when the event is a complete single pool, else `null` — the
+  /** The champion's username when the event is a complete single group, else `null` — the
    * server's own `champion`, joined to a name. `null` while any fixture is unplayed, and
-   * for a multi-pool event (no single champion without a knockout stage yet). */
+   * for a multi-group event (no single champion without a knockout stage yet). */
   champion: string | null
 }
 
@@ -79,9 +86,10 @@ export interface StandingsView {
  * whether it applies: **the caller that switches on `results.kind` does**
  * (`ResultsPanel`), and it is the only place that knows an event may have no results at
  * all. Everything here is a total function of the two arguments — the block, plus the
- * `event` the two id joins need (entry id → username, pool id → pool name).
+ * `event` the id join needs (entry id → username); the group label is derived from
+ * position alone and needs no lookup into the event at all.
  *
- * The block is a `StandingsBlock`, not the `standings` arm itself, so the pool stage of a
+ * The block is a `StandingsBlock`, not the `standings` arm itself, so the group stage of a
  * two-stage event can be rendered through this same selector without anybody forging a
  * `kind` for it.
  *
@@ -96,27 +104,30 @@ export function eventStandings(
   results: StandingsBlock,
 ): StandingsView {
   const names = nameByEntryId(event)
-  const poolNameById = new Map(event.pools.map((p) => [p.id, p.name]))
+  const positionByGroupId = new Map(event.groups.map((g) => [g.id, g.position]))
 
-  const pools = results.pools.map(
-    (pool): PoolStandingsView => ({
-      poolId: pool.poolId,
-      // A pool the standings name but the event does not list would be a payload the
-      // server cannot send; falling back to the id keeps the table titled rather than
-      // blank if it ever did.
-      name: poolNameById.get(pool.poolId) ?? pool.poolId,
-      rows: pool.rows.map(
+  const groups = results.groups.map(
+    (group): GroupStandingsView => ({
+      groupId: group.groupId,
+      // A group the standings name but the event does not list would be a payload the
+      // server cannot send; falling back to the raw id keeps the table titled rather
+      // than blank if it ever did.
+      label:
+        positionByGroupId.get(group.groupId) !== undefined
+          ? groupLabel({ position: positionByGroupId.get(group.groupId) as number })
+          : group.groupId,
+      rows: group.rows.map(
         (row): StandingLine => ({
           ...row,
           name: nameOf(row.entryId, names),
         }),
       ),
-      complete: pool.complete,
+      complete: group.complete,
     }),
   )
 
   return {
-    pools,
+    groups,
     complete: results.complete,
     champion:
       results.champion === null ? null : nameOf(results.champion, names),
