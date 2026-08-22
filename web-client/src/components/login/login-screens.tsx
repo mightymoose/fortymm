@@ -767,6 +767,7 @@ export function ScreenEmail({
   const [email, setEmail] = useState(initialEmail)
   const [touched, setTouched] = useState(false)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [captchaFailed, setCaptchaFailed] = useState(false)
   const [honeypot, setHoneypot] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
   const captchaRef = useRef<TurnstileHandle | null>(null)
@@ -775,6 +776,14 @@ export function ScreenEmail({
   const showError = errorMessage ?? localError ?? (touched && !valid
     ? "That doesn't look like a valid email."
     : null)
+
+  // The Turnstile token needs a script fetch, a widget render and a challenge
+  // solve — a second or more on a cold load — so the submit button waits,
+  // visibly, until the token lands (#1462). A disabled button with no
+  // explanation is a dead end; the waiting label (and, after a failure, the
+  // alert below) is that explanation. `onExpire` nulls the token, which lands
+  // back here and treats a mid-form re-solve exactly like the initial wait.
+  const captchaWaiting = !captchaToken && !captchaFailed
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -849,20 +858,36 @@ export function ScreenEmail({
                   if (localError) setLocalError(null)
                 }}
                 onExpire={() => setCaptchaToken(null)}
-                onError={() => setCaptchaToken(null)}
+                onError={() => {
+                  setCaptchaToken(null)
+                  setCaptchaFailed(true)
+                }}
+                onLoadError={() => setCaptchaFailed(true)}
               />
             </div>
+
+            {captchaFailed && (
+              <p className="fmm-help fmm-help--err" role="alert">
+                The anti-bot check hit a snag. Reload this page and try again.
+              </p>
+            )}
 
             <button
               type="submit"
               style={{
                 ...btnPrimary,
-                opacity: submitting ? 0.7 : 1,
-                cursor: submitting ? 'wait' : 'pointer',
+                opacity: submitting || captchaWaiting ? 0.7 : 1,
+                cursor: submitting ? 'wait' : captchaWaiting
+                  ? 'not-allowed'
+                  : 'pointer',
               }}
-              disabled={submitting}
+              disabled={submitting || !captchaToken}
             >
-              {submitting ? 'Sending the link…' : 'Send the link'}
+              {submitting
+                ? 'Sending the link…'
+                : captchaWaiting
+                  ? 'Getting ready…'
+                  : 'Send the link'}
             </button>
           </form>
           <Divider label="OR" />
