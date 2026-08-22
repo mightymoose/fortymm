@@ -96,4 +96,51 @@ test.describe('tournaments list — the search box follows the URL', () => {
     )
     await expect(pom.card(SEEDED)).toBeVisible()
   })
+
+  test('a whitespace-only search keeps q out of the URL', async ({ page }) => {
+    const { pom } = await TournamentsListPage.navigateTo(page)
+    await expect(pom.card(SEEDED)).toBeVisible()
+
+    // Space by space: every intermediate write goes through the same
+    // trim-as-transform schema (`trim().min(1).catch(undefined)`), so no prefix
+    // of the input may leak a q out either.
+    await pom.searchInput.pressSequentially('   ')
+
+    // The URL first — a dropped guard here writes an invisible ?q=%20%20%20 the
+    // user can neither see nor clear, which is exactly what must not happen.
+    await expect(page).not.toHaveURL(/[?&]q=/)
+
+    // The RAW buffer stays in the box regardless — trim is a transform, not a
+    // check, so binding the input to the parsed value reds right here — and
+    // nothing filters.
+    await expect(pom.searchInput).toHaveValue('   ')
+    await expect(pom.card(SEEDED)).toBeVisible()
+  })
+
+  test('a same-route navigation that carries q adopts it into the box', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentsListPage.navigateTo(page)
+    await expect(pom.card(SEEDED)).toBeVisible()
+
+    // Search writes use replace:true, so typing is ONE history entry. The sidebar
+    // click then pushes the bare route, which makes BACK a same-route navigation
+    // that CARRIES q — the component never unmounts across either hop (#1420,
+    // "Browser back").
+    await pom.searchInput.pressSequentially(NO_MATCH)
+    await expect(pom.searchInput).toHaveValue(NO_MATCH)
+    await expect(pom.card(SEEDED)).toHaveCount(0)
+
+    await pom.sidebarTournamentsLink.click()
+    await expect(pom.searchInput).toHaveValue('')
+    await expect(pom.card(SEEDED)).toBeVisible()
+
+    await page.goBack()
+    await expect(page).toHaveURL(/[?&]q=zzz(&|$)/)
+
+    // Box first: a deleted resync leaves it empty after the back, reading
+    // `Expected "zzz" Received ""` instead of adopting the returned search.
+    await expect(pom.searchInput).toHaveValue(NO_MATCH)
+    await expect(pom.card(SEEDED)).toHaveCount(0)
+  })
 })
