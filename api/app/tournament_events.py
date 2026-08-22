@@ -66,9 +66,9 @@ from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import (
     apply_event_reservations,
-    group_count_for,
     materialise_event_groups,
     materialise_groups,
+    ordered_reservations,
     stored_reservations,
 )
 
@@ -169,45 +169,52 @@ async def create_event(
     # ``stored_reservations`` turns the WRITE shape, which carries no ``position``,
     # into rows that do, from each entry's index in the list this payload sent; they
     # hang off the event. ``materialise_groups`` then mints the group rows onto the
-    # event's stage 0 (ADR 20260815, "Sequencing with #1338") — as many as
-    # ``group_count_for`` says for this draw type against the PREVIEW field (the cap,
-    # or 16), each mapped to the reservation at ``position % reservation count`` —
-    # which is the same rule ``update_event`` re-applies on every later write, so a
-    # create and a patch cannot drift. Assigned onto the just-minted stage rather than
-    # passed into the ``TournamentEvent`` constructor above: ``TournamentEvent.groups``
-    # is a read-only (VIEWONLY) association and would silently drop a write. ``event``
-    # is already a live Python object at this point (just not flushed yet), which is
-    # all the reservations' own ``event`` relationship needs.
+    # event's stage 0 (ADR 20260815, "Sequencing with #1338") against the PREVIEW
+    # field (the cap, or 16) — the one materialisation policy, the same function
+    # ``update_event`` reaches through ``materialise_event_groups`` on every later
+    # write, so a create and a patch cannot drift. Called on the stage directly rather
+    # than through that door because the stage is a fresh, unflushed object with no id
+    # to query by yet. Assigned onto the just-minted stage rather than passed into the
+    # ``TournamentEvent`` constructor above: ``TournamentEvent.groups`` is a read-only
+    # (VIEWONLY) association and would silently drop a write. ``event`` is already a
+    # live Python object at this point (just not flushed yet), which is all the
+    # reservations' own ``event`` relationship needs.
     event.reservations = stored_reservations(event, tournament, payload.reservations)
     materialise_groups(
         stages[0],
         event.reservations,
-        group_count_for(
-            payload.draw_settings.draw_type,
-            field_size=preview_field_size(payload.max_players),
-            reservation_count=len(event.reservations),
-        ),
+        draw_type=payload.draw_settings.draw_type,
+        field_size=preview_field_size(payload.max_players),
     )
     db.add(event)
     await db.commit()
     await db.refresh(event)
-    # ``refresh`` re-runs ``reservations``' own ``selectin`` load, but a reservation
-    # this session already held — every one the patch KEPT — comes back with its
-    # ``tables`` still expired by the commit: the chained ``selectin`` under a refresh
-    # populates the rows it finds in the identity map without re-running their own
-    # collection loads. The serializer reads ``reservation.tables`` next, and under
-    # async an expired collection is a ``MissingGreenlet``, not a lazy load — so the
-    # tables are reloaded here, explicitly, in one statement per event rather than one
-    # per reservation. (A reservation the patch ADDED is a fresh object and arrives
-    # fully loaded; this is only for the kept ones, and it is cheaper to reload all
-    # than to tell them apart.)
+    await _reload_reservation_tables(db, event)
+    return event, tournament.league_id
+
+
+async def _reload_reservation_tables(db: AsyncSession, event: TournamentEvent) -> None:
+    """Reload every reservation's ``tables`` after the ``refresh`` both write verbs end
+    on, so the serializer that reads them next finds them loaded.
+
+    The commit itself expires nothing (the sessionmaker is ``expire_on_commit=False``,
+    ``app.db``). What empties the collection is ``db.refresh(event)``: it re-runs
+    ``reservations``' own ``selectin`` load, and for a reservation this session already
+    held — every one a patch KEPT, and every one a create composed before its INSERT —
+    the chained ``selectin`` populates the row it finds in the identity map without
+    re-running that row's own ``tables`` load, which is left unloaded. Under async an
+    unloaded collection is a ``MissingGreenlet``, not a lazy load — so the tables are
+    reloaded here, explicitly, in one statement per event rather than one per
+    reservation. (A reservation a patch ADDED is a fresh object and arrives fully
+    loaded; it is cheaper to reload all than to tell them apart.) Dropping this call
+    reds ``test_group_materialisation`` on the PATCH path with that error.
+    """
     await db.execute(
         select(TournamentEventReservation)
         .options(selectinload(TournamentEventReservation.tables))
         .where(TournamentEventReservation.event_id == event.id)
         .execution_options(populate_existing=True)
     )
-    return event, tournament.league_id
 
 
 async def delete_event(
@@ -486,13 +493,9 @@ async def _enforce_group_set_frozen(
     # orphanable as a played one.
     if not await event_has_draw(db, event.id):
         return
-    # The reservations the event holds, in their stored order — ``event.reservations``
-    # is eager, and sorted by ``position`` explicitly rather than trusted to arrive
-    # that way, the same belt-and-braces stance ``app.tournament_draws`` takes.
-    existing_order = [
-        reservation.id
-        for reservation in sorted(event.reservations, key=lambda row: row.position)
-    ]
+    # The reservations the event holds, in their stored order (``event.reservations``
+    # is eager).
+    existing_order = [reservation.id for reservation in ordered_reservations(event)]
     # An entry with no ``id`` is an addition and contributes nothing to the incoming
     # SEQUENCE — which is what makes ``existing_order == incoming_order`` "you cited
     # exactly the reservations you have, in the order you have them" rather than merely
@@ -907,20 +910,5 @@ async def update_event(
         await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
     await db.commit()
     await db.refresh(event)
-    # ``refresh`` re-runs ``reservations``' own ``selectin`` load, but a reservation
-    # this session already held — every one the patch KEPT — comes back with its
-    # ``tables`` still expired by the commit: the chained ``selectin`` under a refresh
-    # populates the rows it finds in the identity map without re-running their own
-    # collection loads. The serializer reads ``reservation.tables`` next, and under
-    # async an expired collection is a ``MissingGreenlet``, not a lazy load — so the
-    # tables are reloaded here, explicitly, in one statement per event rather than one
-    # per reservation. (A reservation the patch ADDED is a fresh object and arrives
-    # fully loaded; this is only for the kept ones, and it is cheaper to reload all
-    # than to tell them apart.)
-    await db.execute(
-        select(TournamentEventReservation)
-        .options(selectinload(TournamentEventReservation.tables))
-        .where(TournamentEventReservation.event_id == event.id)
-        .execution_options(populate_existing=True)
-    )
+    await _reload_reservation_tables(db, event)
     return event, tournament.league_id

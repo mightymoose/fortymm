@@ -118,6 +118,7 @@ __all__ = [
     "group_read",
     "materialise_event_groups",
     "materialise_groups",
+    "ordered_reservations",
     "reservation_read",
     "stored_reservations",
 ]
@@ -298,6 +299,22 @@ def _new_reservation(
     )
 
 
+def ordered_reservations(
+    event: TournamentEvent,
+) -> list[TournamentEventReservation]:
+    """The event's reservations in ``position`` order — the one definition of "the
+    event's reservation order", which is what a group's ``position % reservation
+    count`` mapping, the wire's ``reservations[]`` and the freeze's order comparison
+    all read (#1387). The twin of ``app.tournament_draws._ordered_groups``.
+
+    Sorted explicitly rather than trusted to the relationship's own ``order_by``: that
+    ordering is a property of a load, and a caller that built the event in memory (the
+    create path) or just reassigned the collection (the reservations diff) holds the
+    list in whatever order it was given.
+    """
+    return sorted(event.reservations, key=lambda row: row.position)
+
+
 def group_count_for(
     draw_type: DrawType, *, field_size: int, reservation_count: int
 ) -> int:
@@ -335,14 +352,23 @@ def group_count_for(
 def materialise_groups(
     stage: TournamentEventStage,
     reservations: Sequence[TournamentEventReservation],
-    count: int,
+    *,
+    draw_type: DrawType,
+    field_size: int,
 ) -> None:
-    """Make ``stage``'s groups exactly ``count`` rows at positions ``0..count-1``, each
-    mapped to ``reservations[position % len(reservations)]`` — or to nothing when the
-    event has no reservation — as an **id-keyed diff** over the rows the stage holds.
+    """Make ``stage``'s groups exactly the rows :func:`group_count_for` says
+    ``draw_type`` holds against ``field_size``, at positions ``0..count-1``, each mapped
+    to ``reservations[position % len(reservations)]`` — or to nothing when the event has
+    no reservation — as an **id-keyed diff** over the rows the stage holds.
 
-    Pure over loaded objects: no session, so the create path can run it on a fresh,
-    unflushed stage and the edit path on one it just loaded.
+    **This is the whole materialisation policy, in one place.** Which count, which
+    field, which mapping: the create path (``app.tournament_events.create_event``, on a
+    fresh, unflushed stage) and :func:`materialise_event_groups` (the edit path and the
+    cut, on a stage just loaded) both come through here, so a create and a patch
+    cannot drift. ``reservations`` is taken in the order given, which is why the
+    session door hands it :func:`ordered_reservations`.
+
+    Pure over loaded objects: no session.
 
     **Which rows survive a shrink is named, not incidental.** Going from eight groups
     to two keeps positions 0 and 1 and drops the tail, so the surviving mapping and
@@ -358,6 +384,9 @@ def materialise_groups(
     orphaned (``delete-orphan`` on ``reservation_link``, a DELETE); one whose target is
     unchanged is not touched at all.
     """
+    count = group_count_for(
+        draw_type, field_size=field_size, reservation_count=len(reservations)
+    )
     kept = sorted(stage.groups, key=lambda group: group.position)[:count]
     groups: list[TournamentEventStageGroup] = []
     for position in range(count):
@@ -439,13 +468,12 @@ async def materialise_event_groups(
             )
         )
     ).scalar_one()
-    reservations = sorted(event.reservations, key=lambda row: row.position)
-    count = group_count_for(
-        draw_settings_of(event.draw_settings).draw_type,
+    materialise_groups(
+        stage,
+        ordered_reservations(event),
+        draw_type=draw_settings_of(event.draw_settings).draw_type,
         field_size=field_size,
-        reservation_count=len(reservations),
     )
-    materialise_groups(stage, reservations, count)
 
 
 async def apply_event_reservations(

@@ -633,10 +633,13 @@ def build_preview_snapshot(
         # ``app.schedule_solves`` makes, needed here because ``PlannedFixture``
         # (a pure ``app.draws`` value) carries only a group id, never a
         # reservation one.
-        group_reservation_ids = {
-            group.id: group.reservation_link.reservation_id
+        # Total over the event's groups, ``None`` for a group with no join row, so
+        # "no reservation" is a typed value a reader has to handle rather than a
+        # missing key a lookup would raise on.
+        group_reservation_ids: dict[uuid.UUID, uuid.UUID | None] = {
+            group.id: (link.reservation_id if link is not None else None)
             for group in plan.event.groups
-            if group.reservation_link is not None
+            for link in (group.reservation_link,)
         }
         # Counted, not just dropped: the caller turns a non-zero count into the honest
         # note that this event's knockout stage is missing from the schedule shown.
@@ -661,7 +664,8 @@ def build_preview_snapshot(
                 # from.
                 knockout_fixtures += 1
                 continue
-            if fixture.group_id not in group_reservation_ids:
+            reservation_id = group_reservation_ids[fixture.group_id]
+            if reservation_id is None:
                 # A group that plays in no reservation (#1387: an ``rr-then-ko``
                 # event's groups map round-robin onto its reservations, and an event
                 # with none has groups with none). The preview has no window to place
@@ -670,9 +674,7 @@ def build_preview_snapshot(
                 # same stance the knockout stage above takes.
                 continue
             schedule_fixtures.append(
-                _schedule_fixture(
-                    plan.event.id, event_id, fixture, group_reservation_ids
-                )
+                _schedule_fixture(plan.event.id, event_id, fixture, reservation_id)
             )
         summaries.append(
             EventFieldSummary(
@@ -698,7 +700,7 @@ def _schedule_fixture(
     event_uuid: uuid.UUID,
     event_id: EventId,
     fixture: PlannedFixture,
-    group_reservation_ids: dict[uuid.UUID, uuid.UUID],
+    reservation_id: uuid.UUID,
 ) -> ScheduleFixture:
     """Map one synthetic :class:`~app.draws.PlannedFixture` onto the solver's
     :class:`~app.scheduling.ScheduleFixture`.
@@ -710,13 +712,14 @@ def _schedule_fixture(
     reaching here would be a bug in the caller's filter, so we let the ``None`` surface
     loudly rather than inventing a placeholder.
 
-    ``fixture.group_id`` is a GROUP id, resolved through ``group_reservation_ids``
-    (built by the caller off ``event.groups``) into the reservation it plays in —
-    exactly one reservation per fixture, looked up rather than assumed, the same
-    cross ``app.schedule_solves`` makes. The reservation ref is namespaced by the
-    event id, matching the ``ScheduleReservation`` keys; the fixture id is a
-    deterministic, event-namespaced composite keyed on the **group** (unique because
-    ``(group, round, position)`` is unique within an event, whatever the 1:1 does).
+    ``fixture.group_id`` is a GROUP id; ``reservation_id`` is the reservation that
+    group plays in, resolved by the caller off ``event.groups`` (exactly one per
+    fixture, looked up rather than assumed, the same cross ``app.schedule_solves``
+    makes — and a group with none never reaches here). The reservation ref is
+    namespaced by the event id, matching the ``ScheduleReservation`` keys; the
+    fixture id is a deterministic, event-namespaced composite keyed on the **group**
+    (unique because ``(group, round, position)`` is unique within an event, whatever
+    the 1:1 does).
     Each synthetic entrant is its own human, so the entry id doubles as the
     ``PlayerId`` — and
     since entry ids are globally disjoint, so are the players.
@@ -743,9 +746,7 @@ def _schedule_fixture(
     # fixture id on the reservation would collide two group-stage fixtures on
     # ``(reservation, round, position)`` and the snapshot would be refused as
     # incoherent, naming a symptom rather than the cause.
-    reservation_ref = preview_reservation_key(
-        event_uuid, group_reservation_ids[fixture.group_id]
-    )
+    reservation_ref = preview_reservation_key(event_uuid, reservation_id)
     group_ref = preview_reservation_key(event_uuid, fixture.group_id)
     return ScheduleFixture(
         id=FixtureId(f"{group_ref}:{fixture.round}:{fixture.position}"),

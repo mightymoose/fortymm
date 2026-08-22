@@ -650,12 +650,18 @@ export async function addEvent(
       `seeded ${reservations.length} reservations but the event stored ${created.reservations.length}`,
     )
   }
-  // The 1:1 (ADR 20260801, extended): one group per reservation, minted in lockstep.
-  // A mismatch here means the lockstep broke, which no caller of this helper could ever
+  // The server owns the groups (ticket #1387, ADR 20260822). An `rr-then-ko` event
+  // derives `ceil(field / 5)` of them from its preview field — the cap, or 16 when
+  // uncapped — and every other draw type keeps one group per reservation. A mismatch
+  // here means the server's rule moved, which no caller of this helper could ever
   // observe from the reservations array alone.
-  if (created.groups.length !== reservations.length) {
+  const expectedGroups =
+    (options.drawType ?? 'round-robin') === 'rr-then-ko'
+      ? Math.ceil((options.maxPlayers ?? 16) / 5)
+      : reservations.length
+  if (created.groups.length !== expectedGroups) {
     throw new Error(
-      `seeded ${reservations.length} reservations but the event minted ${created.groups.length} groups`,
+      `expected the event to mint ${expectedGroups} groups but it minted ${created.groups.length}`,
     )
   }
 

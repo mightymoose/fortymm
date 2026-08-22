@@ -69,6 +69,7 @@ from app.tournament_reservations import (
     group_count_for,
     group_read,
     materialise_event_groups,
+    ordered_reservations,
     reservation_read,
 )
 
@@ -436,13 +437,11 @@ def event_reservations(event: TournamentEvent) -> list[Reservation]:
     that an ``rr-then-ko`` event's group count derives from its field, a reservation
     may have no group mapped onto it (one group, four reservations) and a group may
     have no reservation (an event with none), so the group chain is neither complete
-    nor duplicate-free. Sorted by ``position`` explicitly — the relationship carries
-    the same ``order_by``, and this is the statement of what "the event's reservation
-    order" means for a caller that built the event in memory.
+    nor duplicate-free. In ``position`` order
+    (:func:`app.tournament_reservations.ordered_reservations`).
     """
     return [
-        reservation_read(reservation)
-        for reservation in sorted(event.reservations, key=lambda row: row.position)
+        reservation_read(reservation) for reservation in ordered_reservations(event)
     ]
 
 
@@ -779,28 +778,31 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     # ``len(event.reservations)`` for every draw type but ``rr-then-ko``, and that is
     # the count those events already hold, so the branch is reached by an
     # ``rr-then-ko`` event alone — stated by the draw type rather than trusted to the
-    # arithmetic, so a reader sees the scope without working it out.
-    if draw_settings_of(event.draw_settings).draw_type is DrawType.rr_then_ko:
-        count = group_count_for(
-            DrawType.rr_then_ko,
-            field_size=len(entrants),
-            reservation_count=len(event.reservations),
-        )
-        if count != len(event.groups):
-            # Delete-first, the one branch where the wholesale ordering below cannot
-            # be kept: a fixture names its group, so a group row cannot go while a
-            # fixture of the standing draw still points at it.
-            await uncut_draw(db, [event.id])
-            await materialise_event_groups(db, event, field_size=len(entrants))
-            # A fresh group's ``id`` is ``gen_random_uuid()``, minted by the INSERT;
-            # ``draw_config`` hands those ids to the snake, so the rows have to exist
-            # before it reads them. Then ``event.groups`` — a VIEWONLY association
-            # the materialisation cannot write through, loaded when the caller
-            # loaded the event — is re-read so it reflects the rows just written.
-            await db.flush()
-            await db.refresh(event, attribute_names=["groups"])
+    # arithmetic, so a reader sees the scope without working it out, and so a cut of
+    # any other draw type reads no reservation at all.
+    re_materialised = draw_settings_of(
+        event.draw_settings
+    ).draw_type is DrawType.rr_then_ko and group_count_for(
+        DrawType.rr_then_ko,
+        field_size=len(entrants),
+        reservation_count=len(event.reservations),
+    ) != len(event.groups)
+    if re_materialised:
+        # Delete-first, the one branch where the wholesale ordering below cannot be
+        # kept: a fixture names its group, so a group row cannot go while a fixture of
+        # the standing draw still points at it.
+        await uncut_draw(db, [event.id])
+        await materialise_event_groups(db, event, field_size=len(entrants))
+        # A fresh group's ``id`` is ``gen_random_uuid()``, minted by the INSERT;
+        # ``draw_config`` hands those ids to the snake, so the rows have to exist
+        # before it reads them. Then ``event.groups`` — a VIEWONLY association the
+        # materialisation cannot write through, loaded when the caller loaded the
+        # event — is re-read so it reflects the rows just written.
+        await db.flush()
+        await db.refresh(event, attribute_names=["groups"])
     planned = strategy.plan_initial(draw_config(event), entrants)
-    await uncut_draw(db, [event.id])
+    if not re_materialised:
+        await uncut_draw(db, [event.id])
     # This event's stage ids keyed by ``position`` — what a planned fixture's
     # ``stage_id`` is resolved against below (ADR 20260815 decision 5's write seam).
     # Built from the already-eager ``TournamentEvent.stages`` collection
