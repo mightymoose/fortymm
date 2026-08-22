@@ -593,6 +593,18 @@ def reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> Reservati
     (``app.schedule_preview``) keys its snapshot through this same function since
     #1389, so the live solve and the preview share one keyspace by construction, not
     by two f-strings that happen to agree.
+
+    **The ``event:`` namespace is no longer needed for uniqueness, and is kept
+    anyway.** It was minted when a reservation id was a per-event string and two
+    events of one tournament could each hold a "reservation-a"; a reservation id is a
+    globally unique uuid now (ADR 20260801), so the prefix disambiguates nothing. It
+    stays because the key is a **wire value**, not an implementation detail: it is
+    what a preview fixture's ``reservation_id`` carries, what a stored solve's plan is
+    keyed by, and what an infeasibility reason names — dropping it would be a wire
+    change with client follow-ups, and would leave every solve row already in a
+    database keyed in a space nothing computes any more. It also earns its keep as a
+    label: a solver reservation id that says which event it belongs to is one a human
+    reading a plan or a reason can place.
     """
     return ReservationId(f"{event_id}:{reservation_id}")
 
@@ -633,9 +645,11 @@ def restricting_reservation_key(
     reservation resolve to one key, which is what keeps the CP-SAT interval
     constraint a single interval rather than a disjunction, and what keeps the
     snapshot's reservation set one entry per reservation however many groups map to
-    it. The solve's spec loop, its event-wide guard and its per-fixture lookup all
-    ask through here, so they agree by construction: the guard builds the event-wide
-    reservation exactly when some fixture resolves to it, and the lookup stays total.
+    it. Every site asks through :func:`reservation_keys_by_group`, which is this
+    rule tabulated once per event, so the solve's spec loop, its event-wide guard and
+    its per-fixture lookup (and the preview's twins) agree by construction: the guard
+    builds the event-wide reservation exactly when some fixture resolves to it, and
+    the lookup stays total.
 
     The question is "which reservation", never "does it name a group". The second
     question was the defect: a fixture in a group with no reservation names a group,
@@ -681,6 +695,20 @@ def reservation_keys_by_group(
     }
     keys[None] = restricting_reservation_key(event_id, None, group_reservation_ids)
     return keys
+
+
+def group_counts_by_reservation(
+    keys_by_group: Mapping[uuid.UUID | None, ReservationId],
+) -> Counter[ReservationId]:
+    """How many groups' fixtures each reservation holds (#1389): the groups mapped to
+    a booked reservation, or the groups with no reservation for the event-wide one.
+    The ``None`` entry is a fixture naming no group, not a group, so it is not
+    counted — an event-wide reservation holding only a knockout stage reports 0, via
+    ``.get(key, 0)`` at the reads. One rule for the live solve and the preview, so the
+    "holds N groups" clause reads the same number on both surfaces."""
+    return Counter(
+        key for group_id, key in keys_by_group.items() if group_id is not None
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1047,9 +1075,7 @@ async def _load_solver_inputs(
             event.id, group_reservation_ids(event)
         )
         keys_by_event[event.id] = keys_by_group
-        group_counts = Counter(
-            key for group_id, key in keys_by_group.items() if group_id is not None
-        )
+        group_counts = group_counts_by_reservation(keys_by_group)
         for reservation in reservations:
             # Keyed on the reservation's OWN id, now that the projection carries
             # one — no lookup needed here (``keys_by_group`` is for the per-fixture

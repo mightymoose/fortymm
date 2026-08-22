@@ -595,12 +595,11 @@ async def test_preview_snapshot_previews_an_rr_then_ko_events_group_stage_only(
     preview = build_preview_snapshot(loaded)
 
     assert len(preview.snapshot.fixtures) == 15
-    # The PREVIEW's key is ``{event}:{reservation}`` (see
-    # ``app.schedule_preview.preview_reservation_key``), the same namespace the
-    # live solve keys on — a ``PlannedFixture`` carries only a GROUP id, so the
-    # builder crosses it into its mapped reservation's id
-    # (``group_reservation_ids`` in ``build_preview_snapshot``) before composing
-    # the ref, exactly as ``app.schedule_solves`` does for a real solve.
+    # The PREVIEW's key is ``{event}:{reservation}`` — the live solve's own
+    # ``app.schedule_solves.reservation_key``, one keyspace for both — a
+    # ``PlannedFixture`` carries only a GROUP id, so the builder crosses it into its
+    # mapped reservation's key (``reservation_keys_by_group``) before composing the
+    # ref, exactly as ``app.schedule_solves`` does for a real solve.
     (group,) = loaded.events[0].groups
     assert {f.reservation_id for f in preview.snapshot.fixtures} == {
         scheduling.ReservationId(f"{loaded.events[0].id}:{group.reservation.id}")

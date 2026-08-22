@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -73,6 +72,7 @@ from app.schedule_solves import (
     _solve_num_workers,
     event_wide_reservation_key,
     event_wide_reservation_name,
+    group_counts_by_reservation,
     group_reservation_ids,
     reservation_key,
     reservation_keys_by_group,
@@ -167,8 +167,9 @@ class _PreviewReservationResolution:
     #: ``"event"`` for the synthetic event-wide reservation the builder gives an event
     #: whose groups play in no reservation. A reason blaming the latter must not be
     #: answered with a reservation remedy, exactly as the live solve's twin carries it.
-    #: No default: this value is per-request and never read back from storage, so a
-    #: construction site has to say which kind it is.
+    #: No default: a construction site has to say which kind it is. The live twin's
+    #: default is for ledger rows written before the field existed; this object only
+    #: rides the job payload through Redis for the life of one preview request.
     reservation: ReservationKind
     #: How many groups' fixtures this reservation holds (#1389) — the groups mapped to
     #: a booked reservation, or the groups with no reservation for the event-wide one.
@@ -316,9 +317,7 @@ def _reservation_resolutions(
         keys_by_group = reservation_keys_by_group(
             event.id, group_reservation_ids(event)
         )
-        group_counts = Counter(
-            key for group_id, key in keys_by_group.items() if group_id is not None
-        )
+        group_counts = group_counts_by_reservation(keys_by_group)
         for reservation in event_reservations(event):
             key = reservation_key(event.id, reservation.id)
             resolutions[key] = _PreviewReservationResolution(

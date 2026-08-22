@@ -300,7 +300,7 @@ async def _solver_reservation_id(
 
     Looked up rather than spelled, because both ids are server-minted uuids (ADR
     20260801). The namespacing itself is unchanged — see
-    ``app.schedule_preview.preview_reservation_key`` for why it stayed."""
+    ``app.schedule_solves.reservation_key`` for why it stayed."""
     reservation_id = (
         await db.execute(
             select(TournamentEventReservation.id).where(

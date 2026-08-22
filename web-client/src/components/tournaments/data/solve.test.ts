@@ -781,15 +781,17 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
       )
     })
 
-    it('appends the same clause to the event-wide reservation — both axes fire together', () => {
+    it('appends the clause to the event-wide reservation too — both axes fire together — and asks for reservations, plural', () => {
       // An rr-then-ko event with no reservation: its groups all sit in the
       // event-wide reservation, so `reservation === "event"` AND a count above 1.
+      // One added reservation would hold every group (they map round-robin onto
+      // what the event has), so the remedy cannot promise that one spreads them.
       const copy = infeasibilityReasonCopy({ ...eventWide, groupCount: 2 })
       expect(copy.sentence).toBe(
         "Open Singles (whole venue) can't fit all its matches: they need about 10h of table-time, but the event's 09:00–17:00 window on the tournament's 4 tables only holds about 8h. It holds 2 groups, all competing for the same tables.",
       )
       expect(copy.remedy).toBe(
-        "Add a table to this tournament, widen the event's window, or trim the field. Adding a reservation spreads the groups across them.",
+        "Add a table to this tournament, widen the event's window, or trim the field. Adding reservations spreads the groups across them.",
       )
     })
 
@@ -801,7 +803,7 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
       // stage. 1: one group, nothing to re-spread. Both read as today's sentence.
       const atZero = infeasibilityReasonCopy({ ...base, groupCount: 0 })
       expect(atZero.sentence).not.toContain('groups')
-      expect(atZero.remedy).not.toContain('Adding a reservation')
+      expect(atZero.remedy).not.toContain('spreads the groups')
       expect(infeasibilityReasonCopy({ ...base, groupCount: 1 })).toEqual(atZero)
     })
   })

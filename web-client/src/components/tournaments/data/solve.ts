@@ -786,8 +786,16 @@ export function infeasibilityReasonCopy(
         reason.groupCount > 1
           ? ` It holds ${reason.groupCount} groups, all competing for the same tables.`
           : ''
+      // The remedy's number follows the kind: groups map round-robin onto the
+      // reservations the event has, so a booked reservation gains a peer to spread
+      // across with ONE more, but an event-wide one (the event has none) would put
+      // every group on a single new row — there it takes reservations, plural.
       const groupRemedy =
-        reason.groupCount > 1 ? ' Adding a reservation spreads the groups across them.' : ''
+        reason.groupCount > 1
+          ? reason.reservation === 'booked'
+            ? ' Adding a reservation spreads the groups across them.'
+            : ' Adding reservations spreads the groups across them.'
+          : ''
       return {
         sentence:
           (reason.reservation === 'booked'

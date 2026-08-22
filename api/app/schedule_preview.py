@@ -323,8 +323,9 @@ def _slot_bounds(
     ``schedule_solves._slot_bounds`` uses — so a multi-timezone tournament's
     preview verdict/duration/finish agree with production instead of mis-comparing
     two venues' naive wall-clocks. Reuses the #1152 ``venue_time`` primitive rather
-    than re-deriving the anchor, and does not import the RQ/Redis-heavy
-    ``schedule_solves`` module into this pure builder."""
+    than re-deriving the anchor. Takes the slot's components rather than a parsed
+    ``Slot`` because a projected reservation carries them as strings; the live
+    solve's twin takes the ``Slot``. Both anchor through ``anchor_wallclock``."""
     return (
         anchor_wallclock(
             datetime.strptime(f"{date} {start}", "%Y-%m-%d %H:%M"), timezone
