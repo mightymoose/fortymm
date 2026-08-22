@@ -108,6 +108,11 @@ export const DrawStructureSection = ({
   const largestGroup = Math.max(...structure.groupSizes)
   const uneven = smallestGroup !== largestGroup
 
+  // One fact flips the qualifiers row's whole shape — number vs phrase, unit, badge,
+  // source sentence — so it is read once here rather than asked three times in the JSX
+  // below (the same one-constant pattern `group-card.tsx` uses).
+  const qualifiersUnset = structure.sources.qualifiers.ownership === 'unset'
+
   // The ONE notice the tab shows, chosen in the reference's order — impossible, then
   // disagreement, then uneven. The derivation reports all three independently and more
   // than one can hold at once (8 players across 6 reservations is an uneven split whose
@@ -222,20 +227,10 @@ export const DrawStructureSection = ({
               name="Qualifiers per group"
               hint="How many finishers from each group reach the knockout."
               value={
-                structure.sources.qualifiers.ownership === 'unset'
-                  ? 'Not set'
-                  : String(structure.qualifiersPerGroup)
+                qualifiersUnset ? 'Not set' : String(structure.qualifiersPerGroup)
               }
-              kind={
-                structure.sources.qualifiers.ownership === 'unset'
-                  ? 'phrase'
-                  : 'number'
-              }
-              unit={
-                structure.sources.qualifiers.ownership === 'unset'
-                  ? undefined
-                  : 'through from each group'
-              }
+              kind={qualifiersUnset ? 'phrase' : 'number'}
+              unit={qualifiersUnset ? undefined : 'through from each group'}
               ownership={structure.sources.qualifiers.ownership}
               source={structure.sources.qualifiers.sentence}
             />
