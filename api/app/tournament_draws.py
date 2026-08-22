@@ -65,7 +65,12 @@ from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_queries import stage_ids_for_events
-from app.tournament_reservations import group_read, reservation_read
+from app.tournament_reservations import (
+    group_count_for,
+    group_read,
+    materialise_event_groups,
+    reservation_read,
+)
 
 
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
@@ -425,18 +430,20 @@ def event_reservations(event: TournamentEvent) -> list[Reservation]:
     ``app.draws.group_label`` — because a group's label is derived from its position,
     not read off its reservation's editable name (ADR 20260808).
 
-    Reads through ``event.groups[].reservation_link.reservation``, deliberately NOT
-    through ``TournamentEvent.reservations`` — that collection is loaded eagerly
-    nowhere except the one write path that populates it explicitly
-    (``app.tournament_reservations.apply_event_reservations``), and a read through it
-    here would be a lazy load under async, i.e. a ``MissingGreenlet``. The group chain
-    (``TournamentEvent.groups`` → ``reservation_link`` → ``reservation`` → ``tables``)
-    is eager end to end (``selectin`` / ``joined`` / ``joined`` / ``selectin``), because
-    it rides along with every load of ``event.groups`` already. The order matches
-    ``event.groups``' own (``position``), which is the reservations' order too under
-    this slice's 1:1.
+    Reads ``TournamentEvent.reservations`` itself — eager (``selectin``) since #1387,
+    and the only collection that holds every reservation. It used to read through
+    ``event.groups[].reservation`` while every group had exactly one reservation; now
+    that an ``rr-then-ko`` event's group count derives from its field, a reservation
+    may have no group mapped onto it (one group, four reservations) and a group may
+    have no reservation (an event with none), so the group chain is neither complete
+    nor duplicate-free. Sorted by ``position`` explicitly — the relationship carries
+    the same ``order_by``, and this is the statement of what "the event's reservation
+    order" means for a caller that built the event in memory.
     """
-    return [reservation_read(group.reservation) for group in event.groups]
+    return [
+        reservation_read(reservation)
+        for reservation in sorted(event.reservations, key=lambda row: row.position)
+    ]
 
 
 async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
@@ -717,13 +724,38 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     so a refused re-cut cannot leave a director with the draw they had thrown away and
     none of the one they could not have.
 
-    That last property has **two** locks on it, and it is worth knowing that they are
-    two, because a test can only ever see one of them fail: the ordering here, and the
-    transaction itself (the route rolls back on a ``DrawError``, and nothing on that
-    path has committed). Reordering these two lines would not break
-    ``test_a_refused_re_cut_leaves_the_standing_draw_untouched`` — the rollback would
-    still save it — so do not read that test's green as permission to. The ordering is
-    the one that survives somebody deciding a service function ought to commit.
+    That last property has **two** locks on it when the group count holds, and it is
+    worth knowing that they are two, because a test can only ever see one of them
+    fail: the ordering here, and the transaction itself (the route rolls back on a
+    ``DrawError``, and nothing on that path has committed). Reordering these two lines
+    would not break ``test_a_refused_re_cut_leaves_the_standing_draw_untouched`` — the
+    rollback would still save it — so do not read that test's green as permission to.
+    The ordering is the one that survives somebody deciding a service function ought
+    to commit.
+
+    **The cut re-derives an ``rr-then-ko`` event's group count from the real field**
+    (#1387 decision 1). The rows were materialised against the preview field — the
+    cap, or 16 — and the snake judges a group's size against the entrants actually
+    registered; the two numbers never meet, and a 40-cap event with ten registrants
+    would otherwise deal ten players across eight groups and be refused as
+    ``DegenerateDraw``. So, for that draw type only, the count is derived again here
+    from ``len(entrants)`` and the rows re-materialised (keeping the lowest positions,
+    and the mapping re-read as ``position % reservation count``) **only when the
+    derived count differs from the stored one**. When it holds — every first cut of a
+    correctly sized event, every re-cut whose field did not cross a group boundary —
+    nothing is written and the plan-before-delete ordering above stands. That skip is
+    not an optimization with a hole in it: the mapping cannot move while the count
+    holds, because a reservation changes only through an event write and every event
+    write re-materialises.
+
+    When the count moves on a **re-cut**, both orderings cannot hold: a fixture
+    foreign-keys its group, so the old fixtures have to go before a group row can.
+    That branch deletes first, re-materialises, flushes (a fresh group's id is the
+    database's and the snake needs it), then plans, and the transaction rollback is
+    the only lock on a refused plan. After it the identities and the mapping freeze,
+    as they do after any cut (decision 3); ``uncut_draw`` writes no group row, so an
+    uncut event keeps its cut-time count until the next event write re-materialises
+    it from the preview field.
 
     **The caller must hold the tournament's row lock**, and must commit. The field this
     reads is the field the fixtures are derived from, and an entry that lands between
@@ -742,9 +774,32 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
     strategy = strategy_for_event(event)
-    planned = strategy.plan_initial(
-        draw_config(event), order_entrants(await active_draw_entrants(db, event.id))
-    )
+    entrants = order_entrants(await active_draw_entrants(db, event.id))
+    # The real-field re-derivation (see the docstring). ``group_count_for`` answers
+    # ``len(event.reservations)`` for every draw type but ``rr-then-ko``, and that is
+    # the count those events already hold, so the branch is reached by an
+    # ``rr-then-ko`` event alone — stated by the draw type rather than trusted to the
+    # arithmetic, so a reader sees the scope without working it out.
+    if draw_settings_of(event.draw_settings).draw_type is DrawType.rr_then_ko:
+        count = group_count_for(
+            DrawType.rr_then_ko,
+            field_size=len(entrants),
+            reservation_count=len(event.reservations),
+        )
+        if count != len(event.groups):
+            # Delete-first, the one branch where the wholesale ordering below cannot
+            # be kept: a fixture names its group, so a group row cannot go while a
+            # fixture of the standing draw still points at it.
+            await uncut_draw(db, [event.id])
+            await materialise_event_groups(db, event, field_size=len(entrants))
+            # A fresh group's ``id`` is ``gen_random_uuid()``, minted by the INSERT;
+            # ``draw_config`` hands those ids to the snake, so the rows have to exist
+            # before it reads them. Then ``event.groups`` — a VIEWONLY association
+            # the materialisation cannot write through, loaded when the caller
+            # loaded the event — is re-read so it reflects the rows just written.
+            await db.flush()
+            await db.refresh(event, attribute_names=["groups"])
+    planned = strategy.plan_initial(draw_config(event), entrants)
     await uncut_draw(db, [event.id])
     # This event's stage ids keyed by ``position`` — what a planned fixture's
     # ``stage_id`` is resolved against below (ADR 20260815 decision 5's write seam).
