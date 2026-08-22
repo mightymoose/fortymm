@@ -523,7 +523,7 @@ async def test_set_user_roles_replaces_assignments(
 
 
 async def test_set_user_roles_rejects_unknown_role(api_client: AsyncClient):
-    user = (await api_client.post("/v1/users", json={"username": "u"})).json()
+    user = (await api_client.post("/v1/users", json={"username": "uma"})).json()
     response = await api_client.put(
         f"/v1/users/{user['id']}/roles",
         json={"role_ids": ["00000000-0000-0000-0000-000000000000"]},
@@ -700,10 +700,64 @@ async def test_role_rename_collision_returns_409(api_client: AsyncClient):
     assert patched.status_code == 409
 
 
-async def test_username_collision_is_case_insensitive(api_client: AsyncClient):
-    await api_client.post("/v1/users", json={"username": "Dup"})
-    second = await api_client.post("/v1/users", json={"username": "DUP"})
+async def test_username_collision_is_case_insensitive(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """`POST /v1/users` only admits lowercase, so the mixed-case row is seeded
+    directly — the way `test_update_username_rejects_taken_name_case_insensitive`
+    does it. The uniqueness check being case-insensitive is what this test is
+    for, and that is unchanged."""
+    db_session.add(User(username="Dup"))
+    await db_session.commit()
+
+    second = await api_client.post("/v1/users", json={"username": "dup"})
     assert second.status_code == 409
+
+
+# ----- username validation on write ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "username",
+    [
+        "ab",  # shorter than USERNAME_MIN_LENGTH
+        "a" * 41,  # longer than USERNAME_MAX_LENGTH
+        "Bob",  # uppercase
+        "\u00e1rni.pal",  # an accent — the gap this closes
+        "arni.p\u00e1l",  # an accent anywhere, not only at the start
+        ".leading",  # starts with a separator
+        "trailing-",  # ends with a separator
+        "has space",
+        "",
+    ],
+)
+async def test_create_user_rejects_invalid_username(
+    api_client: AsyncClient, username: str
+):
+    """The admin form already refuses these, but the API must hold the invariant
+    itself (`.claude/rules/parse-at-boundaries.md`). Reachable by calling the
+    endpoint directly while holding `authorization.manage`."""
+    response = await api_client.post("/v1/users", json={"username": username})
+    assert response.status_code == 422
+
+
+async def test_create_user_accepts_a_valid_username(api_client: AsyncClient):
+    response = await api_client.post("/v1/users", json={"username": "jamie.tran-1"})
+    assert response.status_code == 201
+    assert response.json()["username"] == "jamie.tran-1"
+
+
+async def test_list_users_serializes_a_row_that_predates_the_pattern(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Enforced on write only. A row created through the gap before this landed
+    must still load and still serialize, exactly as `PermissionRead` does."""
+    db_session.add(User(username="\u00c1rni.P\u00e1l"))
+    await db_session.commit()
+
+    response = await api_client.get("/v1/users")
+    assert response.status_code == 200
+    assert "\u00c1rni.P\u00e1l" in [u["username"] for u in response.json()]
 
 
 # ----- regression: updated_at + null/[] semantics --------------------------

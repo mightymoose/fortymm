@@ -30,6 +30,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import { foldForSearch } from '@/lib/fold-text'
+import { USERNAME_HINT, isValidUsername } from '@/lib/username'
 import { useSession } from '@/api/session'
 import {
   type Permission,
@@ -77,9 +79,9 @@ export function UsersPage() {
   const totalAssignments = useMemo(() => users.reduce((a, u) => a + u.role_ids.length, 0), [users])
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase()
+    const q = foldForSearch(search)
     return users.filter((u) => {
-      if (search && !u.username.toLowerCase().includes(q)) return false
+      if (search && !foldForSearch(u.username).includes(q)) return false
       if (roleFilter === 'unassigned') return u.role_ids.length === 0
       if (roleFilter !== 'all') return u.role_ids.includes(roleFilter)
       return true
@@ -603,10 +605,10 @@ function AddUserModal({
   const [username, setUsername] = useState('')
   const trimmed = username.trim()
   const taken = existingUsernames.some((u) => u.toLowerCase() === trimmed.toLowerCase())
-  // Match the settings-page rule: separators allowed in the middle but not
-  // at the ends, length 2+. Settings.tsx is the canonical source.
-  const validShape =
-    /^[a-z0-9._-]{2,}$/i.test(trimmed) && !/^[._-]|[._-]$/.test(trimmed)
+  // The same rule the API enforces, from the one place the web client mirrors
+  // it. This modal used to accept `AB` and `Bob`, which `POST /v1/users` now
+  // rejects with a 422 — an admin must never be shown a 422 the form allowed.
+  const validShape = isValidUsername(trimmed)
   const valid = trimmed && validShape && !taken
   const { hint, hintTone } = validateUsername({ trimmed, taken, validShape })
 
@@ -648,7 +650,7 @@ function validateUsername({
 }): { hint: string; hintTone: 'neutral' | 'loss' } {
   if (taken) return { hint: 'That username is already taken.', hintTone: 'loss' }
   if (trimmed && !validShape) {
-    return { hint: 'Letters, numbers, dots, dashes, underscores. Min 2 characters.', hintTone: 'loss' }
+    return { hint: USERNAME_HINT, hintTone: 'loss' }
   }
   return { hint: 'Must be unique. After creating, click the row to attach roles.', hintTone: 'neutral' }
 }

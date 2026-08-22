@@ -15,6 +15,7 @@ import {
   parseStatusFilter,
   type StatusFilter,
 } from './data/options'
+import { foldForSearch } from '@/lib/fold-text'
 import { tournamentsSearchSchema, type TournamentsSearch } from './data/search'
 import type { TournamentsNearMe } from './data/api'
 import type { Tournament } from './data/types'
@@ -133,11 +134,11 @@ export const TournamentsListPage = ({
   const query = queryText.trim()
 
   const filtered = useMemo(() => {
-    // Lowercased once, not once per row: the needle does not change across the scan.
-    const needle = query.toLowerCase()
+    // Folded once, not once per row: the needle does not change across the scan.
+    const needle = foldForSearch(query)
     return tournaments.filter((t) => {
       if (status !== 'all' && t.status !== status) return false
-      if (needle && !t.name.toLowerCase().includes(needle)) return false
+      if (needle && !foldForSearch(t.name).includes(needle)) return false
       return true
     })
   }, [tournaments, status, query])

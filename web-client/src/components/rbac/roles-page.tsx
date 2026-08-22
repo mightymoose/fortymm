@@ -52,6 +52,7 @@ import {
 } from './queries'
 import { Avatar, EmptyState, Field, Stat } from './primitives'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions } from './helpers'
+import { foldForSearch } from '@/lib/fold-text'
 import { applyServerFieldError, notifyError } from '@/lib/notify-error'
 
 // The default role is held by every user on the platform, so the API refuses to
@@ -88,8 +89,10 @@ export function RolesPage() {
 
   const filtered = useMemo(() => {
     if (!search) return roles
-    const q = search.toLowerCase()
-    return roles.filter((r) => r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q))
+    const q = foldForSearch(search)
+    return roles.filter(
+      (r) => foldForSearch(r.name).includes(q) || foldForSearch(r.description || '').includes(q),
+    )
   }, [roles, search])
 
   // Track selection against the *filtered* list: a role the search has hidden
