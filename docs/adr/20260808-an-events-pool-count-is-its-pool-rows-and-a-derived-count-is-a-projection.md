@@ -5,7 +5,10 @@ concurrent worktrees. See `scripts/check-adr-numbering.sh`)
 
 ## Status
 
-Accepted. Decided during the grill for #1320. Builds on
+Superseded by
+20260822-an-events-group-rows-are-materialised-from-a-derived-count-and-mapped-round-robin
+(#1387). A group row no longer carries a venue, so a derived count can
+materialise rows, and does. Decided during the grill for #1320. Builds on
 20260808-a-structural-setting-is-owned-by-the-director-or-derived-by-the-system,
 which records the ownership model this ADR resolves one hard case of.
 

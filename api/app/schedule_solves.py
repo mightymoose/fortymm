@@ -926,7 +926,7 @@ async def _load_solver_inputs(
     # wire split the two names apart, ``GroupRead`` carries the mapped
     # ``reservation_id`` outright, so the hop has one spelling and #1370 has one place
     # to change it.
-    reservation_ids: dict[uuid.UUID, uuid.UUID] = {
+    reservation_ids: dict[uuid.UUID, uuid.UUID | None] = {
         group.id: group.reservation_id
         for event in drawn_events
         for group in event_groups(event)
@@ -987,11 +987,15 @@ async def _load_solver_inputs(
                 window_start=reservation.slot.start,
                 window_end=reservation.slot.end,
             )
-        if any(fixture.group_id is None for fixture in fixtures_by_event[event.id]):
+        if any(
+            fixture.group_id is None or reservation_ids[fixture.group_id] is None
+            for fixture in fixtures_by_event[event.id]
+        ):
             # The event-wide reservation (ADR "a reservation restricts scheduling, it
             # does not enable it"): one synthetic reservation for the event's ungrouped
             # fixtures — a single-elim or swiss draw's whole field, an
-            # rr-then-ko draw's knockout stage. Its window is the event's own
+            # rr-then-ko draw's knockout stage — and, since #1387, for a grouped
+            # fixture whose group plays in no reservation. Its window is the event's own
             # ``slot`` read in the event's zone; its tables are the whole
             # tournament catalogue. No reservation row exists or is minted — it lives
             # only in this snapshot.
@@ -1064,11 +1068,20 @@ async def _load_solver_inputs(
             # the CP-SAT interval constraint a single interval instead of a
             # disjunction over several. The lookup is total — a fixture's group
             # belongs to this event's stage 0 by its own composite foreign key,
-            # and every group of it is in the map.
+            # and every group of it is in the map — but its VALUE may be ``None``
+            # (#1387): a group that plays in no reservation, which is every group
+            # of an event with no reservation. Such a fixture takes the event-wide
+            # reservation, exactly as an ungrouped one does; #1389 owns making
+            # that resolution a first-class rule of the solver.
+            group_reservation_id = (
+                reservation_ids[fixture.group_id]
+                if fixture.group_id is not None
+                else None
+            )
             fixture_reservation_key = (
                 event_wide_reservation_key(event.id)
-                if fixture.group_id is None
-                else reservation_key(event.id, reservation_ids[fixture.group_id])
+                if group_reservation_id is None
+                else reservation_key(event.id, group_reservation_id)
             )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it

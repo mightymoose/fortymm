@@ -48,9 +48,16 @@ class TournamentEventStageGroup(Base):
     had. The reservation is free to hang off the event instead, and does, because
     nothing points at a reservation with a composite key through a fixture.
 
-    **A group's identity freezes once a draw exists** (ADR-0786), exactly as the group
-    set froze before it — ``app.tournament_events._enforce_group_set_frozen`` is the
-    409, and the composite foreign key underneath is the backstop. The *reservation's*
+    **The rows are server-materialised** (#1387, ADR 20260822): no client sends a group
+    list. For an ``rr-then-ko`` event the count derives from the preview field on every
+    event write and from the real registered field at the cut; for every other draw
+    type it is one group per reservation. A group maps to the reservation at
+    ``position % reservation count``, which is why the join row below is optional.
+
+    **A group's identity and its mapping freeze once a draw exists** (ADR-0786),
+    exactly as the group set froze before it — nothing re-materialises after the cut,
+    ``app.tournament_events._enforce_group_set_frozen`` is the 409 on the reservation
+    set, and the composite foreign key underneath is the backstop. The *reservation's*
     attributes do not freeze: a director may re-name, re-table and re-window one
     mid-event, because none of that is identity.
 
@@ -155,14 +162,16 @@ class TournamentEventStageGroup(Base):
     #: The join row that maps this group to its reservation — **the write side**.
     #:
     #: ``uselist=False`` because the join carries a primary key on the group column: one
-    #: group maps to at most one reservation, which is the whole shape of the 1:1 this
-    #: slice keeps. ``delete-orphan`` is what makes a removed group take its mapping
-    #: with it, and ``passive_deletes`` + the FK's ``ON DELETE CASCADE`` covers every
-    #: path that does not load the collection first. In this slice the mapping is never
-    #: absent — ``app.tournament_reservations`` writes a group and its reservation
-    #: together on every path — so the ``reservation`` view below is total in
-    #: practice. The type stays non-optional to say so.
-    reservation_link: Mapped["TournamentEventGroupReservation"] = relationship(
+    #: group maps to at most one reservation. ``delete-orphan`` is what makes a removed
+    #: group take its mapping with it, and ``passive_deletes`` + the FK's ``ON DELETE
+    #: CASCADE`` covers every path that does not load the collection first.
+    #:
+    #: **Optional, since #1387.** A group maps to the reservation at ``position %
+    #: reservation count`` (``app.tournament_reservations.materialise_event_groups``),
+    #: so an event with no reservation holds groups with no join row at all. "No
+    #: reservation" is the ABSENCE of this row, never a null column on it — the join's
+    #: three legs all stay ``NOT NULL``, and no migration was owed for the change.
+    reservation_link: Mapped["TournamentEventGroupReservation | None"] = relationship(
         back_populates="group",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -184,9 +193,9 @@ class TournamentEventStageGroup(Base):
     )
 
     @property
-    def reservation(self) -> "TournamentEventReservation":
-        """This group's reservation — the read side, over the *same* rows the write side
-        loads.
+    def reservation(self) -> "TournamentEventReservation | None":
+        """This group's reservation, or ``None`` for a group that plays in no
+        reservation — the read side, over the *same* rows the write side loads.
 
         A plain Python property and deliberately NOT a second relationship. A viewonly
         ``secondary=`` association straight to ``tournament_event_reservations`` would
@@ -203,14 +212,11 @@ class TournamentEventStageGroup(Base):
         ``selectinload`` that the write path attaches is exactly the one the read path
         needs.
 
-        Total on anything the **application** wrote: ``app.tournament_reservations`` is
-        the one write seam and every arm of it writes a group and a reservation
-        together. That is an invariant of the seam, not a constraint the database
-        enforces — the join table has no group-side NOT NULL, and a direct-to-database
-        seed can make a bare group (one test deliberately does, to prove the fixture's
-        composite foreign key refuses a cross-stage reference). Nothing projects such a
-        row today. The change that lets a group exist without a reservation has to
-        revisit this property, ``reservation_link``'s non-optional type, and
-        :func:`app.tournament_reservations.group_read` together.
+        ``None`` is a real, reachable state (#1387): an ``rr-then-ko`` event derives its
+        group count from its field, not from its reservations, and a group whose
+        ``position`` has no reservation to map onto — every group of an event with no
+        reservation at all — carries no join row. Readers that need a venue for such a
+        group fall back to the event-wide reservation (#1389).
         """
-        return self.reservation_link.reservation
+        link = self.reservation_link
+        return link.reservation if link is not None else None

@@ -139,10 +139,15 @@ async def cut_event_draw(
       *this* transaction (the lock still held, so the field cannot move under it and
       the DELETE and INSERTs land together). When it refuses — an unsupported draw
       type, a non-singles event, a degenerate field — it raises
-      :class:`~app.draws.DrawError` **before** the DELETE, so nothing is written; this
-      verb rolls back and lets the error propagate **unchanged** for the adapter to map
-      to the existing 422. It is deliberately *not* converted to an ``HTTPException``
-      here.
+      :class:`~app.draws.DrawError`, and this verb rolls back and lets the error
+      propagate **unchanged** for the adapter to map to the existing 422. The rollback
+      is load-bearing, not belt-and-braces: ``cut_draw`` plans before it deletes when
+      it can, but a re-cut of an ``rr-then-ko`` event whose real field moved the group
+      count deletes the standing fixtures and re-materialises the group rows *before*
+      the snake can refuse (#1387), so on that branch the transaction is the only
+      thing that keeps a refused re-cut from destroying the draw it was replacing. A
+      caller that caught the error per event and committed the rest would persist
+      exactly that. It is deliberately *not* converted to an ``HTTPException`` here.
 
     On success it requests a ``settings_changed`` solve in the same transaction under
     the row lock (the order ``request_solve`` requires): the fixtures just changed
@@ -162,10 +167,12 @@ async def cut_event_draw(
         await cut_draw(db, event)
     except DrawError:
         # The domain refusing to produce a draw is not a bug — it is an answer, and it
-        # is the caller's to act on. Roll back (a DrawError is raised before the DELETE,
-        # so nothing is written, but the rollback clears the session and preserves the
-        # router's inline behaviour) and let the error propagate: the adapter composes
-        # the 422 sentence, the core stays FastAPI-free.
+        # is the caller's to act on. Roll back — on the re-materialising re-cut branch
+        # the fixtures and group rows are already gone from the session by the time the
+        # snake refuses (see the docstring), and on every other branch the rollback
+        # clears the session and preserves the router's inline behaviour — and let the
+        # error propagate: the adapter composes the 422 sentence, the core stays
+        # FastAPI-free.
         await db.rollback()
         raise
     await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)

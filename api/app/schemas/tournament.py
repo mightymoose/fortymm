@@ -1794,22 +1794,23 @@ class GroupRead(BaseModel):
     identity and order, plus which reservation it plays under.
 
     Server-owned, unlike :class:`Reservation` — there is no write shape, because a
-    client never authors a group directly. The server mints exactly one group per
-    reservation (the 1:1, ``app.tournament_reservations``), so a ``reservations`` write
-    is the only way a group comes to exist, is re-ordered, or goes away.
+    client never authors a group directly. The server materialises the group rows on
+    every event write (``app.tournament_reservations.materialise_event_groups``): for
+    an ``rr-then-ko`` event the count derives from the preview field, for every other
+    draw type it is one group per reservation (ADR 20260822, #1387).
 
-    ``reservation_id`` names an entry of the event's own ``reservations`` array. It is
-    never a dangling ref in this slice: the join column behind it is ``NOT NULL`` and a
-    real foreign key, so a group with no mapped reservation is a state the database
-    cannot produce. A future slice may relax that (#1370), which is why the client is
-    expected to look the id up rather than assume it always resolves.
+    ``reservation_id`` names an entry of the event's own ``reservations`` array, or is
+    ``null`` for a group that plays in no reservation. A group maps to the reservation
+    at ``position % reservation count``, so an event with no reservation has groups
+    with no reservation. The join row behind a non-null id is a real foreign key, so a
+    non-null id always resolves against ``reservations``.
     """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     position: int
-    reservation_id: uuid.UUID
+    reservation_id: uuid.UUID | None
 
 
 class TournamentEventRead(BaseModel):
@@ -1859,8 +1860,9 @@ class TournamentEventRead(BaseModel):
     match_settings: MatchSettings
     predicates: list[Predicate]
     # The event's competitive groups, server-owned and read-only — see
-    # :class:`GroupRead`. A director edits ``reservations`` below; the server keeps
-    # this array in lockstep, one group per reservation.
+    # :class:`GroupRead`. A director edits ``reservations`` below; the server
+    # materialises this array on every write (#1387) and maps each group onto a
+    # reservation by ``position % reservation count``.
     groups: list[GroupRead]
     # The event's reservations: the venue side a director books and edits directly.
     # Writable via ``reservations`` on the create/patch schemas below
@@ -2296,8 +2298,10 @@ class TournamentEventCreate(BaseModel):
     # ``EventReservations`` — the CREATE shape (``ReservationWrite``), which carries
     # neither an ``id`` nor a ``position``: both are the server's to assign, so an
     # editor that echoes one back gets a 422 naming the field rather than a value that
-    # quietly decided nothing. The list's ORDER is what the server reads the group order
-    # off (``stored_groups``). The patch schema takes ``EditedEventReservations``
+    # quietly decided nothing. The list's ORDER is what the server reads the
+    # reservation order off (``stored_reservations``), and through it which
+    # reservation each materialised group maps onto. The patch schema takes
+    # ``EditedEventReservations``
     # instead, whose entries may *cite* an id — the one thing a create has nothing to
     # do.
     reservations: EventReservations = Field(default_factory=list)
@@ -2393,7 +2397,7 @@ class TournamentEventUpdate(BaseModel):
     # freeze cannot cover, since the freeze compares SETS and ``[A, A, B]`` is the same
     # set as ``{A, B}``. A reservation's ``position`` is not on this shape either, so an
     # editor that echoes one back gets a 422 naming the field; the order it sends the
-    # list in is what re-orders the reservations (and, in lockstep, the groups).
+    # list in is what re-orders the reservations (and re-maps the groups onto them).
     reservations: EditedEventReservations | None = None
 
     @field_validator(

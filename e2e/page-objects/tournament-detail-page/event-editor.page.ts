@@ -93,6 +93,29 @@ export class EventEditorPage {
     await expect(this.roundsInput).toHaveValue(String(rounds))
   }
 
+  /** The player-limit box (`max_players`) — present for every draw type, not just
+   * `rr-then-ko`'s. Labelled, on the Basics tab, same as `nameInput`.
+   *
+   * ⚠️ Since #1387 this is the number an `rr-then-ko` event's group count is DERIVED
+   * from (the server materializes `ceil(field / 5)` group rows on every event write,
+   * `field` being this cap or a synthetic 16 when the box is left blank) — a spec that
+   * cares how many groups a draw comes back with sets this, not the reservation count. */
+  get playerLimitInput(): Locator {
+    return this.page.getByLabel('Player limit')
+  }
+
+  /** Type the player limit. Blank means "no cap" for the event itself, but a spec driving
+   * `rr-then-ko`'s group-count derivation wants a real number here, so — same shape as
+   * `setQualifiersPerGroup`/`setRounds` — this fills and reads the value back rather than
+   * leaving the box at its blank default.
+   *
+   * Assumes the Basics tab is already active, exactly as `setQualifiersPerGroup` does:
+   * `addReservations` switches away from it, so call this BEFORE adding reservations. */
+  async setPlayerLimit(count: number): Promise<void> {
+    await this.playerLimitInput.fill(String(count))
+    await expect(this.playerLimitInput).toHaveValue(String(count))
+  }
+
   // ----- the sheet's tabs ---------------------------------------------------
 
   /** One of the sheet's section tabs, by the word on it.

@@ -149,12 +149,13 @@ class TournamentEventReservation(Base):
     #: Where this reservation sits in its event's own order: 0-based, contiguous,
     #: assigned by the server from the index of the entry that wrote it.
     #:
-    #: Not what the wire reports. ``reservations[].position`` is the *group's*
-    #: position, which is the one the snake seeds against and the qualifier seam
-    #: labels by. This column exists so a reservation set has a stable, non-arbitrary
-    #: read order of its own —
-    #: ordering by a random uuid would shuffle a director's list on every read — and it
-    #: happens to equal the group's position under this slice's 1:1 lockstep.
+    #: What the wire reports as ``reservations[].position``. A group's position is a
+    #: separate column on its own row — the one the snake seeds against and the
+    #: qualifier seam labels by — and since #1387 the two are related only through the
+    #: mapping (a group maps to the reservation at ``position % reservation count``).
+    #: This column exists so a reservation set has a stable, non-arbitrary read order
+    #: of its own — ordering by a random uuid would shuffle a director's list on every
+    #: read — and so the mapping has an order to be derived from.
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     #: The venue-local calendar day of this reservation's window. See the class
     #: docstring for why these three are wall-clock columns rather than instants.

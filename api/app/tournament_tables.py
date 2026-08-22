@@ -5,7 +5,8 @@ an invariant"), not an entry in ``tournaments.table_catalogue`` JSONB, and its i
 minted by the database. So the two write verbs — ``create_tournament`` and
 ``edit_tournament`` — no longer assign a column; they compose ``VenueTable`` rows, and
 they do it through this module rather than each spelling it out, for the reason
-``stored_groups`` is shared between the event verbs: the shape a catalogue is stored in
+``stored_reservations`` is shared between the event verbs: the shape a catalogue is
+stored in
 must not depend on which verb happened to store it.
 
 The edit path is a **diff**, and the ADR is explicit about why it had to become one:

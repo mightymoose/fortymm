@@ -783,9 +783,12 @@ async def update_event(
     carries the `id` of a reservation this event already has — keeping it, with the
     `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
     to add a new reservation, whose id the server mints. **A reservation no entry names
-    is removed.** The server keeps one `groups` entry per reservation in lockstep, so
-    adding, removing or reordering a reservation adds, removes or reorders its mapped
-    group the same way. Send back the reservations you read, edited: the ids came from
+    is removed.** `groups` is the server's: it materialises the group rows on every
+    write while no draw exists (an `rr-then-ko` event derives `ceil(field / 5)` from
+    its player cap, or 16 when uncapped; every other draw type holds one group per
+    reservation) and maps each group to the reservation at `position % reservation
+    count` — `null` when the event has none. Send back the reservations you read,
+    edited: the ids came from
     the read, and naming an id this event does not have is a `422` on that entry.
     Citing the same reservation twice is a `422` too — a reservation id identifies one
     reservation, and a group's own reservation is one of them.
