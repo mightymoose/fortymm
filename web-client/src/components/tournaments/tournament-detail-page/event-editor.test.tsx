@@ -732,6 +732,11 @@ describe('EventEditor', () => {
       // the sentence that actually helps. Same principle as the freeze notice
       // suppressing it: one dead button, one explanation, said once.
       expect(eventEditorPage.queryReservationsCapNotice()).toBeNull()
+      // …and the BUTTON is still dead. Suppressing the notice must not suppress the
+      // cap: Add disables from the FIRST reservation while this refusal only exists
+      // past the second, so a single flag serving both would re-enable Add at two —
+      // offering a third reservation on the very screen that just refused to save two.
+      expect(eventEditorPage.getAddReservationButton()).toBeDisabled()
     })
 
     // Both refusals fire at once — the array-level cap AND a per-row blank name — and

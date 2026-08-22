@@ -156,14 +156,22 @@ export const ReservationsSection = ({
   const { errors } = useFormState({ control })
   const capError = errors.reservations?.root?.message ?? errors.reservations?.message
 
-  // Gated on `!capError` for the same reason it is gated on `!frozen`: when the SAVE
-  // refusal below is on screen, this notice is a second, weaker story about the very
-  // same rule — the error names the count actually held AND the way down to one, so
-  // stacking a `Lock` alert saying "can hold only one reservation" directly above a
-  // destructive one saying "it currently holds 2" tells the director nothing new and
-  // buries the sentence that does. One dead button, one explanation, said once.
-  const capped =
-    !frozen && !capError && drawType !== 'rr-then-ko' && fields.length >= 1
+  const capped = !frozen && drawType !== 'rr-then-ko' && fields.length >= 1
+
+  // Whether the button is DEAD and whether this notice EXPLAINS it are two questions,
+  // and they must not share one flag: `capped` disables Add from the first reservation
+  // (`length >= 1`), while the save refusal only exists past the second (`length > 1`),
+  // so folding the two together would re-enable Add at two reservations — letting the
+  // director add a third from the very screen that just refused to save two.
+  //
+  // Which leaves only the notice to suppress, and for the same reason it is suppressed
+  // once the draw is cut: when the SAVE refusal below is on screen, this notice is a
+  // second, weaker story about the very same rule — the error names the count actually
+  // held AND the way down to one, so stacking a `Lock` alert reading "can hold only one
+  // reservation" directly above a destructive one reading "it currently holds 2" tells
+  // the director nothing new and buries the sentence that does. One dead button, one
+  // explanation, said once.
+  const showCapNotice = capped && !capError
 
   // Double-booking is a diagnostic only the organizer can act on, so a viewer
   // is neither shown it nor pays to compute it.
@@ -203,7 +211,7 @@ export const ReservationsSection = ({
               onClick={addReservation}
               disabled={frozen || capped}
               aria-describedby={
-                frozen ? freezeNoticeId : capped ? capNoticeId : undefined
+                frozen ? freezeNoticeId : showCapNotice ? capNoticeId : undefined
               }
             >
               <Plus size={14} />
@@ -232,11 +240,13 @@ export const ReservationsSection = ({
       {/* #1482's cap notice: why ADD is disabled once a non-`rr-then-ko` event already
           holds one reservation. Its own testid and its own `id` — never
           `freezeNoticeId`, whose sentence is about a cut draw and would be a lie here.
-          Never shown alongside EITHER of the other two (`capped` is already `!frozen`
-          and `!capError`): the freeze is the more actionable refusal once a draw is
-          cut, the save error names the count held and the way down to one, and two
-          alerts explaining the same dead button would be a worse answer than one. */}
-      {canEdit && capped && (
+          Never shown alongside EITHER of the other two (`showCapNotice` is already
+          `capped && !capError`, and `capped` is already `!frozen`): the freeze is the
+          more actionable refusal once a draw is cut, the save error names the count
+          held and the way down to one, and two alerts explaining the same dead button
+          would be a worse answer than one. The BUTTON stays disabled either way — only
+          this notice steps aside. */}
+      {canEdit && showCapNotice && (
         <Alert id={capNoticeId} data-testid="reservations-cap-notice">
           <Lock size={16} />
           <AlertTitle>This event can hold only one reservation</AlertTitle>
