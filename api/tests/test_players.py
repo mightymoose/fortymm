@@ -803,6 +803,42 @@ async def test_list_players_filters_by_username_substring(
     assert usernames == {"vinh.player", "rio.player"}
 
 
+async def test_list_players_omits_a_never_active_user(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A user nobody has ever browsed (#1438) — a pending first-sign-in mint or
+    an abandoned token consume — appears on neither the roster body nor its
+    ``total``. Listing them would let an attacker diff the roster around
+    ``POST /v1/login/request`` and learn which addresses hold accounts."""
+    me = await start_session(api_client, db_session)
+    await make_user(db_session, "browsed.once")
+    await make_user(db_session, "never.browsed", last_seen_at=None)
+
+    response = await api_client.get("/v1/players", params={"page_size": 100})
+    assert response.status_code == 200
+    body = response.json()
+    usernames = {p["username"] for p in body["items"]}
+    assert {me.username, "browsed.once"} <= usernames
+    assert "never.browsed" not in usernames
+    # The count answers with the SAME population as the body — a total that
+    # still counts never-active rows rebuilds the oracle on its own.
+    assert body["total"] == len(body["items"])
+
+
+async def test_get_player_still_returns_a_never_active_users_profile(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Reachability is not enumerability (#1438): the delisting applies to the
+    public listings only. A never-active guest's profile still resolves by id —
+    the same by-id shape the tournament-entry and match-creation lookups use."""
+    await start_session(api_client, db_session)
+    guest = await make_user(db_session, "never.browsed", last_seen_at=None)
+
+    response = await api_client.get(f"/v1/players/{guest.id}")
+    assert response.status_code == 200
+    assert response.json()["username"] == "never.browsed"
+
+
 async def test_list_players_sorts_by_rating_descending_with_nulls_last(
     api_client: AsyncClient, db_session: AsyncSession
 ):

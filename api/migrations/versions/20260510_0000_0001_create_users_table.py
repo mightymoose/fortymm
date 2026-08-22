@@ -4,6 +4,15 @@ Revision ID: 0001
 Revises:
 Create Date: 2026-05-10 00:00:00.000000
 
+``last_seen_at`` (the #1438 anti-enumeration stamp) is folded into this
+migration rather than added as its own revision, per the pre-deploy
+edit-in-place convention in ``api/CLAUDE.md``: no production deploy exists, so
+every database is wiped and re-run from empty. There is deliberately NO
+backfill step: a wipe-and-rebuild deploy has no rows to backfill, which
+discharges the "no listed user may disappear on deploy" requirement by
+mechanism. Any database that already applied the pre-fold revision (UAT's
+volume, a live QA stack) must be wiped and re-migrated — Alembic will not
+re-run ``0001`` on its own.
 """
 from typing import Sequence, Union
 
@@ -26,6 +35,16 @@ def upgrade() -> None:
         sa.Column("email", sa.String(length=320), nullable=True),
         sa.Column(
             "confirmed_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
+        # When a session cookie last resolved this row through the auth
+        # resolver, throttled to one write per window. NULL means no person has
+        # ever browsed the account (a pending first-sign-in mint or an
+        # abandoned token consume), so public listings must omit it — see
+        # ``app.listed.is_listed_player`` (#1438). Not stamped at mint.
+        sa.Column(
+            "last_seen_at",
             sa.DateTime(timezone=True),
             nullable=True,
         ),
