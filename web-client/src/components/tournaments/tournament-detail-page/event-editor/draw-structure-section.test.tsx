@@ -266,4 +266,45 @@ describe('DrawStructureSection', () => {
       )
     })
   })
+
+  /**
+   * #1388. Removing a reservation must not move the group count this tab reads out.
+   *
+   * The tab is where a director would notice a group count and a reservation count
+   * disagreeing, and this ticket's decision 2 is that nothing reports that. The
+   * derivation stopped reading the reservation rows in #1386, and the call site was
+   * rewired with it — but a call site can keep feeding a reservation count into a
+   * parameter that no longer governs, and this is the assertion that would catch it.
+   *
+   * The `Reservations` fact is asserted alongside, so the fixture is proven to have
+   * really changed. Without it the test would also pass on a component that ignored
+   * the event entirely.
+   *
+   * Only the group count is pinned here. The tab's three notice kinds are a separate
+   * question: the uneven and impossible notices are reachable with automatic settings
+   * and report nothing about a reservation count, and the disagreement notice is
+   * unreachable while both ownership modes are `automatic` — so a test asserting "no
+   * warning" would red on the uneven notice, and that red would not be a defect.
+   */
+  describe('a reservation removal', () => {
+    it.each([
+      ['four reservations', 4],
+      ['one reservation', 1],
+      ['no reservations', 0],
+    ])('reads the same 4 groups with %s', (_label, count) => {
+      drawStructureSectionPage.render({
+        event: buildDrawStructureEvent({
+          reservations: buildDrawStructureEvent().reservations.slice(0, count),
+        }),
+      })
+
+      const row = drawStructureSectionPage.setting('Group count')
+      expect(row.getValue()).toHaveTextContent('4')
+      expect(row.getSource()).toHaveTextContent('20 players ÷ about 5 per group')
+      // The event really did change under the tab.
+      expect(
+        drawStructureSectionPage.preview.getFact('Reservations'),
+      ).toHaveTextContent(String(count))
+    })
+  })
 })
