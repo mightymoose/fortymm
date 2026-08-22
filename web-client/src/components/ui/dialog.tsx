@@ -60,8 +60,20 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        // `wrap-anywhere` (#1417) is what keeps the footer buttons on screen. This is a
+        // CSS grid with a fixed `w-[420px]`, and an automatic track takes its base size
+        // from the content's MIN-CONTENT width — so a 255-character tournament name with
+        // no space in it sized the track to ~1847px, and `sm:justify-end` pinned Cancel
+        // and Delete to that track's far right edge, outside the viewport. The box itself
+        // never moved. Only `overflow-wrap: anywhere` fixes that: `break-words`
+        // (`overflow-wrap: break-word`) is defined NOT to contribute soft-wrap
+        // opportunities to intrinsic min-content sizing, and was measured changing
+        // nothing at all here. `min-w-0` is inert while the width stays fixed; it is kept
+        // so the pair still reads correctly if a call site ever overrides `w-[420px]`.
+        // Pinned by `src/components/tournaments/confirm-delete-dialog.test.tsx` and by
+        // `e2e/tournaments/confirm-dialog-long-name.spec.ts`.
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-[420px] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-0 rounded-[14px] border border-[color:var(--border-subtle)] bg-popover p-6 text-sm text-popover-foreground shadow-[0_12px_32px_rgba(0,0,0,0.55)] duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-[420px] max-w-[calc(100%-2rem)] min-w-0 wrap-anywhere -translate-x-1/2 -translate-y-1/2 gap-0 rounded-[14px] border border-[color:var(--border-subtle)] bg-popover p-6 text-sm text-popover-foreground shadow-[0_12px_32px_rgba(0,0,0,0.55)] duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
