@@ -283,8 +283,13 @@ describe('SolveLedgerPage', () => {
         tournament: 'summer-slam-2026',
       }),
     )
+    // `sv-infeasible` is in both the filtered and unfiltered lists, so wait for
+    // the other tournament's row to leave rather than for this one to appear:
+    // the router commits the search change before the page re-renders.
     await solveLedgerPage.findRow('sv-infeasible')
-    expect(solveLedgerPage.queryRow('sv-succeeded')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(solveLedgerPage.queryRow('sv-succeeded')).not.toBeInTheDocument(),
+    )
     const chip = solveLedgerPage.queryFilterChip()
     expect(chip).toHaveTextContent('Tournament: Summer Slam 2026')
 
