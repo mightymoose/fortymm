@@ -152,14 +152,20 @@ class PreviewFixture(BaseModel):
     composite the solver keys a reservation by (unique across events) —
     scheduling is reservation-scoped, so this is the reservation the fixture's
     group is confined to, not the group's own id. ``reservation_name`` is the
-    human label from the event's reservation config (e.g. ``"Reservation A"``)
-    so the grid can head a column with a name a director recognizes rather than
-    the raw composite."""
+    human label from the event's reservation config (e.g. ``"Reservation A"``),
+    or the event-wide reservation's name for a fixture whose group has none, so a
+    fixture card names a reservation a director recognizes rather than the raw
+    composite. ``group_label`` is the fixture's own group (``"Group C"``, from the
+    group's position through :func:`app.draws.group_label`): two groups routinely
+    share one reservation (#1387), so a card reads ``Event · Group C ·
+    Reservation A`` and the group structure the director just changed stays
+    visible (#1389)."""
 
     fixture_id: str
     event_id: str
     reservation_id: str
     reservation_name: str
+    group_label: str
     player_a_id: str
     player_b_id: str
 

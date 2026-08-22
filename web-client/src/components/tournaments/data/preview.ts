@@ -84,13 +84,17 @@ export interface PreviewFieldSummary {
  *
  * `reservationId` is the namespaced `{event_id}:{reservation_id}` composite the solver
  * keys a reservation by (unique across events); `reservationName` is the human label
- * from the event's reservation config (e.g. `"Reservation A"`) — the one the grid heads
- * a column with, so a director reads a name, not the raw composite. */
+ * from the event's reservation config (e.g. `"Reservation A"`), or the event-wide
+ * reservation's name for a fixture whose group has none — what a card names, so a
+ * director reads a name, not the raw composite. `groupLabel` is the fixture's own group
+ * (`"Group C"`, ticket #1389): two groups routinely share one reservation (#1387), so a
+ * card reads `Event · Group C · Reservation A` and the group structure stays visible. */
 export interface PreviewFixture {
   fixtureId: string
   eventId: string
   reservationId: string
   reservationName: string
+  groupLabel: string
   playerAId: string
   playerBId: string
 }
@@ -105,6 +109,7 @@ const previewFixtureWireSchema = z.object({
   event_id: z.string(),
   reservation_id: z.string(),
   reservation_name: z.string(),
+  group_label: z.string(),
   player_a_id: z.string(),
   player_b_id: z.string(),
 }) satisfies z.ZodType<PreviewFixtureWire>
@@ -121,6 +126,7 @@ function previewFixtureFromWire(f: PreviewFixtureWire): PreviewFixture {
     eventId: f.event_id,
     reservationId: f.reservation_id,
     reservationName: f.reservation_name,
+    groupLabel: f.group_label,
     playerAId: f.player_a_id,
     playerBId: f.player_b_id,
   }

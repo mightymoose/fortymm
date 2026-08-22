@@ -138,6 +138,7 @@ describe('SolveStrip', () => {
             requiredMin: 480,
             capacityMin: 420,
             tableCount: 4,
+            groupCount: 0,
           },
         ],
       }),

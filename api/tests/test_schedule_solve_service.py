@@ -99,6 +99,7 @@ from app.scheduling import (
     SolveResult,
     SolveStats,
     Verdict,
+    Window,
     WindowTooShortForMatch,
 )
 from app.schemas.notification import NotificationJob
@@ -267,8 +268,10 @@ async def _make_tournament(
     # (``app.tournament_draws.event_groups``/``draw_config``), so this object — built
     # and flushed, never queried — needs an explicit refresh or that read is an async
     # lazy load and raises ``MissingGreenlet``. A production caller never hits this:
-    # every route loads its event through a query first.
-    await db.refresh(event, attribute_names=["groups"])
+    # every route loads its event through a query first. ``reservations`` too: with
+    # ``reservations=[]`` nothing set the backref, and the cut's ``rr-then-ko``
+    # materialisation (#1387) reads ``event.reservations`` to map the groups.
+    await db.refresh(event, attribute_names=["groups", "reservations"])
 
     for _ in range(entrants):
         player = await make_user(db, f"player-{uuid.uuid4().hex[:8]}")
@@ -2560,6 +2563,166 @@ async def _play_out_the_groups(db: AsyncSession, event_id: uuid.UUID) -> None:
             assert winner is not None
             await _score_and_complete(db, fixture, winner_entry_id=winner)
     await db.commit()
+
+
+class TestFixturesKeyOnTheReservation:
+    """The solver keys on the **reservation**, not the group (#1389): a fixture resolves
+    to exactly one reservation through its group, two groups that share a reservation
+    resolve to one key and one spec, and a group with no reservation resolves to the
+    event-wide one exactly as an ungrouped fixture does.
+
+    Every case here is an ``rr-then-ko`` case. The cut materialises that draw type's
+    groups from the registered field (#1387, five to a group) and maps them round-robin
+    onto the reservations, so eight entrants over one reservation give two groups
+    sharing it, and eight entrants over none give two groups with none. No other draw
+    type reaches either state."""
+
+    async def test_two_groups_sharing_a_reservation_resolve_to_one_key_and_one_spec(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Two groups over one reservation compete for one set of tables. Keyed on
+        the group, the solver would build two table pools over the same tables and
+        double-book them.
+
+        The **spec count** is asserted, not only the key: the resolution maps are
+        dictionaries and dedupe a duplicate silently, but the spec list does not,
+        and two ``ScheduleReservation`` rows carrying one id double-count that
+        reservation's table-minutes, so an infeasible reservation solves as
+        feasible. Nothing errors. A key assertion alone stays green against it."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            entrants=8,
+            draw_type=DrawType.rr_then_ko,
+            qualifiers_per_group=2,
+        )
+        fixtures = await _fixtures_of(db_session, event_id)
+        group_ids = {f.group_id for f in fixtures if f.group_id is not None}
+        assert len(group_ids) == 2, "eight entrants derive two groups (#1386)"
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        reservation_key = await _solver_reservation_id(db_session, event_id)
+        event_wide_key = schedule_solves.event_wide_reservation_key(event_id)
+
+        # One spec per reservation: the booked one and the bracket's event-wide one,
+        # and nothing else — counted, so a per-group duplicate reds here.
+        spec_ids = [r.id for r in inputs.snapshot.reservations]
+        assert sorted(spec_ids) == sorted([reservation_key, event_wide_key])
+        assert spec_ids.count(reservation_key) == 1
+
+        # Every group-stage fixture of both groups resolves to the one booked key.
+        group_stage = [
+            f for f in inputs.snapshot.fixtures if f.reservation_id != event_wide_key
+        ]
+        assert group_stage, "the group stage reached the snapshot"
+        assert {f.reservation_id for f in group_stage} == {reservation_key}
+        assert len(group_stage) == 2 * len(list(combinations(range(4), 2)))
+
+        # The over-capacity reason names how many groups share the reservation, the
+        # cause a director acts on by adding a reservation.
+        resolved = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=reservation_key,
+                required_min=600,
+                capacity_min=480,
+                table_count=2,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved, ReservationOverCapacityRead)
+        assert resolved.group_count == 2
+        assert resolved.reservation == "booked"
+
+    async def test_a_group_with_no_reservation_takes_the_event_wide_reservation(
+        self, db_session: AsyncSession
+    ) -> None:
+        """An rr-then-ko event with no reservation holds groups with none (#1387).
+        Their fixtures name a group, so a site asking "does it name a group" took
+        the group arm and asked for a key with no window. Asking "which reservation
+        restricts it" gives the event-wide one, as for an ungrouped fixture — and
+        the guard builds that reservation, so the lookup is total.
+
+        The event holds both kinds of fixture at once: a group stage in groups with no
+        reservation, and a knockout stage naming no group. One event-wide reservation
+        serves both, and the guard builds exactly one."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            entrants=8,
+            draw_type=DrawType.rr_then_ko,
+            qualifiers_per_group=2,
+            reservations=[],
+        )
+        fixtures = await _fixtures_of(db_session, event_id)
+        assert any(f.group_id is not None for f in fixtures)
+        assert any(f.group_id is None for f in fixtures)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        event_wide_key = schedule_solves.event_wide_reservation_key(event_id)
+
+        # Exactly one reservation, the event-wide one, spanning the whole catalogue
+        # inside the event's own window.
+        (reservation,) = inputs.snapshot.reservations
+        assert reservation.id == event_wide_key
+        assert len(reservation.table_ids) == 2
+        assert reservation.window == Window(start_min=0, end_min=8 * 60)
+
+        # Every placeable fixture — the group stage, whose sides are known — takes it.
+        assert inputs.snapshot.fixtures, "the group stage reached the snapshot"
+        assert {f.reservation_id for f in inputs.snapshot.fixtures} == {event_wide_key}
+
+        # It solves, over the tournament's tables: a reservation restricts
+        # scheduling, it does not enable it.
+        result = scheduling.solve(inputs.snapshot)
+        assert result.verdict in (Verdict.feasible, Verdict.optimal)
+
+        # The event-wide reservation counts the groups with no reservation — the
+        # groups whose fixtures it holds — and is answered with the event's remedies.
+        resolved = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=event_wide_key,
+                required_min=600,
+                capacity_min=480,
+                table_count=2,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved, ReservationOverCapacityRead)
+        assert resolved.group_count == 2
+        assert resolved.reservation == "event"
+
+    async def test_an_event_wide_reservation_holding_only_a_knockout_counts_no_group(
+        self, db_session: AsyncSession
+    ) -> None:
+        """``group_count`` is total: for the event-wide reservation of an event whose
+        groups are all booked, the only fixtures it holds are the knockout stage's,
+        which belong to no group, so it reports 0 rather than an undefined count."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            entrants=6,
+            draw_type=DrawType.rr_then_ko,
+            qualifiers_per_group=2,
+        )
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        event_wide_key = schedule_solves.event_wide_reservation_key(event_id)
+        resolved = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=event_wide_key,
+                required_min=600,
+                capacity_min=480,
+                table_count=2,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved, ReservationOverCapacityRead)
+        assert resolved.group_count == 0
 
 
 class TestUnGroupedDrawShapes:

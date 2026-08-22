@@ -42,6 +42,7 @@ from app.models import (
 )
 from app.schemas.schedule_solve import (
     ReservationHasNoTablesRead,
+    ReservationOverCapacityRead,
     parse_infeasibility_reasons,
 )
 from app.schemas.tournament import ScheduleSolveRead
@@ -341,4 +342,27 @@ def test_a_reason_stored_before_the_discriminator_reads_as_booked() -> None:
     )
     assert isinstance(reason, ReservationHasNoTablesRead)
     assert reason.reservation_name == "Reservation A"
+    assert reason.reservation == "booked"
+
+
+def test_an_over_capacity_reason_stored_before_group_count_reads_as_zero() -> None:
+    """Same JSONB ledger, same read-back rule (#1389 decision 6): a
+    ``reservation_over_capacity`` row written before the reason carried
+    ``group_count`` reads back as ``0``, which a client renders as no group clause —
+    today's sentence, unchanged. No backfill is owed."""
+    (reason,) = parse_infeasibility_reasons(
+        [
+            {
+                "kind": "reservation_over_capacity",
+                "reservation_name": "Reservation A",
+                "window_start": "09:00",
+                "window_end": "17:00",
+                "required_min": 600,
+                "capacity_min": 480,
+                "table_count": 2,
+            }
+        ]
+    )
+    assert isinstance(reason, ReservationOverCapacityRead)
+    assert reason.group_count == 0
     assert reason.reservation == "booked"

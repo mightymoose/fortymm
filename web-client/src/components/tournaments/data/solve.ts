@@ -173,6 +173,10 @@ export type InfeasibilityReason =
       requiredMin: number
       capacityMin: number
       tableCount: number
+      /** How many groups' fixtures the reservation holds (ticket #1389). Above 1 it
+       * names a cause the director can act on — add a reservation, and the groups
+       * re-spread — so the copy appends a group clause; at 0 or 1 it says nothing. */
+      groupCount: number
     }
   | {
       kind: 'player_over_subscribed'
@@ -218,6 +222,10 @@ const reservationOverCapacityWireSchema = z.object({
   required_min: z.number().int(),
   capacity_min: z.number().int(),
   table_count: z.number().int(),
+  // Optional on the wire, `0` when absent: the solve ledger stores resolved reasons
+  // as JSONB, so a row written before the field existed reads back without it, and
+  // the API's own read-back default is 0 (the same rule `reservation` follows).
+  group_count: z.number().int().nonnegative().default(0),
 }) satisfies z.ZodType<ReservationOverCapacityWire>
 
 const playerOverSubscribedWireSchema = z.object({
@@ -286,6 +294,7 @@ export function infeasibilityReasonFromWire(
         requiredMin: r.required_min,
         capacityMin: r.capacity_min,
         tableCount: r.table_count,
+        groupCount: r.group_count,
       }
     case 'player_over_subscribed':
       return {
@@ -765,20 +774,36 @@ export function infeasibilityReasonCopy(
             ? `Widen ${reason.reservationName}'s window, or use a shorter match format.`
             : `Widen the event's window, or use a shorter match format.`,
       }
-    case 'reservation_over_capacity':
+    case 'reservation_over_capacity': {
+      // The group clause is built ONCE and appended, not branched on: `reservation`
+      // is the only branch here. Both axes fire together — an event-wide reservation
+      // over an rr-then-ko event with no reservation reports `event` AND a count
+      // above 1 — and a second branch would give four copies of each sentence.
+      // Suppressed below 2: "holds 1 group" points at nothing to re-spread, and the
+      // event-wide reservation of an event whose groups are all booked holds only
+      // the knockout stage, which belongs to no group (count 0).
+      const groupClause =
+        reason.groupCount > 1
+          ? ` It holds ${reason.groupCount} groups, all competing for the same tables.`
+          : ''
+      const groupRemedy =
+        reason.groupCount > 1 ? ' Adding a reservation spreads the groups across them.' : ''
       return {
         sentence:
-          reason.reservation === 'booked'
+          (reason.reservation === 'booked'
             ? `${reason.reservationName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but its ${reason.windowStart}–${reason.windowEnd} window on ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`
             : // Same figures, honestly attributed: the window is the event's and
               // the tables are the tournament's — neither belongs to the
               // reservation the way a booked one's do.
-              `${reason.reservationName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but the event's ${reason.windowStart}–${reason.windowEnd} window on the tournament's ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`,
+              `${reason.reservationName} can't fit all its matches: they need about ${fmtTableTime(reason.requiredMin)} of table-time, but the event's ${reason.windowStart}–${reason.windowEnd} window on the tournament's ${fmtTables(reason.tableCount)} only holds about ${fmtTableTime(reason.capacityMin)}.`) +
+          groupClause,
         remedy:
-          reason.reservation === 'booked'
+          (reason.reservation === 'booked'
             ? `Add a table to ${reason.reservationName}, widen its window, or trim the field.`
-            : `Add a table to this tournament, widen the event's window, or trim the field.`,
+            : `Add a table to this tournament, widen the event's window, or trim the field.`) +
+          groupRemedy,
       }
+    }
     case 'player_over_subscribed':
       // The ticket's headline example, in the director's words: "player X is in 4
       // matches inside a 90-minute window". Both figures go through the shared

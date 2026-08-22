@@ -4000,9 +4000,14 @@ export interface components {
          *     composite the solver keys a reservation by (unique across events) —
          *     scheduling is reservation-scoped, so this is the reservation the fixture's
          *     group is confined to, not the group's own id. ``reservation_name`` is the
-         *     human label from the event's reservation config (e.g. ``"Reservation A"``)
-         *     so the grid can head a column with a name a director recognizes rather than
-         *     the raw composite.
+         *     human label from the event's reservation config (e.g. ``"Reservation A"``),
+         *     or the event-wide reservation's name for a fixture whose group has none, so a
+         *     fixture card names a reservation a director recognizes rather than the raw
+         *     composite. ``group_label`` is the fixture's own group (``"Group C"``, from the
+         *     group's position through :func:`app.draws.group_label`): two groups routinely
+         *     share one reservation (#1387), so a card reads ``Event · Group C ·
+         *     Reservation A`` and the group structure the director just changed stays
+         *     visible (#1389).
          */
         PreviewFixture: {
             /** Fixture Id */
@@ -4013,6 +4018,8 @@ export interface components {
             reservation_id: string;
             /** Reservation Name */
             reservation_name: string;
+            /** Group Label */
+            group_label: string;
             /** Player A Id */
             player_a_id: string;
             /** Player B Id */
@@ -4397,8 +4404,18 @@ export interface components {
          * @description A reservation whose aggregate match-time (``required_min``) exceeds the
          *     table-minutes its window offers (``capacity_min`` = window span ×
          *     ``table_count``). Resolved: the reservation ``name``, which kind of
-         *     ``reservation`` it is, and its ``HH:MM`` bounds; the minutes stay
-         *     integers.
+         *     ``reservation`` it is, its ``HH:MM`` bounds, and ``group_count`` — how many
+         *     groups' fixtures the reservation holds (#1389). Two groups sharing one
+         *     reservation compete for one set of tables, so a count above one names a cause
+         *     the director can act on: add a reservation, and the groups re-spread across
+         *     them. It is the groups mapped to a booked reservation, or the groups with no
+         *     reservation for an event-wide one (0 when only a knockout stage sits in it).
+         *     The minutes stay integers.
+         *
+         *     ``group_count`` defaults to ``0``: the solve ledger stores resolved reasons as
+         *     JSONB, so a row written before the field existed reads back as 0, and a client
+         *     renders no group clause for it — the same read-back default
+         *     :data:`ReservationKind` carries.
          */
         ReservationOverCapacityRead: {
             /**
@@ -4424,6 +4441,11 @@ export interface components {
             capacity_min: number;
             /** Table Count */
             table_count: number;
+            /**
+             * Group Count
+             * @default 0
+             */
+            group_count: number;
         };
         /**
          * ReservationUpsert

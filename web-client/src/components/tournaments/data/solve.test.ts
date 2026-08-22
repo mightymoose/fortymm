@@ -135,7 +135,25 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       requiredMin: 480,
       capacityMin: 450,
       tableCount: 5,
+      // Absent on the wire (a ledger row written before #1389) reads back as 0.
+      groupCount: 0,
     })
+  })
+
+  it('parses reservation_over_capacity with its group count (ticket #1389)', () => {
+    expect(
+      infeasibilityReasonSchema.parse({
+        kind: 'reservation_over_capacity',
+        reservation_name: 'Reservation C',
+        reservation: 'booked',
+        window_start: '09:00',
+        window_end: '13:00',
+        required_min: 480,
+        capacity_min: 450,
+        table_count: 5,
+        group_count: 8,
+      }),
+    ).toMatchObject({ kind: 'reservation_over_capacity', groupCount: 8 })
   })
 
   it('parses player_over_subscribed — the one arm that names a human', () => {
@@ -425,6 +443,7 @@ describe('infeasibilityReasonCopy', () => {
         requiredMin: 480,
         capacityMin: 450,
         tableCount: 5,
+        groupCount: 0,
       }),
     ).toEqual({
       sentence:
@@ -444,6 +463,7 @@ describe('infeasibilityReasonCopy', () => {
         requiredMin: 90,
         capacityMin: 75,
         tableCount: 1,
+        groupCount: 0,
       }).sentence,
     ).toContain('on 1 table only')
   })
@@ -561,6 +581,7 @@ describe('infeasibilityReasonCopy', () => {
         requiredMin: 480,
         capacityMin: 450,
         tableCount: 5,
+        groupCount: 0,
       },
       {
         kind: 'player_over_subscribed',
@@ -627,6 +648,7 @@ describe('infeasibilityReasonCopy — the reservation copy is unchanged', () => 
         requiredMin: 480,
         capacityMin: 450,
         tableCount: 5,
+        groupCount: 0,
       }),
     ).toEqual({
       sentence:
@@ -713,6 +735,7 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
       requiredMin: 600,
       capacityMin: 480,
       tableCount: 4,
+      groupCount: 0,
     })
     expect(copy).toEqual({
       sentence:
@@ -724,6 +747,65 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
     // impossible, and the sentence must not claim the window/tables are its own.
     expect(copy.remedy).not.toContain(`Add a table to ${EVENT_RESERVATION_NAME}`)
     expect(copy.sentence).not.toContain('but its 09:00–17:00 window')
+  })
+
+  describe('the group clause on reservation_over_capacity (ticket #1389)', () => {
+    const booked = {
+      kind: 'reservation_over_capacity' as const,
+      reservationName: 'Reservation A',
+      reservation: 'booked' as const,
+      windowStart: '09:00',
+      windowEnd: '13:00',
+      requiredMin: 480,
+      capacityMin: 450,
+      tableCount: 5,
+    }
+    const eventWide = {
+      ...booked,
+      reservationName: EVENT_RESERVATION_NAME,
+      reservation: 'event' as const,
+      windowStart: '09:00',
+      windowEnd: '17:00',
+      requiredMin: 600,
+      capacityMin: 480,
+      tableCount: 4,
+    }
+
+    it('names how many groups share a booked reservation, and points at adding one', () => {
+      const copy = infeasibilityReasonCopy({ ...booked, groupCount: 8 })
+      expect(copy.sentence).toBe(
+        "Reservation A can't fit all its matches: they need about 8h of table-time, but its 09:00–13:00 window on 5 tables only holds about 7.5h. It holds 8 groups, all competing for the same tables.",
+      )
+      expect(copy.remedy).toBe(
+        'Add a table to Reservation A, widen its window, or trim the field. Adding a reservation spreads the groups across them.',
+      )
+    })
+
+    it('appends the same clause to the event-wide reservation — both axes fire together', () => {
+      // An rr-then-ko event with no reservation: its groups all sit in the
+      // event-wide reservation, so `reservation === "event"` AND a count above 1.
+      const copy = infeasibilityReasonCopy({ ...eventWide, groupCount: 2 })
+      expect(copy.sentence).toBe(
+        "Open Singles (whole venue) can't fit all its matches: they need about 10h of table-time, but the event's 09:00–17:00 window on the tournament's 4 tables only holds about 8h. It holds 2 groups, all competing for the same tables.",
+      )
+      expect(copy.remedy).toBe(
+        "Add a table to this tournament, widen the event's window, or trim the field. Adding a reservation spreads the groups across them.",
+      )
+    })
+
+    it.each([
+      ['booked', booked],
+      ['event', eventWide],
+    ])('renders no group clause at 0 or 1 for a %s reservation', (_kind, base) => {
+      // 0: a stale ledger row, or an event-wide reservation holding only a knockout
+      // stage. 1: one group, nothing to re-spread. Both read as today's sentence.
+      for (const groupCount of [0, 1]) {
+        const copy = infeasibilityReasonCopy({ ...base, groupCount })
+        expect(copy.sentence).not.toContain('groups')
+        expect(copy.remedy).not.toContain('Adding a reservation')
+        expect(copy).toEqual(infeasibilityReasonCopy({ ...base, groupCount: 0 }))
+      }
+    })
   })
 
   it('offers player_over_subscribed a smaller FIELD and the event\'s window — a "smaller reservation" is not a control here', () => {

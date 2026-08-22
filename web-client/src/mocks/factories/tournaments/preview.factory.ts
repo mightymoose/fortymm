@@ -34,9 +34,10 @@ export function buildPreviewFixture(
     fixture_id: 'pfx-1',
     event_id: 'ev-1',
     // The namespaced `{event_id}:{reservation_id}` composite the solver keys by, plus
-    // the human `reservation_name` the grid actually heads a column with.
+    // the human `reservation_name` and the fixture's own `group_label` a card reads.
     reservation_id: 'ev-1:res-1',
     reservation_name: 'Reservation A',
+    group_label: 'Group A',
     player_a_id: 'placeholder-1',
     player_b_id: 'placeholder-2',
     ...overrides,
@@ -48,14 +49,20 @@ export function buildPreviewFixture(
  * grid skeleton whose match count matches its field size. */
 export function buildRoundRobinFixtures(
   n: number,
-  opts: { eventId?: string; reservationId?: string; reservationName?: string } = {},
+  opts: {
+    eventId?: string
+    reservationId?: string
+    reservationName?: string
+    groupLabel?: string
+  } = {},
 ): PreviewFixture[] {
   const eventId = opts.eventId ?? 'ev-1'
   // The solver's namespaced composite (`{event_id}:{reservation_id}`), plus the human
-  // reservation name the grid heads its column with — a realistic pair so a card
-  // renders "Reservation A", never the raw composite.
+  // reservation name and group label a card reads — a realistic trio so a card
+  // renders "Group A · Reservation A", never the raw composite.
   const reservationId = opts.reservationId ?? `${eventId}:res-1`
   const reservationName = opts.reservationName ?? 'Reservation A'
+  const groupLabel = opts.groupLabel ?? 'Group A'
   const fixtures: PreviewFixture[] = []
   for (let a = 1; a <= n; a += 1) {
     for (let b = a + 1; b <= n; b += 1) {
@@ -65,6 +72,7 @@ export function buildRoundRobinFixtures(
           event_id: eventId,
           reservation_id: reservationId,
           reservation_name: reservationName,
+          group_label: groupLabel,
           player_a_id: `placeholder-${a}`,
           player_b_id: `placeholder-${b}`,
         }),

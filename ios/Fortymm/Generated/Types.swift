@@ -8321,9 +8321,14 @@ internal enum Components {
         /// composite the solver keys a reservation by (unique across events) —
         /// scheduling is reservation-scoped, so this is the reservation the fixture's
         /// group is confined to, not the group's own id. ``reservation_name`` is the
-        /// human label from the event's reservation config (e.g. ``"Reservation A"``)
-        /// so the grid can head a column with a name a director recognizes rather than
-        /// the raw composite.
+        /// human label from the event's reservation config (e.g. ``"Reservation A"``),
+        /// or the event-wide reservation's name for a fixture whose group has none, so a
+        /// fixture card names a reservation a director recognizes rather than the raw
+        /// composite. ``group_label`` is the fixture's own group (``"Group C"``, from the
+        /// group's position through :func:`app.draws.group_label`): two groups routinely
+        /// share one reservation (#1387), so a card reads ``Event · Group C ·
+        /// Reservation A`` and the group structure the director just changed stays
+        /// visible (#1389).
         ///
         /// - Remark: Generated from `#/components/schemas/PreviewFixture`.
         internal struct PreviewFixture: Codable, Hashable, Sendable {
@@ -8335,6 +8340,8 @@ internal enum Components {
             internal var reservationId: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/reservation_name`.
             internal var reservationName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PreviewFixture/group_label`.
+            internal var groupLabel: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_a_id`.
             internal var playerAId: Swift.String
             /// - Remark: Generated from `#/components/schemas/PreviewFixture/player_b_id`.
@@ -8346,6 +8353,7 @@ internal enum Components {
             ///   - eventId:
             ///   - reservationId:
             ///   - reservationName:
+            ///   - groupLabel:
             ///   - playerAId:
             ///   - playerBId:
             internal init(
@@ -8353,6 +8361,7 @@ internal enum Components {
                 eventId: Swift.String,
                 reservationId: Swift.String,
                 reservationName: Swift.String,
+                groupLabel: Swift.String,
                 playerAId: Swift.String,
                 playerBId: Swift.String
             ) {
@@ -8360,6 +8369,7 @@ internal enum Components {
                 self.eventId = eventId
                 self.reservationId = reservationId
                 self.reservationName = reservationName
+                self.groupLabel = groupLabel
                 self.playerAId = playerAId
                 self.playerBId = playerBId
             }
@@ -8368,6 +8378,7 @@ internal enum Components {
                 case eventId = "event_id"
                 case reservationId = "reservation_id"
                 case reservationName = "reservation_name"
+                case groupLabel = "group_label"
                 case playerAId = "player_a_id"
                 case playerBId = "player_b_id"
             }
@@ -9266,8 +9277,18 @@ internal enum Components {
         /// A reservation whose aggregate match-time (``required_min``) exceeds the
         /// table-minutes its window offers (``capacity_min`` = window span ×
         /// ``table_count``). Resolved: the reservation ``name``, which kind of
-        /// ``reservation`` it is, and its ``HH:MM`` bounds; the minutes stay
-        /// integers.
+        /// ``reservation`` it is, its ``HH:MM`` bounds, and ``group_count`` — how many
+        /// groups' fixtures the reservation holds (#1389). Two groups sharing one
+        /// reservation compete for one set of tables, so a count above one names a cause
+        /// the director can act on: add a reservation, and the groups re-spread across
+        /// them. It is the groups mapped to a booked reservation, or the groups with no
+        /// reservation for an event-wide one (0 when only a knockout stage sits in it).
+        /// The minutes stay integers.
+        ///
+        /// ``group_count`` defaults to ``0``: the solve ledger stores resolved reasons as
+        /// JSONB, so a row written before the field existed reads back as 0, and a client
+        /// renders no group clause for it — the same read-back default
+        /// :data:`ReservationKind` carries.
         ///
         /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead`.
         internal struct ReservationOverCapacityRead: Codable, Hashable, Sendable {
@@ -9296,6 +9317,8 @@ internal enum Components {
             internal var capacityMin: Swift.Int
             /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/table_count`.
             internal var tableCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/group_count`.
+            internal var groupCount: Swift.Int?
             /// Creates a new `ReservationOverCapacityRead`.
             ///
             /// - Parameters:
@@ -9307,6 +9330,7 @@ internal enum Components {
             ///   - requiredMin:
             ///   - capacityMin:
             ///   - tableCount:
+            ///   - groupCount:
             internal init(
                 kind: Components.Schemas.ReservationOverCapacityRead.KindPayload? = nil,
                 reservationName: Swift.String,
@@ -9315,7 +9339,8 @@ internal enum Components {
                 windowEnd: Swift.String,
                 requiredMin: Swift.Int,
                 capacityMin: Swift.Int,
-                tableCount: Swift.Int
+                tableCount: Swift.Int,
+                groupCount: Swift.Int? = nil
             ) {
                 self.kind = kind
                 self.reservationName = reservationName
@@ -9325,6 +9350,7 @@ internal enum Components {
                 self.requiredMin = requiredMin
                 self.capacityMin = capacityMin
                 self.tableCount = tableCount
+                self.groupCount = groupCount
             }
             internal enum CodingKeys: String, CodingKey {
                 case kind
@@ -9335,6 +9361,7 @@ internal enum Components {
                 case requiredMin = "required_min"
                 case capacityMin = "capacity_min"
                 case tableCount = "table_count"
+                case groupCount = "group_count"
             }
         }
         /// One reservation of an event a client **edits** (``PATCH …/events/{id}``):

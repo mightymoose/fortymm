@@ -183,8 +183,8 @@ import logging
 import math
 import os
 import uuid
-from collections import defaultdict
-from collections.abc import Sequence
+from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, assert_never
@@ -612,6 +612,42 @@ def event_wide_reservation_name(event_name: str) -> str:
     return f"{event_name} (whole venue)"
 
 
+def restricting_reservation_key(
+    event_id: uuid.UUID,
+    group_id: uuid.UUID | None,
+    group_reservation_ids: Mapping[uuid.UUID, uuid.UUID | None],
+) -> ReservationId:
+    """Which reservation restricts a fixture of ``event_id`` that names ``group_id``
+    (ADR "a reservation restricts scheduling, it does not enable it") — the **one**
+    rule every site that asks the question goes through (#1389).
+
+    A fixture resolves to a reservation through its group: ``group_id`` names a
+    **group**, and ``group_reservation_ids`` maps each group of the event to the id of
+    the reservation it plays in, or ``None`` for a group that plays in none (#1387).
+    The fixture takes that reservation's key (:func:`reservation_key`) when the hop
+    lands on one, and the event-wide key (:func:`event_wide_reservation_key`)
+    otherwise — whether because it names no group at all (a single-elim or swiss
+    fixture, an rr-then-ko draw's knockout stage) or because its group has no
+    reservation (every group of an rr-then-ko event with no reservation booked).
+
+    Total: exactly one key per fixture, never a set. Two groups that share a
+    reservation resolve to one key, which is what keeps the CP-SAT interval
+    constraint a single interval rather than a disjunction, and what keeps the
+    snapshot's reservation set one entry per reservation however many groups map to
+    it. The solve's spec loop, its event-wide guard and its per-fixture lookup all
+    ask through here, so they agree by construction: the guard builds the event-wide
+    reservation exactly when some fixture resolves to it, and the lookup stays total.
+
+    The question is "which reservation", never "does it name a group". The second
+    question was the defect: a fixture in a group with no reservation names a group,
+    so a site asking it took the group arm and then asked for a key with no window.
+    """
+    booked = group_reservation_ids[group_id] if group_id is not None else None
+    if booked is None:
+        return event_wide_reservation_key(event_id)
+    return reservation_key(event_id, booked)
+
+
 @dataclass(frozen=True, slots=True)
 class _ReservationResolution:
     """The DB-side facts an infeasibility reason needs to name a reservation a
@@ -630,6 +666,11 @@ class _ReservationResolution:
     window_start: str
     window_end: str
     reservation: ReservationKind = "booked"
+    #: How many groups' fixtures this reservation holds (#1389): the groups mapped to
+    #: a booked reservation, or the groups with no reservation for the event-wide one
+    #: — 0 when only a knockout stage sits in it. Carried onto the over-capacity read,
+    #: where a count above one points the director at "add a reservation".
+    group_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -967,6 +1008,15 @@ async def _load_solver_inputs(
         # instants; it is boundary-validated on write (``EventTimezone``), so
         # ``ZoneInfo`` here cannot raise on a stored value.
         event_tz = ZoneInfo(event.timezone)
+        event_wide_key = event_wide_reservation_key(event.id)
+        # Which reservation restricts each GROUP's fixtures, through the same rule a
+        # fixture resolves by: the count behind an over-capacity reason's "holds N
+        # groups" clause. ``get(key, 0)`` at the reads, so a reservation no group maps
+        # to — an event-wide one holding only a knockout stage — reports 0, not a miss.
+        group_counts = Counter(
+            restricting_reservation_key(event.id, group.id, reservation_ids)
+            for group in event_groups(event)
+        )
         for reservation in reservations:
             # Keyed on the reservation's OWN id, now that the projection carries
             # one — no lookup needed here (the ``reservation_ids`` map below is
@@ -986,9 +1036,11 @@ async def _load_solver_inputs(
                 name=reservation.name,
                 window_start=reservation.slot.start,
                 window_end=reservation.slot.end,
+                group_count=group_counts.get(key, 0),
             )
         if any(
-            fixture.group_id is None or reservation_ids[fixture.group_id] is None
+            restricting_reservation_key(event.id, fixture.group_id, reservation_ids)
+            == event_wide_key
             for fixture in fixtures_by_event[event.id]
         ):
             # The event-wide reservation (ADR "a reservation restricts scheduling, it
@@ -1008,7 +1060,6 @@ async def _load_solver_inputs(
             # running tournament. An event-wide reservation carrying no
             # placeable fixture constrains nothing and can prove no cause — the
             # pure module's per-reservation arms all require unpinned demand.
-            event_wide_key = event_wide_reservation_key(event.id)
             event_slot = event_slots[event.id]
             start, end = _slot_bounds(event_slot, event_tz)
             reservation_specs.append((event_wide_key, catalogue, start, end))
@@ -1022,6 +1073,7 @@ async def _load_solver_inputs(
                 # window). Its controls are the event's window and the
                 # tournament's table catalogue.
                 reservation="event",
+                group_count=group_counts.get(event_wide_key, 0),
             )
 
     # The minute frame's origin: the earliest reservation window start — a
@@ -1073,15 +1125,8 @@ async def _load_solver_inputs(
             # of an event with no reservation. Such a fixture takes the event-wide
             # reservation, exactly as an ungrouped one does; #1389 owns making
             # that resolution a first-class rule of the solver.
-            group_reservation_id = (
-                reservation_ids[fixture.group_id]
-                if fixture.group_id is not None
-                else None
-            )
-            fixture_reservation_key = (
-                event_wide_reservation_key(event.id)
-                if group_reservation_id is None
-                else reservation_key(event.id, group_reservation_id)
+            fixture_reservation_key = restricting_reservation_key(
+                event.id, fixture.group_id, reservation_ids
             )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it
@@ -1356,6 +1401,7 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
                 required_min=reason.required_min,
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
+                group_count=reservation.group_count,
             )
         case PlayerOverSubscribed():
             # The one arm that names a *human*: resolved through the same
