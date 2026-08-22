@@ -13,6 +13,7 @@ refusal is unreachable from the derived count alone.
 """
 
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,6 +29,7 @@ from app.models import (
     DrawType,
     TournamentEntry,
     TournamentEntryStatus,
+    TournamentEventGroupReservation,
     TournamentEventStageGroup,
     TournamentFixture,
     User,
@@ -215,6 +217,36 @@ async def _stored_group_ids(db: AsyncSession, event_id: str) -> list[uuid.UUID]:
         .scalars()
         .all()
     )
+
+
+async def _join_rows(
+    db: AsyncSession, event_id: str
+) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    """Every ``(group_id, reservation_id)`` the event's group-to-reservation join table
+    holds, read straight off the row (#1388).
+
+    The wire cannot answer the two criteria this serves. ``groups[].reservation_id``
+    projects ``group.reservation_link``, a one-to-one, so a second join row for the same
+    group is invisible there, and so is a row still naming a reservation the payload
+    removed. Both are questions about the TABLE, so they are asked of the table.
+    """
+    db.expire_all()
+    return [
+        (row.group_id, row.reservation_id)
+        for row in (
+            await db.execute(
+                select(TournamentEventGroupReservation)
+                .where(
+                    TournamentEventGroupReservation.stage_id.in_(
+                        stage_ids_for_events([uuid.UUID(event_id)])
+                    )
+                )
+                .order_by(TournamentEventGroupReservation.group_id)
+            )
+        )
+        .scalars()
+        .all()
+    ]
 
 
 async def _fixtures(db: AsyncSession, event_id: str) -> list[TournamentFixture]:
@@ -654,6 +686,189 @@ async def test_the_409s_way_out_works_end_to_end(
     assert len(set(_mapping(read))) == 2
 
 
+# ----- the removal -----------------------------------------------------------------
+#
+# #1388. A removal reaches the same write seam an addition does, so the rule it follows
+# is #1387's and is not restated here. What IS asserted here, and nowhere else, is the
+# half of that rule only a removal can reach: the wholesale re-map onto a SHORTER
+# reservation list, the group rows surviving a removal that takes their reservation
+# away, and the join rows a removal to zero deletes. Every write below is a removal, or
+# a removal to zero — the discriminator that keeps this file's two sections apart.
+
+
+async def test_removing_one_reservation_re_maps_every_group_and_deletes_no_row(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """8 groups over 4 reservations, minus one, spread all 8 across the 3 that remain.
+
+    The re-map is **wholesale** (#1388 decision 3): the four groups that mapped to a
+    surviving reservation move too, because every group recomputes against the new
+    positions rather than only the two the removal orphaned. And the removal deletes no
+    group row — the count derives from the preview field and the reservation count plays
+    no part in it — so the same 8 ids come back in the same order.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event = await _create_event(
+        client,
+        tournament_id,
+        reservations=[RESERVATION_A, RESERVATION_B, RESERVATION_C, RESERVATION_D],
+    )
+    before_ids = await _stored_group_ids(db_session, event["id"])
+    before_mapping = _mapping(event)
+    assert len(before_ids) == 8
+
+    response = await _patch(
+        client, tournament_id, event["id"], reservations=_cited(event)[:3]
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["reservations"]) == 3
+    # No group row went with the reservation.
+    assert len(body["groups"]) == 8
+    assert await _stored_group_ids(db_session, event["id"]) == before_ids
+    # Every group re-mapped by ``position % surviving reservation count``.
+    assert _mapping(body) == _expected_mapping(body)
+    survivors = [reservation["id"] for reservation in body["reservations"]]
+    assert sorted(Counter(_mapping(body)).values()) == [2, 3, 3]
+    assert set(_mapping(body)) == set(survivors)
+    # Wholesale, not minimal: the groups that already had a surviving reservation moved
+    # too. Positions 4 and 5 held reservations A and B on 4, and hold B and C on 3.
+    assert _mapping(body)[4:6] != before_mapping[4:6]
+    # Exactly one join row per group, and none naming the reservation that went.
+    rows = await _join_rows(db_session, event["id"])
+    assert sorted(group_id for group_id, _ in rows) == sorted(before_ids)
+    assert {str(reservation_id) for _, reservation_id in rows} == set(survivors)
+
+
+async def test_removing_the_middle_reservation_maps_against_the_restamped_positions(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """Which row went does not change the answer.
+
+    The write restamps the survivors' ``position`` from the payload order, so removing
+    the middle of three leaves positions 0 and 1 exactly as removing the last would —
+    the mapping keys on the new positions, never on the removed row's. Both are DEFERRED
+    unique constraints, so C moving onto the position B has not vacated yet is legal.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event = await _create_event(
+        client,
+        tournament_id,
+        reservations=[RESERVATION_A, RESERVATION_B, RESERVATION_C],
+    )
+    before_ids = await _stored_group_ids(db_session, event["id"])
+    cited = _cited(event)
+
+    response = await _patch(
+        client, tournament_id, event["id"], reservations=[cited[0], cited[2]]
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [reservation["name"] for reservation in body["reservations"]] == [
+        "Reservation A",
+        "Reservation C",
+    ]
+    assert [reservation["position"] for reservation in body["reservations"]] == [0, 1]
+    assert len(body["groups"]) == 8
+    assert await _stored_group_ids(db_session, event["id"]) == before_ids
+    assert _mapping(body) == _expected_mapping(body)
+    assert sorted(Counter(_mapping(body)).values()) == [4, 4]
+
+
+async def test_removing_the_last_reservation_keeps_the_groups_and_deletes_the_joins(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """Emptying the reservation list is silent and legal (#1388 decision 2, #1370).
+
+    The write answers 2xx, every group row survives with the id it had, and every join
+    row goes — a group with no reservation is the ABSENCE of a join row, not a null on
+    one. The mapping arithmetic never divides by the zero count; #1387 owns that guard
+    and this is the second path that reaches it.
+
+    Adding a reservation back is the same seam run forwards, so it is the second write
+    of this test rather than a standalone one: it starts from the state only a removal
+    to zero produces.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event = await _create_event(
+        client,
+        tournament_id,
+        reservations=[RESERVATION_A, RESERVATION_B],
+    )
+    before_ids = await _stored_group_ids(db_session, event["id"])
+    assert len(before_ids) == 8
+    assert len(await _join_rows(db_session, event["id"])) == 8
+
+    emptied = await _patch(client, tournament_id, event["id"], reservations=[])
+
+    assert emptied.status_code == 200, emptied.text
+    body = emptied.json()
+    assert body["reservations"] == []
+    assert len(body["groups"]) == 8
+    assert await _stored_group_ids(db_session, event["id"]) == before_ids
+    assert _mapping(body) == [None] * 8
+    # No join row survives, so none can name a reservation that is gone.
+    assert await _join_rows(db_session, event["id"]) == []
+
+    restored = await _patch(
+        client, tournament_id, event["id"], reservations=[RESERVATION_C]
+    )
+
+    assert restored.status_code == 200, restored.text
+    back = restored.json()
+    only = back["reservations"][0]["id"]
+    assert len(back["groups"]) == 8
+    assert await _stored_group_ids(db_session, event["id"]) == before_ids
+    assert _mapping(back) == [only] * 8
+    assert [
+        str(reservation_id)
+        for _, reservation_id in await _join_rows(db_session, event["id"])
+    ] == [only] * 8
+
+
+@pytest.mark.parametrize("draw_type", ["round-robin", "single-elim", "swiss"])
+async def test_a_removal_on_every_other_draw_type_takes_exactly_one_group_with_it(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession, draw_type: str
+) -> None:
+    """The materialisation did not break the 1:1 lockstep on the other three draw types.
+
+    ``group_count_for`` returns the reservation count for them, so three reservations
+    minus one is three groups minus one. The row that goes is the TAIL — the shrink
+    keeps the lowest positions — while the surviving reservations restamp to 0 and 1, so
+    removing the middle reservation is the same end state as removing the last.
+    """
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event = await _create_other(
+        client,
+        tournament_id,
+        draw_type,
+        reservations=[RESERVATION_A, RESERVATION_B, RESERVATION_C],
+    )
+    before_ids = await _stored_group_ids(db_session, event["id"])
+    assert len(before_ids) == 3
+    cited = _cited(event)
+
+    response = await _patch(
+        client, tournament_id, event["id"], reservations=[cited[0], cited[2]]
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["reservations"]) == 2
+    assert len(body["groups"]) == 2
+    assert await _stored_group_ids(db_session, event["id"]) == before_ids[:2]
+    # Still 1:1: two groups, two reservations, one group each.
+    assert _mapping(body) == _expected_mapping(body)
+    assert len(set(_mapping(body))) == 2
+    assert len(await _join_rows(db_session, event["id"])) == 2
+
+
 # ----- the freeze ------------------------------------------------------------------
 
 
@@ -770,3 +985,30 @@ async def test_a_rename_and_a_reservation_edit_on_a_cut_event_succeed(
     assert edited.json()["reservations"][0]["slot"]["start"] == "10:00"
     assert await _stored_group_ids(db_session, event["id"]) == before
     assert _mapping(edited.json()) == _mapping(event)
+
+
+async def test_a_refused_removal_leaves_every_group_row_and_every_join_row(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The freeze is not weakened by any of the above.
+
+    #1387 pins the 409 and the sentence it carries. What this pins is the invariant
+    #1388's Constraints keeps: the guard is asked before anything is written, so the
+    refusal leaves the rows never written rather than merely rolled back — every group
+    id, and every join row, exactly as they were.
+    """
+    client, _ = authed_client
+    tournament_id, event = await _cut_event(client, db_session)
+    before_ids = await _stored_group_ids(db_session, event["id"])
+    before_joins = await _join_rows(db_session, event["id"])
+    assert len(before_ids) == 2
+    assert len(before_joins) == 2
+
+    response = await _patch(
+        client, tournament_id, event["id"], reservations=_cited(event)[:1]
+    )
+
+    assert response.status_code == 409, response.text
+    assert await _stored_group_ids(db_session, event["id"]) == before_ids
+    assert await _join_rows(db_session, event["id"]) == before_joins
+    assert len((await _read(client, tournament_id, event["id"]))["reservations"]) == 2
