@@ -30,6 +30,26 @@ describe('ConfirmDeleteDialog', () => {
     )
   })
 
+  /**
+   * #1417's fix is two classes on the shared `DialogContent`, which eighteen other
+   * call sites inherit. The e2e spec proves the *geometry*, but only through this
+   * dialog and the publish confirm — so a reformat of that class string, or a `cn`
+   * override at a call site, would silently un-fix the other seventeen with nothing
+   * red. This pins the class at the altitude it actually lives at.
+   *
+   * `wrap-anywhere` and not `break-words`: only `overflow-wrap: anywhere` contributes
+   * soft-wrap opportunities to intrinsic min-content sizing, and the grid track's
+   * min-content width is the only number this bug is about. Measured — `break-words`
+   * left every probe number identical to the unfixed tree.
+   *
+   * Matches the #1199 precedent in `location-map.test.tsx` and
+   * `tournament-detail-page.test.tsx`, which pin the same class the same way.
+   */
+  it('gives the dialog panel the wrap that keeps its buttons on screen', () => {
+    confirmDeleteDialogPage.render({ name: UNBREAKABLE_TOURNAMENT_NAME })
+    expect(confirmDeleteDialogPage.queryDialog()).toHaveClass('wrap-anywhere')
+  })
+
   /** The prop type allows `undefined` — the list page passes `pendingDelete?.name`,
    * which is `undefined` on every render where nothing is pending. The dialog still
    * has to render. */
@@ -54,29 +74,20 @@ describe('ConfirmDeleteDialog', () => {
    * dismiss that also deleted would be the worst possible regression here.
    */
   describe('dismissal', () => {
-    it('dismisses on Cancel, and deletes nothing', async () => {
+    // The routes are lazy callbacks, not locators: each page-object getter must
+    // resolve *after* the `render` inside the case.
+    it.each([
+      ['Cancel', () => userEvent.click(confirmDeleteDialogPage.getCancelButton())],
+      [
+        'the Close icon',
+        () => userEvent.click(confirmDeleteDialogPage.getCloseButton()),
+      ],
+      ['Escape', () => userEvent.keyboard('{Escape}')],
+    ] as const)('dismisses on %s, and deletes nothing', async (_route, dismiss) => {
       const onOpenChange = vi.fn()
       const onConfirm = vi.fn()
       confirmDeleteDialogPage.render({ onOpenChange, onConfirm })
-      await userEvent.click(confirmDeleteDialogPage.getCancelButton())
-      expect(onOpenChange).toHaveBeenCalledWith(false)
-      expect(onConfirm).not.toHaveBeenCalled()
-    })
-
-    it('dismisses on the Close icon, and deletes nothing', async () => {
-      const onOpenChange = vi.fn()
-      const onConfirm = vi.fn()
-      confirmDeleteDialogPage.render({ onOpenChange, onConfirm })
-      await userEvent.click(confirmDeleteDialogPage.getCloseButton())
-      expect(onOpenChange).toHaveBeenCalledWith(false)
-      expect(onConfirm).not.toHaveBeenCalled()
-    })
-
-    it('dismisses on Escape, and deletes nothing', async () => {
-      const onOpenChange = vi.fn()
-      const onConfirm = vi.fn()
-      confirmDeleteDialogPage.render({ onOpenChange, onConfirm })
-      await userEvent.keyboard('{Escape}')
+      await dismiss()
       expect(onOpenChange).toHaveBeenCalledWith(false)
       expect(onConfirm).not.toHaveBeenCalled()
     })

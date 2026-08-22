@@ -250,6 +250,13 @@ export class TournamentDetailPage {
     return this.page.getByTestId('confirm-irreversible-act-confirm')
   }
 
+  /** The same confirm's explicit way out — `Go back`. Addressed by testid for the same
+   * reason its confirm sibling is: the pair is generated per act, and a spec asserting
+   * on both should reach them the same way. */
+  get irreversibleActCancelButton(): Locator {
+    return this.page.getByTestId('confirm-irreversible-act-cancel')
+  }
+
   /** The panel's inline **refusal** — the `Alert` where the click was, carrying the
    * server's own sentence (a 422 names what the director must change). Addressed by the
    * testid prefix because the id carries the event's id, which a spec has no business

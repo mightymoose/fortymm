@@ -92,7 +92,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { UNBREAKABLE_TOURNAMENT_NAME } from '../../src/mocks/factories/tournaments/tournament.factory'
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
 import { TournamentsListPage } from '../page-objects/tournaments/tournaments-list.page'
-import { expectOnScreen } from '../support/viewport'
+import { expectNoHorizontalScroll, expectOnScreen } from '../support/viewport'
 
 /** The desktop Quinn measured the defect at, and the config's own default. */
 const DESKTOP = { width: 1280, height: 800 }
@@ -180,8 +180,6 @@ async function expectNameWrapsInFull(description: Locator, what: string) {
     lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight),
     clientHeight: el.clientHeight,
     scrollHeight: el.scrollHeight,
-    clientWidth: el.clientWidth,
-    scrollWidth: el.scrollWidth,
   }))
 
   const lines = box.clientHeight / box.lineHeight
@@ -195,10 +193,11 @@ async function expectNameWrapsInFull(description: Locator, what: string) {
     box.scrollHeight,
     `${what} hides ${box.scrollHeight - box.clientHeight}px of the name below its box — it is clipped, not wrapped`,
   ).toBeLessThanOrEqual(box.clientHeight + 1)
-  expect(
-    box.scrollWidth,
-    `${what} hides the name past its right-hand edge: ${box.scrollWidth}px of content in a ${box.clientWidth}px box`,
-  ).toBeLessThanOrEqual(box.clientWidth + 1)
+  // The horizontal half is exactly `expectNoHorizontalScroll` — same measurement, same
+  // 1px slack — so it is called rather than re-written here. It adds a `scrollLeft === 0`
+  // check this file did not make, which a description that is not overflowing satisfies
+  // trivially.
+  await expectNoHorizontalScroll(description, what)
 }
 
 /** Open `/tournaments` seeded with the unbreakable name, and press the delete control on
@@ -206,7 +205,7 @@ async function expectNameWrapsInFull(description: Locator, what: string) {
  * name (`aria-label={`Delete ${t.name}`}`), so the locator is unambiguous by
  * construction. */
 async function openDeleteDialog(page: Page) {
-  await TournamentsListPage.navigateTo(page, { longName: true })
+  const { pom } = await TournamentsListPage.navigateTo(page, { longName: true })
   await fontsReady(page)
 
   const deleteControl = page.getByRole('button', {
@@ -218,7 +217,7 @@ async function openDeleteDialog(page: Page) {
   await expect(deleteControl, "the card's delete control").toBeVisible()
   await deleteControl.click()
 
-  const dialog = page.getByRole('dialog')
+  const dialog = pom.dialog
   await expect(dialog).toBeVisible()
   await fontsReady(page)
   return { dialog, description: dialog.locator('[data-slot="dialog-description"]') }
@@ -285,11 +284,11 @@ for (const viewport of [DESKTOP, PHONE]) {
     test.use({ viewport })
 
     test('keeps Go back and the confirm button wholly on screen', async ({ page }) => {
-      const { pom, dialog } = await openIrreversibleActDialog(page)
+      const { pom } = await openIrreversibleActDialog(page)
 
       await expectOnScreen(
         page,
-        dialog.getByTestId('confirm-irreversible-act-cancel'),
+        pom.irreversibleActCancelButton,
         "the publish confirm's Go back button",
       )
       await expectOnScreen(

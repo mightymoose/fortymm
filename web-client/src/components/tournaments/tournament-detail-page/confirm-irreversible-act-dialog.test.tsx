@@ -5,6 +5,8 @@ import {
   buildRecutDrawConsequence,
   buildStartTournamentConsequence,
 } from './confirm-irreversible-act-dialog.factory'
+import { UNBREAKABLE_TOURNAMENT_NAME } from '@/mocks/factories/tournaments/tournament.factory'
+
 import { confirmIrreversibleActDialogPage as page } from './confirm-irreversible-act-dialog.page'
 
 describe('ConfirmIrreversibleActDialog', () => {
@@ -254,5 +256,30 @@ describe('ConfirmIrreversibleActDialog', () => {
     page.render({})
     expect(page.getDialog()).toHaveAttribute('role', 'alertdialog')
     expect(page.getDialog().contains(document.activeElement)).toBe(true)
+  })
+  /**
+   * #1417's fix is two classes on the shared `AlertDialogContent`, and this dialog
+   * gates publishing, starting and ending a tournament — so its name is the fact a
+   * director checks before an irreversible act. The e2e spec proves the geometry;
+   * this pins the class itself, so a reformat of the primitive's class string reds
+   * here rather than silently un-fixing every alert dialog in the app.
+   *
+   * `wrap-anywhere` and not `break-words`: only `overflow-wrap: anywhere` contributes
+   * soft-wrap opportunities to intrinsic min-content sizing, which is the only number
+   * this bug is about. Mirrors the guard in `confirm-delete-dialog.test.tsx` and the
+   * #1199 precedent.
+   */
+  it('gives the dialog panel the wrap that keeps its buttons on screen', () => {
+    page.render({
+      consequence: buildPublishTournamentConsequence({
+        tournamentName: UNBREAKABLE_TOURNAMENT_NAME,
+      }),
+    })
+
+    expect(page.getDialog()).toHaveClass('wrap-anywhere')
+    // The whole name is present, not shortened — criterion 4, restated for the alert
+    // dialog. `overflow: hidden` would hide it from the user, not the DOM, so this
+    // pairs with the class assertion above rather than replacing it.
+    expect(page.getDialog()).toHaveTextContent(UNBREAKABLE_TOURNAMENT_NAME)
   })
 })
