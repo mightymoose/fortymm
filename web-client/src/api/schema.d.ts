@@ -1174,9 +1174,12 @@ export interface paths {
          *     carries the `id` of a reservation this event already has — keeping it, with the
          *     `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
          *     to add a new reservation, whose id the server mints. **A reservation no entry names
-         *     is removed.** The server keeps one `groups` entry per reservation in lockstep, so
-         *     adding, removing or reordering a reservation adds, removes or reorders its mapped
-         *     group the same way. Send back the reservations you read, edited: the ids came from
+         *     is removed.** `groups` is the server's: it materialises the group rows on every
+         *     write while no draw exists (an `rr-then-ko` event derives `ceil(field / 5)` from
+         *     its player cap, or 16 when uncapped; every other draw type holds one group per
+         *     reservation) and maps each group to the reservation at `position % reservation
+         *     count` — `null` when the event has none. Send back the reservations you read,
+         *     edited: the ids came from
          *     the read, and naming an id this event does not have is a `422` on that entry.
          *     Citing the same reservation twice is a `422` too — a reservation id identifies one
          *     reservation, and a group's own reservation is one of them.
@@ -2676,15 +2679,16 @@ export interface components {
          *     identity and order, plus which reservation it plays under.
          *
          *     Server-owned, unlike :class:`Reservation` — there is no write shape, because a
-         *     client never authors a group directly. The server mints exactly one group per
-         *     reservation (the 1:1, ``app.tournament_reservations``), so a ``reservations`` write
-         *     is the only way a group comes to exist, is re-ordered, or goes away.
+         *     client never authors a group directly. The server materialises the group rows on
+         *     every event write (``app.tournament_reservations.materialise_event_groups``): for
+         *     an ``rr-then-ko`` event the count derives from the preview field, for every other
+         *     draw type it is one group per reservation (ADR 20260822, #1387).
          *
-         *     ``reservation_id`` names an entry of the event's own ``reservations`` array. It is
-         *     never a dangling ref in this slice: the join column behind it is ``NOT NULL`` and a
-         *     real foreign key, so a group with no mapped reservation is a state the database
-         *     cannot produce. A future slice may relax that (#1370), which is why the client is
-         *     expected to look the id up rather than assume it always resolves.
+         *     ``reservation_id`` names an entry of the event's own ``reservations`` array, or is
+         *     ``null`` for a group that plays in no reservation. A group maps to the reservation
+         *     at ``position % reservation count``, so an event with no reservation has groups
+         *     with no reservation. The join row behind a non-null id is a real foreign key, so a
+         *     non-null id always resolves against ``reservations``.
          */
         GroupRead: {
             /**
@@ -2694,11 +2698,8 @@ export interface components {
             id: string;
             /** Position */
             position: number;
-            /**
-             * Reservation Id
-             * Format: uuid
-             */
-            reservation_id: string;
+            /** Reservation Id */
+            reservation_id: string | null;
         };
         /**
          * GroupStandingsRead

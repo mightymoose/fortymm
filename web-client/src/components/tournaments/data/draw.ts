@@ -80,11 +80,11 @@ export function buildDrawIndex(
  * Both hops tolerate an unresolved id rather than throwing: a fixture whose `groupId`
  * names no entry of `event.groups` is a domain-legal state (a knockout fixture simply
  * has none, and it is shown in the ungrouped block, never dropped — `drawState` below).
- * A group's `reservationId` is guaranteed to resolve by the API's own NOT NULL
- * constraint (`GroupRead`, `schema.d.ts`) — parsed and rejected at the boundary if it
- * ever didn't (`./api`) — but this lookup stays tolerant of both hops for one reason:
- * it is a plain JS `Map` lookup over already-parsed data, and the one thing worth
- * asserting once is the wire's own guarantee, at the boundary where it is checked.
+ * A group's `reservationId` may be `null` (ticket #1387: a group that plays in no
+ * reservation), and a non-null one is guaranteed to resolve by the API's own foreign
+ * key (`GroupRead`, `schema.d.ts`) — parsed and rejected at the boundary if it ever
+ * didn't (`./api`). Either way this lookup answers `reservation: null`, and the
+ * fixture renders without a window and without tables.
  */
 export function fixtureReservation(
   index: DrawIndex,
@@ -92,7 +92,9 @@ export function fixtureReservation(
 ): { group: Group | null; reservation: Reservation | null } {
   const group = fixture.groupId !== null ? (index.groupById.get(fixture.groupId) ?? null) : null
   const reservation =
-    group !== null ? (index.reservationById.get(group.reservationId) ?? null) : null
+    group !== null && group.reservationId !== null
+      ? (index.reservationById.get(group.reservationId) ?? null)
+      : null
   return { group, reservation }
 }
 
