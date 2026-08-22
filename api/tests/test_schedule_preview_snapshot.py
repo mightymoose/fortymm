@@ -50,10 +50,10 @@ from app.schedule_preview import (
 )
 from app.schedule_solves import event_wide_reservation_key
 from app.tournament_event_stages import mint_stages
-from app.tournament_reservations import materialise_groups
 from tests._helpers import (
     event_draw_settings,
     make_user,
+    materialise_derived_groups,
     venue_tables,
     with_table_aliases,
 )
@@ -149,12 +149,9 @@ async def _add_event(
     )
     if derive_groups:
         assert max_players is not None, "the derived count needs a field"
-        rows = [
-            group.reservation_link.reservation
-            for group in stages[0].groups
-            if group.reservation_link is not None
-        ]
-        materialise_groups(stages[0], rows, draw_type=draw_type, field_size=max_players)
+        materialise_derived_groups(
+            stages[0], draw_type=draw_type, field_size=max_players
+        )
     db.add(event)
     await db.commit()
     await db.refresh(event)
@@ -808,7 +805,6 @@ async def test_an_rr_then_ko_event_with_groups_and_no_reservation_is_previewed(
     assert preview.base == datetime(
         2026, 6, 13, 9, 0, tzinfo=ZoneInfo("America/Los_Angeles")
     )
-    assert preview.event_wide_events == (event.id,)
     # Every previewed fixture is labelled with its own group.
     assert {preview.group_labels[f.id] for f in preview.snapshot.fixtures} == {
         "Group A",
@@ -849,7 +845,6 @@ async def test_two_groups_sharing_a_reservation_preview_as_one_spec(
     assert [r.id for r in preview.snapshot.reservations] == [key]
     assert len(preview.snapshot.fixtures) == 12
     assert {f.reservation_id for f in preview.snapshot.fixtures} == {key}
-    assert preview.event_wide_events == ()
     assert sorted({preview.group_labels[f.id] for f in preview.snapshot.fixtures}) == [
         "Group A",
         "Group B",

@@ -73,8 +73,9 @@ from app.schedule_solves import (
     _solve_num_workers,
     event_wide_reservation_key,
     event_wide_reservation_name,
+    group_reservation_ids,
     reservation_key,
-    restricting_reservation_key,
+    reservation_keys_by_group,
 )
 from app.scheduling import (
     InfeasibilityReason,
@@ -166,10 +167,12 @@ class _PreviewReservationResolution:
     #: ``"event"`` for the synthetic event-wide reservation the builder gives an event
     #: whose groups play in no reservation. A reason blaming the latter must not be
     #: answered with a reservation remedy, exactly as the live solve's twin carries it.
-    reservation: ReservationKind = "booked"
+    #: No default: this value is per-request and never read back from storage, so a
+    #: construction site has to say which kind it is.
+    reservation: ReservationKind
     #: How many groups' fixtures this reservation holds (#1389) — the groups mapped to
     #: a booked reservation, or the groups with no reservation for the event-wide one.
-    group_count: int = 0
+    group_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,28 +298,26 @@ def _reservation_resolutions(
     humanized through, keyed by the solver's ``f"{event.id}:{reservation.id}"`` spelling
     (the same one :func:`app.schedule_preview.build_preview_snapshot` stamps on the
     snapshot's reservations), plus one entry per event the builder gave an
-    **event-wide reservation** (``preview.event_wide_events``, #1389) — named, windowed
-    and dated off the event's own ``slot``, and marked ``reservation="event"`` so a
-    reason blaming it offers the event's controls, not a reservation's. Parsed through
+    **event-wide reservation** (#1389) — recognised by its key being among the
+    snapshot's reservations — named, windowed and dated off the event's own ``slot``,
+    and marked ``reservation="event"`` so a reason blaming it offers the event's
+    controls, not a reservation's. Parsed through
     :class:`~app.schemas.tournament.Reservation` and
     :class:`~app.schemas.tournament.Slot`, not indexed off raw JSONB (parse, don't
     validate).
 
     ``group_count`` is resolved through the same rule a fixture resolves by
-    (:func:`app.schedule_solves.restricting_reservation_key`): the groups whose
+    (:func:`app.schedule_solves.reservation_keys_by_group`): the groups whose
     fixtures each reservation holds, which for the event-wide one is the groups with no
     reservation."""
     resolutions: dict[str, _PreviewReservationResolution] = {}
-    event_wide = set(preview.event_wide_events)
+    built = {reservation.id for reservation in preview.snapshot.reservations}
     for event in tournament.events:
-        group_reservation_ids = {
-            group.id: (link.reservation_id if link is not None else None)
-            for group in event.groups
-            for link in (group.reservation_link,)
-        }
+        keys_by_group = reservation_keys_by_group(
+            event.id, group_reservation_ids(event)
+        )
         group_counts = Counter(
-            restricting_reservation_key(event.id, group.id, group_reservation_ids)
-            for group in event.groups
+            key for group_id, key in keys_by_group.items() if group_id is not None
         )
         for reservation in event_reservations(event):
             key = reservation_key(event.id, reservation.id)
@@ -327,10 +328,11 @@ def _reservation_resolutions(
                 # The venue-local calendar day the director dated this window for —
                 # the actionable "which day to move" fact a past_window reason names.
                 date=date.fromisoformat(reservation.slot.date),
+                reservation="booked",
                 group_count=group_counts.get(key, 0),
             )
-        if event.id in event_wide:
-            event_wide_key = event_wide_reservation_key(event.id)
+        event_wide_key = event_wide_reservation_key(event.id)
+        if event_wide_key in built:
             event_slot = Slot.model_validate(event.slot)
             resolutions[event_wide_key] = _PreviewReservationResolution(
                 name=event_wide_reservation_name(event.name),

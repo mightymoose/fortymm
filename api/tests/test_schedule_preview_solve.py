@@ -74,10 +74,10 @@ from app.tournament_errors import (
     TournamentNotPreLiveError,
 )
 from app.tournament_event_stages import mint_stages
-from app.tournament_reservations import materialise_groups
 from tests._helpers import (
     event_draw_settings,
     make_user,
+    materialise_derived_groups,
     venue_tables,
     with_table_aliases,
 )
@@ -196,12 +196,9 @@ async def _add_event(
     )
     if derive_groups:
         assert max_players is not None, "the derived count needs a field"
-        rows = [
-            group.reservation_link.reservation
-            for group in stages[0].groups
-            if group.reservation_link is not None
-        ]
-        materialise_groups(stages[0], rows, draw_type=draw_type, field_size=max_players)
+        materialise_derived_groups(
+            stages[0], draw_type=draw_type, field_size=max_players
+        )
     db.add(event)
     await db.commit()
     await db.refresh(event)

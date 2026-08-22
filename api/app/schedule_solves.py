@@ -589,11 +589,10 @@ def reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> Reservati
     agree byte for byte, or ``app.scheduling`` refuses the snapshot as incoherent. It
     was written out as a raw f-string at both sites; one function means one edit.
 
-    The suffix is a **reservation** id, matching the preview's
-    ``app.schedule_preview.preview_reservation_key``. Both spaces key the same way, so
-    a value from one is structurally indistinguishable from the other's — they never
-    meet today (each module builds and consumes its own map), but that is a property of
-    the call graph rather than of the type.
+    The suffix is a **reservation** id. The schedule preview
+    (``app.schedule_preview``) keys its snapshot through this same function since
+    #1389, so the live solve and the preview share one keyspace by construction, not
+    by two f-strings that happen to agree.
     """
     return ReservationId(f"{event_id}:{reservation_id}")
 
@@ -646,6 +645,42 @@ def restricting_reservation_key(
     if booked is None:
         return event_wide_reservation_key(event_id)
     return reservation_key(event_id, booked)
+
+
+def group_reservation_ids(event: TournamentEvent) -> dict[uuid.UUID, uuid.UUID | None]:
+    """Group id → the id of the reservation that group plays in, ``None`` for a group
+    with no join row (#1387) — the one place the scheduler crosses from the draw's
+    vocabulary (a fixture names a **group**) into the venue's (the thing the solver
+    constrains is a **reservation**). Total over the event's groups, so "no
+    reservation" is a typed value a reader has to handle rather than a missing key.
+
+    Read through the projection seam (:func:`~app.tournament_draws.event_groups`),
+    not off the ORM: ``GroupRead`` carries the mapped ``reservation_id`` outright, so
+    the hop has one spelling and #1370 has one place to change it. The live solve, the
+    preview builder and the preview's reason resolver all take the map from here."""
+    return {group.id: group.reservation_id for group in event_groups(event)}
+
+
+def reservation_keys_by_group(
+    event_id: uuid.UUID,
+    group_reservation_ids: Mapping[uuid.UUID, uuid.UUID | None],
+) -> dict[uuid.UUID | None, ReservationId]:
+    """Every answer :func:`restricting_reservation_key` can give for one event, keyed
+    by the group a fixture names — one entry per group plus the ``None`` entry for a
+    fixture that names no group — so a site walking hundreds of fixtures looks a key
+    up rather than minting the same string per fixture.
+
+    Built through the rule, not beside it, so the map cannot disagree with a direct
+    call. Total over the event's fixtures: a fixture's group is in
+    ``group_reservation_ids`` by its own composite foreign key, and ``None`` is here.
+    The group count behind an over-capacity reason is a ``Counter`` over the non-None
+    values."""
+    keys: dict[uuid.UUID | None, ReservationId] = {
+        group_id: restricting_reservation_key(event_id, group_id, group_reservation_ids)
+        for group_id in group_reservation_ids
+    }
+    keys[None] = restricting_reservation_key(event_id, None, group_reservation_ids)
+    return keys
 
 
 @dataclass(frozen=True, slots=True)
@@ -954,24 +989,17 @@ async def _load_solver_inputs(
     event_slots: dict[uuid.UUID, Slot] = {
         event.id: Slot.model_validate(event.slot) for event, _s, _p in parsed_events
     }
-    # Group id → the id of the RESERVATION that group plays in. This is the one
-    # place the solver crosses from the draw's vocabulary into the venue's: a
-    # ``fixture.group_id`` names a **group**, while the thing this module actually
-    # constrains — a set of tables for a window — is the reservation. Keying the
-    # solver on the reservation is what makes "which reservation confines this
+    # Per event: the group a fixture names → the RESERVATION key that restricts it
+    # (``reservation_keys_by_group``, built through ``restricting_reservation_key``).
+    # This is the one place the solver crosses from the draw's vocabulary into the
+    # venue's: a ``fixture.group_id`` names a **group**, while the thing this module
+    # actually constrains — a set of tables for a window — is the reservation. Keying
+    # the solver on the reservation is what makes "which reservation confines this
     # fixture" a lookup rather than an assumption, and it is why the
     # ``ScheduleReservation`` set below has exactly one entry per reservation however
-    # many groups map to it.
-    #
-    # Read through the projection seam (``event_groups``), not off the ORM: since the
-    # wire split the two names apart, ``GroupRead`` carries the mapped
-    # ``reservation_id`` outright, so the hop has one spelling and #1370 has one place
-    # to change it.
-    reservation_ids: dict[uuid.UUID, uuid.UUID | None] = {
-        group.id: group.reservation_id
-        for event in drawn_events
-        for group in event_groups(event)
-    }
+    # many groups map to it. Filled in the spec loop below, read by the fixture loop
+    # after it.
+    keys_by_event: dict[uuid.UUID, dict[uuid.UUID | None, ReservationId]] = {}
 
     # Reservation ids are per-event value-objects — two events may both hold a
     # "reservation-a" — so the solver's ReservationId is namespaced by the event id.
@@ -1009,20 +1037,24 @@ async def _load_solver_inputs(
         # ``ZoneInfo`` here cannot raise on a stored value.
         event_tz = ZoneInfo(event.timezone)
         event_wide_key = event_wide_reservation_key(event.id)
-        # Which reservation restricts each GROUP's fixtures, through the same rule a
-        # fixture resolves by: the count behind an over-capacity reason's "holds N
-        # groups" clause. ``get(key, 0)`` at the reads, so a reservation no group maps
-        # to — an event-wide one holding only a knockout stage — reports 0, not a miss.
+        # Which reservation restricts each of this event's fixtures, by the group it
+        # names — one lookup table built through the rule, used by the event-wide
+        # guard and the per-fixture resolution below. Its non-None entries are also
+        # the count behind an over-capacity reason's "holds N groups" clause;
+        # ``get(key, 0)`` at the reads, so a reservation no group maps to — an
+        # event-wide one holding only a knockout stage — reports 0, not a miss.
+        keys_by_group = reservation_keys_by_group(
+            event.id, group_reservation_ids(event)
+        )
+        keys_by_event[event.id] = keys_by_group
         group_counts = Counter(
-            restricting_reservation_key(event.id, group.id, reservation_ids)
-            for group in event_groups(event)
+            key for group_id, key in keys_by_group.items() if group_id is not None
         )
         for reservation in reservations:
             # Keyed on the reservation's OWN id, now that the projection carries
-            # one — no lookup needed here (the ``reservation_ids`` map below is
-            # for the per-fixture side, which only has a group id to resolve
-            # through). This loop emits one spec per reservation, one entry
-            # whatever the number of groups a later change lets share it.
+            # one — no lookup needed here (``keys_by_group`` is for the per-fixture
+            # side, which only has a group id to resolve through). This loop emits
+            # one spec per reservation, one entry however many groups share it.
             key = reservation_key(event.id, reservation.id)
             start, end = _slot_bounds(reservation.slot, event_tz)
             tables = tuple(
@@ -1039,8 +1071,7 @@ async def _load_solver_inputs(
                 group_count=group_counts.get(key, 0),
             )
         if any(
-            restricting_reservation_key(event.id, fixture.group_id, reservation_ids)
-            == event_wide_key
+            keys_by_group[fixture.group_id] == event_wide_key
             for fixture in fixtures_by_event[event.id]
         ):
             # The event-wide reservation (ADR "a reservation restricts scheduling, it
@@ -1107,31 +1138,22 @@ async def _load_solver_inputs(
     broken_pin_voids: set[uuid.UUID] = set()
     for event, settings, _reservations in parsed_events:
         for fixture in fixtures_by_event[event.id]:
-            # Which reservation restricts this fixture (ADR "a group restricts
-            # scheduling, it does not enable it"). A grouped fixture takes its
-            # own reservation's tables and window, exactly as it always has. An
-            # ungrouped one — a single-elim or swiss fixture, or an rr-then-ko
-            # draw's knockout stage — takes its event's event-wide reservation,
-            # built above; the branch is present for the event precisely because
-            # this fixture is, so the lookup is total.
-            # ``fixture.group_id`` is a GROUP id, so it is resolved through the
-            # group→reservation map rather than spliced into a key directly:
-            # exactly one reservation per fixture, looked up, which is what keeps
-            # the CP-SAT interval constraint a single interval instead of a
-            # disjunction over several. The lookup is total — a fixture's group
-            # belongs to this event's stage 0 by its own composite foreign key,
-            # and every group of it is in the map — but its VALUE may be ``None``
-            # (#1387): a group that plays in no reservation, which is every group
-            # of an event with no reservation. Such a fixture takes the event-wide
-            # reservation, exactly as an ungrouped one does; #1389 owns making
-            # that resolution a first-class rule of the solver.
-            fixture_reservation_key = restricting_reservation_key(
-                event.id, fixture.group_id, reservation_ids
-            )
             if fixture.entry_a_id is None or fixture.entry_b_id is None:
                 # TBD side: cannot be placed; the snapshot builder leaves it
                 # out (app.scheduling's contract).
                 continue
+            # Which reservation restricts this fixture (ADR "a reservation restricts
+            # scheduling, it does not enable it"), through the one rule
+            # (``restricting_reservation_key``, #1389) the spec loop built the event's
+            # lookup table from: its group's booked reservation, or the event-wide one
+            # for a fixture naming no group (a single-elim or swiss fixture, an
+            # rr-then-ko draw's knockout stage) or a group that plays in none (#1387).
+            # Exactly one reservation per fixture, looked up, which is what keeps the
+            # CP-SAT interval constraint a single interval instead of a disjunction.
+            # Total: a fixture's group belongs to this event's stage 0 by its own
+            # composite foreign key, so it is in the map, and so is ``None``; the
+            # event-wide branch is present precisely because such a fixture is.
+            fixture_reservation_key = keys_by_event[event.id][fixture.group_id]
             status = (
                 match_status.get(fixture.match_id)
                 if fixture.match_id is not None

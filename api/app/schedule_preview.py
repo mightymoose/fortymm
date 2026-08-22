@@ -102,7 +102,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import assert_never
 
@@ -118,7 +118,9 @@ from app.draws import (
 from app.models.tournament import DrawType, Tournament, TournamentEvent
 from app.schedule_solves import (
     event_wide_reservation_key,
-    restricting_reservation_key,
+    group_reservation_ids,
+    reservation_key,
+    reservation_keys_by_group,
 )
 from app.scheduling import (
     EventId,
@@ -160,36 +162,6 @@ def placeholder_label(player_id: str) -> str:
     (:class:`~app.scheduling.PlayerOverSubscribed`) into the same resolved read
     form a real solve records."""
     return f"Placeholder {player_id.removeprefix(PLACEHOLDER_PREFIX)}"
-
-
-def preview_reservation_key(event_id: uuid.UUID, reservation_id: uuid.UUID) -> str:
-    """The one namespaced ``event:reservation`` spelling every preview site keys a
-    reservation by — the ``ScheduleReservation`` id, a fixture's ``reservation_id``
-    ref, and the enqueue verb's infeasibility-resolution map all pass through here, so
-    the string contract lives in exactly one place and cannot drift between them.
-
-    **The suffix is a RESERVATION id, the same as a live solve's**
-    (``app.schedule_solves.reservation_key``, beside its event-wide twin).
-    It was a GROUP id until the wire split the two names apart: the preview keyed its
-    fixture refs off the projected slot's ``id``, which was the group's. Both spaces
-    key on the reservation now, because a reservation is what a fixture is actually
-    confined to — its tables, inside its window — and because a field called
-    ``reservation_id`` holding a group id is the exact conflation this rename ends.
-    Two groups may share a reservation now (#1387), and a group may have none, so
-    keying on the reservation is the answer that stays correct.
-
-    **The namespace is no longer needed for uniqueness, and is kept anyway.** It was
-    minted because a reservation id was a per-event string and two events of one
-    tournament could each hold a "reservation-a"; a reservation id is a globally unique
-    uuid now (ADR 20260801), so the ``event:`` prefix disambiguates nothing. It stays
-    because the *key* is a wire value, not an implementation detail: it is what
-    :class:`~app.schemas.schedule_preview.SchedulePreviewFixtureRead.reservation_id`
-    carries, what a stored solve's plan is keyed by, and what an infeasibility reason
-    names — so dropping it would be a wire change with client follow-ups, and it would
-    leave every solve row already in a database keyed in a space nothing computes any
-    more. It also still earns its keep as a *label*: a solver reservation id that says
-    which event it belongs to is one a human reading a plan or a reason can place."""
-    return f"{event_id}:{reservation_id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,13 +279,11 @@ class PreviewSnapshot:
     #: the pure snapshot speaks only ids, and a fixture card names its group beside
     #: its reservation, so the builder — the one place that still holds the group
     #: rows — hands the labels back with the snapshot. Total over
-    #: ``snapshot.fixtures``.
-    group_labels: Mapping[str, str] = field(default_factory=dict)
-    #: The events this snapshot built an **event-wide reservation** for (#1389): an
-    #: event holding a previewed fixture that resolves to no booked reservation. The
-    #: enqueue verb resolves that reservation's name, window and kind from these,
-    #: because no reservation row exists to read them off.
-    event_wide_events: tuple[uuid.UUID, ...] = ()
+    #: ``snapshot.fixtures``, and required so a snapshot cannot be built without it.
+    #: Whether an event got an **event-wide reservation** is not carried beside this:
+    #: it is already a fact of ``snapshot.reservations`` (its key is
+    #: :func:`~app.schedule_solves.event_wide_reservation_key`), read off there.
+    group_labels: Mapping[str, str]
 
 
 def preview_field_size(max_players: int | None) -> int:
@@ -377,20 +347,6 @@ class _EventPlan:
     settings: MatchSettings
     fixtures: list[PlannedFixture]
     field_size: int
-
-
-def _group_reservation_ids(event: TournamentEvent) -> dict[uuid.UUID, uuid.UUID | None]:
-    """Group id → the id of the reservation that group plays in — the same cross from
-    the draw's vocabulary into the venue's that ``app.schedule_solves`` makes, needed
-    here because :class:`~app.draws.PlannedFixture` carries only a group id, never a
-    reservation one. Total over the event's groups, ``None`` for a group with no join
-    row (#1387), so "no reservation" is a typed value a reader has to handle rather
-    than a missing key a lookup would raise on."""
-    return {
-        group.id: (link.reservation_id if link is not None else None)
-        for group in event.groups
-        for link in (group.reservation_link,)
-    }
 
 
 def _previewed_fixtures(plan: _EventPlan) -> list[PlannedFixture]:
@@ -595,13 +551,12 @@ def build_preview_snapshot(
     # absent: nothing of that event is placed, so a window it reserves must neither move
     # the frame nor reach the solver, where an empty or past-dated one would report an
     # infeasibility against an event that was never drawn.
-    windows: dict[str, tuple[datetime, datetime]] = {}
-    event_wide_events: list[uuid.UUID] = []
+    windows: dict[ReservationId, tuple[datetime, datetime]] = {}
     for plan in plans:
         if isinstance(plan, _SkippedEvent):
             continue
         for reservation in plan.reservations:
-            key = preview_reservation_key(plan.event.id, reservation.id)
+            key = reservation_key(plan.event.id, reservation.id)
             # The event's own venue ``timezone`` anchors its reservations' wall-clock
             # windows to instants, so two events in different zones land on one
             # axis — exactly as ``_load_solver_inputs`` anchors the real solve.
@@ -627,20 +582,18 @@ def build_preview_snapshot(
         # reservation too, but it is dropped before the solver sees it (TBD-sided), so
         # an rr-then-ko event whose groups are all booked builds no event-wide window
         # and its frame origin stays its reservations' — unchanged behaviour.
-        group_reservation_ids = _group_reservation_ids(plan.event)
+        keys_by_group = reservation_keys_by_group(
+            plan.event.id, group_reservation_ids(plan.event)
+        )
         event_wide_key = event_wide_reservation_key(plan.event.id)
         if any(
-            restricting_reservation_key(
-                plan.event.id, fixture.group_id, group_reservation_ids
-            )
-            == event_wide_key
+            keys_by_group[fixture.group_id] == event_wide_key
             for fixture in _previewed_fixtures(plan)
         ):
             event_slot = Slot.model_validate(plan.event.slot)
             windows[event_wide_key] = _slot_bounds(
                 event_slot.date, event_slot.start, event_slot.end, plan.event.timezone
             )
-            event_wide_events.append(plan.event.id)
     # ``base`` is ``None`` when no event has a reservation, booked or event-wide
     # (nothing to anchor on); the minute frame then falls back to ``datetime.min``
     # (no window uses it anyway).
@@ -690,7 +643,7 @@ def build_preview_snapshot(
             EventSettings(id=event_id, length_games=plan.settings.length_games)
         )
         for reservation in plan.reservations:
-            key = preview_reservation_key(plan.event.id, reservation.id)
+            key = reservation_key(plan.event.id, reservation.id)
             start, end = windows[key]
             tables = tuple(
                 TableId(table_id)
@@ -699,7 +652,7 @@ def build_preview_snapshot(
             )
             schedule_reservations.append(
                 ScheduleReservation(
-                    id=ReservationId(key),
+                    id=key,
                     table_ids=tables,
                     window=Window(start_min=to_min(start), end_min=to_min(end)),
                 )
@@ -711,12 +664,14 @@ def build_preview_snapshot(
             start, end = windows[event_wide_key]
             schedule_reservations.append(
                 ScheduleReservation(
-                    id=ReservationId(event_wide_key),
+                    id=event_wide_key,
                     table_ids=catalogue,
                     window=Window(start_min=to_min(start), end_min=to_min(end)),
                 )
             )
-        group_reservation_ids = _group_reservation_ids(plan.event)
+        keys_by_group = reservation_keys_by_group(
+            plan.event.id, group_reservation_ids(plan.event)
+        )
         group_labels_by_id = {
             group.id: group_label(group.position) for group in plan.event.groups
         }
@@ -747,11 +702,8 @@ def build_preview_snapshot(
             # one built above for a group that plays in none (#1387, #1389) — through
             # the same rule the live solve resolves by, so the key is always one the
             # windows pass built and the lookup is total.
-            reservation_ref = restricting_reservation_key(
-                plan.event.id, fixture.group_id, group_reservation_ids
-            )
             schedule_fixture = _schedule_fixture(
-                plan.event.id, event_id, fixture, reservation_ref
+                event_id, fixture, keys_by_group[fixture.group_id]
             )
             schedule_fixtures.append(schedule_fixture)
             group_labels[schedule_fixture.id] = group_labels_by_id[fixture.group_id]
@@ -775,12 +727,10 @@ def build_preview_snapshot(
         field_summaries=tuple(summaries),
         base=base,
         group_labels=group_labels,
-        event_wide_events=tuple(event_wide_events),
     )
 
 
 def _schedule_fixture(
-    event_uuid: uuid.UUID,
     event_id: EventId,
     fixture: PlannedFixture,
     reservation_ref: ReservationId,
@@ -829,11 +779,11 @@ def _schedule_fixture(
     # fixture id on the reservation would collide two group-stage fixtures on
     # ``(reservation, round, position)`` and the snapshot would be refused as
     # incoherent, naming a symptom rather than the cause.
-    group_ref = preview_reservation_key(event_uuid, fixture.group_id)
+    group_ref = f"{event_id}:{fixture.group_id}"
     return ScheduleFixture(
         id=FixtureId(f"{group_ref}:{fixture.round}:{fixture.position}"),
         event_id=event_id,
-        reservation_id=ReservationId(reservation_ref),
+        reservation_id=reservation_ref,
         player_a_id=PlayerId(f"{PLACEHOLDER_PREFIX}{fixture.entry_a_id.int}"),
         player_b_id=PlayerId(f"{PLACEHOLDER_PREFIX}{fixture.entry_b_id.int}"),
     )

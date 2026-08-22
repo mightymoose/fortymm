@@ -799,12 +799,10 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
     ])('renders no group clause at 0 or 1 for a %s reservation', (_kind, base) => {
       // 0: a stale ledger row, or an event-wide reservation holding only a knockout
       // stage. 1: one group, nothing to re-spread. Both read as today's sentence.
-      for (const groupCount of [0, 1]) {
-        const copy = infeasibilityReasonCopy({ ...base, groupCount })
-        expect(copy.sentence).not.toContain('groups')
-        expect(copy.remedy).not.toContain('Adding a reservation')
-        expect(copy).toEqual(infeasibilityReasonCopy({ ...base, groupCount: 0 }))
-      }
+      const atZero = infeasibilityReasonCopy({ ...base, groupCount: 0 })
+      expect(atZero.sentence).not.toContain('groups')
+      expect(atZero.remedy).not.toContain('Adding a reservation')
+      expect(infeasibilityReasonCopy({ ...base, groupCount: 1 })).toEqual(atZero)
     })
   })
 
