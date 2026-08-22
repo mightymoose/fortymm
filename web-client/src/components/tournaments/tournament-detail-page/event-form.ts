@@ -116,6 +116,26 @@ const reservationEntrySchema: z.ZodType<ReservationEntry, ReservationEntry> =
   ])
 
 /**
+ * The client's own sentence for #1482's reservation cap — raised inline, before the
+ * request ever goes out, so a director sees this rather than the server's prose
+ * (`DEFINITION_OF_COMPLETE`). Takes the count actually held, so "it currently holds
+ * 2" stays true whatever the director's list happens to be.
+ *
+ * Deliberately its own words, not a transplant of the server's `enforce_event_
+ * reservation_cap` sentence: that one is about the WRITE the server just refused
+ * (`api/app/schemas/tournament.py`); this one is about the DRAFT the director is
+ * still editing, before any request exists to refuse.
+ */
+function reservationCapMessage(count: number): string {
+  return (
+    `This event can hold only one reservation while its draw type is not ` +
+    `“rr-then-ko” — it currently holds ${count}. Remove reservations until ` +
+    `one remains, or switch the draw type to “rr-then-ko”, which can hold ` +
+    `several.`
+  )
+}
+
+/**
  * The one schema the editor's `zodResolver` runs — the whole event, scalars and
  * nested arrays alike, so "may I save?" has a single answer computed in a single
  * place.
@@ -137,26 +157,6 @@ const reservationEntrySchema: z.ZodType<ReservationEntry, ReservationEntry> =
  *   name, so only the *box* could ever author a blank one — and it did. (The id it no
  *   longer mints at all; see `reservationEntrySchema`.)
  */
-/**
- * The client's own sentence for #1482's reservation cap — raised inline, before the
- * request ever goes out, so a director sees this rather than the server's prose
- * (`DEFINITION_OF_COMPLETE`). Takes the count actually held, so "it currently holds
- * 2" stays true whatever the director's list happens to be.
- *
- * Deliberately its own words, not a transplant of the server's `enforce_event_
- * reservation_cap` sentence: that one is about the WRITE the server just refused
- * (`api/app/schemas/tournament.py`); this one is about the DRAFT the director is
- * still editing, before any request exists to refuse.
- */
-export function reservationCapMessage(count: number): string {
-  return (
-    `This event can hold only one reservation while its draw type is not ` +
-    `“rr-then-ko” — it currently holds ${count}. Remove reservations until ` +
-    `one remains, or switch the draw type to “rr-then-ko”, which can hold ` +
-    `several.`
-  )
-}
-
 export const eventSchema = z.object({
   name: nameSchema,
   format: z.enum(['singles', 'doubles', 'teams']),

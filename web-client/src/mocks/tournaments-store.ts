@@ -718,9 +718,13 @@ function seed(): StoredTournament[] {
           // ONE reservation, and therefore ONE group (#1482: a round-robin event holds
           // at most one) — nine entrants all in it, an ODD group, so its rounds have a
           // player sitting out each time, and a bye is visible for what it is: the
-          // ABSENCE of a fixture, not a fixture with an empty side. Complete, so there
-          // is a champion — the state a multi-group round-robin could never reach
-          // before this cap (CONTEXT.md, "Champion").
+          // ABSENCE of a fixture, not a fixture with an empty side. Complete, and ONE
+          // group, so it has a champion (CONTEXT.md, "Champion": the leader of the
+          // standings). Before the cap this same event could have been seeded across
+          // two reservations, and a complete TWO-group round-robin has no champion at
+          // all — nothing joins its two group winners. The cap is what makes a
+          // round-robin event's champion unconditional; it did not give a multi-group
+          // round-robin one.
           id: 'ev-u1200',
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1200 Singles',
@@ -2577,10 +2581,23 @@ export function updateEvent(
   // patch's own `reservations.length`, since the diff replaces wholesale when present) or
   // the stored one. A patch that touches only one half of the pair is still judged
   // against the state it would leave the event in.
+  //
+  // A NO-OP when this patch touches neither half of the pair, mirroring the server's
+  // `_enforce_reservation_cap` (`api/app/tournament_events.py`), whose first line is
+  // the same early return: a legacy event already over the cap (data only reachable
+  // pre-#1482, since both write paths now refuse to create one) must still accept an
+  // edit to its name or its fee. Unreachable through this editor, which always sends
+  // both keys (`eventToUpdateBody`, and `data/api.test.ts` pins that) — which is
+  // exactly why the mirror is worth its one line: the day a PATCH shape drops a key,
+  // the mock must not start refusing a write the real server accepts.
+  const touchesThePair = patch.reservations != null || patch.draw_type != null
   const effectiveDrawType = patch.draw_type ?? event.draw_type
   const effectiveReservationCount =
     patch.reservations == null ? event.reservations.length : patch.reservations.length
-  if (reservationCapExceeded(effectiveDrawType, effectiveReservationCount)) {
+  if (
+    touchesThePair &&
+    reservationCapExceeded(effectiveDrawType, effectiveReservationCount)
+  ) {
     return {
       ok: false,
       status: 422,

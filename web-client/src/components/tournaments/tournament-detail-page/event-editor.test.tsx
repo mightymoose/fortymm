@@ -726,6 +726,12 @@ describe('EventEditor', () => {
       // The client's OWN sentence — never the server's raw detail string
       // (`DEFINITION_OF_COMPLETE`), and it names the count actually held.
       expect(error).toHaveTextContent('2')
+      // …and ONLY that one. The Add button's cap notice says the same rule in weaker
+      // words ("this event can hold only one reservation") without naming the count
+      // held or the way down to one, so stacking it directly above the red would bury
+      // the sentence that actually helps. Same principle as the freeze notice
+      // suppressing it: one dead button, one explanation, said once.
+      expect(eventEditorPage.queryReservationsCapNotice()).toBeNull()
     })
 
     // Both refusals fire at once — the array-level cap AND a per-row blank name — and

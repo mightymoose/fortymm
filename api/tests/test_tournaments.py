@@ -1358,19 +1358,37 @@ _TWO_RESERVATIONS = [
 ]
 
 
-async def test_create_event_with_two_reservations_on_a_round_robin_draw_is_422(
+@pytest.mark.parametrize(
+    ("draw_type", "extra"),
+    [
+        pytest.param("round-robin", {}, id="round-robin"),
+        pytest.param("single-elim", {}, id="single-elim"),
+        pytest.param("swiss", {"rounds": 5}, id="swiss"),
+    ],
+)
+async def test_create_event_with_two_reservations_on_a_capped_draw_is_422(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
+    draw_type: str,
+    extra: dict[str, Any],
 ):
-    """A ``round-robin`` event carrying two reservations is refused at the boundary
-    (#1482): it runs one group, and the derived mapping would leave the second
-    reservation's tables unreachable by any fixture."""
+    """Every draw type but ``rr-then-ko`` carrying two reservations is refused at the
+    boundary (#1482): each runs its whole stage as one group, and the derived mapping
+    would leave the second reservation's tables unreachable by any fixture.
+
+    All three the acceptance criterion names are asked, not just ``round-robin``. The
+    predicate is an EXCLUSION (``draw_type is not DrawType.rr_then_ko``) rather than an
+    allow-list, so this also pins that a draw type is capped by DEFAULT — a fourth one
+    added tomorrow lands in this parametrize list, not in a list inside the guard.
+    ``swiss`` carries its ``rounds`` count, which its arm requires (ADR 20260727)."""
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
 
     response = await client.post(
         f"/v1/tournaments/{created['id']}/events",
-        json=_event_payload(draw_type="round-robin", reservations=_TWO_RESERVATIONS),
+        json=_event_payload(
+            draw_type=draw_type, reservations=_TWO_RESERVATIONS, **extra
+        ),
     )
     assert response.status_code == 422, response.text
     body = response.json()

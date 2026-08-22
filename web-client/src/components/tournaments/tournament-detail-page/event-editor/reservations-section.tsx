@@ -145,7 +145,6 @@ export const ReservationsSection = ({
   // (unsaved) draw-type pick has to disable Add immediately, before a save round-trips
   // it back as `event.drawType`.
   const drawType = useWatch({ control, name: 'drawType' })
-  const capped = !frozen && drawType !== 'rr-then-ko' && fields.length >= 1
 
   // The array-level save refusal (`eventSchema`'s `superRefine`, `event-form.ts`) —
   // read straight off the resolver's own verdict, unlike `reservationNameIssues` above:
@@ -156,6 +155,15 @@ export const ReservationsSection = ({
   // reservations error — read both, so neither shape goes silently blank.
   const { errors } = useFormState({ control })
   const capError = errors.reservations?.root?.message ?? errors.reservations?.message
+
+  // Gated on `!capError` for the same reason it is gated on `!frozen`: when the SAVE
+  // refusal below is on screen, this notice is a second, weaker story about the very
+  // same rule — the error names the count actually held AND the way down to one, so
+  // stacking a `Lock` alert saying "can hold only one reservation" directly above a
+  // destructive one saying "it currently holds 2" tells the director nothing new and
+  // buries the sentence that does. One dead button, one explanation, said once.
+  const capped =
+    !frozen && !capError && drawType !== 'rr-then-ko' && fields.length >= 1
 
   // Double-booking is a diagnostic only the organizer can act on, so a viewer
   // is neither shown it nor pays to compute it.
@@ -224,9 +232,10 @@ export const ReservationsSection = ({
       {/* #1482's cap notice: why ADD is disabled once a non-`rr-then-ko` event already
           holds one reservation. Its own testid and its own `id` — never
           `freezeNoticeId`, whose sentence is about a cut draw and would be a lie here.
-          Never shown alongside the freeze notice (`capped` is already `!frozen`): the
-          freeze is the more actionable refusal once a draw is cut, and two notices
-          explaining the same dead button would be a worse answer than one. */}
+          Never shown alongside EITHER of the other two (`capped` is already `!frozen`
+          and `!capError`): the freeze is the more actionable refusal once a draw is
+          cut, the save error names the count held and the way down to one, and two
+          alerts explaining the same dead button would be a worse answer than one. */}
       {canEdit && capped && (
         <Alert id={capNoticeId} data-testid="reservations-cap-notice">
           <Lock size={16} />

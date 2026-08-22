@@ -645,14 +645,23 @@ def _enforce_reservation_cap(
 
     **A no-op on a patch that touches neither half of the pair.** A legacy event
     already over the cap (data only reachable pre-#1482, since both write paths now
-    refuse to create one) must still accept an edit to its name, its fee, a
-    reservation's table or window, or anything else that is not itself a
-    reservations-or-draw-type write — the same contract
+    refuse to create one) must still accept an edit to its name, its fee, or anything
+    else that is not itself a reservations-or-draw-type write — the same contract
     :func:`_enforce_group_set_frozen` already states for the freeze ("every event
     edit that is not a reservation add, remove or reorder succeeds"). A cap that
     fired on every patch to such a row, whatever the payload touched, would turn its
     mere existence into a standing refusal — which is not what "at most one
     reservation, going forward" means.
+
+    **That escape hatch serves API and MCP callers, not the event editor.** The web
+    client's ``eventToUpdateBody`` always spreads ``reservations`` and always takes
+    ``draw_type`` off ``drawSettingsToApi`` (deliberately, and pinned by
+    ``web-client/src/components/tournaments/data/api.test.ts``), so **every** save
+    from the editor touches the pair and none of them reach this early return — a
+    legacy over-cap event is refused in the editor by the client's own resolver rule
+    before a request is even built. A caller that patches one field at a time is the
+    only one this branch is reachable from, and it is the one that needs it: without
+    it, such a row could never be renamed, only deleted.
     """
     if updates.reservations is None and updates.draw_settings is None:
         return
