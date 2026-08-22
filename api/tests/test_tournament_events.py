@@ -1045,6 +1045,92 @@ async def test_update_event_cut_legacy_round_robin_resending_same_reservations_h
             ),
         )
 
+    # ----- the arm that actually DISCRIMINATES the ordering ------------------
+    # Neither payload above can tell the two orders apart: the first trips only the
+    # cap (the set and its order are unchanged, so the freeze is silent), and the
+    # second trips only the freeze (one reservation is under the cap, so the cap is
+    # silent). This one trips BOTH — a third reservation changes the id set AND
+    # takes the count to three — so which exception comes out is decided purely by
+    # which guard `update_event` asks first. It must be the freeze's 409: "delete the
+    # draw first" is the instruction a director can act on, and a 422 telling them to
+    # merge their tables is unactionable while the draw still stands. Swap the two
+    # calls in `update_event` and this reds with an
+    # `EventReservationCapExceededError`.
+    with pytest.raises(GroupSetFrozenError):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "reservations": [
+                        _reservation_entry(group_a),
+                        _reservation_entry(group_b),
+                        {
+                            "name": "Reservation C",
+                            "slot": {
+                                "date": "2026-06-13",
+                                "start": "13:00",
+                                "end": "16:30",
+                            },
+                            "table_ids": [],
+                        },
+                    ],
+                }
+            ),
+        )
+
+
+async def test_update_event_cut_draw_type_flip_over_the_cap_hits_the_freeze_first(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The second half of the ordering (#1482): the **draw-settings** freeze is asked
+    before the cap, too.
+
+    A cut ``rr-then-ko`` event legitimately holds two reservations. A patch flipping it
+    to ``round-robin`` and sending no ``reservations`` key at all leaves the effective
+    pair ``(round-robin, 2)`` — over the cap — so both guards have something to say,
+    and only the order decides which speaks. It must be
+    :class:`DrawTypeFrozenError`'s 409, exactly as this ticket's own edge case states:
+    "``_enforce_draw_settings_frozen`` already refuses it with a 409. The cap never
+    competes."
+
+    This is the discriminating case for that half. Move
+    ``_enforce_reservation_cap`` above ``_enforce_draw_settings_frozen`` in
+    :func:`~app.tournament_events.update_event` and this test reds with an
+    ``EventReservationCapExceededError`` instead.
+    """
+    owner = await make_user(db_session, "events-update-flip-cap-order-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event_with_two_groups(db_session, tournament)
+    event_id = event.id
+
+    with pytest.raises(DrawTypeFrozenError):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {"draw_type": "round-robin", "qualifiers_per_group": None}
+            ),
+        )
+
+    # Refused before the write: the draw type and both reservations stand.
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert row.draw_settings.draw_type is DrawType.rr_then_ko
+    assert [group.reservation.name for group in row.groups] == [
+        "Reservation A",
+        "Reservation B",
+    ]
+
 
 async def test_update_event_frozen_group_reorder_is_refused(
     db_session: AsyncSession,
