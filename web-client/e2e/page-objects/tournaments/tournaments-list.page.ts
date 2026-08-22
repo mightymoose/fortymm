@@ -44,6 +44,34 @@ export class TournamentsListPage {
     return this.page.getByRole('button', { name: 'New tournament' }).first()
   }
 
+  /** The list's search box, by its accessible name. The box holds its own raw
+   * text buffer and only SEEDS from the URL, so what it reads after the URL moves
+   * underneath it is the whole subject of the url-resync spec. */
+  get searchInput(): Locator {
+    return this.page.getByRole('textbox', { name: 'Search tournaments by name' })
+  }
+
+  /** A status-filter tab (`All`, `Live`, ...). The active one carries
+   * `aria-selected="true"`, which is what `toHaveAttribute` reads. */
+  statusTab(label: string): Locator {
+    return this.page.getByRole('tab', { name: label, exact: true })
+  }
+
+  /** A tournament card's full-card open target, keyed on the name the organizer
+   * reads — so "the card is back" means the grid really stopped filtering. */
+  card(name: string): Locator {
+    return this.page.getByRole('button', { name, exact: true })
+  }
+
+  /** The app shell's own "Tournaments" entry. It is `to: '/tournaments'` with no
+   * search, so clicking it while a filter is active is a SAME-ROUTE navigation:
+   * the URL drops `q`/`status` and the list page never unmounts. */
+  get sidebarTournamentsLink(): Locator {
+    return this.page
+      .locator('#app-shell-sidebar')
+      .getByRole('link', { name: 'Tournaments' })
+  }
+
   get dialog(): Locator {
     return this.page.getByRole('dialog')
   }
