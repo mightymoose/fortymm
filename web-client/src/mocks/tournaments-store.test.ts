@@ -678,8 +678,11 @@ describe('the rest of the event surface still holds', () => {
   function createTenReservationEvent() {
     const result = createEvent(TOURNAMENT, {
       name: 'Ten-reservation Singles',
+      // rr-then-ko (#1482): the one draw type ten reservations does not exceed the
+      // cap on.
+      draw_type: 'rr-then-ko',
+      qualifiers_per_group: 2,
       format: 'singles',
-      draw_type: 'round-robin',
       entry_fee: 0,
       timezone: 'America/Chicago',
       slot: SLOT,
@@ -752,9 +755,9 @@ describe('transitionTournament', () => {
   const DRAFT = SUMMER_SLAM_ID // seeded `draft`, owned
   const PUBLISHED = BAY_AREA_OPEN_ID // seeded `published`, owned
   const NOT_MINE = CLUB_CHAMPS_ID // seeded `published`, can_edit: false
-  /** `DRAFT`'s only event: round-robin, 8 entrants, a draw already cut across its two
-   * groups — i.e. the one seeded event whose draw is CURRENT, which is what makes that
-   * tournament the only one in the seed that can go live at all. */
+  /** `DRAFT`'s only event: round-robin, 8 entrants, a draw already cut across its one
+   * group (#1482) — i.e. the one seeded event whose draw is CURRENT, which is what
+   * makes that tournament the only one in the seed that can go live at all. */
   const SLAM_EVENT = 'ev-slam-open'
 
   const LEGAL: [TournamentStatus, TournamentStatus][] = [
@@ -1314,6 +1317,134 @@ describe('draft visibility', () => {
   })
 })
 
+// #1482: a non-`rr-then-ko` event holds AT MOST ONE reservation — every other draw
+// type runs its whole stage as one group (ADR 20260808), so a second reservation would
+// be dead data no fixture could ever be dealt into. Zero stays legal; this is a
+// ceiling, not a floor. The mock enforces the SAME 422 the server does (`_enforce_
+// reservation_cap` / `enforce_event_reservation_cap`, `api/app/schemas/tournament.py`)
+// so a web-client test cannot pass against a server that does not exist.
+describe('the reservation cap (#1482)', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  it('refuses a CREATE of a round-robin event with more than one reservation', () => {
+    const result = createEvent(TOURNAMENT, {
+      name: 'Over-cap Singles',
+      format: 'singles',
+      draw_type: 'round-robin',
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+      reservations: [
+        { name: 'Reservation A', slot: SLOT, table_ids: [] },
+        { name: 'Reservation B', slot: SLOT, table_ids: [] },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+  })
+
+  it('accepts a CREATE of an rr-then-ko event with more than one reservation', () => {
+    const result = createEvent(TOURNAMENT, {
+      name: 'Two-stage Singles',
+      format: 'singles',
+      draw_type: 'rr-then-ko',
+      qualifiers_per_group: 2,
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+      reservations: [
+        { name: 'Reservation A', slot: SLOT, table_ids: [] },
+        { name: 'Reservation B', slot: SLOT, table_ids: [] },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('accepts a CREATE of a round-robin event with zero reservations — a ceiling, not a floor', () => {
+    const result = createEvent(TOURNAMENT, {
+      name: 'Zero-reservation Singles',
+      format: 'singles',
+      draw_type: 'round-robin',
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('refuses a PATCH sending only reservations, more than one, against a stored round-robin event', () => {
+    // `EMPTY_SINGLES` is seeded round-robin with no reservations at all.
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      reservations: [
+        { name: 'Reservation A', slot: SLOT, table_ids: [] },
+        { name: 'Reservation B', slot: SLOT, table_ids: [] },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+  })
+
+  it('accepts a PATCH that leaves a round-robin event at exactly one reservation', () => {
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      reservations: [{ name: 'Reservation A', slot: SLOT, table_ids: [] }],
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  // The cap reads the EFFECTIVE pair: a PATCH that sends only `draw_type`, against a
+  // stored event already holding more than one reservation, is judged against the
+  // reservation count it would be LEFT holding — the stored one — not against a count
+  // this payload never mentions. Built via a fresh `rr-then-ko` create (legally holding
+  // two) rather than off a seeded fixture, so the claim stands on its own.
+  it('refuses a PATCH sending only draw_type against a stored event already holding more than one reservation', () => {
+    const created = createEvent(TOURNAMENT, {
+      name: 'Two-stage For A Flip',
+      format: 'singles',
+      draw_type: 'rr-then-ko',
+      qualifiers_per_group: 2,
+      entry_fee: 0,
+      timezone: 'America/Chicago',
+      slot: SLOT,
+      match_settings: { rated: false, length_games: 3 },
+      reservations: [
+        { name: 'Reservation A', slot: SLOT, table_ids: [] },
+        { name: 'Reservation B', slot: SLOT, table_ids: [] },
+      ],
+    })
+    if (!created.ok) throw new Error('setup create failed')
+
+    const result = updateEvent(TOURNAMENT, created.event.id, { draw_type: 'round-robin' })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.status).toBe(422)
+  })
+
+  // …and the flip the OTHER way is always legal — the cap only narrows.
+  it('accepts a PATCH flipping round-robin to rr-then-ko while holding more than one reservation', () => {
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      draw_type: 'rr-then-ko',
+      qualifiers_per_group: 2,
+      reservations: [
+        { name: 'Reservation A', slot: SLOT, table_ids: [] },
+        { name: 'Reservation B', slot: SLOT, table_ids: [] },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+  })
+})
+
 // The draw (ADR-0786). A mock that were more permissive than the server it stands in
 // for would be a trap: a Generate button that "worked" in `npm run dev` and 422'd in
 // production would look like a server bug rather than the missing generator it is. So
@@ -1323,8 +1454,12 @@ describe('cutting and un-cutting a draw', () => {
 
   const FOREIGN = CLUB_CHAMPS_ID // `u-office`'s, published: readable, not writable
   const FOREIGN_EVENT = 'ev-cc-open'
-  /** Round-robin, two groups, nine entrants — the seed's one cuttable (and pre-cut)
-   * event, because round-robin is the only draw type with a generator today. */
+  /** Round-robin, one group, nine entrants, cut — the seed's `ev-u1200` (#1482: a
+   * round-robin event holds at most one reservation, so this is also the store's ONE
+   * cuttable round-robin event, because round-robin is the only draw type with a
+   * generator today). There is no seeded round-robin event with two groups any more —
+   * that state is reachable only through data minted before the cap existed, and this
+   * store mints fresh on every run, so it seeds none. */
   const ROUND_ROBIN = 'ev-u1200'
 
   const eventOf = (tournamentId: string, eventId: string) =>
@@ -1341,10 +1476,14 @@ describe('cutting and un-cutting a draw', () => {
 
   it('seeds the round-robin event ALREADY DRAWN, and every other event with no draw', () => {
     const drawn = eventOf(TOURNAMENT, ROUND_ROBIN)
-    // 9 entrants snaked across 2 groups → groups of 5 and 4 → C(5,2) + C(4,2) = 16 pairs.
-    expect(drawn.fixtures).toHaveLength(16)
+    // 9 entrants, ONE group (#1482): C(9,2) = 36 pairs.
+    expect(drawn.fixtures).toHaveLength(36)
+    // One other event in this seed is ALSO drawn: `ev-two-stage-cut` (`rr-then-ko`, the
+    // group-set-freeze fixture below) — deliberate, so this sweep excludes it by name
+    // rather than asserting a state the seed no longer has.
+    const alsoDrawn = new Set(['ev-two-stage-cut'])
     for (const other of findTournament(TOURNAMENT)!.events.filter(
-      (e) => e.id !== ROUND_ROBIN,
+      (e) => e.id !== ROUND_ROBIN && !alsoDrawn.has(e.id),
     )) {
       // `[]`, not null: an event with no draw is EMPTY, and empty is a state.
       expect(other.fixtures).toEqual([])
@@ -1390,22 +1529,28 @@ describe('cutting and un-cutting a draw', () => {
     expect(again.fixtures).toEqual(before)
   })
 
-  it('re-cuts WHOLESALE against the event as it stands now — new groups, new draw', () => {
-    // The plan is made against the CURRENT config, never patched onto the old one. Two
-    // groups of 5 + 4 (16 pairs) become one group of 9 (36 pairs) — and the fixtures that
-    // referred to the old groups are gone, not re-pointed.
+  it('re-cuts WHOLESALE against the event as it stands now — a fresh reservation, a fresh group, a fresh draw', () => {
+    // The plan is made against the CURRENT config, never patched onto the old one. #1482
+    // caps a round-robin event at one reservation, so what varies here is the
+    // reservation's IDENTITY rather than its count: the stored one is dropped for a
+    // newly-named one, and the fixtures that referred to the OLD group are gone, not
+    // re-pointed at the new one.
+    const before = eventOf(TOURNAMENT, ROUND_ROBIN).groups.map((g) => g.id)
     expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true) // the freeze lifts first
     updateEvent(TOURNAMENT, ROUND_ROBIN, { reservations: [reservationNamed('Reservation One')] })
     // The one group the event now has — a freshly MINTED id, not a name the test chose,
-    // because the two old groups were dropped and this one was added.
-    const single = eventOf(TOURNAMENT, ROUND_ROBIN).groups.map((g) => g.id)
-    expect(single).toHaveLength(1)
+    // because the old reservation (and its group) was dropped and this one was added.
+    const after = eventOf(TOURNAMENT, ROUND_ROBIN).groups.map((g) => g.id)
+    expect(after).toHaveLength(1)
+    expect(after).not.toEqual(before)
 
     const result = cutDraw(TOURNAMENT, ROUND_ROBIN)
 
     if (!result.ok) throw new Error(`expected a cut, got ${result.status}`)
+    // Still one group of nine — the count did not change, the reservation did — so the
+    // fixture count is unchanged and every one of them names the NEW group, not the old.
     expect(result.fixtures).toHaveLength(36) // C(9,2)
-    expect(new Set(result.fixtures.map((f) => f.group_id))).toEqual(new Set(single))
+    expect(new Set(result.fixtures.map((f) => f.group_id))).toEqual(new Set(after))
   })
 
   it('un-cutting empties the draw; un-cutting again is still a success (idempotent DELETE)', () => {
@@ -1429,15 +1574,12 @@ describe('cutting and un-cutting a draw', () => {
   })
 
   it('refuses a field too small for its groups — a group of one has nobody to play', () => {
-    // Three reservations, three entrants… would be three groups of one. The server
-    // refuses it, so the mock must: a group of one is not a competition.
+    // ONE reservation (#1482 caps round-robin at one), one entrant: still a group too
+    // small to play — the refusal this test is about needs no second or third
+    // reservation to reach it.
     updateEvent(TOURNAMENT, EMPTY_SINGLES, {
       draw_type: 'round-robin',
-      reservations: [
-        reservationNamed('Reservation A'),
-        reservationNamed('Reservation B'),
-        reservationNamed('Reservation C'),
-      ],
+      reservations: [reservationNamed('Reservation A')],
     })
     enterEvent(TOURNAMENT, EMPTY_SINGLES) // one entrant: the dev user
 
@@ -1446,11 +1588,11 @@ describe('cutting and un-cutting a draw', () => {
     if (result.ok) return
     expect(result.status).toBe(422)
     // The WHOLE sentence, not a fragment: the counts are the message, and both nouns are
-    // inflected exactly as `_snake` inflects them ("1 entrant", "3 groups"). The mock used
-    // to say "1 entrants across 3 group(s)" — a sentence the API has never said, invisible
+    // inflected exactly as `_snake` inflects them ("1 entrant", "1 group"). The mock used
+    // to say "1 entrants across N group(s)" — a sentence the API has never said, invisible
     // for as long as every assertion on it was a `toContain` of the tail.
     expect(result.status === 422 && result.detail).toBe(
-      '1 entrant across 3 groups would leave a group with fewer than 2 entrants, who ' +
+      '1 entrant across 1 group would leave a group with fewer than 2 entrants, who ' +
         'would have nobody to play.',
     )
   })
@@ -1881,7 +2023,13 @@ describe('cutting a round-robin-then-knockout draw', () => {
     asRrThenKo(TWO_STAGE, 2, 2)
     expect(uncutDraw(TOURNAMENT, TWO_STAGE).ok).toBe(true)
 
-    const patched = updateEvent(TOURNAMENT, TWO_STAGE, { draw_type: 'round-robin' })
+    // #1482: round-robin holds at most one reservation, so the same PATCH that drops
+    // the type also has to leave the event at one — the claim under test here
+    // (`qualifiers_per_group` clearing) is independent of that count either way.
+    const patched = updateEvent(TOURNAMENT, TWO_STAGE, {
+      draw_type: 'round-robin',
+      reservations: [reservationNamed('Reservation 1')],
+    })
 
     expect(patched.ok).toBe(true)
     expect(eventOf(TWO_STAGE).qualifiers_per_group).toBeNull()
@@ -2165,7 +2313,10 @@ describe('the draw-type catalogue', () => {
 describe('the group set freezes while a draw exists', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const ROUND_ROBIN = 'ev-u1200'
+  // #1482: `rr-then-ko` is the one draw type the reservation cap does not apply to,
+  // so it is where this suite's multi-reservation coverage now lives — `ev-u1200`
+  // itself holds only one now.
+  const TWO_STAGE = 'ev-two-stage-cut'
   const reservationsOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!.reservations
 
@@ -2180,9 +2331,9 @@ describe('the group set freezes while a draw exists', () => {
   })
 
   it('refuses a PATCH that removes a reservation whose group the draw was dealt across', () => {
-    const [reservationA] = reservationsOf(ROUND_ROBIN)
+    const [reservationA] = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [citing(reservationA)],
     })
 
@@ -2198,15 +2349,15 @@ describe('the group set freezes while a draw exists', () => {
     // again — because a refusal a director cannot act on is just a wall.
     expect(result.detail).toContain('remove the draw first')
     // …and the reservations are untouched: a refused write writes nothing.
-    expect(reservationsOf(ROUND_ROBIN)).toHaveLength(2)
+    expect(reservationsOf(TWO_STAGE)).toHaveLength(2)
   })
 
   // An added group is COUNTED, not named: it has no position yet, and the label it
   // would land on is one an existing group wears today (see the collision test below).
   it('refuses a PATCH that ADDS a reservation — the arriving group is counted, not named', () => {
-    const reservations = reservationsOf(ROUND_ROBIN)
+    const reservations = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       // No `id`: that IS the addition, now that a client cannot author one.
       reservations: [
         ...reservations.map(citing),
@@ -2218,7 +2369,7 @@ describe('the group set freezes while a draw exists', () => {
     if (result.ok || result.status !== 409) throw new Error('expected a 409')
     expect(result.detail).toContain('1 new group would arrive with no fixtures in it')
     expect(result.detail).not.toContain('“Group C”')
-    expect(reservationsOf(ROUND_ROBIN)).toHaveLength(2)
+    expect(reservationsOf(TWO_STAGE)).toHaveLength(2)
   })
 
   // The collision the naming bug produced: replacing the FIRST reservation removes the
@@ -2228,9 +2379,9 @@ describe('the group set freezes while a draw exists', () => {
   // departing and arriving. The added side is counted now, so no label can appear on
   // both sides of the "; and " join.
   it('refuses a PATCH that replaces the FIRST reservation — no label departs and arrives at once', () => {
-    const [reservationA, reservationB] = reservationsOf(ROUND_ROBIN)
+    const [reservationA, reservationB] = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [
         { name: 'Reservation A (new)', slot: SLOT, table_ids: [] },
         citing(reservationB),
@@ -2245,7 +2396,7 @@ describe('the group set freezes while a draw exists', () => {
     for (const label of departing.match(/Group [A-Z]+/g) ?? []) {
       expect(arriving).not.toContain(label)
     }
-    expect(reservationsOf(ROUND_ROBIN)).toEqual([reservationA, reservationB])
+    expect(reservationsOf(TWO_STAGE)).toEqual([reservationA, reservationB])
   })
 
   // Only the GROUP's identity is frozen. A reservation's tables and its window stay
@@ -2253,9 +2404,9 @@ describe('the group set freezes while a draw exists', () => {
   // (a table breaks, a table frees up), and a director who cannot record that would have
   // to un-cut a draw that is *correct*.
   it('ALLOWS a venue edit — same reservation ids, new tables and a new window', () => {
-    const reservations = reservationsOf(ROUND_ROBIN)
+    const reservations = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       reservations: reservations.map((r) => ({
         ...citing(r),
         name: `${r.name} (moved)`,
@@ -2265,10 +2416,10 @@ describe('the group set freezes while a draw exists', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(reservationsOf(ROUND_ROBIN)[0].table_ids).toEqual(['t9'])
+    expect(reservationsOf(TWO_STAGE)[0].table_ids).toEqual(['t9'])
     // The ids — and therefore every fixture drawn into their mapped groups — survived
     // the edit.
-    expect(reservationsOf(ROUND_ROBIN).map((r) => r.id)).toEqual(
+    expect(reservationsOf(TWO_STAGE).map((r) => r.id)).toEqual(
       reservations.map((r) => r.id),
     )
   })
@@ -2277,18 +2428,18 @@ describe('the group set freezes while a draw exists', () => {
   // unchanged, so the freeze has nothing to say, and the positions follow the payload's
   // order.
   it('ALLOWS a reorder of exactly the reservations the draw was cut across', () => {
-    const [reservationA, reservationB] = reservationsOf(ROUND_ROBIN)
+    const [reservationA, reservationB] = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [citing(reservationB), citing(reservationA)],
     })
 
     expect(result.ok).toBe(true)
-    expect(reservationsOf(ROUND_ROBIN).map((r) => r.id)).toEqual([
+    expect(reservationsOf(TWO_STAGE).map((r) => r.id)).toEqual([
       reservationB.id,
       reservationA.id,
     ])
-    expect(reservationsOf(ROUND_ROBIN).map((r) => r.position)).toEqual([0, 1])
+    expect(reservationsOf(TWO_STAGE).map((r) => r.position)).toEqual([0, 1])
   })
 
   it('leaves an UNDRAWN event’s reservations wholesale-replaceable, as they have always been', () => {
@@ -2306,15 +2457,15 @@ describe('the group set freezes while a draw exists', () => {
   })
 
   it('un-freezes the moment the draw is removed', () => {
-    const before = reservationsOf(ROUND_ROBIN).map((r) => r.id)
-    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true)
+    const before = reservationsOf(TWO_STAGE).map((r) => r.id)
+    expect(uncutDraw(TOURNAMENT, TWO_STAGE).ok).toBe(true)
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [{ name: 'Reservation A', slot: SLOT, table_ids: [] }],
     })
 
     expect(result.ok).toBe(true)
-    const after = reservationsOf(ROUND_ROBIN)
+    const after = reservationsOf(TWO_STAGE)
     expect(after).toHaveLength(1)
     // A brand-new reservation, with a brand-new id: the two the draw was cut across
     // (via their mapped groups) are gone, and this one was MINTED rather than named by
@@ -2331,7 +2482,9 @@ describe('the group set freezes while a draw exists', () => {
 describe('a reservations PATCH citing an id the event does not have', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const ROUND_ROBIN = 'ev-u1200' // seeded WITH a draw
+  // #1482: `rr-then-ko`, so a cut draw can still stand here to exercise the freeze
+  // ordering below regardless of the reservation cap.
+  const TWO_STAGE = 'ev-two-stage-cut' // seeded WITH a draw
   const eventOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
 
@@ -2340,22 +2493,24 @@ describe('a reservations PATCH citing an id the event does not have', () => {
   it('is a 422 naming the entry, and writes nothing', () => {
     const before = eventOf(EMPTY_SINGLES).reservations
 
+    // ONE entry, citing the unknown id — #1482 caps EMPTY_SINGLES (round-robin) at
+    // one reservation, so a second entry here would trip that cap instead of the
+    // refusal this test is about.
     const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
-      reservations: [
-        { name: 'Reservation A', slot: SLOT, table_ids: [] },
-        { id: UNKNOWN, name: 'Reservation B', slot: SLOT, table_ids: [] },
-      ],
+      reservations: [{ id: UNKNOWN, name: 'Reservation B', slot: SLOT, table_ids: [] }],
     })
 
     expect(result.ok).toBe(false)
-    if (result.ok || result.status !== 422) throw new Error('expected a 422')
-    // The index is what lets the handler build `loc: ["body","reservations",1,"id"]` —
+    if (result.ok || result.status !== 422 || 'reservationCapExceeded' in result) {
+      throw new Error('expected the per-entry 422')
+    }
+    // The index is what lets the handler build `loc: ["body","reservations",0,"id"]` —
     // the reservations are a list, and a refusal a client cannot attribute to a row it
     // cannot render.
-    expect(result.index).toBe(1)
+    expect(result.index).toBe(0)
     expect(result.reservationId).toBe(UNKNOWN)
     expect(result.detail).toBe('This event has no reservation with that id.')
-    // Judged BEFORE anything is assigned: the id-less first entry was not minted either.
+    // Judged BEFORE anything is assigned.
     expect(eventOf(EMPTY_SINGLES).reservations).toEqual(before)
   })
 
@@ -2363,7 +2518,7 @@ describe('a reservations PATCH citing an id the event does not have', () => {
   // answers the 409 that names its groups rather than this 422. A cited-but-unknown id
   // is an addition as far as a standing draw is concerned.
   it('loses to the group-set freeze on an event whose draw is cut', () => {
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [{ id: UNKNOWN, name: 'Reservation Z', slot: SLOT, table_ids: [] }],
     })
 
@@ -2379,12 +2534,14 @@ describe('a reservations PATCH citing an id the event does not have', () => {
 describe('the draw type freezes while a draw exists', () => {
   beforeEach(() => resetTournamentsStore())
 
-  const ROUND_ROBIN = 'ev-u1200'
+  // #1482: `rr-then-ko`, the one draw type the reservation cap does not apply to, so
+  // this block's own multi-reservation cases keep working undisturbed by it.
+  const TWO_STAGE = 'ev-two-stage-cut'
   const eventOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
 
   it('refuses a PATCH that re-labels the draw type of a cut draw', () => {
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       draw_type: 'single-elim',
     })
 
@@ -2395,10 +2552,10 @@ describe('the draw type freezes while a draw exists', () => {
     // whose type they cannot change and whose fixtures they were never told to remove.
     // (It is not that the target type is unplannable: `single-elim` has had a generator
     // since #785, and since ADR 20260726 every member of the enum does. The freeze is
-    // about the fixtures already dealt AS a round robin.)
+    // about the fixtures already dealt AS this draw type.)
     expect(result.status === 409 && result.detail).toContain('remove the draw')
     // A refused write writes nothing.
-    expect(eventOf(ROUND_ROBIN).draw_type).toBe('round-robin')
+    expect(eventOf(TWO_STAGE).draw_type).toBe('rr-then-ko')
   })
 
   // ⚠️ The one that keeps the freeze from eating the edits it exists to permit. The
@@ -2406,16 +2563,16 @@ describe('the draw type freezes while a draw exists', () => {
   // tables. A guard that fired on the mere *presence* of `draw_type` would refuse that,
   // and the reservations editor would be unusable against a server that allows it.
   it('ALLOWS a PATCH that re-sends the SAME draw type (the whole-form save)', () => {
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
-      draw_type: 'round-robin',
-      reservations: eventOf(ROUND_ROBIN).reservations.map((r) => ({
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+      draw_type: 'rr-then-ko',
+      reservations: eventOf(TWO_STAGE).reservations.map((r) => ({
         ...r,
         table_ids: ['t9'],
       })),
     })
 
     expect(result.ok).toBe(true)
-    expect(eventOf(ROUND_ROBIN).reservations[0].table_ids).toEqual(['t9'])
+    expect(eventOf(TWO_STAGE).reservations[0].table_ids).toEqual(['t9'])
   })
 
   it('leaves an UNDRAWN event’s draw type free to change', () => {
@@ -2428,14 +2585,18 @@ describe('the draw type freezes while a draw exists', () => {
   })
 
   it('un-freezes the moment the draw is removed', () => {
-    expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true)
+    expect(uncutDraw(TOURNAMENT, TWO_STAGE).ok).toBe(true)
 
-    const result = updateEvent(TOURNAMENT, ROUND_ROBIN, {
+    // #1482: `single-elim` holds at most one reservation, so the same PATCH that lifts
+    // the type also has to leave it at one — exactly what a director flipping types
+    // after un-cutting a two-reservation draw would send in one save.
+    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
       draw_type: 'single-elim',
+      reservations: [{ name: 'Reservation A', slot: SLOT, table_ids: [] }],
     })
 
     expect(result.ok).toBe(true)
-    expect(eventOf(ROUND_ROBIN).draw_type).toBe('single-elim')
+    expect(eventOf(TWO_STAGE).draw_type).toBe('single-elim')
   })
 })
 
@@ -2469,17 +2630,18 @@ describe('the schedule solve tick — calling on a live tournament', () => {
 
   it('calls the imminent fixtures — placed within 10 minutes of the day’s first ball — with one notification counted', () => {
     stepClock()
-    // Summer Slam: one drawn round-robin event, two reservations (t1/t2 from 09:00,
-    // t3/t4 from 11:00). LIVE, so the apply may promise.
+    // Summer Slam: one drawn round-robin event, ONE reservation (#1482) across all
+    // four tables (t1-t4), all from 09:00. LIVE, so the apply may promise.
     placeInStatus(DRAFT_TOURNAMENT, 'live')
 
     const detail = solveToCompletion(DRAFT_TOURNAMENT)
 
     const fixtures = detail.events.flatMap((e) => e.fixtures)
     const called = fixtures.filter((f) => f.pinned_at !== null)
-    // Reservation A's first wave — one fixture per reservation table at the window's start —
-    // is inside the call-ahead window; everything later is not.
-    expect(called).toHaveLength(2)
+    // The first wave — one fixture per table at the window's start — is inside the
+    // call-ahead window; everything later is not. Four tables, all starting together
+    // now that the reservation is one (#1482).
+    expect(called).toHaveLength(4)
     for (const fixture of called) {
       // The wire now carries a `FixtureTimeRead` object (ADR "tournament times are
       // timezone-aware instants"): a UTC instant for geometry + the venue-local label.
@@ -2494,7 +2656,7 @@ describe('the schedule solve tick — calling on a live tournament', () => {
     // The ledger row reports the calls it made.
     expect(detail.latest_schedule_solve).toMatchObject({
       status: 'succeeded',
-      fixtures_pinned: 2,
+      fixtures_pinned: 4,
     })
   })
 
@@ -2523,7 +2685,7 @@ describe('the schedule solve tick — calling on a live tournament', () => {
     const called = again.events
       .flatMap((e) => e.fixtures)
       .filter((f) => f.pinned_at !== null)
-    expect(called).toHaveLength(2)
+    expect(called).toHaveLength(4)
     // Still exactly one notification each: the pass skips pinned fixtures, so a
     // re-solve cannot quietly spend the players' attention twice.
     expect(called.every((f) => f.call_notified_count === 1)).toBe(true)

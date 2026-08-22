@@ -591,7 +591,12 @@ async def test_patching_away_from_rr_then_ko_clears_the_qualifier_count(
     that prevents it, which is exactly why this test exists."""
     client, _ = authed_client
     tournament_id = await _tournament(client)
-    event_id = (await _create_event(client, tournament_id)).json()["id"]
+    # One reservation, not the default three (#1482 caps a round-robin event at
+    # one): this test is about the SETTINGS clearing when the draw type moves, not
+    # about how many reservations the event has.
+    event_id = (
+        await _create_event(client, tournament_id, reservations=[RESERVATIONS[0]])
+    ).json()["id"]
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",
@@ -704,7 +709,12 @@ async def test_patching_away_from_rr_then_ko_reads_back_no_qualifier_count(
     carrying a K."""
     client, _ = authed_client
     tournament_id = await _tournament(client)
-    event_id = (await _create_event(client, tournament_id)).json()["id"]
+    # One reservation, not the default three (#1482 caps a round-robin event at
+    # one): this test is about the READ reflecting the cleared count, not about how
+    # many reservations the event has.
+    event_id = (
+        await _create_event(client, tournament_id, reservations=[RESERVATIONS[0]])
+    ).json()["id"]
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event_id}",

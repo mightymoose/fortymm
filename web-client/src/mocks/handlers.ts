@@ -1996,6 +1996,27 @@ export const handlers = [
         body as components['schemas']['TournamentEventCreate'],
       )
       if (!result.ok) {
+        // #1482: a non-`rr-then-ko` event carrying more than one reservation. Shaped
+        // as the CREATE schema's own `model_validator(mode="after")` produces it, not
+        // as the PATCH adapter's — Pydantic folds a `ValueError` raised inside a
+        // validator into the model's own `ValidationError`, whose `loc` is the model
+        // ROOT (`["body"]`, since the refusal is about the pair, not one field) and
+        // whose `msg` carries Pydantic's own "Value error, " prefix.
+        if (result.status === 422) {
+          return HttpResponse.json(
+            {
+              detail: [
+                {
+                  type: 'value_error',
+                  loc: ['body'],
+                  msg: `Value error, ${result.detail}`,
+                  input: body,
+                },
+              ],
+            },
+            { status: 422 },
+          )
+        }
         return detail(
           result.status === 403
             ? 'Only the creator can add events to this tournament.'
@@ -2245,6 +2266,30 @@ export const handlers = [
         // orphaning the fixtures drawn into it. The store's sentence says so — naming
         // the groups — and says how to get out of it.
         if (result.status === 409) return detail(result.detail, 409)
+        // #1482: a non-`rr-then-ko` event that would be left holding more than one
+        // reservation. Checked BEFORE the per-entry shape below — this arm carries no
+        // `index` at all, because the refusal is about the LIST's length against the
+        // draw type, not about any one entry, and it has to hold even when the payload
+        // sends no `reservations` key (a bare `draw_type` flip against a stored
+        // over-cap event). `loc` names the `reservations` ARRAY, never one entry's
+        // `id` — the service-layer adapter's own shape
+        // (`_event_reservation_cap_exceeded`, `api/app/tournaments.py`), not Pydantic's
+        // fold: no "Value error, " prefix, and `input: null`.
+        if (result.status === 422 && 'reservationCapExceeded' in result) {
+          return HttpResponse.json(
+            {
+              detail: [
+                {
+                  type: 'value_error',
+                  loc: ['body', 'reservations'],
+                  msg: result.detail,
+                  input: null,
+                },
+              ],
+            },
+            { status: 422 },
+          )
+        }
         // An entry citing an id this event does not have (ADR 20260801). Shaped as a
         // **field** refusal — FastAPI's per-field array, `loc` naming the entry's index —
         // because that is what the route really sends and what `validationFields`

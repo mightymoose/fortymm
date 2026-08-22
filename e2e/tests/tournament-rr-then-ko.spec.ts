@@ -103,7 +103,7 @@ const KNOCKOUT_MATCHES = 5
  * *derived* from it: who advances is "the top `K` of each group", and that is only a
  * statement a test can make in advance if it knows who is in each group. Asserting it on
  * the page is a bonus — the deal following the group order is `tournament-group-order`'s
- * subject at ten groups, and this is not a second copy of that proof.
+ * subject at six groups, and this is not a second copy of that proof.
  */
 const GROUP_MEMBERS: ReadonlyArray<ReadonlyArray<number>> = [
   [0, 5, 6, 11],
@@ -369,7 +369,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     // Top to bottom in position order. One statement pinning both the count and the
     // order — a draw whose sections came back in any other order reds here. (What that
     // order is *derived from* — `position`, and never the group ids — is
-    // `tournament-group-order.spec.ts`'s subject, at the ten groups it takes to tell the
+    // `tournament-group-order.spec.ts`'s subject, at the six groups it takes to tell the
     // two apart reliably.)
     await expect(detail.groupDrawHeadings(eventId)).toHaveText(GROUP_LABELS)
     for (const [index, group] of groups.entries()) {

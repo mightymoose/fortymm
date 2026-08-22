@@ -137,6 +137,26 @@ const reservationEntrySchema: z.ZodType<ReservationEntry, ReservationEntry> =
  *   name, so only the *box* could ever author a blank one — and it did. (The id it no
  *   longer mints at all; see `reservationEntrySchema`.)
  */
+/**
+ * The client's own sentence for #1482's reservation cap — raised inline, before the
+ * request ever goes out, so a director sees this rather than the server's prose
+ * (`DEFINITION_OF_COMPLETE`). Takes the count actually held, so "it currently holds
+ * 2" stays true whatever the director's list happens to be.
+ *
+ * Deliberately its own words, not a transplant of the server's `enforce_event_
+ * reservation_cap` sentence: that one is about the WRITE the server just refused
+ * (`api/app/schemas/tournament.py`); this one is about the DRAFT the director is
+ * still editing, before any request exists to refuse.
+ */
+export function reservationCapMessage(count: number): string {
+  return (
+    `This event can hold only one reservation while its draw type is not ` +
+    `“rr-then-ko” — it currently holds ${count}. Remove reservations until ` +
+    `one remains, or switch the draw type to “rr-then-ko”, which can hold ` +
+    `several.`
+  )
+}
+
 export const eventSchema = z.object({
   name: nameSchema,
   format: z.enum(['singles', 'doubles', 'teams']),
@@ -238,6 +258,34 @@ export const eventSchema = z.object({
       code: 'custom',
       path: ['rounds'],
       message: result.error.issues[0].message,
+    })
+  })
+
+  // **The reservation cap (#1482)**: a non-`rr-then-ko` event holds AT MOST ONE
+  // reservation — every other draw type runs its whole stage as one group (ADR
+  // 20260808), so `enforce_event_reservation_cap` (`api/app/schemas/tournament.py`)
+  // refuses a second one at the request boundary. Raised at the ARRAY's own path
+  // (`['reservations']`), the same shape `qualifiersPerGroup` and `rounds` use above:
+  // the refusal is about the LIST against the draw type beside it, not about any one
+  // row, so `firstInvalidSection` (below) already opens the Reservations tab off the
+  // mere truthiness of `errors.reservations` — no change needed there.
+  //
+  // Not enforced by freezing the Basics draw-type select: the reservations are the
+  // thing the director has to change, and freezing the picker would point them at the
+  // wrong tab entirely (Planning's interview, #1482).
+  //
+  // The MESSAGE is the client's own copy (`reservationCapMessage` below), never the
+  // server's sentence — `DEFINITION_OF_COMPLETE`: a raw API detail string never
+  // reaches the UI. The server's own words still arrive verbatim when a director
+  // loses the race and the save is refused anyway (`save-failure.ts`'s `refused` arm,
+  // unchanged by this ticket).
+  .superRefine((values, ctx) => {
+    if (values.drawType === 'rr-then-ko') return
+    if (values.reservations.length <= 1) return
+    ctx.addIssue({
+      code: 'custom',
+      path: ['reservations'],
+      message: reservationCapMessage(values.reservations.length),
     })
   })
 

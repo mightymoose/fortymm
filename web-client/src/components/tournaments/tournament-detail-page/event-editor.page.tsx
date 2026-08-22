@@ -46,6 +46,25 @@ const scoped = (container: Container) => ({
   getReservationNameInputs() {
     return container.queryAllByLabelText('Reservation name')
   },
+  /** The Reservations tab's Add button (`getAddReservationButton` matches either the
+   * header's "Add reservation" or the empty state's "Add first reservation" — #1482's
+   * cap disables whichever renders). */
+  getAddReservationButton() {
+    return container.getByRole('button', { name: /Add (first )?reservation/ })
+  },
+  getRemoveReservationButtons() {
+    return container.queryAllByRole('button', { name: 'Remove reservation' })
+  },
+  /** #1482's cap notice on the Reservations tab — why Add is disabled. */
+  queryReservationsCapNotice() {
+    return container.queryByTestId('reservations-cap-notice')
+  },
+  /** #1482's array-level save refusal — a non-`rr-then-ko` event that would be left
+   * holding more than one reservation. The client's OWN sentence (`event-form.ts`'s
+   * `reservationCapMessage`), never the server's. */
+  queryReservationsCapError() {
+    return container.queryByTestId('reservations-cap-error')
+  },
   /** The red messages under the reservation name boxes, in card order — the
    * Reservations counterpart of `queryFieldError` on Basics and `getRuleErrors()` on
    * Eligibility. */

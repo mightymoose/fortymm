@@ -96,7 +96,13 @@ describe('EventEditor', () => {
     it('drops the count from the body when the director switches away from rr-then-ko', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildRrThenKoEvent({ qualifiersPerGroup: 2 }),
+        // ONE reservation: #1482 caps a round-robin event at one, and this test's own
+        // claim is about `qualifiers_per_group`, not about how many reservations survive
+        // the flip.
+        event: buildRrThenKoEvent({
+          qualifiersPerGroup: 2,
+          reservations: [buildReservation({ id: 'res-a', name: 'Reservation A' })],
+        }),
         onSave,
       })
 
@@ -656,6 +662,119 @@ describe('EventEditor', () => {
   })
 
   /**
+   * #1482: a non-`rr-then-ko` event holds AT MOST ONE reservation. The editor declines
+   * to build a second one (Add disables, with its reason in visible text) — but a
+   * director can still reach an over-cap draft by flipping the Basics draw-type picker
+   * on an event that already holds two (the `rr-then-ko` case, which legally holds
+   * many). Saving THAT must fail in the form, red on the Reservations tab, in the
+   * client's own words — never by freezing the Basics draw-type select, which would
+   * point the director at the wrong tab entirely.
+   */
+  describe('an over-cap reservation list (#1482)', () => {
+    it('disables Add, names the reason, and leaves Remove live once the draft flips off rr-then-ko', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          reservations: [
+            buildReservation({ id: 'res-a', name: 'Reservation A', position: 0 }),
+            buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
+          ],
+        }),
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      expect(eventEditorPage.getAddReservationButton()).toBeEnabled()
+      expect(eventEditorPage.queryReservationsCapNotice()).toBeNull()
+
+      // The draw-type picker is on Basics — leave Reservations to flip it, exactly as
+      // a director would, then come back to see Add react to the unsaved change.
+      await userEvent.click(eventEditorPage.getSectionTab('Basics'))
+      await eventEditorPage.chooseDrawType('Round robin')
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+
+      expect(eventEditorPage.getAddReservationButton()).toBeDisabled()
+      expect(eventEditorPage.queryReservationsCapNotice()).not.toBeNull()
+      for (const button of eventEditorPage.getRemoveReservationButtons()) {
+        expect(button).toBeEnabled()
+      }
+    })
+
+    it('refuses the save, red on Reservations, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          reservations: [
+            buildReservation({ id: 'res-a', name: 'Reservation A', position: 0 }),
+            buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
+          ],
+        }),
+        onSave,
+      })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      // Nothing left the room.
+      expect(onSave).not.toHaveBeenCalled()
+      // A message on a tab you cannot see is indistinguishable from a button that does
+      // nothing — Reservations is where the offending list actually is.
+      expect(eventEditorPage.getSectionTab('Reservations')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      const error = eventEditorPage.queryReservationsCapError()
+      expect(error).not.toBeNull()
+      // The client's OWN sentence — never the server's raw detail string
+      // (`DEFINITION_OF_COMPLETE`), and it names the count actually held.
+      expect(error).toHaveTextContent('2')
+    })
+
+    // Both refusals fire at once — the array-level cap AND a per-row blank name — and
+    // both must still be visible. A read that only checked `errors.reservations.message`
+    // (the shape when the cap is the ONLY reservations error) would go blank the moment
+    // a row error joins it, because RHF nests the array-level message under `.root`
+    // once ANY per-row error exists beside it.
+    it('shows the cap message alongside a per-row name error when both fire together', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          reservations: [
+            buildReservation({ id: 'res-a', name: '' }),
+            buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
+          ],
+        }),
+        onSave,
+      })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(eventEditorPage.getReservationNameErrors()).toEqual(['Name is required.'])
+      expect(eventEditorPage.queryReservationsCapError()).not.toBeNull()
+    })
+
+    // The freeze notice, not this one, once the event is drawn — a director locked out
+    // by a cut draw is told to delete the draw first (the actionable instruction); the
+    // cap notice would be a second, less useful story about the very same dead button.
+    it('shows no cap notice once the draw is cut, even while over cap', async () => {
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          reservations: [
+            buildReservation({ id: 'res-a', name: 'Reservation A', position: 0 }),
+            buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
+          ],
+          fixtures: [buildFixture({ groupId: groupIdFor('res-a') })],
+        }),
+      })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+
+      expect(eventEditorPage.getAddReservationButton()).toBeDisabled()
+      expect(eventEditorPage.queryReservationsCapNotice()).toBeNull()
+    })
+  })
+
+  /**
    * THE data-loss half — and the half that matters most, because client validation
    * only ever prevents the refusals we already know about. Whatever the *next*
    * unknown 422 is, it must not silently eat somebody's work: the sheet stays open,
@@ -877,7 +996,14 @@ describe('EventEditor', () => {
     it('sends an added reservation with NO id, and still cites the stored one', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
       eventEditorPage.render({
-        event: buildEvent({ id: 'ev-1', reservations: [buildReservation({ id: 'res-1' })] }),
+        // rr-then-ko: the ADD this test drives leaves the event holding two
+        // reservations, which #1482 caps everywhere else.
+        event: buildEvent({
+          id: 'ev-1',
+          drawType: 'rr-then-ko',
+          qualifiersPerGroup: 2,
+          reservations: [buildReservation({ id: 'res-1' })],
+        }),
         onSave,
       })
 
@@ -925,7 +1051,15 @@ describe('EventEditor', () => {
       // Named, because a blank name is refused in the form and nothing would be sent —
       // the resolver is doing its job, and this test is about a different one.
       eventEditorPage.render({
-        event: { ...emptyEvent(buildTournament()), name: 'New Event' },
+        event: {
+          ...emptyEvent(buildTournament()),
+          name: 'New Event',
+          // rr-then-ko: two ADDED reservations is exactly what #1482 caps for every
+          // other draw type, and this test's own claim is about the create verb's id
+          // shape, not about which draw type was picked.
+          drawType: 'rr-then-ko',
+          qualifiersPerGroup: 2,
+        },
         onSave,
       })
 
@@ -979,7 +1113,12 @@ describe('EventEditor', () => {
 
     it('freezes nothing when no draw is cut', async () => {
       eventEditorPage.render({
-        event: buildEvent({ id: 'ev-1', reservations: [buildReservation()] }),
+        event: buildEvent({
+          id: 'ev-1',
+          drawType: 'rr-then-ko',
+          qualifiersPerGroup: 2,
+          reservations: [buildReservation()],
+        }),
       })
 
       expect(screen.getByRole('combobox', { name: 'Draw type' })).toBeEnabled()
