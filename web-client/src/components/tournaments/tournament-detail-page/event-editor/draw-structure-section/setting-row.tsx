@@ -13,6 +13,9 @@ import type { SettingOwnership } from '../../../data/draw-structure'
 const OWNERSHIP_LABEL: Record<SettingOwnership, string> = {
   automatic: 'Automatic',
   manual: 'Yours',
+  // #1425: a required setting nobody has filled in is not `Automatic` — that badge
+  // would claim the system chose a number nobody chose.
+  unset: 'Unset',
 }
 
 export interface SettingRowProps {

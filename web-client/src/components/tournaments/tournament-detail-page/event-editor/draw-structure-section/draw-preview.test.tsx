@@ -212,6 +212,110 @@ describe('DrawPreview', () => {
         expect(drawPreviewPage.group(letter).queryTooSmall()).toBeInTheDocument()
       }
     })
+
+    /**
+     * #1425. The reference's world has no unset qualifier count; ours does. A draw
+     * whose required qualifier setting nobody has chosen is not *sound* and not
+     * *impossible* — it is unfinished, and the heading names the one setting that
+     * finishes it.
+     */
+    describe('when nobody has chosen a qualifier count', () => {
+      const unset = () => buildDrawPreviewPropsFor({ qualifiersMode: 'unset' })
+
+      it('says the draw is unfinished, in words and on the badge', () => {
+        drawPreviewPage.render(unset())
+
+        expect(drawPreviewPage.getVerdict()).toHaveTextContent(
+          'Choose your qualifiers',
+        )
+        expect(drawPreviewPage.getBadge()).toHaveTextContent('Incomplete')
+      })
+
+      it('does not call it ready to save', () => {
+        drawPreviewPage.render(unset())
+
+        expect(drawPreviewPage.getVerdict()).not.toHaveTextContent(
+          'Ready to save',
+        )
+        expect(drawPreviewPage.getBadge()).not.toHaveTextContent('Sound')
+      })
+
+      it('still states the group stage the cap implies', () => {
+        drawPreviewPage.render(unset())
+
+        expect(drawPreviewPage.getEquation()).toHaveTextContent(
+          '20 players ÷ 4 groups = 5 per group',
+        )
+        expect(drawPreviewPage.getGroupCards()).toHaveLength(4)
+      })
+
+      it('marks no group too small, because no group can be judged', () => {
+        drawPreviewPage.render(unset())
+
+        for (const letter of ['A', 'B', 'C', 'D']) {
+          expect(drawPreviewPage.group(letter).queryTooSmall()).toBeNull()
+          expect(
+            drawPreviewPage.group(letter).queryUnsetQualifiers(),
+          ).toBeInTheDocument()
+        }
+      })
+
+      it('states no bracket size and no byes', () => {
+        drawPreviewPage.render(unset())
+
+        const knockout = drawPreviewPage.getKnockout()
+        expect(knockout).toHaveTextContent('Not set')
+        expect(knockout).not.toHaveTextContent('-player bracket')
+        expect(knockout).not.toHaveTextContent('first-round')
+        // The group stage plays either way; only its output is unanswered.
+        expect(knockout).toHaveTextContent('40 group matches')
+      })
+    })
+
+    /**
+     * The fourth verdict's place in the order (#1425): a draw that cannot be played is
+     * still reported impossible first, and an unfinished one still outranks a
+     * disagreement — both pinned against a harness where the losing state is really
+     * there to be outranked.
+     */
+    it('calls a draw that is both impossible and incomplete impossible', () => {
+      // 8 players across 6 manual groups is 2, 2, 1, 1, 1, 1 — a real group problem,
+      // with no qualifier count chosen at all.
+      drawPreviewPage.render(
+        buildDrawPreviewPropsFor({
+          previewFieldSize: 8,
+          groupCountMode: 'manual',
+          manualGroupCount: 6,
+          qualifiersMode: 'unset',
+        }),
+      )
+
+      expect(drawPreviewPage.getVerdict()).toHaveTextContent(
+        'This draw can’t work yet',
+      )
+      expect(drawPreviewPage.getBadge()).toHaveTextContent('Impossible')
+    })
+
+    it('calls a draw that is both incomplete and disagreeing incomplete', () => {
+      // Six groups of five seat thirty of a forty field — a live disagreement, held
+      // open while the qualifier count is also missing.
+      drawPreviewPage.render(
+        buildDrawPreviewPropsFor({
+          previewFieldSize: 40,
+          groupCountMode: 'manual',
+          manualGroupCount: 6,
+          groupSizeMode: 'manual',
+          manualGroupSize: 5,
+          qualifiersMode: 'unset',
+        }),
+      )
+
+      expect(drawPreviewPage.getVerdict()).toHaveTextContent(
+        'Choose your qualifiers',
+      )
+      expect(drawPreviewPage.getBadge()).toHaveTextContent('Incomplete')
+      expect(drawPreviewPage.getBadge()).not.toHaveTextContent('Your call')
+    })
   })
 
   /**

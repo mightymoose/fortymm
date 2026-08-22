@@ -42,12 +42,16 @@ const RESERVATIONS: ReadonlyArray<ReservationSpec> = ['A', 'B', 'C', 'D'].map(
 /** **K as the event STORES it** — required with no default on the server's `rr-then-ko`
  * arm, so the seed must send it or the create is a 422 naming the field.
  *
- * ⚠️ It is **not** what the tab reads. Nothing on the Draw structure tab looks at the
- * stored column this slice: every number there comes from the derivation, which aims at
- * an eight-player knockout and lands on `ceil(8 / 4)` = 2 for this event. The two agree
- * here, which is why the row is not asserted as proof of anything about storage. Chore 3e
- * moves the setting onto this tab for good and makes them one number. */
+ * Since #1425 the tab reads THIS number: a stored K reaches the tab as `Yours`, and an
+ * event whose director never typed one reads `Unset` rather than an invented
+ * `Automatic` figure. It still agrees with the derived `ceil(8 / 4)` = 2 here, which is
+ * what keeps every numeric assertion below stable across the two sources. */
 const STORED_QUALIFIERS_PER_GROUP = 2
+
+/** The qualifiers row under a stored K: the badge says who owns it, and the sentence is
+ * the manual one (#1425). Verbatim, like every source line asserted here. */
+const QUALIFIERS_OWNERSHIP = 'Yours'
+const QUALIFIERS_SOURCE = 'You set this.'
 
 /** What the derivation makes of a field of `20`, and the only numbers this spec asserts.
  * Worked from the derivation's own arithmetic (`data/draw-structure.ts`, and the
@@ -228,6 +232,16 @@ test.describe('Tournament — the rr-then-ko draw structure', () => {
     // — the fact that keeps the equation above from being an average.
     await expect(drawStructure.settingValue('Group size')).toHaveText(String(GROUP_SIZE))
     await expect(drawStructure.settingUnit('Group size')).toHaveText('players per group')
+
+    // ----- the qualifiers row reads the STORED K, as the director's own (#1425) --------
+    // The row that used to invent a number: since #1425 it shows what the event holds,
+    // badged `Yours` with the manual sentence, not a derived figure under `Automatic`.
+    await expect(
+      drawStructure.settingOwnership('Qualifiers per group'),
+    ).toHaveText(QUALIFIERS_OWNERSHIP)
+    await expect(drawStructure.settingSource('Qualifiers per group')).toHaveText(
+      QUALIFIERS_SOURCE,
+    )
 
     // ----- the control: a plain round-robin is offered NO such tab -----------
     // Reloaded rather than closing the sheet: the editor is a modal, so its overlay

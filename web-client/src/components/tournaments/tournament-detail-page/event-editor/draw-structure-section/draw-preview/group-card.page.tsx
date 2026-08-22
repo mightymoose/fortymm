@@ -18,6 +18,15 @@ const scoped = (container: Container) => ({
   getAdvanceLine() {
     return container.getByText(/^top \d+ advance$/)
   },
+  /** The same line as a query — **absent** while the qualifier count is unset (#1425). */
+  queryAdvanceLine() {
+    return container.queryByText(/^top \d+ advance$/)
+  },
+  /** The `qualifiers not set` line — present only while the preview has no qualifier
+   * count to state (#1425). */
+  queryUnsetQualifiers() {
+    return container.queryByText('qualifiers not set')
+  },
 })
 
 /** Test page-object for `GroupCard`. The card is an `<li>`, so `render` puts it in a list

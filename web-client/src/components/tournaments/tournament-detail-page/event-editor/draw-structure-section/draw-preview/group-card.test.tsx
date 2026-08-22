@@ -40,6 +40,31 @@ describe('GroupCard', () => {
     expect(groupCardPage.queryTooSmall()).toBeNull()
   })
 
+  // #1425. With no qualifier count the second too-small clause cannot be asked — a
+  // `?? 0` here would read every group as bad, a silent wrong answer nothing else
+  // catches, because it is card copy and not an impossible problem.
+  //
+  // `qualifiers: undefined` is stated outright: the factory seeds a number, and a plain
+  // override that omits the key would leave the seed in place.
+  it('states no advancing number while the qualifier count is unset', () => {
+    groupCardPage.render({ letter: 'B', size: 8, qualifiers: undefined })
+
+    expect(groupCardPage.queryUnsetQualifiers()).toBeInTheDocument()
+    expect(groupCardPage.queryAdvanceLine()).toBeNull()
+  })
+
+  it('does not read an unqualified group as too small', () => {
+    groupCardPage.render({ size: 8, qualifiers: undefined })
+
+    expect(groupCardPage.queryTooSmall()).toBeNull()
+  })
+
+  it('keeps "Too small" for a group of one even with qualifiers unset', () => {
+    groupCardPage.render({ letter: 'C', size: 1, qualifiers: undefined })
+
+    expect(groupCardPage.queryTooSmall()).toBeInTheDocument()
+  })
+
   // Green is the advancing state, and a group that cannot advance anybody must not wear
   // it — the tint is the second signal, never the only one.
   it('drops the advancing colour from a group that is too small', () => {
