@@ -125,13 +125,25 @@ const reservationEntrySchema: z.ZodType<ReservationEntry, ReservationEntry> =
  * reservation_cap` sentence: that one is about the WRITE the server just refused
  * (`api/app/schemas/tournament.py`); this one is about the DRAFT the director is
  * still editing, before any request exists to refuse.
+ *
+ * **Names the draw type in the domain's words, never the wire token.** The server's
+ * sentence says `rr-then-ko` because its audience is an API or MCP caller, for whom
+ * that string is exactly what they must send. A director's audience is the Basics
+ * tab's picker, which renders the label the `draw_types` table serves — and
+ * `rr-then-ko` appears nowhere on it. Telling a director to choose an option that is
+ * not on the menu makes this the one instruction the cap gives unfollowable.
+ *
+ * It is prose about one draw type, NOT a label lookup, and that distinction is what
+ * keeps it inside ADR 20260726: the ban is on a client-side *catalogue* of draw types
+ * and labels that has to agree with the server's seed by hand. There is still exactly
+ * one menu, still served. This sentence names the concept the way `CONTEXT.md` does.
  */
 function reservationCapMessage(count: number): string {
   return (
-    `This event can hold only one reservation while its draw type is not ` +
-    `“rr-then-ko” — it currently holds ${count}. Remove reservations until ` +
-    `one remains, or switch the draw type to “rr-then-ko”, which can hold ` +
-    `several.`
+    `This event can hold only one reservation while its draw type runs a single ` +
+    `group — it currently holds ${count}. Remove reservations until one remains, ` +
+    `or change the draw type on the Basics tab to a round-robin-then-knockout draw, ` +
+    `which runs several groups.`
   )
 }
 

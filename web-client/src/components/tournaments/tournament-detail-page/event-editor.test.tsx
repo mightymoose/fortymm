@@ -807,6 +807,45 @@ describe('EventEditor', () => {
       expect(onSave).toHaveBeenCalled()
     })
 
+    // The cap's copy is the ONLY instruction the feature gives, and it has to name
+    // something the director can actually pick. `rr-then-ko` is the wire token; the
+    // Basics picker renders the label the `draw_types` table serves ("Round-robin then
+    // knockout"), so a message naming the token sends the director hunting for an
+    // option that is not on the menu. Asserted on BOTH surfaces — the notice beside the
+    // dead Add button, and the red refusal — because they are separate strings in
+    // separate files and only one of them was wrong first.
+    it('never names the wire token in either the cap notice or the refusal', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          reservations: [
+            buildReservation({ id: 'res-a', name: 'Reservation A', position: 0 }),
+            buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
+          ],
+        }),
+        onSave,
+      })
+
+      // BEFORE the save, the NOTICE is the surface on show: `capError` does not exist
+      // until a submit has run, so `showCapNotice` is still true even at two.
+      await eventEditorPage.chooseDrawType('Round robin')
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      const notice = eventEditorPage.queryReservationsCapNotice()
+      expect(notice).not.toBeNull()
+      expect(notice?.textContent).not.toContain('rr-then-ko')
+      expect(notice?.textContent).toContain('round-robin-then-knockout')
+
+      // AFTER the refused save, the RED ERROR takes over and the notice steps aside.
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(onSave).not.toHaveBeenCalled()
+      const error = eventEditorPage.queryReservationsCapError()
+      expect(error).not.toBeNull()
+      expect(error?.textContent).not.toContain('rr-then-ko')
+      expect(error?.textContent).toContain('round-robin-then-knockout')
+      // …and it still names the count actually held, which is what makes it actionable.
+      expect(error).toHaveTextContent('2')
+    })
+
     // The freeze notice, not this one, once the event is drawn — a director locked out
     // by a cut draw is told to delete the draw first (the actionable instruction); the
     // cap notice would be a second, less useful story about the very same dead button.

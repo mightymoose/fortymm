@@ -174,7 +174,7 @@ export const ReservationsSection = ({
     ? (errors.reservations?.root?.message ?? errors.reservations?.message)
     : undefined
 
-  const capped = !frozen && drawType !== 'rr-then-ko' && fields.length >= 1
+  const capped = drawType !== 'rr-then-ko' && fields.length >= 1
 
   // Whether the button is DEAD and whether this notice EXPLAINS it are two questions,
   // and they must not share one flag: `capped` disables Add from the first reservation
@@ -268,10 +268,14 @@ export const ReservationsSection = ({
         <Alert id={capNoticeId} data-testid="reservations-cap-notice">
           <Lock size={16} />
           <AlertTitle>This event can hold only one reservation</AlertTitle>
+          {/* The draw type is named in the domain's words, never the wire token
+              `rr-then-ko`, which appears nowhere in the Basics tab's picker — see
+              `reservationCapMessage` in `event-form.ts` for why that distinction is
+              load-bearing and why it does not reintroduce a client label catalogue. */}
           <AlertDescription>
-            A draw type other than “rr-then-ko” runs its whole stage as one group, so
-            this event can hold only one reservation. Switch the draw type to
-            “rr-then-ko” on the Basics tab to use more than one.
+            Every draw type but round-robin-then-knockout runs its whole stage as one
+            group, so this event can hold only one reservation. Change the draw type on
+            the Basics tab to run several groups.
           </AlertDescription>
         </Alert>
       )}
