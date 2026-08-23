@@ -48,9 +48,11 @@ export const TARGET_BRACKET_SIZE = 8
  * ⚠️ Duplicated in `api/app/draw_structure.py`, and the shared vectors pin both copies. */
 export const DEFAULT_GROUP_SIZE = 5
 
-/** Who a structural setting belongs to: the system derived it, or the director typed it.
- * The row's `Automatic` / `Yours` badge is this, and nothing else. */
-export type SettingOwnership = 'automatic' | 'manual'
+/** Who a structural setting belongs to: the system derived it, the director typed it,
+ * or nobody has yet — `unset` is the state of a required setting the director has not
+ * filled in (#1425). The row's `Automatic` / `Yours` / `Unset` badge is this, and
+ * nothing else. */
+export type SettingOwnership = 'automatic' | 'manual' | 'unset'
 
 /** One setting row's provenance: who owns the number, and the one line under it saying
  * where the number came from. The sentence is derived here rather than in the row, so the
@@ -139,14 +141,19 @@ export interface DrawStructure {
   /** One entry per group, in group order — **not** a single size, because the groups are
    * routinely unequal and the uneven case is a first-class state, not an edge. */
   groupSizes: number[]
-  qualifiersPerGroup: number
-  /** `groupCount * qualifiersPerGroup`: how many players come out of the group stage. */
-  totalQualifiers: number
+  /** Absent while the director has not chosen a number (`qualifiersMode: 'unset'`,
+   * #1425) — the derivation invents nothing, so every question downstream of it goes
+   * unanswered too. */
+  qualifiersPerGroup?: number
+  /** `groupCount * qualifiersPerGroup`: how many players come out of the group stage.
+   * Absent with `qualifiersPerGroup`. */
+  totalQualifiers?: number
   /** The knockout's entry list. The same number as `totalQualifiers` by construction —
    * they are two different questions with one answer, and both are named because the tab
-   * asks both. */
-  knockoutBracketSize: number
-  firstRoundByes: number
+   * asks both. Absent with `qualifiersPerGroup`. */
+  knockoutBracketSize?: number
+  /** Absent with `qualifiersPerGroup` — no bracket, no byes. */
+  firstRoundByes?: number
   /** Every all-play-all match the group stage plays, across all groups. */
   groupMatchCount: number
   sources: DrawStructureSources
@@ -238,6 +245,12 @@ function tallySizes(sizes: number[]): GroupSizeTally[] {
  * not set anything, and the row must go on showing a real number rather than a blank or a
  * one. The reported ownership is therefore the *effective* one, so the `Yours` badge and
  * the source sentence can never disagree with each other.
+ *
+ * **A mode of `unset` is no number at all (#1425).** The qualifiers setting is required
+ * on Basics; until the director types one there is nothing to derive from, so the four
+ * qualifier-derived fields are absent rather than invented — the automatic rule answers
+ * "what would happen by default", which is a different question from "what does this
+ * event hold". The group count and sizes are independent of it and stay derived.
  */
 export function deriveDrawStructure(options: DrawStructureOptions): DrawStructure {
   const {
@@ -252,7 +265,9 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
 
   const setCount = groupCountMode === 'manual' && manualGroupCount !== null
   const setSize = groupSizeMode === 'manual' && manualGroupSize !== null
-  const setQualifiers = qualifiersMode === 'manual' && manualQualifiers !== null
+  const unsetQualifiers = qualifiersMode === 'unset'
+  const setQualifiers =
+    !unsetQualifiers && qualifiersMode === 'manual' && manualQualifiers !== null
 
   const targetSize = setSize ? atLeastOne(manualGroupSize) : null
 
@@ -278,12 +293,18 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
 
   const qualifiersPerGroup = setQualifiers
     ? atLeastOne(manualQualifiers)
-    : atLeastOne(Math.ceil(TARGET_BRACKET_SIZE / groupCount))
+    : unsetQualifiers
+      ? undefined
+      : atLeastOne(Math.ceil(TARGET_BRACKET_SIZE / groupCount))
 
-  const knockoutBracketSize = groupCount * qualifiersPerGroup
+  const knockoutBracketSize =
+    qualifiersPerGroup === undefined ? undefined : groupCount * qualifiersPerGroup
   // `max(2, …)` is what makes a one-player knockout report ONE bye rather than none: the
   // smallest bracket that can be drawn holds two, so the missing player is a bye.
-  const firstRoundByes = nextPowerOfTwo(Math.max(2, knockoutBracketSize)) - knockoutBracketSize
+  const firstRoundByes =
+    knockoutBracketSize === undefined
+      ? undefined
+      : nextPowerOfTwo(Math.max(2, knockoutBracketSize)) - knockoutBracketSize
   const groupMatchCount = groupSizes.reduce((total, n) => total + (n * (n - 1)) / 2, 0)
 
   const seats = groupCount * (targetSize ?? 0)
@@ -335,10 +356,12 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
           : `${fieldSize} players ÷ ${groupCount} groups`,
       },
       qualifiers: {
-        ownership: setQualifiers ? 'manual' : 'automatic',
+        ownership: setQualifiers ? 'manual' : unsetQualifiers ? 'unset' : 'automatic',
         sentence: setQualifiers
           ? 'You set this.'
-          : `Aiming at an ${TARGET_BRACKET_SIZE}-player knockout across ${groupCount} groups.`,
+          : unsetQualifiers
+            ? 'You choose this in Basics.'
+            : `Aiming at an ${TARGET_BRACKET_SIZE}-player knockout across ${groupCount} groups.`,
       },
     },
     disagreement,
@@ -359,6 +382,10 @@ export function deriveDrawStructure(options: DrawStructureOptions): DrawStructur
  * one trips all three — but "Group C would have one player" is the fact the director can
  * act on, and the other two are echoes of it. Reporting the echoes alongside it would make
  * one mistake look like three.
+ *
+ * With the qualifiers `unset`, only the group rule can fire (#1425): both other rules
+ * need a qualifier count to compare against, and inventing one to test with would report
+ * a problem the director's eventual number may not have.
  */
 function impossibleProblemsFor({
   groupSizes,
@@ -368,8 +395,8 @@ function impossibleProblemsFor({
 }: {
   groupSizes: number[]
   smallestGroup: number
-  knockoutBracketSize: number
-  qualifiersPerGroup: number
+  knockoutBracketSize: number | undefined
+  qualifiersPerGroup: number | undefined
 }): ImpossibleProblem[] {
   // 1. A group nobody can play in. Named by the FIRST such group, because that is the one
   //    a director looking down the preview will see first.
@@ -393,7 +420,7 @@ function impossibleProblemsFor({
 
   // 2. A knockout of one. Reachable only from one group taking one qualifier, and the
   //    winner of that group would be handed a title without playing for it.
-  if (knockoutBracketSize < 2) {
+  if (knockoutBracketSize !== undefined && knockoutBracketSize < 2) {
     return [
       {
         kind: 'bracket',
@@ -405,7 +432,7 @@ function impossibleProblemsFor({
 
   // 3. More qualifiers than the smallest group holds — the group would advance players it
   //    does not have.
-  if (qualifiersPerGroup > smallestGroup) {
+  if (qualifiersPerGroup !== undefined && qualifiersPerGroup > smallestGroup) {
     return [
       {
         kind: 'qualifier',

@@ -362,3 +362,23 @@ After the cut: `Draw cut.` with `4 pools · 40 pool matches · 8-player knockout
    — the reference's reservation clause is gone because the derivation stops
    reading reservations. "The derivation" and "Row copy" above are unchanged: they
    record the reference, and this note records where the implementation departs.
+5. **Divergence (#1425, 2026-08-22): a third badge and a fourth verdict, for the
+   qualifiers setting nobody has chosen.** The reference specifies two badges
+   (`Automatic` / `Yours`) and three preview verdicts ("The verdict" above), and its
+   qualifier rule always has a number to work from. A real event does not until the
+   director types one on Basics. So:
+   - `SettingOwnership` gains a third value, `unset`, badged **`Unset`**. It never
+     falls through to the automatic rule — an invented number under an `Automatic`
+     badge is the defect this records.
+   - With no count chosen, the qualifiers row reads **`Not set`** (no unit) sourced
+     **`You choose this in Basics.`**; each group card reads **`qualifiers not set`**
+     instead of `top {n} advance` and is never marked `Too small` for it; the
+     knockout card reads **`Not set`**, states no bracket size and no byes, and keeps
+     its group-match total.
+   - The preview gains a fourth verdict: heading **`Choose your qualifiers`** with
+     badge **`Incomplete`**, in the warning tint. Verdict precedence becomes:
+     impossible → incomplete → your call → sound.
+   - With no count, only a `group` impossible problem can fire: the bracket and
+     qualifier rules both need a number to compare against.
+   - The reference's own copy above is unchanged; this note is the divergence of
+     record, as with item 4.

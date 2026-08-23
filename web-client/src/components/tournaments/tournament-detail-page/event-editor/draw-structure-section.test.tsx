@@ -1,6 +1,9 @@
 import userEvent from '@testing-library/user-event'
 
-import { buildDrawStructureEvent } from './draw-structure-section.factory'
+import {
+  DrawStructureSection,
+} from './draw-structure-section'
+import { buildDrawStructureEvent, buildDrawStructureSectionProps } from './draw-structure-section.factory'
 import { drawStructureSectionPage } from './draw-structure-section.page'
 
 describe('DrawStructureSection', () => {
@@ -64,31 +67,37 @@ describe('DrawStructureSection', () => {
       expect(row.queryUnit()).toBeNull()
     })
 
-    it('takes 2 through from each group, aiming at the 8-player knockout', () => {
+    /**
+     * The factory event HOLDS a saved qualifier count (`qualifiersPerGroup: 2`, as a
+     * saved rr-then-ko event always does), so the tab reads the director's number back,
+     * badged theirs — not a derived one badged `Automatic` (#1425).
+     */
+    it('reads the saved 2 through from each group, and says the director set it', () => {
       drawStructureSectionPage.render()
 
       const row = drawStructureSectionPage.setting('Qualifiers per group')
       expect(row.getValue()).toHaveTextContent('2')
       expect(row.queryUnit()).toHaveTextContent('through from each group')
-      expect(row.getSource()).toHaveTextContent(
-        'Aiming at an 8-player knockout across 4 groups.',
-      )
+      expect(row.getSource()).toHaveTextContent('You set this.')
     })
 
     // ADR 20260808: the owner is readable as TEXT on every row, never as a shade.
-    it('marks all four values Automatic, in words', () => {
+    it('marks the three derived values Automatic, in words', () => {
       drawStructureSectionPage.render()
 
-      for (const name of [
-        'Group count',
-        'Group size',
-        'Membership',
-        'Qualifiers per group',
-      ]) {
+      for (const name of ['Group count', 'Group size', 'Membership']) {
         expect(
           drawStructureSectionPage.setting(name).getOwnershipBadge(),
         ).toHaveTextContent('Automatic')
       }
+    })
+
+    it('marks the saved qualifier count Yours, because the director typed it', () => {
+      drawStructureSectionPage.render()
+
+      expect(
+        drawStructureSectionPage.setting('Qualifiers per group').getOwnershipBadge(),
+      ).toHaveTextContent('Yours')
     })
   })
 
@@ -242,17 +251,22 @@ describe('DrawStructureSection', () => {
 
     /**
      * ⚠️ The case the precedence exists for. A 7-player cap derives two groups of
-     * `4, 3`, and the automatic qualifier count — `ceil(8 / 2)` is four — takes more
-     * than the smaller group holds. That is an uneven tally AND an impossible
-     * competition, both reported at once — and `Legal, but uneven` is not the thing to
-     * say about a draw nobody can play.
+     * `4, 3`, and a director-typed count of four takes more than the smaller group
+     * holds. That is an uneven tally AND an impossible competition, both reported at
+     * once — and `Legal, but uneven` is not the thing to say about a draw nobody can
+     * play. (#1425 moved the count from invented to typed: the automatic rule would
+     * have said `ceil(8 / 2)` = 4 here, so the test now states the number outright
+     * rather than leaning on an invention.)
      *
      * The Group size row proves the tally really is there. Without it this test would
      * also pass on a draw that is not uneven at all, and prove nothing about the order.
      */
-    it('drops the uneven notice when the draw cannot be played — a 7-player cap', () => {
+    it('drops the uneven notice when the draw cannot be played — a 7-player cap, 4 through', () => {
       drawStructureSectionPage.render({
-        event: buildDrawStructureEvent({ maxPlayers: 7 }),
+        event: buildDrawStructureEvent({
+          maxPlayers: 7,
+          qualifiersPerGroup: 4,
+        }),
       })
 
       const row = drawStructureSectionPage.setting('Group size')
@@ -264,6 +278,120 @@ describe('DrawStructureSection', () => {
       expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
         'This draw can’t work yet',
       )
+    })
+  })
+
+  /**
+   * #1425. The qualifier count is the one setting on this tab the director types
+   * themselves, on Basics — so the tab reads the draft's live value back through the
+   * derivation instead of feeding the automatic rule and inventing a number the event
+   * does not hold.
+   */
+  describe('the saved qualifier count', () => {
+    /** A brand-new event, or a director who cleared the Basics field: no number. */
+    const unsetEvent = () =>
+      buildDrawStructureEvent({ qualifiersPerGroup: null })
+
+    it('reads Not set on an empty field, badged Unset, pointing at Basics', () => {
+      drawStructureSectionPage.render({ event: unsetEvent() })
+
+      const row = drawStructureSectionPage.setting('Qualifiers per group')
+      expect(row.getValue()).toHaveTextContent('Not set')
+      // No number, so no unit — the value is already the state, like Membership's.
+      expect(row.queryUnit()).toBeNull()
+      expect(row.getOwnershipBadge()).toHaveTextContent('Unset')
+      expect(row.getSource()).toHaveTextContent('You choose this in Basics.')
+    })
+
+    /**
+     * The defect itself, stated as a negative. Fed the hard-coded `automatic` mode the
+     * call site used to pass, this row would read an invented `2` under an `Automatic`
+     * badge — the exact lie that sent #1423's director to a refused save.
+     */
+    it('never invents an Automatic number where the field is empty', () => {
+      drawStructureSectionPage.render({ event: unsetEvent() })
+
+      const row = drawStructureSectionPage.setting('Qualifiers per group')
+      expect(row.getValue()).not.toHaveTextContent('2')
+      expect(row.getOwnershipBadge()).not.toHaveTextContent('Automatic')
+    })
+
+    it('tracks the Basics field live, before any save', () => {
+      const view = drawStructureSectionPage.render({
+        event: buildDrawStructureEvent({ qualifiersPerGroup: 3 }),
+      })
+      expect(
+        drawStructureSectionPage.setting('Qualifiers per group').getValue(),
+      ).toHaveTextContent('3')
+
+      view.rerender(
+        <DrawStructureSection
+          {...buildDrawStructureSectionProps({
+            event: buildDrawStructureEvent({ qualifiersPerGroup: 5 }),
+          })}
+        />,
+      )
+
+      expect(
+        drawStructureSectionPage.setting('Qualifiers per group').getValue(),
+      ).toHaveTextContent('5')
+      expect(
+        drawStructureSectionPage.setting('Qualifiers per group').getSource(),
+      ).toHaveTextContent('You set this.')
+    })
+
+    it('states no bracket size or byes while the count is unset, and calls the draw unfinished', () => {
+      drawStructureSectionPage.render({ event: unsetEvent() })
+
+      const knockout = drawStructureSectionPage.preview.getKnockout()
+      expect(knockout).toHaveTextContent('Not set')
+      expect(knockout).not.toHaveTextContent('-player bracket')
+      expect(knockout).not.toHaveTextContent('first-round')
+
+      expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+        'Choose your qualifiers',
+      )
+      expect(drawStructureSectionPage.preview.getBadge()).toHaveTextContent(
+        'Incomplete',
+      )
+    })
+
+    it('marks no group too small while the count is unset', () => {
+      drawStructureSectionPage.render({ event: unsetEvent() })
+
+      for (const letter of ['A', 'B', 'C', 'D']) {
+        const card = drawStructureSectionPage.preview.group(letter)
+        expect(card.queryTooSmall()).toBeNull()
+        expect(card.queryUnsetQualifiers()).toBeInTheDocument()
+      }
+    })
+
+    /**
+     * #1423's repro, the case that must pass: a saved event with a 4-player cap and
+     * qualifiers 2 reads a TWO-player knockout and no `Impossible` verdict. Under the
+     * old hard-coded automatic mode the tab invented `ceil(8 / 1)` = 8 qualifiers out
+     * of a group of four and called the already-cut draw impossible.
+     */
+    it('#1423’s repro: cap 4, qualifiers 2, reads a two-player knockout and no Impossible', () => {
+      drawStructureSectionPage.render({
+        event: buildDrawStructureEvent({
+          maxPlayers: 4,
+          qualifiersPerGroup: 2,
+          reservations: buildDrawStructureEvent().reservations.slice(0, 1),
+        }),
+      })
+
+      const row = drawStructureSectionPage.setting('Qualifiers per group')
+      expect(row.getValue()).toHaveTextContent('2')
+      expect(row.getOwnershipBadge()).toHaveTextContent('Yours')
+
+      expect(drawStructureSectionPage.preview.getKnockout()).toHaveTextContent(
+        '2-player bracket',
+      )
+      expect(drawStructureSectionPage.preview.getVerdict()).toHaveTextContent(
+        'Ready to save',
+      )
+      expect(drawStructureSectionPage.issuePanel.queryPanel()).toBeNull()
     })
   })
 

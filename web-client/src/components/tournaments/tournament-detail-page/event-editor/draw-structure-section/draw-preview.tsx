@@ -13,15 +13,26 @@ import { GroupCard } from './draw-preview/group-card'
  * shape, not an inventory. */
 const MAX_GROUP_CARDS = 8
 
-/** The three states the preview can be in, in the words the reference uses. **The
- * heading and the badge are one decision**, so they are one table — split across two
- * conditionals they would eventually disagree, and a `Sound` badge over
- * `This draw can’t work yet` is worse than either alone. */
+/** The four states the preview can be in, in the words the reference uses for its
+ * three — plus one of ours (#1425). **The heading and the badge are one decision**, so
+ * they are one table — split across two conditionals they would eventually disagree,
+ * and a `Sound` badge over `This draw can’t work yet` is worse than either alone.
+ *
+ * `incomplete` is not the reference's: its world has no unset qualifier count. A draw
+ * whose required qualifier setting nobody has chosen is not *sound* and not
+ * *impossible* — it is unfinished, and it says which setting finishes it. The
+ * divergence is recorded in the reference README's "What the reference does not
+ * settle". */
 const VERDICTS = {
   impossible: {
     heading: 'This draw can’t work yet',
     badge: 'Impossible',
     badgeClass: 'border-[color:var(--loss)]/50 text-[color:var(--loss)]',
+  },
+  incomplete: {
+    heading: 'Choose your qualifiers',
+    badge: 'Incomplete',
+    badgeClass: 'border-[color:var(--warn)]/50 text-[color:var(--warn)]',
   },
   disagreement: {
     heading: 'Your numbers disagree',
@@ -94,13 +105,16 @@ export const DrawPreview = ({
   const overlineId = useId()
 
   // The precedence is the reference's, and it is the order a director can act in: a draw
-  // that cannot be played is not "your call".
+  // that cannot be played is not "your call", and an unfinished one is neither — it
+  // needs a number before any other question about it can be asked (#1425).
   const verdict =
     structure.impossibleProblems.length > 0
       ? VERDICTS.impossible
-      : structure.disagreement !== null
-        ? VERDICTS.disagreement
-        : VERDICTS.sound
+      : structure.qualifiersPerGroup === undefined
+        ? VERDICTS.incomplete
+        : structure.disagreement !== null
+          ? VERDICTS.disagreement
+          : VERDICTS.sound
 
   // Read off the derived sizes rather than divided out again — the groups are routinely
   // unequal, and `8` where the draw holds `6–5` would be the silent reshaping #1320
@@ -112,11 +126,15 @@ export const DrawPreview = ({
       ? String(smallestGroup)
       : `${smallestGroup}–${largestGroup}`
 
+  // Absent while the qualifier count is unset (#1425): the card states no bracket size
+  // and no byes rather than a number nobody chose.
   const byes = structure.firstRoundByes
   const byesLine =
-    byes === 0
-      ? 'No first-round byes'
-      : `${byes} first-round ${byes === 1 ? 'bye' : 'byes'}`
+    byes === undefined
+      ? null
+      : byes === 0
+        ? 'No first-round byes'
+        : `${byes} first-round ${byes === 1 ? 'bye' : 'byes'}`
 
   // Three facts about the draw that are not in the picture above it. Only a bare figure
   // takes the mono face: `Preview basis` is `32-player cap` for a capped event but a
@@ -222,12 +240,17 @@ export const DrawPreview = ({
             <div className="text-[10px] font-semibold tracking-[0.14em] text-[color:var(--fg-3)] uppercase">
               Knockout
             </div>
+            {/* No bracket exists until the director picks its qualifiers (#1425), so the
+                card states no size rather than the one the default rule would have
+                aimed at. */}
             <p className="mt-0.5 font-mono text-[15px] font-semibold text-[color:var(--fg-1)]">
-              {structure.knockoutBracketSize}-player bracket
+              {structure.knockoutBracketSize === undefined
+                ? 'Not set'
+                : `${structure.knockoutBracketSize}-player bracket`}
             </p>
           </div>
           <div className="shrink-0 text-right text-[11px] text-[color:var(--fg-3)]">
-            <p>{byesLine}</p>
+            {byesLine !== null && <p>{byesLine}</p>}
             {/* Not pluralised, deliberately: the reference does not pluralise this line
                 and `data/draw-structure.ts` records why an unasked-for improvement here
                 is drift against the Python twin. */}

@@ -13,6 +13,9 @@ import type { SettingOwnership } from '../../../data/draw-structure'
 const OWNERSHIP_LABEL: Record<SettingOwnership, string> = {
   automatic: 'Automatic',
   manual: 'Yours',
+  // #1425: a required setting nobody has filled in is not `Automatic` — that badge
+  // would claim the system chose a number nobody chose.
+  unset: 'Unset',
 }
 
 export interface SettingRowProps {
@@ -32,8 +35,9 @@ export interface SettingRowProps {
    * How the value reads, which is also how it is set:
    *
    * - `number` — a figure, in the mono face at display size, beside its `unit`.
-   * - `phrase` — prose (`Snake automatically`), in the UI face, with no unit. Membership
-   *   is the only setting with no number, so it is the only row that takes this.
+   * - `phrase` — prose (`Snake automatically`), in the UI face, with no unit. A row
+   *   whose value is a state rather than a number takes this: Membership always, and
+   *   Qualifiers per group while nobody has chosen a count (#1425).
    */
   kind: 'number' | 'phrase'
   /** Plain words after the value (`groups`, `players per group`). A `phrase` row has

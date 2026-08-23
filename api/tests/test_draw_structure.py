@@ -53,6 +53,7 @@ from app.draw_structure import (
 
 AUTOMATIC = SettingOwnership.automatic
 MANUAL = SettingOwnership.manual
+UNSET = SettingOwnership.unset
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,6 +591,94 @@ DRAW_STRUCTURE_VECTORS: list[DrawStructureVector] = [
             group_match_count=58,
             disagreement=None,
             impossible_problems=(),
+        ),
+    ),
+    # -----------------------------------------------------------------------------
+    # The qualifiers setting nobody has chosen yet (#1425). The four qualifier-derived
+    # fields are ``None``, not zero and not invented — the group arithmetic stands
+    # alone, and only a ``group`` problem can fire without a qualifier count to test
+    # against.
+    # -----------------------------------------------------------------------------
+    DrawStructureVector(
+        # The defect's own shape: a saved 22-player event whose director typed 3 holds
+        # five groups and THEIR number. With nothing typed, the tab still states the
+        # five groups — and refuses to state any bracket, bye or qualifier number at
+        # all.
+        name=(
+            "qualifiers unset: a 22-player cap keeps its five groups "
+            "and states no bracket"
+        ),
+        options=DrawStructureOptions(
+            preview_field_size=22,
+            group_count_mode=AUTOMATIC,
+            manual_group_count=None,
+            group_size_mode=AUTOMATIC,
+            manual_group_size=None,
+            qualifiers_mode=UNSET,
+            manual_qualifiers=None,
+        ),
+        expected=DrawStructure(
+            group_count=5,
+            group_sizes=(5, 5, 4, 4, 4),
+            qualifiers_per_group=None,
+            total_qualifiers=None,
+            knockout_bracket_size=None,
+            first_round_byes=None,
+            group_match_count=38,
+            disagreement=None,
+            impossible_problems=(),
+        ),
+    ),
+    DrawStructureVector(
+        # The uncapped default behaves identically: absence is absence whatever the
+        # field derives from.
+        name="qualifiers unset on the uncapped field of 16 behaves the same",
+        options=DrawStructureOptions(
+            preview_field_size=16,
+            group_count_mode=AUTOMATIC,
+            manual_group_count=None,
+            group_size_mode=AUTOMATIC,
+            manual_group_size=None,
+            qualifiers_mode=UNSET,
+            manual_qualifiers=None,
+        ),
+        expected=DrawStructure(
+            group_count=4,
+            group_sizes=(4, 4, 4, 4),
+            qualifiers_per_group=None,
+            total_qualifiers=None,
+            knockout_bracket_size=None,
+            first_round_byes=None,
+            group_match_count=24,
+            disagreement=None,
+            impossible_problems=(),
+        ),
+    ),
+    DrawStructureVector(
+        # The rule the unset mode exists for: automatic qualifiers here would have
+        # been ceil(8 / 6) = 2, and two out of a group of one would have echoed the
+        # group problem as a qualifier problem. Unset fires NEITHER echo — no bracket
+        # question and no qualifier question can be asked without a number.
+        name="qualifiers unset reports only a group problem: 8 across 6 groups",
+        options=DrawStructureOptions(
+            preview_field_size=8,
+            group_count_mode=MANUAL,
+            manual_group_count=6,
+            group_size_mode=AUTOMATIC,
+            manual_group_size=None,
+            qualifiers_mode=UNSET,
+            manual_qualifiers=None,
+        ),
+        expected=DrawStructure(
+            group_count=6,
+            group_sizes=(2, 2, 1, 1, 1, 1),
+            qualifiers_per_group=None,
+            total_qualifiers=None,
+            knockout_bracket_size=None,
+            first_round_byes=None,
+            group_match_count=2,
+            disagreement=None,
+            impossible_problems=(ImpossibleProblemKind.group,),
         ),
     ),
 ]

@@ -902,6 +902,141 @@ export const DRAW_STRUCTURE_VECTORS: DrawStructureVector[] = [
       impossibleProblems: [],
     },
   },
+
+  // ---------------------------------------------------------------------------------
+  // The qualifiers setting nobody has chosen yet (#1425). The four qualifier-derived
+  // fields are ABSENT, not zero and not invented — the group arithmetic stands alone,
+  // and only a `group` problem can fire without a qualifier count to test against.
+  // ---------------------------------------------------------------------------------
+
+  {
+    // The defect's own shape: a saved 22-player event whose director typed 3 holds five
+    // groups and THEIR number. With nothing typed, the tab still states the five groups
+    // — and refuses to state any bracket, bye or qualifier number at all.
+    name: 'qualifiers unset: a 22-player cap keeps its five groups and states no bracket',
+    input: {
+      previewFieldSize: 22,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
+      qualifiersMode: 'unset',
+      manualQualifiers: null,
+    },
+    expected: {
+      groupCount: 5,
+      groupSizes: [5, 5, 4, 4, 4],
+      qualifiersPerGroup: undefined,
+      totalQualifiers: undefined,
+      knockoutBracketSize: undefined,
+      firstRoundByes: undefined,
+      groupMatchCount: 38,
+      sources: {
+        groupCount: {
+          ownership: 'automatic',
+          sentence: '22 players ÷ about 5 per group',
+        },
+        groupSize: { ownership: 'automatic', sentence: '22 players ÷ 5 groups' },
+        qualifiers: {
+          ownership: 'unset',
+          sentence: 'You choose this in Basics.',
+        },
+      },
+      disagreement: null,
+      unevenDistribution: [
+        { groups: 2, size: 5 },
+        { groups: 3, size: 4 },
+      ],
+      impossibleProblems: [],
+    },
+  },
+
+  {
+    // The uncapped default behaves identically: absence is absence whatever the field
+    // derives from.
+    name: 'qualifiers unset on the uncapped field of 16 behaves the same',
+    input: {
+      previewFieldSize: 16,
+      groupCountMode: 'automatic',
+      manualGroupCount: null,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
+      qualifiersMode: 'unset',
+      manualQualifiers: null,
+    },
+    expected: {
+      groupCount: 4,
+      groupSizes: [4, 4, 4, 4],
+      qualifiersPerGroup: undefined,
+      totalQualifiers: undefined,
+      knockoutBracketSize: undefined,
+      firstRoundByes: undefined,
+      groupMatchCount: 24,
+      sources: {
+        groupCount: {
+          ownership: 'automatic',
+          sentence: '16 players ÷ about 5 per group',
+        },
+        groupSize: { ownership: 'automatic', sentence: '16 players ÷ 4 groups' },
+        qualifiers: {
+          ownership: 'unset',
+          sentence: 'You choose this in Basics.',
+        },
+      },
+      disagreement: null,
+      unevenDistribution: null,
+      impossibleProblems: [],
+    },
+  },
+
+  {
+    // The rule the unset mode exists for: automatic qualifiers here would have been
+    // ceil(8 / 6) = 2, and two out of a group of one would have echoed the group
+    // problem as a qualifier problem. Unset fires NEITHER echo — no bracket question
+    // and no qualifier question can be asked without a number.
+    name: 'qualifiers unset reports only a group problem: 8 across 6 groups',
+    input: {
+      previewFieldSize: 8,
+      groupCountMode: 'manual',
+      manualGroupCount: 6,
+      groupSizeMode: 'automatic',
+      manualGroupSize: null,
+      qualifiersMode: 'unset',
+      manualQualifiers: null,
+    },
+    expected: {
+      groupCount: 6,
+      groupSizes: [2, 2, 1, 1, 1, 1],
+      qualifiersPerGroup: undefined,
+      totalQualifiers: undefined,
+      knockoutBracketSize: undefined,
+      firstRoundByes: undefined,
+      groupMatchCount: 2,
+      sources: {
+        groupCount: {
+          ownership: 'manual',
+          sentence: 'You set this.',
+        },
+        groupSize: { ownership: 'automatic', sentence: '8 players ÷ 6 groups' },
+        qualifiers: {
+          ownership: 'unset',
+          sentence: 'You choose this in Basics.',
+        },
+      },
+      disagreement: null,
+      unevenDistribution: [
+        { groups: 2, size: 2 },
+        { groups: 4, size: 1 },
+      ],
+      impossibleProblems: [
+        {
+          kind: 'group',
+          title: 'Group C would have one player',
+          body: 'They would have nobody to play. Use fewer groups or raise the player limit.',
+        },
+      ],
+    },
+  },
 ]
 
 describe('deriveDrawStructure', () => {

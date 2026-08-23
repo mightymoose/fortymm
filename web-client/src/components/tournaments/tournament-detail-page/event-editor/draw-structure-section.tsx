@@ -15,13 +15,14 @@ import { SettingRow } from './draw-structure-section/setting-row'
 export interface DrawStructureSectionProps {
   /**
    * The event as the editor's **live draft** has it, so the tab recomputes as the
-   * director edits the player limit or adds a reservation on the tabs next door.
+   * director edits the player limit, adds a reservation on the tabs next door, or
+   * types a qualifier count on Basics (#1425).
    *
-   * ⚠️ Only two fields are read — `maxPlayers` and `reservations.length` — and the
-   * second is read as a *count* deliberately. The editor's draft carries the form's
-   * `reservations`, which are `ReservationEntry` diffs rather than the read model's
-   * `Reservation` rows (ADR 20260801); the length is the same either way, and nothing
-   * else here may touch a reservation's insides.
+   * ⚠️ Only three fields are read — `maxPlayers`, `qualifiersPerGroup`, and
+   * `reservations.length` — and the third is read as a *count* deliberately. The
+   * editor's draft carries the form's `reservations`, which are `ReservationEntry`
+   * diffs rather than the read model's `Reservation` rows (ADR 20260801); the length is
+   * the same either way, and nothing else here may touch a reservation's insides.
    */
   event: TournamentEvent
   /**
@@ -49,11 +50,13 @@ export interface DrawStructureSectionProps {
  *
  * ## What this chore renders, and what it does not
  *
- * **Every setting is `Automatic`, and every value is text.** Nothing stores an ownership
- * mode yet, so the derivation is fed all-automatic and the rows read out what today's
- * behaviour already does. The `Set myself` / `Use automatic` action and the numeric
- * input arrive with the ownership modes (chore 3c) — and they are *absent* until then,
- * never a disabled box, which is the unexplained dead end ADR-0015 forbids.
+ * **Three settings are `Automatic` and one is yours.** The group count, size and
+ * membership are derived; the qualifier count is the number the director typed on
+ * Basics (#1425), read back live through the same derivation — and until they type
+ * one, that row reads as unset rather than inventing a figure. The `Set myself` /
+ * `Use automatic` action and the numeric input arrive with the ownership modes (chore
+ * 3c) — and they are *absent* until then, never a disabled box, which is the
+ * unexplained dead end ADR-0015 forbids.
  *
  * The right column carries the live preview (`DrawPreview`) — **the tab's one verdict**,
  * and the only summary of the draw anywhere on it. The uneven / disagreement /
@@ -85,14 +88,18 @@ export const DrawStructureSection = ({
   // the `reservationCount` prop below, which is the one reader that keeps them.
   const structure = deriveDrawStructure({
     previewFieldSize: fieldSize,
-    // All four settings are the system's this chore: nothing writes an ownership mode
-    // yet, so there is no manual number for any of them to hold.
+    // The group count and size are still all the system's: nothing writes an ownership
+    // mode for either yet.
     groupCountMode: 'automatic',
     manualGroupCount: null,
     groupSizeMode: 'automatic',
     manualGroupSize: null,
-    qualifiersMode: 'automatic',
-    manualQualifiers: null,
+    // #1425: the qualifier count is the director's OWN number, typed on Basics and held
+    // by the live draft. A number reads as `Yours`; an empty field reads as unset — it
+    // is never fed to the automatic rule, which would invent a number the event does
+    // not hold and badge it `Automatic`.
+    qualifiersMode: event.qualifiersPerGroup === null ? 'unset' : 'manual',
+    manualQualifiers: event.qualifiersPerGroup,
   })
 
   // Read off the derived sizes rather than divided out again — the groups are routinely
@@ -100,6 +107,11 @@ export const DrawStructureSection = ({
   const smallestGroup = Math.min(...structure.groupSizes)
   const largestGroup = Math.max(...structure.groupSizes)
   const uneven = smallestGroup !== largestGroup
+
+  // One fact flips the qualifiers row's whole shape — number vs phrase, unit, badge,
+  // source sentence — so it is read once here rather than asked three times in the JSX
+  // below (the same one-constant pattern `group-card.tsx` uses).
+  const qualifiersUnset = structure.sources.qualifiers.ownership === 'unset'
 
   // The ONE notice the tab shows, chosen in the reference's order — impossible, then
   // disagreement, then uneven. The derivation reports all three independently and more
@@ -208,15 +220,17 @@ export const DrawStructureSection = ({
               ownership="automatic"
               source="Seeds spread 1, 2, 3, 3, 2, 1."
             />
-            {/* ⚠️ Still on Basics as well, this slice. Chore 3e moves it here for good;
-                until then the director sees the stored K on Basics and the DERIVED one
-                here, and the two can disagree. That is deliberate and temporary. */}
+            {/* The SAME number Basics holds — the draft's live value, read back through
+                the derivation (#1425). Until the director types one, the row is a phrase
+                like Membership's: no number, no unit, no invented `Automatic` figure. */}
             <SettingRow
               name="Qualifiers per group"
               hint="How many finishers from each group reach the knockout."
-              value={String(structure.qualifiersPerGroup)}
-              kind="number"
-              unit="through from each group"
+              value={
+                qualifiersUnset ? 'Not set' : String(structure.qualifiersPerGroup)
+              }
+              kind={qualifiersUnset ? 'phrase' : 'number'}
+              unit={qualifiersUnset ? undefined : 'through from each group'}
               ownership={structure.sources.qualifiers.ownership}
               source={structure.sources.qualifiers.sentence}
             />

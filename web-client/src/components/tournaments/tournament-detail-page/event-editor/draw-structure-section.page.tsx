@@ -60,10 +60,14 @@ const scoped = (container: Container) => ({
   issuePanel: drawIssuePanelPage.within(container),
 })
 
-/** Test page-object for `DrawStructureSection`, the event editor's fifth tab. */
+/** Test page-object for `DrawStructureSection`, the event editor's fifth tab. `render`
+ * returns the RTL result, so a test can `rerender` a new draft through it — the way the
+ * editor's live form re-renders the tab on every Basics keystroke. */
 export const drawStructureSectionPage = {
   render(overrides: Partial<DrawStructureSectionProps> = {}) {
-    render(<DrawStructureSection {...buildDrawStructureSectionProps(overrides)} />)
+    return render(
+      <DrawStructureSection {...buildDrawStructureSectionProps(overrides)} />,
+    )
   },
 
   within(container: Container = screen) {

@@ -37,6 +37,14 @@ describe('SettingRow', () => {
     expect(settingRowPage.getOwnershipBadge()).toHaveTextContent('Yours')
   })
 
+  // #1425: a required setting nobody has filled in is not `Automatic` — that badge
+  // would claim the system chose a number nobody chose.
+  it('says "Unset" in text when nobody has set the value', () => {
+    settingRowPage.render({ ownership: 'unset' })
+
+    expect(settingRowPage.getOwnershipBadge()).toHaveTextContent('Unset')
+  })
+
   it('renders a figure in the mono face', () => {
     settingRowPage.render({ kind: 'number', value: '4' })
 

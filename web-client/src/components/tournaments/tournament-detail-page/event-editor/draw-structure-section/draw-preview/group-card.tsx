@@ -7,8 +7,11 @@ export interface GroupCardProps {
   /** How many players the derivation lands in this group. */
   size: number
   /** How many of them reach the knockout. The same number for every group, and the card
-   * needs it to know whether it can supply them. */
-  qualifiers: number
+   * needs it to know whether it can supply them. **Absent while the director has not
+   * chosen one** (#1425): the card then states no advancing number at all, and the
+   * qualifier half of the too-small question goes unasked rather than answered with a
+   * guess. */
+  qualifiers?: number
 }
 
 /**
@@ -27,7 +30,8 @@ export interface GroupCardProps {
  * reader who cannot separate the two shades.
  */
 export const GroupCard = ({ letter, size, qualifiers }: GroupCardProps) => {
-  const tooSmall = size < 2 || size < qualifiers
+  const tooSmall = size < 2 || (qualifiers !== undefined && size < qualifiers)
+  const qualifiersUnset = qualifiers === undefined
   return (
     <li
       data-testid="draw-preview-group-card"
@@ -46,17 +50,24 @@ export const GroupCard = ({ letter, size, qualifiers }: GroupCardProps) => {
       </p>
       <p className="mt-0.5 text-[11px] text-[color:var(--fg-3)]">players</p>
       {/* Green is the advancing state, and it is only honest on a group that can supply
-          the qualifiers it promises. */}
-      <p
-        className={cn(
-          'mt-1.5 text-[11px]',
-          tooSmall
-            ? 'text-[color:var(--fg-3)]'
-            : 'text-[color:var(--serve-500)]',
-        )}
-      >
-        top {qualifiers} advance
-      </p>
+          the qualifiers it promises. With no qualifier count there is nothing to promise
+          — the card says so instead of inventing one (#1425). */}
+      {qualifiersUnset ? (
+        <p className="mt-1.5 text-[11px] text-[color:var(--fg-3)]">
+          qualifiers not set
+        </p>
+      ) : (
+        <p
+          className={cn(
+            'mt-1.5 text-[11px]',
+            tooSmall
+              ? 'text-[color:var(--fg-3)]'
+              : 'text-[color:var(--serve-500)]',
+          )}
+        >
+          top {qualifiers} advance
+        </p>
+      )}
       {tooSmall && (
         <p className="mt-1 text-[11px] font-semibold text-[color:var(--loss)]">
           Too small

@@ -55,11 +55,16 @@ DEFAULT_GROUP_SIZE = 5
 
 
 class SettingOwnership(enum.Enum):
-    """Who a structural setting belongs to: the system derived it, or the director typed
-    it. The client's ``Automatic`` / ``Yours`` badge is this, and nothing else."""
+    """Who a structural setting belongs to: the system derived it, the director typed
+    it, or nobody has yet — ``unset`` is the state of a required setting the director
+    has not filled in (#1425). The client's ``Automatic`` / ``Yours`` / ``Unset`` badge
+    is this, and nothing else."""
 
     automatic = "automatic"
     manual = "manual"
+    #: No number exists yet (#1425). The derivation invents none, so the four
+    #: qualifier-derived fields come back ``None``.
+    unset = "unset"
 
 
 class DisagreementDirection(enum.Enum):
@@ -143,13 +148,19 @@ class DrawStructure:
     #: One entry per group, in group order — **not** a single size, because the groups
     #: are routinely unequal and the uneven case is a first-class state, not an edge.
     group_sizes: tuple[int, ...]
-    qualifiers_per_group: int
+    #: ``None`` while the director has not chosen a number (``unset``, #1425) — the
+    #: derivation invents nothing, so every question downstream of it goes unanswered
+    #: too.
+    qualifiers_per_group: int | None
     #: ``group_count * qualifiers_per_group``: how many players leave the group stage.
-    total_qualifiers: int
+    #: ``None`` with :attr:`qualifiers_per_group`.
+    total_qualifiers: int | None
     #: The knockout's entry list. The same number as :attr:`total_qualifiers` by
     #: construction — two questions with one answer, and the client asks both.
-    knockout_bracket_size: int
-    first_round_byes: int
+    #: ``None`` with :attr:`qualifiers_per_group`.
+    knockout_bracket_size: int | None
+    #: ``None`` with :attr:`qualifiers_per_group` — no bracket, no byes.
+    first_round_byes: int | None
     #: Every all-play-all match the group stage plays, across all groups.
     group_match_count: int
     #: ``None`` when the numbers agree, or when only one of them is the director's.
@@ -231,12 +242,24 @@ def derive_draw_structure(options: DrawStructureOptions) -> DrawStructure:
     **A mode of ``manual`` with no number is automatic.** A director who clears the
     input has set nothing, so the derivation falls back and uses the automatic rule —
     which is what stops a ``Yours`` badge sitting above a number the system worked out.
+
+    **A mode of ``unset`` is no number at all (#1425).** The qualifiers setting is
+    required on Basics; until the director types one there is nothing to derive from,
+    so the four qualifier-derived fields come back ``None`` rather than invented — the
+    automatic rule answers "what would happen by default", which is a different
+    question from "what does this event hold". The group count and sizes are
+    independent of it and stay derived.
     """
     field_size = options.preview_field_size
     # Resolve the modes first, so the rest of the function reads one fact.
     manual_group_count = _typed(options.group_count_mode, options.manual_group_count)
     manual_group_size = _typed(options.group_size_mode, options.manual_group_size)
-    manual_qualifiers = _typed(options.qualifiers_mode, options.manual_qualifiers)
+    qualifiers_unset = options.qualifiers_mode is SettingOwnership.unset
+    manual_qualifiers = (
+        None
+        if qualifiers_unset
+        else _typed(options.qualifiers_mode, options.manual_qualifiers)
+    )
     target_size = (
         _at_least_one(manual_group_size) if manual_group_size is not None else None
     )
@@ -261,18 +284,24 @@ def derive_draw_structure(options: DrawStructureOptions) -> DrawStructure:
 
     smallest_group = min(group_sizes)
 
-    if manual_qualifiers is not None:
+    if qualifiers_unset:
+        qualifiers_per_group = None
+    elif manual_qualifiers is not None:
         qualifiers_per_group = _at_least_one(manual_qualifiers)
     else:
         qualifiers_per_group = _at_least_one(
             _ceil_div(TARGET_BRACKET_SIZE, group_count)
         )
 
-    knockout_bracket_size = group_count * qualifiers_per_group
+    knockout_bracket_size = (
+        group_count * qualifiers_per_group if qualifiers_per_group is not None else None
+    )
     # ``max(2, …)`` is what makes a one-player knockout report ONE bye rather than none:
     # the smallest bracket that can be drawn holds two, so the missing player is a bye.
     first_round_byes = (
         _next_power_of_two(max(2, knockout_bracket_size)) - knockout_bracket_size
+        if knockout_bracket_size is not None
+        else None
     )
     group_match_count = sum(size * (size - 1) // 2 for size in group_sizes)
 
@@ -317,8 +346,8 @@ def derive_draw_structure(options: DrawStructureOptions) -> DrawStructure:
 def _impossible_problems(
     *,
     smallest_group: int,
-    knockout_bracket_size: int,
-    qualifiers_per_group: int,
+    knockout_bracket_size: int | None,
+    qualifiers_per_group: int | None,
 ) -> tuple[ImpossibleProblemKind, ...]:
     """The three impossible competitions, **tested in order, first hit only**.
 
@@ -326,6 +355,10 @@ def _impossible_problems(
     qualify from — a group of one trips the qualifier rule too, and a field of one trips
     all three — but the group is the fact a director can act on, and the rest are echoes
     of it. Reporting the echoes alongside it would make one mistake look like several.
+
+    With the qualifiers ``unset``, only the group rule can fire (#1425): both other
+    rules need a qualifier count to compare against, and inventing one to test with
+    would report a problem the director's eventual number may not have.
     """
     # 1. A group nobody can play in.
     if smallest_group < 2:
@@ -333,12 +366,12 @@ def _impossible_problems(
 
     # 2. A knockout of one. Reachable only from one group taking one qualifier, and the
     #    winner of that group would be handed a title without playing for it.
-    if knockout_bracket_size < 2:
+    if knockout_bracket_size is not None and knockout_bracket_size < 2:
         return (ImpossibleProblemKind.bracket,)
 
     # 3. More qualifiers than the smallest group holds — the group would advance players
     #    it does not have.
-    if qualifiers_per_group > smallest_group:
+    if qualifiers_per_group is not None and qualifiers_per_group > smallest_group:
         return (ImpossibleProblemKind.qualifier,)
 
     return ()
