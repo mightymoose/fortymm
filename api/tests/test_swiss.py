@@ -404,8 +404,13 @@ async def test_the_cut_writes_every_round_with_round_one_seated(
 
     Round 1 carries both sides, seeded from the draw order — top half against bottom
     half, so seed 1 meets seed 5. Rounds 2 and 3 exist with both sides NULL, which
-    means TBD and nothing else (ADR-0786). Every fixture is ungrouped, because swiss
-    ranks one field in one table.
+    means TBD and nothing else (ADR-0786).
+
+    Every fixture names the event's **one group** (#1483), which is what confines the
+    rounds to the reservation the director booked. That is a scheduling fact, not a
+    format one: swiss still ranks one field in one table, and no surface labels these
+    rounds with a group — the stage's own draw type is what decides that
+    (``app.draws.seats_both_sides_at_cut``).
     """
     client, _ = authed_client
     tournament_id, event_id, entries = await _field(client, db_session, 8)
@@ -414,7 +419,11 @@ async def test_the_cut_writes_every_round_with_round_one_seated(
 
     fixtures = await _fixtures(db_session, event_id)
     assert len(fixtures) == 12
-    assert all(f.group_id is None for f in fixtures)
+    group_ids = {f.group_id for f in fixtures}
+    assert len(group_ids) == 1 and None not in group_ids, (
+        "every swiss fixture is dealt into the event's one group, so the solver can "
+        f"reach its reservation through it — got {group_ids!r}"
+    )
 
     by_seed = {entry.seed: entry.id for entry in entries}
     round_one = [f for f in fixtures if f.round == 1]

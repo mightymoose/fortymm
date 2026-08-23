@@ -189,7 +189,12 @@ export interface StoredReservation {
 export interface StoredGroup {
   readonly id: string
   readonly position: number
-  readonly reservation_id: string
+  /** The reservation this group plays in, or `null` for a group that plays in none
+   * (#1387) — the state a **reservation-less** event's one group is always in, since
+   * #1483's floor mints a group whatever the reservation count. Its fixtures then fall
+   * to the synthetic event-wide reservation (the event's own slot over the whole
+   * catalogue) until #1364 mints one for them. */
+  readonly reservation_id: string | null
 }
 
 /** `Group A`, `Group B`, … and past `Group Z` the spreadsheet's `AA` — a bijective
@@ -292,11 +297,15 @@ export interface SeedEventOptions {
   /** The event's draw type. Omitted = `round-robin`, the original minimal shape.
    *
    * `single-elim` is what `tournament-single-elim-schedule.spec.ts` seeds, and it is
-   * seeded **with `reservations: []`**: a bracket is un-grouped end to end (ADR-0786),
-   * so a reservation on such an event would book a slice of the venue no group's fixture
-   * is ever drawn into — and the spec's whole subject is what the scheduler does with a
-   * fixture that names no group (ADR 20260807, "a group restricts scheduling, it does
-   * not enable it"). */
+   * seeded **with `reservations: []`** — which no longer means the bracket is
+   * un-grouped. Since #1483 a single-elim or swiss stage holds one group whatever the
+   * reservation count, and every fixture of its draw is dealt into it, so the bracket
+   * is confined to whatever that group maps to. Booking nothing is what keeps this
+   * seed's group mapped to no reservation, and its fixtures therefore falling to the
+   * synthetic event-wide reservation — the event's own slot over the whole catalogue
+   * (ADR 20260807, "a group restricts scheduling, it does not enable it"), which is
+   * still the spec's subject. #1364 closes that fallback by minting a reservation, and
+   * rewrites the spec's assertions when it does. */
   readonly drawType?: SeededDrawType
   /** **K** — how many finishers of each group reach the knockout. Sent only when given,
    * because the key is a **422 naming itself** on every arm but `rr-then-ko`: the union's
@@ -319,7 +328,9 @@ export interface SeedEventOptions {
 
 /** One event as `addEvent` reads it back: the uuid the server minted for it, its
  * reservations **as stored** (empty for an event seeded with `reservations: []`), and
- * the groups the server minted for them **in lockstep**, one per reservation. */
+ * the groups the server minted **one per reservation — but never fewer than one**
+ * (#1483's floor). An event that books nothing therefore reads back no reservations and
+ * exactly one group, whose `reservation_id` is `null`. */
 export interface SeededEvent {
   readonly eventId: string
   readonly reservations: ReadonlyArray<StoredReservation>
@@ -336,11 +347,15 @@ export interface SeedTournamentOptions {
   /** The event's draw type. Omitted = `round-robin`, the original minimal shape.
    *
    * `single-elim` is what `tournament-single-elim-schedule.spec.ts` seeds, and it is
-   * seeded **with `reservations: []`**: a bracket is un-grouped end to end (ADR-0786),
-   * so a reservation on such an event would book a slice of the venue no group's fixture
-   * is ever drawn into — and the spec's whole subject is what the scheduler does with a
-   * fixture that names no group (ADR 20260807, "a group restricts scheduling, it does
-   * not enable it"). */
+   * seeded **with `reservations: []`** — which no longer means the bracket is
+   * un-grouped. Since #1483 a single-elim or swiss stage holds one group whatever the
+   * reservation count, and every fixture of its draw is dealt into it, so the bracket
+   * is confined to whatever that group maps to. Booking nothing is what keeps this
+   * seed's group mapped to no reservation, and its fixtures therefore falling to the
+   * synthetic event-wide reservation — the event's own slot over the whole catalogue
+   * (ADR 20260807, "a group restricts scheduling, it does not enable it"), which is
+   * still the spec's subject. #1364 closes that fallback by minting a reservation, and
+   * rewrites the spec's assertions when it does. */
   readonly drawType?: SeededDrawType
   /** **K** — see `SeedEventOptions.qualifiersPerGroup`, which is this same option on
    * the one event `seedTournament` adds. */
@@ -351,10 +366,11 @@ export interface SeedTournamentOptions {
   readonly tables?: ReadonlyArray<TableSpec>
   /** The event's reservations, **in the director's order** — omitted = the original
    * single `Reservation A` over the whole catalogue, so existing specs are untouched.
-   * **`[]` seeds an event with NO reservations**, which is what an un-grouped draw type
-   * wants: the create verb takes any number of reservations, zero included, and `??`
-   * leaves an explicit empty list alone (only an *omitted* option falls back to the
-   * default).
+   * **`[]` seeds an event that books nothing**: the create verb takes any number of
+   * reservations, zero included, and `??` leaves an explicit empty list alone (only an
+   * *omitted* option falls back to the default). It no longer means "no groups" —
+   * #1483's floor mints one anyway, mapped to no reservation, and the event's fixtures
+   * fall to the synthetic event-wide reservation through it.
    *
    * The list's order is the whole point of the option: it is what the server turns into
    * the stored `position`s — of the reservations themselves, and of the groups it mints
@@ -401,18 +417,20 @@ export interface SeededTournament extends CreatedTournament {
    * would cite to keep the row. */
   readonly reservations: ReadonlyArray<StoredReservation>
   /** The groups the server minted for those reservations, **in lockstep**, one per
-   * reservation, in the same order. The id everything competitive is keyed by — a
-   * fixture's `group_id`, the draw's group sections, a standings table — and the order
-   * the draw must read in. */
+   * reservation and in the same order — **but never fewer than one** (#1483's floor).
+   * A seed that books nothing therefore reads back one group whose `reservation_id` is
+   * `null`. The id everything competitive is keyed by — a fixture's `group_id`, the
+   * draw's group sections, a standings table — and the order the draw must read in. */
   readonly groups: ReadonlyArray<StoredGroup>
   /** The event's **first** group id — its only one under the default seed — so a spec
    * can scope its standings assertions without indexing `groups` itself.
    *
-   * **`null` for a seed with no reservations** (`reservations: []`, an un-grouped draw
-   * type, which mints no groups either). Nullable rather than "the first element of a
-   * possibly-empty list", which reads as a `string` and is `undefined`: a group-less
-   * event has no first group, and saying so here is what stops that `undefined`
-   * travelling into a locator and resolving nothing. */
+   * Non-null for every event the API can now create, since the floor above mints a
+   * group whatever the reservation count. Kept nullable all the same: it is read off
+   * `groups[0]`, and a type that says "there is always a first element" of a list this
+   * module does not control is a claim about the server that belongs in an assertion,
+   * not in a type. That nullability is what stops an `undefined` travelling into a
+   * locator and resolving nothing. */
   readonly groupId: string | null
 }
 
@@ -652,13 +670,15 @@ export async function addEvent(
   }
   // The server owns the groups (ticket #1387, ADR 20260822). An `rr-then-ko` event
   // derives `ceil(field / 5)` of them from its preview field — the cap, or 16 when
-  // uncapped — and every other draw type keeps one group per reservation. A mismatch
-  // here means the server's rule moved, which no caller of this helper could ever
-  // observe from the reservations array alone.
+  // uncapped — and every other draw type keeps one group per reservation, **but never
+  // fewer than one** (#1483's floor: a stage with no group row has no hop for the
+  // solver to reach a reservation through, so an event that books nothing still holds
+  // one group, mapped to none). A mismatch here means the server's rule moved, which no
+  // caller of this helper could ever observe from the reservations array alone.
   const expectedGroups =
     (options.drawType ?? 'round-robin') === 'rr-then-ko'
       ? Math.ceil((options.maxPlayers ?? 16) / 5)
-      : reservations.length
+      : Math.max(reservations.length, 1)
   if (created.groups.length !== expectedGroups) {
     throw new Error(
       `expected the event to mint ${expectedGroups} groups but it minted ${created.groups.length}`,

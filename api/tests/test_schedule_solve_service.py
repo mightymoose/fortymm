@@ -1997,6 +1997,118 @@ async def _make_two_group_tournament(
     )
 
 
+class TestBracketConfinement:
+    """A single-elim or swiss event's fixtures are placed on **its reservation's
+    tables inside its reservation's window** (#1483), not across the tournament's
+    whole catalogue for the whole day.
+
+    The confinement arrives with no change to the solver at all: a fixture reaches
+    its reservation through its group (``restricting_reservation_key``, #1436), and
+    #1483 is what gives these draw types a group to reach through. The lookup's
+    INPUT changed; the lookup did not.
+    """
+
+    async def test_a_single_elim_bracket_is_confined_to_its_reservations_tables(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The headline. A 4-entrant bracket at a two-table venue, whose event window
+        is the whole day but whose one reservation books **table 1 in the morning
+        only**. Both semifinals land on table 1, before noon.
+
+        Every assertion here can fail, which is the point of the seed's shape: the
+        event's own window spans the whole day over both tables, so a bracket that
+        fell through to the synthetic event-wide reservation — which is exactly what
+        it did before this ticket — would be placed feasibly on either table at any
+        hour and the run would still be ``optimal``. The table and the window are the
+        two things only the group hop can restrict.
+        """
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            draw_type=DrawType.single_elim,
+            entrants=4,
+            tables=("t1", "t2"),
+            reservations=[
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "12:00"},
+                    "table_ids": ["t1"],
+                }
+            ],
+        )
+        catalogue = await table_ids_of(db_session, tournament_id)
+        assert len(catalogue) == 2, "the venue must hold a table the reservation omits"
+
+        fixtures = await _fixtures_of(db_session, event_id)
+        round_one = [f for f in fixtures if f.round == 1]
+        assert len(round_one) == 2
+        assert all(f.group_id is not None for f in fixtures), (
+            "every bracket fixture is dealt into the stage's group — the hop the "
+            "confinement is made of"
+        )
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        result = scheduling.solve(inputs.snapshot)
+
+        assert result.verdict in (Verdict.optimal, Verdict.feasible)
+        assert {p.fixture_id for p in result.placements} == {
+            str(f.id) for f in round_one
+        }
+        reserved_end = datetime(2030, 1, 1, 12, 0, tzinfo=VENUE_TZ)
+        placed_tables = {p.table_id for p in result.placements}
+        assert len(placed_tables) == 1, (
+            f"the whole bracket sits on the one table the reservation booked — "
+            f"got {placed_tables!r}"
+        )
+        assert placed_tables < set(catalogue), (
+            "and it is a strict subset of the catalogue, so the reservation really "
+            "restricted something"
+        )
+        for placement in result.placements:
+            end = inputs.base + timedelta(minutes=placement.end_min)
+            assert end <= reserved_end, (
+                "and inside the reservation's window, not the event's whole day"
+            )
+
+    async def test_a_swiss_round_is_confined_to_its_reservations_tables(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The same claim for swiss, whose rounds reach their reservation through the
+        same one group."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            draw_type=DrawType.swiss,
+            rounds=2,
+            entrants=4,
+            tables=("t1", "t2"),
+            reservations=[
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "12:00"},
+                    "table_ids": ["t1"],
+                }
+            ],
+        )
+        catalogue = await table_ids_of(db_session, tournament_id)
+        fixtures = await _fixtures_of(db_session, event_id)
+        assert all(f.group_id is not None for f in fixtures)
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        result = scheduling.solve(inputs.snapshot)
+
+        assert result.verdict in (Verdict.optimal, Verdict.feasible)
+        assert result.placements, "round one is seeded, so it is placeable"
+        reserved_end = datetime(2030, 1, 1, 12, 0, tzinfo=VENUE_TZ)
+        assert {p.table_id for p in result.placements} < set(catalogue)
+        for placement in result.placements:
+            assert inputs.base + timedelta(minutes=placement.end_min) <= reserved_end
+
+
 class TestEventWideReservation:
     """A fixture with no group is placed over its event's whole timeline (ADR "a
     reservation restricts scheduling, it does not enable it"): the event's own

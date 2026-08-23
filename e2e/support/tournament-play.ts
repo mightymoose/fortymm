@@ -145,6 +145,12 @@ export async function playEvent(
       .filter(
         (fixture) =>
           fixture.match_status !== 'completed' &&
+          // ``'groups'`` means the **group stage of an rr-then-ko draw**, whose knockout
+          // half is the only thing left carrying ``group_id: null`` after #1483. It is
+          // not a general "is this fixture grouped" test: a single-elim or swiss event's
+          // whole draw names a group now, so this filter would keep all of it — which is
+          // correct for those (they have one stage) and is why the only caller passing
+          // ``'groups'`` is the rr-then-ko spec.
           (stage === 'all' || fixture.group_id !== null),
       )
     if (playable.length === 0) return played

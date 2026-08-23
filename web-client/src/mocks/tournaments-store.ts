@@ -647,13 +647,19 @@ function seed(): StoredTournament[] {
           // Deliberately empty: the designed empty entrants state, and the event
           // whose count a dev demo ticks from 0 to 1.
           //
-          // It is ALSO the seed's **uncuttable** event, and it stays uncuttable for a
-          // reason that survives (ADR 20260726): round-robin with **NO GROUPS**. It used
-          // to be `rr-then-ko`, refused because nothing could plan that type — but "an
-          // unplannable type" is no longer a state a valid event can be in (that slug is
-          // back, with a strategy, since #1227). `reservations: []` replaces it, and it is
-          // permanent: "A round-robin draw needs at least one group." Do not give it
-          // reservations.
+          // It is ALSO the seed's **uncuttable** event: round-robin with **NO GROUPS**,
+          // which this store refuses with "A round-robin draw needs at least one group."
+          // Do not give it reservations.
+          //
+          // ⚠️ A **known divergence from the real server**, and a deliberate one. Since
+          // #1483 the server mints a group for every stage whatever the reservation
+          // count, so it would cut this event rather than refuse it; this store derives
+          // its group count from `reservations.length` alone, unconditionally, and
+          // closing that gap is #1484's job (see `ev-two-stage-cut` below, where the
+          // same divergence is already written down). Until then this seed keeps a
+          // permanently-refused event for the dev demo, and the refusal it demonstrates
+          // is still one the domain writes — a caller reaching the round-robin strategy
+          // with no group gets exactly this sentence.
           id: 'ev-u1500',
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1500 Singles',
