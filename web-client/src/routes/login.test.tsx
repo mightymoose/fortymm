@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -10,7 +16,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { toast } from 'sonner'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import { mockSession } from '@/mocks/handlers'
 import { Route as LoginIndexRoute } from './login.index'
@@ -22,15 +28,42 @@ interface TestRouterContext {
   queryClient: QueryClient
 }
 
+// Shared control surface for the Turnstile stub below. `auto` hands a token
+// on mount — the behaviour most tests rely on. `defer` holds the widget's
+// callbacks so a test can release a token (or fire the error path) after
+// asserting the pre-token UI, reproducing the cold-load window where no token
+// exists yet (#1462).
+const turnstileStub = vi.hoisted(() => ({
+  mode: 'auto' as 'auto' | 'defer',
+  // Assigned by the stubbed widget once it renders in `defer` mode.
+  giveToken: null as null | ((token: string) => void),
+  failWidget: null as null | (() => void),
+}))
+
 // Replace the real Turnstile widget with a fake that hands a token to the
 // form on mount — the production component loads a Cloudflare script that
 // jsdom can't execute.
 vi.mock('@/components/turnstile', () => ({
-  Turnstile: ({ onToken }: { onToken: (token: string) => void }) => {
+  Turnstile: ({
+    onToken,
+    onError,
+  }: {
+    onToken: (token: string) => void
+    onError?: () => void
+  }) => {
+    if (turnstileStub.mode === 'defer') {
+      turnstileStub.giveToken = onToken
+      turnstileStub.failWidget = () => onError?.()
+      return <div data-testid="deferred-turnstile" />
+    }
     onToken('fake-captcha-token')
     return <div data-testid="fake-turnstile" />
   },
 }))
+
+afterEach(() => {
+  turnstileStub.mode = 'auto'
+})
 
 vi.mock('sonner', async () => {
   const actual = await vi.importActual<typeof import('sonner')>('sonner')
@@ -142,6 +175,71 @@ describe('/login flow', () => {
       expect(router.state.location.pathname).toBe('/login/sent')
     })
     expect(requests).toBe(1)
+  })
+
+  // Regression pair for #1462: the Turnstile token needs a script fetch, a
+  // widget render and a challenge solve, so for the first second or so of a
+  // cold load there is no token. The submit button used to accept that click,
+  // set "Complete the check above…" and have onToken clear the message again
+  // a moment later — reading as a dead button. It must visibly refuse clicks
+  // until the token exists instead.
+
+  it('waits visibly for the captcha token, then submits exactly once it lands (#1462)', async () => {
+    turnstileStub.mode = 'defer'
+    let requests = 0
+    server.use(
+      http.post('*/v1/login/request', async ({ request }) => {
+        requests += 1
+        const body = (await request.json()) as { email: string }
+        return HttpResponse.json({ email: body.email }, { status: 202 })
+      }),
+    )
+    const user = userEvent.setup()
+    const { router } = renderAt('/login')
+
+    const input = await screen.findByLabelText('Email address')
+    await user.type(input, 'rita@example.com')
+
+    // Pre-token: disabled with an explained waiting label; neither a click
+    // nor implicit Enter submission reaches the network.
+    const waitingBtn = screen.getByRole('button', { name: /getting ready/i })
+    expect(waitingBtn).toBeDisabled()
+    fireEvent.click(waitingBtn)
+    await user.type(input, '{enter}')
+    expect(requests).toBe(0)
+    expect(router.state.location.pathname).toBe('/login')
+
+    // Token lands: enabled with its normal label, one click → one POST.
+    act(() => turnstileStub.giveToken?.('late-captcha-token'))
+    const sendBtn = screen.getByRole('button', { name: /^send the link$/i })
+    expect(sendBtn).toBeEnabled()
+    await user.click(sendBtn)
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/login/sent')
+    })
+    expect(requests).toBe(1)
+  })
+
+  it('swaps the waiting label for a visible alert and stays disabled when the captcha errors (#1462)', async () => {
+    turnstileStub.mode = 'defer'
+    const user = userEvent.setup()
+    renderAt('/login')
+
+    const input = await screen.findByLabelText('Email address')
+    await user.type(input, 'rita@example.com')
+    expect(screen.getByRole('button', { name: /getting ready/i })).toBeDisabled()
+
+    // Widget-level error: no silent return to "Getting ready…", no enable.
+    act(() => turnstileStub.failWidget?.())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /anti-bot check hit a snag/i,
+    )
+    expect(
+      screen.queryByRole('button', { name: /getting ready/i }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^send the link$/i })).toBeDisabled()
   })
 
   it('keeps the user on /login and surfaces an inline error for bad emails', async () => {
