@@ -217,9 +217,11 @@ def test_mint_stages_positions_from_zero() -> None:
 def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
     """The lockstep pin for ADR 20260815 decisions 3 and 6: what
     :func:`~app.tournament_event_stages.stage_template` mints for ``rr-then-ko`` (the
-    WRITER — ``app.tournament_draws.cut_draw`` hangs every grouped planned fixture off
-    position 0 and the ungrouped bracket off the template's LAST position,
-    unconditionally) and what :class:`~app.draws.RrThenKoStrategy` reads back through
+    WRITER — since #1483 each strategy STATES the stage it dealt a fixture into, on
+    :attr:`~app.draws.PlannedFixture.stage`, and ``app.tournament_draws.cut_draw``
+    writes that position through unchanged; :class:`~app.draws.RrThenKoStrategy` deals
+    its group half at position 0 and its bracket at position 1) and what
+    :class:`~app.draws.RrThenKoStrategy` reads back through
     :attr:`~app.draws.FixtureState.stage` (the READER — its ``_stage_split`` matches on
     ``draw_type``, never on a position literal) have to be the SAME two facts, or a
     real cut's fixtures would land on stages the strategy cannot place.
@@ -239,10 +241,11 @@ def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
         stage.position: FixtureStage(position=stage.position, draw_type=stage.draw_type)
         for stage in stages
     }
-    # cut_draw's own assumption (app.tournament_draws.cut_draw): every GROUPED planned
-    # fixture is hung off position 0, and the ungrouped bracket off the template's
-    # LAST position — restated here as data pulled off the real mint, not trusted
-    # silently to still be true.
+    # The composite's own deal (app.draws.RrThenKoStrategy.plan_initial): its group
+    # half names position 0 and its bracket the template's LAST position — restated
+    # here as data pulled off the real mint, not trusted silently to still be true.
+    # (Before #1483 this was cut_draw's inference from a fixture's group presence
+    # rather than the strategy's own statement; the two positions are the same pair.)
     group_stage = fixture_stage_at[0]
     knockout_stage = fixture_stage_at[len(stages) - 1]
 

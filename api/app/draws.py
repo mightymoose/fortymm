@@ -394,54 +394,17 @@ class DrawConfig:
     downstream may re-sort it: a ``sorted(config.group_ids)`` anywhere below here would
     seed the draw against the ids' own order, which under a random uuid is nobody's.
 
-    Empty for an un-grouped draw type (single-elim), where every fixture's ``group_id``
-    is ``NULL``. The group *id set* freezes while a draw exists
+    Never empty on the production path since #1483: every event's stage 0 holds at
+    least one group, whatever its reservation count (the floor in
+    ``app.tournament_reservations.group_count_for``), and a single-stage draw type
+    deals every fixture into the one it names (:func:`_sole_group`). It is still
+    *representable* empty, for a strategy test cutting against a bare
+    ``DrawConfig()``. The group *id set* freezes while a draw exists
     (``app.tournament_events`` refuses a payload that moves it), and underneath that a
     composite foreign key holds the reference itself.
     """
 
     group_ids: tuple[GroupId, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class PlannedFixture:
-    """One fixture a cut wants written — the pre-persistence twin of a
-    ``TournamentFixture`` row, minus the ids the database mints.
-
-    A side is ``None`` only when it is genuinely **TBD** (single-elim's later rounds).
-    It is *never* ``None`` to mean "bye": a bye is the absence of this object.
-    """
-
-    #: ``None`` = the draw is un-grouped — single-elim today, and the knockout stage of
-    #: a groups-then-knockout draw type once #787 adds one.
-    group_id: GroupId | None
-    #: 1-based.
-    round: int
-    #: 1-based within its (group, round).
-    position: int
-    entry_a_id: EntryId | None = None
-    entry_b_id: EntryId | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class FixtureGames:
-    """How many games **each side of a fixture won**, read off its completed match.
-
-    One object carrying both counts, rather than two ``int | None`` fields on
-    :class:`FixtureState`, so "we know this fixture's games" is a single fact: there is
-    no way to hold a half-known score in which one side's count is present and the
-    other's is missing (api/CLAUDE.md — make illegal states unrepresentable).
-
-    ``entry_a`` ↔ side 1 and ``entry_b`` ↔ side 2, the fixed materialization convention
-    (#788) every other read of a fixture's match already uses.
-
-    A tie is representable here and is not this type's job to refuse: a match is played
-    to an odd best-of, so a *completed* one cannot tie, but a count is a count and this
-    object never sees the best-of that would make the claim checkable.
-    """
-
-    entry_a_games: int
-    entry_b_games: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,6 +435,65 @@ class FixtureStage:
 
     position: int
     draw_type: DrawType
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedFixture:
+    """One fixture a cut wants written — the pre-persistence twin of a
+    ``TournamentFixture`` row, minus the ids the database mints.
+
+    A side is ``None`` only when it is genuinely **TBD** (single-elim's later rounds).
+    It is *never* ``None`` to mean "bye": a bye is the absence of this object.
+    """
+
+    #: Which of its event's stages this fixture is dealt into, and that stage's own
+    #: draw type — the same :class:`FixtureStage` projection :attr:`FixtureState.stage`
+    #: carries on the read side (ADR 20260815 decision 5), stated here on the write
+    #: side by the strategy that dealt the fixture.
+    #:
+    #: **Required, and not derived downstream.** The write seam
+    #: (:func:`app.tournament_draws.cut_draw`) used to infer a fixture's stage from
+    #: whether it named a group — stage 0 for a grouped fixture, the event's un-grouped
+    #: stage otherwise. That inference was only ever correct while "has a group" and
+    #: "belongs to the group stage" were the same set, and it is the strategy, not the
+    #: seam, that actually knows: a bracket dealt into its stage's group is grouped AND
+    #: on a knockout stage. The reader that needs the draw type
+    #: (:func:`app.schedule_preview._previewed_fixtures`, through
+    #: :func:`seats_both_sides_at_cut`) and the one that needs the position (the write
+    #: seam) read the one fact rather than two derivations of it.
+    stage: FixtureStage
+    #: The group this fixture is dealt into — the event's stage-0 group for every
+    #: single-stage draw type (round-robin's dealt groups, and, since #1483, the sole
+    #: group a single-elim or swiss stage holds), and ``None`` for the knockout stage
+    #: of a groups-then-knockout draw, whose groups #1484 materialises.
+    group_id: GroupId | None
+    #: 1-based.
+    round: int
+    #: 1-based within its (group, round).
+    position: int
+    entry_a_id: EntryId | None = None
+    entry_b_id: EntryId | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureGames:
+    """How many games **each side of a fixture won**, read off its completed match.
+
+    One object carrying both counts, rather than two ``int | None`` fields on
+    :class:`FixtureState`, so "we know this fixture's games" is a single fact: there is
+    no way to hold a half-known score in which one side's count is present and the
+    other's is missing (api/CLAUDE.md — make illegal states unrepresentable).
+
+    ``entry_a`` ↔ side 1 and ``entry_b`` ↔ side 2, the fixed materialization convention
+    (#788) every other read of a fixture's match already uses.
+
+    A tie is representable here and is not this type's job to refuse: a match is played
+    to an odd best-of, so a *completed* one cannot tie, but a count is a count and this
+    object never sees the best-of that would make the claim checkable.
+    """
+
+    entry_a_games: int
+    entry_b_games: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -885,6 +907,33 @@ class RoundRobinStrategy:
         return AdvancePlan(side_fills=(), ready_fixture_ids=ready_fixtures(fixtures))
 
 
+def _sole_group(config: DrawConfig) -> GroupId | None:
+    """The **one** group a single-stage draw deals every fixture into, or ``None``
+    when the config names anything other than exactly one.
+
+    A single-elim or swiss event has one stage, and since #1483 that stage holds
+    exactly one group whatever the event's reservation count: the materialisation
+    floor (``app.tournament_reservations.group_count_for``) mints at least one, and
+    #1482's cap keeps a non-composite event to at most one reservation, so the count
+    cannot climb. The production answer is therefore always that one group's id.
+
+    ``None`` is for the callers the production path does not have: a strategy test
+    that cuts against a bare ``DrawConfig()``. Dealing those fixtures into no group
+    is exactly what they did before this floor existed, so an ungrouped config
+    plans the shape it always planned rather than raising at a caller that never
+    asked about groups.
+
+    The many-groups arm answers ``None`` too, and deliberately does not pick the
+    first: "the group of this stage" has no answer when a stage has several, and
+    guessing one would deal a whole bracket into an arbitrary group with nothing to
+    say it was arbitrary. #1484, which materialises groups per stage, is what gives
+    that arm a real answer.
+    """
+    if len(config.group_ids) != 1:
+        return None
+    return config.group_ids[0]
+
+
 @dataclass(frozen=True, slots=True)
 class SingleElimStrategy:
     """Single-elimination: one bracket, lose once and you are out (ADR-0785).
@@ -923,7 +972,12 @@ class SingleElimStrategy:
                 "one has nobody to play."
             )
         seed_entry = {entrant.position: entrant.entry_id for entrant in entrants}
-        return _knockout_fixtures(size, seed_entry)
+        return _knockout_fixtures(
+            size,
+            seed_entry,
+            stage=FixtureStage(position=0, draw_type=DrawType.single_elim),
+            group_id=_sole_group(config),
+        )
 
     def advance(
         self,
@@ -1115,9 +1169,19 @@ class RrThenKoStrategy:
             )
         qualifier_count = len(groups) * self.qualifiers_per_group
         fixtures = RoundRobinStrategy().plan_initial(config, ordered_entrants)
-        # Cut in the same stroke: every side TBD (nobody has qualified), ``group_id``
-        # ``None`` (the knockout stage *is* ``group_id IS NULL``), rounds from 1.
-        fixtures.extend(_knockout_fixtures(qualifier_count, {}))
+        # Cut in the same stroke: every side TBD (nobody has qualified), rounds from 1,
+        # and **no group** — the composite passes none and takes the parameter's
+        # default. Its knockout stage has no groups to name until #1484 materialises
+        # them, and handing it the group stage's group (which is what
+        # ``_sole_group(config)`` would answer here) would deal the bracket into the
+        # round-robin half the qualifiers are picked from.
+        fixtures.extend(
+            _knockout_fixtures(
+                qualifier_count,
+                {},
+                stage=FixtureStage(position=1, draw_type=DrawType.single_elim),
+            )
+        )
         return fixtures
 
     def advance(
@@ -1292,12 +1356,13 @@ class SwissStrategy:
     already-existing rows in rank order, so a fixture's ``position`` *is* its pairing
     rank.
 
-    Fixtures are **un-grouped** (``group_id=None``): swiss ranks the whole field in one
-    table. That no longer keeps them off the schedule — a live solve places an
-    un-grouped fixture over its event's own window (ADR "a group restricts scheduling,
-    it does not enable it") — but the schedule **preview** still refuses a swiss event
-    exactly as it refuses a bracket, for the reason :mod:`app.schedule_preview` states
-    in full.
+    Fixtures are dealt into the event's **one group** (#1483), which is what confines
+    the rounds to the reservation their director booked — but swiss is still not a
+    group *stage*: it ranks the whole field in one table, and every surface that
+    renders or labels a group asks :func:`seats_both_sides_at_cut` about the stage's
+    draw type rather than reading the group id. The schedule **preview** still
+    refuses a swiss event exactly as it refuses a bracket, for the reason
+    :mod:`app.schedule_preview` states in full.
     """
 
     #: How many rounds the event plays. ``R >= 1`` is static — a Pydantic constraint at
@@ -1339,9 +1404,18 @@ class SwissStrategy:
         # The odd entrant out sits the round; ``m`` is the field that actually plays, so
         # every round holds ⌊n/2⌋ fixtures whatever the parity.
         pairs_per_round = size // 2
+        # Every fixture of a swiss draw belongs to its event's sole stage, and is
+        # dealt into that stage's sole group (#1483) — which is what confines the
+        # rounds to the reservation the director booked. The stage's own draw type
+        # is what keeps a surface from calling that group a group stage
+        # (:func:`seats_both_sides_at_cut`): swiss ranks the whole field in one
+        # table, and rounds past the first are unpaired until ``advance``.
+        stage = FixtureStage(position=0, draw_type=DrawType.swiss)
+        group_id = _sole_group(config)
         fixtures = [
             PlannedFixture(
-                group_id=None,
+                stage=stage,
+                group_id=group_id,
                 round=1,
                 position=position,
                 # Top half against bottom half, in draw order. ``entrants`` is
@@ -1356,7 +1430,9 @@ class SwissStrategy:
         # pairing's rank in the standings when the round is paired; until then it is
         # only the row's identity within its round.
         fixtures.extend(
-            PlannedFixture(group_id=None, round=round_number, position=position)
+            PlannedFixture(
+                stage=stage, group_id=group_id, round=round_number, position=position
+            )
             for round_number in range(2, self.rounds + 1)
             for position in range(1, pairs_per_round + 1)
         )
@@ -1958,10 +2034,13 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
        :attr:`~FixtureState.stage`'s ``position`` where a caller resolved it (only
        ``rr-then-ko``'s ``advance()`` ever asks for the plumbing that fills it),
        falling back to ``group_id is None`` where it did not (every other draw type, and
-       an under-wired caller). Either way this sorts the un-grouped/knockout fixtures
-       LAST, behind the groups that feed them — except under swiss, whose draw is
-       un-grouped end to end, so there are no groups for it to sort behind and this key
-       partitions nothing.
+       an under-wired caller). Either way this sorts the knockout stage LAST, behind the
+       groups that feed it. It partitions nothing at all for a single-stage draw type:
+       every fixture of one shares its event's only stage, and since #1483 shares that
+       stage's only group too, so both the key and its fallback answer the same value
+       for all of them. That is why the deal changed nothing here — a uniform key is
+       uniform whichever value it is uniform at, and the round/position questions below
+       decide the order as they always did.
     2. "Where in the event's group order is its group?" — :func:`_group_sort_key`'s
     first
        two elements: ``group_position``, with an unresolved order sorting after every
@@ -2062,6 +2141,51 @@ def reads_fixture_games(draw_type: DrawType) -> bool:
             return True
         case DrawType.swiss:
             return True
+
+
+def seats_both_sides_at_cut(draw_type: DrawType) -> bool:
+    """Whether a stage running ``draw_type`` knows **both sides of every one of its
+    fixtures at the cut** — the one predicate every surface that used to ask
+    ``group_id is not None`` asks instead.
+
+    A round-robin stage does: the circle method pairs the whole group up front, so
+    every fixture it deals names two entrants the moment it exists. A single-elim
+    stage does not (round one is seeded, every later round is TBD until its feeders
+    are decided), and a swiss stage does not (only round one is seeded; the rest are
+    paired on ``advance``).
+
+    **It replaced group presence, and that is the whole point.** "Has a group" and
+    "seats both sides at the cut" happened to be the same set for as long as
+    single-elim and swiss dealt their fixtures into no group at all — so five
+    surfaces spelled the second question as the first (the preview's keep/drop split
+    and its honest-note count, a match call's ``group_label``, the dashboard's group
+    label, and the client's grouped/ungrouped bucketing). The moment a bracket's
+    fixtures name their stage's group, every one of those readers would have started
+    calling a bracket a group: a preview would place TBD-sided fixtures it cannot
+    place, and a single-elim player would be told they are in "Group A". Asked here,
+    once, they cannot drift apart per surface.
+
+    An exhaustive ``match`` with **no catch-all**, exactly like
+    :func:`reads_fixture_games` and :func:`strategy_for`: a fifth
+    :class:`DrawType` member has to declare its answer before this type-checks.
+
+    ``rr_then_ko`` answers ``False`` and is unreachable in practice: this is asked of
+    a **stage's own** draw type, and ``rr_then_ko`` names a template rather than a
+    runnable stage's type (ADR 20260815 decision 4 —
+    :data:`~app.models.draw_type.StageDrawType` excludes it, and the stage model's
+    setter refuses it). ``False`` is the safe answer anyway: a composite seats
+    nobody's second side at the cut but its group half's, and that half is a
+    round-robin stage which answers for itself.
+    """
+    match draw_type:
+        case DrawType.round_robin:
+            return True
+        case DrawType.single_elim:
+            return False
+        case DrawType.swiss:
+            return False
+        case DrawType.rr_then_ko:
+            return False
 
 
 def reads_entrants(draw_type: DrawType) -> bool:
@@ -2220,6 +2344,13 @@ def _circle_method(
             position += 1
             fixtures.append(
                 PlannedFixture(
+                    # A round-robin deal is always a **group stage** at position 0 —
+                    # the sole stage of a round-robin event, and the first of an
+                    # rr-then-ko one (``stage_template``, ADR 20260815 decision 3).
+                    # There is no third caller, and no round-robin stage anywhere else
+                    # in any template, so this is stated here rather than threaded
+                    # through as a parameter nobody would ever vary.
+                    stage=FixtureStage(position=0, draw_type=DrawType.round_robin),
                     group_id=group_id,
                     round=round_number,
                     position=position,
@@ -2324,11 +2455,15 @@ def _knockout_seats(field_size: int) -> dict[int, tuple[int, int, Side]]:
 
 
 def _knockout_fixtures(
-    field_size: int, entry_for_seed: Mapping[int, EntryId]
+    field_size: int,
+    entry_for_seed: Mapping[int, EntryId],
+    *,
+    stage: FixtureStage,
+    group_id: GroupId | None = None,
 ) -> list[PlannedFixture]:
-    """The whole un-grouped bracket for ``field_size`` seeds, with each seed's entry
-    taken from ``entry_for_seed`` — **or left TBD for every seed the map does not
-    name**.
+    """The whole bracket for ``field_size`` seeds, dealt into ``stage`` (and into
+    ``group_id``, when the caller has one), with each seed's entry taken from
+    ``entry_for_seed`` — **or left TBD for every seed the map does not name**.
 
     Two callers, one bracket. :class:`SingleElimStrategy` passes the full seed → entry
     map, because a single-elim cut knows its field. :class:`RrThenKoStrategy` passes an
@@ -2339,6 +2474,19 @@ def _knockout_fixtures(
     known at cut time, so *which* slots exist and *which* seeds bye is settled before
     anybody has played.
 
+    **The group rides a parameter, and it defaults to none.** The two callers do not
+    agree about it: a single-elim event has one stage, that stage holds a group
+    (#1483's floor), and every fixture of its bracket is dealt into it, so the
+    solver confines the bracket to that group's reservation. An ``rr-then-ko``
+    event's knockout stage holds no group *yet* (#1484 materialises them), and it
+    must not be handed its group **stage's** group — that would deal knockout
+    fixtures into the round-robin half, corrupting the standings the qualifiers are
+    picked from. So the composite passes nothing and keeps ``group_id=None``, and
+    a default of "no group" is the shape that cannot leak one by omission.
+
+    ``stage`` differs between the callers for the same reason: the single-elim cut's
+    bracket is its event's stage 0, the composite's is stage 1.
+
     A **bye is absence** (ADR-0786): a byed seed has no round-1 fixture at all, and the
     round-1 positions it would have occupied are simply skipped, leaving gaps in the
     position sequence. Every later round is emitted whole, its sides ``None`` except a
@@ -2346,9 +2494,10 @@ def _knockout_fixtures(
 
     Rounds are numbered from **1** for both callers. For the knockout stage of an
     rr-then-ko draw that is a *restart*, not a continuation of the group rounds: the
-    fixture uniqueness constraint is ``(event_id, group_id, round, position)`` with
-    ``NULLS NOT DISTINCT``, so ``group_id IS NULL`` is its own numbering namespace, and
-    "the round after the groups" is ill-defined anyway when groups may differ in size.
+    fixture uniqueness constraint is ``(stage_id, group_id, round, position)`` with
+    ``NULLS NOT DISTINCT``, so the knockout stage is its own numbering namespace
+    whatever its group is, and "the round after the groups" is ill-defined anyway when
+    groups may differ in size.
     """
     bracket = _bracket_size(field_size)
     rounds = bracket.bit_length() - 1
@@ -2365,7 +2514,8 @@ def _knockout_fixtures(
 
     fixtures = [
         PlannedFixture(
-            group_id=None,
+            stage=stage,
+            group_id=group_id,
             round=1,
             position=position,
             entry_a_id=seated.get((1, position, Side.a)),
@@ -2380,7 +2530,8 @@ def _knockout_fixtures(
     # rule ("a side is known only where a seat says so"), which is how they drift.
     fixtures.extend(
         PlannedFixture(
-            group_id=None,
+            stage=stage,
+            group_id=group_id,
             round=round_number,
             position=position,
             entry_a_id=seated.get((round_number, position, Side.a)),

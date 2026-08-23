@@ -1,3 +1,5 @@
+import { btnGhost, btnPrimary } from '@/components/login/styles'
+
 interface MergeGateProps {
   ownerUsername: string
   guestUsername: string | null
@@ -41,6 +43,12 @@ export function MergeGate({
         margin: '64px auto',
         padding: 24,
         textAlign: 'center',
+        // Both the copy and the "Not now" label interpolate a username, and a
+        // username may be 40 unbroken characters. Without this the column's
+        // min-content width exceeds a 375px viewport and carries the buttons
+        // off screen with it. `overflow-wrap` inherits, so one declaration
+        // here covers the paragraphs and both labels.
+        overflowWrap: 'anywhere',
       }}
     >
       <h1
@@ -71,9 +79,23 @@ export function MergeGate({
           marginTop: 24,
         }}
       >
+        {/*
+          The login flow styles its buttons with the inline objects in
+          `./styles`, not with a CSS class: `.fmm-btn` lives only under
+          `.fmm-settings`, and that stylesheet never loads on these routes.
+          Neither object carries a disabled look, so — following
+          `login-screens.tsx`'s Resend button — each call site applies its own
+          while `busy`. The primary also drops its glow, which on its own would
+          keep reading as available.
+        */}
         <button
           type="button"
-          className="fmm-btn fmm-btn--primary"
+          style={{
+            ...btnPrimary,
+            opacity: busy ? 0.7 : 1,
+            boxShadow: busy ? 'none' : btnPrimary.boxShadow,
+            cursor: busy ? 'wait' : 'pointer',
+          }}
           disabled={busy}
           onClick={onBringThemOver}
         >
@@ -81,7 +103,11 @@ export function MergeGate({
         </button>
         <button
           type="button"
-          className="fmm-btn fmm-btn--quiet"
+          style={{
+            ...btnGhost,
+            opacity: busy ? 0.7 : 1,
+            cursor: busy ? 'wait' : 'pointer',
+          }}
           disabled={busy}
           onClick={onNotNow}
         >

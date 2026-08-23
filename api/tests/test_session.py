@@ -1,7 +1,7 @@
 import hashlib
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -19,6 +19,7 @@ from app.sessions import (
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
     _maybe_merge_prior_session,
+    _resolve_current_user,
 )
 from tests._helpers import CSRF_EVENT_HOOKS, make_client, make_raw_client, start_session
 
@@ -710,3 +711,68 @@ async def test_maybe_merge_prior_session_no_merge_on_unresolvable_cookie(
 
     merged = await _maybe_merge_prior_session(db_session, cookie, target)
     assert merged is None
+
+
+# ---- the last_seen_at stamp (#1438) -----------------------------------------
+
+
+async def test_minting_a_session_does_not_stamp_last_seen(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A visitor who calls ``GET /v1/session`` once and stops is NEVER-ACTIVE:
+    the bootstrap mint writes no stamp, so they stay off the public listings.
+    A drive-by bootstrap call must not be enough to be listed."""
+    response = await api_client.get("/v1/session")
+    assert response.status_code == 200
+    username = response.json()["data"]["user"]["username"]
+
+    user = (
+        await db_session.execute(select(User).where(User.username == username))
+    ).scalar_one()
+    assert user.last_seen_at is None
+
+
+async def test_resolving_an_existing_cookie_stamps_last_seen(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The web flow in two requests: the bootstrap mints (unstamped), then any
+    authenticated request resolves the cookie through ``get_current_user`` and
+    stamps — so a real visitor is listed within one page load, not one visit."""
+    await api_client.get("/v1/session")
+    second = await api_client.get("/v1/session")
+    assert second.status_code == 200
+    username = second.json()["data"]["user"]["username"]
+
+    user = (
+        await db_session.execute(select(User).where(User.username == username))
+    ).scalar_one()
+    assert user.last_seen_at is not None
+
+
+async def test_last_seen_stamp_is_throttled_to_once_per_window(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The throttle is a PYTHON-side test against the already-loaded row: a
+    resolution inside the window issues no SQL, so the stamp cannot move. Past
+    the window, the next resolution rewrites it. Called directly (rather than
+    through a route) so the criterion — the resolver's own behaviour against
+    the row it holds — is the thing under test."""
+    await start_session(api_client, db_session)
+    raw_token = api_client.cookies.get(SESSION_COOKIE_NAME)
+    assert raw_token
+
+    (user,) = (await db_session.execute(select(User))).scalars().all()
+    first_stamp = user.last_seen_at
+    assert first_stamp is not None
+
+    resolved = await _resolve_current_user(db_session, session_cookie=raw_token)
+    assert resolved is not None
+    # Unmoved: a rewrite would carry a strictly later wall-clock timestamp.
+    assert resolved.last_seen_at == first_stamp
+
+    user.last_seen_at = datetime.now(UTC) - timedelta(minutes=6)
+    await db_session.commit()
+    aged = await _resolve_current_user(db_session, session_cookie=raw_token)
+    assert aged is not None
+    assert aged.last_seen_at is not None
+    assert aged.last_seen_at > first_stamp

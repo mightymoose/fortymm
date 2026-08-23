@@ -6640,12 +6640,6 @@ async def test_cutting_a_singles_event_is_allowed(
     ("reservations", "entrants", "expected"),
     [
         pytest.param(
-            (),
-            4,
-            "A round-robin draw needs at least one group.",
-            id="no-groups",
-        ),
-        pytest.param(
             (RESERVATION_A, RESERVATION_B),
             3,
             "3 entrants across 2 groups would leave a group with fewer than 2 "
@@ -6668,10 +6662,17 @@ async def test_cutting_a_draw_that_is_not_a_competition_is_422(
     entrants: int,
     expected: str,
 ) -> None:
-    """A draw the domain will not produce, because it would not be a competition: an
-    event with no groups to deal into, a field too small for the groups it has
-    (somebody would be alone in a group, with nobody to play), and the empty field
-    that is both.
+    """A draw the domain will not produce, because it would not be a competition: a
+    field too small for the groups it has (somebody would be alone in a group, with
+    nobody to play), and the empty field that is a sharper case of the same.
+
+    **An event with no reservation is no longer one of them.** It used to be — no
+    reservation meant no group, and ``_snake`` refuses a round-robin draw with no
+    group to deal into — but #1483's floor mints one group whatever the reservation
+    count, so that event now cuts and is asserted doing so next door
+    (``test_an_event_with_no_reservation_still_holds_one_group``). The domain's own
+    refusal stays where it is written: it still guards a caller that reaches
+    ``RoundRobinStrategy`` with an empty ``DrawConfig``.
 
     Each is a 422 whose ``detail`` names the numbers the director has to change — the
     group count and the size of the field — because "invalid draw" tells them nothing
@@ -6698,6 +6699,93 @@ async def test_cutting_a_draw_that_is_not_a_competition_is_422(
     assert response.status_code == 422, response.text
     assert response.json()["detail"] == expected
     assert await _fixture_rows(db_session, event["id"]) == []
+
+
+@pytest.mark.parametrize(
+    "payload_for",
+    [
+        pytest.param(lambda: _rr_payload(), id="round-robin"),
+        pytest.param(lambda: _se_payload(), id="single-elim"),
+        pytest.param(
+            lambda: _event_payload(
+                draw_type="swiss", rounds=2, reservations=[], predicates=[]
+            ),
+            id="swiss",
+        ),
+    ],
+)
+async def test_an_event_with_no_reservation_still_holds_one_group(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    payload_for: Callable[[], dict[str, Any]],
+) -> None:
+    """**The floor** (#1483): an event whose count has no structural-settings source
+    holds at least one group, whatever its reservation count — so an event created
+    with ``reservations: []`` holds exactly one.
+
+    Why it matters is a scheduling fact, not a display one. A fixture reaches the
+    reservation that restricts it *through its group*
+    (``app.schedule_solves.restricting_reservation_key``), so a stage with no group row
+    has no hop to make and every one of its fixtures falls to the synthetic event-wide
+    reservation — the whole venue, the whole day. The group is what carries the
+    restriction, so it has to exist before there is anything to restrict.
+
+    The group maps to no reservation here, and that stays legal: its fixtures still
+    fall to the event-wide reservation, exactly as they did, until #1364 mints one.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, payload_for())
+
+    assert event["reservations"] == []
+    assert len(event["groups"]) == 1, event["groups"]
+    assert event["groups"][0]["reservation_id"] is None
+
+    detail = (await client.get(f"/v1/tournaments/{tournament_id}")).json()
+    served = next(e for e in detail["events"] if e["id"] == event["id"])
+    assert len(served["groups"]) == 1
+
+
+async def test_a_single_elim_bracket_is_dealt_into_its_stages_group(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Every fixture of a single-elimination cut — round one and every later round —
+    names the one group its stage holds (#1483).
+
+    That is what confines the bracket to its reservation's tables and window: the
+    solver resolves a fixture's reservation through its group, so a bracket that named
+    none was placed across the tournament's whole table catalogue however narrowly the
+    director had booked.
+
+    It is emphatically not a claim that a bracket is a group. No surface labels these
+    fixtures with a group, because every one of them asks
+    ``app.draws.seats_both_sides_at_cut`` about the fixture's *stage*, not about
+    whether it resolved a group id.
+    """
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+    await _seed_field(db_session, event["id"], 4)
+
+    assert (
+        await client.post(_draw_url(tournament_id, event["id"]))
+    ).status_code == 201, "a single-elim event with no reservation still cuts"
+
+    fixtures = await _fixture_rows(db_session, event["id"])
+    assert len(fixtures) == 3  # two semifinals and a final
+    group_ids = {f.group_id for f in fixtures}
+    assert len(group_ids) == 1 and None not in group_ids, (
+        f"every bracket fixture names the stage's one group — got {group_ids!r}"
+    )
+    assert {f.round for f in fixtures} == {1, 2}, (
+        "the later round is dealt into the group too, not only round one"
+    )
+
+    # And the group row buys the bracket no group STANDINGS. Results dispatch by the
+    # draw type's own strategy, exactly as before: a single-elim event serves a
+    # ``finishes`` block, which has no per-group table for a "Group A" to head.
+    (served,) = await _events_of(client, tournament_id)
+    assert served["results"]["kind"] == "finishes"
+    assert "groups" not in served["results"]
 
 
 async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_message(

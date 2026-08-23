@@ -117,7 +117,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import db as db_module
 from app import queue as queue_module
-from app.draws import group_label
+from app.draws import group_label, seats_both_sides_at_cut
 from app.models import (
     Match,
     MatchGame,
@@ -131,6 +131,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.models.draw_type import StageDrawType
 from app.notifications.match_calls import (
     MATCH_CALLS_CATEGORY,
     MatchCallCancellationReason,
@@ -465,7 +466,7 @@ async def call_due_fixtures(
             # A dangling ref (entry/event deleted under a stale placement) is
             # broken-pin territory — don't promise a match that can't run.
             continue
-        context = ingredients.context_for(tournament, event, fixture.group_id)
+        context = ingredients.context_for(tournament, event, fixture)
         # A removed table under a stale placement can't be labeled; fall back
         # to the raw id rather than dropping the call (the *next* solve's
         # snapshot detects the broken pin and repairs it).
@@ -600,7 +601,7 @@ async def notify_pin_repairs(
             or fixture.scheduled_start is None
         ):
             continue
-        context = ingredients.context_for(tournament, event, fixture.group_id)
+        context = ingredients.context_for(tournament, event, fixture)
         table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
         build = _moved_copy(
             table_label,
@@ -617,7 +618,7 @@ async def notify_pin_repairs(
         event = ingredients.events.get(fixture.event_id)
         if event is None:
             continue
-        context = ingredients.context_for(tournament, event, fixture.group_id)
+        context = ingredients.context_for(tournament, event, fixture)
         recipients: list[tuple[User, User]] = []
         for entry_id, opponent_entry_id in (
             (fixture.entry_a_id, fixture.entry_b_id),
@@ -866,7 +867,7 @@ async def _tell_both_entrants(
     user_b = ingredients.user_for_entry(fixture.entry_b_id)
     if event is None or user_a is None or user_b is None:
         return []
-    context = ingredients.context_for(tournament, event, fixture.group_id)
+    context = ingredients.context_for(tournament, event, fixture)
     in_app_ids = await _in_app_allowed(db, (user_a, user_b))
     fanout: list[NotificationJob] = []
     _tell_pair(
@@ -988,6 +989,11 @@ class CopyIngredients:
     #: ``tournament_event_stage_groups`` primary key (ADR 20260801), which is exactly
     #: what a fixture's ``group_id`` holds.
     group_labels: dict[uuid.UUID, dict[uuid.UUID, str]]
+    #: Stage id → that stage's own draw type, flat across every event in the batch (a
+    #: stage id is globally unique), read off each event's eager ``stages`` collection.
+    #: What :meth:`context_for` asks :func:`~app.draws.seats_both_sides_at_cut` about,
+    #: so a call for a bracket fixture is not labelled with a group.
+    stage_draw_types: dict[uuid.UUID, StageDrawType]
 
     def user_for_entry(self, entry_id: uuid.UUID | None) -> User | None:
         if entry_id is None:
@@ -999,11 +1005,31 @@ class CopyIngredients:
         self,
         tournament: Tournament,
         event: TournamentEvent,
-        group_id: uuid.UUID | None,
+        fixture: TournamentFixture,
     ) -> MatchCallContext:
-        """The fixture's whereabouts in the player's terms."""
+        """The fixture's whereabouts in the player's terms.
+
+        A ``group_label`` is emitted only when the fixture's **stage seats both sides
+        at the cut** (:func:`~app.draws.seats_both_sides_at_cut`) — i.e. when the
+        group is a group *stage*'s group, the thing a player calls "Group A" and can
+        find a standings table for. Since #1483 a single-elim or swiss fixture names
+        its stage's group too, and telling a bracket player they are in Group A would
+        name a table that does not exist and a field they are not in. Their call still
+        carries the tournament and the event, which is all a bracket has to say about
+        where a match sits.
+
+        Takes the whole fixture rather than its ``group_id``, because the question is
+        about the fixture's stage now and one argument that is the fixture cannot be
+        passed half of.
+        """
         label: str | None = None
-        if group_id is not None:
+        group_id = fixture.group_id
+        stage_draw_type = self.stage_draw_types.get(fixture.stage_id)
+        if (
+            group_id is not None
+            and stage_draw_type is not None
+            and seats_both_sides_at_cut(stage_draw_type)
+        ):
             label = self.group_labels.get(event.id, {}).get(group_id)
         return MatchCallContext(
             tournament_name=tournament.name,
@@ -1066,12 +1092,19 @@ async def load_copy_ingredients(
         }
         for event in events.values()
     }
+    # Flat by stage id, which is globally unique — the same shape
+    # ``app.dashboard_tournaments`` builds for the same question. Read off the events'
+    # eager (``lazy="selectin"``) ``stages`` collection, so this costs no statement.
+    stage_draw_types = {
+        stage.id: stage.draw_type for event in events.values() for stage in event.stages
+    }
     return CopyIngredients(
         entry_user=entry_user,
         users=users,
         events=events,
         table_labels=table_labels,
         group_labels=group_labels,
+        stage_draw_types=stage_draw_types,
     )
 
 

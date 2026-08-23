@@ -5,6 +5,17 @@ import { act, render, screen } from '@/test/utilities'
 
 import { ScreenEmail, ScreenSent, ScreenVerifyNetError } from './login-screens'
 
+// The real Turnstile loads a Cloudflare script jsdom can't execute, so these
+// screen-level tests hand a token on mount — same stub as
+// routes/login.test.tsx. Without it the submit button waits for a token that
+// never comes (#1462).
+vi.mock('@/components/turnstile', () => ({
+  Turnstile: ({ onToken }: { onToken: (token: string) => void }) => {
+    onToken('fake-captcha-token')
+    return <div data-testid="fake-turnstile" />
+  },
+}))
+
 describe('ScreenSent expiry countdown', () => {
   beforeEach(() => {
     vi.useFakeTimers()

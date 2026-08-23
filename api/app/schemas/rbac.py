@@ -8,6 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 # schema layer — the one layer that must stay importable from anywhere — for a
 # single string, and would become an import cycle the day a model imports a schema.
 from app.domain.roles import DEFAULT_ROLE_NAME
+from app.schemas.session import (
+    USERNAME_MAX_LENGTH,
+    USERNAME_MIN_LENGTH,
+    USERNAME_PATTERN,
+)
 
 # Permission names follow a `resource.action` convention (e.g. `tournament.publish`).
 # Allowed chars per segment: lowercase letters, digits, underscores. At least
@@ -87,7 +92,15 @@ class RoleRead(RoleBase):
 
 
 class RbacUserCreate(BaseModel):
-    username: str = Field(min_length=1, max_length=255)
+    # The same rule every other username write path enforces, read from the one
+    # place that defines it. Enforced on write only, following PermissionCreate
+    # above: a row that predates this constraint must still serialize cleanly
+    # through RbacUserRead.
+    username: str = Field(
+        min_length=USERNAME_MIN_LENGTH,
+        max_length=USERNAME_MAX_LENGTH,
+        pattern=USERNAME_PATTERN,
+    )
 
 
 class RbacUserRolesUpdate(BaseModel):

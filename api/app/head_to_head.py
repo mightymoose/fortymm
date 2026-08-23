@@ -37,6 +37,7 @@ from sqlalchemy import Select, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.listed import is_listed_player
 from app.models import Match, MatchSide, MatchSidePlayer, MatchStatus, User
 from app.schemas.player import (
     HeadToHeadOpponent,
@@ -175,8 +176,15 @@ async def _frequent_opponents(
             .join(User, User.id == meetings.c.opponent_id)
             # Tombstoned (merged-away) users hold no side rows once the merge
             # has re-pointed them, so this excludes nothing in practice — it is
-            # here so a ghost can never surface as somebody's rival.
-            .where(User.merged_into_user_id.is_(None))
+            # here so a ghost can never surface as somebody's rival. The
+            # never-active conjunct is the same story twice over: a rival is
+            # met through match sides, which a never-active row cannot hold —
+            # both filters ride along so no listing carries a different rule
+            # (#1438, see ``app.listed.is_listed_player``).
+            .where(
+                User.merged_into_user_id.is_(None),
+                is_listed_player(),
+            )
             .group_by(User.id, User.username)
             .order_by(
                 total.desc(),
