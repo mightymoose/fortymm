@@ -161,6 +161,17 @@ describe('ScreenEmail honeypot', () => {
       screen.getByLabelText('Email address'),
     ])
   })
+
+  it('takes the honeypot out of the focus order behind an inert wrapper (#1463)', () => {
+    render(<ScreenEmail onSubmit={vi.fn()} />)
+
+    const wrapper = screen.getByTestId('login-honeypot').closest('div')
+
+    // A focusable input inside an aria-hidden wrapper is an ARIA violation;
+    // `inert` removes it from the tab order and the a11y tree together.
+    expect(wrapper).toHaveAttribute('inert')
+    expect(wrapper).toHaveAttribute('aria-hidden', 'true')
+  })
 })
 
 describe('ScreenVerifyNetError fabricated diagnostics (#226)', () => {

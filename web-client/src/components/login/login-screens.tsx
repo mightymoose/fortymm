@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode } from 'react'
 
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
-import { HONEYPOT_STYLE, isValidEmail } from '@/lib/form-helpers'
+import { isValidEmail } from '@/lib/form-helpers'
 
+import { Honeypot } from '@/components/honeypot'
 import { Wordmark } from '@/components/wordmark'
 import { Eyebrow, RedirectStrip } from './atoms'
 import { btnGhost, btnPrimary, fineprint, linkInline } from './styles'
@@ -867,19 +868,7 @@ export function ScreenEmail({
               </p>
             )}
 
-            <div style={HONEYPOT_STYLE} aria-hidden="true">
-              <label htmlFor="login-fmm-hp">Leave this empty</label>
-              <input
-                id="login-fmm-hp"
-                name="fmm_hp_token"
-                type="text"
-                tabIndex={-1}
-                autoComplete="off"
-                value={honeypot}
-                onChange={(e) => setHoneypot(e.target.value)}
-                data-testid="login-honeypot"
-              />
-            </div>
+            <Honeypot value={honeypot} onChange={setHoneypot} testId="login-honeypot" />
 
             <div>
               <Turnstile
