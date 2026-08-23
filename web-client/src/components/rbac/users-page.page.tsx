@@ -7,6 +7,27 @@ import { UsersPage } from './users-page'
 import { buildUsersSeed } from './users-page.factory'
 
 const scoped = (container: Container) => ({
+  /** The list's search box. It carries a placeholder rather than a label. */
+  findSearch() {
+    return container.findByPlaceholderText('Search by username')
+  },
+  /** Every user row currently rendered. */
+  queryUserRows() {
+    return container.queryAllByTestId(/^user-row-/)
+  },
+  /** The header action that opens the add-user modal. */
+  findAddUserButton() {
+    return container.findByRole('button', { name: /add user/i })
+  },
+  /** The add-user modal's Username field. `Field` renders its label in a plain
+   * `div`, not a `<label>`, so there is nothing for `findByLabelText` to bind. */
+  findNewUsernameInput() {
+    return container.findByPlaceholderText('e.g. jamie.tran')
+  },
+  /** The hint under the modal's Username field — the form's stated rule. */
+  queryHint(text: string | RegExp) {
+    return container.queryByText(text)
+  },
   /** A user's row in the table. */
   findUserRow(username: string) {
     return container.findByTestId(`user-row-${username}`)
@@ -56,6 +77,26 @@ export const usersPage = {
 
   user() {
     return userEvent.setup()
+  },
+
+  /** Type `text` into the search box, once it has painted. */
+  async search(text: string) {
+    const box = await this.findSearch()
+    await userEvent.type(box, text)
+    return box
+  },
+
+  /** Open the add-user modal and type `username` into it. Resolves the modal's
+   * own submit button, whose disabled state is the form's verdict. */
+  async typeNewUsername(username: string) {
+    await userEvent.click(await this.findAddUserButton())
+    const input = await this.findNewUsernameInput()
+    await userEvent.type(input, username)
+    // The header action and the modal's submit share an accessible name, so
+    // scope to the dialog. Taking the last match relied on render order, which
+    // is not a contract.
+    const dialog = await screen.findByRole('dialog')
+    return rtlWithin(dialog).getByRole('button', { name: /^add user$/i })
   },
 
   /** Click a user's row and resolve the open role-editor drawer. */
