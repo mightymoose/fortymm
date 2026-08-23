@@ -40,7 +40,13 @@ from app.tournament_event_stages import GroupCountSource
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import group_count_for
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
-from tests._helpers import grant_permissions, make_user, stage_id_at, start_session
+from tests._helpers import (
+    grant_permissions,
+    make_user,
+    patch_event,
+    stage_id_at,
+    start_session,
+)
 
 RR_THEN_KO = DrawType.rr_then_ko.value
 
@@ -191,9 +197,11 @@ async def _ensure_group(
 async def _patch(
     client: AsyncClient, tournament_id: str, event_id: str, **updates: Any
 ) -> Any:
-    return await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}", json=updates
-    )
+    """PATCH the event, with its current ``lock_version`` (#1499) merged in by
+    :func:`~tests._helpers.patch_event` — the module's own tests are not about the
+    version token, so every call site keeps composing a payload out of the fields it
+    cares about."""
+    return await patch_event(client, tournament_id, event_id, updates)
 
 
 def _draw_url(tournament_id: str, event_id: str) -> str:
@@ -752,6 +760,9 @@ async def test_the_409s_way_out_works_end_to_end(
         reservations=[*_cited(event), RESERVATION_B],
     )
     assert refused.status_code == 409, refused.text
+    assert isinstance(refused.json()["detail"], str), (
+        "the group-set freeze, not the (structurally identical) version conflict"
+    )
 
     assert (
         await client.delete(_draw_url(tournament_id, event["id"]))

@@ -291,6 +291,9 @@ export function buildEvent(
     // explicit `groups` override wins outright, for a test that needs a group naming a
     // reservation its event does not (hand-authored) or otherwise disagreeing on purpose.
     groups: overrides.groups ?? groupsFor(overrides.reservations ?? [buildReservation()]),
+    // The optimistic-concurrency version (#1499) — `1`, the value a freshly created
+    // event reads. A fixture wanting a version conflict overrides it directly.
+    lockVersion: overrides.lockVersion ?? 1,
   } satisfies Omit<TournamentEvent, 'entered'>
   // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
   // the server guarantees it, and so does the fixture. The null check is the whole

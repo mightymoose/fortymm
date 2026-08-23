@@ -394,7 +394,7 @@ it mistakes a server-assigned field for one of its own."""
         ),
         pytest.param(
             TournamentEventUpdate,
-            {"reservations": _RESERVATIONS_CLAIMING_A_POSITION},
+            {"reservations": _RESERVATIONS_CLAIMING_A_POSITION, "lock_version": 1},
             id="patch",
         ),
     ],
@@ -547,7 +547,8 @@ async def test_update_repositions_reservations_by_the_order_they_were_patched(
                     _reservation("Reservation B"),
                     _reservation("Reservation C"),
                     _reservation("Reservation A"),
-                ]
+                ],
+                "lock_version": event.lock_version,
             }
         ),
     )
@@ -1062,6 +1063,7 @@ async def test_update_event_cut_legacy_round_robin_resending_same_reservations_h
                         _reservation_entry(group_a),
                         _reservation_entry(group_b),
                     ],
+                    "lock_version": event.lock_version,
                 }
             ),
         )
@@ -1078,7 +1080,10 @@ async def test_update_event_cut_legacy_round_robin_resending_same_reservations_h
             event_id=event_id,
             actor=owner,
             updates=TournamentEventUpdate.model_validate(
-                {"reservations": [_reservation_entry(group_a)]}
+                {
+                    "reservations": [_reservation_entry(group_a)],
+                    "lock_version": event.lock_version,
+                }
             ),
         )
 
@@ -1114,6 +1119,7 @@ async def test_update_event_cut_legacy_round_robin_resending_same_reservations_h
                             "table_ids": [],
                         },
                     ],
+                    "lock_version": event.lock_version,
                 }
             ),
         )
@@ -1151,7 +1157,11 @@ async def test_update_event_cut_draw_type_flip_over_the_cap_hits_the_freeze_firs
             event_id=event_id,
             actor=owner,
             updates=TournamentEventUpdate.model_validate(
-                {"draw_type": "round-robin", "qualifiers_per_group": None}
+                {
+                    "draw_type": "round-robin",
+                    "qualifiers_per_group": None,
+                    "lock_version": event.lock_version,
+                }
             ),
         )
 
@@ -1216,6 +1226,7 @@ async def test_update_event_frozen_group_reorder_is_refused(
                     "table_ids": [],
                 },
             ],
+            "lock_version": event.lock_version,
         }
     )
     with pytest.raises(GroupSetFrozenError) as excinfo:
@@ -1291,6 +1302,7 @@ async def test_update_event_re_sending_the_same_group_order_is_not_frozen(
                         "table_ids": [],
                     },
                 ],
+                "lock_version": event.lock_version,
             }
         ),
     )
@@ -1318,7 +1330,9 @@ async def test_update_event_persists_a_normal_field_edit(
         tournament_id=tournament.id,
         event_id=event_id,
         actor=owner,
-        updates=TournamentEventUpdate.model_validate({"name": "Renamed Open"}),
+        updates=TournamentEventUpdate.model_validate(
+            {"name": "Renamed Open", "lock_version": event.lock_version}
+        ),
     )
 
     # The verb returns the tournament's league_id beside the event (see create test).
@@ -1352,7 +1366,9 @@ async def test_update_event_on_a_non_owned_tournament_raises_not_owner(
             tournament_id=tournament.id,
             event_id=event_id,
             actor=stranger,
-            updates=TournamentEventUpdate.model_validate({"name": "Hijacked"}),
+            updates=TournamentEventUpdate.model_validate(
+                {"name": "Hijacked", "lock_version": event.lock_version}
+            ),
         )
 
     # The name is unchanged.
@@ -1380,7 +1396,9 @@ async def test_update_event_on_a_missing_event_raises_event_not_found(
             tournament_id=tournament.id,
             event_id=uuid.uuid4(),
             actor=owner,
-            updates=TournamentEventUpdate.model_validate({"name": "Nope"}),
+            updates=TournamentEventUpdate.model_validate(
+                {"name": "Nope", "lock_version": 1}
+            ),
         )
 
 
@@ -1405,6 +1423,7 @@ async def test_update_event_frozen_group_set_change_is_refused(
                     "table_ids": ["t1"],
                 }
             ],
+            "lock_version": event.lock_version,
         }
     )
     with pytest.raises(GroupSetFrozenError):
@@ -1445,7 +1464,11 @@ async def test_update_event_frozen_draw_type_change_is_refused(
             event_id=event_id,
             actor=owner,
             updates=TournamentEventUpdate.model_validate(
-                {"name": "Should Not Apply", "draw_type": "single-elim"}
+                {
+                    "name": "Should Not Apply",
+                    "draw_type": "single-elim",
+                    "lock_version": event.lock_version,
+                }
             ),
         )
 
@@ -1477,7 +1500,11 @@ async def test_update_event_re_sending_the_same_draw_type_is_not_frozen(
         event_id=event_id,
         actor=owner,
         updates=TournamentEventUpdate.model_validate(
-            {"name": "Renamed Under Draw", "draw_type": "round-robin"}
+            {
+                "name": "Renamed Under Draw",
+                "draw_type": "round-robin",
+                "lock_version": event.lock_version,
+            }
         ),
     )
 
@@ -1510,7 +1537,9 @@ async def test_update_event_timezone_change_reanchors_placements(
         tournament_id=tournament.id,
         event_id=event_id,
         actor=owner,
-        updates=TournamentEventUpdate.model_validate({"timezone": "America/Denver"}),
+        updates=TournamentEventUpdate.model_validate(
+            {"timezone": "America/Denver", "lock_version": event.lock_version}
+        ),
     )
 
     db_session.expire_all()
@@ -1869,7 +1898,9 @@ async def test_removing_a_reservation_takes_its_table_reservations_with_it(
         tournament_id=tournament_id,
         event_id=event_id,
         actor=owner,
-        updates=TournamentEventUpdate.model_validate({"reservations": []}),
+        updates=TournamentEventUpdate.model_validate(
+            {"reservations": [], "lock_version": event.lock_version}
+        ),
     )
 
     db_session.expire_all()
@@ -1931,7 +1962,8 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
                         **_reservation_payload(table_2, table_1),
                         "id": str(reservation_id),
                     }
-                ]
+                ],
+                "lock_version": event.lock_version,
             }
         ),
     )
@@ -2047,7 +2079,8 @@ async def test_reservation_write_statement_count_does_not_drift(
                             **_reservation("Reservation B"),
                             "id": str(reservation_ids[1]),
                         },
-                    ]
+                    ],
+                    "lock_version": event.lock_version,
                 }
             ),
         )

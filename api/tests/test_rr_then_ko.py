@@ -54,6 +54,7 @@ from tests._helpers import (
     joined_to_reservation,
     make_user,
     opponent_session,
+    patch_event,
     stage_id_at,
     start_session,
 )
@@ -516,9 +517,11 @@ async def test_patching_a_qualifier_count_above_the_ceiling_is_422(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": count},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"draw_type": RR_THEN_KO, "qualifiers_per_group": count},
     )
 
     assert response.status_code == 422, response.text
@@ -537,9 +540,11 @@ async def test_patching_a_qualifier_count_at_the_ceiling_is_accepted(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={
+    response = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {
             "draw_type": RR_THEN_KO,
             "qualifiers_per_group": MAX_QUALIFIERS_PER_GROUP,
         },
@@ -564,9 +569,8 @@ async def test_patching_a_qualifier_count_without_its_draw_type_is_422(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"qualifiers_per_group": 3},
+    response = await patch_event(
+        client, tournament_id, event_id, {"qualifiers_per_group": 3}
     )
 
     assert response.status_code == 422, response.text
@@ -584,9 +588,11 @@ async def test_the_qualifier_count_is_editable_while_no_draw_exists(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 3},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"draw_type": RR_THEN_KO, "qualifiers_per_group": 3},
     )
 
     assert response.status_code == 200, response.text
@@ -611,9 +617,8 @@ async def test_patching_away_from_rr_then_ko_clears_the_qualifier_count(
         await _create_event(client, tournament_id, reservations=[RESERVATIONS[0]])
     ).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": "round-robin"},
+    response = await patch_event(
+        client, tournament_id, event_id, {"draw_type": "round-robin"}
     )
 
     assert response.status_code == 200, response.text
@@ -703,9 +708,11 @@ async def test_editing_the_qualifier_count_reads_the_edited_value_back(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 4},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"draw_type": RR_THEN_KO, "qualifiers_per_group": 4},
     )
 
     assert response.status_code == 200, response.text
@@ -729,9 +736,8 @@ async def test_patching_away_from_rr_then_ko_reads_back_no_qualifier_count(
         await _create_event(client, tournament_id, reservations=[RESERVATIONS[0]])
     ).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": "round-robin"},
+    response = await patch_event(
+        client, tournament_id, event_id, {"draw_type": "round-robin"}
     )
 
     assert response.status_code == 200, response.text
@@ -945,13 +951,22 @@ async def test_the_qualifier_count_is_frozen_once_the_draw_is_cut(
     client, _ = authed_client
     tournament_id, event_id, _ = await _twelve_entrant_event(client, db_session)
     assert (await _cut(client, tournament_id, event_id)).status_code == 201
-    url = f"/v1/tournaments/{tournament_id}/events/{event_id}"
 
-    unchanged = await client.patch(
-        url, json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 2}
+    unchanged = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"draw_type": RR_THEN_KO, "qualifiers_per_group": 2},
     )
-    refused = await client.patch(
-        url, json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 3}
+    # The re-send above is a genuine, accepted write (asserted below), so it moves the
+    # token — the refused PATCH has to be composed against what the event holds NOW,
+    # which is what re-reading through ``patch_event`` (rather than reusing a captured
+    # version) proves.
+    refused = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"draw_type": RR_THEN_KO, "qualifiers_per_group": 3},
     )
 
     assert unchanged.status_code == 200, unchanged.text
@@ -987,9 +1002,11 @@ async def test_a_patch_response_still_splits_groups_from_the_bracket(
     tournament_id, event_id, _ = await _twelve_entrant_event(client, db_session)
     assert (await _cut(client, tournament_id, event_id)).status_code == 201
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": RR_THEN_KO, "qualifiers_per_group": 2},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"draw_type": RR_THEN_KO, "qualifiers_per_group": 2},
     )
 
     assert response.status_code == 200, response.text
@@ -1274,9 +1291,11 @@ async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
 
         reservations = await _reservations(db_session, event_id)
         stored_order = await _group_ids(db_session, event_id)
-        reorder = await client.patch(
-            f"/v1/tournaments/{tournament_id}/events/{event_id}",
-            json={
+        reorder = await patch_event(
+            client,
+            tournament_id,
+            event_id,
+            {
                 "reservations": [
                     _reservation_payload(reservation)
                     for reservation in reversed(reservations)
@@ -1340,11 +1359,11 @@ async def test_a_reservations_patch_before_any_draw_is_cut_is_accepted(
     expected_order = [reservation.id for reservation in sent]
     group_ids = await _group_ids(db_session, event_id)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={
-            "reservations": [_reservation_payload(reservation) for reservation in sent]
-        },
+    response = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"reservations": [_reservation_payload(reservation) for reservation in sent]},
     )
 
     assert response.status_code == 200, response.text

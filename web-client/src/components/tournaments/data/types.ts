@@ -762,6 +762,19 @@ export interface TournamentEvent {
    * write it, and never re-sort or recompute it (the order and the numbers *are* the
    * result). */
   results: EventResults | null
+  /** The event's **optimistic-concurrency version** (#1499) — the number a PATCH must
+   * send back for the server to accept the edit. Server-owned and read-only: a client
+   * carries it across unread and unmodified, `eventToUpdateBody` sends it back
+   * verbatim, and every accepted PATCH moves it on by one, on the server, whatever it
+   * changed.
+   *
+   * A stale one — this event written elsewhere since this copy was read — is refused
+   * with a coded 409 (`event_version_conflict`, `./save-failure`) rather than silently
+   * overwriting the other write and, with it, whatever it touched (reservations
+   * included, which takes the drawn fixtures with them). The event editor reads the
+   * FRESH version live off the reconciled tournament — never off this frozen copy — to
+   * offer a deliberate override (`tournament-detail-page.tsx`). */
+  lockVersion: number
 }
 
 /** A physical table in the venue catalogue, referenced by id from a

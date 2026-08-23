@@ -33,6 +33,8 @@
 // its rows — so that is what a caller passes in (`SaveTarget`); the sentences live
 // here, once.
 
+import { z } from 'zod'
+
 import { validationFields, ApiError, extractDetail } from '@/api/client'
 
 import { conjoinWithAnd } from './helpers'
@@ -78,6 +80,15 @@ export type SaveFailure =
    * the client cannot name, report the server's own words rather than invent a
    * headline. */
   | { kind: 'refused'; message: string }
+  /** A **coded** 409 (`event_version_conflict`, #1499): this event was written by
+   * someone else since this client read it, and the PATCH was refused before it
+   * touched anything. Its own arm, asked BEFORE `refused` and matched on the
+   * `code` — never the sentence — so it is never confused with the event editor's
+   * other two 409s (the draw-type and group-set freezes), which are `refused`'s
+   * plain-string kind and carry no code at all. `message` is the server's sentence,
+   * kept for completeness; the banner speaks its OWN copy for this one
+   * (`saveFailureMessage` below, ADR-0968) rather than the server's. */
+  | { kind: 'conflict'; message: string }
   /** A **5xx**: the server was reached, and it broke. Their request was fine, their
    * connection is fine, and there is nothing for them to fix — which is the opposite
    * of what `offline` says, and why it is not that. */
@@ -176,6 +187,32 @@ function isNoResponse(error: unknown): boolean {
   return FETCH_FAILED.some((pattern) => pattern.test(error.message))
 }
 
+/** The one code this classifier reads, #1499 — matched the same way
+ * `src/api/client.ts` reads `SESSION_ENDED_CODES`: narrow the `unknown` body,
+ * never cast it. */
+const EVENT_VERSION_CONFLICT_CODE = 'event_version_conflict'
+
+/** The 409 body, **parsed rather than cast** (`.claude/rules/parse-at-boundaries.md`):
+ * an error body is untrusted input like any other. The same shape, and the same
+ * schema-not-cast treatment, as `entry-refusal.ts`'s `entryRefusalBodySchema` next
+ * door — the other coded-409 reader in this directory.
+ *
+ * `message` is deliberately not read here: the code is the contract, and the
+ * classifier keeps the sentence separately (through `extractDetail`, which every
+ * arm shares) rather than trusting this parse for it. */
+const eventVersionConflictBodySchema = z.object({
+  detail: z.object({ code: z.literal(EVENT_VERSION_CONFLICT_CODE) }),
+})
+
+/** True when a 409's body carries the coded event-version-conflict detail
+ * (`{"detail": {"code": "event_version_conflict", "message": …}}`). Deliberately
+ * NOT true of the event editor's other two 409s (the draw-type and group-set
+ * freezes), whose `detail` is a bare string with no `code` at all — so this can
+ * never steal them. */
+function hasEventVersionConflictCode(body: unknown): boolean {
+  return eventVersionConflictBodySchema.safeParse(body).success
+}
+
 /** Classify a rejected save. Nothing here reads a server *message* except the one
  * arm that is allowed to (`refused`). */
 export function saveFailure(error: unknown): SaveFailure {
@@ -199,6 +236,18 @@ export function saveFailure(error: unknown): SaveFailure {
   // `detail` here is machinery too ("Internal Server Error", a stack, an nginx HTML
   // page) — so, like the 422's, it is classified and never quoted.
   if (error.status >= 500) return { kind: 'faulted', status: error.status }
+
+  // A stale `lock_version` (#1499) — asked BEFORE the generic `refused` fallback
+  // below, and matched on the CODE, never on the status alone: the event editor's
+  // other two 409s (the draw-type and group-set freezes) are plain-string and must
+  // keep falling through to `refused`, exactly as they did before this code existed.
+  if (error.status === 409 && hasEventVersionConflictCode(error.body)) {
+    const message = extractDetail(error.body)
+    return {
+      kind: 'conflict',
+      message: message ?? 'This event has changed since you opened it.',
+    }
+  }
 
   const message = extractDetail(error.body)
   return message ? { kind: 'refused', message } : { kind: 'unknown' }
@@ -240,6 +289,18 @@ export function saveFailureMessage(
     }
     case 'refused':
       return failure.message
+    case 'conflict':
+      // The client's OWN copy (ADR-0968) — not `failure.message`, the server's
+      // sentence, which stays on the value for completeness but is never read out
+      // here. The event editor's banner offers the deliberate override
+      // (`event-editor.tsx`); this sentence just says why the save didn't happen.
+      //
+      // `target.subject`, not a hardcoded "event", for the same reason every other
+      // arm here takes it: only the EVENT endpoint carries a version token today,
+      // but the noun is the one thing that would have to change if the tournament
+      // PATCH ever grew one, and a fixed noun is how a shared sentence stops being
+      // shared. Reads identically for `EVENT_SAVE_TARGET`, whose subject is "event".
+      return `This ${target.subject} has changed since you opened it — someone else may have saved a more recent edit.`
     case 'faulted':
       // The server ANSWERED — it just answered badly. So this says whose fault it is
       // (ours), and says nothing whatever about their connection: a 500 is not

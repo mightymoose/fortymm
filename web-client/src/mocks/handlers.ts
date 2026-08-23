@@ -1040,8 +1040,20 @@ function validateEventBody(
     | components['schemas']['TournamentEventCreate']
     | components['schemas']['TournamentEventUpdate']
     | undefined,
+  opts: { requireLockVersion?: boolean } = {},
 ): Response | null {
   if (!body) return detail('Event body is required.', 422)
+  // `TournamentEventUpdate.lock_version` is REQUIRED (#1499) — only on the update
+  // shape, which is why the caller opts in rather than this checking `'lock_version'
+  // in body` on a union that also admits `TournamentEventCreate` (no such field at
+  // all, `extra="forbid"`). Asked before every other body check, mirroring Pydantic's
+  // own field-required 422 arriving before the route's business-logic checks.
+  if (
+    opts.requireLockVersion &&
+    (!('lock_version' in body) || typeof body.lock_version !== 'number')
+  ) {
+    return detail('Field required: lock_version', 422)
+  }
   if ('name' in body && body.name !== undefined) {
     const name = body.name?.trim() ?? ''
     if (!name) return detail('Name is required.', 422)
@@ -2253,14 +2265,28 @@ export const handlers = [
       const body = (await readJson(request)) as
         | components['schemas']['TournamentEventUpdate']
         | undefined
-      const invalid = validateEventBody(body)
+      const invalid = validateEventBody(body, { requireLockVersion: true })
       if (invalid) return invalid
       const result = updateTournamentEvent(
         String(params.tournamentId),
         String(params.eventId),
-        body ?? {},
+        // `body ?? {}` never reaches the store WITHOUT `lock_version`: `validateEventBody`
+        // above already 422'd a body missing it (or missing entirely), so the store's own
+        // `patch.lock_version` read never sees `undefined` here.
+        (body ?? {}) as components['schemas']['TournamentEventUpdate'],
       )
       if (!result.ok) {
+        // A stale `lock_version` (#1499) — asked BEFORE the plain-string 409s below,
+        // and discriminated by the CODE the store attached, never by status alone: a
+        // coded 409 is a `{"detail": {"code": …, "message": …}}` object, the two draw
+        // freezes beneath it are a bare string, and the client tells them apart the
+        // same way (`hasEventVersionConflictCode`, `data/save-failure.ts`).
+        if (result.status === 409 && 'code' in result) {
+          return HttpResponse.json(
+            { detail: { code: result.code, message: result.detail } },
+            { status: 409 },
+          )
+        }
         // The group-set freeze (ADR-0786): this PATCH would add or remove a reservation
         // — and therefore the group mapped to it — on an event whose draw is cut,
         // orphaning the fixtures drawn into it. The store's sentence says so — naming

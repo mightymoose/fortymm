@@ -459,6 +459,16 @@ def upgrade() -> None:
         # create — "UTC" is a guess no single-venue tournament wants made silently.
         # Added here in place per the pre-deploy convention, not as a chained ALTER.
         sa.Column("timezone", sa.String(length=64), nullable=False),
+        # The event's optimistic-concurrency token (#1499). NOT NULL, server default
+        # 1, and bumped by one on every accepted PATCH of this event; a PATCH stating
+        # a stale number is refused with a 409 before anything is written. It exists
+        # instead of leaning on ``updated_at`` because, before it, a reservations-only
+        # edit wrote only child rows and never dirtied this one — so ``updated_at`` did
+        # not move on exactly the edit the lost update was found on. Added here in
+        # place per the pre-deploy convention, not as a chained ALTER.
+        sa.Column(
+            "lock_version", sa.Integer(), nullable=False, server_default=sa.text("1")
+        ),
         sa.CheckConstraint(
             "max_players > 0", name="ck_tournament_events_max_players_positive"
         ),

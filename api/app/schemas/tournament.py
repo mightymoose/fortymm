@@ -1961,6 +1961,23 @@ class TournamentEventRead(BaseModel):
     # one either — ``TournamentEvent.stages`` is ``lazy="selectin"``, like ``groups``
     # and ``reservations`` above, so every read of an event carries its real stages.
     stages: list[EventStageRead]
+    # The event's optimistic-concurrency token (#1499): the number a PATCH of this
+    # event has to state back, and which every accepted PATCH moves on by one. A
+    # created event reads ``1``.
+    #
+    # It rides on the read because it is the ONLY way a client can hold it — and a
+    # client that holds a stale one is exactly what this exists to catch. The editor
+    # sends back the number the sheet was opened with, so a write built on a read that
+    # some other tab has since superseded is refused (409) rather than silently
+    # overwriting the whole editable surface, which is what a PATCH of this event does:
+    # the body always carries every editable field, ``reservations`` included.
+    #
+    # ``updated_at`` above could not be used for this. Before this field existed, a
+    # reservations-only edit wrote child rows and never dirtied the event row, so
+    # ``updated_at`` did not move on precisely the edit the lost update was found on.
+    # It moves now — because the verb writes this column — which is a consequence of
+    # the fix, not an alternative to it.
+    lock_version: int
     created_at: datetime
     updated_at: datetime
     # The event's active entrants, oldest entry first.
@@ -2666,6 +2683,22 @@ class TournamentEventUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # **Required, and deliberately the one field on this partial patch that is**
+    # (#1499): the version of the event this edit was composed against, read off
+    # ``TournamentEventRead.lock_version``. The verb refuses the whole write with a 409
+    # when it does not match what the event now holds.
+    #
+    # A precondition a caller may omit is not a precondition — and the caller most
+    # likely to omit it is the one acting on the stalest read, which is the case this
+    # exists for. So there is no default here and no ``| None``: a body without it is a
+    # 422 at this boundary, which is what makes every caller (the editor, the MCP tool,
+    # every seed and every test) state the version it believes.
+    #
+    # It is a body field rather than an ``If-Match`` header on purpose. The MCP
+    # ``update_event`` tool calls the shared verb directly, so no header reaches it, and
+    # the two surfaces must not drift on what a valid edit is. ``If-Match`` is the
+    # correct HTTP idiom and this schema declines it knowingly.
+    lock_version: int
     name: str | None = Field(default=None, min_length=1, max_length=255)
     format: EventFormat | None = None
     draw_type: DrawType | None = None

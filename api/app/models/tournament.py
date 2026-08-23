@@ -306,6 +306,32 @@ class TournamentEvent(Base):
     # ``reservations`` relationships below now, so a fixture can foreign-key the group
     # it names — and name one of its OWN event's groups (ADR 20260801, on what belongs
     # to an event rather than to its draw settings).
+    #
+    # Monotonic optimistic-concurrency token (#1499), the same device
+    # ``MatchGameScore.version`` is. Every accepted PATCH of this event bumps it by
+    # one, and a PATCH stating a different number is refused with a 409 before it
+    # writes anything — so a director's second tab, holding a read from before some
+    # other write, can no longer clobber the whole editable surface silently.
+    #
+    # It exists because ``updated_at`` **could not** serve as the token. A
+    # reservations-only edit assigns ``event.reservations``, a relationship: SQLAlchemy
+    # writes the child rows and never marks this parent row dirty, so ``onupdate``
+    # above did not fire and ``updated_at`` did not move on exactly the edit the lost
+    # update was found on.
+    #
+    # Note the tense. That is a statement about the world BEFORE this column existed,
+    # and it is the reason the column is here — not a claim you can still observe. The
+    # verb now assigns this scalar on every accepted PATCH, which dirties the parent
+    # row, so ``updated_at`` moves on a reservations-only edit too. Do not read that as
+    # permission to go back to ``updated_at``: it moves because of this column, and it
+    # would stop moving the moment this one went away.
+    #
+    # ``default=1`` as well as ``server_default``: the read schema types it ``int``
+    # and NOT optional, so an unrefreshed instance whose attribute was still ``None``
+    # would make a freshly created event a 500 at the read boundary rather than a 1.
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

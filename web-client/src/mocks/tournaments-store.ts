@@ -647,6 +647,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-01T09:05:00Z',
           updated_at: '2026-06-09T12:00:00Z',
+          lock_version: 1,
         },
         {
           // Deliberately empty: the designed empty entrants state, and the event
@@ -689,6 +690,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-01T09:06:00Z',
           updated_at: '2026-06-09T12:00:00Z',
+          lock_version: 1,
         },
         {
           // FULL: 16 entrants in 16 places, so `entryState` reads `event_full` off
@@ -715,6 +717,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-01T09:06:30Z',
           updated_at: '2026-06-09T12:00:00Z',
+          lock_version: 1,
         },
         {
           // RATING-INELIGIBLE: the dev user is rated 1650 on the tournament's
@@ -796,6 +799,7 @@ function seed(): StoredTournament[] {
           },
           created_at: '2026-06-01T09:06:45Z',
           updated_at: '2026-06-09T12:00:00Z',
+          lock_version: 1,
         },
         {
           // TWO reservations, `rr-then-ko` (#1482): the one draw type the cap does not
@@ -851,6 +855,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-01T09:06:45Z',
           updated_at: '2026-06-09T12:00:00Z',
+          lock_version: 1,
         },
         {
           // A doubles event: entry is a singles-only affair (one row per user
@@ -876,6 +881,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-01T09:07:00Z',
           updated_at: '2026-06-09T12:00:00Z',
+          lock_version: 1,
         },
       ],
     },
@@ -942,6 +948,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-05T15:31:00Z',
           updated_at: '2026-06-05T15:31:00Z',
+          lock_version: 1,
         },
       ],
     },
@@ -1029,6 +1036,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-05-20T10:05:00Z',
           updated_at: '2026-06-12T08:00:00Z',
+          lock_version: 1,
         },
       ],
     },
@@ -1087,6 +1095,7 @@ function seed(): StoredTournament[] {
           results: null,
           created_at: '2026-06-13T18:01:00Z',
           updated_at: '2026-06-13T18:01:00Z',
+          lock_version: 1,
         },
       ],
     },
@@ -1224,6 +1233,7 @@ function seed(): StoredTournament[] {
           },
           created_at: '2026-05-02T10:05:00Z',
           updated_at: '2026-06-06T17:12:00Z',
+          lock_version: 1,
         },
         {
           // MID-FLIGHT: the same shape, one round from home. Every group is decided and
@@ -1298,6 +1308,7 @@ function seed(): StoredTournament[] {
           },
           created_at: '2026-05-02T10:06:00Z',
           updated_at: '2026-06-07T11:20:00Z',
+          lock_version: 1,
         },
       ],
     },
@@ -1847,11 +1858,18 @@ export type StoreResult =
  * The 422 carries the offending entry's `index` so the handler can build the `loc`
  * (`["body", "reservations", i, "id"]`) the real route sends — the reservations are a
  * list, and a refusal a client cannot attribute to a row is a refusal it cannot
- * render. */
+ * render.
+ *
+ * A PATCH can also fail with a **coded** 409 (#1499): the `lock_version` the body sent
+ * does not match the one this event is stored at — someone else wrote it since the
+ * caller last read it. Its own arm, discriminated by the literal `code` (not merely by
+ * `status: 409`) so a handler can tell it apart from the plain-string draw freezes
+ * above without inspecting `detail`'s shape. */
 export type EventResult =
   | { ok: true; event: TournamentEventRead }
   | { ok: false; status: 403 | 404 }
   | { ok: false; status: 409; detail: string }
+  | { ok: false; status: 409; code: 'event_version_conflict'; detail: string }
   | { ok: false; status: 422; index: number; reservationId: string; detail: string }
   // #1482: a non-`rr-then-ko` event would be left holding more than one reservation.
   // Its own arm, discriminated by `reservationCapExceeded` rather than merely by
@@ -2563,6 +2581,11 @@ export function createEvent(
     results: null,
     created_at: now,
     updated_at: now,
+    // A freshly created event's optimistic-concurrency version (#1499) — `1`, the
+    // value the real server assigns a brand-new row. `TournamentEventCreate` carries
+    // no `lock_version` at all (`extra="forbid"` would 422 one), so this is minted
+    // here, never read off the body.
+    lock_version: 1,
   }
   replace({ ...existing, events: [...existing.events, event] })
   return { ok: true, event: readEvent(event) }
@@ -2603,6 +2626,27 @@ export function updateEvent(
   const existing = owned.tournament
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
+  // 404 → 403 → 404 → 409 (#1499), the server's ordering: FIRST of every payload gate,
+  // before either draw freeze and before the reservation cap, so a stale draft that
+  // ALSO trips one of those (it cites a reservation another write removed, or re-sends
+  // a draw type another write froze) is told the true thing — the event moved under
+  // it — rather than blamed for a field it never touched.
+  //
+  // The sentence is the server's own, verbatim (`EventVersionConflictError`,
+  // `api/app/tournament_errors.py`) — a human-authored one, not a library's, so this
+  // mock reproduces it exactly. The CODE, not the sentence, is what the client
+  // switches on (`hasEventVersionConflictCode`, `data/save-failure.ts`); the sentence
+  // is only the ADR-0968 fallback for a caller that does not know the code.
+  if (patch.lock_version !== event.lock_version) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'event_version_conflict',
+      detail:
+        'This event was changed somewhere else while you had it open, so this ' +
+        'save was not applied. Reopen the event to see what it holds now.',
+    }
+  }
   // 404 → 403 → 409, the server's ordering: the state of an event's draw is never the
   // reason a stranger's request is refused. (The *schema's* 422s come before all of it —
   // the handler asks them at the boundary; see `validateEventBody`. The diff's own 422,
@@ -2709,6 +2753,12 @@ export function updateEvent(
     // draw had just been thrown away by a rename.
     fixtures: event.fixtures,
     updated_at: new Date().toISOString(),
+    // Every ACCEPTED PATCH moves the token on by one, unconditionally — including one
+    // whose payload equals what the event already holds (#1499, mirroring the
+    // server's `event.lock_version = event.lock_version + 1`). The version check above
+    // already refused a body sent against the WRONG number, so by construction
+    // `patch.lock_version === event.lock_version` here.
+    lock_version: event.lock_version + 1,
   }
   replace({
     ...existing,

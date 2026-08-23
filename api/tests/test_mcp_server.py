@@ -3801,7 +3801,7 @@ async def test_update_event_owner_edits_it_and_it_persists(
             {
                 "tournament_id": str(tournament_id),
                 "event_id": str(event_id),
-                "updates": {"name": "Renamed Open"},
+                "updates": {"name": "Renamed Open", "lock_version": event.lock_version},
             },
         )
         assert result.isError is False
@@ -3841,7 +3841,11 @@ async def test_update_event_frozen_change_raises_tool_error(
                 {
                     "tournament_id": str(tournament_id),
                     "event_id": str(event_id),
-                    "updates": {"name": "Should Not Apply", "draw_type": "single-elim"},
+                    "updates": {
+                        "name": "Should Not Apply",
+                        "draw_type": "single-elim",
+                        "lock_version": event.lock_version,
+                    },
                 },
             )
 
@@ -3883,7 +3887,10 @@ async def test_update_event_non_owner_raises_tool_error_and_writes_nothing(
                 {
                     "tournament_id": str(tournament_id),
                     "event_id": str(event_id),
-                    "updates": {"name": "Hijacked"},
+                    # A version that does not exist on this event — proving the 403
+                    # fires before any version is even considered (mirrors the
+                    # non-owner HTTP probe in ``test_tournaments.py``).
+                    "updates": {"name": "Hijacked", "lock_version": 999},
                 },
             )
 
@@ -3895,6 +3902,79 @@ async def test_update_event_non_owner_raises_tool_error_and_writes_nothing(
         )
     ).scalar_one()
     assert persisted.name == "Existing Singles"
+
+
+async def test_update_event_current_version_succeeds_and_increments_it(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A current ``lock_version`` (#1499) is accepted, and the read the tool returns
+    carries the number moved on by one — the same contract the HTTP surface has, since
+    both go through the one shared verb."""
+    owner = await make_user(db_session, "mcp-update-event-version-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session,
+        owner,
+        default_league,
+        "Versioned Events Cup",
+        TournamentStatus.draft,
+    )
+    event = await _seed_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+    assert event.lock_version == 1
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "update_event",
+            {
+                "tournament_id": str(tournament_id),
+                "event_id": str(event_id),
+                "updates": {"name": "Renamed Open", "lock_version": 1},
+            },
+        )
+        assert result.isError is False
+        body = result.structuredContent
+        assert body is not None
+        assert body["lock_version"] == 2
+
+
+async def test_update_event_stale_version_raises_tool_error_naming_the_current_one(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A ``lock_version`` that is not the one the event currently holds is refused with
+    a ``ToolError`` naming the number the agent should re-read against — never a
+    ``detail.code``, since an agent reads prose, not a wire-coded body (the HTTP
+    surface's own coded 409 is a different adapter over the same domain exception)."""
+    owner = await make_user(db_session, "mcp-update-event-stale-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Stale Version Cup", TournamentStatus.draft
+    )
+    event = await _seed_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="lock_version 1"):
+            await client.call_tool(
+                "update_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "updates": {"name": "Should Not Apply", "lock_version": 999},
+                },
+            )
+
+    # Refused, and nothing moved — not the name, not the version.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert persisted.name == "Existing Singles"
+    assert persisted.lock_version == 1
 
 
 async def _seed_event_with_reservation(
@@ -3963,6 +4043,9 @@ async def test_update_event_reservation_outside_event_window_raises_tool_error(
                     "tournament_id": str(tournament_id),
                     "event_id": str(event_id),
                     "updates": {
+                        # Required since #1499; the containment refusal is what this
+                        # test is about, so the version it states is the current one.
+                        "lock_version": event.lock_version,
                         "reservations": [
                             {
                                 "id": str(reservation_id),
@@ -3975,7 +4058,7 @@ async def test_update_event_reservation_outside_event_window_raises_tool_error(
                                 },
                                 "table_ids": [],
                             }
-                        ]
+                        ],
                     },
                 },
             )

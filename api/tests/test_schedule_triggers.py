@@ -58,6 +58,7 @@ from tests._helpers import (
     grant_permissions,
     make_user,
     opponent_session,
+    patch_event,
     start_session,
     venue_tables,
 )
@@ -662,9 +663,11 @@ async def test_a_reservation_window_edit_requests_a_settings_solve(
     await _enter_and_cut(db_session, event, entrants)
     table_ids = await _catalogue_ids(db_session, tournament_id)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={
+    response = await patch_event(
+        client,
+        tournament_id,
+        event.id,
+        {
             "reservations": _reservations_payload(
                 reservation_id=await _reservation_id(db_session, event.id),
                 end="18:00",
@@ -689,13 +692,14 @@ async def test_a_name_only_event_patch_requests_no_settings_solve(
     await _enter_and_cut(db_session, event, entrants)
     table_ids = await _catalogue_ids(db_session, tournament_id)
 
-    renamed = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={"name": "Renamed Singles"},
+    renamed = await patch_event(
+        client, tournament_id, event.id, {"name": "Renamed Singles"}
     )
-    resent = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={
+    resent = await patch_event(
+        client,
+        tournament_id,
+        event.id,
+        {
             "reservations": _reservations_payload(
                 reservation_id=await _reservation_id(db_session, event.id),
                 end="17:00",
@@ -720,9 +724,11 @@ async def test_a_length_games_change_requests_a_settings_solve(
     entrants = [await make_user(db_session, f"lg-{i}") for i in range(3)]
     await _enter_and_cut(db_session, event, entrants)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event.id}",
-        json={"match_settings": {"rated": False, "length_games": 5}},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event.id,
+        {"match_settings": {"rated": False, "length_games": 5}},
     )
 
     assert response.status_code == 200, response.text

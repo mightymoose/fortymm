@@ -154,6 +154,7 @@ from app.tournament_errors import (
     EntryRefusedError,
     EventNotFoundError,
     EventReservationCapExceededError,
+    EventVersionConflictError,
     FixtureNotFoundError,
     FixturePlacementFrozenError,
     GroupSetFrozenError,
@@ -1412,13 +1413,22 @@ async def update_event(
     re-solve trigger) and the same ``TournamentEventUpdate`` schema the HTTP route
     validates, so the MCP and HTTP surfaces can never drift on what a valid edit is.
 
-    ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; ``predicates``
-    replaces wholesale when sent. ``reservations`` is an ID-KEYED DIFF sent in full and
-    in order: an entry carrying an ``id`` keeps that reservation (re-worded, re-timed,
-    re-tabled, re-positioned), an entry omitting one adds a reservation the server
-    mints an id for, and a reservation no entry names is removed — so send back the
-    reservations you read, edited. ``groups`` is server-owned and read-only: the
-    server materialises the group rows on every write (for an ``rr-then-ko`` event,
+    ``updates`` REQUIRES ``lock_version`` — the number you read off the event you are
+    editing. Read the event, edit what you read, and send its ``lock_version`` back. If
+    anything has written the event since that read, this call is refused and NOTHING is
+    changed: read the event again, look at what it now holds, and only then decide
+    whether to re-send your edit against the new version. Never re-send automatically —
+    a re-send overwrites whatever the other writer did. Every accepted edit moves the
+    event's ``lock_version`` on by one.
+
+    ``updates`` is otherwise a PARTIAL patch: an OMITTED field is left unchanged;
+    ``predicates`` replaces wholesale when sent. ``reservations`` is an ID-KEYED DIFF
+    sent in full and in order: an entry carrying an ``id`` keeps that reservation
+    (re-worded, re-timed, re-tabled, re-positioned), an entry omitting one adds a
+    reservation the server mints an id for, and a reservation no entry names is
+    removed — so send back the reservations you read, edited. ``groups`` is
+    server-owned and read-only: the server materialises the group rows on every
+    write (for an ``rr-then-ko`` event,
     ``ceil(field / 5)`` against the player cap, or 16 when uncapped; one group per
     reservation for every other draw type) and maps each group to the reservation at
     ``position % reservation count``, or to none when the event has no reservation.
@@ -1435,8 +1445,9 @@ async def update_event(
     own, recomputed from the event as it now stands).
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
-    tournament's owner, when no event with that id exists under the tournament, or when
-    the edit would change the frozen group set or draw type of a cut-draw event.
+    tournament's owner, when no event with that id exists under the tournament, when the
+    ``lock_version`` you sent is not the one the event now holds, or when the edit would
+    change the frozen group set or draw type of a cut-draw event.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1457,6 +1468,24 @@ async def update_event(
                 tournament_id=tournament_id,
                 event_id=event_id,
                 owner_denial="edit events of",
+            ) from exc
+        except EventVersionConflictError as exc:
+            # The optimistic-concurrency refusal (#1499). Deliberately NOT a member of
+            # ``_TOURNAMENT_WRITE_TOOL_ERRORS`` — that tuple is the 404/403 identity set
+            # — and caught here beside the two freezes, whose neighbour it is: a
+            # well-formed request from the rightful owner that the resource's state
+            # refuses.
+            #
+            # An agent reads prose, not a ``detail.code``, so the code the HTTP surface
+            # carries has nothing to say here and the domain sentence rides through
+            # alone. It names the current version, which is the one fact an agent needs
+            # to decide: re-read the event, look at what it now holds, and re-send
+            # against ``lock_version`` if it still wants its edit. Never automatic —
+            # overwriting another writer is a decision, on this surface as much as in
+            # the editor.
+            raise ToolError(
+                f"{exc} (it is now at lock_version {exc.current_version}; read the "
+                "event again and send that version if you still want this edit)."
             ) from exc
         except (GroupSetFrozenError, DrawTypeFrozenError) as exc:
             # Both freezes carry the exact, domain-authored 409 sentence — surfaced as

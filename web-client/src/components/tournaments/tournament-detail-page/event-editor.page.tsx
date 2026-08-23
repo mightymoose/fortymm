@@ -85,6 +85,19 @@ const scoped = (container: Container) => ({
   queryFailure() {
     return container.queryByTestId('event-editor-error')
   },
+  /** The conflict banner's deliberate override (#1499) — present only for a
+   * `conflict` failure with a live `currentLockVersion` to re-send against. */
+  queryOverrideButton() {
+    return container.queryByTestId('event-editor-override')
+  },
+  getOverrideButton() {
+    return container.getByTestId('event-editor-override')
+  },
+  /** The conflict banner's other branch: the event was deleted elsewhere, so
+   * there is nothing left to overwrite and no override button renders at all. */
+  queryConflictDeletedNotice() {
+    return container.queryByTestId('event-editor-conflict-deleted')
+  },
   /** The red messages under the rule rows (`predicate-error`), scoped to the whole
    * editor — the Eligibility tab is where a refused-in-the-form save lands. */
   getRuleErrors() {

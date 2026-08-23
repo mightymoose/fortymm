@@ -1191,6 +1191,15 @@ export interface paths {
          * @description Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
          *     sent.
          *
+         *     **`lock_version` is required on every edit.** Send back the `lock_version` you read
+         *     off the event you are editing. If the event has been written since that read, this
+         *     request is refused with a `409` carrying
+         *     `{"detail": {"code": "event_version_conflict", "message": …}}` and **nothing is
+         *     written** — read the event again and decide what to do with your draft. Every edit
+         *     this endpoint accepts moves the event's `lock_version` on by one, whatever it
+         *     changed. The check runs before every other check on the body, so a stale edit is
+         *     told it is stale rather than blamed on a field it did not touch.
+         *
          *     **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
          *     carries the `id` of a reservation this event already has — keeping it, with the
          *     `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
@@ -5233,6 +5242,8 @@ export interface components {
             reservations: components["schemas"]["Reservation"][];
             /** Stages */
             stages: components["schemas"]["EventStageRead"][];
+            /** Lock Version */
+            lock_version: number;
             /**
              * Created At
              * Format: date-time
@@ -5284,6 +5295,8 @@ export interface components {
          *     born small and then edited into the 500.
          */
         TournamentEventUpdate: {
+            /** Lock Version */
+            lock_version: number;
             /** Name */
             name?: string | null;
             format?: components["schemas"]["EventFormat"] | null;

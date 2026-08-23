@@ -522,5 +522,13 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // No results (ADR-0788): with no draw there is nothing to stand. The server sends the
     // real thing once the event exists and its draw is cut.
     results: null,
+    // A placeholder that can never reach a wire body (#1499): `eventToCreateBody`
+    // doesn't read `lockVersion` at all (`TournamentEventCreate` has no such field —
+    // `extra="forbid"` would 422 it), and only `eventToUpdateBody` ever sends it, which
+    // this draft can only reach once it exists on the server and carries a REAL version
+    // (`apiToEvent` overwrites this the moment the created event is read back). `1` is
+    // what the server assigns a brand-new row, so this draft reads the same as the
+    // event it is about to become rather than inventing a second value for the concept.
+    lockVersion: 1,
   }
 }

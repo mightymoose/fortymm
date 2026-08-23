@@ -676,6 +676,15 @@ internal protocol APIProtocol: Sendable {
     /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     /// sent.
     ///
+    /// **`lock_version` is required on every edit.** Send back the `lock_version` you read
+    /// off the event you are editing. If the event has been written since that read, this
+    /// request is refused with a `409` carrying
+    /// `{"detail": {"code": "event_version_conflict", "message": …}}` and **nothing is
+    /// written** — read the event again and decide what to do with your draft. Every edit
+    /// this endpoint accepts moves the event's `lock_version` on by one, whatever it
+    /// changed. The check runs before every other check on the body, so a stale edit is
+    /// told it is stale rather than blamed on a field it did not touch.
+    ///
     /// **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
     /// carries the `id` of a reservation this event already has — keeping it, with the
     /// `name`, `slot`, `table_ids` and position this payload gives it — or omits the `id`
@@ -2213,6 +2222,15 @@ extension APIProtocol {
     ///
     /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     /// sent.
+    ///
+    /// **`lock_version` is required on every edit.** Send back the `lock_version` you read
+    /// off the event you are editing. If the event has been written since that read, this
+    /// request is refused with a `409` carrying
+    /// `{"detail": {"code": "event_version_conflict", "message": …}}` and **nothing is
+    /// written** — read the event again and decide what to do with your draft. Every edit
+    /// this endpoint accepts moves the event's `lock_version` on by one, whatever it
+    /// changed. The check runs before every other check on the body, so a stale edit is
+    /// told it is stale rather than blamed on a field it did not touch.
     ///
     /// **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
     /// carries the `id` of a reservation this event already has — keeping it, with the
@@ -11206,6 +11224,8 @@ internal enum Components {
             internal var reservations: [Components.Schemas.Reservation]
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/stages`.
             internal var stages: [Components.Schemas.EventStageRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/lock_version`.
+            internal var lockVersion: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/created_at`.
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/updated_at`.
@@ -11337,6 +11357,7 @@ internal enum Components {
             ///   - groups:
             ///   - reservations:
             ///   - stages:
+            ///   - lockVersion:
             ///   - createdAt:
             ///   - updatedAt:
             ///   - entrants:
@@ -11361,6 +11382,7 @@ internal enum Components {
                 groups: [Components.Schemas.GroupRead],
                 reservations: [Components.Schemas.Reservation],
                 stages: [Components.Schemas.EventStageRead],
+                lockVersion: Swift.Int,
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 entrants: [Components.Schemas.TournamentEntrantRead],
@@ -11385,6 +11407,7 @@ internal enum Components {
                 self.groups = groups
                 self.reservations = reservations
                 self.stages = stages
+                self.lockVersion = lockVersion
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.entrants = entrants
@@ -11410,6 +11433,7 @@ internal enum Components {
                 case groups
                 case reservations
                 case stages
+                case lockVersion = "lock_version"
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case entrants
@@ -11441,6 +11465,8 @@ internal enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate`.
         internal struct TournamentEventUpdate: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/lock_version`.
+            internal var lockVersion: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/name`.
             internal var name: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentEventUpdate/format`.
@@ -11540,6 +11566,7 @@ internal enum Components {
             /// Creates a new `TournamentEventUpdate`.
             ///
             /// - Parameters:
+            ///   - lockVersion:
             ///   - name:
             ///   - format:
             ///   - drawType:
@@ -11553,6 +11580,7 @@ internal enum Components {
             ///   - predicates:
             ///   - reservations:
             internal init(
+                lockVersion: Swift.Int,
                 name: Swift.String? = nil,
                 format: Components.Schemas.TournamentEventUpdate.FormatPayload? = nil,
                 drawType: Components.Schemas.TournamentEventUpdate.DrawTypePayload? = nil,
@@ -11566,6 +11594,7 @@ internal enum Components {
                 predicates: [Components.Schemas.Predicate]? = nil,
                 reservations: [Components.Schemas.ReservationUpsert]? = nil
             ) {
+                self.lockVersion = lockVersion
                 self.name = name
                 self.format = format
                 self.drawType = drawType
@@ -11580,6 +11609,7 @@ internal enum Components {
                 self.reservations = reservations
             }
             internal enum CodingKeys: String, CodingKey {
+                case lockVersion = "lock_version"
                 case name
                 case format
                 case drawType = "draw_type"
@@ -11595,6 +11625,10 @@ internal enum Components {
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.lockVersion = try container.decode(
+                    Swift.Int.self,
+                    forKey: .lockVersion
+                )
                 self.name = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .name
@@ -11644,6 +11678,7 @@ internal enum Components {
                     forKey: .reservations
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "lock_version",
                     "name",
                     "format",
                     "draw_type",
@@ -24199,6 +24234,15 @@ internal enum Operations {
     ///
     /// Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     /// sent.
+    ///
+    /// **`lock_version` is required on every edit.** Send back the `lock_version` you read
+    /// off the event you are editing. If the event has been written since that read, this
+    /// request is refused with a `409` carrying
+    /// `{"detail": {"code": "event_version_conflict", "message": …}}` and **nothing is
+    /// written** — read the event again and decide what to do with your draft. Every edit
+    /// this endpoint accepts moves the event's `lock_version` on by one, whatever it
+    /// changed. The check runs before every other check on the body, so a stale edit is
+    /// told it is stale rather than blamed on a field it did not touch.
     ///
     /// **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
     /// carries the `id` of a reservation this event already has — keeping it, with the
