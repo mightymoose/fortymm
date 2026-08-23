@@ -1,9 +1,9 @@
 import uuid
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import ROUND_DOWN, Decimal
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -32,7 +32,10 @@ from app.schemas.schedule_solve import (
     parse_infeasibility_reasons,
     parse_placement_conflicts,
 )
-from app.tournament_errors import EventReservationCapExceededError
+from app.tournament_errors import (
+    EventReservationCapExceededError,
+    ReservationOutsideEventWindowError,
+)
 
 # ----- bounded numerics (the column is a constraint too) ---------------------
 
@@ -863,27 +866,35 @@ one event share a position" unrepresentable through the API, and it is why
 field a client cannot send is a field it cannot decide."""
 
 
-def _slot_is_storable(slot: Slot) -> Slot:
-    """Refuse a reservation window whose strings are not the ``YYYY-MM-DD`` / ``HH:MM``
-    this shape has always claimed to be (422).
+def _slot_is_well_formed(slot: Slot) -> Slot:
+    """Refuse a window whose strings are not the ``YYYY-MM-DD`` / ``HH:MM`` this shape
+    has always claimed to be, and refuse one whose ``end`` does not come strictly after
+    its ``start`` (422, #1501).
 
-    A reservation's window is three real columns now — ``slot_date DATE``,
-    ``slot_start TIME``, ``slot_end TIME`` (ADR 20260801) — where it used to be three
-    strings inside a JSONB blob that accepted literally anything. ``"next Tuesday"`` was
-    a storable reservation window until this line existed; past it, it is a driver error
-    at the INSERT, i.e. a 500 for a payload the boundary waved through. A boundary that
-    admits what the interior cannot hold is not a boundary (:data:`EventMaxPlayers` is
-    the same lesson in a different key).
+    **The parse rule.** A reservation's window is three real columns —
+    ``slot_date DATE``, ``slot_start TIME``, ``slot_end TIME`` (ADR 20260801) — where it
+    used to be three strings inside a JSONB blob that accepted literally anything.
+    ``"next Tuesday"`` was a storable reservation window until this line existed; past
+    it, it is a driver error at the INSERT, i.e. a 500 for a payload the boundary waved
+    through. A boundary that admits what the interior cannot hold is not a boundary
+    (:data:`EventMaxPlayers` is the same lesson in a different key). Seconds are refused
+    rather than truncated: the stored value must compose back into the ``HH:MM`` the
+    wire shape promises, and a window silently read back one minute from where the
+    director set it is worse than a refusal that says what to send.
 
-    Seconds are refused rather than truncated. The stored value must compose back into
-    the ``HH:MM`` the wire shape promises, and a window silently read back one minute
-    from where the director set it is worse than a refusal that says what to send.
+    **The ordering rule.** ``end`` strictly after ``start`` — a zero-length or negative
+    window is refused outright, whether it is a reservation's own window or an event's
+    (#1501). An overnight window (``22:00`` to ``02:00``) stays unsayable; the shape has
+    no second date to carry one.
 
-    An ``AfterValidator`` on the *reservation's* slot only, not on :class:`Slot` itself:
-    the event's own ``slot`` is still an untyped JSONB value-object with no columns
-    behind it, and tightening it here would be a rule about a field this chore does not
-    move. It contributes nothing to the JSON schema, so the OpenAPI shape of a
-    reservation's ``slot`` is the ``Slot`` it always was.
+    An ``AfterValidator`` on **both** the reservation's slot and the event's own — see
+    :data:`WellFormedSlot`. It used to run on the reservation's slot only, because the
+    event's own ``slot`` was an untyped JSONB value-object with no columns behind it and
+    no relation to check. That is no longer true: an event's slot is the authority
+    containment is judged against (:func:`enforce_reservation_containment`), so a
+    malformed or inverted one is refused here before it can reach a reservation
+    validated against it, or the schedule preview's own ``date.fromisoformat``
+    (``app.schedule_preview_solve``), where it used to answer 500.
     """
     try:
         date.fromisoformat(slot.date)
@@ -891,20 +902,36 @@ def _slot_is_storable(slot: Slot) -> Slot:
         end = time.fromisoformat(slot.end)
     except ValueError as exc:
         raise ValueError(
-            "A reservation's window is a date and two times: “date” must be "
-            f"YYYY-MM-DD and “start”/“end” must be HH:MM ({exc})."
+            "A window is a date and two times: “date” must be YYYY-MM-DD and "
+            f"“start”/“end” must be HH:MM ({exc})."
         ) from exc
     if any(t.second or t.microsecond for t in (start, end)):
         raise ValueError(
-            "A reservation's window is stated to the minute: “start” and “end” must "
-            "be HH:MM, with no seconds."
+            "A window is stated to the minute: “start” and “end” must be HH:MM, "
+            "with no seconds."
+        )
+    if end <= start:
+        raise ValueError(
+            "A window's “end” must come strictly after its “start” — a zero-length "
+            "or backwards window is not a window."
         )
     return slot
 
 
-ReservationSlot = Annotated[Slot, AfterValidator(_slot_is_storable)]
-"""A reservation's window — a :class:`Slot` that the reservation's own ``date``/``time``
-columns can actually hold. See :func:`_slot_is_storable`."""
+WellFormedSlot = Annotated[Slot, AfterValidator(_slot_is_well_formed)]
+"""A :class:`Slot` that denotes a real, positive-length window: its strings parse as
+the ``YYYY-MM-DD``/``HH:MM`` this shape has always claimed to be, and its ``end`` comes
+strictly after its ``start``. See :func:`_slot_is_well_formed`.
+
+Carried on a reservation's own ``slot`` (:class:`ReservationWrite`) and, since #1501,
+on the two event WRITE shapes (:class:`TournamentEventCreate`,
+:class:`TournamentEventUpdate`) — never on the read shapes, :class:`TournamentEventRead`
+or :class:`Reservation`. A tightened read turns a legacy row into a 500 on GET, which
+is the exact failure mode
+this alias exists to stop, relocated to the other side of the boundary. No environment
+holds such a row today (#1501's Evidence, and the repo's no-data-preservation
+decision), but a read boundary should not depend on that staying true — see the
+comments at each read field for the record of the choice."""
 
 
 class ReservationWrite(BaseModel):
@@ -938,7 +965,7 @@ class ReservationWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    slot: ReservationSlot
+    slot: WellFormedSlot
     table_ids: list[str]
 
 
@@ -1000,6 +1027,13 @@ class Reservation(ReservationWrite):
 
     id: uuid.UUID
     position: ReservationPosition = 0
+    # Overrides the inherited ``WellFormedSlot`` back to a bare ``Slot`` (#1501).
+    # ``ReservationWrite.slot`` is tightened because it is written; this is read, and
+    # tightening a read turns a legacy row's malformed or inverted window into a 500 on
+    # GET — the ticket's own bug relocated one field over. Same reasoning as the event
+    # read shape at ``TournamentEventRead.slot`` below; no environment holds such a
+    # row today, but the read boundary should not depend on that staying true.
+    slot: Slot
 
 
 def named_list(names: list[str]) -> str:
@@ -1857,6 +1891,11 @@ class TournamentEventRead(BaseModel):
     # the read so a client (and later the display BFF) knows the frame every ``Slot``
     # of this event is stated in; the ``Slot`` strings themselves are unchanged.
     timezone: str
+    # Deliberately a bare ``Slot``, not ``WellFormedSlot`` (#1501). The two write
+    # shapes below are tightened because they are written; this is read, and
+    # tightening a read turns a legacy row's malformed or inverted window into a 500
+    # on GET — this ticket's own bug relocated one verb over. No environment holds
+    # such a row today, but the read boundary should not depend on that staying true.
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate]
@@ -2290,6 +2329,84 @@ def enforce_event_reservation_cap(draw_type: DrawType, reservation_count: int) -
         )
 
 
+class ReservationWindow(NamedTuple):
+    """One reservation's identity and parsed window, exactly as
+    :func:`enforce_reservation_containment` needs it: enough to judge containment, and
+    enough to name the offending row when it fails. ``position`` is the reservation's
+    0-based position in whatever order is being judged — the request's own
+    ``reservations`` list on a create, or
+    :func:`~app.tournament_reservations.ordered_reservations` on an update that left
+    ``reservations`` unsent — the same "position"
+    :data:`ReservationPosition` already means, so a caller reads it straight off
+    either source with no separate counter to keep in step. Named ``position``, not
+    ``index``: the latter collides with ``tuple.index``, the built-in lookup method
+    every :class:`NamedTuple` already carries."""
+
+    position: int
+    name: str
+    slot_date: date
+    slot_start: time
+    slot_end: time
+
+
+def enforce_reservation_containment(
+    event_window: tuple[date, time, time],
+    reservations: Sequence[ReservationWindow],
+) -> None:
+    """Refuse a reservation whose window is not fully inside its event's own ``slot``
+    (#1501) — the one named function both the create validator and the update verb
+    call, so containment is one rule rather than two half-rules living in two places.
+    The exact pattern :func:`enforce_event_reservation_cap` set for #1482, one resource
+    over.
+
+    **Full containment, bounds inclusive.** A reservation's date must equal the
+    event's, and its ``start``/``end`` must fall within the event's —
+    ``reservation.start >= event.start`` and ``reservation.end <= event.end``.
+    Inclusive because a reservation exactly as wide as its event is a real, seeded
+    case (``p-cc-1`` on ``ev-cc-open``), not an edge worth rounding away.
+
+    **Parsed values in, never wire strings — and never a re-parse.** ``event_window``
+    is the event's own ``(date, start, end)``; ``reservations`` is each reservation's
+    identity and window (:class:`ReservationWindow`). The create schema holds
+    parse-guaranteed :data:`WellFormedSlot`\\ s and converts them inline; the update
+    verb holds the ORM's own ``slot_date``/``slot_start``/``slot_end`` columns and
+    passes them straight through. Both are total conversions, not parses that can
+    fail — :func:`_slot_is_well_formed` already refused anything that would not
+    convert — so this function stays a pure comparison and needs no failure branch of
+    its own.
+
+    **Stops at the first violation.** Raises
+    :class:`~app.tournament_errors.ReservationOutsideEventWindowError` (a
+    ``ValueError``, so a create's ``model_validator(mode="after")`` folds it straight
+    into the request's own 422) naming the offending reservation by index and name — a
+    director fixes that row, saves again, and meets the next one if there is one,
+    rather than reading a refusal about a list.
+
+    Callers resolve the **effective** state before calling this, exactly as
+    :func:`enforce_event_reservation_cap`'s callers do: the incoming event window or
+    the stored one, the incoming reservations or the stored ones, so a write that
+    touches only one half of the pair is still judged against the truth it would leave
+    the event in."""
+    event_date, event_start, event_end = event_window
+    for reservation in reservations:
+        if (
+            reservation.slot_date != event_date
+            or reservation.slot_start < event_start
+            or reservation.slot_end > event_end
+        ):
+            raise ReservationOutsideEventWindowError(
+                f"“{reservation.name}” runs "
+                f"{reservation.slot_date.isoformat()} "
+                f"{reservation.slot_start.strftime('%H:%M')}–"
+                f"{reservation.slot_end.strftime('%H:%M')}, which is not inside "
+                "this event's own window: "
+                f"{event_date.isoformat()} {event_start.strftime('%H:%M')}–"
+                f"{event_end.strftime('%H:%M')}.",
+                reservation_index=reservation.position,
+                reservation_name=reservation.name,
+            )
+
+
 class TournamentEventCreate(BaseModel):
     """A new event. Its two numbers are bounded by what their columns can hold —
     ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
@@ -2339,7 +2456,11 @@ class TournamentEventCreate(BaseModel):
     # there is no server default, because "the event's venue is UTC" is a guess no
     # single-venue tournament would want silently made for it.
     timezone: EventTimezone
-    slot: Slot
+    # ``WellFormedSlot``, not a bare ``Slot`` (#1501): the event's own window gets the
+    # same parse rule and ``end``-after-``start`` rule a reservation's does, since it
+    # is now the authority containment is judged against
+    # (:func:`enforce_reservation_containment`).
+    slot: WellFormedSlot
     match_settings: MatchSettings
     predicates: list[Predicate] = Field(default_factory=list)
     # ``EventReservations`` — the CREATE shape (``ReservationWrite``), which carries
@@ -2409,6 +2530,45 @@ class TournamentEventCreate(BaseModel):
         enforce_event_reservation_cap(self.draw_type, len(self.reservations))
         return self
 
+    @model_validator(mode="after")
+    def _enforce_reservation_containment(self) -> "TournamentEventCreate":
+        """Refuse a reservation whose window is not fully inside this event's own
+        ``slot`` (#1501), by calling :func:`enforce_reservation_containment` — the one
+        function both this validator and the update verb call, so containment is
+        never half-duplicated across the two write shapes.
+
+        Converts ``self.slot`` and each reservation's ``slot`` from
+        :data:`WellFormedSlot` strings into the ``(date, time, time)`` triples the
+        predicate takes. A total conversion, not a parse that can fail:
+        :meth:`_slot_is_well_formed` has already refused anything
+        ``date.fromisoformat``/``time.fromisoformat`` would choke on, so this is the
+        same "no failure branch" move :func:`~app.tournament_reservations._slot_columns`
+        already makes for the same reason.
+
+        ``ReservationOutsideEventWindowError`` is a ``ValueError``, so Pydantic folds
+        it straight into this model's own ``ValidationError`` — the create path needs
+        no adapter at all, exactly as :meth:`_enforce_reservation_cap` above needs
+        none."""
+        event_window = (
+            date.fromisoformat(self.slot.date),
+            time.fromisoformat(self.slot.start),
+            time.fromisoformat(self.slot.end),
+        )
+        enforce_reservation_containment(
+            event_window,
+            [
+                ReservationWindow(
+                    position=index,
+                    name=reservation.name,
+                    slot_date=date.fromisoformat(reservation.slot.date),
+                    slot_start=time.fromisoformat(reservation.slot.start),
+                    slot_end=time.fromisoformat(reservation.slot.end),
+                )
+                for index, reservation in enumerate(self.reservations)
+            ],
+        )
+        return self
+
 
 class TournamentEventUpdate(BaseModel):
     """Partial update for an event. Absent fields are unchanged. Every column
@@ -2451,7 +2611,10 @@ class TournamentEventUpdate(BaseModel):
     # supported edit (ADR: "picked Chicago, the venue is Denver"). Its column is NOT
     # NULL, so an explicit ``null`` is rejected below; an unknown zone is still a 422.
     timezone: EventTimezone | None = None
-    slot: Slot | None = None
+    # ``WellFormedSlot``, not a bare ``Slot`` (#1501) — see the identical comment on
+    # ``TournamentEventCreate.slot``. ``None`` still means "not sent"; ``_reject_
+    # explicit_null`` below refuses an explicit ``null`` before this validator runs.
+    slot: WellFormedSlot | None = None
     match_settings: MatchSettings | None = None
     predicates: list[Predicate] | None = None
     # ``EditedEventReservations``, not the create shape: this is the verb that can

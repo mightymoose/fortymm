@@ -3,6 +3,10 @@ import {
   eventSchema,
   eventToFormValues,
   firstInvalidSection,
+  isEventSlotWellFormed,
+  isReservationContained,
+  isSlotOrdered,
+  reservationWindowIssues,
   type EventFormValues,
 } from './event-form'
 
@@ -283,6 +287,328 @@ describe('eventSchema', () => {
     expect(rejectedFields(formFor({ timezone: '' }))).toEqual(['timezone'])
     expect(rejectedFields(formFor({ timezone: '   ' }))).toEqual(['timezone'])
   })
+
+  /**
+   * #1501: a reservation's window must end after it starts, and must fall inside its
+   * event's own window (bounds INCLUSIVE). The seeded event's slot is `09:00`–`18:00`
+   * on `2026-06-13`, and its one seeded reservation (`09:00`–`12:30`, same date) is
+   * contained by construction — every case below starts from that baseline and breaks
+   * exactly one thing.
+   */
+  describe('a reservation window (#1501)', () => {
+    const reservationSlot = (
+      overrides: Partial<{ date: string; start: string; end: string }>,
+    ) =>
+      formFor({
+        reservations: [buildReservation({ slot: { date: '2026-06-13', start: '09:00', end: '12:30', ...overrides } })],
+      })
+
+    it('accepts the seeded reservation, contained by construction', () => {
+      expect(rejectedFields(reservationSlot({}))).toEqual([])
+    })
+
+    it('refuses a reservation whose end comes before its start', () => {
+      expect(
+        rejectedFields(reservationSlot({ start: '12:30', end: '09:00' })),
+      ).toEqual(['reservations'])
+    })
+
+    it('refuses a zero-length reservation — end equal to start', () => {
+      expect(
+        rejectedFields(reservationSlot({ start: '10:00', end: '10:00' })),
+      ).toEqual(['reservations'])
+    })
+
+    it('refuses a reservation dated off the event — even by one day', () => {
+      expect(rejectedFields(reservationSlot({ date: '2026-06-14' }))).toEqual([
+        'reservations',
+      ])
+    })
+
+    it('refuses a reservation whose window starts before the event opens', () => {
+      expect(rejectedFields(reservationSlot({ start: '08:00' }))).toEqual([
+        'reservations',
+      ])
+    })
+
+    it('refuses a reservation whose window ends after the event closes', () => {
+      expect(rejectedFields(reservationSlot({ end: '19:00' }))).toEqual([
+        'reservations',
+      ])
+    })
+
+    // Bounds are INCLUSIVE — a reservation whose window exactly equals the event's
+    // must save. The seeded `ev-cc-open` / `p-cc-1` pair (`mocks/tournaments-store.ts`)
+    // is this case in the app's own fixtures.
+    it('accepts a reservation whose window exactly equals the event’s', () => {
+      expect(
+        rejectedFields(reservationSlot({ start: '09:00', end: '18:00' })),
+      ).toEqual([])
+    })
+
+    // Several bad rows, several messages — never one refusal for the whole list.
+    it('names every bad row, keyed by its own id', () => {
+      const issues = reservationWindowIssues(
+        [
+          {
+            kind: 'kept',
+            id: 'res-a',
+            name: 'Reservation A',
+            slot: { date: '2026-06-13', start: '10:00', end: '09:00' },
+            tableIds: [],
+          },
+          {
+            kind: 'kept',
+            id: 'res-b',
+            name: 'Reservation B',
+            slot: { date: '2026-06-20', start: '09:00', end: '10:00' },
+            tableIds: [],
+          },
+          {
+            kind: 'kept',
+            id: 'res-c',
+            name: 'Reservation C',
+            slot: { date: '2026-06-13', start: '09:00', end: '10:00' },
+            tableIds: [],
+          },
+        ],
+        { date: '2026-06-13', start: '09:00', end: '18:00' },
+      )
+      expect(Object.keys(issues).sort()).toEqual(['res-a', 'res-b'])
+      expect(issues['res-c']).toBeUndefined()
+    })
+
+    /**
+     * ⚠️ **No row is judged against a window that cannot exist.** A containment
+     * message quotes the event's own window, and quoting an inverted or malformed one
+     * ("must fall between 18:00–09:00") sends the director back to Reservations to fit
+     * inside something Basics already told them to fix first — the event slot IS the
+     * thing to fix first, one level up from "ordering before containment" for a single
+     * row.
+     */
+    it('says nothing about ANY row when the event’s own slot cannot frame one', () => {
+      const reservations = [
+        {
+          kind: 'kept' as const,
+          id: 'res-a',
+          name: 'Reservation A',
+          slot: { date: '2026-06-20', start: '09:00', end: '10:00' },
+          tableIds: [],
+        },
+      ]
+      expect(
+        reservationWindowIssues(reservations, {
+          date: '2026-06-13',
+          start: '18:00',
+          end: '09:00',
+        }),
+      ).toEqual({})
+      expect(
+        reservationWindowIssues(reservations, {
+          date: '',
+          start: '09:00',
+          end: '18:00',
+        }),
+      ).toEqual({})
+    })
+
+    // The containment message states the event's own window, so the director can read
+    // the target without leaving the Reservations tab for Basics.
+    it('states the event’s own window in the containment message', () => {
+      const result = eventSchema.safeParse(reservationSlot({ date: '2026-06-14' }))
+      expect(result.success).toBe(false)
+      const message = result.error?.issues[0].message ?? ''
+      expect(message).toContain('Jun 13, 2026')
+      expect(message).toContain('09:00–18:00')
+    })
+  })
+
+  /** #1501, rule 3: the event's own slot obeys the same end-after-start rule the
+   * reservation's slot does — an event slotted end-before-start makes every
+   * reservation uncontainable. */
+  describe('the event’s own slot (#1501)', () => {
+    // No reservations, so inverting the event's own window cannot ALSO trip
+    // containment — this isolates the event-slot rule from the reservation rule that
+    // sits beside it (an event with no reservations still has to refuse its own
+    // inverted slot, per the ticket's own edge case).
+    it('refuses an event slotted end-before-start', () => {
+      expect(
+        rejectedFields(
+          formFor({
+            slot: { date: '2026-06-13', start: '18:00', end: '09:00' },
+            reservations: [],
+          }),
+        ),
+      ).toEqual(['slot'])
+    })
+
+    it('refuses a zero-length event slot', () => {
+      expect(
+        rejectedFields(
+          formFor({
+            slot: { date: '2026-06-13', start: '09:00', end: '09:00' },
+            reservations: [],
+          }),
+        ),
+      ).toEqual(['slot'])
+    })
+
+    it('accepts an ordered event slot', () => {
+      expect(
+        rejectedFields(formFor({ slot: { date: '2026-06-13', start: '09:00', end: '18:00' } })),
+      ).toEqual([])
+    })
+
+    /**
+     * ⚠️ **A cleared box is `''`, and `isSlotOrdered`'s string comparison treats `''` as
+     * sorting before every real `HH:MM`** — so a blank Start next to a real End (or a
+     * blank Date on an event with no reservations to trip containment on) would
+     * otherwise read as "ordered" and build a request the server 500s trying to parse.
+     * No reservations, for the same isolation reason the ordering cases above use it.
+     */
+    describe('a cleared box (#1501, the parse half)', () => {
+      it('refuses a blank Start next to a real End', () => {
+        expect(
+          rejectedFields(
+            formFor({
+              slot: { date: '2026-06-13', start: '', end: '18:00' },
+              reservations: [],
+            }),
+          ),
+        ).toEqual(['slot'])
+      })
+
+      it('refuses a blank End next to a real Start', () => {
+        expect(
+          rejectedFields(
+            formFor({
+              slot: { date: '2026-06-13', start: '09:00', end: '' },
+              reservations: [],
+            }),
+          ),
+        ).toEqual(['slot'])
+      })
+
+      it('refuses a blank Date, even with an otherwise-ordered window', () => {
+        expect(
+          rejectedFields(
+            formFor({
+              slot: { date: '', start: '09:00', end: '18:00' },
+              reservations: [],
+            }),
+          ),
+        ).toEqual(['slot'])
+      })
+
+      it('refuses a time carrying seconds', () => {
+        expect(
+          rejectedFields(
+            formFor({
+              slot: { date: '2026-06-13', start: '09:00:00', end: '18:00' },
+              reservations: [],
+            }),
+          ),
+        ).toEqual(['slot'])
+      })
+
+      it('speaks about the missing value, never the ordering sentence', () => {
+        const result = eventSchema.safeParse(
+          formFor({
+            slot: { date: '2026-06-13', start: '', end: '18:00' },
+            reservations: [],
+          }),
+        )
+        expect(result.success).toBe(false)
+        expect(result.error?.issues[0].message).toBe(
+          'The date and both times are required.',
+        )
+      })
+    })
+  })
+})
+
+describe('isEventSlotWellFormed', () => {
+  it('accepts a real date and two real times', () => {
+    expect(
+      isEventSlotWellFormed({ date: '2026-06-13', start: '09:00', end: '18:00' }),
+    ).toBe(true)
+  })
+
+  it('refuses a blank date', () => {
+    expect(
+      isEventSlotWellFormed({ date: '', start: '09:00', end: '18:00' }),
+    ).toBe(false)
+  })
+
+  it('refuses a blank start', () => {
+    expect(
+      isEventSlotWellFormed({ date: '2026-06-13', start: '', end: '18:00' }),
+    ).toBe(false)
+  })
+
+  it('refuses a blank end', () => {
+    expect(
+      isEventSlotWellFormed({ date: '2026-06-13', start: '09:00', end: '' }),
+    ).toBe(false)
+  })
+
+  it('refuses a time carrying seconds', () => {
+    expect(
+      isEventSlotWellFormed({ date: '2026-06-13', start: '09:00:00', end: '18:00' }),
+    ).toBe(false)
+  })
+})
+
+describe('isSlotOrdered', () => {
+  it('accepts a window whose end comes after its start', () => {
+    expect(isSlotOrdered({ date: '2026-06-13', start: '09:00', end: '18:00' })).toBe(
+      true,
+    )
+  })
+
+  it('refuses a window whose end equals its start', () => {
+    expect(isSlotOrdered({ date: '2026-06-13', start: '09:00', end: '09:00' })).toBe(
+      false,
+    )
+  })
+
+  it('refuses a window whose end comes before its start', () => {
+    expect(isSlotOrdered({ date: '2026-06-13', start: '18:00', end: '09:00' })).toBe(
+      false,
+    )
+  })
+})
+
+describe('isReservationContained', () => {
+  const eventSlot = { date: '2026-06-13', start: '09:00', end: '18:00' }
+
+  it('accepts a window strictly inside the event’s', () => {
+    expect(
+      isReservationContained({ date: '2026-06-13', start: '10:00', end: '12:00' }, eventSlot),
+    ).toBe(true)
+  })
+
+  it('accepts a window exactly equal to the event’s — bounds are inclusive', () => {
+    expect(isReservationContained(eventSlot, eventSlot)).toBe(true)
+  })
+
+  it('refuses a different date, even with a window that would otherwise fit', () => {
+    expect(
+      isReservationContained({ date: '2026-06-14', start: '10:00', end: '12:00' }, eventSlot),
+    ).toBe(false)
+  })
+
+  it('refuses a window that starts before the event opens', () => {
+    expect(
+      isReservationContained({ date: '2026-06-13', start: '08:00', end: '12:00' }, eventSlot),
+    ).toBe(false)
+  })
+
+  it('refuses a window that ends after the event closes', () => {
+    expect(
+      isReservationContained({ date: '2026-06-13', start: '10:00', end: '19:00' }, eventSlot),
+    ).toBe(false)
+  })
 })
 
 describe('eventToFormValues', () => {
@@ -335,6 +661,14 @@ describe('firstInvalidSection', () => {
 
   it('sends a broken timezone to Basics', () => {
     expect(firstInvalidSection({ timezone: { type: 'custom', message: 'x' } })).toBe(
+      'basics',
+    )
+  })
+
+  // #1501, rule 3: the event's own slot lives on Basics, under the time-slot grid —
+  // a save refused for a window nobody can see is a button that does nothing.
+  it('sends a broken event slot to Basics', () => {
+    expect(firstInvalidSection({ slot: { type: 'custom', message: 'x' } })).toBe(
       'basics',
     )
   })

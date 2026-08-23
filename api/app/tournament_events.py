@@ -20,7 +20,7 @@ absent id existed), exactly as the slice-1 lifecycle verbs do.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -41,6 +41,7 @@ from app.schedule_solves import request_solve
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
     MatchSettings,
+    ReservationWindow,
     RoundRobinDrawSettingsWrite,
     RrThenKoDrawSettingsWrite,
     SingleElimDrawSettingsWrite,
@@ -49,6 +50,7 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventUpdate,
     enforce_event_reservation_cap,
+    enforce_reservation_containment,
     named_list,
 )
 from app.tournament_draw_settings import (
@@ -679,6 +681,91 @@ def _enforce_reservation_cap(
     enforce_event_reservation_cap(draw_type, reservation_count)
 
 
+def _enforce_reservation_containment(
+    event: TournamentEvent, updates: TournamentEventUpdate
+) -> None:
+    """Raise :class:`ReservationOutsideEventWindowError` once this PATCH would leave a
+    reservation outside its event's own ``slot`` (#1501), by calling
+    :func:`app.schemas.tournament.enforce_reservation_containment` — the one function
+    both this call site and the create schema's validator use.
+
+    **The effective-pair pattern, exactly as** :func:`_enforce_reservation_cap` **above
+    plays it.** The event window judged is ``updates.slot`` when this patch touches the
+    event's own slot, else the event's stored one; the reservations judged are
+    ``updates.reservations`` when this patch touches them, else the event's stored ones
+    (:func:`~app.tournament_reservations.ordered_reservations`, the same eager access
+    :func:`_enforce_group_set_frozen` and :func:`_enforce_reservation_cap` already use).
+    So a PATCH that shortens the event's slot under a stored reservation is refused
+    naming that reservation, and a PATCH that widens a reservation past the event's
+    stored slot is refused too — each half of the pair is judged against the truth the
+    OTHER half would leave standing.
+
+    **The escape hatch, checked FIRST — before ``event.slot`` is ever read.** A patch
+    touching neither ``slot`` nor ``reservations`` is not judged at all, the same
+    contract :func:`_enforce_reservation_cap` states for the cap: a legacy event already
+    violating the rule (unreachable through either write path once this guard exists)
+    must still accept a rename, a fee change, or anything else that is not itself a
+    window edit. Checking this before touching ``event.slot`` is not just the policy —
+    it is what keeps the read below TOTAL: a row that already violates the rule may
+    also hold a malformed stored slot, and reading it before the early return would turn
+    an unrelated rename into a 500, which is this ticket's own bug relocated to the
+    verb that was supposed to fix it.
+
+    **The stored event slot is read as a total function, not a parse.** ``event.slot``
+    is still the untyped JSONB dict (three keys, no columns behind it), and
+    ``date.fromisoformat``/``time.fromisoformat`` run with no ``try``/``except`` around
+    them — mirroring the stated precedent at
+    :func:`app.tournament_reservations._slot_columns`: no environment holds a malformed
+    stored event slot (#1501's Evidence, and the repo's no-data-preservation decision),
+    so this is a total function of what can reach it. Recorded here, deliberately, so
+    the choice is examined rather than inherited the next time someone reads this
+    function.
+
+    Asked **after** :func:`_enforce_reservation_cap` in the guard chain
+    (``update_event`` below), which is itself already after both freezes: a cut event
+    over the cap still answers the cap's 422 before this one, and a cut event at all
+    still answers a freeze's 409 before either.
+    """
+    if updates.reservations is None and updates.slot is None:
+        return
+    if updates.slot is not None:
+        event_window = (
+            date.fromisoformat(updates.slot.date),
+            time.fromisoformat(updates.slot.start),
+            time.fromisoformat(updates.slot.end),
+        )
+    else:
+        stored_slot = event.slot
+        event_window = (
+            date.fromisoformat(stored_slot["date"]),
+            time.fromisoformat(stored_slot["start"]),
+            time.fromisoformat(stored_slot["end"]),
+        )
+    if updates.reservations is not None:
+        reservations = [
+            ReservationWindow(
+                position=index,
+                name=reservation.name,
+                slot_date=date.fromisoformat(reservation.slot.date),
+                slot_start=time.fromisoformat(reservation.slot.start),
+                slot_end=time.fromisoformat(reservation.slot.end),
+            )
+            for index, reservation in enumerate(updates.reservations)
+        ]
+    else:
+        reservations = [
+            ReservationWindow(
+                position=stored.position,
+                name=stored.name,
+                slot_date=stored.slot_date,
+                slot_start=stored.slot_start,
+                slot_end=stored.slot_end,
+            )
+            for stored in ordered_reservations(event)
+        ]
+    enforce_reservation_containment(event_window, reservations)
+
+
 def _event_scheduling_facts(
     event: TournamentEvent,
 ) -> tuple[tuple[tuple[uuid.UUID, Slot, tuple[str, ...]], ...], int, str]:
@@ -841,10 +928,14 @@ async def update_event(
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
-    # The reservation cap (#1482) is judged last of the three, after both freezes:
-    # the freeze is the refusal a director can act on, so a cut event over the cap
-    # answers the 409 that names its groups before this 422.
+    # The reservation cap (#1482) is judged after both freezes: the freeze is the
+    # refusal a director can act on, so a cut event over the cap answers the 409 that
+    # names its groups before this 422.
     _enforce_reservation_cap(event, updates)
+    # Containment (#1501) is judged last of the four: after both freezes and the cap,
+    # so a cut event over the cap still answers the cap's 422 first, and a cut event
+    # at all still answers a freeze's 409 first.
+    _enforce_reservation_containment(event, updates)
     # Read ONCE, under the row lock, for the two gates below (the materialisation and
     # the re-solve trigger): a draw is cut or removed only under this same lock, so
     # the answer cannot move between here and the commit.

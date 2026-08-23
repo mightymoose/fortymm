@@ -57,10 +57,29 @@
 // a price the organizer never typed. Both bounds are mirrored below, from the same
 // numbers the server now states (`MAX_EVENT_PLAYERS` / `MAX_ENTRY_FEE`).
 //
-// `format`, `draw_type` and `match_settings.length_games` come off closed pickers,
-// so a value the server would refuse cannot be authored. `slot` is three plain
-// `str`s server-side (`Slot`): the API refuses nothing there, so neither does this —
-// mirroring a constraint that does not exist would be inventing one.
+// `format`, `draw_type` and `match_settings.length_games` come off closed pickers, so a
+// value the server would refuse cannot be authored. `slot` — both the event's own and
+// every reservation's — is no longer three unconstrained plain `str`s (#1501): the API
+// now refuses an inverted window (`end` not strictly after `start`, on either slot), a
+// reservation whose window falls outside its event's own (bounds INCLUSIVE, and the
+// reservation's `date` must equal the event's), and a malformed or seconds-carrying
+// event slot.
+//
+// The client mirrors ordering and containment: `isSlotOrdered` / `isReservationContained`
+// and the `superRefine`s that call them, in `../tournament-detail-page/event-form.ts`,
+// with the client's own message copy (`slotOrderMessage` / `reservationWindowMessage`) —
+// never the server's prose.
+//
+// It mirrors the EVENT's own parse half too (`isEventSlotWellFormed`), but only there,
+// and only for the one hole the native controls leave open: a `<input type="date">` /
+// `<input type="time">` cannot *emit* a malformed string or one carrying seconds, but it
+// CAN be cleared — a blanked box is `''`, and `isSlotOrdered`'s string comparison treats
+// `''` as sorting before every real `HH:MM`, so an inverted-looking pair with one bound
+// missing would otherwise read as "ordered" and reach a server that 500s trying to parse
+// it. A reservation's own three boxes get no such rule here: clearing one is already
+// caught by ordering (both blank) or containment (one blank can never equal, or fall
+// inside, a well-formed event window) once the event's own slot passes the check above —
+// mirroring a parse rule there would be inventing a redundant one.
 //
 // The *rules* keep their own module (`predicate-validation.ts`): they are the one
 // part of the draft the server is deliberately MORE permissive about (it accepts a

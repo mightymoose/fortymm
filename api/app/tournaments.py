@@ -79,6 +79,7 @@ from app.tournament_errors import (
     PlacementTableNotFoundError,
     PlayerNotFoundError,
     ReservationNotInEventError,
+    ReservationOutsideEventWindowError,
     ScheduleQueueUnavailableError,
     TableInUseError,
     TableNotInCatalogueError,
@@ -797,6 +798,36 @@ def _event_reservation_cap_exceeded(
     )
 
 
+def _reservation_outside_event_window(
+    exc: ReservationOutsideEventWindowError,
+) -> RequestValidationError:
+    """The 422 for a PATCH that would leave a reservation's window outside its event's
+    own ``slot`` (#1501), as a validation error — the create path never reaches this
+    adapter at all, because ``ReservationOutsideEventWindowError`` is a ``ValueError``
+    and Pydantic folds it into the create's own 422 with no handler involved.
+
+    **``loc`` is the ``reservations`` ARRAY, not one entry's ``slot``** — the same
+    divergence :func:`_event_reservation_cap_exceeded` makes from
+    :func:`_reservation_not_in_event`, and for the identical reason: the offending
+    reservation is not always one this PATCH's payload mentions at all. A ``slot``-only
+    payload is judged against the event's STORED reservations (the effective-pair
+    pattern), so there may be no entry in the body to index into. ``msg`` carries the
+    offending reservation's own name and both windows
+    (:func:`enforce_reservation_containment` composes it), which is how the director
+    finds the row without a precise ``loc``.
+    """
+    return RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body", "reservations"),
+                "msg": str(exc),
+                "input": None,
+            }
+        ]
+    )
+
+
 @router.patch(
     "/tournaments/{tournament_id}/events/{event_id}",
     response_model=TournamentEventRead,
@@ -883,6 +914,11 @@ async def update_event(
         # (#1482): a 422, shaped like every other validation error on this route (see
         # ``_event_reservation_cap_exceeded``).
         raise _event_reservation_cap_exceeded(exc) from exc
+    except ReservationOutsideEventWindowError as exc:
+        # A reservation's window would fall outside its event's own slot (#1501): a
+        # 422, shaped like every other validation error on this route (see
+        # ``_reservation_outside_event_window``).
+        raise _reservation_outside_event_window(exc) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's

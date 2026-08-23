@@ -59,6 +59,13 @@ export interface ReservationCardProps {
    * because the sentence is the schema's: one rule, one wording, said wherever it is
    * shown. A viewer never sees it — a read-only card has no box to clear. */
   nameError?: string
+  /** What is wrong with this reservation's **window**, in the organizer's words, or
+   * `undefined` when nothing is — #1501's ordering and containment rules
+   * (`reservationWindowIssues`, `../event-form`), handed down the same way `nameError`
+   * is and rendered the same way: under the window it is about, in red, wired so a
+   * screen reader hears it too. A viewer never sees it, for the same reason it never
+   * sees `nameError` — a read-only card has no box to fix. */
+  windowError?: string
   onChange: (reservation: ReservationDraft) => void
   onRemove: () => void
 }
@@ -128,6 +135,7 @@ export const ReservationCard = ({
   canEdit,
   removal,
   nameError,
+  windowError,
   onChange,
   onRemove,
 }: ReservationCardProps) => {
@@ -135,6 +143,8 @@ export const ReservationCard = ({
   // that merely sits below an input is next to it on screen and nowhere at all to a
   // screen reader.
   const nameErrorId = useId()
+  // …and the window's own message, the same treatment one row down (#1501).
+  const windowErrorId = useId()
 
   /** Hand back the three fields this card owns, with one of them changed — rebuilt by
    * name rather than spread from `reservation`, so nothing the *caller* happened to pass in
@@ -273,6 +283,8 @@ export const ReservationCard = ({
                 id={id}
                 type="date"
                 value={reservation.slot.date}
+                aria-invalid={!!windowError}
+                aria-describedby={windowError ? windowErrorId : undefined}
                 onChange={(e) => setSlot({ date: e.target.value })}
               />
             )}
@@ -284,6 +296,8 @@ export const ReservationCard = ({
                 type="time"
                 className="font-mono"
                 value={reservation.slot.start}
+                aria-invalid={!!windowError}
+                aria-describedby={windowError ? windowErrorId : undefined}
                 onChange={(e) => setSlot({ start: e.target.value })}
               />
             )}
@@ -295,11 +309,25 @@ export const ReservationCard = ({
                 type="time"
                 className="font-mono"
                 value={reservation.slot.end}
+                aria-invalid={!!windowError}
+                aria-describedby={windowError ? windowErrorId : undefined}
                 onChange={(e) => setSlot({ end: e.target.value })}
               />
             )}
           </Field>
         </div>
+        {/* The refusal, under the window it is about — #1501's ordering/containment
+            rules, the same shape the name error uses above (`CLAUDE.md`, `## Forms`):
+            inline, in red, never a toast and never a banner. */}
+        {windowError && (
+          <p
+            id={windowErrorId}
+            data-testid="reservation-window-error"
+            className="text-xs text-[color:var(--loss)]"
+          >
+            {windowError}
+          </p>
+        )}
       </div>
 
       <div className="px-3.5 pb-3.5">

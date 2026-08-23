@@ -39,6 +39,7 @@ import {
   eventSchema,
   eventToFormValues,
   firstInvalidSection,
+  reservationWindowIssues,
   type EventFormValues,
 } from './event-form'
 
@@ -212,6 +213,17 @@ export const EventEditor = ({
   const watchedReservations = useWatch({ control: form.control, name: 'reservations' })
   const reservationIssues = reservationNameIssues(watchedReservations ?? [])
 
+  // …and the same arrangement again for the RESERVATION WINDOWS (#1501) — ordering and
+  // containment against the event's own slot, which is why this one also watches `slot`:
+  // a director widening the Basics window has to see a reservation's red clear live,
+  // exactly as narrowing it has to turn a previously-fine reservation red, before either
+  // one presses Save again. Gated on `isSubmitted` below for the identical reason
+  // `reservationIssues` is — this reads LIVE watched values rather than `errors`, so it
+  // does not ride RHF's own `onSubmit` mode the way `basicsErrors.slot` does, and would
+  // show red on load if it were not gated explicitly.
+  const watchedSlot = useWatch({ control: form.control, name: 'slot' })
+  const windowIssues = reservationWindowIssues(watchedReservations ?? [], watchedSlot)
+
   const applyChange = (next: TournamentEvent) => {
     // Don't validate until the user has tried to save once — otherwise a new
     // event (whose name starts empty) would flash "required" on the first
@@ -274,6 +286,13 @@ export const EventEditor = ({
     maxPlayers: errors.maxPlayers?.message,
     entryFee: errors.entryFee?.message,
     timezone: errors.timezone?.message,
+    // #1501, rule 3 — the event's own slot. Read straight off the resolver's `errors`,
+    // never gated on `isSubmitted`: RHF's default `onSubmit` mode already stays silent
+    // until the first submit, exactly as every other field on this tab does. See the
+    // `windowIssues` comment above for why the RESERVATION side of this same ticket
+    // needs an explicit gate and this one does not — the two rules satisfy "no message
+    // on load" by different mechanisms, on purpose.
+    slot: errors.slot?.message,
   }
 
   // **What a cut draw freezes** (ADR-0786), derived from the SAVED event and never from
@@ -394,6 +413,7 @@ export const EventEditor = ({
                   canEdit={canEdit}
                   freeze={reservationsFreeze}
                   nameIssues={isSubmitted ? reservationIssues : undefined}
+                  windowIssues={isSubmitted ? windowIssues : undefined}
                 />
               </TabsContent>
               {/* Rendered only alongside its trigger, so the panel and the tab appear
