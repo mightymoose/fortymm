@@ -72,7 +72,7 @@ export function renderWithRoutes(
  *
  * Use `renderWithRoutes` instead whenever the subject contains a typed `<Link>`, or
  * when the test is about routing itself — a search param, a loader, a boundary. Those
- * need real matches, and a route test (`routes/…​.test.tsx`) is where they belong.
+ * need real matches, and a route test (`routes/*.test.tsx`) is where they belong.
  */
 export function renderWithRouterContext(
   ui: ReactNode,

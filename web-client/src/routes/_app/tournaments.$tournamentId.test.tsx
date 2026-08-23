@@ -465,7 +465,12 @@ describe('tournament detail route — which event editor is open lives in the UR
     await user.type(nameInput(), 'Renamed')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
-    await waitFor(() => expect(editorSheet()).not.toBeInTheDocument())
+    // By TEST ID: a confirmation on top would `aria-hidden` the sheet, so a role
+    // query would report it "closed" while it is still there — the assertion would
+    // then pass against the very bug it is here to catch.
+    await waitFor(() =>
+      expect(screen.queryByTestId('event-editor-body')).not.toBeInTheDocument(),
+    )
     expect(discardDialog()).not.toBeInTheDocument()
     expect(router.state.location.search).toEqual({})
   })

@@ -35,6 +35,7 @@ import {
   buildTournamentFixtureRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import type { CodedErrorBody } from '@/mocks/endpoints/error-body'
+import { mockUuid } from '@/mocks/mock-uuid'
 import {
   BAY_AREA_OPEN_ID,
   SUMMER_SLAM_ID,
@@ -474,7 +475,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
 describe('an added reservation, through the mock’s id-keyed diff', () => {
   // The seed's owned, published tournament and its event.
   const TOURNAMENT = BAY_AREA_OPEN_ID
-  const EVENT = 'ev-open-singles'
+  const EVENT = mockUuid('ev-open-singles')
 
   beforeEach(() => resetTournamentsStore())
 
@@ -1189,7 +1190,7 @@ describe('entering and withdrawing, against the stateful mock store', () => {
   beforeEach(() => resetTournamentsStore())
 
   const TOURNAMENT = BAY_AREA_OPEN_ID
-  const EVENT = 'ev-u1500' // seeded with nobody in it
+  const EVENT = mockUuid('ev-u1500') // seeded with nobody in it
 
   it('adds the entrant and increments the count; withdrawing reverses both', async () => {
     const { wrapper } = setupClient()
@@ -1655,12 +1656,12 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
   /** The seed's `ev-u1200`: round-robin (the only draw type with a generator), ONE
    * group, nine entrants — and seeded already drawn (#1482 caps a round-robin event at
    * one reservation, so one group is all it can hold). */
-  const DRAWN = 'ev-u1200'
+  const DRAWN = mockUuid('ev-u1200')
   /** Seeded round-robin with **no reservations (and therefore no groups)** and nobody
    * entered — the event a cut REFUSES, and (ADR 20260726) the refusal that survives: an
    * unplannable draw type left the enum, a groupless round-robin has nowhere to deal the
    * field forever. */
-  const UNCUTTABLE = 'ev-u1500'
+  const UNCUTTABLE = mockUuid('ev-u1500')
 
   it('the seeded draw arrives on the detail read, grouped, with no draw on the other events', async () => {
     const { wrapper } = setupClient()
@@ -1688,7 +1689,7 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
     // …and every OTHER event has an empty draw — `[]`, the designed uncut state. One
     // OTHER event in this seed is ALSO drawn: `ev-two-stage-cut` (`rr-then-ko`) —
     // deliberate, so this sweep excludes it by name.
-    const alsoDrawn = new Set(['ev-two-stage-cut'])
+    const alsoDrawn = new Set([mockUuid('ev-two-stage-cut')])
     for (const event of events.filter((e) => e.id !== DRAWN && !alsoDrawn.has(e.id))) {
       expect(event.fixtures).toEqual([])
     }

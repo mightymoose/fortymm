@@ -1,15 +1,10 @@
-import { useState } from 'react'
-
 import { interactiveElementsIn } from '@/test/read-only'
 import { SessionProbe } from '@/test/session-probe'
 import { renderWithRouterContext } from '@/test/router'
 import { screen, type Container } from '@/test/utilities'
 
-import {
-  TournamentDetailPage,
-  type TournamentDetailPageProps,
-} from './tournament-detail-page'
-import { buildTournamentDetailPageProps } from './tournament-detail-page.factory'
+import type { TournamentDetailPageProps } from './tournament-detail-page'
+import { TournamentDetailPageHarness } from './tournament-detail-page.harness'
 import { confirmIrreversibleActDialogPage } from './tournament-detail-page/confirm-irreversible-act-dialog.page'
 import { eventsTabPage } from './tournament-detail-page/events-tab.page'
 
@@ -97,29 +92,6 @@ const scoped = (container: Container) => ({
   ...eventsTabPage.within(container),
 })
 
-/** The route's `?event=` param, stood in for by React state — see `render` below. */
-function EditorUrlStandIn({
-  overrides,
-}: {
-  overrides: Partial<TournamentDetailPageProps>
-}) {
-  // Built once: the factory mints a fresh tournament on every call, and handing the
-  // page a new one each render is churn no real route produces.
-  const [props] = useState(() => buildTournamentDetailPageProps(overrides))
-  const [openEditorFor, setOpenEditorFor] = useState(props.openEditorFor)
-
-  return (
-    <TournamentDetailPage
-      {...props}
-      openEditorFor={openEditorFor}
-      onOpenEditor={
-        overrides.onOpenEditor ?? ((eventKey) => setOpenEditorFor(eventKey))
-      }
-      onCloseEditor={overrides.onCloseEditor ?? (() => setOpenEditorFor(undefined))}
-    />
-  )
-}
-
 /** Test page-object for `TournamentDetailPage`. */
 export const tournamentDetailPagePage = {
   /** Rendered under the router CONTEXT (not a matched route): the page hosts the
@@ -127,13 +99,9 @@ export const tournamentDetailPagePage = {
    * `renderWithRouterContext` still renders synchronously, so this suite's `getBy…`
    * assertions are unchanged.
    *
-   * `EditorUrlStandIn` supplies the fact the ROUTE owns — which event's editor the
-   * URL names — so a component test can still click "New event" and land in the
-   * editor. It holds the param in state rather than in history, which is the whole
-   * of the route's contract that jsdom can honestly observe; the history behaviour
-   * (Back, the pushed-vs-deep-linked close) is proved in the route test and in
-   * `e2e/tournaments/event-editor-history.spec.ts`. Pass `openEditorFor` to pin a
-   * starting value, or `onOpenEditor` / `onCloseEditor` to take the wiring over. */
+   * `TournamentDetailPageHarness` supplies the fact the ROUTE owns — which event's
+   * editor the URL names — so a component test can still click "New event" and land
+   * in the editor. See that file for what it does and does not prove. */
   render(overrides: Partial<TournamentDetailPageProps> = {}) {
     renderWithRouterContext(
       <>
@@ -141,7 +109,7 @@ export const tournamentDetailPagePage = {
             permission-gated control is absent (the page already fetches the session
             itself — this only exposes when it lands). */}
         <SessionProbe />
-        <EditorUrlStandIn overrides={overrides} />
+        <TournamentDetailPageHarness overrides={overrides} />
       </>,
     )
   },

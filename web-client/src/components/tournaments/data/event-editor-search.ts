@@ -26,12 +26,17 @@ export const NEW_EVENT_PARAM = 'new'
  * too, and the route imports the page — the same arrangement `matchesSearchSchema`
  * has with `/_app/matches/`.
  */
-export const eventEditorSearchSchema = z.object({
-  event: z
-    .union([z.string().uuid(), z.literal(NEW_EVENT_PARAM)])
-    .optional()
-    .catch(undefined),
-})
+export const eventEditorSearchSchema = z
+  .object({
+    event: z.union([z.string().uuid(), z.literal(NEW_EVENT_PARAM)]),
+  })
+  .partial()
+  // `.catch({})` on the OBJECT, never `.catch(undefined)` on the field. A field-level
+  // catch always produces the key, so a tournament with no editor open would carry
+  // `{ event: undefined }` — a search record with a phantom entry in it, which
+  // everything that walks the record (the router devtools' explorer, for one) then
+  // renders. `{}` is what "no editor is open" actually is.
+  .catch({})
 
 /** The `?event=` value, parsed. `undefined` is "no editor open". */
 export type EventEditorSearch = z.infer<typeof eventEditorSearchSchema>['event']

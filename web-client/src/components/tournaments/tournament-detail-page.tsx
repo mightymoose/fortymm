@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Calendar, Layers, MapPin, Table2, Trophy, Users } from 'lucide-react'
 
 import { LocationMap } from '@/components/maps/location-map'
@@ -78,41 +78,56 @@ export interface TournamentDetailPageProps {
 }
 
 /**
+ * Resolve `?event=` against a tournament. Pure, and called ONCE per value of the
+ * param — see `useOpenEditorEvent` for why that matters.
+ */
+function resolveEditorEvent(
+  openEditorFor: EventEditorSearch,
+  tournament: Tournament,
+  canEdit: boolean,
+): TournamentEvent | null {
+  if (openEditorFor === undefined) return null
+  // `new` is an editor over an event that does not exist yet — not a state a reader
+  // has. A viewer's `?event=new` is as meaningless as an unknown uuid, and closes the
+  // same way (ADR-0015: read-only is a view, and there is nothing here to view).
+  if (openEditorFor === NEW_EVENT_PARAM) return canEdit ? emptyEvent(tournament) : null
+  // A well-formed uuid naming no event on THIS tournament is a URL that names no
+  // resource: the editor stays closed, and nothing is requested (ADR-1001).
+  return tournament.events.find((e) => e.id === openEditorFor) ?? null
+}
+
+/**
  * The event whose editor is open, resolved from the URL — and then **held**.
  *
  * Held, because `EventEditor` re-seeds its form whenever this object's IDENTITY
  * changes, and the tournament refetches in the background (every event mutation
- * invalidates it, and the realtime `tournament.changed` feed does too). Resolving
- * against `tournament.events` on every render would hand the editor an equal-but-new
- * object after any such refetch, and reset the form under the director's hands. So
- * the memo is keyed on WHICH event is open, never on the payload it came from — the
- * URL is the only thing that decides when to re-seed, which is also what makes "the
- * editor is re-seeded on every open" true.
+ * invalidates it, and the realtime feed does too). Re-resolving against
+ * `tournament.events` on every render would hand the editor an equal-but-new object
+ * after any such refetch, and reset the form under the director's hands.
+ *
+ * So the resolution is redone only when the PARAM changes — the URL is the one thing
+ * that decides which editor is open, and therefore the one thing that may re-seed it.
+ * `emptyEvent` is held for the same reason twice over: it mints a fresh object on
+ * every call, so re-running it would loop the editor's own re-seed effect.
+ *
+ * Held in state adjusted during render, not in a ref, because it is state the render
+ * reads (https://react.dev/learn/you-might-not-need-an-effect).
  */
 function useOpenEditorEvent(
   openEditorFor: EventEditorSearch,
   tournament: Tournament,
   canEdit: boolean,
 ): TournamentEvent | null {
-  // Read on demand, depended on never. A ref is stable, so the memo below cannot
-  // be re-run by a refetch that changed nothing about which editor is open.
-  const latest = useRef({ tournament, canEdit })
-  latest.current = { tournament, canEdit }
+  const [held, setHeld] = useState(() => ({
+    openEditorFor,
+    event: resolveEditorEvent(openEditorFor, tournament, canEdit),
+  }))
 
-  return useMemo(() => {
-    const { tournament: t, canEdit: editable } = latest.current
-    if (openEditorFor === undefined) return null
-    // `new` is an editor over an event that does not exist yet — not a state a
-    // reader has. A viewer's `?event=new` is as meaningless as an unknown uuid, and
-    // closes the same way (ADR-0015: read-only is a view, and there is nothing to
-    // view here).
-    if (openEditorFor === NEW_EVENT_PARAM) {
-      return editable ? emptyEvent(t) : null
-    }
-    // A well-formed uuid naming no event on THIS tournament is a URL that names no
-    // resource: the editor stays closed, and nothing is requested (ADR-1001).
-    return t.events.find((e) => e.id === openEditorFor) ?? null
-  }, [openEditorFor])
+  if (held.openEditorFor === openEditorFor) return held.event
+
+  const event = resolveEditorEvent(openEditorFor, tournament, canEdit)
+  setHeld({ openEditorFor, event })
+  return event
 }
 
 function MetaItem({

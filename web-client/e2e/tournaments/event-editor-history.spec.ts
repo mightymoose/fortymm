@@ -35,15 +35,8 @@ const DISCARD = {
   leave: 'Discard & leave',
 } as const
 
-/**
- * Press Back the way the chrome does.
- *
- * `window.history.back()` rather than `page.goBack()`: a BLOCKED back is reverted by
- * `history.go(1)` inside the same task, so Playwright's navigation bookkeeping has no
- * settled navigation to resolve against and the call can hang. This fires the identical
- * browser API the Back button fires, and every assertion after it auto-retries.
- */
-const pressBack = (page: Page) => page.evaluate(() => window.history.back())
+/** Press Back the way the chrome does. */
+const pressBack = (page: Page) => page.goBack()
 
 /** The `?event=` value currently in the address bar, or `null`. */
 const eventParam = (page: Page) =>
@@ -117,7 +110,6 @@ test.describe('Tournaments · the event editor is a URL, and Back dismisses it',
     await expect(page.getByRole('alertdialog')).toContainText(DISCARD.title)
     await page.getByRole('button', { name: DISCARD.stay }).click()
     await expect(pom.eventEditor).toBeVisible()
-
 
     await page.getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('alertdialog')).toContainText(DISCARD.title)
