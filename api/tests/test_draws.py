@@ -1210,6 +1210,36 @@ SINGLE_ELIM_IDS = [f"K={k}" for k, _, _, _ in SINGLE_ELIM_MATRIX]
 
 
 class TestSingleElimCut:
+    def test_every_bracket_fixture_is_dealt_into_the_stages_one_group(self) -> None:
+        """#1483: a single-elim cut stamps every fixture — round one and every later
+        round — with the one group its stage holds, and puts them on that stage.
+
+        The group is the hop the scheduler resolves a reservation through
+        (``app.schedule_solves.restricting_reservation_key``), so a bracket that named
+        none was placed across the tournament's whole table catalogue however narrowly
+        its director had booked. It is not a claim that a bracket is a group: the
+        stage's own draw type is ``single-elim``, which is what every labelling and
+        bucketing surface reads.
+        """
+        cut = SingleElimStrategy().plan_initial(_config(1), _ordered(4))
+
+        assert {f.group_id for f in cut} == {_group("A")}
+        assert {f.round for f in cut} == {1, 2}, "later rounds too, not only round one"
+        assert {f.stage for f in cut} == {
+            FixtureStage(position=0, draw_type=DrawType.single_elim)
+        }
+
+    def test_a_cut_against_no_configured_group_still_plans_an_ungrouped_bracket(
+        self,
+    ) -> None:
+        """The arm production does not take. A bare ``DrawConfig()`` names no group, so
+        ``_sole_group`` answers ``None`` and the bracket is planned exactly as it was
+        before the floor existed — a caller that never asked about groups is not made
+        to raise about them."""
+        cut = SingleElimStrategy().plan_initial(DrawConfig(), _ordered(4))
+
+        assert {f.group_id for f in cut} == {None}
+
     @pytest.mark.parametrize(
         ("k", "round_one", "prefills", "counts"),
         SINGLE_ELIM_MATRIX,
@@ -1913,16 +1943,36 @@ class TestRrThenKoCut:
     def test_rr_then_ko_knockout_rounds_restart_at_one_in_their_own_namespace(
         self,
     ) -> None:
-        # The unique constraint is ``(event_id, group_id, round, position)`` with NULLS
-        # NOT DISTINCT, so ``group_id IS NULL`` is its own numbering namespace and the
-        # knockout starts again at round 1 — a group round 1 and a knockout round 1 are
-        # different keys, and nothing in the cut collides.
+        # The unique constraint is ``(stage_id, group_id, round, position)`` with NULLS
+        # NOT DISTINCT, so the knockout stage is its own numbering namespace and starts
+        # again at round 1 — a group round 1 and a knockout round 1 are different keys,
+        # and nothing in the cut collides.
         cut = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
 
         assert min(f.round for f in _knockout(cut)) == 1
         assert min(f.round for f in _grouped(cut)) == 1
-        keys = [(f.group_id, f.round, f.position) for f in cut]
+        keys = [(f.stage.position, f.group_id, f.round, f.position) for f in cut]
         assert len(set(keys)) == len(keys)
+
+    def test_the_composite_does_not_deal_its_bracket_into_the_group_stages_group(
+        self,
+    ) -> None:
+        """#1483 gives ``_knockout_fixtures`` a group parameter, and the composite must
+        keep passing none.
+
+        The builder is SHARED with the whole-event single-elim cut, which now hands it
+        the one group its stage holds. A composite that let that argument through would
+        deal its bracket into the round-robin half's group — corrupting the very
+        standings its qualifiers are picked from, and (via the group's reservation)
+        confining a bracket to the window booked for the groups it follows.
+
+        Its knockout stage gets groups of its own in #1484, materialised per stage;
+        until then the whole half is ``group_id=None``.
+        """
+        cut = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
+
+        assert {f.group_id for f in _knockout(cut)} == {None}
+        assert None not in {f.group_id for f in _grouped(cut)}
 
     def test_rr_then_ko_cuts_the_same_draw_twice(self) -> None:
         first = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
@@ -2435,6 +2485,22 @@ class TestSwissCut:
     """The cut pre-writes **every** round: ``R × ⌊n/2⌋`` fixtures, round 1 seeded from
     the draw order and every later round left with both sides TBD (ADR "swiss pre-cuts
     every round and pairs each one on advance")."""
+
+    def test_every_round_is_dealt_into_the_stages_one_group(self) -> None:
+        """#1483: every swiss fixture names the one group its stage holds, which is the
+        hop that confines the rounds to the reservation the director booked.
+
+        Swiss still ranks one field in one table — the group is a scheduling fact and
+        not a format one, and the stage's own ``swiss`` draw type is what every
+        labelling surface reads.
+        """
+        cut = SwissStrategy(rounds=3).plan_initial(_config(1), _ordered(8))
+
+        assert {f.group_id for f in cut} == {_group("A")}
+        assert {f.round for f in cut} == {1, 2, 3}, (
+            "every round, not only the seeded one"
+        )
+        assert {f.stage for f in cut} == {_SWISS_STAGE}
 
     @pytest.mark.parametrize(
         ("entrants", "rounds", "per_round"),
@@ -3026,7 +3092,9 @@ class TestSwissAdvance:
                         entry_a_id=_entry_id(2),
                         entry_b_id=_entry_id(3),
                     ),
-                    PlannedFixture(stage=_SWISS_STAGE, group_id=None, round=4, position=1),
+                    PlannedFixture(
+                        stage=_SWISS_STAGE, group_id=None, round=4, position=1
+                    ),
                 ]
             ),
             {

@@ -6235,6 +6235,13 @@ async def test_a_single_elim_bracket_is_dealt_into_its_stages_group(
         "the later round is dealt into the group too, not only round one"
     )
 
+    # And the group row buys the bracket no group STANDINGS. Results dispatch by the
+    # draw type's own strategy, exactly as before: a single-elim event serves a
+    # ``finishes`` block, which has no per-group table for a "Group A" to head.
+    (served,) = await _events_of(client, tournament_id)
+    assert served["results"]["kind"] == "finishes"
+    assert "groups" not in served["results"]
+
 
 async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_message(
     authed_client: tuple[AsyncClient, User],

@@ -851,6 +851,14 @@ async def test_panel_statement_count_does_not_grow_with_events(
         assert event.match.round_label == (
             "Group match 1" if n % 2 == 0 else "Round 1"
         ), (event.name, event.match.round_label)
+        # And no group label on a BRACKET, though its fixtures name a group row since
+        # #1483. The panel asks the fixture's stage, not whether it resolved a group:
+        # a bracket player has no group standings table and no group field, so "Group
+        # A" would name both.
+        assert event.group_label == ("Group A" if n % 2 == 0 else None), (
+            event.name,
+            event.group_label,
+        )
 
 
 async def test_a_swiss_panel_reads_the_callers_rank_off_the_group_less_table(
@@ -930,6 +938,10 @@ async def test_a_swiss_panel_reads_the_callers_rank_off_the_group_less_table(
     assert swiss_event["stage_label"] == "Complete", (
         "the only round is decided, so the event is over — and swiss has no group "
         "whose completeness could have answered this instead"
+    )
+    assert swiss_event["group_label"] is None, (
+        "the fixtures name the event's one group since #1483, but a swiss stage does "
+        "not seat both sides at the cut, so the panel labels no group"
     )
 
 

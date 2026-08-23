@@ -31,7 +31,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import scheduling
-from app.draws import DegenerateDraw, UnsupportedDrawType
+from app.draws import (
+    DegenerateDraw,
+    FixtureStage,
+    GroupId,
+    PlannedFixture,
+    UnsupportedDrawType,
+)
 from app.models import (
     League,
     Tournament,
@@ -46,9 +52,12 @@ from app.schedule_preview import (
     DEFAULT_UNCAPPED_FIELD,
     DegenerateConfiguration,
     UnpreviewableDrawType,
+    _EventPlan,
+    _previewed_fixtures,
     build_preview_snapshot,
 )
 from app.schedule_solves import event_wide_reservation_key
+from app.schemas.tournament import MatchSettings
 from app.tournament_event_stages import mint_stages
 from tests._helpers import (
     event_draw_settings,
@@ -740,10 +749,15 @@ async def test_a_degenerate_event_does_not_abort_the_tournaments_whole_preview(
 async def test_preview_snapshot_round_robin_event_without_reservations_refuses(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    """A ``round_robin`` event keeps one group per reservation (#1387 decision 2), so
-    zero reservations is zero groups, and the strategy refuses an empty group set — a
-    clear domain error, never a partial snapshot. This refusal still fires here; it
-    no longer fires for ``rr-then-ko``, whose groups derive from the field (below)."""
+    """The strategy refuses an empty group set — a clear domain error, never a partial
+    snapshot.
+
+    Reached here through a hand-seeded event with **no group row at all**. The API can
+    no longer build one: #1483's floor mints a group whatever the reservation count, so
+    a reservation-less event created through the real route holds one group and is
+    previewed over the event-wide reservation. The refusal is still the domain's, still
+    written, and still what a caller reaching ``RoundRobinStrategy`` with an empty
+    ``DrawConfig`` gets — which is what this pins."""
     owner = await make_user(db_session, "prev-noreservations")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     await _add_event(db_session, tournament, reservations=[])
@@ -751,6 +765,61 @@ async def test_preview_snapshot_round_robin_event_without_reservations_refuses(
 
     with pytest.raises(DegenerateDraw):
         build_preview_snapshot(loaded)
+
+
+def test_the_preview_keeps_fixtures_by_stage_not_by_group(
+    db_session: AsyncSession,
+) -> None:
+    """``_previewed_fixtures`` keeps a fixture because **its stage seats both sides at
+    the cut**, never because it resolved a group id — and the note counts the rest.
+
+    The two questions used to have the same answer, so the filter asked the easy one.
+    #1483 separates them: a single-elim or swiss stage's fixtures now carry a group,
+    and #1484 gives an rr-then-ko knockout stage groups too. Under the old spelling
+    every one of those would be *kept* — placed with both sides TBD, which this engine
+    and the live one alike cannot do — and the honest note that says the knockout stage
+    is missing from the schedule would report **zero** and vanish.
+
+    **Falsification** (``.claude/rules/verify-the-artifact-under-test.md``): change
+    ``_previewed_fixtures``'s condition back to ``fixture.group_id is not None`` and
+    this reds on both halves — 2 kept instead of 1, and a note count of 0 instead of 1.
+    Verified 2026-08-23.
+
+    Built from ``PlannedFixture`` literals rather than a seeded event, because the
+    knockout half's group is the state #1484 introduces and this ticket must not be
+    able to break when it lands. The plan's ``event`` is never read by the filter.
+    """
+    group = GroupId(uuid.uuid4())
+    group_stage_fixture = PlannedFixture(
+        stage=FixtureStage(position=0, draw_type=DrawType.round_robin),
+        group_id=group,
+        round=1,
+        position=1,
+        entry_a_id=None,
+        entry_b_id=None,
+    )
+    # A knockout fixture that DOES name a group — the #1484 shape, and the one the
+    # old spelling could not tell from the group stage.
+    knockout_fixture = PlannedFixture(
+        stage=FixtureStage(position=1, draw_type=DrawType.single_elim),
+        group_id=group,
+        round=1,
+        position=1,
+    )
+    plan = _EventPlan(
+        event=TournamentEvent(),
+        reservations=[],
+        settings=MatchSettings(rated=False, length_games=5),
+        fixtures=[group_stage_fixture, knockout_fixture],
+        field_size=4,
+    )
+
+    previewed = _previewed_fixtures(plan)
+
+    assert previewed == [(group_stage_fixture, group)]
+    assert len(plan.fixtures) - len(previewed) == 1, (
+        "the knockout fixture is COUNTED for the honest note, not silently kept"
+    )
 
 
 async def test_an_rr_then_ko_event_with_groups_and_no_reservation_is_previewed(
