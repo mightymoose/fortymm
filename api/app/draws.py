@@ -2034,10 +2034,13 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
        :attr:`~FixtureState.stage`'s ``position`` where a caller resolved it (only
        ``rr-then-ko``'s ``advance()`` ever asks for the plumbing that fills it),
        falling back to ``group_id is None`` where it did not (every other draw type, and
-       an under-wired caller). Either way this sorts the un-grouped/knockout fixtures
-       LAST, behind the groups that feed them — except under swiss, whose draw is
-       un-grouped end to end, so there are no groups for it to sort behind and this key
-       partitions nothing.
+       an under-wired caller). Either way this sorts the knockout stage LAST, behind the
+       groups that feed it. It partitions nothing at all for a single-stage draw type:
+       every fixture of one shares its event's only stage, and since #1483 shares that
+       stage's only group too, so both the key and its fallback answer the same value
+       for all of them. That is why the deal changed nothing here — a uniform key is
+       uniform whichever value it is uniform at, and the round/position questions below
+       decide the order as they always did.
     2. "Where in the event's group order is its group?" — :func:`_group_sort_key`'s
     first
        two elements: ``group_position``, with an unresolved order sorting after every

@@ -822,6 +822,54 @@ def test_the_preview_keeps_fixtures_by_stage_not_by_group(
     )
 
 
+async def test_a_round_robin_event_with_no_reservation_is_previewed_event_wide(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """**The behaviour #1483's floor changes for round-robin**, where it can fail.
+
+    Before the floor, a ``round_robin`` event with no reservation held no group, the
+    strategy refused the cut, and the whole event was SKIPPED with a
+    :class:`DegenerateConfiguration` carrying "A round-robin draw needs at least one
+    group." Now it holds one group, mapped to no reservation, and is previewed over the
+    **event-wide reservation** — the event's own slot over the whole tournament
+    catalogue — exactly as an ``rr-then-ko`` event with none already was (#1389, the
+    test next door).
+
+    Asserted on all three halves, because each can fail on its own: the event is not
+    skipped, its fixtures are actually in the snapshot, and the reservation they are
+    keyed to is the event-wide one rather than a booked window the event does not have.
+
+    Six synthetic entrants (the helper's default cap) in one group: ``C(6, 2)`` = 15
+    fixtures, and no knockout stage to drop.
+    """
+    owner = await make_user(db_session, "prev-rr-noreservation")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_event(
+        db_session, tournament, reservations=[], derive_groups=True
+    )
+    loaded = await _load(db_session, tournament.id)
+    assert len(loaded.events[0].groups) == 1, "the floor mints one group"
+    assert loaded.events[0].groups[0].reservation_link is None
+
+    # Judged from the morning of the event, so the fixed seed date is not a day behind
+    # ``now`` and a ``past_window`` cannot mask the verdict under test.
+    preview = build_preview_snapshot(
+        loaded, now=datetime(2026, 6, 13, 8, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    )
+
+    event_wide_key = event_wide_reservation_key(event.id)
+    (summary,) = preview.field_summaries
+    assert summary.skip_reason is None, (
+        "a reservation-less round-robin event is no longer refused as degenerate"
+    )
+    assert (summary.field_size, summary.knockout_fixtures) == (6, 0)
+    assert len(preview.snapshot.fixtures) == 15
+    assert {f.reservation_id for f in preview.snapshot.fixtures} == {event_wide_key}
+    (reservation,) = preview.snapshot.reservations
+    assert reservation.id == event_wide_key
+    assert set(reservation.table_ids) == {str(t.id) for t in loaded.tables}
+
+
 async def test_an_rr_then_ko_event_with_groups_and_no_reservation_is_previewed(
     db_session: AsyncSession, default_league: League
 ) -> None:
