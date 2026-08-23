@@ -1336,6 +1336,213 @@ async def test_patch_event_rejects_server_managed_entered(
     assert response.status_code == 422
 
 
+# ----- the reservation cap: at most one, unless the draw is rr-then-ko (#1482) -----
+#
+# A round-robin, single-elim or swiss event runs its whole stage as one group (ADR
+# 20260808: only rr-then-ko has structural settings), and today's mapping puts that
+# one group on ``reservations[0]`` — a second or third reservation would be dead data,
+# unreachable by any fixture. So every draw type but rr-then-ko is capped at one
+# reservation; rr-then-ko still holds many, and zero stays legal for everyone.
+
+_TWO_RESERVATIONS = [
+    {
+        "name": "Reservation A",
+        "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+        "table_ids": [],
+    },
+    {
+        "name": "Reservation B",
+        "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
+        "table_ids": [],
+    },
+]
+
+
+@pytest.mark.parametrize(
+    ("draw_type", "extra"),
+    [
+        pytest.param("round-robin", {}, id="round-robin"),
+        pytest.param("single-elim", {}, id="single-elim"),
+        pytest.param("swiss", {"rounds": 5}, id="swiss"),
+    ],
+)
+async def test_create_event_with_two_reservations_on_a_capped_draw_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    draw_type: str,
+    extra: dict[str, Any],
+):
+    """Every draw type but ``rr-then-ko`` carrying two reservations is refused at the
+    boundary (#1482): each runs its whole stage as one group, and the derived mapping
+    would leave the second reservation's tables unreachable by any fixture.
+
+    All three the acceptance criterion names are asked, not just ``round-robin``. The
+    predicate is an EXCLUSION (``draw_type is not DrawType.rr_then_ko``) rather than an
+    allow-list, so this also pins that a draw type is capped by DEFAULT — a fourth one
+    added tomorrow lands in this parametrize list, not in a list inside the guard.
+    ``swiss`` carries its ``rounds`` count, which its arm requires (ADR 20260727)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            draw_type=draw_type, reservations=_TWO_RESERVATIONS, **extra
+        ),
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["detail"][0]["loc"] == ["body"]
+    assert "at most one reservation" in body["detail"][0]["msg"]
+
+    # A 422 that had already written the event would be a 422 in name only.
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_create_event_rr_then_ko_with_two_reservations_is_accepted(
+    authed_client: tuple[AsyncClient, User],
+):
+    """``rr-then-ko`` is the one draw type the cap does not touch: it legitimately
+    holds many reservations (this is an acceptance check, not falsification — it
+    passes before and after the guard exists)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            draw_type="rr-then-ko",
+            qualifiers_per_group=2,
+            reservations=_TWO_RESERVATIONS,
+        ),
+    )
+    assert response.status_code == 201, response.text
+
+
+async def test_create_event_with_a_round_robin_draw_and_zero_reservations_is_accepted(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The rule is **at most** one, not exactly one: a non-``rr-then-ko`` event with
+    no reservations at all is still legal (acceptance check, not falsification)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(draw_type="round-robin", reservations=[]),
+    )
+    assert response.status_code == 201, response.text
+
+
+async def test_patch_event_flipping_draw_type_and_reservations_over_cap_together_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A single PATCH that both flips the draw type away from ``rr-then-ko`` AND
+    sends more than one reservation is refused, even with no cut draw standing
+    (#1482)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(
+                draw_type="rr-then-ko",
+                qualifiers_per_group=2,
+                reservations=[_TWO_RESERVATIONS[0]],
+            ),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"draw_type": "round-robin", "reservations": _TWO_RESERVATIONS},
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["detail"][0]["loc"] == ["body", "reservations"]
+    assert "at most one reservation" in body["detail"][0]["msg"]
+
+
+async def test_patch_event_reservations_only_over_cap_against_stored_draw_type_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A PATCH sending only ``reservations`` (no ``draw_type``), against an event
+    whose STORED draw type is already non-``rr-then-ko``, is refused (#1482) — the
+    cap reads the effective pair, not merely what this payload names."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(
+                draw_type="round-robin", reservations=[_TWO_RESERVATIONS[0]]
+            ),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"reservations": _TWO_RESERVATIONS},
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_patch_event_draw_type_only_flip_over_cap_on_an_uncut_event_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A PATCH sending only ``draw_type: 'round-robin'`` against a stored, **uncut**
+    ``rr-then-ko`` event holding two reservations is refused (#1482).
+
+    This path is wide open without the cap: ``_enforce_draw_settings_frozen`` only
+    fires on a CUT event, so an uncut one sails the type change through today with
+    no ``reservations`` key in the payload to catch it any other way."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(
+                draw_type="rr-then-ko",
+                qualifiers_per_group=2,
+                reservations=_TWO_RESERVATIONS,
+            ),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"draw_type": "round-robin"},
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_patch_event_flipping_round_robin_to_rr_then_ko_is_accepted(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The cap only narrows: flipping FROM a capped draw type TO ``rr-then-ko`` is
+    always legal, whatever the reservation count already is (acceptance check, not
+    falsification)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(
+                draw_type="round-robin", reservations=[_TWO_RESERVATIONS[0]]
+            ),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"draw_type": "rr-then-ko", "qualifiers_per_group": 2},
+    )
+    assert response.status_code == 200, response.text
+
+
 # ----- the column is a constraint too (#783 QA, round three) ----------------
 #
 # An event's two numbers are bounded by their COLUMNS whether the schema says so or
@@ -3477,8 +3684,8 @@ async def test_two_events_each_with_a_current_draw_go_live_together(
     client, _ = authed_client
     tournament_id, (one, two) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A, RESERVATION_B),
-        _rr_payload(RESERVATION_A, RESERVATION_B),
+        _rr_payload(RESERVATION_A),
+        _rr_payload(RESERVATION_A),
     )
     await _seed_field(db_session, one["id"], 4, prefix="one")
     await _seed_field(db_session, two["id"], 4, prefix="two")
@@ -3520,7 +3727,7 @@ async def test_going_live_is_undisturbed_by_another_tournaments_entries(
     # A wholly unrelated tournament, with an event and a field of its own. Nothing about
     # it is this tournament's business — including, especially, on the way to live.
     _other_id, (other_event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     await _seed_field(db_session, other_event["id"], 4, prefix="other")
 
@@ -5396,9 +5603,14 @@ async def test_cutting_a_draw_persists_the_fixtures_the_strategy_planned(
     the body — and the next page load would show no draw at all.
     """
     client, _ = authed_client
+    # One reservation through the real create route (#1482 caps round-robin at
+    # that), the second added directly through the ORM (:func:`_ensure_group`),
+    # which never crosses the request boundary the cap stands at — the cut below is
+    # still the real route, and untouched by #1482.
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
     p1, p2, p3, p4, p5 = await _seed_field(db_session, event["id"], 5)
     # A withdrawn player, who is not an entrant (ADR-0016) and must be in no fixture:
     # cutting a draw from a field that includes people who have LEFT the event would
@@ -5481,8 +5693,9 @@ async def test_an_unseeded_field_is_drawn_in_registration_order(
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
     field = await _seed_field(
         db_session, event["id"], 6, seeded=False, descending_ids=True
     )
@@ -5521,8 +5734,9 @@ async def test_a_seed_outranks_the_registration_it_contradicts(
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
     # Registered 1st..6th; seeded 6th..1st.
     first, second, third, fourth, fifth, sixth = await _seed_field(
         db_session, event["id"], 6, seeds=[6, 5, 4, 3, 2, 1]
@@ -5561,9 +5775,10 @@ async def test_the_cut_reads_only_the_field_of_the_event_it_is_cutting(
     client, _ = authed_client
     tournament_id, (event, other) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A, RESERVATION_B),
-        _rr_payload(RESERVATION_A, RESERVATION_B),
+        _rr_payload(RESERVATION_A),
+        _rr_payload(RESERVATION_A),
     )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
     ours = await _seed_field(db_session, event["id"], 4, prefix="ours")
     theirs = await _seed_field(db_session, other["id"], 4, prefix="theirs")
 
@@ -5599,8 +5814,9 @@ async def test_a_second_cut_replaces_the_draw_wholesale(
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
     await _seed_field(db_session, event["id"], 4)
 
     first_cut = await client.post(_draw_url(tournament_id, event["id"]))
@@ -5663,7 +5879,7 @@ async def test_un_cutting_deletes_the_draw_and_is_idempotent(
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     entries = await _seed_field(db_session, event["id"], 4)
     await client.post(_draw_url(tournament_id, event["id"]))
@@ -5699,7 +5915,7 @@ async def test_a_non_owner_cannot_cut_or_un_cut_a_draw(
     """
     owner_client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        owner_client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        owner_client, _rr_payload(RESERVATION_A)
     )
     await _seed_field(db_session, event["id"], 4)
     await owner_client.post(_draw_url(tournament_id, event["id"]))
@@ -5726,7 +5942,7 @@ async def test_an_anonymous_caller_cannot_cut_or_un_cut_a_draw(
     """No session, no draw: both verbs are 401 before ownership is even a question."""
     owner_client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        owner_client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        owner_client, _rr_payload(RESERVATION_A)
     )
     await _seed_field(db_session, event["id"], 4)
     await owner_client.post(_draw_url(tournament_id, event["id"]))
@@ -5754,7 +5970,7 @@ async def test_a_draw_on_a_tournament_or_event_that_does_not_exist_is_404(
     name."""
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     other_id, _ = await _tournament_with_events(client)
     missing = str(uuid.uuid4())
@@ -5921,9 +6137,15 @@ async def test_cutting_a_draw_that_is_not_a_competition_is_422(
     fixtures it had thrown away and none of the ones it could not make.
     """
     client, _ = authed_client
+    # Only the FIRST reservation goes through the real create route (#1482 caps
+    # round-robin at one); any further ones are added directly through the ORM
+    # (:func:`_ensure_group`), which never crosses the request boundary the cap
+    # stands at — the cut this test refuses is still the real route.
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(*reservations)
+        client, _rr_payload(*reservations[:1])
     )
+    for reservation in reservations[1:]:
+        await _ensure_group(db_session, uuid.UUID(event["id"]), reservation["name"])
     await _seed_field(db_session, event["id"], entrants)
 
     response = await client.post(_draw_url(tournament_id, event["id"]))
@@ -5955,7 +6177,7 @@ async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_me
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     await _seed_field(db_session, event["id"], 4)
 
@@ -6015,9 +6237,14 @@ async def test_a_refused_re_cut_leaves_the_standing_draw_untouched(
     pinned" — it isn't, and the comment there says so.
     """
     client, _ = authed_client
+    # One reservation through the real create route (#1482 caps round-robin at
+    # that), the second added directly through the ORM (:func:`_ensure_group`),
+    # which never crosses the request boundary the cap stands at — the re-cut this
+    # test refuses is still the real route, untouched by #1482.
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
     entries = await _seed_field(db_session, event["id"], 4)
     await client.post(_draw_url(tournament_id, event["id"]))
     before = _snapshot(await _fixture_rows(db_session, event["id"]))
@@ -6072,7 +6299,7 @@ async def test_a_played_draw_can_be_neither_re_cut_nor_un_cut(
     """
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     await _seed_field(db_session, event["id"], 4)
     await client.post(_draw_url(tournament_id, event["id"]))
@@ -6107,8 +6334,8 @@ async def test_the_play_guard_is_scoped_to_the_event_being_cut(
     client, _ = authed_client
     tournament_id, (played_event, other_event) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Under 13s"),
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Open Singles"),
+        _rr_payload(RESERVATION_A, name="Under 13s"),
+        _rr_payload(RESERVATION_A, name="Open Singles"),
     )
     await _seed_field(db_session, played_event["id"], 4, prefix="u13-")
     await _seed_field(db_session, other_event["id"], 4, prefix="open-")
@@ -6156,8 +6383,8 @@ async def test_going_live_seals_every_events_draw(
     client, _ = authed_client
     tournament_id, (one, two) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Under 13s"),
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Open Singles"),
+        _rr_payload(RESERVATION_A, name="Under 13s"),
+        _rr_payload(RESERVATION_A, name="Open Singles"),
     )
     await _seed_field(db_session, one["id"], 4, prefix="one")
     await _seed_field(db_session, two["id"], 4, prefix="two")
@@ -6211,7 +6438,7 @@ async def test_both_draw_verbs_take_the_tournaments_row_lock(
     """
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     await _seed_field(db_session, event["id"], 4)
     owner_id = owner.id
@@ -6447,8 +6674,20 @@ async def test_an_events_reservations_are_read_back_in_the_order_they_were_poste
     what makes this assertion able to fail.
     """
     client, _ = authed_client
+    # ``rr-then-ko`` (#1482 caps every other draw type at one reservation): its group
+    # count derives as ``ceil(max_players / 5)``, so ``max_players=13`` derives three,
+    # matching the three reservations — the same 1:1 mapping every other draw type
+    # gives for free, which is what keeps this test about POSITION, not draw type.
     tournament_id, _ = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_C, RESERVATION_A, RESERVATION_B)
+        client,
+        _rr_payload(
+            RESERVATION_C,
+            RESERVATION_A,
+            RESERVATION_B,
+            draw_type="rr-then-ko",
+            qualifiers_per_group=2,
+            max_players=13,
+        ),
     )
 
     (event,) = await _events_of(client, tournament_id)
@@ -6511,9 +6750,15 @@ async def test_reservations_carrying_a_position_are_refused_and_write_nothing(
     reservations.
     """
     client, _ = authed_client
+    # One reservation through the real create route (#1482 caps round-robin at
+    # that), the second added directly through the ORM (:func:`_ensure_group`),
+    # which never crosses the request boundary the cap stands at — the refusal
+    # under test (``position``) is a pure schema error the payload's own reservation
+    # count never reaches anyway.
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
@@ -6579,9 +6824,40 @@ async def _cut_two_group_event(
 ) -> tuple[str, dict[str, Any]]:
     """A two-group round-robin over four players, with its draw **cut** — the state the
     freeze applies in. Four fixtures, two in each group, every one of them holding a
-    ``group_id`` that resolves against the event's groups."""
+    ``group_id`` that resolves against the event's groups.
+
+    Seeded as ONE reservation through the real create route — #1482 caps a
+    round-robin event at one reservation now, so a create carrying two is refused —
+    and given its SECOND group directly through the ORM (:func:`_ensure_group`),
+    which never crosses the request boundary the cap stands at. That makes this
+    exactly the "legacy" shape #1482's own edge cases describe: unreachable through
+    the API today, but the one the group-set FREEZE still has to guard once it
+    exists (a row seeded before the cap, or by direct ORM access). The CUT itself is
+    still the real route, and nothing about cutting or the fixtures it plans is
+    touched by #1482, so the fixture shape below is unchanged.
+    """
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
+    )
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
+    await _seed_field(db_session, event["id"], 4)
+    cut = await client.post(_draw_url(tournament_id, event["id"]))
+    assert cut.status_code == 201, cut.text
+    return tournament_id, event
+
+
+async def _cut_one_group_event(
+    client: AsyncClient, db_session: AsyncSession
+) -> tuple[str, dict[str, Any]]:
+    """A one-group round-robin over four players, with its draw **cut** — for tests
+    about a cut draw's OTHER freezes and permissions (the draw type, a venue edit on
+    the one reservation it has) that have nothing to do with the group-SET freeze's
+    own multi-reservation shape. One reservation, because #1482 caps a round-robin
+    event at that; nothing here reads a second group. Use
+    :func:`_cut_two_group_event` instead when the group set itself — adding,
+    removing, or reordering a reservation — is what the test is about."""
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
     )
     await _seed_field(db_session, event["id"], 4)
     cut = await client.post(_draw_url(tournament_id, event["id"]))
@@ -6640,17 +6916,16 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
     would satisfy a count and would have thrown away the placements anyway.
     """
     client, _ = authed_client
-    tournament_id, event = await _cut_two_group_event(client, db_session)
+    tournament_id, event = await _cut_one_group_event(client, db_session)
     before = _snapshot(await _fixture_rows(db_session, event["id"]))
-    # Both reservations are CITED by the ids the server minted — which is what makes
-    # this an edit of the reservations the draw was cut across rather than a request to
-    # replace them.
-    reservation_a, reservation_b = _kept(
-        await _reservations_of(db_session, event["id"])
-    )
+    # CITED by the id the server minted — which is what makes this an edit of the
+    # reservation the draw was cut across rather than a request to replace it. One
+    # reservation only (#1482 caps a round-robin event at that): the freeze this test
+    # exercises is about the id SET surviving an edit to what a reservation carries,
+    # which one reservation demonstrates as well as two.
+    (reservation_a,) = _kept(await _reservations_of(db_session, event["id"]))
     edited = [
         {**reservation_a, **edit(await _catalogue_table_ids(client, tournament_id))},
-        reservation_b,
     ]
 
     response = await client.patch(
@@ -6819,7 +7094,7 @@ async def test_an_event_with_no_draw_replaces_its_reservations_wholesale(
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
 
     response = await client.patch(
@@ -6848,7 +7123,11 @@ async def test_removing_the_draw_un_freezes_the_group_set(
     client, _ = authed_client
     tournament_id, event = await _cut_two_group_event(client, db_session)
     url = f"/v1/tournaments/{tournament_id}/events/{event['id']}"
-    regrouped = [RESERVATION_A, RESERVATION_B, RESERVATION_C]
+    # A single, different reservation (#1482 caps a round-robin event at one): the
+    # claim under test is that regrouping — the very payload the freeze just refused —
+    # succeeds once the draw is gone, and one new reservation demonstrates that as
+    # well as three.
+    regrouped = [RESERVATION_C]
 
     refused = await client.patch(url, json={"reservations": regrouped})
     assert refused.status_code == 409, refused.text
@@ -6907,9 +7186,10 @@ async def test_the_group_freeze_is_scoped_to_the_event_being_patched(
     client, _ = authed_client
     tournament_id, (drawn, undrawn) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Under 13s"),
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Open Singles"),
+        _rr_payload(RESERVATION_A, name="Under 13s"),
+        _rr_payload(RESERVATION_A, name="Open Singles"),
     )
+    await _ensure_group(db_session, uuid.UUID(drawn["id"]), RESERVATION_B["name"])
     await _seed_field(db_session, drawn["id"], 4, prefix="u13-")
     await client.post(_draw_url(tournament_id, drawn["id"]))
 
@@ -7019,8 +7299,18 @@ async def test_creating_an_event_mints_an_id_for_every_reservation(
     ``reservations[0]["id"]`` assertion would sail past.
     """
     client, _ = authed_client
+    # ``rr-then-ko`` (#1482 caps every other draw type at one reservation) so this
+    # mint test can still exercise three at once.
     _tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B, RESERVATION_C)
+        client,
+        _rr_payload(
+            RESERVATION_A,
+            RESERVATION_B,
+            RESERVATION_C,
+            draw_type="rr-then-ko",
+            qualifiers_per_group=2,
+            max_players=13,
+        ),
     )
 
     ids = [uuid.UUID(reservation["id"]) for reservation in event["reservations"]]
@@ -7070,8 +7360,18 @@ async def test_a_reservations_patch_keeps_the_cited_one_and_mints_the_rest(
     outright.
     """
     client, _ = authed_client
+    # ``rr-then-ko`` (#1482 caps every other draw type at one reservation), and the
+    # event is never cut, so the compositing an rr-then-ko cut would add is moot: this
+    # test is purely about the reservations DIFF.
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client,
+        _rr_payload(
+            RESERVATION_A,
+            RESERVATION_B,
+            draw_type="rr-then-ko",
+            qualifiers_per_group=2,
+            max_players=8,
+        ),
     )
     kept_a, dropped_b = _kept(await _reservations_of(db_session, event["id"]))
 
@@ -7110,8 +7410,19 @@ async def test_a_reservations_patch_citing_an_id_this_event_does_not_have_is_a_4
     groups under another event's row.
     """
     client, _ = authed_client
+    # ``rr-then-ko`` on the first event (#1482 caps every other draw type at one
+    # reservation), and it is never cut, so this is purely about the reservations
+    # DIFF's own id-citation rule.
     tournament_id, (event, other) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B), _rr_payload(RESERVATION_C)
+        client,
+        _rr_payload(
+            RESERVATION_A,
+            RESERVATION_B,
+            draw_type="rr-then-ko",
+            qualifiers_per_group=2,
+            max_players=8,
+        ),
+        _rr_payload(RESERVATION_C),
     )
     kept_a, _kept_b = _kept(await _reservations_of(db_session, event["id"]))
     (elsewhere,) = _kept(await _reservations_of(db_session, other["id"]))
@@ -7186,10 +7497,10 @@ async def test_an_undrawn_event_also_refuses_a_reservations_patch_citing_one_twi
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     before = await _reservations_of(db_session, event["id"])
-    reservation_a, _reservation_b = _kept(before)
+    (reservation_a,) = _kept(before)
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
@@ -7252,7 +7563,7 @@ async def test_a_reservations_patch_that_empties_a_reservation_name_is_refused(
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
     before = await _reservations_of(db_session, event["id"])
 
@@ -7892,7 +8203,7 @@ async def test_an_undrawn_event_still_changes_its_draw_type(
     """
     client, _ = authed_client
     tournament_id, (event,) = await _tournament_with_events(
-        client, _rr_payload(RESERVATION_A, RESERVATION_B)
+        client, _rr_payload(RESERVATION_A)
     )
 
     response = await client.patch(
@@ -7927,13 +8238,14 @@ async def test_re_sending_the_same_draw_type_with_a_venue_edit_still_succeeds(
     caller's own keyboard.)
     """
     client, _ = authed_client
-    tournament_id, event = await _cut_two_group_event(client, db_session)
+    tournament_id, event = await _cut_one_group_event(client, db_session)
     fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
     table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
-    reservation_a, reservation_b = _kept(
-        await _reservations_of(db_session, event["id"])
-    )
-    moved = [{**reservation_a, "table_ids": [table_1]}, reservation_b]
+    # One reservation only (#1482 caps a round-robin event at that) — the claim under
+    # test is that RE-SENDING the draw type the event already has, alongside a venue
+    # edit, is not treated as a change; one reservation demonstrates it as well as two.
+    (reservation_a,) = _kept(await _reservations_of(db_session, event["id"]))
+    moved = [{**reservation_a, "table_ids": [table_1]}]
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}/events/{event['id']}",
@@ -7959,7 +8271,10 @@ async def test_removing_the_draw_un_freezes_the_draw_type(
     names had better work.
     """
     client, _ = authed_client
-    tournament_id, event = await _cut_two_group_event(client, db_session)
+    # One reservation (#1482 caps a round-robin event at that): this test is about the
+    # DRAW TYPE freeze and its un-freeze, not the group-set freeze, which has its own
+    # coverage (``_cut_two_group_event``'s dependents).
+    tournament_id, event = await _cut_one_group_event(client, db_session)
     url = f"/v1/tournaments/{tournament_id}/events/{event['id']}"
 
     refused = await client.patch(url, json={"draw_type": "single-elim"})
@@ -7988,8 +8303,8 @@ async def test_the_draw_type_freeze_is_scoped_to_the_event_being_patched(
     client, _ = authed_client
     tournament_id, (drawn, undrawn) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Under 13s"),
-        _rr_payload(RESERVATION_A, RESERVATION_B, name="Open Singles"),
+        _rr_payload(RESERVATION_A, name="Under 13s"),
+        _rr_payload(RESERVATION_A, name="Open Singles"),
     )
     await _seed_field(db_session, drawn["id"], 4, prefix="u13-")
     await _cut_the_draw(client, tournament_id, drawn["id"])

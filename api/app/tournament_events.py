@@ -48,6 +48,7 @@ from app.schemas.tournament import (
     SwissDrawSettingsWrite,
     TournamentEventCreate,
     TournamentEventUpdate,
+    enforce_event_reservation_cap,
     named_list,
 )
 from app.tournament_draw_settings import (
@@ -617,6 +618,67 @@ async def _enforce_draw_settings_frozen(
     raise DrawTypeFrozenError(detail, draw_type=current.value)
 
 
+def _enforce_reservation_cap(
+    event: TournamentEvent, updates: TournamentEventUpdate
+) -> None:
+    """Raise :class:`EventReservationCapExceededError` once this PATCH would leave a
+    non-``rr-then-ko`` event holding more than one reservation (#1482), by calling
+    :func:`app.schemas.tournament.enforce_event_reservation_cap` — the one function
+    both this call site and the create schema's validator use.
+
+    Judged on the **effective** pair, not merely on what this payload sends, so a
+    patch that touches only one half of the pair is still judged against the state
+    it would leave the event in: the draw type is ``updates.draw_settings.draw_type``
+    when this patch touches the draw configuration, else the event's stored one
+    (:func:`~app.tournament_draw_settings.draw_settings_of`); the reservation count
+    is ``len(updates.reservations)`` when this patch replaces the reservations, else
+    the event's stored count. The stored count is read off ``event.reservations``
+    via :func:`~app.tournament_reservations.ordered_reservations` — the same eager
+    access :func:`_enforce_group_set_frozen` already uses — rather than a fresh
+    query, since the caller already holds the event with that relationship loaded.
+
+    Asked **after** :func:`_enforce_group_set_frozen` and
+    :func:`_enforce_draw_settings_frozen`, and before anything is written: the freeze
+    is the refusal a director can act on (remove the draw, then edit), so a cut event
+    over the cap answers the freeze's 409 first, and only an uncut event (or one
+    whose payload leaves the freezes satisfied) reaches this 422.
+
+    **A no-op on a patch that touches neither half of the pair.** A legacy event
+    already over the cap (data only reachable pre-#1482, since both write paths now
+    refuse to create one) must still accept an edit to its name, its fee, or anything
+    else that is not itself a reservations-or-draw-type write — the same contract
+    :func:`_enforce_group_set_frozen` already states for the freeze ("every event
+    edit that is not a reservation add, remove or reorder succeeds"). A cap that
+    fired on every patch to such a row, whatever the payload touched, would turn its
+    mere existence into a standing refusal — which is not what "at most one
+    reservation, going forward" means.
+
+    **That escape hatch serves API and MCP callers, not the event editor.** The web
+    client's ``eventToUpdateBody`` always spreads ``reservations`` and always takes
+    ``draw_type`` off ``drawSettingsToApi`` (deliberately, and pinned by
+    ``web-client/src/components/tournaments/data/api.test.ts``), so **every** save
+    from the editor touches the pair and none of them reach this early return — a
+    legacy over-cap event is refused in the editor by the client's own resolver rule
+    before a request is even built. A caller that patches one field at a time is the
+    only one this branch is reachable from, and it is the one that needs it: without
+    it, such a row could never be renamed, only deleted.
+    """
+    if updates.reservations is None and updates.draw_settings is None:
+        return
+    incoming_draw_settings = updates.draw_settings
+    draw_type = (
+        incoming_draw_settings.draw_type
+        if incoming_draw_settings is not None
+        else draw_settings_of(event.draw_settings).draw_type
+    )
+    reservation_count = (
+        len(updates.reservations)
+        if updates.reservations is not None
+        else len(ordered_reservations(event))
+    )
+    enforce_event_reservation_cap(draw_type, reservation_count)
+
+
 def _event_scheduling_facts(
     event: TournamentEvent,
 ) -> tuple[tuple[tuple[uuid.UUID, Slot, tuple[str, ...]], ...], int, str]:
@@ -779,6 +841,10 @@ async def update_event(
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
+    # The reservation cap (#1482) is judged last of the three, after both freezes:
+    # the freeze is the refusal a director can act on, so a cut event over the cap
+    # answers the 409 that names its groups before this 422.
+    _enforce_reservation_cap(event, updates)
     # Read ONCE, under the row lock, for the two gates below (the materialisation and
     # the re-solve trigger): a draw is cut or removed only under this same lock, so
     # the answer cannot move between here and the commit.

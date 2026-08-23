@@ -1,6 +1,6 @@
 import { groupSetFreeze, type EditFreeze } from '../../data/draw'
 import { buildEvent, buildTables } from '../../data/seed.factory'
-import type { TournamentEvent, TournamentTable } from '../../data/types'
+import type { DrawType, TournamentEvent, TournamentTable } from '../../data/types'
 
 /** Harness inputs for `ReservationsSection` — the section now drives a
  * `useFieldArray` off the editor's form, so the test wraps it in a form seeded from
@@ -19,6 +19,13 @@ export interface ReservationsHarnessInputs {
    * is normally in: the editor says nothing in red until the organizer has actually
    * tried to save. */
   nameIssues?: Record<string, string>
+  /** Seeds the FORM's `drawType` at a value that DIVERGES from `event.drawType` —
+   * #1482's reservation cap reads the form's watched draw type, never the stored
+   * event's, and this is how a test proves that without driving a live Basics-tab
+   * pick: the harness's form starts here instead of at `event.drawType`, the way a
+   * director's in-progress (unsaved) type flip would leave it. `undefined` leaves the
+   * form seeded from `event` exactly as before. */
+  formDrawType?: DrawType
 }
 
 export function buildReservationsSectionProps(

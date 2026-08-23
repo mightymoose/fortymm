@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import { type Control, useFieldArray, useWatch } from 'react-hook-form'
+import { type Control, useFieldArray, useFormState, useWatch } from 'react-hook-form'
 import { Lock, Plus, TriangleAlert } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -10,7 +10,7 @@ import { findReservationConflicts } from '../../data/helpers'
 import { addedReservation, reservationEntryKey } from '../../data/reservation-entries'
 import type { ReservationEntry, TournamentTable } from '../../data/types'
 import { EmptyState } from '../../empty-state'
-import type { EventFormValues } from '../event-form'
+import { type EventFormValues, isOverReservationCap } from '../event-form'
 import { SectionHeader } from '../section-header'
 import { ReservationCard } from './reservations-section/reservation-card'
 
@@ -97,6 +97,15 @@ export const ReservationsSection = ({
   // `aria-describedby`: one explanation, in one place, said once.
   const freezeNoticeId = useId()
   const frozen = freeze.kind === 'frozen'
+  // #1482's reservation cap: a non-`rr-then-ko` event holds at most one reservation, so
+  // once it already holds one, Add would build a second — dead data no fixture could
+  // ever be dealt into (ADR 20260808: only `rr-then-ko` has structural settings, so
+  // every other draw type runs one group per stage). Read off the FORM's watched
+  // `drawType`, never `event.drawType`, so a director who flips the type on Basics sees
+  // Add disable before anything is saved. Gated on `!frozen`: once the draw is cut, the
+  // freeze already disables Add for its own (more actionable) reason, and showing this
+  // notice too would be a second, less useful story about the same dead button.
+  const capNoticeId = useId()
   // `keyName: 'rhfKey'` keeps the field array's internal key off our own fields — and
   // the cards are NOT keyed on it, because `update()` regenerates it for the row it
   // touches, which would remount the card the director is typing in and drop their
@@ -131,6 +140,56 @@ export const ReservationsSection = ({
       ? { kind: 'kept', id: f.id, name: f.name, slot: f.slot, tableIds: f.tableIds }
       : { kind: 'added', key: f.key, name: f.name, slot: f.slot, tableIds: f.tableIds },
   )
+
+  // Watched off the form, not read from the saved `event` — a director's in-progress
+  // (unsaved) draw-type pick has to disable Add immediately, before a save round-trips
+  // it back as `event.drawType`.
+  const drawType = useWatch({ control, name: 'drawType' })
+
+  // The array-level save refusal (`eventSchema`'s `superRefine`, `event-form.ts`). RHF
+  // nests an array-level custom issue under `.root` once a PER-ROW error joins it (a
+  // blank name alongside the cap), and leaves it as the array's own `.message` when the
+  // cap is the only reservations error — read both, so neither shape goes silently blank.
+  //
+  // **Gated on the live watched pair, because RHF's error object goes STALE here.** The
+  // refusal is raised at the ARRAY's path but its condition reads `drawType`, a
+  // DIFFERENT field, and RHF revalidates the field that changed, never a sibling. So a
+  // director who takes this very message's second remedy ("switch the draw type to
+  // rr-then-ko") watches Add re-enable beside a red alert still insisting the draw type
+  // is not rr-then-ko. The sentence is false at the moment it is on screen, and it is
+  // false precisely because the director did what it asked.
+  //
+  // Re-deriving the condition costs nothing and cannot go stale: `drawType` is already
+  // watched above and `fields` is the live array. The `superRefine` itself STAYS — it is
+  // what refuses the save, and `firstInvalidSection` reads `errors.reservations` to jump
+  // to this tab. This gate only decides whether the sentence is still TRUE.
+  //
+  // The predicate is IMPORTED, never restated here: the `superRefine` calls the same
+  // `isOverReservationCap`, so "the display gate is exactly the resolver's condition" is
+  // a fact about the code rather than a promise made in a comment. A second hand-written
+  // copy is how one of them gets fixed and the other does not.
+  const { errors } = useFormState({ control })
+  const overCap = isOverReservationCap(drawType, fields.length)
+  const capError = overCap
+    ? (errors.reservations?.root?.message ?? errors.reservations?.message)
+    : undefined
+
+  const capped = !frozen && drawType !== 'rr-then-ko' && fields.length >= 1
+
+  // Whether the button is DEAD and whether this notice EXPLAINS it are two questions,
+  // and they must not share one flag: `capped` disables Add from the first reservation
+  // (`length >= 1`), while the save refusal only exists past the second (`length > 1`),
+  // so folding the two together would re-enable Add at two reservations — letting the
+  // director add a third from the very screen that just refused to save two.
+  //
+  // Which leaves only the notice to suppress, and for the same reason it is suppressed
+  // once the draw is cut: when the SAVE refusal below is on screen, this notice is a
+  // second, weaker story about the very same rule — the error names the count actually
+  // held AND the way down to one, so stacking a `Lock` alert reading "can hold only one
+  // reservation" directly above a destructive one reading "it currently holds 2" tells
+  // the director nothing new and buries the sentence that does. One dead button, one
+  // explanation, said once.
+  const showCapNotice = capped && !capError
 
   // Double-booking is a diagnostic only the organizer can act on, so a viewer
   // is neither shown it nor pays to compute it.
@@ -168,8 +227,10 @@ export const ReservationsSection = ({
             <Button
               size="sm"
               onClick={addReservation}
-              disabled={frozen}
-              aria-describedby={frozen ? freezeNoticeId : undefined}
+              disabled={frozen || capped}
+              aria-describedby={
+                frozen ? freezeNoticeId : showCapNotice ? capNoticeId : undefined
+              }
             >
               <Plus size={14} />
               Add reservation
@@ -191,6 +252,46 @@ export const ReservationsSection = ({
           <Lock size={16} />
           <AlertTitle>This event’s draw is cut</AlertTitle>
           <AlertDescription>{freeze.reason}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* #1482's cap notice: why ADD is disabled once a non-`rr-then-ko` event already
+          holds one reservation. Its own testid and its own `id` — never
+          `freezeNoticeId`, whose sentence is about a cut draw and would be a lie here.
+          Never shown alongside EITHER of the other two (`showCapNotice` is already
+          `capped && !capError`, and `capped` is already `!frozen`): the freeze is the
+          more actionable refusal once a draw is cut, the save error names the count
+          held and the way down to one, and two alerts explaining the same dead button
+          would be a worse answer than one. The BUTTON stays disabled either way — only
+          this notice steps aside. */}
+      {canEdit && showCapNotice && (
+        <Alert id={capNoticeId} data-testid="reservations-cap-notice">
+          <Lock size={16} />
+          <AlertTitle>This event can hold only one reservation</AlertTitle>
+          {/* The draw type is named in the domain's words, never the wire token
+              `rr-then-ko`, which appears nowhere in the Basics tab's picker — see
+              `reservationCapMessage` in `event-form.ts` for why that distinction is
+              load-bearing and why it does not reintroduce a client label catalogue. */}
+          <AlertDescription>
+            This event's draw type runs its whole stage as one group, so it can hold
+            only one reservation. Change the draw type on the Basics tab to
+            round-robin-then-knockout, the one draw that runs several groups.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* #1482's array-level SAVE refusal: a non-`rr-then-ko` event that would be left
+          holding more than one reservation. Independent of the freeze/cap notices
+          above (which are about the ADD button) — this is the resolver's own verdict on
+          the reservations LIST, and it has to be visible whether or not the draw is
+          cut: a cut round-robin event holding two legacy reservations still refuses the
+          save (re-sending both unchanged passes the freeze and then hits this cap), and
+          the director still needs to be told why. */}
+      {canEdit && capError && (
+        <Alert variant="destructive" data-testid="reservations-cap-error">
+          <TriangleAlert size={16} />
+          <AlertTitle>Too many reservations</AlertTitle>
+          <AlertDescription>{capError}</AlertDescription>
         </Alert>
       )}
 

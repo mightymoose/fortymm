@@ -692,9 +692,7 @@ the **standings**; for a single-elimination, the undefeated entrant, first in th
 **finishes**; for a round-robin-then-knockout, the winner of the **knockout
 stage**, never the leader of a **group**. **Derived, never stored**: a
 **correction** can re-crown, so the champion is always read from the current
-results. A **multi-group** round-robin has **no champion even when complete** —
-there is nothing to join its group winners, which is exactly the gap a knockout
-stage fills.
+results.
 _Avoid_: winner (a **winner** is one side of one match; the champion is the whole
 event's), first place.
 

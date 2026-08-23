@@ -300,7 +300,27 @@ const JOURNEY_RESERVATIONS: Reservation[] = [
   },
 ]
 
-/** The two reservations of `EVENT.GROUPS` — and, 1:1, its two groups. Their ids are
+/** The two reservations of `EVENT.GROUPS` — and, 1:1, its two groups.
+ *
+ * **DELIBERATELY OVER #1482's CAP — do not "fix" this by dropping a reservation.**
+ * `EVENT.GROUPS` is a `round-robin` event holding TWO reservations, which the request
+ * boundary now refuses to create or update into (`enforce_event_reservation_cap`,
+ * `api/app/schemas/tournament.py`): every draw type but `rr-then-ko` runs its whole
+ * stage as one group, so it holds at most one reservation. This is a STUB store, never
+ * the real API, so nothing here crosses that boundary — and the two-group round-robin
+ * draw it seeds is what `tournament-draw.spec.ts`, `tournament-schedule-board.spec.ts`
+ * and `tournament-schedule-solve.spec.ts` narrate their group counts, their snake deal
+ * (`PLAY_FIELD` = 5 → 3 + 2) and their fixture totals against.
+ *
+ * It is therefore a state the product can no longer PRODUCE, kept because converting it
+ * is a rewrite of four specs rather than a fixture move: `rr-then-ko` derives its group
+ * count from `ceil(field / 5)` rather than from the reservation count, and it renders a
+ * knockout stage these specs do not narrate. #1484 moves the group count onto structural
+ * settings and owns that conversion — see #1482's settled rule 4, "a fixture over the
+ * cap moves by what its test needs". Until then: do not copy this shape into a NEW
+ * fixture, and do not seed it against the real API, where it is a 422.
+ *
+ * Their ids are
  * spelled ONCE and handed to both the event and its planner: a fixture's `group_id` is a
  * string ref into its event's own `groups`, minted 1:1 from `reservations`
  * (ADR-0786 — groups are JSONB value-objects, not rows), so a seed that spelled the

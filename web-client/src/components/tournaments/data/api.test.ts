@@ -1044,6 +1044,40 @@ describe('eventToUpdateBody', () => {
   })
 
   /**
+   * #1482's server-side reservation cap no-ops on a PATCH that touches neither
+   * `reservations` nor `draw_type` (`_enforce_reservation_cap`,
+   * `api/app/tournament_events.py`) — a legacy over-cap event must still accept an
+   * edit to its name, its fee, or anything else that is not itself a
+   * reservations-or-draw-type write.
+   *
+   * That no-op can only matter to a caller that can build a body omitting both keys.
+   * This one never does: `eventToUpdateBody` spreads `reservations` in
+   * unconditionally (see the doc above it), and `draw_type` comes off
+   * `drawSettingsToApi`, which reads `ev.drawType` — always present on an
+   * `EditedEvent`. So THIS client's save always sends both, whatever field the
+   * director actually changed, and its own `eventSchema` reservation-cap rule
+   * (`event-form.ts`) is deliberately unconditional too: there is no PATCH shape this
+   * editor can produce for which the server's no-op and the client's rule would ever
+   * disagree. Pinned here so a future PATCH shape that DOES omit one of them is
+   * caught by this test rather than by a director's save silently reding for a field
+   * they never touched. */
+  it('sends reservations AND draw_type even when only an unrelated field changed', () => {
+    const body = eventToUpdateBody(asEditedEvent({ ...event, name: 'Renamed' }))
+
+    expect('reservations' in body).toBe(true)
+    expect(body.reservations).toEqual([
+      {
+        id: 'res-1',
+        name: 'Reservation A',
+        slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+        table_ids: ['t1', 't2'],
+      },
+    ])
+    expect('draw_type' in body).toBe(true)
+    expect(body.draw_type).toBe('round-robin')
+  })
+
+  /**
    * The three statements a reservations diff can make, in one body: keep this one, add
    * that one, and — by saying nothing about it — remove the third.
    *

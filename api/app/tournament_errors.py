@@ -261,6 +261,47 @@ class ReservationNotInEventError(Exception):
         self.reservation_id = reservation_id
 
 
+class EventReservationCapExceededError(ValueError):
+    """Raised when a non-``rr-then-ko`` event would hold more than one reservation
+    (#1482) — the ceiling half of the reservation cap, judged by
+    ``app.schemas.tournament.enforce_event_reservation_cap`` and raised by both the
+    create schema's ``model_validator`` and the update verb.
+
+    A **``ValueError``**, not a plain ``Exception`` like this module's other members,
+    and that is load-bearing rather than decorative: raised inside a Pydantic
+    ``model_validator(mode="after")``, a ``ValueError`` is what Pydantic folds into the
+    model's own ``ValidationError`` — so the create path becomes a 422 with no adapter
+    at all, the same mechanism ``_parse_draw_settings`` already leans on for the
+    ``(draw_type, qualifiers_per_group)`` pairing. The update path raises the identical
+    class from ordinary Python code (not a validator), so its adapter — the HTTP route
+    and the MCP tool, beside their existing ``except ReservationNotInEventError`` —
+    catches it explicitly rather than relying on Pydantic's fold, which only ever
+    happens inside a validator.
+
+    Only every OTHER draw type is capped, and that is the domain reason (ADR
+    20260808): ``rr-then-ko`` is the one draw type with structural settings, so it is
+    the one draw type whose group count does not derive one-group-per-reservation. The
+    cap is temporary (see #1482's Context) — it exists only because the derived
+    mapping ``position % reservation_count`` puts a single group on ``reservations[0]``
+    and leaves the rest dead — and its later removal is meant to be exactly one
+    deletion, which is why the predicate and the message both live in one function
+    rather than being duplicated across the two call sites.
+
+    Carries the already-composed sentence (``message``) plus structured detail for
+    any adapter that wants to reshape rather than echo, exactly as
+    :class:`GroupSetFrozenError` does: ``draw_type``, the offending draw type's
+    **wire string** (e.g. ``"round-robin"``), not the enum — this module imports
+    nothing but the standard library, so it never holds a reference to
+    ``app.models.tournament.DrawType`` — and ``reservation_count``, the number of
+    reservations the write would leave the event holding. Never an
+    ``HTTPException`` — the caller adapts it to its transport."""
+
+    def __init__(self, message: str, *, draw_type: str, reservation_count: int) -> None:
+        super().__init__(message)
+        self.draw_type = draw_type
+        self.reservation_count = reservation_count
+
+
 class TableNotInCatalogueError(Exception):
     """Raised by the edit verb when an entry of a submitted ``table_catalogue`` cites an
     ``id`` that names no table of **this** tournament's catalogue (ADR 20260801).

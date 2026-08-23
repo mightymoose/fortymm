@@ -70,6 +70,22 @@ const scoped = (container: Container) => ({
   queryFrozenNotice() {
     return container.queryByTestId('reservations-frozen-notice')
   },
+  /** #1482's cap notice: why ADD is disabled when the draw type is not `rr-then-ko`
+   * and the list already holds one reservation. Its own testid and its own id —
+   * never `reservations-frozen-notice`, whose sentence is about a cut draw and would
+   * be a lie here. */
+  queryCapNotice() {
+    return container.queryByTestId('reservations-cap-notice')
+  },
+  /** The array-level refusal a resolver raises when a SAVE would leave a
+   * non-`rr-then-ko` event holding more than one reservation (#1482) — read off
+   * `errors.reservations`, never the server's own words (`event-form.ts`'s
+   * `reservationCapMessage`). Absent until a save has actually been attempted, and
+   * absent here in the section's OWN harness, whose form carries no resolver at all
+   * (`event-editor.test.tsx` is where this one is exercised end to end). */
+  queryCapError() {
+    return container.queryByTestId('reservations-cap-error')
+  },
   /** The live `reservations` array in form state (via the probe), so a test can assert
    * that an add / edit / remove flowed through `useFieldArray`.
    *

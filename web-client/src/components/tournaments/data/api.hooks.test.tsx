@@ -472,7 +472,7 @@ describe('useUpdateEvent — the draw configuration on the wire', () => {
  * handler for that very reason: a stub would answer whatever it was told to.
  */
 describe('an added reservation, through the mock’s id-keyed diff', () => {
-  // The seed's owned, published tournament and its two-reservation event.
+  // The seed's owned, published tournament and its event.
   const TOURNAMENT = BAY_AREA_OPEN_ID
   const EVENT = 'ev-open-singles'
 
@@ -488,6 +488,10 @@ describe('an added reservation, through the mock’s id-keyed diff', () => {
       eventId: EVENT,
       body: eventToUpdateBody({
         ...stored,
+        // rr-then-ko (#1482): this PATCH leaves the event holding TWO reservations —
+        // one kept, one added — which every other draw type now caps at one.
+        drawType: 'rr-then-ko',
+        qualifiersPerGroup: 2,
         reservations: [
           ...keepReservations(stored.reservations),
           addedReservation({
@@ -501,19 +505,19 @@ describe('an added reservation, through the mock’s id-keyed diff', () => {
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
     const saved = apiToEvent(result.current.data!)
-    // The reservations it already had kept their ids — which is what keeps the groups
-    // (and therefore the fixtures) mapped to them — and the new one came back with an id
-    // this client never authored.
-    expect(saved.reservations.map((r) => r.id).slice(0, 2)).toEqual(
+    // The reservation it already had kept its id — which is what keeps the group (and
+    // therefore the fixtures) mapped to it — and the new one came back with an id this
+    // client never authored.
+    expect(saved.reservations.map((r) => r.id).slice(0, 1)).toEqual(
       stored.reservations.map((r) => r.id),
     )
-    const added = saved.reservations[2]
+    const added = saved.reservations[1]
     expect(added.name).toBe('Reservation Z')
     expect(added.id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     )
     // …and the server, not the array, decided where it sits.
-    expect(saved.reservations.map((r) => r.position)).toEqual([0, 1, 2])
+    expect(saved.reservations.map((r) => r.position)).toEqual([0, 1])
   })
 
   /** The other half of the diff, and the reason a client may never mint: an id the event
@@ -1648,8 +1652,9 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
   beforeEach(() => resetTournamentsStore())
 
   const TOURNAMENT = BAY_AREA_OPEN_ID
-  /** The seed's ONE cuttable event: round-robin (the only draw type with a generator),
-   * two groups, nine entrants — and seeded already drawn. */
+  /** The seed's `ev-u1200`: round-robin (the only draw type with a generator), ONE
+   * group, nine entrants — and seeded already drawn (#1482 caps a round-robin event at
+   * one reservation, so one group is all it can hold). */
   const DRAWN = 'ev-u1200'
   /** Seeded round-robin with **no reservations (and therefore no groups)** and nobody
    * entered — the event a cut REFUSES, and (ADR 20260726) the refusal that survives: an
@@ -1670,7 +1675,7 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
     // into that array, so a draw pointing at a group the event does not have would be a
     // draw nothing could render.
     const groupIds = drawn.groups.map((g) => g.id)
-    expect(groupIds.length).toBe(2)
+    expect(groupIds.length).toBe(1)
     for (const fixture of drawn.fixtures) {
       expect(groupIds).toContain(fixture.groupId)
       // Nothing has been played: no winner, no match, both sides known (round-robin
@@ -1680,8 +1685,11 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
       expect(fixture.entryAId).not.toBeNull()
       expect(fixture.entryBId).not.toBeNull()
     }
-    // …and every OTHER event has an empty draw — `[]`, the designed uncut state.
-    for (const event of events.filter((e) => e.id !== DRAWN)) {
+    // …and every OTHER event has an empty draw — `[]`, the designed uncut state. One
+    // OTHER event in this seed is ALSO drawn: `ev-two-stage-cut` (`rr-then-ko`) —
+    // deliberate, so this sweep excludes it by name.
+    const alsoDrawn = new Set(['ev-two-stage-cut'])
+    for (const event of events.filter((e) => e.id !== DRAWN && !alsoDrawn.has(e.id))) {
       expect(event.fixtures).toEqual([])
     }
   })

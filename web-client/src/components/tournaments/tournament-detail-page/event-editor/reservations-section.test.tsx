@@ -66,7 +66,11 @@ describe('ReservationsSection', () => {
   // now drives via `useFieldArray` (chore 1e) — not a bridged `onChange` spy.
   describe('the reservation list drives the form', () => {
     it('appends a reservation to the form when Add reservation is clicked', async () => {
-      reservationsSectionPage.render({ event: buildEvent({ reservations: [buildReservation()] }) })
+      // rr-then-ko: the one draw type #1482's cap does not apply to, so Add stays
+      // live past the first reservation.
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: [buildReservation()] }),
+      })
       await userEvent.click(reservationsSectionPage.getAddReservationButton())
       expect(reservationsSectionPage.getReservations()).toHaveLength(2)
     })
@@ -122,7 +126,7 @@ describe('ReservationsSection', () => {
     })
 
     it('renders the cards in position order, not in id order', () => {
-      reservationsSectionPage.render({ event: buildEvent({ reservations: buildTenReservations() }) })
+      reservationsSectionPage.render({ event: buildEvent({ drawType: 'rr-then-ko', reservations: buildTenReservations() }) })
 
       expect(reservationsSectionPage.getReservationNames()).toEqual(TEN_RESERVATIONS_BY_POSITION)
     })
@@ -130,7 +134,7 @@ describe('ReservationsSection', () => {
     // …and the same for a reader, whose cards are text rather than boxes (ADR-0015).
     it('reads back in position order for a viewer too', () => {
       reservationsSectionPage.render({
-        event: buildEvent({ reservations: buildTenReservations() }),
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: buildTenReservations() }),
         canEdit: false,
       })
 
@@ -144,7 +148,7 @@ describe('ReservationsSection', () => {
      * director's reservations into a different order than the one they were looking at.
      */
     it('seeds the form array in position order, so the save sends that order', () => {
-      reservationsSectionPage.render({ event: buildEvent({ reservations: buildTenReservations() }) })
+      reservationsSectionPage.render({ event: buildEvent({ drawType: 'rr-then-ko', reservations: buildTenReservations() }) })
 
       expect(reservationsSectionPage.getReservations().map((p) => p.name)).toEqual(
         TEN_RESERVATIONS_BY_POSITION,
@@ -173,7 +177,7 @@ describe('ReservationsSection', () => {
      * below is the one the old client-side position arithmetic got wrong.
      */
     it('appends an added reservation at the END, with no id and no position', async () => {
-      reservationsSectionPage.render({ event: buildEvent({ reservations: buildTenReservations() }) })
+      reservationsSectionPage.render({ event: buildEvent({ drawType: 'rr-then-ko', reservations: buildTenReservations() }) })
 
       await userEvent.click(reservationsSectionPage.getAddReservationButton())
 
@@ -198,7 +202,7 @@ describe('ReservationsSection', () => {
      * the positions off that.
      */
     it('keeps the surviving reservations cited, in order, with the newcomer last', async () => {
-      reservationsSectionPage.render({ event: buildEvent({ reservations: buildTenReservations() }) })
+      reservationsSectionPage.render({ event: buildEvent({ drawType: 'rr-then-ko', reservations: buildTenReservations() }) })
 
       // The third card is Reservation 3 (position 2).
       await userEvent.click(reservationsSectionPage.getRemoveReservationButtons()[2])
@@ -240,7 +244,9 @@ describe('ReservationsSection', () => {
    */
   describe('who owns a reservation id', () => {
     it('adds a reservation with NO id — the server mints it', async () => {
-      reservationsSectionPage.render({ event: buildEvent({ reservations: [buildReservation()] }) })
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: [buildReservation()] }),
+      })
 
       await userEvent.click(reservationsSectionPage.getAddReservationButton())
 
@@ -328,6 +334,84 @@ describe('ReservationsSection', () => {
     expect(document.body).toHaveTextContent('No reservations yet')
   })
 
+  // #1482: a non-`rr-then-ko` event holds AT MOST ONE reservation, so Add declines to
+  // build a second one — disabled, with its reason in visible text (ADR 20260806),
+  // never hidden. Remove stays live: a director who is holding two reservations after a
+  // draw-type flip needs a way DOWN to one, and disabling Remove too would trap them.
+  describe('the reservation cap (#1482)', () => {
+    it('disables Add with a visible reason once a non-rr-then-ko event already holds one reservation', () => {
+      // The default seeded event is round-robin with exactly one reservation.
+      reservationsSectionPage.render()
+
+      const button = reservationsSectionPage.getAddReservationButton()
+      expect(button).toBeDisabled()
+
+      const notice = reservationsSectionPage.queryCapNotice()
+      expect(notice).not.toBeNull()
+      expect(notice).toHaveTextContent('only one reservation')
+      expect(button).toHaveAttribute('aria-describedby', notice?.id)
+    })
+
+    it('leaves every Remove reservation button live at the cap', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'round-robin', reservations: twoReservations() }),
+      })
+
+      for (const removeButton of reservationsSectionPage.getRemoveReservationButtons()) {
+        expect(removeButton).toBeEnabled()
+      }
+    })
+
+    it('leaves Add enabled with no cap notice while the event holds no reservations yet', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'round-robin', reservations: [] }),
+      })
+
+      // With zero reservations BOTH the header's "Add reservation" and the empty
+      // state's "Add first reservation" render, so `getAddReservationButton()` (which
+      // matches either) would be ambiguous here — name the header one exactly, the
+      // way the empty-state tests elsewhere in this file do.
+      expect(screen.getByRole('button', { name: 'Add reservation' })).toBeEnabled()
+      expect(reservationsSectionPage.queryCapNotice()).toBeNull()
+    })
+
+    it('leaves Add enabled for an rr-then-ko event holding more than one reservation', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: twoReservations() }),
+      })
+
+      expect(reservationsSectionPage.getAddReservationButton()).toBeEnabled()
+      expect(reservationsSectionPage.queryCapNotice()).toBeNull()
+    })
+
+    // The cap reads the FORM's watched `drawType`, never the stored event's — a
+    // director who flips the type on Basics sees Add disable before anything is saved.
+    // Proved by seeding the form's `drawType` at a value that DISAGREES with the
+    // event's own: the stored event here is `rr-then-ko` (legally holding two
+    // reservations), so a component that read `event.drawType` would leave Add live.
+    it("disables Add off the form's drawType even while the stored event disagrees", () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: twoReservations() }),
+        formDrawType: 'round-robin',
+      })
+
+      expect(reservationsSectionPage.getAddReservationButton()).toBeDisabled()
+      expect(reservationsSectionPage.queryCapNotice()).not.toBeNull()
+    })
+
+    // The freeze's own reason wins when both apply: a cut round-robin event holding two
+    // LEGACY reservations (only reachable in data seeded before this cap existed) is
+    // stopped by the freeze first, and the freeze's "delete the draw first" is the
+    // instruction that actually gets them out — the cap notice would be a second,
+    // less actionable story about the very same disabled button.
+    it('shows the freeze notice, not the cap notice, once the draw is cut', () => {
+      reservationsSectionPage.render({ event: buildDrawnEvent() })
+
+      expect(reservationsSectionPage.queryFrozenNotice()).not.toBeNull()
+      expect(reservationsSectionPage.queryCapNotice()).toBeNull()
+    })
+  })
+
   // ADR-0786's group-set freeze, in the editor. The reservations of an event whose draw is
   // CUT may no longer be added to or removed from — a fixture names its group by id, and a
   // group is minted 1:1 with a reservation (ticket #1369) — but everything else about a
@@ -405,7 +489,9 @@ describe('ReservationsSection', () => {
     // The whole freeze turns on the draw existing. With none cut, the section is exactly
     // what it always was — no dead buttons, and nothing to explain.
     it('is not frozen when no draw is cut', () => {
-      reservationsSectionPage.render({ event: buildEvent({ reservations: twoReservations() }) })
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: twoReservations() }),
+      })
 
       expect(reservationsSectionPage.getAddReservationButton()).toBeEnabled()
       for (const button of reservationsSectionPage.getRemoveReservationButtons()) {

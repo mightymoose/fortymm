@@ -15,13 +15,13 @@ refusal is unreachable from the derived count alone.
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draw_structure import DEFAULT_GROUP_SIZE
@@ -30,6 +30,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEventGroupReservation,
+    TournamentEventReservation,
     TournamentEventStageGroup,
     TournamentFixture,
     User,
@@ -38,7 +39,7 @@ from app.schedule_preview import DEFAULT_UNCAPPED_FIELD
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import group_count_for
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
-from tests._helpers import grant_permissions, make_user, start_session
+from tests._helpers import grant_permissions, make_user, stage_id_at, start_session
 
 RR_THEN_KO = DrawType.rr_then_ko.value
 
@@ -133,6 +134,55 @@ async def _create_other(
     assert response.status_code == 201, response.text
     body: dict[str, Any] = response.json()
     return body
+
+
+async def _ensure_group(
+    db_session: AsyncSession, event_id: uuid.UUID, name: str
+) -> uuid.UUID:
+    """Give ``event_id`` a group whose reservation is named ``name``, directly
+    through the ORM — which never crosses the request boundary #1482's reservation
+    cap stands at.
+
+    ``test_every_other_draw_type_keeps_one_group_per_reservation`` and its removal
+    sibling assert a state (several reservations on a non-``rr-then-ko`` event) the
+    real create/update routes now refuse to produce, since only ``rr-then-ko`` may
+    hold more than one reservation. The DERIVATION those tests pin
+    (``group_count_for``'s non-``rr-then-ko`` branch, ``return reservation_count``)
+    is untouched by #1482 — there is simply at most one reservation reachable
+    through the API to derive from now — so the coverage moves here, below the
+    cap, rather than being lost: seed the extra reservations directly, the way an
+    ORM seed always could, and read the result back through the real GET/PATCH/cut
+    routes exactly as before.
+
+    Mirrors ``tests.test_tournaments._ensure_group`` (kept as its own copy rather
+    than shared, since the two modules seed no other fixture in common).
+    """
+    stage_id = await stage_id_at(db_session, event_id, 0)
+    position = (
+        await db_session.execute(
+            select(func.count())
+            .select_from(TournamentEventStageGroup)
+            .where(TournamentEventStageGroup.stage_id == stage_id)
+        )
+    ).scalar_one()
+    group = TournamentEventStageGroup(
+        id=uuid.uuid4(),
+        stage_id=stage_id,
+        position=position,
+        reservation_link=TournamentEventGroupReservation(
+            reservation=TournamentEventReservation(
+                event_id=event_id,
+                name=name,
+                position=position,
+                slot_date=date(2026, 6, 13),
+                slot_start=time(9, 0),
+                slot_end=time(12, 30),
+            )
+        ),
+    )
+    db_session.add(group)
+    await db_session.commit()
+    return group.id
 
 
 async def _patch(
@@ -394,18 +444,27 @@ async def test_clearing_the_cap_derives_against_the_uncapped_default(
 
 @pytest.mark.parametrize("draw_type", ["round-robin", "single-elim", "swiss"])
 async def test_every_other_draw_type_keeps_one_group_per_reservation(
-    authed_client: tuple[AsyncClient, User], draw_type: str
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    draw_type: str,
 ) -> None:
     """Decision 2: the derivation covers ``rr-then-ko`` only. A 40-cap round-robin over
-    three reservations is three groups, not eight, and a cap change moves nothing."""
+    three reservations is three groups, not eight, and a cap change moves nothing.
+
+    Three reservations on a non-``rr-then-ko`` event is a state #1482 makes
+    unreachable through the create/update routes (only ``rr-then-ko`` may hold more
+    than one reservation now), so the second and third are seeded directly through
+    the ORM (:func:`_ensure_group`) rather than posted — the derivation this test
+    pins (``group_count_for``'s non-``rr-then-ko`` branch) is untouched by #1482,
+    there is simply at most one reservation reachable through the API to derive
+    from. Read back and patched through the real routes exactly as before.
+    """
     client, _ = authed_client
     tournament_id = await _tournament(client)
-    event = await _create_other(
-        client,
-        tournament_id,
-        draw_type,
-        reservations=[RESERVATION_A, RESERVATION_B, RESERVATION_C],
-    )
+    event = await _create_other(client, tournament_id, draw_type)
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_C["name"])
+    event = await _read(client, tournament_id, event["id"])
     assert len(event["groups"]) == 3
     assert _mapping(event) == _expected_mapping(event)
 
@@ -420,16 +479,21 @@ async def test_patching_the_draw_type_to_and_from_rr_then_ko_moves_the_rows(
 ) -> None:
     """The materialisation runs AFTER ``store_draw_settings``, so a patch TO
     ``rr-then-ko`` reads the new type and materialises; a patch away returns the event
-    to one group per reservation."""
+    to one group per reservation.
+
+    One reservation, not three (#1482 caps a round-robin event at that — a patch
+    back to ``round-robin`` while holding more would be refused, and that refusal
+    is not what this test is about). ``rr-then-ko``'s group count derives from
+    ``max_players`` alone, independent of the reservation count, so the grow to 8
+    groups is unaffected; only the STARTING and ENDING reservation count moved,
+    and the row-identity claim (a grow keeps the row an event had and appends; a
+    shrink returns to exactly the rows it started with) holds just as well over
+    one row as over three.
+    """
     client, _ = authed_client
     tournament_id = await _tournament(client)
-    event = await _create_other(
-        client,
-        tournament_id,
-        "round-robin",
-        reservations=[RESERVATION_A, RESERVATION_B, RESERVATION_C],
-    )
-    assert len(event["groups"]) == 3
+    event = await _create_other(client, tournament_id, "round-robin")
+    assert len(event["groups"]) == 1
     kept = await _stored_group_ids(db_session, event["id"])
 
     to_rrko = await _patch(
@@ -442,12 +506,12 @@ async def test_patching_the_draw_type_to_and_from_rr_then_ko_moves_the_rows(
     assert to_rrko.status_code == 200, to_rrko.text
     assert len(to_rrko.json()["groups"]) == 8
     assert _mapping(to_rrko.json()) == _expected_mapping(to_rrko.json())
-    # A grow keeps the rows the event had, and appends.
-    assert (await _stored_group_ids(db_session, event["id"]))[:3] == kept
+    # A grow keeps the row the event had, and appends.
+    assert (await _stored_group_ids(db_session, event["id"]))[:1] == kept
 
     back = await _patch(client, tournament_id, event["id"], draw_type="round-robin")
     assert back.status_code == 200, back.text
-    assert len(back.json()["groups"]) == 3
+    assert len(back.json()["groups"]) == 1
     assert await _stored_group_ids(db_session, event["id"]) == kept
 
 
@@ -838,35 +902,37 @@ async def test_a_removal_on_every_other_draw_type_takes_exactly_one_group_with_i
     """The materialisation did not break the 1:1 lockstep on the other three draw types.
 
     ``group_count_for`` returns the reservation count for them, so three reservations
-    minus one is three groups minus one. The row that goes is the TAIL — the shrink
-    keeps the lowest positions — while the surviving reservations restamp to 0 and 1, so
-    removing the middle reservation is the same end state as removing the last.
+    minus two is three groups minus two. The row that goes is the TAIL — the shrink
+    keeps the lowest position.
+
+    Three reservations, and a PATCH that leaves a non-``rr-then-ko`` event holding
+    more than one, are both states #1482 makes unreachable through the real routes
+    now (only ``rr-then-ko`` may hold more than one reservation): the extra two are
+    seeded directly through the ORM (:func:`_ensure_group`), and the removal shrinks
+    to the one this draw type may still keep, rather than to two. The shrink
+    mechanism under test — keep the lowest position, restamp, recompute the mapping
+    — is exercised identically either way; only the surviving COUNT moved.
     """
     client, _ = authed_client
     tournament_id = await _tournament(client)
-    event = await _create_other(
-        client,
-        tournament_id,
-        draw_type,
-        reservations=[RESERVATION_A, RESERVATION_B, RESERVATION_C],
-    )
+    event = await _create_other(client, tournament_id, draw_type)
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
+    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_C["name"])
+    event = await _read(client, tournament_id, event["id"])
     before_ids = await _stored_group_ids(db_session, event["id"])
     assert len(before_ids) == 3
     cited = _cited(event)
 
-    response = await _patch(
-        client, tournament_id, event["id"], reservations=[cited[0], cited[2]]
-    )
+    response = await _patch(client, tournament_id, event["id"], reservations=[cited[0]])
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert len(body["reservations"]) == 2
-    assert len(body["groups"]) == 2
-    assert await _stored_group_ids(db_session, event["id"]) == before_ids[:2]
-    # Still 1:1: two groups, two reservations, one group each.
+    assert len(body["reservations"]) == 1
+    assert len(body["groups"]) == 1
+    assert await _stored_group_ids(db_session, event["id"]) == before_ids[:1]
+    # Still 1:1: one group, one reservation.
     assert _mapping(body) == _expected_mapping(body)
-    assert len(set(_mapping(body))) == 2
-    assert len(await _join_rows(db_session, event["id"])) == 2
+    assert len(await _join_rows(db_session, event["id"])) == 1
 
 
 # ----- the freeze ------------------------------------------------------------------

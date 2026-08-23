@@ -43,6 +43,7 @@ from app.schemas.tournament import Address, TournamentEventCreate, TournamentEve
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
+    EventReservationCapExceededError,
     GroupSetFrozenError,
     NotTournamentOwnerError,
     TournamentNotFoundError,
@@ -53,6 +54,7 @@ from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import reservation_read
 from tests._helpers import (
     counted_statements,
+    event_draw_settings,
     event_groups,
     joined_to_reservation,
     make_user,
@@ -259,6 +261,25 @@ async def test_create_on_a_missing_tournament_raises_not_found(
 #     all zeros or sorted by name.
 
 
+# ``rr-then-ko`` overrides that keep a MULTI-reservation ``_event_payload`` legal
+# post-#1482: its group count derives as ``ceil(max_players / 5)``, independent of
+# the reservation count, so picking a ``max_players`` that derives exactly as many
+# groups as reservations keeps ``position % reservation_count`` a plain 1:1 mapping
+# — the same one every OTHER draw type gives for free — so tests written against
+# that 1:1 shape (``_named_positions`` and friends) need no change beyond these two
+# fields plus the draw type itself.
+_RR_THEN_KO_TWO_GROUPS: dict[str, Any] = {
+    "draw_type": "rr-then-ko",
+    "qualifiers_per_group": 2,
+    "max_players": 8,  # ceil(8 / 5) == 2
+}
+_RR_THEN_KO_THREE_GROUPS: dict[str, Any] = {
+    "draw_type": "rr-then-ko",
+    "qualifiers_per_group": 2,
+    "max_players": 13,  # ceil(13 / 5) == 3
+}
+
+
 def _reservation(name: str, **extra: Any) -> dict[str, Any]:
     """One reservation payload, valid but for whatever ``extra`` the caller adds."""
     return {
@@ -307,11 +328,12 @@ async def test_create_positions_reservations_by_the_order_they_were_sent(
         tournament_id=tournament.id,
         actor=owner,
         payload=_event_payload(
+            **_RR_THEN_KO_THREE_GROUPS,
             reservations=[
                 _reservation("Reservation C"),
                 _reservation("Reservation A"),
                 _reservation("Reservation B"),
-            ]
+            ],
         ),
     )
     event_id = event.id
@@ -400,6 +422,76 @@ def test_a_write_payload_carrying_a_reservation_position_is_refused(
     assert {error["type"] for error in errors} == {"extra_forbidden"}
 
 
+def test_a_non_rr_then_ko_create_with_two_reservations_is_refused() -> None:
+    """A ``round-robin`` create carrying two reservations is refused at the schema
+    boundary (#1482) — the create path's ``model_validator(mode="after")`` folds
+    :class:`EventReservationCapExceededError` (a ``ValueError``) straight into this
+    model's own ``ValidationError``, with no adapter involved. The resulting ``loc``
+    is the model root, ``()`` — an empty tuple here, ``["body"]`` once FastAPI's
+    handler prefixes it — because the refusal is about the pair, not one field."""
+    with pytest.raises(ValidationError) as excinfo:
+        TournamentEventCreate.model_validate(
+            _event_body(
+                draw_type="round-robin",
+                reservations=[
+                    {
+                        "name": "Reservation A",
+                        "slot": {
+                            "date": "2026-06-13",
+                            "start": "09:00",
+                            "end": "12:30",
+                        },
+                        "table_ids": [],
+                    },
+                    {
+                        "name": "Reservation B",
+                        "slot": {
+                            "date": "2026-06-13",
+                            "start": "13:00",
+                            "end": "16:30",
+                        },
+                        "table_ids": [],
+                    },
+                ],
+            )
+        )
+
+    errors = excinfo.value.errors()
+    assert [error["loc"] for error in errors] == [()]
+    assert "at most one reservation" in errors[0]["msg"]
+
+
+def test_an_rr_then_ko_create_with_two_reservations_is_accepted() -> None:
+    """``rr-then-ko`` is the one draw type the cap does not touch (acceptance check,
+    not falsification — passes before and after the guard exists)."""
+    TournamentEventCreate.model_validate(
+        _event_body(
+            draw_type="rr-then-ko",
+            qualifiers_per_group=2,
+            reservations=[
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                    "table_ids": [],
+                },
+                {
+                    "name": "Reservation B",
+                    "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
+                    "table_ids": [],
+                },
+            ],
+        )
+    )
+
+
+def test_a_non_rr_then_ko_create_with_zero_reservations_is_accepted() -> None:
+    """The rule is **at most** one, not exactly one (acceptance check, not
+    falsification)."""
+    TournamentEventCreate.model_validate(
+        _event_body(draw_type="round-robin", reservations=[])
+    )
+
+
 async def test_update_repositions_reservations_by_the_order_they_were_patched(
     db_session: AsyncSession,
     default_league: League,
@@ -420,11 +512,12 @@ async def test_update_repositions_reservations_by_the_order_they_were_patched(
         tournament_id=tournament.id,
         actor=owner,
         payload=_event_payload(
+            **_RR_THEN_KO_THREE_GROUPS,
             reservations=[
                 _reservation("Reservation C"),
                 _reservation("Reservation A"),
                 _reservation("Reservation B"),
-            ]
+            ],
         ),
     )
     event_id = event.id
@@ -494,7 +587,8 @@ async def test_an_events_groups_and_reservations_are_rows_of_their_own(
         tournament_id=tournament.id,
         actor=owner,
         payload=_event_payload(
-            reservations=[_reservation("Reservation A"), _reservation("Reservation B")]
+            **_RR_THEN_KO_TWO_GROUPS,
+            reservations=[_reservation("Reservation A"), _reservation("Reservation B")],
         ),
     )
     event_id = event.id
@@ -763,11 +857,85 @@ async def _add_cut_event_with_two_groups(
 ) -> TournamentEvent:
     """An event carrying two groups ("Reservation A" at position 0, "Reservation B" at
     position 1), each with a fixture — so ``event_has_draw`` is True and, unlike
-    :func:`_add_cut_event`'s single group, an *order* actually exists to change."""
-    stages = mint_stages(DrawType.round_robin)
+    :func:`_add_cut_event`'s single group, an *order* actually exists to change.
+
+    ``rr-then-ko`` (#1482): the only draw type this event's reservation count could
+    still be two of, once a non-``rr-then-ko`` event is capped at one. Its group
+    count derives as ``ceil(max_players / 5)``, so ``max_players`` is pinned to 8 —
+    inside the 6-10 range that derives exactly two — rather than left ``None``, which
+    would derive 16 (the uncapped default) and silently gain groups on the first
+    write through the request boundary. ``qualifiers_per_group`` is required
+    alongside ``rr-then-ko`` (ADR 20260727), so the settings row is built through
+    :func:`event_draw_settings`, which parses the pair the same way the request
+    boundary does — ``TournamentEventDrawSettings.for_draw_type`` alone would write
+    ``{}`` and fail at read instead."""
+    stages = mint_stages(DrawType.rr_then_ko)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name="Cut Singles",
+        format=EventFormat.singles,
+        draw_settings=event_draw_settings(DrawType.rr_then_ko, qualifiers_per_group=2),
+        max_players=8,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-06-13", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        stages=stages,
+    )
+    groups = event_groups(
+        [
+            {
+                "name": "Reservation A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+                "table_ids": ["t1"],
+            },
+            {
+                "name": "Reservation B",
+                "slot": {"date": "2026-06-13", "start": "13:00", "end": "16:30"},
+                "table_ids": ["t2"],
+            },
+        ],
+        event=event,
+        tournament=tournament,
+    )
+    stages[0].groups = groups
+    db.add(event)
+    await db.commit()
+    stage0_id = stages[0].id
+    group_a_id, group_b_id = groups[0].id, groups[1].id
+    await db.refresh(event)
+    db.add_all(
+        [
+            TournamentFixture(
+                stage_id=stage0_id, group_id=group_a_id, round=1, position=1
+            ),
+            TournamentFixture(
+                stage_id=stage0_id, group_id=group_b_id, round=1, position=1
+            ),
+        ]
+    )
+    await db.commit()
+    return event
+
+
+async def _add_legacy_cut_round_robin_event_with_two_reservations(
+    db: AsyncSession, tournament: Tournament
+) -> TournamentEvent:
+    """A ``round-robin`` event holding TWO reservations and a cut draw — a state the
+    API can no longer *produce* once the reservation cap (#1482) exists, since both
+    the create and update paths refuse it. Reachable only pre-cap, or by seeding
+    straight through the ORM the way this helper does, which is exactly what makes it
+    "legacy" data rather than a state a director could reach today.
+
+    Mirrors :func:`_add_cut_event_with_two_groups`'s shape before that helper moved to
+    ``rr-then-ko`` (#1482) to stay a legal state to seed; this one is kept as its own,
+    separate helper because it exists specifically to BE the illegal state the cap's
+    update-path test needs."""
+    stages = mint_stages(DrawType.round_robin)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Legacy Cut Singles",
         format=EventFormat.singles,
         draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=None,
@@ -812,6 +980,156 @@ async def _add_cut_event_with_two_groups(
     )
     await db.commit()
     return event
+
+
+async def test_update_event_cut_legacy_round_robin_resending_same_reservations_hits_cap(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A cut ``round-robin`` event holding two LEGACY reservations (#1482, reachable
+    only pre-cap or by seeding the ORM directly): re-sending the same two, unchanged,
+    passes the group-set freeze (nothing about the set or its order moved) and THEN
+    hits the reservation cap — proving the cap is judged *after* the freeze, on an
+    event the freeze alone would otherwise wave through.
+
+    The mirror direction — trying to instead *remove* one of the two — hits the
+    freeze's own 409 first, because the freeze is judged before the cap and a removal
+    is exactly what the freeze exists to catch. Both directions are asserted here so
+    the ordering (freeze, then cap) is pinned from both sides at once.
+    """
+    owner = await make_user(db_session, "events-update-legacy-cap-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_legacy_cut_round_robin_event_with_two_reservations(
+        db_session, tournament
+    )
+    event_id = event.id
+    (group_a, group_b) = sorted(event.groups, key=lambda group: group.position)
+
+    def _reservation_entry(group: Any) -> dict[str, Any]:
+        return {
+            "id": str(group.reservation.id),
+            "name": group.reservation.name,
+            "slot": {"date": "2026-06-13", "start": "09:00", "end": "12:30"},
+            "table_ids": [],
+        }
+
+    with pytest.raises(EventReservationCapExceededError) as excinfo:
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "reservations": [
+                        _reservation_entry(group_a),
+                        _reservation_entry(group_b),
+                    ],
+                }
+            ),
+        )
+    assert "at most one reservation" in str(excinfo.value)
+    assert excinfo.value.draw_type == "round-robin"
+    assert excinfo.value.reservation_count == 2
+
+    # The mirror direction: removing one of the two hits the FREEZE's 409, not this
+    # 422 — the freeze is judged first, and a removal is exactly its case.
+    with pytest.raises(GroupSetFrozenError):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {"reservations": [_reservation_entry(group_a)]}
+            ),
+        )
+
+    # ----- the arm that actually DISCRIMINATES the ordering ------------------
+    # Neither payload above can tell the two orders apart: the first trips only the
+    # cap (the set and its order are unchanged, so the freeze is silent), and the
+    # second trips only the freeze (one reservation is under the cap, so the cap is
+    # silent). This one trips BOTH — a third reservation changes the id set AND
+    # takes the count to three — so which exception comes out is decided purely by
+    # which guard `update_event` asks first. It must be the freeze's 409: "delete the
+    # draw first" is the instruction a director can act on, and a 422 telling them to
+    # merge their tables is unactionable while the draw still stands. Swap the two
+    # calls in `update_event` and this reds with an
+    # `EventReservationCapExceededError`.
+    with pytest.raises(GroupSetFrozenError):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "reservations": [
+                        _reservation_entry(group_a),
+                        _reservation_entry(group_b),
+                        {
+                            "name": "Reservation C",
+                            "slot": {
+                                "date": "2026-06-13",
+                                "start": "13:00",
+                                "end": "16:30",
+                            },
+                            "table_ids": [],
+                        },
+                    ],
+                }
+            ),
+        )
+
+
+async def test_update_event_cut_draw_type_flip_over_the_cap_hits_the_freeze_first(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The second half of the ordering (#1482): the **draw-settings** freeze is asked
+    before the cap, too.
+
+    A cut ``rr-then-ko`` event legitimately holds two reservations. A patch flipping it
+    to ``round-robin`` and sending no ``reservations`` key at all leaves the effective
+    pair ``(round-robin, 2)`` — over the cap — so both guards have something to say,
+    and only the order decides which speaks. It must be
+    :class:`DrawTypeFrozenError`'s 409, exactly as this ticket's own edge case states:
+    "``_enforce_draw_settings_frozen`` already refuses it with a 409. The cap never
+    competes."
+
+    This is the discriminating case for that half. Move
+    ``_enforce_reservation_cap`` above ``_enforce_draw_settings_frozen`` in
+    :func:`~app.tournament_events.update_event` and this test reds with an
+    ``EventReservationCapExceededError`` instead.
+    """
+    owner = await make_user(db_session, "events-update-flip-cap-order-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event_with_two_groups(db_session, tournament)
+    event_id = event.id
+
+    with pytest.raises(DrawTypeFrozenError):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event_id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {"draw_type": "round-robin", "qualifiers_per_group": None}
+            ),
+        )
+
+    # Refused before the write: the draw type and both reservations stand.
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert row.draw_settings.draw_type is DrawType.rr_then_ko
+    assert [group.reservation.name for group in row.groups] == [
+        "Reservation A",
+        "Reservation B",
+    ]
 
 
 async def test_update_event_frozen_group_reorder_is_refused(
@@ -1662,7 +1980,8 @@ async def test_reservation_write_statement_count_does_not_drift(
         tournament_id=tournament_id,
         actor=owner,
         payload=_event_payload(
-            reservations=[_reservation("Reservation A"), _reservation("Reservation B")]
+            **_RR_THEN_KO_TWO_GROUPS,
+            reservations=[_reservation("Reservation A"), _reservation("Reservation B")],
         ),
     )
     event_id = event.id

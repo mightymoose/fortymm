@@ -63,6 +63,7 @@ from app.tournament_errors import (
     EntryNotFoundError,
     EntryRefusedError,
     EventNotFoundError,
+    EventReservationCapExceededError,
     FixtureNotFoundError,
     FixturePlacementFrozenError,
     GroupSetFrozenError,
@@ -765,6 +766,37 @@ def _reservation_not_in_event(
     )
 
 
+def _event_reservation_cap_exceeded(
+    exc: EventReservationCapExceededError,
+) -> RequestValidationError:
+    """The 422 for a PATCH that would leave a non-``rr-then-ko`` event holding more
+    than one reservation (#1482), as a validation error — the create path never
+    reaches this adapter at all, because ``EventReservationCapExceededError`` is a
+    ``ValueError`` and Pydantic folds it into the create's own 422 with no handler
+    involved.
+
+    **``loc`` is the ``reservations`` ARRAY, not one entry's ``id``** —
+    ``("body", "reservations")`` — a deliberate divergence from
+    :func:`_reservation_not_in_event`'s per-entry ``loc``. That one names an entry
+    because the refusal is about *that entry's* id; this refusal is about the
+    list's *length* against the event's draw type, which is not a fact any single
+    entry carries. It also has to hold in the sub-case where the payload sends no
+    ``reservations`` key at all — a bare ``draw_type`` flip against a stored
+    over-cap event — where there is no entry to index into. One ``loc`` shape for
+    every sub-case, rather than one that only some of them can produce.
+    """
+    return RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body", "reservations"),
+                "msg": str(exc),
+                "input": None,
+            }
+        ]
+    )
+
+
 @router.patch(
     "/tournaments/{tournament_id}/events/{event_id}",
     response_model=TournamentEventRead,
@@ -846,6 +878,11 @@ async def update_event(
         # A reservations entry cited an id this event does not have: a field refusal,
         # shaped like every other 422 on this route (see ``_reservation_not_in_event``).
         raise _reservation_not_in_event(exc) from exc
+    except EventReservationCapExceededError as exc:
+        # A non-``rr-then-ko`` event would be left holding more than one reservation
+        # (#1482): a 422, shaped like every other validation error on this route (see
+        # ``_event_reservation_cap_exceeded``).
+        raise _event_reservation_cap_exceeded(exc) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's

@@ -21,9 +21,17 @@ export const ReservationsHarness = ({
   canEdit,
   freeze,
   nameIssues,
+  formDrawType,
 }: ReservationsHarnessInputs) => {
   const form = useForm<EventFormValues>({
-    defaultValues: eventToFormValues(event),
+    // `formDrawType`, when passed, overrides the seeded `drawType` ONLY — every other
+    // field still comes off `event`, so a test proves the section reads the WATCHED
+    // value by handing it a form whose `drawType` disagrees with `event.drawType`
+    // from the very first render (see `ReservationsHarnessInputs.formDrawType`).
+    defaultValues: {
+      ...eventToFormValues(event),
+      ...(formDrawType ? { drawType: formDrawType } : {}),
+    },
   })
   return (
     <>

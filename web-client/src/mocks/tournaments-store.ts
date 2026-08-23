@@ -214,24 +214,33 @@ function seedReservationId(label: string): string {
   return mockUuid(`tournament-event-reservation:${label}`)
 }
 
-/** The two reservations the seed's ONE drawn event is cut across (`ev-u1200` below).
- * Pulled out of the seed so the fixtures it is seeded with can be planned across the
- * very same GROUP ids (`groupIdFor`, derived from these): a fixture's `group_id` names a
- * group of its own event (ADR-0786; a composite foreign key since ADR 20260801), so a
- * seed that spelled the ids twice could spell them differently, and every fixture would
- * point at a group that does not exist. Every reference below reads the id off this list
- * rather than restating it, which is what makes that impossible rather than merely
- * unlikely. */
-const U1200_RESERVATIONS: Reservation[] = [
+/** `ev-u1200`'s OWN reservation (#1482): a round-robin event holds at most one
+ * reservation, so this covers every table (`t1`-`t4`) in one. */
+const U1200_RESERVATION: Reservation[] = [
   {
-    id: seedReservationId('u1200-a'),
+    id: seedReservationId('u1200-single'),
+    name: 'Reservation A',
+    slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+    table_ids: ['t1', 't2', 't3', 't4'],
+    position: 0,
+  },
+]
+
+/** `ev-two-stage-cut`'s two reservations (#1482) — an `rr-then-ko` event legitimately
+ * holds several, so this is where the multi-reservation id-keyed-diff coverage
+ * `ev-u1200` used to carry now lives. Its own ids, distinct from `U1200_RESERVATION`'s:
+ * a fixture's `group_id` is derived from a reservation's id (`groupIdFor`), and two
+ * different events must never derive the same one. */
+const TWO_STAGE_CUT_RESERVATIONS: Reservation[] = [
+  {
+    id: seedReservationId('two-stage-cut-a'),
     name: 'Reservation A',
     slot: { date: '2026-06-14', start: '09:00', end: '10:30' },
     table_ids: ['t1', 't2'],
     position: 0,
   },
   {
-    id: seedReservationId('u1200-b'),
+    id: seedReservationId('two-stage-cut-b'),
     name: 'Reservation B',
     slot: { date: '2026-06-14', start: '10:30', end: '12:00' },
     table_ids: ['t3', 't4'],
@@ -239,24 +248,21 @@ const U1200_RESERVATIONS: Reservation[] = [
   },
 ]
 
-/** The reservations of Summer Slam's one event — the seed's **ready-to-start**
- * tournament (see below). Pulled out for the same reason `U1200_RESERVATIONS` is: the
- * fixtures are planned against these very (derived) group ids, so they cannot be spelled
- * twice and spelled differently. */
+/** The reservation of Summer Slam's one event — the seed's **ready-to-start**
+ * tournament (see below). Pulled out for the same reason `U1200_RESERVATION` is: the
+ * fixtures are planned against this very (derived) group id, so it cannot be spelled
+ * twice and spelled differently.
+ *
+ * ONE reservation (#1482): a `round-robin` event holds at most one, so both tables
+ * (`t1`–`t4`) and the whole window are in it — never two, the way this event's draw
+ * used to be split. */
 const SLAM_RESERVATIONS: Reservation[] = [
   {
     id: seedReservationId('slam-a'),
     name: 'Reservation A',
-    slot: { date: '2026-08-22', start: '09:00', end: '11:00' },
-    table_ids: ['t1', 't2'],
+    slot: { date: '2026-08-22', start: '09:00', end: '13:00' },
+    table_ids: ['t1', 't2', 't3', 't4'],
     position: 0,
-  },
-  {
-    id: seedReservationId('slam-b'),
-    name: 'Reservation B',
-    slot: { date: '2026-08-22', start: '11:00', end: '13:00' },
-    table_ids: ['t3', 't4'],
-    position: 1,
   },
 ]
 
@@ -311,8 +317,8 @@ const cup = (n: number): string => CUP_ENTRY_IDS[n - 1]
 const shield = (n: number): string => SHIELD_ENTRY_IDS[n - 1]
 
 /** The Challenge Cup's two reservations. Pulled out of the seed for the reason
- * `U1200_RESERVATIONS` is — the fixtures are planned against these very (derived) group
- * ids, so they cannot be spelled twice and spelled differently. */
+ * `TWO_STAGE_CUT_RESERVATIONS` is — the fixtures are planned against these very
+ * (derived) group ids, so they cannot be spelled twice and spelled differently. */
 const CUP_RESERVATIONS: Reservation[] = [
   {
     id: seedReservationId('cup-a'),
@@ -615,20 +621,18 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
           match_settings: { rated: true, length_games: 5 },
           predicates: [],
+          // ONE reservation (#1482): a `round-robin` event runs one group, so it holds
+          // at most one reservation. Every table the two former reservations covered is
+          // now in this one, per the rule's own instruction ("put every table in the one
+          // reservation"). Nothing reads this event's reservations (foreign-tournament
+          // tests aside), so the collapse costs no coverage.
           reservations: [
             {
               id: 'p-os-1',
               name: 'Reservation A',
-              slot: { date: '2026-06-13', start: '09:00', end: '12:30' },
-              table_ids: ['t1', 't2', 't3', 't4'],
-              position: 0,
-            },
-            {
-              id: 'p-os-2',
-              name: 'Reservation B',
-              slot: { date: '2026-06-13', start: '13:30', end: '17:00' },
+              slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
               table_ids: ['t1', 't2', 't3', 't4', 't5', 't6'],
-              position: 1,
+              position: 0,
             },
           ],
           // NO DRAW CUT (ADR-0786) — the state every event starts in, and the state
@@ -704,15 +708,23 @@ function seed(): StoredTournament[] {
           // card reads back out of the event's own `predicates`. Not derivable from
           // the event alone (there is no ladder in a mock), so it is seeded.
           //
-          // It is ALSO the seed's one **drawn** event (ADR-0786) — the only one that
-          // arrives with fixtures already, so `npm run dev` can show a cut draw without
-          // anyone clicking Generate. Round-robin, because a GROUPED draw is the one whose
-          // scaffold (groups, rounds, the sit-out) needs seeing without anybody clicking;
-          // the bracket is one Generate click away on any single-elim event, both types
-          // being cuttable here now. Nine entrants across two groups
-          // (5 + 4 by the snake) — an ODD group, so Group A's rounds have a player
-          // sitting out, and a bye is visible for what it is: the ABSENCE of a fixture,
-          // not a fixture with an empty side.
+          // It is ALSO the seed's one **drawn, COMPLETE** event (ADR-0786) — the only
+          // one that arrives with fixtures already, so `npm run dev` can show a cut
+          // draw without anyone clicking Generate. Round-robin, because a GROUPED draw
+          // is the one whose scaffold (groups, rounds, the sit-out) needs seeing
+          // without anybody clicking; the bracket is one Generate click away on any
+          // single-elim event.
+          //
+          // ONE reservation, and therefore ONE group (#1482: a round-robin event holds
+          // at most one) — nine entrants all in it, an ODD group, so its rounds have a
+          // player sitting out each time, and a bye is visible for what it is: the
+          // ABSENCE of a fixture, not a fixture with an empty side. Complete, and ONE
+          // group, so it has a champion (CONTEXT.md, "Champion": the leader of the
+          // standings). Before the cap this same event could have been seeded across
+          // two reservations, and a complete TWO-group round-robin has no champion at
+          // all — nothing joins its two group winners. The cap is what makes a
+          // round-robin event's champion unconditional; it did not give a multi-group
+          // round-robin one.
           id: 'ev-u1200',
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1200 Singles',
@@ -729,51 +741,85 @@ function seed(): StoredTournament[] {
           match_settings: { rated: true, length_games: 3 },
           predicates: [{ id: 'pr-u1200', field: 'rating', op: '<', value: 1200 }],
           ineligible: { predicate_id: 'pr-u1200', rating: DEV_USER_RATING },
-          reservations: U1200_RESERVATIONS,
+          reservations: U1200_RESERVATION,
           // Planned by the same function the store's `cutDraw` uses, from the same
-          // entrants and the same (derived) group ids — so the seeded draw is one this
+          // entrants and the same (derived) group id — so the seeded draw is one this
           // store could have cut, rather than a hand-written list that no cut would ever
           // produce.
           fixtures: planRoundRobinFixtures(
             otherEntrants('ev-u1200', 9).map((e) => e.id),
-            U1200_RESERVATIONS.map((r) => groupIdFor(r.id)),
+            U1200_RESERVATION.map((r) => groupIdFor(r.id)),
           ),
-          // Representative RESULTS (ADR-0788) so `npm run dev` shows standings live: Group
-          // A still being played (`complete: false` — the table fills in as matches land),
-          // Group B decided. Multi-group, so there is no single champion without a
-          // knockout stage (a later slice) — `champion: null` even where a group is done.
-          // The entry ids match this event's entrants (`entry-ev-u1200-N`) and its group
-          // ids (`groupIdFor`, off `U1200_RESERVATIONS`, never respelled), so the name and
-          // group joins land; the rows are in finishing order, which the client renders
-          // untouched.
+          // COMPLETE results (ADR-0788), so `npm run dev` shows a champion live — the
+          // one state #1482 makes reachable for the first time: a round-robin event now
+          // holds one group, so `len(standings) === 1` is always true for a complete one
+          // (CONTEXT.md's Champion entry, edited here). The entry ids match this event's
+          // entrants (`entry-ev-u1200-N`) and its group id (`groupIdFor`, off
+          // `U1200_RESERVATION`, never respelled), so the name and group joins land; the
+          // rows are in finishing order, which the client renders untouched.
           results: {
             kind: 'standings',
-            complete: false,
-            champion: null,
+            complete: true,
+            champion: 'entry-ev-u1200-1',
             groups: [
               {
-                group_id: groupIdFor(U1200_RESERVATIONS[0].id),
-                complete: false,
-                rows: [
-                  { entry_id: 'entry-ev-u1200-1', rank: 1, played: 2, wins: 2, losses: 0, games_won: 4, games_lost: 1, game_difference: 3 },
-                  { entry_id: 'entry-ev-u1200-5', rank: 2, played: 1, wins: 1, losses: 0, games_won: 2, games_lost: 0, game_difference: 2 },
-                  { entry_id: 'entry-ev-u1200-4', rank: 3, played: 2, wins: 1, losses: 1, games_won: 3, games_lost: 3, game_difference: 0 },
-                  { entry_id: 'entry-ev-u1200-8', rank: 4, played: 1, wins: 0, losses: 1, games_won: 1, games_lost: 2, game_difference: -1 },
-                  { entry_id: 'entry-ev-u1200-9', rank: 5, played: 2, wins: 0, losses: 2, games_won: 1, games_lost: 4, game_difference: -3 },
-                ],
-              },
-              {
-                group_id: groupIdFor(U1200_RESERVATIONS[1].id),
+                group_id: groupIdFor(U1200_RESERVATION[0].id),
                 complete: true,
                 rows: [
-                  { entry_id: 'entry-ev-u1200-2', rank: 1, played: 3, wins: 3, losses: 0, games_won: 6, games_lost: 2, game_difference: 4 },
-                  { entry_id: 'entry-ev-u1200-3', rank: 2, played: 3, wins: 2, losses: 1, games_won: 5, games_lost: 4, game_difference: 1 },
-                  { entry_id: 'entry-ev-u1200-6', rank: 3, played: 3, wins: 1, losses: 2, games_won: 4, games_lost: 5, game_difference: -1 },
-                  { entry_id: 'entry-ev-u1200-7', rank: 4, played: 3, wins: 0, losses: 3, games_won: 2, games_lost: 6, game_difference: -4 },
+                  { entry_id: 'entry-ev-u1200-1', rank: 1, played: 8, wins: 8, losses: 0, games_won: 16, games_lost: 4, game_difference: 12 },
+                  { entry_id: 'entry-ev-u1200-2', rank: 2, played: 8, wins: 7, losses: 1, games_won: 15, games_lost: 6, game_difference: 9 },
+                  { entry_id: 'entry-ev-u1200-3', rank: 3, played: 8, wins: 6, losses: 2, games_won: 14, games_lost: 8, game_difference: 6 },
+                  { entry_id: 'entry-ev-u1200-4', rank: 4, played: 8, wins: 5, losses: 3, games_won: 13, games_lost: 10, game_difference: 3 },
+                  { entry_id: 'entry-ev-u1200-5', rank: 5, played: 8, wins: 4, losses: 4, games_won: 12, games_lost: 12, game_difference: 0 },
+                  { entry_id: 'entry-ev-u1200-6', rank: 6, played: 8, wins: 3, losses: 5, games_won: 10, games_lost: 13, game_difference: -3 },
+                  { entry_id: 'entry-ev-u1200-7', rank: 7, played: 8, wins: 2, losses: 6, games_won: 8, games_lost: 14, game_difference: -6 },
+                  { entry_id: 'entry-ev-u1200-8', rank: 8, played: 8, wins: 1, losses: 7, games_won: 6, games_lost: 15, game_difference: -9 },
+                  { entry_id: 'entry-ev-u1200-9', rank: 9, played: 8, wins: 0, losses: 8, games_won: 4, games_lost: 16, game_difference: -12 },
                 ],
               },
             ],
           },
+          created_at: '2026-06-01T09:06:45Z',
+          updated_at: '2026-06-09T12:00:00Z',
+        },
+        {
+          // TWO reservations, `rr-then-ko` (#1482): the one draw type the cap does not
+          // apply to, so it is where the multi-reservation id-keyed-diff coverage
+          // `ev-u1200` used to carry now lives (`tournaments-store.test.ts`, "the group
+          // set freezes while a draw exists" / "a reservations PATCH citing an id the
+          // event does not have" / "the draw type freezes while a draw exists"). Drawn
+          // for the freeze mechanics only — the two-group `standings_then_finishes`
+          // DEMO already lives at the Cup and the Shield below, so this fixture states
+          // no results at all.
+          id: 'ev-two-stage-cut',
+          tournament_id: BAY_AREA_OPEN_ID,
+          name: 'Two-stage Singles (cut)',
+          format: 'singles',
+          draw_type: 'rr-then-ko',
+          stages: mintStageReads('rr-then-ko'),
+          qualifiers_per_group: 2,
+          rounds: null,
+          // Matches the entrant count below, the same convention the Cup and the
+          // Shield use — this store derives its group count from `reservations.length`
+          // alone (`groupsFor`), unconditionally for every draw type, a pre-existing
+          // divergence from the real server's `ceil(field / 5)` (#1316/#1483/#1484
+          // territory). A field this fixture's TWO reservations would derive
+          // differently under that real formula (`ceil(9/5) = 2`, which happens to
+          // agree) is a coincidence worth keeping rather than a field far enough off
+          // to make the divergence more visible than it already is on `main`.
+          max_players: 9,
+          entry_fee: 20,
+          timezone: 'America/Los_Angeles',
+          entrants: otherEntrants('ev-two-stage-cut', 9),
+          slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+          match_settings: { rated: true, length_games: 3 },
+          predicates: [],
+          reservations: TWO_STAGE_CUT_RESERVATIONS,
+          fixtures: planRoundRobinFixtures(
+            otherEntrants('ev-two-stage-cut', 9).map((e) => e.id),
+            TWO_STAGE_CUT_RESERVATIONS.map((r) => groupIdFor(r.id)),
+          ),
+          results: null,
           created_at: '2026-06-01T09:06:45Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
@@ -934,31 +980,18 @@ function seed(): StoredTournament[] {
             { id: 'pr-cc-2', field: 'rating', op: '>=', value: 1200 },
             { id: 'pr-cc-3', field: 'rating', op: 'between', value: [1200, 2400] },
           ],
-          // Two group-stage reservations on disjoint tables, then a knockout that
-          // reuses the show tables once the groups are done. No pair both
-          // overlaps in time and shares a table, so this seed raises no
-          // double-booking diagnostic (see `findReservationConflicts`).
+          // ONE reservation (#1482): a `single-elim` event holds at most one, so every
+          // table the three former reservations covered ("Group A", "Group B",
+          // "Knockout" — a shape from before this cap) is now in it, spanning the
+          // whole window. Nothing reads this event's reservations (foreign-tournament
+          // tests aside), so the collapse costs no coverage.
           reservations: [
             {
               id: 'p-cc-1',
-              name: 'Group A',
-              slot: { date: '2026-07-01', start: '17:00', end: '19:00' },
-              table_ids: ['t1', 't2', 't3'],
+              name: 'Reservation A',
+              slot: { date: '2026-07-01', start: '17:00', end: '21:00' },
+              table_ids: ['t1', 't2', 't3', 't4', 't5', 't6'],
               position: 0,
-            },
-            {
-              id: 'p-cc-2',
-              name: 'Group B',
-              slot: { date: '2026-07-01', start: '17:00', end: '19:00' },
-              table_ids: ['t4', 't5', 't6'],
-              position: 1,
-            },
-            {
-              id: 'p-cc-3',
-              name: 'Knockout',
-              slot: { date: '2026-07-01', start: '19:15', end: '21:00' },
-              table_ids: ['t1', 't2'],
-              position: 2,
             },
           ],
           // Un-drawn, and it stays that way through the UI: the dev user does not own
@@ -1789,6 +1822,12 @@ export type EventResult =
   | { ok: false; status: 403 | 404 }
   | { ok: false; status: 409; detail: string }
   | { ok: false; status: 422; index: number; reservationId: string; detail: string }
+  // #1482: a non-`rr-then-ko` event would be left holding more than one reservation.
+  // Its own arm, discriminated by `reservationCapExceeded` rather than merely by
+  // `status: 422` — the shape carries no `index`/`reservationId` at all (the refusal
+  // is about the LIST's length against the draw type, not about any one entry), so a
+  // handler must tell the two 422s apart before building either body.
+  | { ok: false; status: 422; reservationCapExceeded: true; detail: string }
 
 export type DeleteResult = { ok: true } | { ok: false; status: 403 | 404 }
 
@@ -2387,6 +2426,34 @@ function applyEventReservations(
   }
 }
 
+/** #1482's reservation cap, mirrored the way `EventReservationCapExceededError`
+ * states it (`api/app/schemas/tournament.py`'s `enforce_event_reservation_cap`):
+ * every draw type but `rr-then-ko` runs its whole stage as one group (ADR 20260808),
+ * so a second reservation would be dead data no fixture could ever be dealt into.
+ * Zero stays legal — a ceiling, not a floor. */
+function reservationCapExceeded(
+  drawType: components['schemas']['DrawType'],
+  reservationCount: number,
+): boolean {
+  return drawType !== 'rr-then-ko' && reservationCount > 1
+}
+
+/** The server's OWN sentence, mirrored verbatim — `enforce_event_reservation_cap`
+ * composes this by hand (not through Pydantic's machinery), the same precedent
+ * `DRAW_SETTINGS_REFUSALS`'s `countUnpaired` sets: a human-authored sentence on both
+ * sides is one a mock can and must reproduce exactly, unlike a library's own prose. */
+function reservationCapDetail(
+  drawType: components['schemas']['DrawType'],
+  reservationCount: number,
+): string {
+  return (
+    `A \u201c${drawType}\u201d event runs one group, so it holds at most one ` +
+    `reservation, and this one holds ${reservationCount}. Put every table in the ` +
+    `one reservation, or use an \u201crr-then-ko\u201d draw, which runs several ` +
+    `groups.`
+  )
+}
+
 let eventCounter = 0
 
 /** Create an event on a tournament. Creator-only (403 on a non-owned row). */
@@ -2397,6 +2464,17 @@ export function createEvent(
   const owned = requireOwned(tournamentId)
   if (!owned.ok) return owned
   const existing = owned.tournament
+  // #1482's reservation cap, judged on the CREATE body directly (a create has no
+  // stored state to fall back on — the pair is exactly what was sent).
+  const incomingReservationCount = (body.reservations ?? []).length
+  if (reservationCapExceeded(body.draw_type, incomingReservationCount)) {
+    return {
+      ok: false,
+      status: 422,
+      reservationCapExceeded: true,
+      detail: reservationCapDetail(body.draw_type, incomingReservationCount),
+    }
+  }
   eventCounter += 1
   const now = new Date().toISOString()
   const event: StoredEvent = {
@@ -2496,6 +2574,37 @@ export function updateEvent(
   // below, comes after, so a cut event answers the freeze.)
   const frozen = groupSetFrozenDetail(event, patch) ?? drawTypeFrozenDetail(event, patch)
   if (frozen !== null) return { ok: false, status: 409, detail: frozen }
+  // #1482's reservation cap, judged AFTER both freezes — the freeze is the refusal a
+  // director can act on (remove the draw, then edit), so a cut event already over the
+  // cap answers THAT 409 first — and BEFORE the id-keyed diff below, on the EFFECTIVE
+  // pair: the incoming draw type or the stored one, the incoming reservation count (this
+  // patch's own `reservations.length`, since the diff replaces wholesale when present) or
+  // the stored one. A patch that touches only one half of the pair is still judged
+  // against the state it would leave the event in.
+  //
+  // A NO-OP when this patch touches neither half of the pair, mirroring the server's
+  // `_enforce_reservation_cap` (`api/app/tournament_events.py`), whose first line is
+  // the same early return: a legacy event already over the cap (data only reachable
+  // pre-#1482, since both write paths now refuse to create one) must still accept an
+  // edit to its name or its fee. Unreachable through this editor, which always sends
+  // both keys (`eventToUpdateBody`, and `data/api.test.ts` pins that) — which is
+  // exactly why the mirror is worth its one line: the day a PATCH shape drops a key,
+  // the mock must not start refusing a write the real server accepts.
+  const touchesThePair = patch.reservations != null || patch.draw_type != null
+  const effectiveDrawType = patch.draw_type ?? event.draw_type
+  const effectiveReservationCount =
+    patch.reservations == null ? event.reservations.length : patch.reservations.length
+  if (
+    touchesThePair &&
+    reservationCapExceeded(effectiveDrawType, effectiveReservationCount)
+  ) {
+    return {
+      ok: false,
+      status: 422,
+      reservationCapExceeded: true,
+      detail: reservationCapDetail(effectiveDrawType, effectiveReservationCount),
+    }
+  }
   // The diff runs BEFORE anything is written, so an entry citing an unknown id leaves the
   // event exactly as it was — never written, not merely rolled back.
   const reservations =

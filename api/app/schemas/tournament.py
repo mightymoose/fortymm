@@ -32,6 +32,7 @@ from app.schemas.schedule_solve import (
     parse_infeasibility_reasons,
     parse_placement_conflicts,
 )
+from app.tournament_errors import EventReservationCapExceededError
 
 # ----- bounded numerics (the column is a constraint too) ---------------------
 
@@ -2243,6 +2244,52 @@ class TournamentEntryCreate(BaseModel):
     user_id: uuid.UUID
 
 
+def enforce_event_reservation_cap(draw_type: DrawType, reservation_count: int) -> None:
+    """Refuse a non-``rr-then-ko`` event that would hold more than one reservation
+    (#1482) — the one named function both the create validator and the update verb
+    call, so the cap is one rule rather than two half-rules living in two schemas.
+
+    **Zero stays legal; this is a ceiling, not a floor.** Every draw type but
+    ``rr-then-ko`` runs its whole stage as one group (ADR 20260808: only
+    ``rr-then-ko`` has structural settings, so every other draw type derives one
+    group per stage), and today's mapping puts that single group on
+    ``reservations[0]`` — reservations 1..N would be dead data, unreachable by any
+    fixture. A director who wants several tables puts every one of them in the single
+    reservation, since a reservation is already a set of tables.
+
+    **The predicate is a draw-type exclusion, not an allow-list of the three named
+    types**, on purpose: ``draw_type is not DrawType.rr_then_ko``. A future draw type
+    is capped by default the moment it is added, without this function's callers
+    having to remember to widen a list — the same "closed by construction" shape
+    ``DrawType`` itself already uses.
+
+    **The cap is temporary, and its later removal is meant to be exactly one
+    deletion** (see #1482's Context): it exists only because a group cannot yet hold
+    many reservations and round-robin's group count is not yet a director-owned
+    structural setting. Either change dissolves the reason this function exists,
+    which is why the rule lives in one place and not two.
+
+    Callers resolve the **effective** pair before calling this — the incoming
+    draw type or the stored one, the incoming reservation count or the stored one —
+    so a write that only touches one half of the pair is still judged against the
+    truth it would leave the event in. Raises :class:`EventReservationCapExceededError`
+    (a ``ValueError``, so a create's ``model_validator(mode="after")`` folds it
+    straight into the request's own 422) naming the rule as a consequence of this
+    draw type's *group count*, not as a permanent fact about reservations — the
+    sentence stays true only until #1483/#1484 let a group span several
+    reservations or make round-robin's group count director-owned, which is exactly
+    when this predicate is meant to go."""
+    if draw_type is not DrawType.rr_then_ko and reservation_count > 1:
+        raise EventReservationCapExceededError(
+            f"A \u201c{draw_type.value}\u201d event runs one group, so it holds at "
+            "most one reservation, and this one holds "
+            f"{reservation_count}. Put every table in the one reservation, or use an "
+            "\u201crr-then-ko\u201d draw, which runs several groups.",
+            draw_type=draw_type.value,
+            reservation_count=reservation_count,
+        )
+
+
 class TournamentEventCreate(BaseModel):
     """A new event. Its two numbers are bounded by what their columns can hold —
     ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
@@ -2342,6 +2389,24 @@ class TournamentEventCreate(BaseModel):
         self._draw_settings = _draw_settings_write(
             self.draw_type, self.qualifiers_per_group, self.rounds
         )
+        return self
+
+    @model_validator(mode="after")
+    def _enforce_reservation_cap(self) -> "TournamentEventCreate":
+        """Refuse a non-``rr-then-ko`` create carrying more than one reservation
+        (#1482), by calling :func:`enforce_event_reservation_cap` — the one function
+        both this validator and the update verb call, so the rule is never
+        half-duplicated across the two write shapes.
+
+        Runs **after** :meth:`_parse_draw_settings` (Pydantic runs ``mode="after"``
+        model validators in the order they are defined), though the two are
+        independent — this one reads only ``self.draw_type`` and
+        ``len(self.reservations)``, neither of which the other validator touches.
+        ``EventReservationCapExceededError`` is a ``ValueError``, so Pydantic folds
+        it straight into this model's own ``ValidationError`` — the create path
+        needs no adapter at all, and the resulting ``loc`` is the model root
+        (``["body"]``), since the refusal is about the pair, not one field."""
+        enforce_event_reservation_cap(self.draw_type, len(self.reservations))
         return self
 
 

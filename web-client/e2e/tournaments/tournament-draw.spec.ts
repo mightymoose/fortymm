@@ -563,14 +563,22 @@ test.describe('Tournaments · the event editor, with a draw standing', () => {
     // be able to record that. Only the group *set* is frozen — a reservation's tables,
     // its window and its name are still the director's, because otherwise they would
     // have to destroy a perfectly good draw to move a table.
+    //
+    // `EVENT.JOURNEY`, not `EVENT.GROUPS` (#1482): a round-robin event now holds at most
+    // one reservation, so re-sending `EVENT.GROUPS`'s two — even unchanged but for one
+    // table — passes the freeze and then hits that cap, which is the correct refusal for
+    // a *legacy* two-reservation event, not the claim this test makes. `EVENT.JOURNEY` is
+    // the drawable seed's one-reservation round-robin event, and its Reservation A holds
+    // the identical T1/T2 shape, so it proves the same freeze exemption without tripping
+    // a cap `EVENT.GROUPS` was only ever incidental to.
     const { pom, store } = await TournamentDetailPage.navigateTo(page, {
       drawable: true,
-      drawn: [EVENT.GROUPS],
+      drawn: [EVENT.JOURNEY],
     })
-    const drawn = store.fixturesOf(EVENT.GROUPS).length
-    expect(drawn).toBe(FIXTURE_COUNT)
+    const drawn = store.fixturesOf(EVENT.JOURNEY).length
+    expect(drawn).toBeGreaterThan(0)
 
-    await pom.openEditor(EVENT.GROUPS)
+    await pom.openEditor(EVENT.JOURNEY)
     await pom.editorTab('Reservations').click()
 
     // Reservation A holds T1 and T2. Add T3 to it — a live control on a card whose
@@ -585,13 +593,10 @@ test.describe('Tournaments · the event editor, with a draw standing', () => {
     await expect(pom.eventEditor).toHaveCount(0)
 
     // The server took it: the reservation really did gain the table…
-    expect(store.reservationsOf(EVENT.GROUPS)[0].table_ids).toEqual(['t1', 't2', 't3'])
+    expect(store.reservationsOf(EVENT.JOURNEY)[0].table_ids).toEqual(['t1', 't2', 't3'])
     // …and the draw is still standing. A PATCH is not a re-cut, and a director who moved
     // a table must not discover their draw was thrown away by the save.
-    expect(store.fixturesOf(EVENT.GROUPS)).toHaveLength(drawn)
-    await expect(pom.groupEntrants(EVENT.GROUPS, GROUP_A.name)).toHaveText([
-      ...GROUP_A.entrants,
-    ])
+    expect(store.fixturesOf(EVENT.JOURNEY)).toHaveLength(drawn)
     await expect(pom.toasts).toHaveCount(0)
     expect(store.unhandled).toEqual([])
   })

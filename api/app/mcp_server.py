@@ -153,6 +153,7 @@ from app.tournament_errors import (
     EntryNotFoundError,
     EntryRefusedError,
     EventNotFoundError,
+    EventReservationCapExceededError,
     FixtureNotFoundError,
     FixturePlacementFrozenError,
     GroupSetFrozenError,
@@ -1468,6 +1469,12 @@ async def update_event(
             raise ToolError(
                 f"{exc} (reservations entry {exc.index} names “{exc.reservation_id}”)."
             ) from exc
+        except EventReservationCapExceededError as exc:
+            # A non-``rr-then-ko`` event would be left holding more than one
+            # reservation (#1482) — an agent reads prose, so the carried,
+            # domain-authored sentence rides straight through, same as the two
+            # freezes above.
+            raise ToolError(str(exc)) from exc
         # The verb returns the tournament's ``league_id`` (the ladder the caller's
         # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,
         # so the shared shaping helper needs no re-query — the same helper the HTTP
