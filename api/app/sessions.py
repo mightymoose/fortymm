@@ -471,6 +471,17 @@ def _login_token_exception(code: str, message: str) -> HTTPException:
     )
 
 
+def _invalid_or_expired_exception() -> HTTPException:
+    """The 400 for a sign-in link that is dead for the generic reason — never
+    valid, already used, genuinely expired, a claimed first-sign-in row, or the
+    merge integrity race. Five paths in ``consume_login_token`` raise exactly
+    this, so a zero-arg helper (matching ``_session_ended_exception``) keeps the
+    code and its sentence from drifting apart between them."""
+    return _login_token_exception(
+        LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
+    )
+
+
 def _session_ended_exception() -> HTTPException:
     """Build the 401 for a request whose session cookie no longer resolves to a
     usable user — a signed-out or expired session. Carries the stable
@@ -1310,6 +1321,29 @@ async def _confirm_account_merge(
     return await _sign_in_after_merge(db, response, target, merged)
 
 
+def _configured_sender_address() -> str | None:
+    """The bare address auth mail really sends from, or ``None`` when
+    ``Settings.email_from`` holds nothing address-shaped.
+
+    ``parseaddr`` is lenient by design: for a malformed value it hands back the
+    literal input rather than failing (``garbage`` -> ``garbage``,
+    ``FortyMM <not-an-email>`` -> ``not-an-email``). Returning that would make
+    the ``/login/sent`` receipt row print a non-address as though it were the
+    sender — the exact class of untruth #1466 closes — so require a non-empty
+    local part and domain and no embedded whitespace before trusting it.
+
+    Deliberately not a full RFC 5322 validator. The job is to keep an obviously
+    broken value off the screen, not to police a deployment's configuration:
+    anything address-shaped is served as-is, because that is genuinely what
+    ``_deliver`` will put in the ``From`` header.
+    """
+    _, address = parseaddr(get_settings().email_from)
+    local, _, domain = address.partition("@")
+    if not local or not domain or any(ch.isspace() for ch in address):
+        return None
+    return address
+
+
 @router.get("/v1/login/sender", response_model=LoginSenderResponse)
 async def get_login_sender() -> LoginSenderResponse:
     """The bare address auth mail really sends from, e.g. for the ``/login/sent``
@@ -1322,8 +1356,7 @@ async def get_login_sender() -> LoginSenderResponse:
     through a crafted ``/login/sent`` URL) or on ``GET /v1/session`` (would
     create a guest account as a side effect of a bookmarked receipt page).
     """
-    _, address = parseaddr(get_settings().email_from)
-    return LoginSenderResponse(address=address or None)
+    return LoginSenderResponse(address=_configured_sender_address())
 
 
 @router.post(
@@ -1574,9 +1607,7 @@ async def consume_login_token(
         )
     ).scalar_one_or_none()
     if token_row is None:
-        raise _login_token_exception(
-            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
-        )
+        raise _invalid_or_expired_exception()
 
     # Expiry before replacement, deliberately: a link that is BOTH replaced and
     # past its own LOGIN_TOKEN_LIFETIME must report expired, because that is
@@ -1587,9 +1618,7 @@ async def consume_login_token(
     if _token_expired(token_row, LOGIN_TOKEN_LIFETIME):
         await db.delete(token_row)
         await db.commit()
-        raise _login_token_exception(
-            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
-        )
+        raise _invalid_or_expired_exception()
 
     if token_row.replaced_at is not None:
         # Superseded by a newer request. Not expired (checked above) and not
@@ -1607,9 +1636,7 @@ async def consume_login_token(
     if user is None:
         await db.delete(token_row)
         await db.commit()
-        raise _login_token_exception(
-            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
-        )
+        raise _invalid_or_expired_exception()
 
     first_sign_in = _is_first_sign_in_context(token_row.context)
     if first_sign_in:
@@ -1625,10 +1652,7 @@ async def consume_login_token(
         ):
             await db.delete(token_row)
             await db.commit()
-            raise _login_token_exception(
-                LOGIN_INVALID_OR_EXPIRED_CODE,
-                "That sign-in link is invalid or expired.",
-            )
+            raise _invalid_or_expired_exception()
     # If the user changed their email between request and click, the link no
     # longer matches the inbox that proved control — reject so the new owner
     # of the old address can't ride an in-flight link.
@@ -1679,9 +1703,7 @@ async def consume_login_token(
         # this the rollback restores it, and every retry hits the same race.
         await db.execute(delete(UserToken).where(UserToken.id == token_id))
         await db.commit()
-        raise _login_token_exception(
-            LOGIN_INVALID_OR_EXPIRED_CODE, "That sign-in link is invalid or expired."
-        ) from None
+        raise _invalid_or_expired_exception() from None
 
 
 async def _adopt_guest_username(db: AsyncSession, *, guest: User, target: User) -> None:

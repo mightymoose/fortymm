@@ -3,6 +3,7 @@ import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -1669,6 +1670,40 @@ async def test_login_sender_uses_the_default_when_unset(
     response = await api_client.get("/v1/login/sender")
     assert response.status_code == 200
     assert response.json() == {"address": "noreply@fortymm.local"}
+
+
+@pytest.mark.parametrize(
+    "email_from",
+    [
+        "",
+        "   ",
+        "garbage",
+        "FortyMM <not-an-email>",
+        "FortyMM <>",
+        "noreply@fortymm.com, second@fortymm.com",
+    ],
+    ids=[
+        "empty",
+        "whitespace-only",
+        "no-at-sign",
+        "display-name-wrapping-a-non-address",
+        "display-name-with-empty-address",
+        "two-addresses",
+    ],
+)
+async def test_login_sender_reports_no_address_for_a_broken_email_from(
+    api_client: AsyncClient, monkeypatch, email_from: str
+):
+    """A missing, empty or malformed ``EMAIL_FROM`` must yield ``null``, never a
+    non-address string. The web client omits the receipt's From row entirely on
+    ``null``, which is the ticket's edge case: the screen must not print a
+    broken address or an empty row. ``parseaddr`` alone does not give this —
+    it echoes ``garbage`` straight back."""
+    monkeypatch.setenv("EMAIL_FROM", email_from)
+
+    response = await api_client.get("/v1/login/sender")
+    assert response.status_code == 200
+    assert response.json() == {"address": None}
 
 
 async def test_login_sender_takes_no_cookie_and_sets_none(api_client: AsyncClient):

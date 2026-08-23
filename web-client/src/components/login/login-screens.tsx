@@ -517,20 +517,24 @@ function useResendCooldown(sentAt: number) {
  *  `ExpiresCountdown` read the `expired` flag this returns, rather than each
  *  computing its own "is it expired" from `sentAt` — that's what keeps the
  *  body copy and the countdown from silently disagreeing. */
-function useLinkExpiry(sentAt: number) {
+function useLinkExpiry(sentAt: number, enabled = true) {
   const expiresAt = sentAt + LOGIN_LINK_TTL_MS
   // Track "now" and derive the remaining time during render — that way a new
   // send time reflects immediately, and there's no setState in the effect body.
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
+    // Nothing reads these values when the send time is unknown, and the
+    // fallback timestamp they'd tick against is meaningless anyway — don't
+    // re-render the whole screen once a second for 15 minutes to compute them.
+    if (!enabled) return
     const id = setInterval(() => {
       const t = Date.now()
       setNow(t)
       if (t >= expiresAt) clearInterval(id)
     }, 1000)
     return () => clearInterval(id)
-  }, [expiresAt])
+  }, [expiresAt, enabled])
 
   const remaining = Math.max(0, expiresAt - now)
   const expired = remaining <= 0
@@ -980,7 +984,7 @@ export function ScreenSent({
   const resendDisabled = resending || !onResend || cooldown > 0
   // Single source of truth for the link's remaining lifetime — the subtitle
   // and ExpiresCountdown both read `expired` from here so they can't drift.
-  const { remaining, expired } = useLinkExpiry(effectiveSentAt)
+  const { remaining, expired } = useLinkExpiry(effectiveSentAt, knowsSentAt)
   return (
     <Shell
       left={

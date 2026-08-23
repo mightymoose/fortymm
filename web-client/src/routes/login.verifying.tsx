@@ -15,14 +15,13 @@ import { ScreenVerifyNetError } from '@/components/login/login-screens'
 import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
-type VerifyError = 'expired' | 'net' | 'replaced' | 'email_changed'
-
-const VERIFY_ERRORS = new Set<VerifyError>([
-  'expired',
-  'net',
-  'replaced',
-  'email_changed',
-])
+// The screens this route can be sent to by `?error=`. The tuple is the single
+// source of the type AND of the URL parse, so the two cannot drift.
+const VERIFY_ERRORS = ['expired', 'net', 'replaced', 'email_changed'] as const
+type VerifyError = (typeof VERIFY_ERRORS)[number]
+// `.catch(undefined)` so a hand-typed `?error=garbage` falls through to the
+// normal verifying flow instead of throwing at the route boundary.
+const verifyErrorSchema = z.enum(VERIFY_ERRORS).optional().catch(undefined)
 
 // `POST /v1/login/consume`'s 400 body, `{ detail: { code, message } }` —
 // `consume_login_token`'s three coded reasons (#1466 defect 3). NOT declared
@@ -30,18 +29,42 @@ const VERIFY_ERRORS = new Set<VerifyError>([
 // `session_merged`/`session_ended` precedent in client.ts), so it never
 // reaches `schema.d.ts` — read off `ApiError.body`, never off the typed
 // `ApiError.detail` (a bare `string | null`), and parse it here.
+//
+// Shaped after `components/tournaments/data/entry-refusal.ts` (ADR-0968): the
+// tuple is the single source of the code type, and `message` is deliberately
+// not read — a code we recognise is a code we already have a screen for, so
+// the server's sentence never reaches the UI.
+const LOGIN_CONSUME_ERROR_CODES = [
+  'invalid_or_expired',
+  'email_changed',
+  'replaced',
+] as const
+type LoginConsumeErrorCode = (typeof LOGIN_CONSUME_ERROR_CODES)[number]
+
 const loginConsumeErrorSchema = z.object({
-  detail: z.object({ code: z.string(), message: z.string() }),
+  detail: z.object({ code: z.enum(LOGIN_CONSUME_ERROR_CODES) }),
 })
 
 /** The structured `code` a 4xx from `/login/consume` carries, or `null` when
  * the body doesn't parse as the coded shape (a plain-string detail, no body,
- * or an unrecognized error). `null` maps to the safe `'expired'` fallback —
- * today's behaviour for every other 4xx. */
-function loginConsumeErrorCode(err: unknown): string | null {
+ * or a code this client has no screen for). `null` maps to the safe
+ * `'expired'` fallback — today's behaviour for every other 4xx. */
+function loginConsumeErrorCode(err: unknown): LoginConsumeErrorCode | null {
   if (!(err instanceof ApiError)) return null
   const parsed = loginConsumeErrorSchema.safeParse(err.body)
   return parsed.success ? parsed.data.detail.code : null
+}
+
+/** Which screen each server code reaches. Two types with a table between them,
+ * on purpose: `VerifyError` also carries `'net'`, which no API code produces,
+ * and the API's `invalid_or_expired` is this client's `'expired'`. Exhaustive
+ * over `LoginConsumeErrorCode`, so a fourth code added to `sessions.py` is a
+ * compile error here rather than a silent mis-route back to `'expired'` — the
+ * exact collapse #1466 defect 3 exists to undo. */
+const CODE_TO_VERIFY_ERROR: Record<LoginConsumeErrorCode, VerifyError> = {
+  invalid_or_expired: 'expired',
+  email_changed: 'email_changed',
+  replaced: 'replaced',
 }
 
 export const Route = createFileRoute('/login/verifying')({
@@ -56,10 +79,7 @@ export const Route = createFileRoute('/login/verifying')({
     const raw = Array.isArray(search.token) ? search.token[0] : search.token
     return {
       token: typeof raw === 'string' ? raw : '',
-      error:
-        typeof e === 'string' && VERIFY_ERRORS.has(e as VerifyError)
-          ? (e as VerifyError)
-          : undefined,
+      error: verifyErrorSchema.parse(e),
     }
   },
   component: LoginVerifyingPage,
@@ -95,11 +115,7 @@ function LoginVerifyingPage() {
           if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
             const code = loginConsumeErrorCode(err)
             const nextError: VerifyError =
-              code === 'replaced'
-                ? 'replaced'
-                : code === 'email_changed'
-                  ? 'email_changed'
-                  : 'expired'
+              code === null ? 'expired' : CODE_TO_VERIFY_ERROR[code]
             navigate({
               to: '/login/verifying',
               search: { token: '', error: nextError },

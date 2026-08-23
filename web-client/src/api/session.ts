@@ -345,13 +345,13 @@ export function useConsumeLoginToken() {
 // the `/login/sent` receipt row (#1466 defect 1). Static, deployment-wide,
 // takes no input and reads no cookie — so unlike `useSession` it's safe to
 // call from a bookmarked `/login/sent` without minting a guest.
-export const loginSenderQueryKey = ['login-sender'] as const
+export const LOGIN_SENDER_QUERY_KEY = ['login-sender'] as const
 
 const loginSenderResponseSchema = z.object({ address: z.string().nullable() })
 
 export function loginSenderQueryOptions() {
   return queryOptions({
-    queryKey: loginSenderQueryKey,
+    queryKey: LOGIN_SENDER_QUERY_KEY,
     // The Zod parse is still the runtime boundary guarantee
     // (`.claude/rules/parse-at-boundaries.md`) even though `api.GET` now
     // types this path from the regenerated `schema.d.ts` — a type
