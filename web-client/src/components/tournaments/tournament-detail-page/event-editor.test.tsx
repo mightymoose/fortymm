@@ -799,6 +799,12 @@ describe('EventEditor', () => {
       expect(eventEditorPage.queryReservationsCapNotice()).toBeNull()
       // …and Add is live again, because two reservations are legal for this draw type.
       expect(eventEditorPage.getAddReservationButton()).toBeEnabled()
+
+      // The display and the resolver must agree: the save the message promised now
+      // goes through. Without this the gate could clear the alert while `handleSubmit`
+      // still refused, which is a worse lie than the one it was written to fix.
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(onSave).toHaveBeenCalled()
     })
 
     // The freeze notice, not this one, once the event is drawn — a director locked out
