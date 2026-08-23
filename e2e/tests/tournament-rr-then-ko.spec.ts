@@ -9,6 +9,7 @@ import {
   findEventByName,
   getEventGroups,
   getEventReservations,
+  getEventStages,
   getScheduleDetail,
   groupLabel,
   seedEntrants,
@@ -325,12 +326,26 @@ test.describe('Tournament — rr-then-ko draw', () => {
     // `RESERVATION_COUNT`, so `position % RESERVATION_COUNT` is the identity and this
     // still reads as a plain 1:1 map onto the reservations above, even though the server
     // no longer mints one because of the other.
-    const groups = await getEventGroups(director, tournamentId, eventId)
+    //
+    // Scoped to the GROUP STAGE's own groups (position 0 of the event's stages) —
+    // never the whole `groups` array as it comes off the wire. Since ADR 20260823
+    // (#1484) every stage holds a group, so this `rr-then-ko` event's knockout stage
+    // has one too, at `position: 0` — sharing that number with the group stage's own
+    // first group. Checking `position` across both stages unfiltered would see
+    // `[0, 0, 1, 2]`, not the plain 1:1 sequence this assertion is actually about.
+    const stages = await getEventStages(director, tournamentId, eventId)
+    const groupStageId = [...stages].sort((a, b) => a.position - b.position)[0]!.id
+    const allGroups = await getEventGroups(director, tournamentId, eventId)
+    const groups = allGroups.filter((group) => group.stage_id === groupStageId)
     expect(groups.map((group) => group.position)).toEqual([0, 1, 2])
     expect(groups.map((group) => group.reservation_id)).toEqual(
       reservations.map((reservation) => reservation.id),
     )
     for (const group of groups) expect(group.id).toMatch(UUID)
+    // The knockout stage holds exactly one MORE group, distinct from the three above —
+    // never sharing an id with a group-stage group, whatever position it shares.
+    const knockoutGroups = allGroups.filter((group) => group.stage_id !== groupStageId)
+    expect(knockoutGroups).toHaveLength(1)
 
     // ----- publish, then fill the field --------------------------------------
     await detail.publishTournament()
@@ -389,19 +404,18 @@ test.describe('Tournament — rr-then-ko draw', () => {
     }
 
     // ----- …and the WIRE carried that order to get here -----------------------
-    // The detail's fixtures come back ordered by their group's position, so the group
-    // ids in first-appearance order are the server's own statement of the event's group
-    // order — the one the page above rendered, read straight off the payload that fed
-    // it.
+    // The detail's fixtures come back ordered by their group's position WITHIN its own
+    // stage, so the GROUP STAGE's group ids in first-appearance order are the server's
+    // own statement of the event's group order — the one the page above rendered, read
+    // straight off the payload that fed it. Scoped by `stage_id` (`groupStageId`,
+    // resolved above), never `group_id`, which no longer tells the group stage's
+    // fixtures apart from the knockout stage's (ADR 20260823, #1484).
     const schedule = await getScheduleDetail(director, tournamentId)
-    const fixtures = schedule.events.find((e) => e.id === eventId)?.fixtures ?? []
-    expect([
-      ...new Set(
-        fixtures.flatMap((fixture) =>
-          fixture.group_id === null ? [] : [fixture.group_id],
-        ),
-      ),
-    ]).toEqual(groups.map((group) => group.id))
+    const fixtures = (schedule.events.find((e) => e.id === eventId)?.fixtures ?? [])
+      .filter((fixture) => fixture.stage_id === groupStageId)
+    expect([...new Set(fixtures.map((fixture) => fixture.group_id))]).toEqual(
+      groups.map((group) => group.id),
+    )
 
     // ----- stage two: the bracket, present already, and entirely unknown -----
     await expect(detail.bracket(eventId)).toBeVisible()
