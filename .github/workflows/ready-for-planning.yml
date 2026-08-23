@@ -1,0 +1,171 @@
+name: ready-for-planning
+
+# Fires an action when a ticket lands in the "Ready For Planning" column of the
+# FortyMM board (https://github.com/users/mightymoose/projects/9).
+#
+# This polls. It does not listen for an event, because no event exists.
+#
+# GitHub never ported the classic `project_card` workflow trigger to Projects
+# v2. `projects_v2_item` is an *organization webhook* only, and it is absent
+# from the Actions "events that trigger workflows" list, so `on:
+# projects_v2_item` is not something a workflow can say. See
+# https://github.com/orgs/community/discussions/40848.
+#
+# Moving the board to an organization does not change this. It unlocks the
+# webhook, which still needs a receiver outside Actions to turn into a
+# `repository_dispatch`. It would also renumber the project away from 9, which
+# the ticket skills hardcode.
+#
+# So: read the column on a timer, diff it against the previous read, and act on
+# what is new. The diff is what turns "is in the column" into "moved into the
+# column". A plain poll only sees the first one.
+
+on:
+  schedule:
+    # Every 10 minutes. Not every 5: the board is ~210 items, so each run costs
+    # 3 pages of GraphQL, and the GraphQL budget is the scarce one here. The
+    # ticket agents share the same 5000 points per hour.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would happen, but post no comments"
+        type: boolean
+        default: false
+      reseed:
+        description: "Discard the saved state and re-seed from the column as it is now"
+        type: boolean
+        default: false
+
+# Two polls must never interleave. Both would read the same previous state, and
+# both would act on the same ticket.
+concurrency:
+  group: ready-for-planning
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The previous poll's view of the column. `restore-keys` does the work:
+      # each run saves under a key unique to itself, and the next run picks up
+      # the newest one by prefix.
+      - name: Read the previous poll's state
+        uses: actions/cache/restore@v4
+        with:
+          path: .rfp-state
+          key: rfp-state-${{ github.run_id }}
+          restore-keys: rfp-state-
+
+      - name: Find the tickets that just entered Ready For Planning
+        id: detect
+        env:
+          # A user-owned project is invisible to GITHUB_TOKEN, which carries no
+          # Projects scope. This needs a PAT. Classic: `read:project` + `repo`.
+          # Fine-grained: Projects "Read-only" plus Issues "Read and write" on
+          # this repository.
+          GH_TOKEN: ${{ secrets.PROJECT_BOARD_TOKEN }}
+          PROJECT_OWNER: mightymoose
+          PROJECT_NUMBER: "9"
+          COLUMN: Ready For Planning
+          RESEED: ${{ inputs.reseed }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::Secret PROJECT_BOARD_TOKEN is not set. GITHUB_TOKEN cannot read a user-owned project." >&2
+            exit 1
+          fi
+
+          if [ "${RESEED}" = "true" ]; then
+            echo "Reseed requested. Discarding the saved state."
+            rm -rf .rfp-state
+          fi
+          mkdir -p .rfp-state
+
+          # Ask for the least the diff needs. `--paginate` requires the cursor
+          # variable to be named exactly `$endCursor`, or it re-fetches page one
+          # forever. `--slurp` collects the pages into one JSON array.
+          #
+          # Write to a file rather than piping into python3: zsh and bash both
+          # report a pipeline's LAST exit code, so a failed `gh api` inside one
+          # reads as success. See .claude/rules/verify-the-artifact-under-test.md
+          gh api graphql --paginate --slurp \
+            -F owner="$PROJECT_OWNER" \
+            -F number="$PROJECT_NUMBER" \
+            -f query='
+              query($owner: String!, $number: Int!, $endCursor: String) {
+                user(login: $owner) {
+                  projectV2(number: $number) {
+                    items(first: 100, after: $endCursor) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        id
+                        fieldValueByName(name: "Status") {
+                          ... on ProjectV2ItemFieldSingleSelectValue { name }
+                        }
+                        content {
+                          ... on Issue { number title url }
+                          ... on PullRequest { number title url }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' > .rfp-pages.json
+
+          python3 .github/scripts/ready_for_planning_diff.py \
+            .rfp-pages.json .rfp-state/column.json
+
+      - name: Act on each ticket that arrived
+        if: steps.detect.outputs.arrived != '[]'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_BOARD_TOKEN }}
+          REPO: ${{ github.repository }}
+          ARRIVED: ${{ steps.detect.outputs.arrived }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # This is the "do anything" hook. Today it posts one comment per
+          # arriving ticket. Replace the body, or the whole step, with whatever
+          # the arrival should really start.
+          echo "$ARRIVED" | jq -c '.[]' | while read -r item; do
+            number="$(echo "$item" | jq -r '.number')"
+            title="$(echo "$item" | jq -r '.title')"
+
+            echo "Ticket #${number} (${title}) entered Ready For Planning."
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Dry run. Posting nothing."
+              continue
+            fi
+
+            body="$(mktemp)"
+            printf '%s\n' \
+              "This ticket moved into **Ready For Planning**." \
+              "" \
+              "Plan it with \`/plan-next-ticket ${number}\`." \
+              "" \
+              "<sub>Posted by [ready-for-planning](${RUN_URL}).</sub>" > "$body"
+
+            # REST, not `gh issue comment`. That one spends the GraphQL budget.
+            gh api "repos/${REPO}/issues/${number}/comments" \
+              -X POST -F body=@"$body" --jq .html_url
+            rm -f "$body"
+          done
+
+      # Saved even when nothing arrived, so the next poll compares against the
+      # column as it is now and not against a stale read.
+      - name: Save this poll's state
+        if: always() && steps.detect.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: .rfp-state
+          key: rfp-state-${{ github.run_id }}
