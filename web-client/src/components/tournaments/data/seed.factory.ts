@@ -53,6 +53,23 @@ export function groupIdFor(reservationId: string): string {
  * fixtures derive it the same way the mock stores do (`groupsFor`,
  * `mocks/factories/tournaments/solver-sim.ts`) rather than storing a second array a
  * fixture could let drift out of the 1:1. */
+export function groupsFor(reservations: Reservation[]): Group[] {
+  return reservations.map((r, position) => ({
+    id: groupIdFor(r.id),
+    position,
+    reservationId: r.id,
+  }))
+}
+
+/** The id of the one group a **single-stage** event holds when it has booked no
+ * reservation — named once, so a fixture's `groupId` and its event's `groups` entry
+ * cannot drift apart.
+ *
+ * That drift would be silent: under stage-based bucketing (`seatsBothSidesAtCut`) a
+ * bracket fixture whose group id resolves against nothing lands in the ungrouped block
+ * anyway, so the test would stay green having stopped testing what it says it does. */
+export const UNBOOKED_GROUP_ID = groupIdFor('unbooked')
+
 /** The one group a **single-stage** event holds when it has booked no reservation
  * (ticket #1483's floor): position 0, mapped to nothing.
  *
@@ -65,15 +82,7 @@ export function groupIdFor(reservationId: string): string {
  * panel still renders a bracket or swiss rounds, because that decision reads the
  * fixture's stage (`seatsBothSidesAtCut`), never its group id. */
 export function unbookedGroup(): Group[] {
-  return [{ id: groupIdFor('unbooked'), position: 0, reservationId: null }]
-}
-
-export function groupsFor(reservations: Reservation[]): Group[] {
-  return reservations.map((r, position) => ({
-    id: groupIdFor(r.id),
-    position,
-    reservationId: r.id,
-  }))
+  return [{ id: UNBOOKED_GROUP_ID, position: 0, reservationId: null }]
 }
 
 /** The seeded venue address. Every part is optional in the domain (blank =
@@ -804,7 +813,7 @@ export function buildSwissDrawnEvent(
       // see `buildBracketDrawnEvent` for why a `null` here would be a shape no server
       // produces. Swiss still ranks one field in one table: what makes these render as
       // swiss rounds is the STAGE's draw type, not the group id.
-      groupId: groupIdFor('unbooked'),
+      groupId: UNBOOKED_GROUP_ID,
       round,
       position,
       entryAId: a,
@@ -851,7 +860,7 @@ export function buildSwissMidEvent(
       ...cut.fixtures.slice(0, 3),
       buildFixture({
         id: 'fx-sw-r2-p1',
-        groupId: groupIdFor('unbooked'),
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 1,
         entryAId: 'entry-1',
@@ -859,7 +868,7 @@ export function buildSwissMidEvent(
       }),
       buildFixture({
         id: 'fx-sw-r2-p2',
-        groupId: groupIdFor('unbooked'),
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 2,
         entryAId: 'entry-3',
@@ -867,7 +876,7 @@ export function buildSwissMidEvent(
       }),
       buildFixture({
         id: 'fx-sw-r2-p3',
-        groupId: groupIdFor('unbooked'),
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 3,
         entryAId: 'entry-5',
@@ -929,7 +938,7 @@ export function buildSwissOddMidEvent(
     buildFixture({
       id: `fx-sw-r2-p${position}`,
       // The event's one group, like every other swiss fixture (#1483).
-      groupId: groupIdFor('unbooked'),
+      groupId: UNBOOKED_GROUP_ID,
       round: 2,
       position,
       entryAId: a,
@@ -1045,7 +1054,7 @@ export function buildBracketDrawnEvent(
     fixtures: [
       buildFixture({
         id: 'fx-se-r1-p1',
-        groupId: groupIdFor('unbooked'),
+        groupId: UNBOOKED_GROUP_ID,
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -1053,7 +1062,7 @@ export function buildBracketDrawnEvent(
       }),
       buildFixture({
         id: 'fx-se-r1-p2',
-        groupId: groupIdFor('unbooked'),
+        groupId: UNBOOKED_GROUP_ID,
         round: 1,
         position: 2,
         entryAId: 'entry-3',
@@ -1061,7 +1070,7 @@ export function buildBracketDrawnEvent(
       }),
       buildFixture({
         id: 'fx-se-r2-p1',
-        groupId: groupIdFor('unbooked'),
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 1,
         entryAId: null,

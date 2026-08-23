@@ -723,7 +723,16 @@ def _seats_both_sides_at_cut(
     stage a director's re-mint deleted between them (ADR 20260815) leaves a fixture
     naming a stage this map no longer has. That is read skew on a background
     dashboard refresh, and the honest answer for a stage nobody can describe is
-    "not a group stage" — the panel drops one label rather than 500ing.
+    "not a group stage".
+
+    It is a local consistency, not a promise that the endpoint survives that skew:
+    ``_build_event`` calls ``event_results`` fourteen lines above this pick, and for
+    ``round_robin`` and ``rr_then_ko`` that path runs every fixture through
+    ``app.tournament_serialization._stage_draw_type_of``, which raises on exactly the
+    same missing stage id. So the skew already 500s before this ``.get`` is reached,
+    wherever a group label was going to exist at all. What ``.get`` buys is that this
+    pick is not a SECOND, differently-worded way to fail — the loud one lives at the
+    seam that decided to be loud.
     """
     draw_type = stage_draw_types.get(stage_id)
     return draw_type is not None and seats_both_sides_at_cut(draw_type)

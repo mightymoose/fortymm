@@ -58,16 +58,21 @@ import type {
 export interface DrawIndex {
   groupById: Map<string, Group>
   reservationById: Map<string, Reservation>
+  /** The event's stages by id — what `fixtureGroupLabel` asks `seatsBothSidesAtCut`
+   * about. Indexed here for the same reason the other two are: it is a per-fixture
+   * lookup, and the event's stages do not change between fixtures. */
+  stageById: Map<string, Stage>
 }
 
 /** Build a `DrawIndex` for one event. Call this once per event, outside the per-fixture
  * loop — every `fixtureReservation` call for that event's fixtures shares it. */
 export function buildDrawIndex(
-  event: Pick<TournamentEvent, 'groups' | 'reservations'>,
+  event: Pick<TournamentEvent, 'groups' | 'reservations' | 'stages'>,
 ): DrawIndex {
   return {
     groupById: new Map(event.groups.map((g) => [g.id, g])),
     reservationById: new Map(event.reservations.map((r) => [r.id, r])),
+    stageById: new Map(event.stages.map((s): [string, Stage] => [s.id, s])),
   }
 }
 
@@ -106,6 +111,34 @@ export function fixtureReservation(
  * group is server-owned and carries no name of its own). */
 export function groupLabel(group: Pick<Group, 'position'>): string {
   return `Group ${groupLetter(group.position)}`
+}
+
+/**
+ * The label a fixture is **shown with** — `Group A`, or `null` for a fixture no surface
+ * may call a group.
+ *
+ * The client's twin of the server's rule in `app.match_calls.CopyIngredients
+ * .context_for`: a group is named only when the fixture's own stage seats both sides at
+ * the cut (`seatsBothSidesAtCut`). Since #1483 a single-elim or swiss fixture is dealt
+ * into its stage's one group — which is how the scheduler confines it to the
+ * reservation its director booked — so `fixtureReservation(...).group !== null` is no
+ * longer the same question, and reading it as one puts a bracket semifinal on the
+ * schedule as "Championship Singles · Group A": a group with no standings table behind
+ * it and no field the player is in.
+ *
+ * `fixtureReservation` deliberately keeps answering the *group* for those fixtures —
+ * the reservation hop is exactly what the deal bought. It is only the LABEL that asks
+ * about the stage. A fixture naming a stage this event does not list gets no label,
+ * the same honest fallback `drawState` gives it.
+ */
+export function fixtureGroupLabel(
+  index: DrawIndex,
+  fixture: Pick<Fixture, 'groupId' | 'stageId'>,
+): string | null {
+  const stage = index.stageById.get(fixture.stageId)
+  if (stage === undefined || !seatsBothSidesAtCut(stage.drawType)) return null
+  const { group } = fixtureReservation(index, fixture)
+  return group !== null ? groupLabel(group) : null
 }
 
 /** A fixture side whose occupant is not decided yet (`entryAId`/`entryBId` is

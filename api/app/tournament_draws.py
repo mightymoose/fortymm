@@ -781,9 +781,10 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     strategy = strategy_for_event(event)
     entrants = order_entrants(await active_draw_entrants(db, event.id))
     # The real-field re-derivation (see the docstring). ``group_count_for`` answers
-    # ``len(event.reservations)`` for every draw type but ``rr-then-ko``, and that is
-    # the count those events already hold, so the branch is reached by an
-    # ``rr-then-ko`` event alone — stated by the draw type rather than trusted to the
+    # ``max(len(event.reservations), 1)`` for every draw type but ``rr-then-ko``
+    # (#1483's floor), and that is the count those events already hold — every event
+    # write materialises against the same function — so the branch is reached by an
+    # ``rr-then-ko`` event alone. Stated by the draw type rather than trusted to the
     # arithmetic, so a reader sees the scope without working it out, and so a cut of
     # any other draw type reads no reservation at all.
     re_materialised = draw_settings_of(

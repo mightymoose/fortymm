@@ -546,10 +546,13 @@ def build_preview_snapshot(
                 plans.append(planned)
             case DrawType.single_elim | DrawType.swiss:
                 # Skipped, not refused — and skipped for a reason that is no longer
-                # about reservations. A live solve does place both of these, over the
-                # event's own window (ADR "a reservation restricts scheduling, it does
-                # not enable it"); what a PREVIEW cannot do is lay out a draw that is
-                # decided as it is played, since it runs before anyone has registered.
+                # about reservations. A live solve does place both of these: since
+                # #1483 their fixtures are dealt into their stage's group, so a booked
+                # event's draw is confined to that group's reservation, and an unbooked
+                # one still falls to the event's own window (ADR "a reservation
+                # restricts scheduling, it does not enable it"). What a PREVIEW cannot
+                # do either way is lay out a draw that is decided as it is played,
+                # since it runs before anyone has registered.
                 # Refusing here would be per-event in name only: this loop builds one
                 # tournament, so it would take the preview of every round-robin event
                 # beside it (the same reasoning ADR 20260727 applied to rr-then-ko's

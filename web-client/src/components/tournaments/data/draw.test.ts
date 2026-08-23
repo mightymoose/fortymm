@@ -980,6 +980,7 @@ describe('fixtureReservation', () => {
     const index = buildDrawIndex({
       groups: [{ id: 'grp-a', position: 0, reservationId: null }],
       reservations: [],
+      stages: [],
     })
     expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
       group: { id: 'grp-a', position: 0, reservationId: null },
@@ -992,6 +993,7 @@ describe('fixtureReservation', () => {
     const index = buildDrawIndex({
       groups: [{ id: 'grp-a', position: 0, reservationId: 'res-a' }],
       reservations: [reservation],
+      stages: [],
     })
     expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
       group: { id: 'grp-a', position: 0, reservationId: 'res-a' },

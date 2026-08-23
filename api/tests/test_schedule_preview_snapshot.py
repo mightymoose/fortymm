@@ -767,9 +767,7 @@ async def test_preview_snapshot_round_robin_event_without_reservations_refuses(
         build_preview_snapshot(loaded)
 
 
-def test_the_preview_keeps_fixtures_by_stage_not_by_group(
-    db_session: AsyncSession,
-) -> None:
+def test_the_preview_keeps_fixtures_by_stage_not_by_group() -> None:
     """``_previewed_fixtures`` keeps a fixture because **its stage seats both sides at
     the cut**, never because it resolved a group id — and the note counts the rest.
 
