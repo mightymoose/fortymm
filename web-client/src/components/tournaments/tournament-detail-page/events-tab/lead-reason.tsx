@@ -37,6 +37,20 @@ export interface LeadReasonProps {
  * (ADR 0015, "hide mutating affordances"; "empty is a designed data state, never a
  * thrown one").
  *
+ * And **`pointer-events-none`, because inert means inert** (#1503). Two of these
+ * notices ride the event card's raised `z-10` layers, where they sat on top of the
+ * stretched open target — a *sibling* `<button>` — and swallowed the click the tab
+ * header invites ("Click any event to edit"). Copy with no handler must never be the
+ * thing a click lands on. The class goes here rather than at the call sites so no
+ * future placement can forget it; the accepted cost is that this paragraph is no
+ * longer selectable anywhere, `EntrantsList`'s two roster empty states included.
+ *
+ * ⚠️ It is necessary and **not sufficient**: a `pointer-events: none` child hands the
+ * click to its nearest painted ANCESTOR, not to a sibling underneath. The raised
+ * wrappers in `event-card.tsx` and `DrawPanel`'s own `<section>` have to stand aside
+ * too — measured in `e2e/tournaments/event-card-click-target.spec.ts`, which stays red
+ * with this class alone.
+ *
  * This is deliberately NOT `components/tournaments/empty-state.tsx`: that is the
  * dashed, full-panel "this whole section is empty" variant. This one lives inside
  * a card that is otherwise entirely alive.
@@ -51,7 +65,7 @@ export const LeadReason = ({
   <p
     data-testid={testId}
     className={cn(
-      'text-[13px] leading-snug text-[color:var(--fg-3)]',
+      'pointer-events-none text-[13px] leading-snug text-[color:var(--fg-3)]',
       className,
     )}
   >
