@@ -53,14 +53,30 @@ export async function guestFromContext(ctx: APIRequestContext): Promise<Guest> {
 }
 
 /** Mint a fresh ephemeral guest: `GET /v1/session` creates a User + issues the
- * session and csrf cookies into a brand-new request context. */
+ * session and csrf cookies into a brand-new request context.
+ *
+ * A second `GET /v1/session` then resolves the fresh cookie and stamps the
+ * row's `last_seen_at`: since #1438 the mint itself deliberately does not
+ * stamp, and an unstamped (never-active) user is invisible to every public
+ * listing — including the opponent search `findUserId` resolves ids through.
+ * A seeded guest models a visitor who loaded the site and browsed, so it
+ * browses once here (the api-side twin of this decision is
+ * `api/tests/_helpers.py:start_session`). */
 export async function mintGuest(baseURL: string): Promise<Guest> {
-  return guestFromContext(await request.newContext({ baseURL }))
+  const guest = await guestFromContext(await request.newContext({ baseURL }))
+  const stamped = await guest.ctx.get(`${API}/session`)
+  if (!stamped.ok()) {
+    throw new Error(
+      `session restamp failed: ${stamped.status()} ${await stamped.text()}`,
+    )
+  }
+  return guest
 }
 
-/** Resolve a user's id via the opponent typeahead. Ephemeral guests are
- * searchable (only tombstoned/merged users are excluded), so this is how one
- * guest names another as an opponent without any claim/sign-in step. */
+/** Resolve a user's id via the opponent typeahead. Seeded guests are
+ * searchable (`mintGuest` stamps them; tombstoned/merged and never-active
+ * users are excluded), so this is how one guest names another as an opponent
+ * without any claim/sign-in step. */
 export async function findUserId(
   searcher: Guest,
   username: string,
