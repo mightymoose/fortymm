@@ -61,6 +61,30 @@ export function groupsFor(reservations: Reservation[]): Group[] {
   }))
 }
 
+/** The id of the one group a **single-stage** event holds when it has booked no
+ * reservation — named once, so a fixture's `groupId` and its event's `groups` entry
+ * cannot drift apart.
+ *
+ * That drift would be silent: under stage-based bucketing (`seatsBothSidesAtCut`) a
+ * bracket fixture whose group id resolves against nothing lands in the ungrouped block
+ * anyway, so the test would stay green having stopped testing what it says it does. */
+export const UNBOOKED_GROUP_ID = groupIdFor('unbooked')
+
+/** The one group a **single-stage** event holds when it has booked no reservation
+ * (ticket #1483's floor): position 0, mapped to nothing.
+ *
+ * The server mints it whatever the reservation count, because a fixture reaches the
+ * reservation that restricts it *through its group* — so a stage with no group row has
+ * no hop to make and its fixtures fall to the synthetic event-wide reservation. It maps
+ * to no reservation here, which is the state the floor deliberately leaves legal.
+ *
+ * It is emphatically not a group *stage*'s group: a single-elim or swiss event's draw
+ * panel still renders a bracket or swiss rounds, because that decision reads the
+ * fixture's stage (`seatsBothSidesAtCut`), never its group id. */
+export function unbookedGroup(): Group[] {
+  return [{ id: UNBOOKED_GROUP_ID, position: 0, reservationId: null }]
+}
+
 /** The seeded venue address. Every part is optional in the domain (blank =
  * `''`), so the partial and wholly-blank cases are expressed by overriding
  * parts to `''` — `buildAddress({ venue: '', city: '', region: '' })` — rather
@@ -773,9 +797,11 @@ export function buildDrawnEvent(
  * `entry-3 v entry-6`). Rounds 2 and 3 carry **both sides null** — TBD, waiting on
  * `advance()`, and *not* byes.
  *
- * Every fixture is `groupId: null`, and that is the trap this fixture exists to catch: it is
- * byte-identical in shape to a single-elimination bracket, so a panel routing on the null
- * renders this as one. Only the DRAW TYPE tells them apart.
+ * Every fixture names the event's **one group** (#1483), and that is the trap this
+ * fixture exists to catch — twice over. Its rows are byte-identical in shape to a
+ * single-elimination bracket's, so a panel routing on the group id renders this as one;
+ * and now that the id is non-null on both, a panel routing on *whether there is a group*
+ * renders both as group panels. Only the STAGE's own draw type tells them apart.
  *
  * `rounds: 3` over six entrants is legal at the cut (`R <= n - 1 + n % 2`), so nothing here
  * is a shape the server would have refused.
@@ -786,7 +812,11 @@ export function buildSwissDrawnEvent(
   const pairing = (round: number, position: number, a: string | null, b: string | null) =>
     buildFixture({
       id: `fx-sw-r${round}-p${position}`,
-      groupId: null,
+      // Dealt into the event's one group, exactly as the server sends it (#1483) —
+      // see `buildBracketDrawnEvent` for why a `null` here would be a shape no server
+      // produces. Swiss still ranks one field in one table: what makes these render as
+      // swiss rounds is the STAGE's draw type, not the group id.
+      groupId: UNBOOKED_GROUP_ID,
       round,
       position,
       entryAId: a,
@@ -795,6 +825,7 @@ export function buildSwissDrawnEvent(
   return buildSwissEvent({
     entrants: buildEntrants(6),
     rounds: 3,
+    groups: unbookedGroup(),
     fixtures: [
       pairing(1, 1, 'entry-1', 'entry-4'),
       pairing(1, 2, 'entry-2', 'entry-5'),
@@ -832,7 +863,7 @@ export function buildSwissMidEvent(
       ...cut.fixtures.slice(0, 3),
       buildFixture({
         id: 'fx-sw-r2-p1',
-        groupId: null,
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 1,
         entryAId: 'entry-1',
@@ -840,7 +871,7 @@ export function buildSwissMidEvent(
       }),
       buildFixture({
         id: 'fx-sw-r2-p2',
-        groupId: null,
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 2,
         entryAId: 'entry-3',
@@ -848,7 +879,7 @@ export function buildSwissMidEvent(
       }),
       buildFixture({
         id: 'fx-sw-r2-p3',
-        groupId: null,
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 3,
         entryAId: 'entry-5',
@@ -909,7 +940,8 @@ export function buildSwissOddMidEvent(
   const pairing = (position: number, a: string, b: string) =>
     buildFixture({
       id: `fx-sw-r2-p${position}`,
-      groupId: null,
+      // The event's one group, like every other swiss fixture (#1483).
+      groupId: UNBOOKED_GROUP_ID,
       round: 2,
       position,
       entryAId: a,
@@ -1014,12 +1046,18 @@ export function buildBracketDrawnEvent(
     name: 'Championship Singles',
     drawType: 'single-elim',
     entrants: buildEntrants(4),
-    // A bracket is ungrouped — the event's groups are not consulted at all (ADR-0786).
+    // **The shape the server actually sends** (ticket #1483): no reservation booked,
+    // one group all the same (the floor), and every fixture of the bracket dealt into
+    // it — round one and the final alike. The group is how the scheduler reaches the
+    // reservation that restricts these fixtures; it is NOT what decides how they
+    // render. A fixture built `groupId: null` here would be a shape no server produces
+    // and would let a renderer that buckets by group id keep passing.
     reservations: [],
+    groups: unbookedGroup(),
     fixtures: [
       buildFixture({
         id: 'fx-se-r1-p1',
-        groupId: null,
+        groupId: UNBOOKED_GROUP_ID,
         round: 1,
         position: 1,
         entryAId: 'entry-1',
@@ -1027,7 +1065,7 @@ export function buildBracketDrawnEvent(
       }),
       buildFixture({
         id: 'fx-se-r1-p2',
-        groupId: null,
+        groupId: UNBOOKED_GROUP_ID,
         round: 1,
         position: 2,
         entryAId: 'entry-3',
@@ -1035,7 +1073,7 @@ export function buildBracketDrawnEvent(
       }),
       buildFixture({
         id: 'fx-se-r2-p1',
-        groupId: null,
+        groupId: UNBOOKED_GROUP_ID,
         round: 2,
         position: 1,
         entryAId: null,

@@ -22,6 +22,7 @@ from app.draws import (
     EntryId,
     GroupId,
     SeatedPairing,
+    seats_both_sides_at_cut,
     swiss_byes,
     swiss_pairable_rows,
 )
@@ -360,16 +361,21 @@ def _group_inputs(
 ) -> list[GroupInput]:
     by_group: dict[uuid.UUID, list[TournamentFixtureRead]] = defaultdict(list)
     for f in fixtures:
-        # The group stage's fixtures — this fixture's OWN stage runs round-robin
-        # (ADR 20260815), read through ``stage_draw_types`` rather than inferred from
-        # ``group_id`` plus the event's overall draw type. ``group_id`` stays on as a
-        # within-stage invariant narrowing, not the stage discriminator: a round-robin
-        # stage's fixtures are always grouped, so this can never actually skip a fixture
-        # ``stage_draw_types`` already selected — it only tells the type checker
-        # ``f.group_id`` is not ``None`` before it is used as a dict key below.
-        if (
+        # The group stage's fixtures — this fixture's OWN stage seats both sides at
+        # the cut (ADR 20260815), read through ``stage_draw_types`` rather than
+        # inferred from ``group_id`` plus the event's overall draw type. Asked through
+        # :func:`~app.draws.seats_both_sides_at_cut`, the one predicate every
+        # group-stage-ness decision goes through since #1483, rather than compared
+        # against ``round_robin`` inline: that comparison silently answers "not a group
+        # stage" for a draw type nobody has considered yet, where the shared predicate
+        # is an exhaustive ``match`` that refuses to type-check until somebody does.
+        # ``group_id`` stays on as a within-stage invariant narrowing, not the stage
+        # discriminator: a round-robin stage's fixtures are always grouped, so this can
+        # never actually skip a fixture ``stage_draw_types`` already selected — it only
+        # tells the type checker ``f.group_id`` is not ``None`` before it is used as a
+        # dict key below.
+        if not seats_both_sides_at_cut(
             _stage_draw_type_of(stage_draw_types, f.stage_id)
-            is not DrawType.round_robin
         ):
             continue
         if f.group_id is None:

@@ -221,3 +221,73 @@ describe('RolesPage — creating a role', () => {
     expect(rolesPage.queryNameInput()).toBeInTheDocument()
   })
 })
+
+// `toLowerCase()` folds case and never folds accents, so an admin on an ASCII
+// keyboard could not reach `Café Staff` at all. Both searched fields — the
+// name and the description — fold.
+describe('RolesPage \u2014 search', () => {
+  const ACCENTED_NAME = 'Caf\u00e9 Staff'
+  const ACCENTED_DESCRIPTION = 'Runs the \u00c1rea da Ba\u00eda counter.'
+
+  const seedWithAccents = () =>
+    buildRolesSeed({
+      roles: [
+        {
+          id: DEFAULT_ROLE_ID,
+          name: 'User',
+          description: 'Held by every user.',
+          permission_ids: [],
+          is_default: true,
+        },
+        {
+          id: 'r_cafe',
+          name: ACCENTED_NAME,
+          description: 'Pours the coffee.',
+          permission_ids: [PERM_VIEW],
+          is_default: false,
+        },
+        {
+          id: 'r_counter',
+          name: 'Counter',
+          description: ACCENTED_DESCRIPTION,
+          permission_ids: [],
+          is_default: false,
+        },
+      ],
+    })
+
+  it('still narrows on plain text', async () => {
+    rolesPage.render(seedWithAccents())
+
+    await rolesPage.search('Counter')
+
+    expect(await rolesPage.findRoleRow('Counter')).toBeInTheDocument()
+    expect(rolesPage.queryRoleRow('User')).toBeNull()
+  })
+
+  it('finds an accented role name from unaccented text', async () => {
+    rolesPage.render(seedWithAccents())
+
+    await rolesPage.search('cafe')
+
+    expect(await rolesPage.findRoleRow(ACCENTED_NAME)).toBeInTheDocument()
+    expect(rolesPage.queryRoleRow('User')).toBeNull()
+  })
+
+  it('finds an accented description from unaccented text', async () => {
+    rolesPage.render(seedWithAccents())
+
+    await rolesPage.search('baia')
+
+    expect(await rolesPage.findRoleRow('Counter')).toBeInTheDocument()
+    expect(rolesPage.queryRoleRow(ACCENTED_NAME)).toBeNull()
+  })
+
+  it('finds an unaccented role from accented text, because the fold is symmetric', async () => {
+    rolesPage.render(seedWithAccents())
+
+    await rolesPage.search('c\u00f2unter')
+
+    expect(await rolesPage.findRoleRow('Counter')).toBeInTheDocument()
+  })
+})

@@ -7,6 +7,14 @@ import { RolesPage } from './roles-page'
 import { buildRolesSeed } from './roles-page.factory'
 
 const scoped = (container: Container) => ({
+  /** The list's search box. It carries a placeholder rather than a label. */
+  findSearch() {
+    return container.findByPlaceholderText('Search roles')
+  },
+  /** Every role row currently rendered. */
+  queryRoleRows() {
+    return container.queryAllByTestId(/^role-row-/)
+  },
   /** A role's row in the left-hand list. */
   findRoleRow(name: string) {
     return container.findByTestId(`role-row-${name}`)
@@ -78,6 +86,13 @@ export const rolesPage = {
 
   user() {
     return userEvent.setup()
+  },
+
+  /** Type `text` into the search box, once it has painted. */
+  async search(text: string) {
+    const box = await this.findSearch()
+    await userEvent.type(box, text)
+    return box
   },
 
   /** Select a role in the sidebar and resolve its detail panel. */

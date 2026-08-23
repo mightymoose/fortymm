@@ -859,14 +859,23 @@ async def test_a_knockout_and_swiss_stage_are_distinguishable_by_stage_not_group
         )
         return by_id[stage_id]
 
+    # The two sets whose formats a reader has to tell apart: the composite's knockout
+    # half, and the swiss event's whole draw. Selected by ROUND SHAPE — every fixture
+    # of each — not by ``group_id``, which since #1483 says nothing about either: the
+    # swiss rounds name their stage's group and the knockout half does not yet
+    # (#1484), so a reader keying on it would now get the two backwards rather than
+    # merely confuse them.
     bracket_fixtures = [
-        f for f in rr_then_ko_event["fixtures"] if f["group_id"] is None
+        f
+        for f in rr_then_ko_event["fixtures"]
+        if _stage_draw_type(rr_then_ko_event, f["stage_id"]) != "round-robin"
     ]
-    swiss_fixtures = [f for f in swiss_event["fixtures"] if f["group_id"] is None]
-    assert bracket_fixtures, "the bracket must have un-grouped fixtures to distinguish"
-    assert swiss_fixtures, "a swiss draw must have un-grouped fixtures to distinguish"
+    swiss_fixtures = list(swiss_event["fixtures"])
+    assert bracket_fixtures, "the bracket must have fixtures to distinguish"
+    assert swiss_fixtures, "a swiss draw must have fixtures to distinguish"
 
-    # Same shape on the row (``group_id: null`` on both), different stage.
+    # Nothing on the row itself separates a swiss round from a knockout round — same
+    # columns, both sides TBD on the later ones of each. The STAGE does.
     assert {
         _stage_draw_type(rr_then_ko_event, f["stage_id"]) for f in bracket_fixtures
     } == {"single-elim"}

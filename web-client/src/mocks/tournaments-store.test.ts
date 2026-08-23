@@ -1867,8 +1867,11 @@ describe('cutting a single-elimination draw', () => {
 
   it('refuses a bracket of fewer than two entrants, in the server’s words', () => {
     // Round-robin's per-group floor, one level up — and the ONLY 422 a single-elim cut
-    // makes. Notably NOT a refusal about groups: `ev-u1500` has none, and a bracket does
-    // not want any.
+    // makes. Notably NOT a refusal about groups: this store holds none for `ev-u1500`,
+    // and a single-elim cut never asks. (On the real server since #1483 a bracket IS
+    // dealt into its stage's one group — which is how the scheduler confines it — and
+    // that changes nothing here: this refusal is about the FIELD being smaller than two
+    // entrants, which no group would fix.)
     const patched = patchEvent(TOURNAMENT, EMPTY_SINGLES, { draw_type: 'single-elim' })
     expect(patched.ok).toBe(true)
     enterEvent(TOURNAMENT, EMPTY_SINGLES) // one entrant: the dev user
