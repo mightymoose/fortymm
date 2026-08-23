@@ -43,6 +43,12 @@ export function MergeGate({
         margin: '64px auto',
         padding: 24,
         textAlign: 'center',
+        // Both the copy and the "Not now" label interpolate a username, and a
+        // username may be 40 unbroken characters. Without this the column's
+        // min-content width exceeds a 375px viewport and carries the buttons
+        // off screen with it. `overflow-wrap` inherits, so one declaration
+        // here covers the paragraphs and both labels.
+        overflowWrap: 'anywhere',
       }}
     >
       <h1
@@ -99,9 +105,6 @@ export function MergeGate({
           type="button"
           style={{
             ...btnGhost,
-            // The label interpolates a username of up to 40 characters, which
-            // can exceed the button's interior at 375px.
-            overflowWrap: 'anywhere',
             opacity: busy ? 0.7 : 1,
             cursor: busy ? 'wait' : 'pointer',
           }}
