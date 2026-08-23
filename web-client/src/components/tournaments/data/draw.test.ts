@@ -978,12 +978,12 @@ describe('fixtureReservation', () => {
    */
   it('resolves the group and no reservation when the group has none', () => {
     const index = buildDrawIndex({
-      groups: [{ id: 'grp-a', position: 0, reservationId: null }],
+      groups: [{ id: 'grp-a', position: 0, reservationId: null, stageId: 's-1' }],
       reservations: [],
       stages: [],
     })
     expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
-      group: { id: 'grp-a', position: 0, reservationId: null },
+      group: { id: 'grp-a', position: 0, reservationId: null, stageId: 's-1' },
       reservation: null,
     })
   })
@@ -991,12 +991,12 @@ describe('fixtureReservation', () => {
   it('resolves both hops when the group has a reservation', () => {
     const reservation = buildReservation({ id: 'res-a' })
     const index = buildDrawIndex({
-      groups: [{ id: 'grp-a', position: 0, reservationId: 'res-a' }],
+      groups: [{ id: 'grp-a', position: 0, reservationId: 'res-a', stageId: 's-1' }],
       reservations: [reservation],
       stages: [],
     })
     expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
-      group: { id: 'grp-a', position: 0, reservationId: 'res-a' },
+      group: { id: 'grp-a', position: 0, reservationId: 'res-a', stageId: 's-1' },
       reservation,
     })
   })

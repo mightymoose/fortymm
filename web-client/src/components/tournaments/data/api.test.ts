@@ -859,7 +859,7 @@ const event: TournamentEvent = {
   // Server-owned and read-only, minted 1:1 with `reservations` above (ticket #1369) —
   // never authored by the editor, and absent from every write body (`eventToApiFields`
   // is allow-list, same as `stages` below).
-  groups: [{ id: 'grp-res-1', position: 0, reservationId: 'res-1' }],
+  groups: [{ id: 'grp-res-1', position: 0, reservationId: 'res-1', stageId: 's-1' }],
   // A round-robin event's single, system-minted stage (ADR 20260815) — never authored
   // by the editor, and absent from every write body (`eventToApiFields` is allow-list).
   stages: [{ id: 's-1', position: 0, drawType: 'round-robin' }],
@@ -956,6 +956,7 @@ describe('eventToCreateBody', () => {
         id: g.id,
         position: g.position,
         reservation_id: g.reservationId,
+        stage_id: g.stageId,
       })),
       // The stage is system-minted (ADR 20260815) and absent from every write body,
       // same as the reservations' server-owned fields above — supply the read shape's

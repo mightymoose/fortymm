@@ -1103,22 +1103,40 @@ describe('transitionTournament', () => {
 
   it('appends NO fix to a degenerate message that already names its own', () => {
     // The other arm of the fix rule, and the one every case above is blind to: the fix is
-    // appended for a field under two entrants and for NOTHING else. "A round-robin draw
-    // needs at least one group" already tells the director what to do, and this event has
-    // 52 entrants — "Add entrants, or remove the event" would be advice against the facts.
+    // appended for a field under two entrants and for NOTHING else. "Take fewer
+    // qualifiers…, or add entrants" already tells the director what to do, and this
+    // event has 52 entrants — a second, separate "Add entrants…" would repeat itself.
+    //
+    // "A round-robin draw needs at least one group" no longer serves this purpose (ADR
+    // 20260823): a standalone event's one stage now always holds exactly one group,
+    // decoupled from its reservation count, so that refusal is unreachable for a
+    // round-robin event — see `ev-u1500`'s own seed comment, `tournaments-store.ts`.
     const id = PUBLISHED
     for (const gone of [EMPTY_SINGLES, FULL_SINGLES, INELIGIBLE_SINGLES, DOUBLES]) {
       if (!deleteEvent(id, gone).ok) throw new Error(`setup failed: ${gone}`)
     }
-    // 52 entrants, and the groups taken away — the one refusal that is about the groups.
-    if (!updateEvent(id, FULLISH_SINGLES, { reservations: [] }).ok) {
-      throw new Error('setup failed: could not empty the reservations')
+    // 52 entrants, re-typed `rr-then-ko` across two reservations — the group stage still
+    // derives its count from `reservations.length` alone (`groupsForEvent`'s `rr-then-ko`
+    // arm is unchanged), so this snakes to 26 entrants a group — and K set past that
+    // smallest group, the one refusal that is about the qualifier count.
+    if (
+      !updateEvent(id, FULLISH_SINGLES, {
+        draw_type: 'rr-then-ko',
+        qualifiers_per_group: 27,
+        reservations: [
+          { name: 'Reservation A', slot: SLOT, table_ids: [] },
+          { name: 'Reservation B', slot: SLOT, table_ids: [] },
+        ],
+      }).ok
+    ) {
+      throw new Error('setup failed: could not re-type the event')
     }
 
     // No trailing fix, and no trailing space — which is why this is a `toBe`.
     expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
-      'This tournament cannot start yet: “Open Singles”: A round-robin draw needs at ' +
-        'least one group.',
+      'This tournament cannot start yet: “Open Singles”: Taking 27 qualifiers from ' +
+        'each group is more than the 26 entrants in the smallest group — take fewer ' +
+        'qualifiers from each group, or add entrants.',
     )
   })
 
@@ -1561,16 +1579,27 @@ describe('cutting and un-cutting a draw', () => {
     expect(uncutDraw(TOURNAMENT, EMPTY_SINGLES)).toEqual({ ok: true })
   })
 
-  it('refuses a grouped draw with NO reservations — there is nowhere to deal the field', () => {
-    // `ev-open-singles` is a grouped round-robin in the seed; empty its reservations and
-    // keep the type, so the refusal can only be about the groups.
+  it('cuts a round-robin draw with NO reservations — the group floor no longer needs one (ADR 20260823)', () => {
+    // Before #1484 this refused ("A round-robin draw needs at least one group"): the
+    // group count came from `reservations.length` alone, and zero reservations meant
+    // zero groups. Since ADR 20260823 a standalone event's one stage always holds
+    // exactly one group, decoupled from its reservation count — so this now CUTS, into
+    // one group that maps to no reservation (an Edge Case the ticket names outright:
+    // "a zero-reservation event… their fixtures fall to the synthetic event-wide
+    // reservation… nothing here refuses that state").
     updateEvent(TOURNAMENT, FULLISH_SINGLES, { draw_type: 'round-robin', reservations: [] })
 
     const result = cutDraw(TOURNAMENT, FULLISH_SINGLES)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.status).toBe(422)
-    expect(result.status === 422 && result.detail).toContain('at least one group')
+    if (!result.ok) throw new Error(`expected a cut, got ${result.status}`)
+
+    const event = eventOf(TOURNAMENT, FULLISH_SINGLES)
+    expect(event.groups).toHaveLength(1)
+    expect(event.groups[0].reservation_id).toBeNull()
+    // Every fixture names the event's one (unmapped) group — never `null`, which is
+    // what this event's fixtures used to carry before there was a group to name.
+    expect(new Set(result.fixtures.map((f) => f.group_id))).toEqual(
+      new Set([event.groups[0].id]),
+    )
   })
 
   it('refuses a field too small for its groups — a group of one has nobody to play', () => {
@@ -1885,9 +1914,19 @@ describe('cutting a round-robin-then-knockout draw', () => {
 
     const stage = grouped(cut(TWO_STAGE))
 
-    // Every fixture names one of THIS event's groups…
+    // Every fixture names one of THIS event's GROUP-STAGE groups — never the knockout
+    // stage's own group (ADR 20260823 mints one there too, but nothing here deals
+    // into it: this event's `fixtures` stay group-stage-only for the freeze mechanics
+    // this seed exists to cover).
+    const groupStageId = [...eventOf(TWO_STAGE).stages].sort(
+      (a, b) => a.position - b.position,
+    )[0]!.id
     expect(new Set(stage.map((f) => f.group_id))).toEqual(
-      new Set(eventOf(TWO_STAGE).groups.map((g) => g.id)),
+      new Set(
+        eventOf(TWO_STAGE)
+          .groups.filter((g) => (g as unknown as { stage_id: string }).stage_id === groupStageId)
+          .map((g) => g.id),
+      ),
     )
     // …every pair meets exactly once…
     const pairs = stage.map((f) => [f.entry_a_id, f.entry_b_id].sort().join('|'))
@@ -2886,10 +2925,22 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
     "%s's bracket is the one planDraw would cut — played out, not hand-drawn",
     (eventId) => {
       const event = eventOf(eventId)
+      // The GROUP STAGE's own group ids only (ADR 20260823) — never `event.groups` as a
+      // whole, which now also carries the knockout stage's own group (`groupsForEvent`).
+      // Handing the snake that one too would deal the field across an extra "group" the
+      // real cut never sees: "the snake deals only into the stage being dealt", the same
+      // filter `planEventDraw` (`tournaments-store.ts`) applies before calling `planDraw`.
+      const groupStageId = [...event.stages].sort((a, b) => a.position - b.position)[0]!.id
+      // `stage_id` (ADR 20260823) is not yet on the generated `GroupRead` — the
+      // regenerated `schema.d.ts` lands with the API companion change, see
+      // `mocks/factories/tournaments/solver-sim.ts`'s own widened `Group` type.
+      const groupIds = event.groups
+        .filter((g) => (g as unknown as { stage_id: string }).stage_id === groupStageId)
+        .map((g) => g.id)
       const plan = planDraw(
         'rr-then-ko',
         event.entrants.map((e) => e.id),
-        event.groups.map((g) => g.id),
+        groupIds,
         // The event's own count, unasserted: the planner takes `number | null` and
         // refuses the impossible pair loudly, so there is nothing here to talk past.
         event.qualifiers_per_group,
