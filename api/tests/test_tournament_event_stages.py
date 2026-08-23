@@ -40,6 +40,7 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventStage,
+    TournamentEventStageGroup,
     TournamentFixture,
     User,
 )
@@ -163,9 +164,10 @@ def _positions(
 
 async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     """Give ``event`` a fixture, which is all ``event_has_draw`` looks at — the same
-    minimal cut simulation ``test_tournament_events._add_cut_event`` uses, without a
-    real group to point the fixture at (single-elim/swiss fixtures carry no group
-    either).
+    minimal cut simulation ``test_tournament_events._add_cut_event`` uses. The
+    fixture names its stage's real group: every event write already materialises
+    one (#1484's floor), so ``group_id`` is never ``NULL`` and minting a second
+    row at the same ``(stage_id, position)`` would collide with it.
 
     Named by its stage 0, resolved through ``stage_id_at`` rather than
     ``event.stages[0]`` — not because ``TournamentEvent.stages`` would fail (it is
@@ -174,7 +176,15 @@ async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     populated at all. The single-stage draw types this file drives never need
     position 1."""
     stage_id = await stage_id_at(db, event.id, 0)
-    db.add(TournamentFixture(stage_id=stage_id, group_id=None, round=1, position=1))
+    group_id = (
+        await db.execute(
+            select(TournamentEventStageGroup.id).where(
+                TournamentEventStageGroup.stage_id == stage_id,
+                TournamentEventStageGroup.position == 0,
+            )
+        )
+    ).scalar_one()
+    db.add(TournamentFixture(stage_id=stage_id, group_id=group_id, round=1, position=1))
     await db.commit()
 
 

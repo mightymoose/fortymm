@@ -56,7 +56,12 @@ from app.tournament_draw_settings import (
     draw_settings_row,
     store_draw_settings,
 )
-from app.tournament_draws import event_groups, event_has_draw, event_reservations
+from app.tournament_draws import (
+    event_groups,
+    event_has_draw,
+    event_reservations,
+    group_stage_ids,
+)
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
@@ -515,9 +520,24 @@ async def _enforce_group_set_frozen(
         return
     existing = set(existing_order)
     incoming = set(incoming_order)
-    # The groups, in position order: the rows a refusal NAMES, by the label each
-    # position derives (ADR 20260808, ``group_label``) — a group has no name column.
-    current = sorted(event_groups(event), key=lambda group: group.position)
+    # The GROUP-STAGE groups, in position order: the rows a refusal NAMES, by the
+    # label each position derives (ADR 20260808, ``group_label``) — a group has no
+    # name column. Scoped to ``group_stage_ids`` (#1484): ``event_groups`` now spans
+    # every stage, and an ``rr-then-ko`` event's knockout stage's sole group shares
+    # ``position: 0`` with the group stage's first group — naming both would print
+    # two "Group A"s for one stranded reservation. Loses no refusal: a knockout
+    # group always maps to ``reservations[0]``, which the group stage's own
+    # position-0 group maps to as well (``position % reservation count``), so every
+    # reservation a knockout group could strand is already named through its
+    # group-stage sibling.
+    current = sorted(
+        (
+            group
+            for group in event_groups(event)
+            if group.stage_id in group_stage_ids(event)
+        ),
+        key=lambda group: group.position,
+    )
     # A removed reservation strands every group mapped to it; those groups are the
     # ones named. An added reservation is COUNTED — it has no identity yet. An entry
     # citing an id this event does not have counts as an addition here — it is one in

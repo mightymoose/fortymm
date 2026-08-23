@@ -181,6 +181,15 @@ async def _group_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]
     )
 
 
+def _is_knockout(fixture: TournamentFixture) -> bool:
+    """Whether ``fixture`` belongs to this composite's KNOCKOUT stage — its own
+    ``single-elim`` stage, never the group stage's ``round-robin`` (#1484: both now
+    name a real group of their own, so ``group_id is None`` no longer tells them
+    apart — the knockout stage's fixtures carry their own single group's id, mapped
+    the same way the group stage's are)."""
+    return fixture.stage.draw_type is DrawType.single_elim
+
+
 async def _tournament(client: AsyncClient) -> str:
     created = await client.post("/v1/tournaments", json=_tournament_payload())
     assert created.status_code == 201, created.text
@@ -758,8 +767,9 @@ async def test_the_cut_emits_the_groups_and_the_whole_bracket(
 
     The bracket is cut upfront because ``AdvancePlan`` can express only a side-fill —
     there is deliberately no way for ``advance()`` to create a fixture — and it costs
-    nothing, since ``P × K`` is known at cut time. Its fixtures are ``group_id IS NULL``
-    (that *is* the knockout stage) with every side TBD, and its rounds restart at 1.
+    nothing, since ``P × K`` is known at cut time. Its fixtures belong to the
+    KNOCKOUT stage (#1484: its own single group, never the group stage's) with every
+    side TBD, and its rounds restart at 1.
     """
     client, _ = authed_client
     tournament_id, event_id, _ = await _twelve_entrant_event(client, db_session)
@@ -767,8 +777,8 @@ async def test_the_cut_emits_the_groups_and_the_whole_bracket(
     assert (await _cut(client, tournament_id, event_id)).status_code == 201
 
     fixtures = await _fixtures(db_session, event_id)
-    grouped = [f for f in fixtures if f.group_id is not None]
-    bracket = [f for f in fixtures if f.group_id is None]
+    grouped = [f for f in fixtures if not _is_knockout(f)]
+    bracket = [f for f in fixtures if _is_knockout(f)]
     # Three groups of four: every pairing within a group, six per group.
     assert sorted(str(f.group_id) for f in grouped) == sorted(
         [str(group_id) for group_id in await _group_ids(db_session, event_id)] * 6
@@ -1104,9 +1114,7 @@ async def test_a_finished_group_seats_its_qualifiers_into_the_bracket(
             games=(2, 0),
         )
 
-        bracket = [
-            f for f in await _fixtures(db_session, event_id) if f.group_id is None
-        ]
+        bracket = [f for f in await _fixtures(db_session, event_id) if _is_knockout(f)]
         seated = {
             entry_id
             for f in bracket
@@ -1254,7 +1262,7 @@ async def test_a_group_reorder_mid_draw_is_refused_and_seating_stays_correct(
             return {
                 entry_id
                 for f in fixtures
-                if f.group_id is None
+                if _is_knockout(f)
                 for entry_id in (f.entry_a_id, f.entry_b_id)
                 if entry_id is not None
             }
@@ -1461,7 +1469,7 @@ async def test_a_group_holding_a_voided_pairing_still_seats_its_qualifiers(
 
         results = (await _event_read(client, tournament_id))["results"]
 
-    bracket = [f for f in await _fixtures(db_session, event_id) if f.group_id is None]
+    bracket = [f for f in await _fixtures(db_session, event_id) if _is_knockout(f)]
     seated = {
         entry_id
         for f in bracket

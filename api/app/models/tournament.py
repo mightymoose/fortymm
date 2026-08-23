@@ -361,8 +361,9 @@ class TournamentEvent(Base):
         order_by="TournamentEntry.created_at",
     )
 
-    # The event's GROUPS, in the director's own order — which is what
-    # ``TournamentEventStageGroup.position`` carries, and what the snake seeds against.
+    # The event's GROUPS, across EVERY stage (#1484) — which is what
+    # ``TournamentEventStageGroup.position`` carries within its own stage, and what
+    # the snake seeds against for the stage it deals.
     #
     # This relationship carried one combined name until a single wire-level slot split
     # into a group row and a reservation row. A group is the half a fixture names; the
@@ -373,28 +374,40 @@ class TournamentEvent(Base):
     #
     # VIEWONLY, reachable through the event's stages, not the real parent-child
     # relationship: ADR 20260815's "Sequencing with #1338" consequence parents a group
-    # on its stage (always stage 0 — decision 3), because
-    # ``tournament_fixtures.event_id`` is dropped in the same ADR and a group must share
-    # a column with the fixtures whose composite FK targets it. Writes go through
-    # ``app.tournament_reservations``, which resolves the event's first stage and
-    # assigns ``stage.groups`` (the real relationship, declared on
+    # on its stage, because ``tournament_fixtures.event_id`` is dropped in the same ADR
+    # and a group must share a column with the fixtures whose composite FK targets it.
+    # Writes go through ``app.tournament_reservations``, which resolves the stage(s) it
+    # is materialising and assigns ``stage.groups`` (the real relationship, declared on
     # :class:`~app.models.tournament_event_stage.TournamentEventStage`) — never this
     # one, which SQLAlchemy refuses to flush from.
     # ``secondary="tournament_event_stages"`` is an unusual use of that argument (the
     # "secondary" table is a full mapped entity here, not a bare association table), and
     # ``viewonly=True`` is what makes it safe: SQLAlchemy never attempts to
     # INSERT/DELETE through this relationship, so it only ever uses the table for the
-    # join. The ``primaryjoin`` pins that join to stage 0 specifically, so this stays
-    # exactly the list a reader expects even on an rr-then-ko event, which has a second
-    # stage with no groups of its own. ``lazy="selectin"``, for the reason every
-    # collection on this path is eager: a joined load would multiply the event rows,
-    # which the tournament list's LIMIT/OFFSET could not survive.
+    # join.
+    #
+    # **The ``primaryjoin`` no longer pins to stage 0** (#1484): it used to, back when
+    # a director's groups only ever hung off the event's first stage and an
+    # ``rr-then-ko`` event's knockout stage held none of its own. Now every stage a
+    # draw type's template mints holds groups, and this is what makes an
+    # ``rr-then-ko`` event's knockout group reach the wire, the freeze and the
+    # solver's reservation hop (``app.schedule_solves.restricting_reservation_key``,
+    # through ``app.tournament_draws.event_groups``). **The consequence every reader
+    # must now handle**: ``position`` is unique only WITHIN a stage, not across the
+    # whole list this relationship returns, so a knockout stage's sole group and its
+    # event's first group-stage group can both report ``position: 0``. Every reader
+    # that labels, ranks, deals or panels a group filters to stages that seat both
+    # sides at the cut (``app.draws.seats_both_sides_at_cut``) or otherwise
+    # disambiguates on ``stage_id`` — see ``app.tournament_draws.draw_config``,
+    # ``group_order`` and ``app.tournament_events``'s freeze sentence. Only the
+    # reservation-resolution hop is meant to read the whole, unfiltered array.
+    #
+    # ``lazy="selectin"``, for the reason every collection on this path is eager: a
+    # joined load would multiply the event rows, which the tournament list's
+    # LIMIT/OFFSET could not survive.
     groups: Mapped[list["TournamentEventStageGroup"]] = relationship(
         secondary="tournament_event_stages",
-        primaryjoin=(
-            "and_(TournamentEvent.id == TournamentEventStage.event_id, "
-            "TournamentEventStage.position == 0)"
-        ),
+        primaryjoin="TournamentEvent.id == TournamentEventStage.event_id",
         secondaryjoin="TournamentEventStage.id == TournamentEventStageGroup.stage_id",
         viewonly=True,
         lazy="selectin",

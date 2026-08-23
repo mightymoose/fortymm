@@ -40,6 +40,7 @@ from app.models import (
     User,
 )
 from app.schemas.tournament import Address, TournamentEventCreate, TournamentEventUpdate
+from app.tournament_draws import group_stage_ids
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
@@ -292,8 +293,11 @@ def _reservation(name: str, **extra: Any) -> dict[str, Any]:
 
 
 def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
-    """``(name, position)`` per stored group, read off the ROWS in the relationship's
-    order (which is ``position`` ascending).
+    """``(name, position)`` per stored GROUP STAGE group, read off the ROWS in the
+    relationship's order (which is ``position`` ascending) — never ``event.groups``
+    whole: an ``rr-then-ko`` event's knockout stage holds its own single group too
+    (#1484), which shares this file's own reservations but is not what these
+    positions are about.
 
     Names, not ids, because a reservation named "Reservation C" sitting at position 0
     is the whole claim: it is the reservation the director put first, and it is not the
@@ -305,7 +309,12 @@ def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
     """
     # The name is the RESERVATION's and the position is the GROUP's — the split the
     # projection reads back, spelled here against the rows.
-    return [(group.reservation.name, group.position) for group in event.groups]
+    stage_ids = group_stage_ids(event)
+    return [
+        (group.reservation.name, group.position)
+        for group in event.groups
+        if group.stage_id in stage_ids
+    ]
 
 
 async def test_create_positions_reservations_by_the_order_they_were_sent(
@@ -357,8 +366,12 @@ async def test_create_positions_reservations_by_the_order_they_were_sent(
         ("Reservation A", 1),
         ("Reservation B", 2),
     ]
-    # No two groups of one event share a position.
-    positions = [group.position for group in row.groups]
+    # No two groups of the GROUP STAGE share a position — never asked of the
+    # event's whole, widened ``groups`` (#1484): the knockout stage's own group is
+    # legitimately position 0 too, the same position the group stage's own group 1
+    # holds.
+    stage_ids = group_stage_ids(row)
+    positions = [group.position for group in row.groups if group.stage_id in stage_ids]
     assert len(set(positions)) == len(positions)
 
 
@@ -556,7 +569,11 @@ async def test_update_repositions_reservations_by_the_order_they_were_patched(
         ("Reservation C", 1),
         ("Reservation A", 2),
     ]
-    positions = [group.position for group in row.groups]
+    # No two groups of the GROUP STAGE share a position — see the sibling create
+    # test's comment for why this is scoped rather than asked of the whole,
+    # widened ``groups`` (#1484).
+    stage_ids = group_stage_ids(row)
+    positions = [group.position for group in row.groups if group.stage_id in stage_ids]
     assert len(set(positions)) == len(positions)
 
 
@@ -2005,7 +2022,12 @@ async def test_reservation_write_statement_count_does_not_drift(
         ),
     )
     event_id = event.id
-    reservation_ids = [group.reservation.id for group in event.groups]
+    # Deduped: the knockout stage's own group (#1484) shares Reservation A with the
+    # group stage's own group 1 (``0 % 2 == 0``), so ``event.groups`` names each
+    # reservation more than once — a PATCH must still cite each one exactly once.
+    reservation_ids = list(
+        dict.fromkeys(group.reservation.id for group in event.groups)
+    )
     await db_session.commit()
 
     async with counted_statements(engine) as (session, statements):

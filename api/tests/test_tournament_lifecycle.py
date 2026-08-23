@@ -32,6 +32,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -544,9 +545,15 @@ async def test_delete_of_a_tournament_whose_fixture_is_placed_still_removes_it(
     )
     db_session.add(event)
     await db_session.commit()
+    # A round-robin stage holds exactly one group (#1484's floor), which its
+    # fixture's ``group_id`` — NOT NULL — must name.
+    group = TournamentEventStageGroup(stage_id=stages[0].id, position=0)
+    db_session.add(group)
+    await db_session.flush()
     db_session.add(
         TournamentFixture(
             stage_id=stages[0].id,
+            group_id=group.id,
             round=1,
             position=1,
             table_id=str(tournament.tables[0].id),

@@ -234,8 +234,23 @@ def _cited(body: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _group_stage_id(body: dict[str, Any]) -> str:
+    """The id of ``body``'s GROUP STAGE — always position 0 (#1484), whatever the
+    draw type — the stage this file's derivation assertions are about."""
+    (stage,) = [stage for stage in body["stages"] if stage["position"] == 0]
+    return str(stage["id"])
+
+
 def _groups(body: dict[str, Any]) -> list[dict[str, Any]]:
-    return sorted(body["groups"], key=lambda group: group["position"])
+    """The GROUP STAGE's own groups, in position order — never the event's whole,
+    widened ``groups`` array (#1484): an ``rr-then-ko`` event's knockout stage holds
+    its own single group too, which is not this file's subject and would otherwise
+    double the count every assertion here pins."""
+    group_stage_id = _group_stage_id(body)
+    return sorted(
+        (group for group in body["groups"] if group["stage_id"] == group_stage_id),
+        key=lambda group: group["position"],
+    )
 
 
 def _mapping(body: dict[str, Any]) -> list[str | None]:
@@ -246,11 +261,11 @@ def _mapping(body: dict[str, Any]) -> list[str | None]:
 def _expected_mapping(body: dict[str, Any]) -> list[str | None]:
     """The ``position % reservation count`` rule, spelled against the response."""
     reservations = sorted(body["reservations"], key=lambda row: row["position"])
+    groups = _groups(body)
     if not reservations:
-        return [None for _ in body["groups"]]
+        return [None for _ in groups]
     return [
-        reservations[group["position"] % len(reservations)]["id"]
-        for group in _groups(body)
+        reservations[group["position"] % len(reservations)]["id"] for group in groups
     ]
 
 
@@ -366,7 +381,7 @@ async def test_an_rr_then_ko_create_materialises_groups_from_the_preview_field(
 
     event = await _create_event(client, tournament_id)
 
-    assert len(event["groups"]) == 8
+    assert len(_groups(event)) == 8
     assert len(event["reservations"]) == 1
     assert [group["position"] for group in _groups(event)] == list(range(8))
     assert _mapping(event) == [event["reservations"][0]["id"]] * 8
@@ -384,7 +399,7 @@ async def test_eight_groups_across_four_reservations_map_two_to_each(
         reservations=[RESERVATION_A, RESERVATION_B, RESERVATION_C, RESERVATION_D],
     )
 
-    assert len(event["groups"]) == 8
+    assert len(_groups(event)) == 8
     assert _mapping(event) == _expected_mapping(event)
     by_reservation = {
         reservation["id"]: _mapping(event).count(reservation["id"])
@@ -403,7 +418,7 @@ async def test_a_group_on_an_event_with_no_reservation_carries_a_null_reservatio
 
     event = await _create_event(client, tournament_id, reservations=[])
 
-    assert len(event["groups"]) == 8
+    assert len(_groups(event)) == 8
     assert event["reservations"] == []
     assert _mapping(event) == [None] * 8
 
@@ -424,7 +439,7 @@ async def test_lowering_the_cap_removes_group_rows_and_keeps_the_lowest_position
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert len(body["groups"]) == 2
+    assert len(_groups(body)) == 2
     assert body["reservations"] == event["reservations"]
     assert await _stored_group_ids(db_session, event["id"]) == before[:2]
     assert _mapping(body) == _expected_mapping(body)
@@ -443,7 +458,7 @@ async def test_clearing_the_cap_derives_against_the_uncapped_default(
 
     assert response.status_code == 200, response.text
     assert response.json()["max_players"] is None
-    assert len(response.json()["groups"]) == -(-DEFAULT_UNCAPPED_FIELD // 5) == 4
+    assert len(_groups(response.json())) == -(-DEFAULT_UNCAPPED_FIELD // 5) == 4
 
 
 @pytest.mark.parametrize("draw_type", ["round-robin", "single-elim", "swiss"])
@@ -512,7 +527,7 @@ async def test_patching_the_draw_type_to_and_from_rr_then_ko_moves_the_rows(
         qualifiers_per_group=1,
     )
     assert to_rrko.status_code == 200, to_rrko.text
-    assert len(to_rrko.json()["groups"]) == 8
+    assert len(_groups(to_rrko.json())) == 8
     assert _mapping(to_rrko.json()) == _expected_mapping(to_rrko.json())
     # A grow keeps the row the event had, and appends.
     assert (await _stored_group_ids(db_session, event["id"]))[:1] == kept
@@ -560,7 +575,7 @@ async def test_the_cut_re_derives_the_count_from_the_real_field(
     client, _ = authed_client
     tournament_id = await _tournament(client)
     event = await _create_event(client, tournament_id)
-    assert len(event["groups"]) == 8
+    assert len(_groups(event)) == 8
     before = await _stored_group_ids(db_session, event["id"])
     await _seed_field(db_session, event["id"], 10)
 
@@ -588,7 +603,7 @@ async def test_an_uncapped_event_with_five_registrants_cuts_into_one_group(
     event = await _create_event(
         client, tournament_id, max_players=None, qualifiers_per_group=2
     )
-    assert len(event["groups"]) == 4
+    assert len(_groups(event)) == 4
     await _seed_field(db_session, event["id"], 5)
 
     response = await client.post(_draw_url(tournament_id, event["id"]))
@@ -671,7 +686,7 @@ async def test_a_re_cut_re_derives_and_an_uncut_keeps_the_cut_time_count(
 
     renamed = await _patch(client, tournament_id, event["id"], name="Renamed")
     assert renamed.status_code == 200, renamed.text
-    assert len(renamed.json()["groups"]) == 8
+    assert len(_groups(renamed.json())) == 8
     assert (await _stored_group_ids(db_session, event["id"]))[:3] == three
 
     assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
@@ -748,12 +763,12 @@ async def test_the_409s_way_out_works_end_to_end(
         reservations=[*_cited(event), RESERVATION_B],
     )
     assert added.status_code == 200, added.text
-    assert len(added.json()["groups"]) == 8
+    assert len(_groups(added.json())) == 8
     assert len(set(_mapping(added.json()))) == 2
 
     assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
     read = await _read(client, tournament_id, event["id"])
-    assert len(read["groups"]) == 2
+    assert len(_groups(read)) == 2
     assert _mapping(read) == _expected_mapping(read)
     assert len(set(_mapping(read))) == 2
 
@@ -798,7 +813,7 @@ async def test_removing_one_reservation_re_maps_every_group_and_deletes_no_row(
     body = response.json()
     assert len(body["reservations"]) == 3
     # No group row went with the reservation.
-    assert len(body["groups"]) == 8
+    assert len(_groups(body)) == 8
     assert await _stored_group_ids(db_session, event["id"]) == before_ids
     # Every group re-mapped by ``position % surviving reservation count``.
     assert _mapping(body) == _expected_mapping(body)
@@ -845,7 +860,7 @@ async def test_removing_the_middle_reservation_maps_against_the_restamped_positi
         "Reservation C",
     ]
     assert [reservation["position"] for reservation in body["reservations"]] == [0, 1]
-    assert len(body["groups"]) == 8
+    assert len(_groups(body)) == 8
     assert await _stored_group_ids(db_session, event["id"]) == before_ids
     assert _mapping(body) == _expected_mapping(body)
     assert sorted(Counter(_mapping(body)).values()) == [4, 4]
@@ -881,7 +896,7 @@ async def test_removing_the_last_reservation_keeps_the_groups_and_deletes_the_jo
     assert emptied.status_code == 200, emptied.text
     body = emptied.json()
     assert body["reservations"] == []
-    assert len(body["groups"]) == 8
+    assert len(_groups(body)) == 8
     assert await _stored_group_ids(db_session, event["id"]) == before_ids
     assert _mapping(body) == [None] * 8
     # No join row survives, so none can name a reservation that is gone.
@@ -894,13 +909,65 @@ async def test_removing_the_last_reservation_keeps_the_groups_and_deletes_the_jo
     assert restored.status_code == 200, restored.text
     back = restored.json()
     only = back["reservations"][0]["id"]
-    assert len(back["groups"]) == 8
+    assert len(_groups(back)) == 8
     assert await _stored_group_ids(db_session, event["id"]) == before_ids
     assert _mapping(back) == [only] * 8
     assert [
         str(reservation_id)
         for _, reservation_id in await _join_rows(db_session, event["id"])
     ] == [only] * 8
+
+
+def _knockout_group(body: dict[str, Any]) -> dict[str, Any]:
+    """The knockout stage's own single group — position 1's stage, not the group
+    stage's (#1484). Every group in ``body["groups"]`` carries ``stage_id``
+    precisely so a caller outside this file's own group-stage helpers can pick it
+    out."""
+    (knockout_stage,) = [stage for stage in body["stages"] if stage["position"] == 1]
+    (group,) = [
+        group for group in body["groups"] if group["stage_id"] == knockout_stage["id"]
+    ]
+    return group
+
+
+async def test_removing_a_reservation_unmaps_the_knockout_stages_own_group_too(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    """The unmap loop in ``apply_event_reservations`` walks ``event.groups`` — every
+    stage's, since #1484 widened that relationship past stage 0 — so a removed
+    reservation orphans the knockout stage's own group exactly as it does a group
+    stage group (Discovery decision 3, deliberately the mirror of how #1316 phrased
+    the same rule before this ticket: every stage's groups unmap, not only the
+    group stage's).
+
+    Two reservations, so the knockout's own group (position 0 of its own stage)
+    starts out sharing Reservation A with the group stage's own group 1 — the same
+    ``0 % 2 == 0`` mapping #1484 makes universal. Removing A must re-point it to
+    the survivor, not just the pool's groups; removing everything must null it,
+    not just the pool's."""
+    client, _ = authed_client
+    tournament_id = await _tournament(client)
+    event = await _create_event(
+        client, tournament_id, reservations=[RESERVATION_A, RESERVATION_B]
+    )
+    before = _knockout_group(event)
+    assert before["position"] == 0
+    assert before["reservation_id"] == _groups(event)[0]["reservation_id"]
+
+    kept_b = [entry for entry in _cited(event) if entry["name"] == "Reservation B"]
+    removed_a = await _patch(client, tournament_id, event["id"], reservations=kept_b)
+
+    assert removed_a.status_code == 200, removed_a.text
+    remapped = removed_a.json()
+    after_removal = _knockout_group(remapped)
+    (surviving,) = remapped["reservations"]
+    assert after_removal["reservation_id"] == surviving["id"]
+
+    emptied = await _patch(client, tournament_id, event["id"], reservations=[])
+
+    assert emptied.status_code == 200, emptied.text
+    after_empty = _knockout_group(emptied.json())
+    assert after_empty["reservation_id"] is None
 
 
 # There is deliberately no more "a removal on every other draw type takes exactly
@@ -990,7 +1057,7 @@ async def test_removing_a_reservation_no_group_maps_onto_is_still_refused(
     await _seed_field(db_session, event["id"], 5)
     assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
     event = await _read(client, tournament_id, event["id"])
-    assert len(event["groups"]) == 1
+    assert len(_groups(event)) == 1
 
     response = await _patch(
         client, tournament_id, event["id"], reservations=_cited(event)[:1]

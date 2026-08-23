@@ -1029,6 +1029,7 @@ async def _hold_user_in_second_event(
     await db.flush()
     fixture = TournamentFixture(
         stage_id=stages[0].id,
+        group_id=stages[0].groups[0].id,
         round=1,
         position=1,
         entry_a_id=entry_held.id,

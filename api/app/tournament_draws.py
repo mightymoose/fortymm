@@ -47,7 +47,9 @@ from app.draws import (
     GroupId,
     MatchId,
     NonSinglesDraw,
+    PlannedFixture,
     order_entrants,
+    seats_both_sides_at_cut,
     strategy_for,
     unseated_entrant_allowance,
 )
@@ -153,10 +155,29 @@ async def active_draw_entrants_by_event(
     return entrants
 
 
+def group_stage_ids(event: TournamentEvent) -> frozenset[uuid.UUID]:
+    """The ids of every one of ``event``'s stages that seats both sides of its
+    fixtures at the cut (:func:`~app.draws.seats_both_sides_at_cut`) — the one
+    definition of "a group-stage stage", so a reader that labels, ranks, deals or
+    panels a group filters a widened ``event.groups``/``plan.event.groups`` list to
+    it once (#1484), rather than three call sites each asking the predicate over
+    ``event.stages`` themselves and risking a fourth that asks it slightly
+    differently.
+
+    Reads the already-eager ``TournamentEvent.stages`` (``lazy="selectin"``), never a
+    query of its own. Shared by :func:`group_order`,
+    ``app.tournament_events._enforce_group_set_frozen`` (the freeze's 409 sentence)
+    and ``app.schedule_preview``'s group-label map.
+    """
+    return frozenset(
+        stage.id for stage in event.stages if seats_both_sides_at_cut(stage.draw_type)
+    )
+
+
 def group_order(event: TournamentEvent) -> dict[GroupId, int]:
-    """Each of this event's group ids mapped to its **0-based place in the event's group
-    order** — the lookup :func:`fixture_state` resolves a fixture's ``group_id``
-    through.
+    """Each of this event's **group-stage** group ids mapped to its **0-based place in
+    the event's group order** — the lookup :func:`fixture_state` resolves a fixture's
+    ``group_id`` through.
 
     Computed once per event rather than per fixture: a fixture carries its group's *id*,
     not its index, so somebody has to do the join and a 200-fixture round-robin should
@@ -167,10 +188,23 @@ def group_order(event: TournamentEvent) -> dict[GroupId, int]:
     :func:`draw_config` hands the snake, by construction and not by two functions
     agreeing — including on an event whose groups predate the field, where every stored
     position is ``0`` and the stable sort leaves the array order standing.
+
+    **Never ranks a knockout group** (#1484, Discovery decision 2). Once
+    ``TournamentEvent.groups`` spans every stage, an ``rr-then-ko`` event's knockout
+    stage's sole group shares ``position: 0`` with the group stage's first group — two
+    groups, one position, and which one takes rank 0 would otherwise be arbitrary. So
+    this filters to :func:`group_stage_ids` before ranking, the same predicate every
+    other reader that labels, deals or panels a group asks (#1483). A fixture whose
+    group falls outside that filter (a knockout fixture, or a caller that never
+    resolved the event's stages at all) projects :attr:`~app.draws.FixtureState
+    .group_position` as ``None`` — harmless, since nothing ranks a bracket by group
+    letter.
     """
-    return {
-        GroupId(group.id): index for index, group in enumerate(_ordered_groups(event))
-    }
+    stage_ids = group_stage_ids(event)
+    group_stage_groups = [
+        group for group in _ordered_groups(event) if group.stage_id in stage_ids
+    ]
+    return {GroupId(group.id): index for index, group in enumerate(group_stage_groups)}
 
 
 def _stage_id_at_position(event: TournamentEvent, position: int) -> uuid.UUID | None:
@@ -892,7 +926,7 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
         [
             TournamentFixture(
                 stage_id=_stage_id_at(stage_ids, fixture.stage.position),
-                group_id=fixture.group_id,
+                group_id=_group_id_of(fixture),
                 round=fixture.round,
                 position=fixture.position,
                 entry_a_id=fixture.entry_a_id,
@@ -925,6 +959,32 @@ def _stage_id_at(stage_ids: Mapping[int, uuid.UUID], position: int) -> uuid.UUID
             "draw type have drifted out of the template's lockstep (ADR 20260815 "
             "decision 3)"
         ) from None
+
+
+def _group_id_of(fixture: PlannedFixture) -> uuid.UUID:
+    """A planned fixture's group id, never ``None`` on the production path — a loud
+    failure rather than a silent attempt to write ``NULL`` into a ``NOT NULL`` column
+    (#1484), mirroring :func:`_stage_id_at`'s reasoning for the same seam.
+
+    :attr:`~app.draws.PlannedFixture.group_id` stays ``GroupId | None`` in the domain
+    — ``app.draws`` is constructible from literals, and a strategy test cutting
+    against a bare ``DrawConfig()`` still plans ungrouped fixtures the way it always
+    did (:func:`~app.draws._sole_group`). It is this one write seam, not the domain
+    type, that enforces the production invariant: every stage a draw type's template
+    mints holds a group now (#1483's floor, #1484's knockout stage), and every
+    strategy deals every fixture it plans into one. A ``None`` here means that
+    lockstep has broken — a stage minted with no group row, or a strategy planning
+    against a config that never resolved one — and the honest response is the same
+    500 :func:`_stage_id_at` raises for the sibling invariant, not a fixture silently
+    written without the group the NOT NULL column exists to guarantee.
+    """
+    if fixture.group_id is None:
+        raise RuntimeError(
+            "cut_draw planned a fixture with no group id, but tournament_fixtures"
+            ".group_id is NOT NULL (#1484) — the strategy that planned this fixture "
+            "and the stage template it was cut against have drifted out of lockstep."
+        )
+    return fixture.group_id
 
 
 async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None:

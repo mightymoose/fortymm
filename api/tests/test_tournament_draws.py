@@ -451,7 +451,17 @@ async def test_group_order_ranks_every_group_id_by_the_events_order(
     cut in."""
     owner = await make_user(db_session, "order-rank-owner")
     stored = await _groups(db_session, owner=owner, league=default_league)
-    event = TournamentEvent(groups=list(reversed(stored)))
+    # ``group_order`` scopes its rank map to the group-stage groups (#1484), which it
+    # resolves through ``event.stages`` — absent on a bare in-memory object, so a
+    # single stage matching every stored group's real ``stage_id`` stands in for it.
+    event = TournamentEvent(
+        groups=list(reversed(stored)),
+        stages=[
+            TournamentEventStage(
+                id=stored[0].stage_id, position=0, draw_type=DrawType.round_robin
+            )
+        ],
+    )
 
     assert group_order(event) == {group.id: index for index, group in enumerate(stored)}
 
@@ -466,7 +476,14 @@ async def test_fixture_state_projects_its_groups_place_in_the_event_order(
     particular in theirs."""
     owner = await make_user(db_session, "order-project-owner")
     stored = await _groups(db_session, owner=owner, league=default_league)
-    event = TournamentEvent(groups=stored)
+    event = TournamentEvent(
+        groups=stored,
+        stages=[
+            TournamentEventStage(
+                id=stored[0].stage_id, position=0, draw_type=DrawType.round_robin
+            )
+        ],
+    )
     fixture = TournamentFixture(
         id=uuid.uuid4(),
         stage_id=uuid.uuid4(),
@@ -485,10 +502,13 @@ async def test_fixture_state_projects_no_group_position_when_there_is_no_group(
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
-    """An ungrouped fixture (single-elim, or an rr-then-ko draw's KO stage) is in no
-    group, so there is no place to project — ``None``, whatever lookup is passed. And
-    a caller that passes no lookup at all gets ``None`` for a *grouped* fixture too:
-    the order was not resolved, which is a different thing from position zero."""
+    """A fixture with no group projects no group position — ``None``, whatever lookup
+    is passed. No persisted ``TournamentFixture`` reaches this state any more
+    (#1484's ``NOT NULL``: single-elim, swiss and an rr-then-ko draw's KO stage all
+    name a real group now), but the bridge stays total over it defensively, the same
+    way :func:`app.tournament_queries._group_position`'s ``nulls_last()`` does. And a
+    caller that passes no lookup at all gets ``None`` for a *grouped* fixture too: the
+    order was not resolved, which is a different thing from position zero."""
     owner = await make_user(db_session, "order-none-owner")
     stored = await _groups(db_session, owner=owner, league=default_league)
     event = TournamentEvent(groups=stored)

@@ -481,18 +481,20 @@ def materialise_stage_groups(
 async def materialise_event_groups(
     db: AsyncSession, event: TournamentEvent, *, field_size: int
 ) -> None:
-    """Make ``event``'s stage-0 group rows equal :func:`group_count_for`'s answer for
-    ``field_size`` and the event's current reservations, mapped round-robin
-    (:func:`materialise_groups`) — the edit-path and cut-path door onto the
+    """Make **every one of** ``event``'s stages hold the group rows
+    :func:`group_count_for` says its own template entry holds for ``field_size`` and
+    the event's current reservations, mapped round-robin (:func:`materialise_groups`,
+    via :func:`materialise_stage_groups`) — the edit-path and cut-path door onto the
     materialisation.
 
-    **Stage 0 only, for now.** #1484 widens this to every stage of the event's
-    template (:func:`materialise_stage_groups`) once ``TournamentEvent.groups`` stops
-    pinning its read to stage 0 — until then, materialising a stage-1 group here would
-    be a row nothing on the read side could show a director, and premature. The create
-    path (``app.tournament_events.create_event``) already materialises every stage,
-    through the same :func:`materialise_stage_groups` this will move onto, because it
-    holds the freshly-minted stages directly and has no stage-0-only shortcut to take.
+    **Every stage, not stage 0 alone** (#1484): an ``rr-then-ko`` event's knockout
+    stage now holds its own single group, the same way its group stage holds its
+    structural pool — both are template entries, and this walks the whole template
+    rather than special-casing the first entry. The create path
+    (``app.tournament_events.create_event``) already materialises every stage through
+    the same :func:`materialise_stage_groups`, because it holds the freshly-minted
+    stages directly and has no query to make; this is that same policy's queried door,
+    for an event that already exists.
 
     **The caller decides whether it runs, and which field it runs against.**
     ``app.tournament_events.update_event`` calls it unconditionally, late in the write
@@ -508,14 +510,10 @@ async def materialise_event_groups(
     ``event.reservations``, which is eager and, on the edit path, already the list the
     reservations diff just assigned.
 
-    Resolves the event's stage 0 with an explicit query, the same discipline
+    Resolves the event's stages with an explicit query, the same discipline
     ``app.tournament_event_stages.remint_stages_in_place`` follows: ``TournamentEvent
     .stages`` is eager, but ``TournamentEventStage.groups`` is deliberately NOT, so
     this needs its own query to attach the ``selectinload`` that loads it.
-    ``scalar_one()``, not ``scalar_one_or_none()``: every event holds at least one
-    stage from the moment it exists (ADR 20260815 decision 1), so a miss here means the
-    event was seeded straight through the ORM bypassing ``create_event`` — a
-    test-fixture bug, not a state this function is asked to tolerate.
 
     Does not flush. A fresh group's ``id`` is the database's (``gen_random_uuid()``)
     and projects as ``None`` until the INSERT runs, so a caller that reads the groups
@@ -528,25 +526,22 @@ async def materialise_event_groups(
     # selectin), so this one direct reader asks for exactly the load it needs. ONE
     # option, not a chain down to the tables: ``reservation_link`` and ``reservation``
     # are ``joined`` on their own models and ride this query's own SELECT.
-    stage = (
-        await db.execute(
-            select(TournamentEventStage)
-            .options(selectinload(TournamentEventStage.groups))
-            .where(
-                TournamentEventStage.event_id == event.id,
-                TournamentEventStage.position == 0,
+    stages = (
+        (
+            await db.execute(
+                select(TournamentEventStage)
+                .options(selectinload(TournamentEventStage.groups))
+                .where(TournamentEventStage.event_id == event.id)
+                .order_by(TournamentEventStage.position)
             )
         )
-    ).scalar_one()
-    # Stage 0's own count source off the template — never the whole template, since
-    # this function only ever touches the one stage it queried above.
-    _component, count_source = stage_template(
-        draw_settings_of(event.draw_settings).draw_type
-    )[0]
-    materialise_groups(
-        stage,
+        .scalars()
+        .all()
+    )
+    materialise_stage_groups(
+        stages,
         ordered_reservations(event),
-        group_count_source=count_source,
+        draw_type=draw_settings_of(event.draw_settings).draw_type,
         field_size=field_size,
     )
 

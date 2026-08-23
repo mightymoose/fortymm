@@ -1355,8 +1355,9 @@ class FixtureTimeRead(BaseModel):
 
 
 class TournamentFixtureRead(BaseModel):
-    """One planned pairing of an event's draw (ADR-0786): a round and a position —
-    plus a group, when the draw is grouped — whose sides may still be unknown.
+    """One planned pairing of an event's draw (ADR-0786): a round, a position, and a
+    group (#1484 — every stage holds one, whatever the draw type) — whose sides may
+    still be unknown.
 
     A fixture is **not** a match. It materializes into one at go-live (#788): once the
     tournament is ``live``, every ready fixture becomes a real ``in_progress`` match and
@@ -1390,14 +1391,14 @@ class TournamentFixtureRead(BaseModel):
       fixture has not materialized. It rides on the fixture so a bracket shows a slot's
       state without a per-slot round-trip; it is the match's *current* status, read
       live, not a copy frozen at go-live.
-    * ``group_id`` — ``null`` means this fixture belongs to no group: **which stage
-      leaves fixtures un-grouped is no longer this field's business to say** — read
-      ``stage_id`` against the event's ``stages`` array for that (ADR 20260815). When
-      set, it names a group of **this fixture's own stage**, and it is guaranteed to:
-      the column is half of a composite foreign key onto
+    * ``group_id`` — **never** ``null`` (#1484): every stage a draw type's template
+      mints holds at least one group, so every fixture names one, even a bracket or a
+      swiss round whose sole group maps to no reservation. It names a group of **this
+      fixture's own stage** — the column is half of a composite foreign key onto
       ``tournament_event_stage_groups (stage_id, id)``, so it is neither a dangling ref
       nor another stage's group (ADR 20260801, re-parented onto the stage by ADR
-      20260815).
+      20260815) — never which stage a fixture is in: read ``stage_id`` against the
+      event's ``stages`` array for that (ADR 20260815).
     * ``table_id`` — the fixture's **placement** table (ADR-0790): ``null`` means
       **unassigned to a table**. When set, it names a ``TournamentTable`` in the
       tournament's ``table_catalogue``, and it is guaranteed to: the column is a real
@@ -1437,7 +1438,9 @@ class TournamentFixtureRead(BaseModel):
     id: uuid.UUID
     #: The stage this fixture belongs to — see the class docstring. NOT NULL.
     stage_id: uuid.UUID
-    group_id: uuid.UUID | None
+    #: The group of ``stage_id`` this fixture belongs to — see the class docstring.
+    #: NOT NULL (#1484).
+    group_id: uuid.UUID
     round: int
     position: int
     entry_a_id: uuid.UUID | None

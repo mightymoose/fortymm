@@ -163,9 +163,14 @@ async def test_a_fixture_persists_with_both_sides_tbd(
     db_session: AsyncSession, event: TournamentEvent
 ) -> None:
     """A cut draw may contain fixtures whose sides are not known yet — that is what a
-    ``NULL`` side is *for*, and it is the only thing it means."""
+    ``NULL`` side is *for*, and it is the only thing it means. ``group_id`` itself
+    stays a real group (#1484: every stage holds one now, so a fixture with unknown
+    sides is still grouped)."""
+    group_a = _group_a(event)
     db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=2, position=1)
+        TournamentFixture(
+            stage_id=_stage_a(event), group_id=group_a, round=2, position=1
+        )
     )
     await db_session.commit()
 
@@ -180,7 +185,7 @@ async def test_a_fixture_persists_with_both_sides_tbd(
     assert stored.entry_b_id is None
     assert stored.winner_entry_id is None
     assert stored.match_id is None
-    assert stored.group_id is None
+    assert stored.group_id == group_a
     assert stored.created_at.tzinfo is not None
     assert stored.updated_at.tzinfo is not None
 
@@ -247,53 +252,6 @@ async def test_duplicate_round_and_position_in_the_same_group_is_rejected(
         await db_session.commit()
     assert FIXTURE_IDENTITY_CONSTRAINT in str(excinfo.value)
     await db_session.rollback()
-
-
-async def test_duplicate_round_and_position_in_an_ungrouped_draw_is_rejected(
-    db_session: AsyncSession, event: TournamentEvent
-) -> None:
-    """The ungrouped case — a single-elim draw, where ``group_id`` is ``NULL`` on
-    every fixture. This is the test the ``NULLS NOT DISTINCT`` clause exists for:
-    under Postgres's *default* semantics ``NULL != NULL``, so a plain unique
-    constraint would let this duplicate through and leave the entire single-elim
-    draw type unguarded. Fails against a default (NULLS DISTINCT) constraint."""
-    db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=1, position=1)
-    )
-    await db_session.commit()
-
-    db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=1, position=1)
-    )
-    with pytest.raises(IntegrityError) as excinfo:
-        await db_session.commit()
-    assert FIXTURE_IDENTITY_CONSTRAINT in str(excinfo.value)
-    await db_session.rollback()
-
-
-async def test_an_ungrouped_round_and_position_in_a_different_event_is_accepted(
-    db_session: AsyncSession, event: TournamentEvent
-) -> None:
-    """NULLS NOT DISTINCT tightens the guard *within* an event; it must not leak
-    across events. Two single-elim events each have a ``(NULL group, round 1,
-    position 1)``, and both rows are legitimate."""
-    other_event = await _make_event(db_session)
-
-    db_session.add(
-        TournamentFixture(stage_id=_stage_a(event), group_id=None, round=1, position=1)
-    )
-    db_session.add(
-        TournamentFixture(
-            stage_id=_stage_a(other_event), group_id=None, round=1, position=1
-        )
-    )
-    await db_session.commit()
-
-    stored = (await db_session.execute(select(TournamentFixture))).scalars().all()
-    assert sorted(str(f.event_id) for f in stored) == sorted(
-        [str(event.id), str(other_event.id)]
-    )
-    assert all(f.group_id is None for f in stored)
 
 
 async def test_the_same_round_and_position_in_a_different_group_is_accepted(
@@ -522,19 +480,18 @@ async def test_the_stages_fixtures_relationship_is_ordered_group_round_position(
     worth fixing before something did.
 
     The rows are inserted in deliberately the wrong order (group B before group A,
-    round 2 before round 1, the ungrouped fixture first), because insertion order is
-    what an unordered read returns — a fixture seeded in the right order could not
-    tell a broken ``order_by`` from a working one.
+    round 2 before round 1), because insertion order is what an unordered read
+    returns — a fixture seeded in the right order could not tell a broken ``order_by``
+    from a working one.
 
-    The ungrouped fixture (``group_id`` NULL — single-elim today, a
-    groups-then-knockout draw type's KO stage once #787 adds one) sorts
-    LAST, after the groups that feed it. NULL is a real value here ("this fixture
-    belongs to no group"), not a missing one, so it has a defined place in the order
-    rather than wherever the dialect's default happens to put it.
+    **No ungrouped fixture any more** (#1484): every stage a draw type's template
+    mints holds groups now, so ``group_id`` is ``NOT NULL`` and there is no "sorts
+    LAST behind a NULL" case left to pin. The relationship's ``order_by`` keeps its
+    ``nulls_last()`` clause regardless — a harmless no-op once the column can never
+    hold one, and simpler than a migration-adjacent edit to a read-only ordering hint.
     """
     group_a, group_b = _group_a(event), _group_b(event)
     for group_id, round_number, position in [
-        (None, 1, 1),
         (group_b, 1, 1),
         (group_a, 2, 1),
         (group_a, 1, 2),
@@ -561,13 +518,12 @@ async def test_the_stages_fixtures_relationship_is_ordered_group_round_position(
     # The relationship orders by the group **id**, which under server-minted uuids is
     # arbitrary — so the expectation is written against whichever of the two sorts
     # first. What is asserted is unchanged and is the whole claim: the groups do not
-    # INTERLEAVE (all of one group's fixtures, then all of the other's), each group's
-    # own fixtures run round → position, and the ungrouped fixture sorts LAST.
+    # INTERLEAVE (all of one group's fixtures, then all of the other's), and each
+    # group's own fixtures run round → position.
     first, second = sorted([group_a, group_b])
     assert [(f.group_id, f.round, f.position) for f in loaded.fixtures] == [
         (first, 1, 1),
         *([(first, 1, 2), (first, 2, 1)] if first == group_a else []),
         (second, 1, 1),
         *([(second, 1, 2), (second, 2, 1)] if second == group_a else []),
-        (None, 1, 1),
     ]
