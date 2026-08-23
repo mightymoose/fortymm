@@ -18,6 +18,7 @@
 // all five visible rows — except that the venue-less one is never a near-me result at all
 // (see the last test).
 
+import { mockUuid } from '@/mocks/mock-uuid'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { components } from '@/api/schema'
@@ -216,7 +217,7 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     patch: Partial<components['schemas']['TournamentEventUpdate']>,
   ) {
     const res = await fetch(
-      `http://localhost/v1/tournaments/${BAY_AREA}/events/ev-open-singles`,
+      `http://localhost/v1/tournaments/${BAY_AREA}/events/${mockUuid('ev-open-singles')}`,
       {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
@@ -378,7 +379,7 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
 describe('the event write boundary — optimistic concurrency (#1499)', () => {
   async function rawPatchEvent(body: unknown) {
     const res = await fetch(
-      `http://localhost/v1/tournaments/${BAY_AREA}/events/ev-open-singles`,
+      `http://localhost/v1/tournaments/${BAY_AREA}/events/${mockUuid('ev-open-singles')}`,
       {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },

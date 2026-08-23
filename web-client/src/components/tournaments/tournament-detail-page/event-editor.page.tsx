@@ -1,6 +1,7 @@
 import userEvent from '@testing-library/user-event'
 
-import { render, screen, type Container } from '@/test/utilities'
+import { renderWithRouterContext } from '@/test/router'
+import { screen, type Container } from '@/test/utilities'
 
 import { EventEditor, type EventEditorProps } from './event-editor'
 import { buildEventEditorProps } from './event-editor.factory'
@@ -178,8 +179,11 @@ const scoped = (container: Container) => ({
  * accessors run against `screen`.
  */
 export const eventEditorPage = {
+  /** The editor holds the discard guard (`useBlocker`, #1503), so it needs a router
+   * in context. `renderWithRouterContext` supplies one and still renders
+   * synchronously, which is why every assertion in this suite is still a `getBy…`. */
   render(overrides: Partial<EventEditorProps> = {}) {
-    render(<EventEditor {...buildEventEditorProps(overrides)} />)
+    renderWithRouterContext(<EventEditor {...buildEventEditorProps(overrides)} />)
   },
 
   within(container: Container = screen) {

@@ -14,10 +14,10 @@ export function buildEventEditorProps(
   const event = ('event' in overrides ? overrides.event : buildEvent()) ?? null
   return {
     open: true,
-    onOpenChange: () => {},
+    onClose: () => {},
     event,
     // The server's CURRENT version for this event, by default equal to the opened
-    // event's own — so a bare render is never already sitting in a conflict it never
+    // event's own, so a bare render is never already sitting in a conflict it never
     // asked for (#1499). A test that WANTS the conflict banner overrides this to a
     // different number, or to `null` for the deleted-elsewhere case.
     currentLockVersion: event?.lockVersion ?? null,
