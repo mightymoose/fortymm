@@ -613,6 +613,13 @@ async def _resolve_current_user(
     merged-away guest (``merged_into_user_id`` set) raises the structured
     ``session_merged`` 401 rather than silently falling through.
 
+    A resolved, live user gets their ``last_seen_at`` stamped (throttled —
+    see ``_stamp_last_seen``): this is the one write that separates a row a
+    person browses from a row nobody can reach, which is what the public
+    listings key on (#1438). ``get_optional_user`` deliberately bypasses this
+    resolver and so never stamps — anonymous-reachable endpoints must not
+    grow a write.
+
     The single resolver shared by ``get_current_user`` and ``GET /v1/session`` so
     the two auth entry points can't drift.
     """
@@ -621,8 +628,47 @@ async def _resolve_current_user(
         if cookie_user is not None:
             if cookie_user.merged_into_user_id is not None:
                 raise await _merged_session_exception(db, cookie_user)
+            await _stamp_last_seen(db, cookie_user)
             return cookie_user
     return None
+
+
+# How stale a ``last_seen_at`` stamp may get before the next resolved request
+# rewrites it. A window, not an exact "last seen": the value backs a listing
+# gate, not an activity display.
+LAST_SEEN_STAMP_INTERVAL = timedelta(minutes=5)
+
+
+async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
+    """Stamp ``user.last_seen_at``, at most once per
+    ``LAST_SEEN_STAMP_INTERVAL``.
+
+    The throttle is tested HERE, in Python, against the already-loaded row: a
+    request inside the window issues no SQL at all. Two concurrent requests may
+    both pass the test and both write; both write the same wall-clock stamp, so
+    the race is idempotent and needs no lock.
+
+    The stamp commits ITSELF rather than riding the route's transaction: it runs
+    as a dependency, before the route body, so nothing half-finished can be
+    swept up, and ``get_session`` does not auto-commit. The commit does not
+    expire the row (``expire_on_commit=False`` in ``app.db``), so the caller's
+    in-memory ``User`` stays usable without a lazy reload.
+
+    A failed stamp write RAISES rather than being swallowed. After a failed
+    commit the session needs a rollback before any further statement, so
+    swallowing would trade one failed request for a broken session on every
+    later query — and a broad ``except`` on the auth path would hide real bugs
+    (``api/CLAUDE.md``: catch the specific exception). The open question from
+    #1438 is settled here, on the raising side.
+    """
+    now = datetime.now(UTC)
+    if (
+        user.last_seen_at is not None
+        and now - user.last_seen_at < LAST_SEEN_STAMP_INTERVAL
+    ):
+        return
+    user.last_seen_at = now
+    await db.commit()
 
 
 @router.get("/v1/session", response_model=SessionResponse)

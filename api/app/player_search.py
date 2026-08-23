@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leagues import resolve_league
+from app.listed import is_listed_player
 from app.models import User
 from app.player_summary import load_player_ratings
 from app.schemas.player import PlayerRead
@@ -51,6 +52,9 @@ async def search_players_by_username(
             User.id != current_user_id,
             # Exclude tombstoned (merged-away) guests so ghosts never surface.
             User.merged_into_user_id.is_(None),
+            # Never-active rows stay out of opponent search (#1438) — see
+            # ``app.listed.is_listed_player``.
+            is_listed_player(),
             User.username.ilike(pattern, escape="\\"),
         )
         .order_by(User.username)
