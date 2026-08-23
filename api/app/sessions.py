@@ -245,6 +245,35 @@ def _is_login_context(context: str) -> bool:
     return context == LOGIN_TOKEN_CONTEXT or context.startswith(_LOGIN_CONTEXT_PREFIX)
 
 
+async def _has_live_login_token(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    """Whether ``user_id`` still has a sign-in link that could actually be
+    opened — one not yet replaced, and not past ``LOGIN_TOKEN_LIFETIME`` by its
+    own ``created_at``.
+
+    ``consume_login_token`` asks this before reporting ``LOGIN_REPLACED_CODE``,
+    because that answer sends the user off to open their most recent email and
+    the screen it reaches tells them that link is still live. Consume deletes
+    the row it accepts, so once the newer link has itself been signed in with
+    there is nothing left to open, and ``replaced`` would be one more untrue
+    sign-in message — the exact thing #1466 removes. Age is read off
+    ``created_at`` rather than inferred from the row still existing, matching
+    ``_token_expired``: the sweep in ``_issue_and_send_login_email`` is
+    opportunistic and may not have run."""
+    live = (
+        await db.execute(
+            select(UserToken.id)
+            .where(
+                UserToken.user_id == user_id,
+                _login_token_clause(),
+                UserToken.replaced_at.is_(None),
+                UserToken.created_at >= datetime.now(UTC) - LOGIN_TOKEN_LIFETIME,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return live is not None
+
+
 async def _guest_match_count(db: AsyncSession, guest_id: uuid.UUID) -> int:
     """How many distinct matches the guest is on — what a merge would carry
     over. ``UNIQUE(match_id, user_id)`` means one row per match, but count
@@ -1621,14 +1650,21 @@ async def consume_login_token(
         raise _invalid_or_expired_exception()
 
     if token_row.replaced_at is not None:
-        # Superseded by a newer request. Not expired (checked above) and not
-        # single-use-consumed — leave the row alone so a second click on the
-        # same dead link keeps reporting the same true reason, rather than
-        # deleting it out from under a person who clicks it twice.
-        raise _login_token_exception(
-            LOGIN_REPLACED_CODE,
-            "A newer sign-in link was requested. Use the most recent email.",
-        )
+        # Superseded by a newer request. Either way leave the row alone: it is
+        # not expired (checked above) and not single-use-consumed, so a second
+        # click on the same dead link keeps reporting the same reason rather
+        # than being deleted out from under a person who clicks it twice.
+        #
+        # Only say "replaced" while a newer link is genuinely still openable.
+        # That answer tells the user to go and open their most recent email;
+        # if that one has since been used or aged out, nothing is waiting there
+        # and this link is simply dead.
+        if await _has_live_login_token(db, token_row.user_id):
+            raise _login_token_exception(
+                LOGIN_REPLACED_CODE,
+                "A newer sign-in link was requested. Use the most recent email.",
+            )
+        raise _invalid_or_expired_exception()
 
     user = (
         await db.execute(select(User).where(User.id == token_row.user_id))

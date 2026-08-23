@@ -1570,6 +1570,32 @@ async def test_consume_reports_replaced_code_for_both_dead_links_after_two_resen
     assert response_3.status_code == 200
 
 
+async def test_consume_reports_invalid_not_replaced_once_the_newer_link_was_used(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """``replaced`` sends the user off to open the most recent email, and the
+    screen it reaches says that link is still live. Once the newer link has
+    itself been signed in with, ``consume_login_token`` has deleted its row and
+    that sentence is false — the exact class of untruth this ticket exists to
+    remove. With no live successor left, the older link is simply dead, so it
+    must report ``invalid_or_expired``."""
+    await _make_confirmed_user(db_session, "rita@example.com")
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)  # link 1
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)  # link 2
+
+    raw_1, raw_2 = _login_email_tokens(fake_email_queue)
+
+    async with make_client() as opener_2:
+        signed_in = await opener_2.post("/v1/login/consume", json={"token": raw_2})
+    assert signed_in.status_code == 200
+
+    async with make_client() as opener_1:
+        response = await opener_1.post("/v1/login/consume", json={"token": raw_1})
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
+
+
 async def test_consume_reports_expired_not_replaced_when_a_link_is_both(
     api_client: AsyncClient, db_session: AsyncSession
 ):

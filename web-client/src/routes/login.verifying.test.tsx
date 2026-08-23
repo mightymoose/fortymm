@@ -174,6 +174,25 @@ describe('/login/verifying error taxonomy (#1466 defect 3)', () => {
   })
 })
 
+// Every test above overrides the consume handler, so none of them would
+// notice the SHARED mock drifting off the contract — which it had: it still
+// answered with a bare-string `detail`, leaving the two new screens
+// unreachable in a dev run at :5173 even though the route handles them. These
+// two deliberately use the default handler and its dev magic tokens.
+describe('the shared MSW consume mock mirrors the coded contract (#1466)', () => {
+  it('reaches the replaced screen through the `replaced` magic token', async () => {
+    renderAt('/login/verifying?token=replaced')
+
+    await screen.findByRole('heading', { name: /newer link was sent/i })
+  })
+
+  it('reaches the email-changed screen through the `email-changed` magic token', async () => {
+    renderAt('/login/verifying?token=email-changed')
+
+    await screen.findByRole('heading', { name: /doesn.t match anymore/i })
+  })
+})
+
 describe('/login/verifying regressions the taxonomy change must not touch', () => {
   it('dedups a duplicated ?token=a&token=b to the first value (validateSearch)', () => {
     // Pure-function check of the boundary parse itself (root CLAUDE.md
