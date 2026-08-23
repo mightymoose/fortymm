@@ -58,6 +58,7 @@ from tests._helpers import (
     event_groups,
     joined_to_reservation,
     make_user,
+    stage_id_at,
     venue_tables,
 )
 
@@ -594,6 +595,13 @@ async def test_an_events_groups_and_reservations_are_rows_of_their_own(
     event_id = event.id
 
     db_session.expire_all()
+    # Scoped to the GROUP STAGE (position 0), not every stage: since #1484,
+    # ``create_event`` also materialises the knockout stage's own single group, which
+    # maps onto the SAME reservation one of the pool groups does
+    # (``position % reservation count`` puts both at ``0 % 2``) — reading every stage
+    # would return "Reservation A" twice and hide the claim this test makes about the
+    # pool groups specifically.
+    stage_id = await stage_id_at(db_session, event_id, 0)
     rows = (
         await db_session.execute(
             # The name and the window live on the reservation, the id and the position
@@ -612,7 +620,9 @@ async def test_an_events_groups_and_reservations_are_rows_of_their_own(
                     TournamentEventStage,
                     TournamentEventStage.id == TournamentEventStageGroup.stage_id,
                 )
-            ).order_by(TournamentEventStageGroup.position)
+            )
+            .where(TournamentEventStageGroup.stage_id == stage_id)
+            .order_by(TournamentEventStageGroup.position)
         )
     ).all()
 
@@ -898,6 +908,11 @@ async def _add_cut_event_with_two_groups(
         ],
         event=event,
         tournament=tournament,
+        # ``max_players=8`` above is pinned so the real structural count
+        # (``ceil(8 / 5) == 2``) matches the two reservations 1:1 (#1484) — this
+        # function's own docstring already explains the pin, this is what makes it
+        # true.
+        group_count=2,
     )
     stages[0].groups = groups
     db.add(event)
@@ -961,6 +976,11 @@ async def _add_legacy_cut_round_robin_event_with_two_reservations(
         ],
         event=event,
         tournament=tournament,
+        # The illegal-legacy state this helper exists to seed: two groups on a
+        # round-robin event, unreachable through any real route since #1484's floor
+        # (as well as #1482's reservation cap) — the direct ORM seed this whole
+        # function is for.
+        group_count=2,
     )
     stages[0].groups = groups
     db.add(event)

@@ -31,6 +31,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStage,
     TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
@@ -394,6 +395,10 @@ async def _groups(
         ],
         event=event,
         tournament=tournament,
+        # This file's ordering rule is unrelated to any draw type's real
+        # materialisation (#1484 floors round-robin at exactly one group) — it is
+        # exercised directly against ten seeded groups, one per reservation.
+        group_count=GROUP_COUNT,
     )
     stages[0].groups = groups
     db.add(event)
@@ -415,7 +420,17 @@ async def test_draw_config_orders_the_groups_by_position_not_by_id(
     """
     owner = await make_user(db_session, "order-config-owner")
     stored = await _groups(db_session, owner=owner, league=default_league)
-    event = TournamentEvent(groups=list(reversed(stored)))
+    # ``draw_config`` scopes ``group_ids`` to the group stage's own rows (#1484), which
+    # it resolves through ``event.stages`` — absent on a bare in-memory object, so a
+    # single stage matching every stored group's real ``stage_id`` stands in for it.
+    event = TournamentEvent(
+        groups=list(reversed(stored)),
+        stages=[
+            TournamentEventStage(
+                id=stored[0].stage_id, position=0, draw_type=DrawType.round_robin
+            )
+        ],
+    )
 
     assert draw_config(event).group_ids == tuple(group.id for group in stored)
 

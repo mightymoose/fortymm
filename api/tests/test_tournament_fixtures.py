@@ -115,6 +115,10 @@ async def _make_event(db_session: AsyncSession) -> TournamentEvent:
             {"name": "Reservation B", "slot": {}, "table_ids": []},
         ],
         event=event,
+        # Two groups deliberately, to pin the fixture uniqueness constraint's SCOPE
+        # (per-group) — unrelated to whether a real round-robin materialisation would
+        # ever hold two (it never does, since #1484's floor).
+        group_count=2,
     )
     db_session.add(event)
     await db_session.commit()

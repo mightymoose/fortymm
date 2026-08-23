@@ -36,6 +36,7 @@ from app.models import (
     User,
 )
 from app.schedule_preview import DEFAULT_UNCAPPED_FIELD
+from app.tournament_event_stages import GroupCountSource
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import group_count_for
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
@@ -254,15 +255,17 @@ def _expected_mapping(body: dict[str, Any]) -> list[str | None]:
 
 
 async def _stored_group_ids(db: AsyncSession, event_id: str) -> list[uuid.UUID]:
+    """The GROUP STAGE's own group ids — always position 0, whatever the draw type
+    (#1484) — never every stage's, which is what this file's ``rr-then-ko`` fixtures
+    already predate: an ``rr-then-ko`` event's knockout stage holds its own single
+    group since #1484, and this file's derivation assertions are about the group
+    stage's count alone."""
+    stage_id = await stage_id_at(db, uuid.UUID(event_id), 0)
     return list(
         (
             await db.execute(
                 select(TournamentEventStageGroup.id)
-                .where(
-                    TournamentEventStageGroup.stage_id.in_(
-                        stage_ids_for_events([uuid.UUID(event_id)])
-                    )
-                )
+                .where(TournamentEventStageGroup.stage_id == stage_id)
                 .order_by(TournamentEventStageGroup.position)
             )
         )
@@ -274,8 +277,10 @@ async def _stored_group_ids(db: AsyncSession, event_id: str) -> list[uuid.UUID]:
 async def _join_rows(
     db: AsyncSession, event_id: str
 ) -> list[tuple[uuid.UUID, uuid.UUID]]:
-    """Every ``(group_id, reservation_id)`` the event's group-to-reservation join table
-    holds, read straight off the row (#1388).
+    """Every ``(group_id, reservation_id)`` the GROUP STAGE's own join rows hold, read
+    straight off the row (#1388) — scoped to stage 0, the same way
+    :func:`_stored_group_ids` is (#1484): an ``rr-then-ko`` event's knockout stage maps
+    its own single group independently, and is not this file's subject.
 
     The wire cannot answer the two criteria this serves. ``groups[].reservation_id``
     projects ``group.reservation_link``, a one-to-one, so a second join row for the same
@@ -283,16 +288,13 @@ async def _join_rows(
     removed. Both are questions about the TABLE, so they are asked of the table.
     """
     db.expire_all()
+    stage_id = await stage_id_at(db, uuid.UUID(event_id), 0)
     return [
         (row.group_id, row.reservation_id)
         for row in (
             await db.execute(
                 select(TournamentEventGroupReservation)
-                .where(
-                    TournamentEventGroupReservation.stage_id.in_(
-                        stage_ids_for_events([uuid.UUID(event_id)])
-                    )
-                )
+                .where(TournamentEventGroupReservation.stage_id == stage_id)
                 .order_by(TournamentEventGroupReservation.group_id)
             )
         )
@@ -445,21 +447,25 @@ async def test_clearing_the_cap_derives_against_the_uncapped_default(
 
 
 @pytest.mark.parametrize("draw_type", ["round-robin", "single-elim", "swiss"])
-async def test_every_other_draw_type_keeps_one_group_per_reservation(
+async def test_every_other_draw_type_holds_exactly_one_group_however_many_reservations(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     draw_type: str,
 ) -> None:
-    """Decision 2: the derivation covers ``rr-then-ko`` only. A 40-cap round-robin over
-    three reservations is three groups, not eight, and a cap change moves nothing.
+    """#1484 decision 1: a non-composite stage's count is
+    :data:`~app.tournament_event_stages.GroupCountSource.one`, full stop — decoupled
+    from its reservation count. Before #1484 this was "one group *per* reservation";
+    now it is one group, whatever the reservation count says. Only ``rr-then-ko``'s
+    group stage derives its count from the field.
 
-    Three reservations on a non-``rr-then-ko`` event is a state #1482 makes
-    unreachable through the create/update routes (only ``rr-then-ko`` may hold more
-    than one reservation now), so the second and third are seeded directly through
-    the ORM (:func:`_ensure_group`) rather than posted — the derivation this test
-    pins (``group_count_for``'s non-``rr-then-ko`` branch) is untouched by #1482,
-    there is simply at most one reservation reachable through the API to derive
-    from. Read back and patched through the real routes exactly as before.
+    Three reservations on a non-``rr-then-ko`` event, and the three ORM-seeded group
+    rows that would have matched them under the old rule, are both states #1482 and
+    #1484 make unreachable through the real routes now (only ``rr-then-ko`` may hold
+    more than one reservation, and a non-composite stage never holds more than one
+    group): the second and third reservations are seeded directly through the ORM
+    (:func:`_ensure_group`), which mints one group per call and so leaves the event
+    holding three group rows — a state no route produces, and exactly what the next
+    write collapses back to the template's answer of one.
     """
     client, _ = authed_client
     tournament_id = await _tournament(client)
@@ -467,13 +473,13 @@ async def test_every_other_draw_type_keeps_one_group_per_reservation(
     await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
     await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_C["name"])
     event = await _read(client, tournament_id, event["id"])
+    # The raw ORM seed, read back before any write has re-materialised it.
     assert len(event["groups"]) == 3
-    assert _mapping(event) == _expected_mapping(event)
 
     response = await _patch(client, tournament_id, event["id"], max_players=10)
 
     assert response.status_code == 200, response.text
-    assert len(response.json()["groups"]) == 3
+    assert len(response.json()["groups"]) == 1
 
 
 async def test_patching_the_draw_type_to_and_from_rr_then_ko_moves_the_rows(
@@ -600,7 +606,7 @@ def test_no_derived_group_holds_fewer_than_two_for_any_field_of_two_or_more(
     ``ceil(N / 5)`` groups over ``N`` entrants give a smallest group of
     ``floor(N / ceil(N / 5))``, which is 2 or more for every ``N`` of 2 or more — so
     ``_snake``'s refusal is unreachable from the derived count alone."""
-    count = group_count_for(DrawType.rr_then_ko, field_size=field, reservation_count=0)
+    count = group_count_for(GroupCountSource.structural, field_size=field)
     assert count == -(-field // DEFAULT_GROUP_SIZE)
     assert field // count >= 2
 
@@ -897,44 +903,20 @@ async def test_removing_the_last_reservation_keeps_the_groups_and_deletes_the_jo
     ] == [only] * 8
 
 
-@pytest.mark.parametrize("draw_type", ["round-robin", "single-elim", "swiss"])
-async def test_a_removal_on_every_other_draw_type_takes_exactly_one_group_with_it(
-    authed_client: tuple[AsyncClient, User], db_session: AsyncSession, draw_type: str
-) -> None:
-    """The materialisation did not break the 1:1 lockstep on the other three draw types.
-
-    ``group_count_for`` returns the reservation count for them, so three reservations
-    minus two is three groups minus two. The row that goes is the TAIL — the shrink
-    keeps the lowest position.
-
-    Three reservations, and a PATCH that leaves a non-``rr-then-ko`` event holding
-    more than one, are both states #1482 makes unreachable through the real routes
-    now (only ``rr-then-ko`` may hold more than one reservation): the extra two are
-    seeded directly through the ORM (:func:`_ensure_group`), and the removal shrinks
-    to the one this draw type may still keep, rather than to two. The shrink
-    mechanism under test — keep the lowest position, restamp, recompute the mapping
-    — is exercised identically either way; only the surviving COUNT moved.
-    """
-    client, _ = authed_client
-    tournament_id = await _tournament(client)
-    event = await _create_other(client, tournament_id, draw_type)
-    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
-    await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_C["name"])
-    event = await _read(client, tournament_id, event["id"])
-    before_ids = await _stored_group_ids(db_session, event["id"])
-    assert len(before_ids) == 3
-    cited = _cited(event)
-
-    response = await _patch(client, tournament_id, event["id"], reservations=[cited[0]])
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert len(body["reservations"]) == 1
-    assert len(body["groups"]) == 1
-    assert await _stored_group_ids(db_session, event["id"]) == before_ids[:1]
-    # Still 1:1: one group, one reservation.
-    assert _mapping(body) == _expected_mapping(body)
-    assert len(await _join_rows(db_session, event["id"])) == 1
+# There is deliberately no more "a removal on every other draw type takes exactly
+# one group with it" test. That test pinned the pre-#1484 rule — ``group_count_for``
+# returning the reservation count for these draw types, so a removal shrank the group
+# count in lockstep — which #1484 makes false (a non-composite stage always holds
+# exactly one group; see the rewritten
+# ``test_every_other_draw_type_holds_exactly_one_group_however_many_reservations``
+# above). Its own removal scenario (a non-``rr-then-ko`` event citing more than one
+# reservation in a PATCH) is doubly unreachable now: #1482's cap refuses more than one
+# reservation on such an event at the request boundary, before #1484's floor is ever
+# reached — so there is no route-reachable removal left for this draw-type family that
+# a pre- and post-#1484 rule could disagree about. The shrink mechanism itself (keep
+# the lowest position, restamp, recompute the mapping) stays covered by this file's
+# ``rr-then-ko`` removal tests above, which exercise the identical
+# ``materialise_groups`` code path.
 
 
 # ----- the freeze ------------------------------------------------------------------

@@ -49,6 +49,7 @@ from app.schemas.notification import NotificationJob
 from app.schemas.tournament import draw_settings_from_storage
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 from app.tournament_draw_settings import draw_settings_row
+from app.tournament_event_stages import stage_template
 from app.tournament_reservations import materialise_groups
 
 
@@ -186,14 +187,16 @@ def event_draw_settings(
 
 
 def event_groups(
-    groups: Sequence[Mapping[str, Any]],
+    reservations: Sequence[Mapping[str, Any]],
     *,
     event: TournamentEvent,
     tournament: Tournament | None = None,
+    group_count: int | None = None,
 ) -> list[TournamentEventStageGroup]:
-    """The GROUP rows — each already mapped to its own reservation — for an event a test
-    seeds straight through the ORM, written from the ``{id, name, slot, table_ids}``
-    dict shape the wire's ``reservations`` list holds and positioned in the order given.
+    """The RESERVATION rows named by ``reservations`` (the ``{name, slot, table_ids}``
+    dict shape the wire's ``reservations`` list holds, positioned in the order given),
+    plus ``group_count`` GROUP rows mapped onto them — an event a test seeds straight
+    through the ORM.
 
     A group is two rows: a
     :class:`~app.models.tournament_event_stage_group.TournamentEventStageGroup`
@@ -201,14 +204,26 @@ def event_groups(
     :class:`~app.models.tournament_event_reservation.TournamentEventReservation` (the
     name, the window and the tables, parented on the event), joined by a
     :class:`~app.models.tournament_event_group_reservation.TournamentEventGroupReservation`.
-    This helper builds all three from one dict — one group per reservation, mapped
-    1:1 — which is the shape every draw type but ``rr-then-ko`` materialises
-    (``app.tournament_reservations.materialise_groups``), so a seeded group and a
-    POSTed one are the same rows. An ``rr-then-ko`` event created through the API
-    derives its group count from the preview field instead (#1387), and re-derives it
-    from the real field at the cut; a test that seeds one straight through the ORM
-    gets exactly the groups it lists, and the cut will re-materialise them if the
-    field says otherwise.
+
+    **``group_count`` defaults to one when there are reservations to map, and to zero
+    when there are none** (#1484). Before #1484 this helper minted one group per
+    reservation, 1:1, because that was the shape every draw type but ``rr-then-ko``
+    materialised; #1484 makes the *non-empty* half of that false — a non-composite
+    stage now holds exactly one group, full stop, decoupled from its reservation
+    count — but leaves the *empty* half exactly as it was: ``reservations=[]`` is
+    still the deliberately UN-GROUPED seed a wide swath of the suite spells that way
+    (``tests.test_schedule_solve_service``'s whole ``TestUnGroupedDrawShapes`` family,
+    among others), and it is a genuinely different domain concept from "one group with
+    no reservation" (the real floor's zero-reservation outcome, which a caller gets by
+    passing ``group_count=1`` explicitly against an empty ``reservations``). Pass an
+    explicit ``group_count`` to seed an ``rr-then-ko`` event's structural pool of
+    groups, that explicit one-group-with-no-reservation state, or an arbitrary number
+    of groups for a test that is exercising ordering/sorting rather than any draw
+    type's real materialisation. Mapped onto the reservations at
+    ``position % len(reservations)`` — or to no reservation at all when there are none
+    — mirroring ``app.tournament_reservations.materialise_groups``'s own mapping byte
+    for byte, so a seeded group (with an explicit count) and a POSTed one are the same
+    rows.
 
     It returns the **groups**, with the reservations riding along inside them, so the
     caller assigns one collection and gets the whole graph:
@@ -220,17 +235,6 @@ def event_groups(
     The ``slot``'s ``YYYY-MM-DD`` / ``HH:MM`` strings are parsed into the reservation's
     ``slot_date`` / ``slot_start`` / ``slot_end`` columns exactly as the write boundary
     parses them.
-
-    The ``id`` is a ``uuid.UUID`` and is **optional**, and it is the **group's** — the
-    id a fixture's ``group_id`` holds. Pass one when the test needs to name the group
-    from somewhere else (a fixture's ``group_id``, an assertion), and leave it out when
-    it does not care. A minted ``uuid4`` per call, never a module constant — the id is a
-    primary key, so two events in one test cannot share one. Minted *here*, up front,
-    rather than left to the column's ``gen_random_uuid()`` default, for the reason
-    :func:`venue_tables` mints table ids: a seed that names the group needs the id
-    before the row is flushed. Through the API the ids are the *server's* and there is
-    no ``id`` on the create shape at all (ADR 20260801); this is the direct-to-database
-    seam, which no HTTP caller can reach.
 
     A reservation's ``table_ids`` become
     :class:`~app.models.tournament_event_reservation_table.TournamentEventReservationTable`
@@ -256,11 +260,11 @@ def event_groups(
         if tournament is not None
         else {}
     )
-    built: list[TournamentEventStageGroup] = []
-    for position, group in enumerate(groups):
-        slot = group.get("slot") or {}
-        table_ids = [str(table_id) for table_id in group.get("table_ids", [])]
-        name = group.get("name", f"Group {position + 1}")
+    reservation_rows: list[TournamentEventReservation] = []
+    for position, reservation in enumerate(reservations):
+        slot = reservation.get("slot") or {}
+        table_ids = [str(table_id) for table_id in reservation.get("table_ids", [])]
+        name = reservation.get("name", f"Reservation {position + 1}")
         if table_ids and tournament is None:
             raise ValueError(
                 f"reservation {name!r} reserves {table_ids} but no tournament was "
@@ -268,25 +272,31 @@ def event_groups(
                 "seed has to say which tournament's tables these are — pass "
                 "tournament=… (or with_table_aliases(tournament, groups))"
             )
-        reservation = TournamentEventReservation(
-            name=name,
-            position=group.get("position", position),
-            slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
-            slot_start=time.fromisoformat(slot.get("start", "09:00")),
-            slot_end=time.fromisoformat(slot.get("end", "18:00")),
-            event=event,
-            tables=_reservation_tables(event, tournament, table_ids, by_alias),
-        )
-        built.append(
-            TournamentEventStageGroup(
-                id=group.get("id") or uuid.uuid4(),
-                position=group.get("position", position),
-                reservation_link=TournamentEventGroupReservation(
-                    reservation=reservation
-                ),
+        reservation_rows.append(
+            TournamentEventReservation(
+                name=name,
+                position=reservation.get("position", position),
+                slot_date=date.fromisoformat(slot.get("date", "2026-06-13")),
+                slot_start=time.fromisoformat(slot.get("start", "09:00")),
+                slot_end=time.fromisoformat(slot.get("end", "18:00")),
+                event=event,
+                tables=_reservation_tables(event, tournament, table_ids, by_alias),
             )
         )
-    return built
+    count = group_count if group_count is not None else (1 if reservation_rows else 0)
+    return [
+        TournamentEventStageGroup(
+            position=position,
+            reservation_link=(
+                TournamentEventGroupReservation(
+                    reservation=reservation_rows[position % len(reservation_rows)]
+                )
+                if reservation_rows
+                else None
+            ),
+        )
+        for position in range(count)
+    ]
 
 
 def _reservation_tables(
@@ -335,20 +345,24 @@ def with_table_aliases(
 def materialise_derived_groups(
     stage: TournamentEventStage, *, draw_type: DrawType, field_size: int
 ) -> None:
-    """Replace ``stage``'s seeded 1:1 groups with the rows the real materialisation
-    policy (:func:`app.tournament_reservations.materialise_groups`) derives for
-    ``draw_type`` against ``field_size``, over the reservations those seeded groups
-    booked. For ``rr-then-ko`` that is ``ceil(field / 5)`` groups mapped round-robin
-    onto the reservations (#1387): eight players over one reservation give two groups
-    sharing it, and eight over none give two groups with none — the two states the API
-    produces and #1389 is about. Call it after :func:`with_table_aliases`, before the
-    event is added to the session."""
+    """Replace ``stage``'s seeded groups with the rows the real materialisation policy
+    (:func:`app.tournament_reservations.materialise_groups`) derives for ``draw_type``'s
+    **stage-0 template entry** against ``field_size``, over the reservations those
+    seeded groups booked. For ``rr-then-ko`` that is ``ceil(field / 5)`` groups mapped
+    round-robin onto the reservations (#1387): eight players over one reservation give
+    two groups sharing it, and eight over none give two groups with none — the two
+    states the API produces and #1389 is about. Every other draw type derives exactly
+    one group, whatever the field (#1484). Call it after :func:`with_table_aliases`,
+    before the event is added to the session."""
     rows = [
         group.reservation_link.reservation
         for group in stage.groups
         if group.reservation_link is not None
     ]
-    materialise_groups(stage, rows, draw_type=draw_type, field_size=field_size)
+    _component, count_source = stage_template(draw_type)[0]
+    materialise_groups(
+        stage, rows, group_count_source=count_source, field_size=field_size
+    )
 
 
 def joined_to_reservation(stmt: Select[Any]) -> Select[Any]:

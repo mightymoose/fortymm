@@ -2286,8 +2286,15 @@ async def _seed_drawable_tournament(
         predicates=[],
         stages=stages,
     )
-    stages[0].groups = with_table_aliases(
-        event, tournament, [_DRAW_RESERVATION_A, _DRAW_RESERVATION_B]
+    # Two groups deliberately, one per reservation (#1484: no longer what a real
+    # materialisation would produce for round-robin, but the shape this MCP smoke
+    # test wants directly) — ``event_groups`` with an explicit count, since
+    # ``with_table_aliases`` no longer implies 1:1.
+    stages[0].groups = event_groups(
+        [_DRAW_RESERVATION_A, _DRAW_RESERVATION_B],
+        event=event,
+        tournament=tournament,
+        group_count=2,
     )
     db_session.add(event)
     await db_session.commit()

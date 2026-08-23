@@ -54,6 +54,7 @@ from tests._helpers import (
     joined_to_reservation,
     make_user,
     opponent_session,
+    stage_id_at,
     start_session,
 )
 
@@ -121,18 +122,22 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
 
 
 async def _group_id(db_session: AsyncSession, event_id: str, name: str) -> uuid.UUID:
-    """The id of the **group** whose reservation is named ``name`` — the lookup every
-    assertion about a fixture's ``group_id`` goes through, since the id is the
-    server's (ADR 20260801).
+    """The id of the **group-stage** group whose reservation is named ``name`` — the
+    lookup every assertion about a fixture's ``group_id`` goes through, since the id
+    is the server's (ADR 20260801).
+
+    Scoped to the group stage — always position 0 (#1484) — because the knockout
+    stage's own single group can map to the SAME reservation (``position % reservation
+    count`` puts both stage 0's first group and the whole-of-stage-1 group at
+    ``0 % N``), which would otherwise make this lookup ambiguous.
 
     The name lives on the reservation and the id on the group, so this walks the join:
     the two halves the wire once served under a single name."""
+    stage_id = await stage_id_at(db_session, uuid.UUID(event_id), 0)
     return (
         await db_session.execute(
             joined_to_reservation(select(TournamentEventStageGroup.id)).where(
-                TournamentEventStageGroup.stage_id.in_(
-                    stage_ids_for_events([uuid.UUID(event_id)])
-                ),
+                TournamentEventStageGroup.stage_id == stage_id,
                 TournamentEventReservation.name == name,
             )
         )
@@ -159,16 +164,15 @@ async def _reservations(
 
 
 async def _group_ids(db_session: AsyncSession, event_id: str) -> list[uuid.UUID]:
-    """The event's group ids in its own group order."""
+    """The event's GROUP STAGE's own group ids, in its own group order — always
+    position 0 (#1484): the round-robin pool groups this file's assertions are about,
+    never the knockout stage's own (single, separately-mapped) group."""
+    stage_id = await stage_id_at(db_session, uuid.UUID(event_id), 0)
     return list(
         (
             await db_session.execute(
                 select(TournamentEventStageGroup.id)
-                .where(
-                    TournamentEventStageGroup.stage_id.in_(
-                        stage_ids_for_events([uuid.UUID(event_id)])
-                    )
-                )
+                .where(TournamentEventStageGroup.stage_id == stage_id)
                 .order_by(TournamentEventStageGroup.position)
             )
         )

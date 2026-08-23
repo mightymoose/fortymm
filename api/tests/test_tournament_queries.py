@@ -119,7 +119,12 @@ async def _make_event(
         match_settings={"rated": True, "length_games": 5},
         stages=stages,
     )
-    stages[0].groups = event_groups(reservations, event=event)
+    # This file's ordering rule is unrelated to any draw type's real materialisation
+    # (#1484 floors round-robin at exactly one group) — it is exercised directly
+    # against ``GROUP_COUNT`` seeded groups, one per reservation.
+    stages[0].groups = event_groups(
+        reservations, event=event, group_count=len(reservations)
+    )
     db_session.add(event)
     await db_session.commit()
     # Both ``groups`` (VIEWONLY) and ``stages`` (not eager) are populated on refresh,

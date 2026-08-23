@@ -402,9 +402,21 @@ class DrawConfig:
     ``DrawConfig()``. The group *id set* freezes while a draw exists
     (``app.tournament_events`` refuses a payload that moves it), and underneath that a
     composite foreign key holds the reference itself.
+
+    ``knockout_group_id`` is the **separate** id of an ``rr-then-ko`` event's knockout
+    stage's own group (#1484) — never one of ``group_ids``, and never read by anything
+    but :class:`RrThenKoStrategy`. The two must not be conflated: ``group_ids`` is what
+    the snake deals the *group* stage's field across, and handing the knockout stage's
+    group to the snake as one more pool would corrupt the round-robin standings the
+    qualifiers are picked from (this is why ``app.tournament_draws.draw_config`` scopes
+    ``group_ids`` to the group-stage's own groups, not the event's whole widened
+    list). ``None`` for every draw type but ``rr-then-ko`` — they have no knockout
+    stage — and, for ``rr-then-ko``, only while the knockout stage's group row does not
+    exist yet (an event created before #1484's materialisation reached it).
     """
 
     group_ids: tuple[GroupId, ...] = ()
+    knockout_group_id: GroupId | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -926,8 +938,13 @@ def _sole_group(config: DrawConfig) -> GroupId | None:
     The many-groups arm answers ``None`` too, and deliberately does not pick the
     first: "the group of this stage" has no answer when a stage has several, and
     guessing one would deal a whole bracket into an arbitrary group with nothing to
-    say it was arbitrary. #1484, which materialises groups per stage, is what gives
-    that arm a real answer.
+    say it was arbitrary. #1484 does not change that — it gives an ``rr-then-ko``
+    event's knockout stage its own group, but that group is never one of this
+    function's own caller's ``config.group_ids`` (see :attr:`DrawConfig
+    .knockout_group_id`, and ``app.tournament_draws.draw_config``'s scoping of
+    ``group_ids`` to the group stage alone) — a knockout stage's single group is
+    named through a different field entirely, one this function is never asked
+    about, so the many-groups arm here stays exactly as unreachable as before.
     """
     if len(config.group_ids) != 1:
         return None
@@ -1170,16 +1187,18 @@ class RrThenKoStrategy:
         qualifier_count = len(groups) * self.qualifiers_per_group
         fixtures = RoundRobinStrategy().plan_initial(config, ordered_entrants)
         # Cut in the same stroke: every side TBD (nobody has qualified), rounds from 1,
-        # and **no group** — the composite passes none and takes the parameter's
-        # default. Its knockout stage has no groups to name until #1484 materialises
-        # them, and handing it the group stage's group (which is what
-        # ``_sole_group(config)`` would answer here) would deal the bracket into the
-        # round-robin half the qualifiers are picked from.
+        # and the KNOCKOUT stage's own group (#1484) — never the group stage's
+        # (``_sole_group(config)`` would answer one of those here, and dealing the
+        # bracket into it would corrupt the round-robin half the qualifiers are picked
+        # from). ``config.knockout_group_id`` is ``None`` only for an event whose
+        # knockout stage predates #1484's materialisation reaching it; every event
+        # created since carries one.
         fixtures.extend(
             _knockout_fixtures(
                 qualifier_count,
                 {},
                 stage=FixtureStage(position=1, draw_type=DrawType.single_elim),
+                group_id=config.knockout_group_id,
             )
         )
         return fixtures
@@ -2474,15 +2493,15 @@ def _knockout_fixtures(
     known at cut time, so *which* slots exist and *which* seeds bye is settled before
     anybody has played.
 
-    **The group rides a parameter, and it defaults to none.** The two callers do not
-    agree about it: a single-elim event has one stage, that stage holds a group
-    (#1483's floor), and every fixture of its bracket is dealt into it, so the
-    solver confines the bracket to that group's reservation. An ``rr-then-ko``
-    event's knockout stage holds no group *yet* (#1484 materialises them), and it
-    must not be handed its group **stage's** group — that would deal knockout
+    **The group rides a parameter.** The two callers pass a different one, never each
+    other's: a single-elim event has one stage, that stage holds a group (#1483's
+    floor), and every fixture of its bracket is dealt into it, so the solver confines
+    the bracket to that group's reservation. An ``rr-then-ko`` event's knockout stage
+    holds its *own* group since #1484 (:attr:`DrawConfig.knockout_group_id`), and it
+    must not be handed its group **stage's** group instead — that would deal knockout
     fixtures into the round-robin half, corrupting the standings the qualifiers are
-    picked from. So the composite passes nothing and keeps ``group_id=None``, and
-    a default of "no group" is the shape that cannot leak one by omission.
+    picked from. The parameter still defaults to ``None`` for a bare literal-built
+    caller (a strategy test) that has no group of its own to name.
 
     ``stage`` differs between the callers for the same reason: the single-elim cut's
     bracket is its event's stage 0, the composite's is stage 1.
@@ -2494,10 +2513,10 @@ def _knockout_fixtures(
 
     Rounds are numbered from **1** for both callers. For the knockout stage of an
     rr-then-ko draw that is a *restart*, not a continuation of the group rounds: the
-    fixture uniqueness constraint is ``(stage_id, group_id, round, position)`` with
-    ``NULLS NOT DISTINCT``, so the knockout stage is its own numbering namespace
-    whatever its group is, and "the round after the groups" is ill-defined anyway when
-    groups may differ in size.
+    fixture uniqueness constraint is ``(stage_id, group_id, round, position)``, keyed
+    on ``stage_id``, so the knockout stage is its own numbering namespace whatever its
+    group is, and "the round after the groups" is ill-defined anyway when groups may
+    differ in size.
     """
     bracket = _bracket_size(field_size)
     rounds = bracket.bit_length() - 1

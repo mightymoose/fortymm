@@ -64,6 +64,7 @@ from app.models import (
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_settings import draw_settings_of
+from app.tournament_event_stages import GroupCountSource
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import (
     group_count_for,
@@ -170,6 +171,23 @@ def group_order(event: TournamentEvent) -> dict[GroupId, int]:
     return {
         GroupId(group.id): index for index, group in enumerate(_ordered_groups(event))
     }
+
+
+def _stage_id_at_position(event: TournamentEvent, position: int) -> uuid.UUID | None:
+    """The id of ``event``'s stage at ``position``, or ``None`` when it has none
+    (#1484).
+
+    Total, unlike ``cut_draw``'s ``_stage_id_at`` below: "does this event have a stage
+    1" is a real, ordinary question here — every non-composite draw type answers no —
+    rather than an invariant a strategy's own already-planned fixture has already
+    proven true. Reads the already-eager ``TournamentEvent.stages``
+    (``lazy="selectin"``), never a query of its own — shared by :func:`draw_config`
+    (which needs stage 0's id to scope the snake, and stage 1's to find the knockout
+    group) and :func:`group_order`.
+    """
+    return next(
+        (stage.id for stage in event.stages if stage.position == position), None
+    )
 
 
 def _ordered_groups(event: TournamentEvent) -> list[GroupRead]:
@@ -316,9 +334,10 @@ def fixture_state(
 
 
 def draw_config(event: TournamentEvent) -> DrawConfig:
-    """What the cut needs to know about the event itself: the ids of the groups it has
-    configured — **in the event's own group order**, which is the order the snake seeds
-    against.
+    """What the cut needs to know about the event itself: the ids of the **group
+    stage's** groups — **in the event's own group order**, which is the order the
+    snake seeds against — plus, for a composite draw type, its knockout stage's own
+    group id.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
     is what ``cut_draw`` picks the *strategy* with (``strategy_for_event(event)``), and
@@ -331,17 +350,30 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     validated them with, whose ``min_length=1`` id is why a ``GroupId`` reaching the
     domain is never ``""``.
 
-    Every configured group is passed, whatever the draw type, and **every strategy
-    now uses them**. A grouped one (round-robin, and the group half of rr-then-ko)
-    deals the field across exactly these ids; a single-stage un-grouped one
-    (single-elim, swiss) deals every fixture into the one group its stage holds
-    (#1483, ``app.draws._sole_group``) — which is what confines a bracket to its
-    reservation's tables and window. Either way a fixture's ``group_id`` is a string
-    ref that resolves against the event the client is already holding.
+    **Scoped to the group stage — always position 0 — not to the event's whole,
+    widened ``groups`` (#1484).** Once ``TournamentEvent.groups`` stops pinning its
+    read to stage 0, an ``rr-then-ko`` event's list holds its group stage's pool
+    groups AND its knockout stage's own group in one array, with ``position`` no
+    longer unique across them (the knockout stage's sole group is *also*
+    ``position: 0``). Handing the whole list to the snake would deal the round-robin
+    field across the knockout stage's group as if it were one more pool, corrupting
+    the standings the qualifiers are picked from — the most dangerous consequence of
+    the widening. So ``group_ids`` is filtered to the groups whose ``stage_id`` names
+    the event's stage at position 0 (:func:`_stage_id_at_position`), which is the
+    group-stage groups for every draw type alike: round-robin's own stage,
+    single-elim's and swiss's sole stage, and ``rr-then-ko``'s group stage. A grouped
+    strategy (round-robin, and the group half of rr-then-ko) deals the field across
+    exactly these ids; a single-stage un-grouped one (single-elim, swiss) deals every
+    fixture into the one group its stage holds (#1483, ``app.draws._sole_group``) —
+    which is what confines a bracket to its reservation's tables and window.
 
-    Only ``rr-then-ko``'s knockout stage still writes a ``NULL`` group ref, because
-    this relationship is pinned to stage 0 and that stage has no groups to name until
-    #1484 materialises them.
+    **The knockout stage's own group rides separately**
+    (:attr:`~app.draws.DrawConfig.knockout_group_id`), never mixed into
+    ``group_ids``: it is the group whose ``stage_id`` names the event's stage at
+    position 1, when the event has one and that stage carries exactly the one group
+    #1484 materialises for it. ``None`` for every draw type that has no stage 1, and
+    for an event whose knockout stage predates #1484's materialisation reaching it.
+    :class:`~app.draws.RrThenKoStrategy` is the one strategy that reads it.
 
     The order is read off each group's ``position`` (ADR 20260801, "Groups carry an
     explicit ``position``") rather than taken from the JSONB array's incidental
@@ -352,8 +384,25 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     them in. A ``sorted`` is stable, so groups stored before the field existed (every
     ``position`` defaulting to ``0``) keep the array order they have always had.
     """
+    groups = _ordered_groups(event)
+    group_stage_id = _stage_id_at_position(event, 0)
+    knockout_stage_id = _stage_id_at_position(event, 1)
+    knockout_groups = (
+        [group for group in groups if group.stage_id == knockout_stage_id]
+        if knockout_stage_id is not None
+        else []
+    )
     return DrawConfig(
-        group_ids=tuple(GroupId(group.id) for group in _ordered_groups(event))
+        group_ids=tuple(
+            GroupId(group.id) for group in groups if group.stage_id == group_stage_id
+        ),
+        # Exactly one, never a guess: "the knockout stage's group" has no answer when
+        # its stage holds none yet or (should the template ever change) more than one
+        # — see ``app.draws._sole_group``'s sibling reasoning for the same refusal to
+        # pick arbitrarily.
+        knockout_group_id=(
+            GroupId(knockout_groups[0].id) if len(knockout_groups) == 1 else None
+        ),
     )
 
 
@@ -738,20 +787,24 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     The ordering is the one that survives somebody deciding a service function ought
     to commit.
 
-    **The cut re-derives an ``rr-then-ko`` event's group count from the real field**
-    (#1387 decision 1). The rows were materialised against the preview field — the
-    cap, or 16 — and the snake judges a group's size against the entrants actually
+    **The cut re-derives an ``rr-then-ko`` event's group-stage count from the real
+    field** (#1387 decision 1). The rows were materialised against the preview field —
+    the cap, or 16 — and the snake judges a group's size against the entrants actually
     registered; the two numbers never meet, and a 40-cap event with ten registrants
     would otherwise deal ten players across eight groups and be refused as
     ``DegenerateDraw``. So, for that draw type only, the count is derived again here
     from ``len(entrants)`` and the rows re-materialised (keeping the lowest positions,
     and the mapping re-read as ``position % reservation count``) **only when the
-    derived count differs from the stored one**. When it holds — every first cut of a
-    correctly sized event, every re-cut whose field did not cross a group boundary —
-    nothing is written and the plan-before-delete ordering above stands. That skip is
-    not an optimization with a hole in it: the mapping cannot move while the count
-    holds, because a reservation changes only through an event write and every event
-    write re-materialises.
+    derived count differs from the stored one**. **Compared against the group
+    stage's own rows, never ``len(event.groups)``** (#1484): once every stage holds
+    groups, an event-wide length would count the knockout stage's own group too, so
+    the comparison would never hold and every ``rr-then-ko`` cut would delete and
+    re-mint needlessly. When it holds — every first cut of a correctly sized event,
+    every re-cut whose field did not cross a group boundary — nothing is written and
+    the plan-before-delete ordering above stands. That skip is not an optimization
+    with a hole in it: the mapping cannot move while the count holds, because a
+    reservation changes only through an event write and every event write
+    re-materialises.
 
     When the count moves on a **re-cut**, both orderings cannot hold: a fixture
     foreign-keys its group, so the old fixtures have to go before a group row can.
@@ -781,19 +834,25 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     strategy = strategy_for_event(event)
     entrants = order_entrants(await active_draw_entrants(db, event.id))
     # The real-field re-derivation (see the docstring). ``group_count_for`` answers
-    # ``max(len(event.reservations), 1)`` for every draw type but ``rr-then-ko``
-    # (#1483's floor), and that is the count those events already hold — every event
-    # write materialises against the same function — so the branch is reached by an
-    # ``rr-then-ko`` event alone. Stated by the draw type rather than trusted to the
-    # arithmetic, so a reader sees the scope without working it out, and so a cut of
-    # any other draw type reads no reservation at all.
-    re_materialised = draw_settings_of(
-        event.draw_settings
-    ).draw_type is DrawType.rr_then_ko and group_count_for(
-        DrawType.rr_then_ko,
-        field_size=len(entrants),
-        reservation_count=len(event.reservations),
-    ) != len(event.groups)
+    # ``1`` for every draw type but ``rr-then-ko``'s group stage (#1483's floor), and
+    # that is the count those events already hold — every event write materialises
+    # against the same function — so the branch is reached by an ``rr-then-ko`` event
+    # alone. Stated by the draw type rather than trusted to the arithmetic, so a
+    # reader sees the scope without working it out, and so a cut of any other draw
+    # type reads no reservation at all.
+    #
+    # Compared against the GROUP STAGE's own rows (#1484), never
+    # ``len(event.groups)`` — see the docstring's own note on why an event-wide
+    # length would never let this comparison hold once every stage carries groups.
+    group_stage_id = _stage_id_at_position(event, 0)
+    group_stage_count = sum(
+        1 for group in event.groups if group.stage_id == group_stage_id
+    )
+    re_materialised = (
+        draw_settings_of(event.draw_settings).draw_type is DrawType.rr_then_ko
+        and group_count_for(GroupCountSource.structural, field_size=len(entrants))
+        != group_stage_count
+    )
     if re_materialised:
         # Delete-first, the one branch where the wholesale ordering below cannot be
         # kept: a fixture names its group, so a group row cannot go while a fixture of

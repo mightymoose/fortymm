@@ -113,10 +113,17 @@ async def _make_event(
         predicates=[],
         stages=stages,
     )
+    reservations = [RESERVATION_A, RESERVATION_B] if groups is None else groups
     stages[0].groups = event_groups(
-        [RESERVATION_A, RESERVATION_B] if groups is None else groups,
+        reservations,
         event=event,
         tournament=tournament,
+        # This file's tests deliberately seed a group per reservation, whatever the
+        # draw type — a raw ORM state #1484's floor no longer produces through any
+        # real route, but one several tests here still want directly (a
+        # multi-group cut, or an explicitly ZERO-group single-elim event). Mirrors
+        # ``event_groups``'s own pre-#1484 default.
+        group_count=len(reservations),
     )
     db.add(event)
     await db.commit()

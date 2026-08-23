@@ -558,6 +558,12 @@ async def test_preview_notes_say_an_rr_then_ko_events_knockout_stage_is_not_sche
         reservations=_TWO_RESERVATIONS,
         draw_type=DrawType.rr_then_ko,
         qualifiers_per_group=2,
+        # The real materialisation policy, not the raw 1:1 seed (#1484 decouples a
+        # stage's group count from its reservation count) — needed so
+        # ``max_players=6`` genuinely derives the two groups of three the docstring
+        # below describes, rather than the ``event_groups`` default (one group,
+        # every entrant).
+        derive_groups=True,
     )
 
     await request_schedule_preview(db_session, tournament_id=tournament.id, actor=owner)

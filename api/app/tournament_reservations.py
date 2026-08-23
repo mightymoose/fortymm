@@ -111,6 +111,7 @@ from app.schemas.tournament import (
 )
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_errors import ReservationNotInEventError
+from app.tournament_event_stages import GroupCountSource, stage_template
 
 __all__ = [
     "apply_event_reservations",
@@ -118,6 +119,7 @@ __all__ = [
     "group_read",
     "materialise_event_groups",
     "materialise_groups",
+    "materialise_stage_groups",
     "ordered_reservations",
     "reservation_read",
     "stored_reservations",
@@ -160,17 +162,23 @@ def group_read(group: TournamentEventStageGroup) -> GroupRead:
     """One stored group, projected as the shape everything above the database reads
     (:class:`~app.schemas.tournament.GroupRead`).
 
-    ``id`` and ``position`` come straight off the row. ``reservation_id`` is read
-    through the join (``group.reservation_link.reservation_id``) rather than through
-    the loaded ``reservation`` object, so this needs no eager load of the reservation
-    itself when a caller only wants the id — and it is ``None`` for a group with no
-    join row, which is how a group that plays in no reservation reaches the wire
-    (#1387).
+    ``id`` and ``position`` come straight off the row, and so does ``stage_id`` (#1484)
+    — the field that lets a reader tell a knockout stage's group apart from its
+    group-stage siblings once ``TournamentEvent.groups`` stops pinning to stage 0:
+    ``position`` alone is no longer unique across an event's groups (a knockout stage's
+    sole group and its event's first pool group both stand at ``position: 0``), so
+    ``stage_id`` is what every filter that labels, ranks, deals or panels a group
+    disambiguates on. ``reservation_id`` is read through the join
+    (``group.reservation_link.reservation_id``) rather than through the loaded
+    ``reservation`` object, so this needs no eager load of the reservation itself when
+    a caller only wants the id — and it is ``None`` for a group with no join row, which
+    is how a group that plays in no reservation reaches the wire (#1387).
     """
     link = group.reservation_link
     return GroupRead(
         id=group.id,
         position=group.position,
+        stage_id=group.stage_id,
         reservation_id=link.reservation_id if link is not None else None,
     )
 
@@ -315,19 +323,19 @@ def ordered_reservations(
     return sorted(event.reservations, key=lambda row: row.position)
 
 
-def group_count_for(
-    draw_type: DrawType, *, field_size: int, reservation_count: int
-) -> int:
-    """How many group rows an event of ``draw_type`` holds (#1387, ADR 20260822).
+def group_count_for(source: GroupCountSource, *, field_size: int) -> int:
+    """How many group rows a stage whose count comes from ``source`` holds (#1387,
+    #1484, ADR 20260822).
 
-    **Two rules, stated rather than hidden.** An ``rr-then-ko`` event derives its
-    count from the field through #1386's derivation, with every structural setting
-    automatic (``ceil(field / 5)``, at least one) — the reservation count plays no
-    part, which is why adding a reservation adds no group. Every other draw type has
-    no structural-settings source for a count at all, so it keeps one group per
-    reservation — **and never fewer than one** (#1483's floor). Whether
-    ``round-robin`` should run groups of five is a product question about that draw
-    type, not a materialisation one (#1387 decision 2).
+    **Two rules, stated rather than hidden.** A :data:`~app.tournament_event_stages
+    .GroupCountSource.structural` stage — today, only an ``rr-then-ko`` event's group
+    stage — derives its count from the field through #1386's derivation, with every
+    structural setting automatic (``ceil(field / 5)``, at least one). A
+    :data:`~app.tournament_event_stages.GroupCountSource.one` stage — every other
+    stage any template mints, including an ``rr-then-ko`` event's own knockout stage
+    — always holds exactly one, whatever the field or the event's reservation count.
+    Whether ``round-robin`` should run groups of five is a product question about
+    that draw type, not a materialisation one (#1387 decision 2).
 
     **The floor is what lets every stage hold a group.** A fixture reaches the
     reservation that restricts it through its group
@@ -341,13 +349,20 @@ def group_count_for(
     fixtures still fall to the event-wide one until #1364 mints a real reservation
     for them.
 
+    **This function never compares a draw type**, ``rr_then_ko`` or otherwise — the
+    caller (:func:`stage_template`, via :func:`materialise_stage_groups`) has already
+    resolved which source a stage's count comes from, and that resolution is what
+    tells apart an ``rr-then-ko`` event's stage 0 from a standalone ``round-robin``
+    event's only stage: both are a ``round_robin`` *component*, but the template says
+    ``structural`` for one and ``one`` for the other (#1484 decision 1).
+
     ``field_size`` is the **caller's** question — the preview field (the cap, or 16)
     on an event write, the real registered field at the cut — and this function only
     takes the number. This module writes no arithmetic of its own: the count is the
     derivation's, called with whichever field the caller holds.
     """
-    if draw_type is not DrawType.rr_then_ko:
-        return max(reservation_count, 1)
+    if source is GroupCountSource.one:
+        return 1
     return derive_draw_structure(
         DrawStructureOptions(
             preview_field_size=field_size,
@@ -365,20 +380,22 @@ def materialise_groups(
     stage: TournamentEventStage,
     reservations: Sequence[TournamentEventReservation],
     *,
-    draw_type: DrawType,
+    group_count_source: GroupCountSource,
     field_size: int,
 ) -> None:
     """Make ``stage``'s groups exactly the rows :func:`group_count_for` says
-    ``draw_type`` holds against ``field_size``, at positions ``0..count-1``, each mapped
-    to ``reservations[position % len(reservations)]`` — or to nothing when the event has
-    no reservation — as an **id-keyed diff** over the rows the stage holds.
+    ``group_count_source`` holds against ``field_size``, at positions ``0..count-1``,
+    each mapped to ``reservations[position % len(reservations)]`` — or to nothing when
+    the event has no reservation — as an **id-keyed diff** over the rows the stage
+    holds.
 
-    **This is the whole materialisation policy, in one place.** Which count, which
-    field, which mapping: the create path (``app.tournament_events.create_event``, on a
-    fresh, unflushed stage) and :func:`materialise_event_groups` (the edit path and the
-    cut, on a stage just loaded) both come through here, so a create and a patch
-    cannot drift. ``reservations`` is taken in the order given, which is why the
-    session door hands it :func:`ordered_reservations`.
+    **This is the whole per-stage materialisation policy, in one place.** Which count,
+    which field, which mapping: :func:`materialise_stage_groups` — the create path's
+    in-memory door and :func:`materialise_event_groups`'s queried door both come
+    through it — calls this once per stage of the event's template, so a create and a
+    patch cannot drift on any of the event's stages, not only its first.
+    ``reservations`` is taken in the order given, which is why the session doors hand
+    it :func:`ordered_reservations`.
 
     Pure over loaded objects: no session.
 
@@ -396,9 +413,7 @@ def materialise_groups(
     orphaned (``delete-orphan`` on ``reservation_link``, a DELETE); one whose target is
     unchanged is not touched at all.
     """
-    count = group_count_for(
-        draw_type, field_size=field_size, reservation_count=len(reservations)
-    )
+    count = group_count_for(group_count_source, field_size=field_size)
     kept = sorted(stage.groups, key=lambda group: group.position)[:count]
     groups: list[TournamentEventStageGroup] = []
     for position in range(count):
@@ -428,6 +443,41 @@ def materialise_groups(
     stage.groups = groups
 
 
+def materialise_stage_groups(
+    stages: Sequence[TournamentEventStage],
+    reservations: Sequence[TournamentEventReservation],
+    *,
+    draw_type: DrawType,
+    field_size: int,
+) -> None:
+    """Materialise every one of ``draw_type``'s template stages' groups, in one pass
+    (#1484) — the shared core ``app.tournament_events.create_event``'s in-memory door
+    (the stages are freshly minted and unflushed, with no id yet to query by) and
+    :func:`materialise_event_groups`'s queried door both run through, so the two paths
+    cannot drift on which stage gets which count source.
+
+    ``stages`` must be exactly ``draw_type``'s template, whatever order it arrives in
+    — sorted here by ``position`` before being zipped, ``strict=True``, against
+    :func:`~app.tournament_event_stages.stage_template`'s own tuple. A caller that
+    hands this a template-mismatched list (a re-mint that ran stale, a draw type
+    changed with no remint) fails loudly here — a ``ValueError`` — rather than
+    materialising a stage against the wrong count source, mirroring
+    ``app.tournament_draws.cut_draw``'s ``_stage_id_at`` on the read side of the same
+    invariant.
+
+    Pure over loaded objects: no session, exactly like :func:`materialise_groups`,
+    which this calls once per stage.
+    """
+    for stage, (_component, count_source) in zip(
+        sorted(stages, key=lambda stage: stage.position),
+        stage_template(draw_type),
+        strict=True,
+    ):
+        materialise_groups(
+            stage, reservations, group_count_source=count_source, field_size=field_size
+        )
+
+
 async def materialise_event_groups(
     db: AsyncSession, event: TournamentEvent, *, field_size: int
 ) -> None:
@@ -435,6 +485,14 @@ async def materialise_event_groups(
     ``field_size`` and the event's current reservations, mapped round-robin
     (:func:`materialise_groups`) — the edit-path and cut-path door onto the
     materialisation.
+
+    **Stage 0 only, for now.** #1484 widens this to every stage of the event's
+    template (:func:`materialise_stage_groups`) once ``TournamentEvent.groups`` stops
+    pinning its read to stage 0 — until then, materialising a stage-1 group here would
+    be a row nothing on the read side could show a director, and premature. The create
+    path (``app.tournament_events.create_event``) already materialises every stage,
+    through the same :func:`materialise_stage_groups` this will move onto, because it
+    holds the freshly-minted stages directly and has no stage-0-only shortcut to take.
 
     **The caller decides whether it runs, and which field it runs against.**
     ``app.tournament_events.update_event`` calls it unconditionally, late in the write
@@ -480,10 +538,15 @@ async def materialise_event_groups(
             )
         )
     ).scalar_one()
+    # Stage 0's own count source off the template — never the whole template, since
+    # this function only ever touches the one stage it queried above.
+    _component, count_source = stage_template(
+        draw_settings_of(event.draw_settings).draw_type
+    )[0]
     materialise_groups(
         stage,
         ordered_reservations(event),
-        draw_type=draw_settings_of(event.draw_settings).draw_type,
+        group_count_source=count_source,
         field_size=field_size,
     )
 

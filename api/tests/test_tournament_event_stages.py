@@ -46,6 +46,7 @@ from app.models import (
 from app.schemas.tournament import Address, TournamentEventCreate, TournamentEventUpdate
 from app.tournament_errors import DrawTypeFrozenError
 from app.tournament_event_stages import (
+    GroupCountSource,
     mint_stages,
     remint_stages_in_place,
     stage_template,
@@ -183,18 +184,26 @@ async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
 @pytest.mark.parametrize(
     ("draw_type", "expected"),
     [
-        (DrawType.round_robin, (DrawType.round_robin,)),
-        (DrawType.single_elim, (DrawType.single_elim,)),
-        (DrawType.swiss, (DrawType.swiss,)),
-        (DrawType.rr_then_ko, (DrawType.round_robin, DrawType.single_elim)),
+        (DrawType.round_robin, ((DrawType.round_robin, GroupCountSource.one),)),
+        (DrawType.single_elim, ((DrawType.single_elim, GroupCountSource.one),)),
+        (DrawType.swiss, ((DrawType.swiss, GroupCountSource.one),)),
+        (
+            DrawType.rr_then_ko,
+            (
+                (DrawType.round_robin, GroupCountSource.structural),
+                (DrawType.single_elim, GroupCountSource.one),
+            ),
+        ),
     ],
 )
 def test_stage_template_per_draw_type(
-    draw_type: DrawType, expected: tuple[DrawType, ...]
+    draw_type: DrawType, expected: tuple[tuple[DrawType, GroupCountSource], ...]
 ) -> None:
-    """Round robin, single elim and swiss are each their own one-stage template;
-    rr-then-ko is the only composite, and its two stages are round-robin then
-    single-elim, in that order (ADR 20260815 decision 3)."""
+    """Round robin, single elim and swiss are each their own one-stage template, and
+    hold exactly one group whatever the field (#1484); rr-then-ko is the only
+    composite, and its two stages are round-robin then single-elim, in that order
+    (ADR 20260815 decision 3) — the first deriving its count from the event's
+    structural settings, the second always exactly one (#1484 decision 1)."""
     assert stage_template(draw_type) == expected
 
 

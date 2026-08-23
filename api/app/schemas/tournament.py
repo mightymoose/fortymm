@@ -1792,13 +1792,21 @@ class EventStageRead(BaseModel):
 
 class GroupRead(BaseModel):
     """One competitive group of an event's draw, as it is **read**: server-minted
-    identity and order, plus which reservation it plays under.
+    identity and order, plus which stage it belongs to and which reservation it plays
+    under.
 
     Server-owned, unlike :class:`Reservation` — there is no write shape, because a
     client never authors a group directly. The server materialises the group rows on
-    every event write (``app.tournament_reservations.materialise_event_groups``): for
-    an ``rr-then-ko`` event the count derives from the preview field, for every other
-    draw type it is one group per reservation (ADR 20260822, #1387).
+    every event write (``app.tournament_reservations.materialise_event_groups``): a
+    stage's count comes from its own template entry — the event's structural settings
+    for an ``rr-then-ko`` event's group stage, one group for every other stage any
+    template mints (ADR 20260822, #1387, #1484).
+
+    ``stage_id`` names the event's own stage this group belongs to (#1484). It is
+    what every reader that labels, ranks, deals or panels a group filters on:
+    ``position`` alone is no longer unique across an event's groups once every stage
+    holds groups of its own — an ``rr-then-ko`` event's knockout stage's sole group
+    and its first group-stage group both stand at ``position: 0``.
 
     ``reservation_id`` names an entry of the event's own ``reservations`` array, or is
     ``null`` for a group that plays in no reservation. A group maps to the reservation
@@ -1811,6 +1819,7 @@ class GroupRead(BaseModel):
 
     id: uuid.UUID
     position: int
+    stage_id: uuid.UUID
     reservation_id: uuid.UUID | None
 
 

@@ -256,7 +256,15 @@ async def _make_tournament(
         stages=stages,
     )
     stages[0].groups = event_groups(
-        reservation_specs, event=event, tournament=tournament
+        reservation_specs,
+        event=event,
+        tournament=tournament,
+        # This module's tests seed a group per reservation, whatever the draw type —
+        # a raw ORM state #1484's floor no longer produces through any real route,
+        # but the one several tests here (this file's own confinement regression
+        # bed among them) still want directly. Mirrors ``event_groups``'s own
+        # pre-#1484 default.
+        group_count=len(reservation_specs),
     )
     db.add(event)
     await db.flush()

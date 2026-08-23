@@ -6682,7 +6682,14 @@ async def _reservations_of(
 
     This is what "the refusal changed nothing" has to be asserted against. "The event
     still has reservations" would pass against a guard that 409'd *after* writing them.
+
+    Scoped to the GROUP STAGE — always position 0 (#1484) — rather than every stage of
+    the event: an ``rr-then-ko`` event's knockout stage holds its own single group,
+    which can map onto the SAME reservation one of the group stage's groups does
+    (``position % reservation count`` puts both at ``0 % N``), and reading every
+    stage's groups would return that reservation twice.
     """
+    stage_id = await stage_id_at(db_session, uuid.UUID(event_id), 0)
     rows = (
         await db_session.execute(
             joined_to_reservation(
@@ -6696,11 +6703,7 @@ async def _reservations_of(
                     TournamentEventStageGroup.position,
                 )
             )
-            .where(
-                TournamentEventStageGroup.stage_id.in_(
-                    stage_ids_for_events([uuid.UUID(event_id)])
-                )
-            )
+            .where(TournamentEventStageGroup.stage_id == stage_id)
             .order_by(TournamentEventStageGroup.position)
         )
     ).all()

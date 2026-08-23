@@ -749,8 +749,16 @@ async def _add_event(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
+    # This helper's own contract is "however many groups ``group_count`` says",
+    # including zero — a state no real materialisation produces since #1483's floor,
+    # but one this file's snake-refusal tests deliberately construct. So the
+    # reservation list AND the group count are both driven by it explicitly, rather
+    # than leaning on ``event_groups``'s new one-group default (#1484).
     stages[0].groups = event_groups(
-        [{} for _ in range(group_count)], event=event, tournament=tournament
+        [{} for _ in range(group_count)],
+        event=event,
+        tournament=tournament,
+        group_count=group_count,
     )
     db.add(event)
     # Committed, not merely flushed: ``created_at`` is a server-side ``now()``
