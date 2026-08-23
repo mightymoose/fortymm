@@ -136,6 +136,27 @@ function reservationCapMessage(count: number): string {
 }
 
 /**
+ * **The reservation cap's one predicate (#1482)** — is this draw type / count pair over
+ * the cap? Exported because it has TWO consumers that must never disagree: the
+ * `superRefine` below, which decides whether the SAVE is refused, and the reservations
+ * section, which decides whether the refusal's sentence is still TRUE to show.
+ *
+ * They must never disagree because the refusal is raised at the reservations ARRAY's
+ * path while its condition reads `drawType`, a DIFFERENT field — and React-Hook-Form
+ * revalidates the field that changed, never a sibling. So the section cannot trust the
+ * error object to have kept up, and re-derives the condition instead. Two hand-written
+ * copies of "over the cap" is exactly the drift this file already refuses for the field
+ * rules ("Two schemas for one field drift"): one copy fixed, the other not, and the
+ * screen goes back to contradicting itself.
+ */
+export function isOverReservationCap(
+  drawType: EventFormValues['drawType'],
+  reservationCount: number,
+): boolean {
+  return drawType !== 'rr-then-ko' && reservationCount > 1
+}
+
+/**
  * The one schema the editor's `zodResolver` runs — the whole event, scalars and
  * nested arrays alike, so "may I save?" has a single answer computed in a single
  * place.
@@ -280,8 +301,7 @@ export const eventSchema = z.object({
   // loses the race and the save is refused anyway (`save-failure.ts`'s `refused` arm,
   // unchanged by this ticket).
   .superRefine((values, ctx) => {
-    if (values.drawType === 'rr-then-ko') return
-    if (values.reservations.length <= 1) return
+    if (!isOverReservationCap(values.drawType, values.reservations.length)) return
     ctx.addIssue({
       code: 'custom',
       path: ['reservations'],

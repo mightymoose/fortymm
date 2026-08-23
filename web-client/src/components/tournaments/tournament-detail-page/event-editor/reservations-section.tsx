@@ -10,7 +10,7 @@ import { findReservationConflicts } from '../../data/helpers'
 import { addedReservation, reservationEntryKey } from '../../data/reservation-entries'
 import type { ReservationEntry, TournamentTable } from '../../data/types'
 import { EmptyState } from '../../empty-state'
-import type { EventFormValues } from '../event-form'
+import { type EventFormValues, isOverReservationCap } from '../event-form'
 import { SectionHeader } from '../section-header'
 import { ReservationCard } from './reservations-section/reservation-card'
 
@@ -163,8 +163,13 @@ export const ReservationsSection = ({
   // watched above and `fields` is the live array. The `superRefine` itself STAYS — it is
   // what refuses the save, and `firstInvalidSection` reads `errors.reservations` to jump
   // to this tab. This gate only decides whether the sentence is still TRUE.
+  //
+  // The predicate is IMPORTED, never restated here: the `superRefine` calls the same
+  // `isOverReservationCap`, so "the display gate is exactly the resolver's condition" is
+  // a fact about the code rather than a promise made in a comment. A second hand-written
+  // copy is how one of them gets fixed and the other does not.
   const { errors } = useFormState({ control })
-  const overCap = drawType !== 'rr-then-ko' && fields.length > 1
+  const overCap = isOverReservationCap(drawType, fields.length)
   const capError = overCap
     ? (errors.reservations?.root?.message ?? errors.reservations?.message)
     : undefined
