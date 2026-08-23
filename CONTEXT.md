@@ -464,10 +464,14 @@ placeholder), location (ambiguous between the address and the coordinates),
 address (that is one *part* of a venue, not the whole).
 
 **Group**:
-An ordered set of entrants who play all-play-all. A group belongs to a **stage**
-— the **group stage** of a round-robin draw — and its label derives from its
-position in that stage's order, so the first group is "Group 1". Nothing stores a
-group's name.
+Every **stage**'s fixtures are dealt into its own groups: a stage that
+partitions its field into more than one all-play-all set holds that many
+groups, and a stage that does not partition its field — a bracket, a swiss
+field — has exactly one. A group's label derives from its position in its
+stage's order, so a group stage's first group is "Group 1". Nothing stores a
+group's name. Only a **group stage**'s groups are ever labelled, ranked, or
+shown their own panel; a **knockout stage**'s group carries no director-facing
+identity at all (ADR 20260823).
 The set of group **identities** a stage has is frozen the moment a **draw**
 exists: groups can no longer be added, removed, or re-identified, because every
 **fixture** names the group it belongs to. The order is frozen with them, because
@@ -478,9 +482,10 @@ A group plays in a **reservation**, and it is the reservation that **restricts**
 scheduling rather than the group (ADR 20260807). A fixture that names a group is
 placed on that group's reservation — its tables, inside its window — while a
 fixture that names none is placed across the whole venue over its **event**'s
-window. A group never confines a fixture that does not name it: a **knockout
-stage**'s fixtures take the event-wide reservation even though their event has
-groups, because those groups belong to the group stage.
+window. Since every stage now holds groups (ADR 20260823), a **knockout
+stage**'s fixtures are confined to its own group's reservation exactly as a
+group stage's are — they no longer fall to the event-wide reservation merely
+for belonging to a knockout stage.
 _Avoid_: the old one-word term that named a group and its **reservation**
 together, which is the confusion these two entries exist to end; division,
 grouping.
@@ -575,17 +580,23 @@ flipped), override, default (a **default** is a starting value, not a claim abou
 who owns it).
 
 **Group count**:
-How many **groups** an event has, which is the number of group rows it has. The
-server owns those rows and no client sends a group list (ADR 20260822). For a
-round-robin-then-knockout **draw** the count derives from the **preview field**
-before the **cut**: the field divided by five, rounded up, re-materialised on
-every write to the event. At the cut the server derives it once more from the
-real registered field, and after that nothing recomputes it. For every other
-**draw type** the count is one group per **reservation**. A group count creates
-no reservation. Each group maps to the reservation at its position modulo the
+How many **groups** a **stage** has, which is the number of group rows it has.
+The server owns those rows and no client sends a group list (ADR 20260822,
+20260823). A round-robin-then-knockout **draw**'s group stage derives its
+count from the **preview field** before the **cut**: the field divided by
+five, rounded up, re-materialised on every write to the event. At the cut the
+server derives it once more from the real registered field, and after that
+nothing recomputes it. Every other stage — a standalone round-robin's only
+stage, a single-elim or swiss stage, and a round-robin-then-knockout event's
+own knockout stage — holds exactly one group, always, independent of how many
+**reservations** the event has (ADR 20260823). A group count creates no
+reservation. Each group maps to the reservation at its position modulo the
 reservation count, so eight groups across four reservations put two on each,
 and a group on an event with no reservation plays in none.
-_Avoid_: reservation count (a different number entirely), group total.
+_Avoid_: reservation count (a different number entirely), group total; "one
+group per reservation" (true only because a non-composite event is capped at
+one reservation, ADR 20260823 — the count itself no longer derives from the
+reservation count at all).
 
 **Group size**:
 How many entrants play in one **group**. The system's default size is five. The
