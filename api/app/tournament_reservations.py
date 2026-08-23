@@ -17,15 +17,18 @@ a group's own ``id``, ``position`` and ``reservation_id``; a reservation's own `
 ``position``, ``name``, ``slot`` and ``table_ids``. Slice 1's single joined reservation
 projection is gone — the wire no longer hides which row an id belongs to.
 
-**The materialisation** (#1387, ADR 20260822). The server owns an event's group rows.
-:func:`materialise_event_groups` makes the stage-0 group row count equal
-:func:`group_count_for`'s answer on every event write — for an ``rr-then-ko`` event
-the count #1386's derivation returns for the field it is handed (the preview field on
-an event write, the real registered field at the cut), for every other draw type one
-group per reservation — and maps each group to the reservation at ``position %
-reservation count``, or to none when the event has no reservation. A group count
-creates no reservation. Nothing calls it once a draw exists: the cut re-derives once
-against the real field and the identities and the mapping freeze there.
+**The materialisation** (#1387, ADR 20260822, #1484, ADR 20260823). The server owns an
+event's group rows. :func:`materialise_event_groups` makes **every stage's** group row
+count equal :func:`group_count_for`'s answer on every event write — the count is a
+property of the stage template (:func:`app.tournament_event_stages.stage_template`),
+not of a reservation count: an ``rr-then-ko`` event's group stage derives its count
+from #1386's derivation against the field it is handed (the preview field on an event
+write, the real registered field at the cut), and every other stage — a standalone
+event's only stage, and an ``rr-then-ko`` event's knockout stage — holds exactly one,
+always. Each group maps to the reservation at ``position % reservation count``, or to
+none when the event has no reservation. A group count creates no reservation. Nothing
+calls it once a draw exists: the cut re-derives once against the real field and the
+identities and the mapping freeze there.
 
 **The position.** :func:`stored_reservations`, :func:`apply_event_reservations` and
 :func:`materialise_event_groups` stamp each row with its index — the reservation's
@@ -64,13 +67,14 @@ every group row, or the write would delete and recreate the rows every fixture i
 event points at.
 
 **The stage.** A group's parent is its stage (ADR 20260815, "Sequencing with #1338") —
-always the event's stage 0 (decision 3). ``TournamentEvent.groups`` is a *readable*
-association through stage 0, but writing means resolving the actual stage row and
-assigning ``stage.groups``. On the create path the stage is a fresh, unflushed object
-the caller already built (``app.tournament_events.create_event`` hands it to
-:func:`materialise_groups`); on the edit path :func:`materialise_event_groups` resolves
-it itself, with an explicit query, the same way
-``app.tournament_event_stages.remint_stages_in_place`` does — not because
+**every** stage an event holds, not only stage 0 (#1484, ADR 20260823 amends decision
+3's "always the event's stage 0"). ``TournamentEvent.groups`` is a *readable*
+association across every one of an event's stages, but writing means resolving the
+actual stage row and assigning ``stage.groups``. On the create path the stage is a
+fresh, unflushed object the caller already built (``app.tournament_events.create_event``
+hands each of them to :func:`materialise_groups`); on the edit path
+:func:`materialise_event_groups` resolves every stage itself, with an explicit query,
+the same way ``app.tournament_event_stages.remint_stages_in_place`` does — not because
 ``TournamentEvent.stages`` is unavailable (it is eager and would already be populated)
 but because ``stage.groups`` is deliberately NOT eager, so this function needs its own
 query to attach the ``selectinload``. That query is why it takes a session.
