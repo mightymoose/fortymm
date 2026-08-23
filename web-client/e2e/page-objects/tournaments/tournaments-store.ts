@@ -2373,7 +2373,9 @@ export class TournamentsStore {
             ),
           }
         : {}),
-      id: `ev-created-${this.detail.events.length + 1}`,
+      // Uuid-shaped, like every seed id here: `?event=` is parsed as a uuid at the
+      // route boundary (#1503), so a slug id makes a created event un-re-openable.
+      id: mockUuid(`ev-created-${this.detail.events.length + 1}`),
       entrants: [],
     })
     this.detail = { ...this.detail, events: [...this.detail.events, created] }

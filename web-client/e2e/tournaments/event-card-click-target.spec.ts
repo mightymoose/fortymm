@@ -90,4 +90,27 @@ test.describe('Tournaments · the event card takes the click it advertises', () 
     await expect(pom.drawEmpty(EVENT.GROUPS)).toHaveCount(0)
     await expect(pom.eventEditor).toHaveCount(0)
   })
+
+  test('a click on a CUT draw is still a click on the draw, not a way into the editor', async ({
+    page,
+  }) => {
+    // The other half of the panel's rule (ADR-0786). Only the `undrawn` state stands
+    // aside; a cut draw takes its whole box exactly as it does today, so a director
+    // reading the fixtures cannot knock the editor open on a stray click. The ternary
+    // in `DrawPanel` is one keystroke from inverting, and this is the assertion that
+    // notices.
+    const { pom } = await TournamentDetailPage.navigateTo(page, { drawable: true })
+    await pom.generateDrawButton(EVENT.GROUPS).click()
+    await expect(pom.drawEmpty(EVENT.GROUPS)).toHaveCount(0)
+
+    await clickCentreOf(page, pom.fixtureLines(EVENT.GROUPS).first())
+
+    // Proving a NON-event needs a bounded wait. Opening the editor is a URL write, so
+    // wait for one and require that none arrives — `toHaveCount(0)` on its own is
+    // satisfied by its FIRST poll and passes just as happily against a card that is
+    // about to open the sheet a tick later. Measured, not assumed: with `DrawPanel`'s
+    // ternary inverted this click opens the editor, and only this wait sees it.
+    await expect(page.waitForURL(/[?&]event=/, { timeout: 2000 })).rejects.toThrow()
+    await expect(pom.eventEditor).toHaveCount(0)
+  })
 })

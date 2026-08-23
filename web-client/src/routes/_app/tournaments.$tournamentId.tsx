@@ -121,10 +121,19 @@ function TournamentDetailRoute() {
    * work, and a delete is about to raise a confirmation of its own, so neither may
    * stack "Discard changes?" on top. It rides `ignoreBlocker`, which both the pop and
    * the replace path honour.
+   *
+   * **The flag is not cleared here**, and that is the point: this close can be
+   * REFUSED. A dirty editor's pop is blocked, `@tanstack/history` puts the entry
+   * straight back, and the director carries on editing — so the entry we pushed is
+   * still there and the next close must still pop it. Clearing the flag on the way
+   * out would send that next close down the `replace` branch, which strands the
+   * pushed entry: the sheet would go, and one Back press would land the director back
+   * on the same tournament page instead of leaving it. The effect above is the only
+   * thing that clears it, on the one fact that means the entry is really gone — the
+   * param disappearing.
    */
   const closeEditor = ({ force = false }: { force?: boolean } = {}) => {
     if (pushedEditorEntry.current) {
-      pushedEditorEntry.current = false
       router.history.back({ ignoreBlocker: force })
       return
     }

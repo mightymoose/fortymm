@@ -2484,7 +2484,11 @@ export function createEvent(
   eventCounter += 1
   const now = new Date().toISOString()
   const event: StoredEvent = {
-    id: `ev-new-${eventCounter}`,
+    // `mockUuid`, for the same reason every seed id above is one: the open editor is a
+    // `?event=<uuid>` search param now (#1503), parsed at the route boundary. A slug id
+    // fails that parse, `.catch({})` drops it, and an event created under `npm run dev`
+    // could never be re-opened — the one event in the mock world a director just made.
+    id: mockUuid(`ev-new-${eventCounter}`),
     tournament_id: tournamentId,
     name: body.name,
     format: body.format,

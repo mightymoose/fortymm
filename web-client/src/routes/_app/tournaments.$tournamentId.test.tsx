@@ -36,6 +36,11 @@ const TournamentNotFound = Route.options.notFoundComponent
 const shippedParseParams = (
   Route.options.params as { parse: (raw: unknown) => { tournamentId: string } }
 ).parse
+/** The REAL search parser (`validateSearch: zodValidator(eventEditorSearchSchema)`),
+ * likewise read off the shipped route rather than re-implemented here. It is what makes
+ * a garbage `?event=` a URL that names nothing instead of a value the page has to
+ * defend against (#1503, `.claude/rules/parse-at-boundaries.md`). */
+const shippedValidateSearch = Route.options.validateSearch!
 
 /** A well-formed uuid that names nothing — the "valid but unknown" case. */
 const UNKNOWN_ID = '00000000-0000-4000-8000-000000000000'
@@ -73,6 +78,12 @@ function renderRoute(initialEntry: string) {
     // The REAL param parser — the thing under test. A route that dropped it would
     // send `/tournaments/abc` to the API and blow up in the error boundary.
     params: { parse: (raw) => shippedParseParams(raw) },
+    // …and the REAL search parser beside it. Without this the harness has no boundary
+    // at all: a malformed `?event=` reaches the page verbatim, the editor stays closed
+    // because no event MATCHES it rather than because the value was dropped, and the
+    // refusal specs below pass against a route module with `validateSearch` deleted.
+    // Measured: with it missing, `location.search` was `{ event: 'not-a-uuid' }`.
+    validateSearch: shippedValidateSearch,
   })
   const listRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -296,6 +307,12 @@ describe('tournament detail route — which event editor is open lives in the UR
     expect(editorSheet()).not.toBeInTheDocument()
   })
 
+  // Two different refusals, and the page's answer is the same for both: a well-formed
+  // uuid survives the boundary and is refused later, by resolution against THIS
+  // tournament's events; a value that is neither a uuid nor `new` never gets that far,
+  // because `validateSearch` drops it. Which refusal fired is not observable from here
+  // — `location.search` is the raw query object, not the validator's output — so the
+  // boundary's own half is pinned directly, in `data/event-editor-search.test.ts`.
   it.each([
     ['a uuid naming no event on this tournament', OTHER_EVENT_ID],
     ['a value that is neither a uuid nor `new`', 'not-a-uuid'],

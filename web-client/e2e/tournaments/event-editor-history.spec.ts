@@ -133,6 +133,47 @@ test.describe('Tournaments · the event editor is a URL, and Back dismisses it',
     await expect(page).toHaveURL(TOURNAMENT_URL)
   })
 
+  test('a close the director backs out of STILL consumes the entry when it finally happens', async ({
+    page,
+  }) => {
+    // The criterion is "closing the editor by any path consumes its history entry, so
+    // the next Back press leaves the tournament page" — and a close can be REFUSED on
+    // the way there. A first Cancel is blocked and the director keeps editing; the
+    // pushed entry is still underneath them, so the close that eventually lands must
+    // still pop it rather than replace the entry it is sitting on.
+    //
+    // Asserting the URL after the close cannot see this: a `replace` leaves exactly the
+    // same address bar and strands the pushed entry, so the next Back lands the director
+    // straight back on the same tournament page. Only the press afterwards discriminates.
+    const { pom } = await TournamentDetailPage.navigateTo(page)
+    // Something in front of the tournament, the way arriving from the list gives it —
+    // otherwise "Back leaves the page" has nowhere to leave to.
+    await page.goto('/tournaments')
+    await page.goto(TOURNAMENT_URL)
+    await expect(pom.eventCard(EVENT.JOURNEY)).toBeVisible()
+
+    await pom.openEditor(EVENT.JOURNEY)
+    await pom.eventNameInput.fill('Open Singles (renamed)')
+
+    // Refused once…
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('alertdialog')).toContainText(DISCARD.title)
+    await page.getByRole('button', { name: DISCARD.stay }).click()
+    await expect(page.getByRole('alertdialog')).toHaveCount(0)
+    await expect(pom.eventEditor).toBeVisible()
+
+    // …and then allowed.
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('alertdialog')).toContainText(DISCARD.title)
+    await page.getByRole('button', { name: DISCARD.leave }).click()
+    await expect(pom.eventEditor).toHaveCount(0)
+    await expect(page).toHaveURL(TOURNAMENT_URL)
+
+    // The claim. One press, and the director is off the tournament page.
+    await pressBack(page)
+    await expect(page).toHaveURL('/tournaments')
+  })
+
   test('a deep link opens the editor on first render and closes by replacing the entry', async ({
     page,
   }) => {
@@ -155,6 +196,42 @@ test.describe('Tournaments · the event editor is a URL, and Back dismisses it',
     await expect(pom.eventEditor).toHaveCount(0)
     await expect(page).toHaveURL(TOURNAMENT_URL)
     await expect(pom.eventCard(EVENT.JOURNEY)).toBeVisible()
+  })
+
+  test('an event just CREATED can be opened again — its new id survives the boundary', async ({
+    page,
+  }) => {
+    // The editor is a URL now, so the id of a brand-new event is load-bearing in a way
+    // it never was: it goes in the address bar, and `?event=` is parsed as a uuid at the
+    // route boundary. An id that fails that parse is dropped by `.catch({})`.
+    //
+    // ⚠️ The RELOAD is what makes this discriminating, and the URL shape alone is not.
+    // An in-app `navigate` carries its search object through without re-running
+    // `validateSearch`, so clicking the card opens the editor even on an id the boundary
+    // would refuse — measured. Only a fresh parse of the address bar asks the boundary
+    // anything, which is exactly the criterion at stake: "the URL is shareable and
+    // survives a reload". Nothing else in this suite re-opens a created event.
+    const { pom } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.newEventButton.click()
+    await expect(pom.eventEditor).toBeVisible()
+    await pom.eventNameInput.fill('Twilight Singles')
+    await pom.saveEventButton.click()
+    await expect(pom.eventEditor).toBeHidden()
+    await expect(pom.eventCard('Twilight Singles')).toBeVisible()
+
+    await pom.openEditor('Twilight Singles')
+
+    await expect(pom.eventEditor).toBeVisible()
+    await expect(pom.eventNameInput).toHaveValue('Twilight Singles')
+    await expect(page).toHaveURL(/[?&]event=[0-9a-f-]{36}/)
+
+    await page.reload()
+
+    // Still open, on the same event: the id in the address bar is one the boundary
+    // accepts, so the link a director could paste to somebody else works.
+    await expect(pom.eventEditor).toBeVisible()
+    await expect(pom.eventNameInput).toHaveValue('Twilight Singles')
   })
 
   test('a uuid that names no event on this tournament leaves the editor closed', async ({

@@ -245,6 +245,40 @@ describe('every tournament id is uuid-shaped (#1229)', () => {
   })
 })
 
+// #1503, and the same class of bug one level down: which event's editor is open is a
+// `?event=<uuid>` search param now, parsed at the route boundary before anything
+// resolves it. An event whose mock id is a slug therefore cannot be OPENED under
+// `npm run dev` — the value fails the union, `.catch({})` drops it, and the sheet
+// silently never appears. The `createEvent` case is the one that bites hardest: the
+// event a director has just authored is the one they are most likely to click.
+describe('every event id is uuid-shaped (#1503)', () => {
+  const uuid = z.string().uuid()
+
+  it('every id the dev seed hands out', () => {
+    for (const tournament of listTournaments()) {
+      const detail = findTournament(tournament.id)
+      for (const event of detail?.events ?? []) {
+        expect(uuid.safeParse(event.id).success).toBe(true)
+      }
+    }
+  })
+
+  it('the id `createEvent` mints', () => {
+    const created = createEvent(DRAFT_TOURNAMENT, {
+      name: 'Freshly Authored',
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: 16,
+      entry_fee: 10,
+      timezone: 'America/Chicago',
+      slot: { date: '2026-08-22', start: '09:00', end: '12:00' },
+      match_settings: { rated: false, length_games: 3 },
+    })
+    if (!created.ok) throw new Error('setup failed: the event was refused')
+    expect(uuid.safeParse(created.event.id).success).toBe(true)
+  })
+})
+
 // #783: the two refusals the EVENT itself makes. A mock that 201'd them would be
 // more permissive than the server, and a UI that kept offering Enter on a full
 // event would look perfect in `npm run dev`.

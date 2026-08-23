@@ -402,7 +402,13 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
         <Alert
           variant="destructive"
           data-testid={`draw-notice-${event.id}`}
-          className="mt-2.5"
+          // `pointer-events-auto`, as the header row above has it. An UNDRAWN section
+          // stands aside so "No draw yet." stops swallowing the card's open target
+          // (#1503) — but this refusal is the one thing in that section a director has
+          // to READ and often copy: it names the numbers a refused Generate wants
+          // changed. Left standing aside, a click on it would open the event editor
+          // over the message, and the message could not be selected at all.
+          className="pointer-events-auto mt-2.5"
         >
           <AlertTitle>{notice.title}</AlertTitle>
           <AlertDescription>{notice.description}</AlertDescription>
