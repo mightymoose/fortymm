@@ -1608,6 +1608,28 @@ export class TournamentsStore {
   }
 
   /**
+   * Simulate a SECOND writer editing this event out from under the tab the spec has
+   * open (#1499) — the whole reason `lock_version` exists. Bumps the stored version
+   * by one, exactly as an accepted PATCH does (`updateEvent` below), and applies
+   * `fields` directly to the stored row rather than through the route, since the
+   * "other writer" is not this spec's own client and has no draft of its own to
+   * validate.
+   *
+   * With nothing supplied it is a pure version bump — a genuine "someone saved,
+   * possibly touching nothing this spec cares about" — which is enough on its own to
+   * make the open sheet's next save stale. A caller that wants the OTHER writer's
+   * change to be visible on the reloaded card (e.g. a renamed event) passes it.
+   */
+  writeEventElsewhere(name: string, fields: Partial<TournamentEventRead> = {}): void {
+    const event = this.eventNamed(name)
+    this.mutateEvent(event.id, (e) => ({
+      ...e,
+      ...fields,
+      lock_version: e.lock_version + 1,
+    }))
+  }
+
+  /**
    * Refuse every event write with FastAPI's **422** until the returned callback is
    * invoked — the *unknown* refusal, which is the only kind left worth testing.
    *
@@ -2375,6 +2397,11 @@ export class TournamentsStore {
         : {}),
       id: `ev-created-${this.detail.events.length + 1}`,
       entrants: [],
+      // A freshly created event's optimistic-concurrency version (#1499) — `1`, what
+      // the real server assigns a brand-new row. `TournamentEventCreate` carries no
+      // `lock_version` at all (`extra="forbid"` would 422 it), so this is minted here,
+      // never read off `fields`.
+      lock_version: 1,
     })
     this.detail = { ...this.detail, events: [...this.detail.events, created] }
     return json(route, 201, this.read(created))
@@ -2401,6 +2428,34 @@ export class TournamentsStore {
     if (!event) return json(route, 404, { detail: 'event not found' })
     if (this.faultingWrites) return serverFault(route)
     if (this.refusingWrites || nameTooLong(body)) return this.unprocessableName(route)
+
+    // `TournamentEventUpdate.lock_version` is REQUIRED (#1499) — a 422 without it,
+    // mirroring the server's Pydantic-level field-required check. Asked before every
+    // other body check, same as the mock (`src/mocks/handlers.ts`'s
+    // `validateEventBody`).
+    const lockVersion = (body as { lock_version?: unknown } | null)?.lock_version
+    if (typeof lockVersion !== 'number') {
+      return json(route, 422, {
+        detail: [{ type: 'missing', loc: ['body', 'lock_version'], msg: 'Field required' }],
+      })
+    }
+    // A stale version (#1499) — asked FIRST of every payload gate, before either draw
+    // freeze, mirroring the server's ordering exactly (`EventVersionConflictError`,
+    // judged before `_enforce_group_set_frozen`/`_enforce_draw_settings_frozen`): a
+    // stale draft usually trips one of THOSE on its way through, and reporting that
+    // would blame a field the director never touched. The sentence is the server's own,
+    // verbatim (`api/app/tournament_errors.py`) — the CODE is what the client switches
+    // on, same shape as `enter`'s coded 409s above.
+    if (lockVersion !== event.lock_version) {
+      return json(route, 409, {
+        detail: {
+          code: 'event_version_conflict',
+          message:
+            'This event was changed somewhere else while you had it open, so this ' +
+            'save was not applied. Reopen the event to see what it holds now.',
+        },
+      })
+    }
 
     const frozen = frozenDetail(event, body)
     if (frozen) return json(route, 409, { detail: frozen })
@@ -2445,6 +2500,14 @@ export class TournamentsStore {
         // a draw stands, so this can only run against an undrawn event.
         stages:
           fields.draw_type == null ? e.stages : mintStageReads(fields.draw_type),
+        // Every ACCEPTED PATCH moves the token on by one, unconditionally — including
+        // one whose payload equals what the event already holds (#1499, mirroring the
+        // server's `event.lock_version = event.lock_version + 1`). Stated AFTER
+        // `...fields`: the client's OWN `lock_version` is in that spread (it is a
+        // `TournamentEventRead` field, not excluded from `fields`'s type), and it is
+        // the version the patch was checked AGAINST above, never the one to store —
+        // the store owns this column, same as `mocks/tournaments-store.ts`'s twin.
+        lock_version: e.lock_version + 1,
       }
     })
     return json(route, 200, this.read(this.eventNamed(fields.name ?? event.name)))

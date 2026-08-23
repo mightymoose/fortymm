@@ -76,6 +76,7 @@ describe('apiToEvent', () => {
         entry_fee: 35,
         entrants: buildTournamentEntrantReads(22),
         match_settings: { rated: false, length_games: 3 },
+        lock_version: 5,
       }),
     )
 
@@ -87,6 +88,8 @@ describe('apiToEvent', () => {
     expect(event.entered).toBe(22)
     expect(event.entrants).toHaveLength(22)
     expect(event.match).toEqual({ rated: false, lengthGames: 3 })
+    // #1499: carried across unchanged — this is what a later PATCH sends back.
+    expect(event.lockVersion).toBe(5)
   })
 
   it('maps each entrant, keeping the ENTRY id a withdrawal is addressed to', () => {
@@ -868,6 +871,10 @@ const event: TournamentEvent = {
   fixtures: [],
   // No results (ADR-0788): no draw, nothing to stand.
   results: null,
+  // The optimistic-concurrency version (#1499) — carried across unread, and sent back
+  // verbatim by `eventToUpdateBody` alone (never `eventToCreateBody`, whose write
+  // shape has no such field — `extra="forbid"` would 422 one).
+  lockVersion: 3,
 }
 
 /** The event as the **editor** hands it back with its reservations untouched: each one
@@ -975,6 +982,10 @@ describe('eventToCreateBody', () => {
       rounds: null,
       id: event.id,
       tournament_id: 't-1',
+      // Absent from the create body — `TournamentEventCreate` has no such field at all
+      // (`extra="forbid"` would 422 one) — so it is supplied here, off the READ shape,
+      // for the round trip to land back on `event`'s own `lockVersion`.
+      lock_version: event.lockVersion,
       // The registrations are server-owned and absent from the create body;
       // supply the read-shape entrants (the count derives from them) so the
       // round-trip assertion holds.
@@ -1018,6 +1029,17 @@ describe('eventToCreateBody', () => {
 
     expect('fixtures' in body).toBe(false)
   })
+
+  // #1499: `TournamentEventCreate` has no `lock_version` field at all
+  // (`extra="forbid"`), so a create body carrying the key is a 422 the server would
+  // never have shipped this way — `eventToUpdateBody` is the ONLY builder that sends
+  // it. Pinned as a key question, not `toEqual`: a `lock_version: undefined` key
+  // would pass an equality check and still 422.
+  it('never sends lock_version — that field does not exist on create', () => {
+    const body = eventToCreateBody(edited)
+
+    expect('lock_version' in body).toBe(false)
+  })
 })
 
 describe('eventToUpdateBody', () => {
@@ -1041,6 +1063,15 @@ describe('eventToUpdateBody', () => {
         table_ids: ['t1', 't2'],
       },
     ])
+  })
+
+  // #1499: the PATCH sends back the version this client read the event at — verbatim,
+  // never a guess or a hard-coded `1`. The create body has no such field at all (see
+  // `eventToCreateBody` below), which is why this assertion lives only here.
+  it('sends lock_version verbatim off the edited event', () => {
+    const body = eventToUpdateBody(asEditedEvent({ ...event, lockVersion: 7 }))
+
+    expect(body.lock_version).toBe(7)
   })
 
   /**

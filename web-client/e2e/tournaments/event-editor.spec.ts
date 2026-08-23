@@ -504,6 +504,87 @@ test.describe('Tournaments · a save the server refuses', () => {
 })
 
 /**
+ * **The whole #1499 loop, end to end.** `PATCH /v1/tournaments/{id}/events/{id}` now
+ * carries `lock_version`, and a stale one is refused with a coded 409 rather than
+ * silently overwriting whatever the OTHER write touched. Two reads, one write, a
+ * refused second write, the override, and the card showing the override's values —
+ * a component test can fake the version numbers; only a browser proves the whole
+ * chain actually connects: the reconcile that follows the refusal really re-fetches,
+ * the fresh version really reaches the override, and the override really saves.
+ */
+test.describe('Tournaments · a stale save and its deliberate override (#1499)', () => {
+  test('the conflict is refused in OUR words, and the override wins with the DRAFT — never the other writer’s edit', async ({
+    page,
+  }) => {
+    // READ 1 — the page loads, and the sheet opens on the event as it stood then
+    // (`lock_version: 1`).
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    await expect(pom.eventEditor).toBeVisible()
+
+    // WRITE 1 — another writer (a co-director across the hall, or this director's
+    // own other tab) saves this SAME event while the sheet sits open. The open
+    // sheet has no way to know: its copy is frozen the moment it opened, and this
+    // is exactly the write it is frozen against. The rename is the load-bearing
+    // part of this fixture: it lands on the card, so a later assertion can prove
+    // the override actually overwrote it — not merely that the draft was sent.
+    store.writeEventElsewhere(EVENT.JOURNEY, { name: 'Renamed By Someone Else' })
+
+    await pom.eventNameInput.fill('Renamed While Stale')
+
+    // WRITE 2 — this tab's own save, built on the read from before WRITE 1. Refused.
+    await pom.saveEventButton.click()
+
+    // Refused in OUR words — never the server's sentence, and never confused with
+    // the OTHER two 409s this same endpoint answers (the draw-type and group-set
+    // freezes), which read completely differently.
+    await expect(pom.saveFailure).toBeVisible()
+    await expect(pom.saveFailure).toContainText(
+      'This event has changed since you opened it',
+    )
+    expect(store.countOf('PATCH')).toBe(1)
+    expect(store.unhandled).toEqual([])
+
+    // The work survives the refusal, same as every other failure this editor meets.
+    await expect(pom.eventEditor).toBeVisible()
+    await expect(pom.eventNameInput).toHaveValue('Renamed While Stale')
+
+    // READ 2 — the reconcile that follows every settled mutation
+    // (`useUpdateEvent`'s AWAITED `onSettled`) re-fetches the tournament, and THAT
+    // is where the override's fresh version comes from. `currentLockVersion` was
+    // never `null` — the event stayed in `tournament.events` the whole time, only
+    // its version was stale. What the reconcile actually changes is visible on the
+    // card underneath the (still-open) sheet: it now reads the OTHER writer's name.
+    await expect(pom.eventCard('Renamed By Someone Else')).toBeVisible()
+    await expect(pom.overrideButton).toBeVisible()
+
+    // WRITE 3 — the override. Never automatic: the director presses it on purpose.
+    await pom.overrideButton.click()
+
+    // Saved, OVER the other writer's edit — this is the one behaviour that
+    // separates the override from a plain retry: the card shows the DRAFT this
+    // director actually typed, and the other writer's name is gone.
+    await expect(pom.eventEditor).toBeHidden()
+    expect(store.countOf('PATCH')).toBe(2)
+    await expect(pom.eventCard('Renamed While Stale')).toBeVisible()
+    await expect(pom.eventCard('Renamed By Someone Else')).toHaveCount(0)
+    expect(store.unhandled).toEqual([])
+  })
+
+  // The disabled-override-when-deleted-elsewhere branch is component-tested
+  // (`event-editor.test.tsx`, "disables the override — and says why — when the
+  // event was deleted elsewhere"), where `currentLockVersion: null` is a prop this
+  // suite can state directly. Reproducing it here would mean racing a SECOND
+  // deletion against the reconcile that follows the refusal — a race this mock's
+  // synchronous store cannot represent honestly, and simply removing the event
+  // before the PATCH lands answers 404, not the 409 this banner exists for. The
+  // browser's job is proving the reconcile-to-override WIRING actually connects
+  // (the test above); the disabled branch is a pure prop → render claim the
+  // component layer already covers.
+})
+
+/**
  * **The phone.** The rule row's grid is byte-identical to the one that shipped before
  * this branch — the layout bug is older than the validation — but the validation moved
  * in next door to it, and a message rendered in a column that is off the screen is a
@@ -820,6 +901,27 @@ test.describe('Tournaments · the event editor · accessibility', () => {
     await expect(pom.basicsError(SAY.nameRequired)).toBeVisible()
 
     await expectAxeClean(page, 'event editor — invalid event name', {
+      exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
+    })
+  })
+
+  // #1499: a new button, inside the destructive `Alert`, that jsdom's component tests
+  // cannot see the contrast of — the `Alert`'s destructive variant tints its own text,
+  // and a button with no explicit colour classes of its own inherits whatever that
+  // tint leaves it, which may or may not clear AA against the card background.
+  test('is axe-clean with the conflict banner AND its override button on screen', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    store.writeEventElsewhere(EVENT.JOURNEY)
+    await pom.eventNameInput.fill('Renamed While Stale')
+    await pom.saveEventButton.click()
+
+    await expect(pom.overrideButton).toBeVisible()
+
+    await expectAxeClean(page, 'event editor — version conflict with override', {
       exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
     })
   })

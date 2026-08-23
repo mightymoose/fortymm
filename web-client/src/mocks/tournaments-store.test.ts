@@ -111,6 +111,30 @@ function event(eventId: string) {
   return found
 }
 
+/**
+ * `updateEvent`, with `lock_version` filled in from the CURRENT stored value (#1499)
+ * — read fresh off the store right before the call, the same way a real client's most
+ * recent GET would be. Every test below this point is about draw settings,
+ * reservations, capacity, the group-set freeze, or some other business rule that
+ * predates #1499 and has nothing to do with it, so none of them should have to state
+ * a version by hand (or worse, a hard-coded number a future seed change silently
+ * makes wrong). The dedicated version-conflict coverage lives in its own `describe`
+ * block below and calls the real `updateEvent` directly, with an explicit —
+ * deliberately wrong — number.
+ */
+function patchEvent(
+  tournamentId: string,
+  eventId: string,
+  patch: Omit<Partial<components['schemas']['TournamentEventUpdate']>, 'lock_version'>,
+) {
+  const current = findTournament(tournamentId)?.events.find((e) => e.id === eventId)
+  if (!current) throw new Error(`no such event ${eventId} on ${tournamentId}`)
+  return updateEvent(tournamentId, eventId, {
+    lock_version: current.lock_version,
+    ...patch,
+  } as components['schemas']['TournamentEventUpdate'])
+}
+
 /** A tournament genuinely IN `status`, holding an empty singles event and a
  * doubles event.
  *
@@ -618,7 +642,7 @@ describe('the rest of the event surface still holds', () => {
   it('leaves the registrations untouched when the event is edited', () => {
     enterEvent(TOURNAMENT, EMPTY_SINGLES)
 
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, { name: 'Renamed' })
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, { name: 'Renamed' })
     if (!result.ok) throw new Error('update failed')
 
     expect(result.event.name).toBe('Renamed')
@@ -646,7 +670,7 @@ describe('the rest of the event surface still holds', () => {
   // An explicit null clears the cap; `??` would have kept the old value. This is
   // the store half of the no-cap round-trip.
   it('clears the cap when a PATCH sends max_players: null', () => {
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, { max_players: null })
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, { max_players: null })
     if (!result.ok) throw new Error('update failed')
     expect(result.event.max_players).toBeNull()
   })
@@ -725,7 +749,7 @@ describe('the rest of the event surface still holds', () => {
       .reverse()
       .map((r) => ({ id: r.id, name: r.name, slot: r.slot, table_ids: r.table_ids }))
 
-    const result = updateEvent(TOURNAMENT, created.id, { reservations: reversed })
+    const result = patchEvent(TOURNAMENT, created.id, { reservations: reversed })
     if (!result.ok) throw new Error('update failed')
 
     expect(result.event.reservations.map((r) => r.name)).toEqual(
@@ -741,10 +765,79 @@ describe('the rest of the event surface still holds', () => {
   // same "absent means unchanged" the cap follows one test up.
   it('leaves the stored positions alone when a PATCH names no reservations', () => {
     const before = event(FULLISH_SINGLES).reservations.map((r) => r.position)
-    const result = updateEvent(TOURNAMENT, FULLISH_SINGLES, { name: 'Renamed' })
+    const result = patchEvent(TOURNAMENT, FULLISH_SINGLES, { name: 'Renamed' })
     if (!result.ok) throw new Error('update failed')
 
     expect(result.event.reservations.map((r) => r.position)).toEqual(before)
+  })
+})
+
+// Optimistic concurrency (#1499): a PATCH states the `lock_version` it read the
+// event at, and the store refuses one that does not match — before either draw
+// freeze and before the reservation cap, so a stale draft that ALSO trips one of
+// those on its way through is told the true thing (the event moved under it)
+// rather than blamed for a field it never touched. Every accepted PATCH moves the
+// token on by one, unconditionally.
+describe('updateEvent — the lock_version guard (#1499)', () => {
+  it('accepts a PATCH whose lock_version matches the stored one, and moves it on by one', () => {
+    const before = event(EMPTY_SINGLES).lock_version
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      lock_version: before,
+      name: 'Renamed',
+    })
+    if (!result.ok) throw new Error('update failed')
+
+    expect(result.event.lock_version).toBe(before + 1)
+  })
+
+  it('moves the token on even when the payload changes nothing else', () => {
+    // Mirrors the server's own unconditional bump (#1499): a PATCH is still a
+    // write, even a no-op one, and the alternative — bump only on a real change —
+    // would mean deciding what "changed" means across scalars, JSONB
+    // value-objects, a settings row and a child-row diff.
+    const before = event(EMPTY_SINGLES).lock_version
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      lock_version: before,
+      name: event(EMPTY_SINGLES).name,
+    })
+    if (!result.ok) throw new Error('update failed')
+
+    expect(result.event.lock_version).toBe(before + 1)
+  })
+
+  it('refuses a STALE lock_version with a CODED 409, and writes nothing', () => {
+    const before = event(EMPTY_SINGLES)
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+      lock_version: before.lock_version + 1, // a version this event has not reached yet
+      name: 'Should not land',
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.status).toBe(409)
+    expect('code' in result && result.code).toBe('event_version_conflict')
+    // Nothing written — the name, and the version, are exactly as they were.
+    expect(event(EMPTY_SINGLES).name).toBe(before.name)
+    expect(event(EMPTY_SINGLES).lock_version).toBe(before.lock_version)
+  })
+
+  // FIRST of every payload gate (#1499) — before the group-set freeze, which THIS
+  // stale patch would also trip (it removes the event's only reservation on a
+  // cut draw). The version conflict is the true news; the freeze would blame the
+  // wrong thing.
+  it('is judged BEFORE the group-set freeze — a stale draft is told the truth, not blamed for the freeze it also trips', () => {
+    const cut = cutDraw(TOURNAMENT, FULLISH_SINGLES)
+    if (!cut.ok) throw new Error('cut failed')
+    const before = event(FULLISH_SINGLES)
+
+    const result = updateEvent(TOURNAMENT, FULLISH_SINGLES, {
+      lock_version: before.lock_version + 1,
+      reservations: [], // would ALSO trip the group-set freeze, were it reached
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a refusal')
+    expect('code' in result && result.code).toBe('event_version_conflict')
   })
 })
 
@@ -1111,7 +1204,7 @@ describe('transitionTournament', () => {
       if (!deleteEvent(id, gone).ok) throw new Error(`setup failed: ${gone}`)
     }
     // 52 entrants, and the groups taken away — the one refusal that is about the groups.
-    if (!updateEvent(id, FULLISH_SINGLES, { reservations: [] }).ok) {
+    if (!patchEvent(id, FULLISH_SINGLES, { reservations: [] }).ok) {
       throw new Error('setup failed: could not empty the reservations')
     }
 
@@ -1193,11 +1286,11 @@ describe('transitionTournament', () => {
     // that is no longer the field. A re-cut fixes it, so it stays in the stale bucket.
     if (!cutDraw(id, FULLISH_SINGLES).ok) throw new Error('setup failed: cut')
     if (!enterEvent(id, FULLISH_SINGLES).ok) throw new Error('setup failed: enter')
-    if (!updateEvent(id, FULLISH_SINGLES, { name: 'C Stale' }).ok) {
+    if (!patchEvent(id, FULLISH_SINGLES, { name: 'C Stale' }).ok) {
       throw new Error('setup failed: rename')
     }
     // “B Uncut”: 16 entrants, never cut — one click from ready.
-    if (!updateEvent(id, FULL_SINGLES, { name: 'B Uncut' }).ok) {
+    if (!patchEvent(id, FULL_SINGLES, { name: 'B Uncut' }).ok) {
       throw new Error('setup failed: rename')
     }
     // “A Undrawable”: one group, one entrant — the headline repro of #1300.
@@ -1381,7 +1474,7 @@ describe('the reservation cap (#1482)', () => {
 
   it('refuses a PATCH sending only reservations, more than one, against a stored round-robin event', () => {
     // `EMPTY_SINGLES` is seeded round-robin with no reservations at all.
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       reservations: [
         { name: 'Reservation A', slot: SLOT, table_ids: [] },
         { name: 'Reservation B', slot: SLOT, table_ids: [] },
@@ -1394,7 +1487,7 @@ describe('the reservation cap (#1482)', () => {
   })
 
   it('accepts a PATCH that leaves a round-robin event at exactly one reservation', () => {
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       reservations: [{ name: 'Reservation A', slot: SLOT, table_ids: [] }],
     })
 
@@ -1423,7 +1516,7 @@ describe('the reservation cap (#1482)', () => {
     })
     if (!created.ok) throw new Error('setup create failed')
 
-    const result = updateEvent(TOURNAMENT, created.event.id, { draw_type: 'round-robin' })
+    const result = patchEvent(TOURNAMENT, created.event.id, { draw_type: 'round-robin' })
 
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -1432,7 +1525,7 @@ describe('the reservation cap (#1482)', () => {
 
   // …and the flip the OTHER way is always legal — the cap only narrows.
   it('accepts a PATCH flipping round-robin to rr-then-ko while holding more than one reservation', () => {
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       draw_type: 'rr-then-ko',
       qualifiers_per_group: 2,
       reservations: [
@@ -1537,7 +1630,7 @@ describe('cutting and un-cutting a draw', () => {
     // re-pointed at the new one.
     const before = eventOf(TOURNAMENT, ROUND_ROBIN).groups.map((g) => g.id)
     expect(uncutDraw(TOURNAMENT, ROUND_ROBIN).ok).toBe(true) // the freeze lifts first
-    updateEvent(TOURNAMENT, ROUND_ROBIN, { reservations: [reservationNamed('Reservation One')] })
+    patchEvent(TOURNAMENT, ROUND_ROBIN, { reservations: [reservationNamed('Reservation One')] })
     // The one group the event now has — a freshly MINTED id, not a name the test chose,
     // because the old reservation (and its group) was dropped and this one was added.
     const after = eventOf(TOURNAMENT, ROUND_ROBIN).groups.map((g) => g.id)
@@ -1564,7 +1657,7 @@ describe('cutting and un-cutting a draw', () => {
   it('refuses a grouped draw with NO reservations — there is nowhere to deal the field', () => {
     // `ev-open-singles` is a grouped round-robin in the seed; empty its reservations and
     // keep the type, so the refusal can only be about the groups.
-    updateEvent(TOURNAMENT, FULLISH_SINGLES, { draw_type: 'round-robin', reservations: [] })
+    patchEvent(TOURNAMENT, FULLISH_SINGLES, { draw_type: 'round-robin', reservations: [] })
 
     const result = cutDraw(TOURNAMENT, FULLISH_SINGLES)
     expect(result.ok).toBe(false)
@@ -1577,7 +1670,7 @@ describe('cutting and un-cutting a draw', () => {
     // ONE reservation (#1482 caps round-robin at one), one entrant: still a group too
     // small to play — the refusal this test is about needs no second or third
     // reservation to reach it.
-    updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       draw_type: 'round-robin',
       reservations: [reservationNamed('Reservation A')],
     })
@@ -1677,7 +1770,7 @@ describe('cutting a single-elimination draw', () => {
    * route a director would take through the UI. */
   function asSingleElim(eventId: string) {
     expect(uncutDraw(TOURNAMENT, eventId).ok).toBe(true)
-    const patched = updateEvent(TOURNAMENT, eventId, { draw_type: 'single-elim' })
+    const patched = patchEvent(TOURNAMENT, eventId, { draw_type: 'single-elim' })
     if (!patched.ok) throw new Error(`could not re-type ${eventId}`)
   }
 
@@ -1776,7 +1869,7 @@ describe('cutting a single-elimination draw', () => {
     // Round-robin's per-group floor, one level up — and the ONLY 422 a single-elim cut
     // makes. Notably NOT a refusal about groups: `ev-u1500` has none, and a bracket does
     // not want any.
-    const patched = updateEvent(TOURNAMENT, EMPTY_SINGLES, { draw_type: 'single-elim' })
+    const patched = patchEvent(TOURNAMENT, EMPTY_SINGLES, { draw_type: 'single-elim' })
     expect(patched.ok).toBe(true)
     enterEvent(TOURNAMENT, EMPTY_SINGLES) // one entrant: the dev user
 
@@ -1831,7 +1924,7 @@ describe('cutting a round-robin-then-knockout draw', () => {
    * read back out at the cut, rather than a planner default nobody chose. */
   function asRrThenKo(eventId: string, groupCount: number, qualifiers = 1) {
     expect(uncutDraw(TOURNAMENT, eventId).ok).toBe(true)
-    const patched = updateEvent(TOURNAMENT, eventId, {
+    const patched = patchEvent(TOURNAMENT, eventId, {
       draw_type: 'rr-then-ko',
       qualifiers_per_group: qualifiers,
       reservations: Array.from({ length: groupCount }, (_, i) =>
@@ -1970,7 +2063,7 @@ describe('cutting a round-robin-then-knockout draw', () => {
     // *round-robin* draw. That reads oddly and is right: the group stage of an
     // rr-then-ko draw IS a round-robin, and inventing a second wording would put a
     // sentence in the server's mouth it never says.
-    const patched = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    const patched = patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       draw_type: 'rr-then-ko',
       reservations: [],
     })
@@ -2026,7 +2119,7 @@ describe('cutting a round-robin-then-knockout draw', () => {
     // #1482: round-robin holds at most one reservation, so the same PATCH that drops
     // the type also has to leave the event at one — the claim under test here
     // (`qualifiers_per_group` clearing) is independent of that count either way.
-    const patched = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const patched = patchEvent(TOURNAMENT, TWO_STAGE, {
       draw_type: 'round-robin',
       reservations: [reservationNamed('Reservation 1')],
     })
@@ -2333,7 +2426,7 @@ describe('the group set freezes while a draw exists', () => {
   it('refuses a PATCH that removes a reservation whose group the draw was dealt across', () => {
     const [reservationA] = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [citing(reservationA)],
     })
 
@@ -2357,7 +2450,7 @@ describe('the group set freezes while a draw exists', () => {
   it('refuses a PATCH that ADDS a reservation — the arriving group is counted, not named', () => {
     const reservations = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       // No `id`: that IS the addition, now that a client cannot author one.
       reservations: [
         ...reservations.map(citing),
@@ -2381,7 +2474,7 @@ describe('the group set freezes while a draw exists', () => {
   it('refuses a PATCH that replaces the FIRST reservation — no label departs and arrives at once', () => {
     const [reservationA, reservationB] = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [
         { name: 'Reservation A (new)', slot: SLOT, table_ids: [] },
         citing(reservationB),
@@ -2406,7 +2499,7 @@ describe('the group set freezes while a draw exists', () => {
   it('ALLOWS a venue edit — same reservation ids, new tables and a new window', () => {
     const reservations = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       reservations: reservations.map((r) => ({
         ...citing(r),
         name: `${r.name} (moved)`,
@@ -2430,7 +2523,7 @@ describe('the group set freezes while a draw exists', () => {
   it('ALLOWS a reorder of exactly the reservations the draw was cut across', () => {
     const [reservationA, reservationB] = reservationsOf(TWO_STAGE)
 
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [citing(reservationB), citing(reservationA)],
     })
 
@@ -2443,7 +2536,7 @@ describe('the group set freezes while a draw exists', () => {
   })
 
   it('leaves an UNDRAWN event’s reservations wholesale-replaceable, as they have always been', () => {
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       reservations: [{ name: 'A', slot: SLOT, table_ids: [] }],
     })
 
@@ -2460,7 +2553,7 @@ describe('the group set freezes while a draw exists', () => {
     const before = reservationsOf(TWO_STAGE).map((r) => r.id)
     expect(uncutDraw(TOURNAMENT, TWO_STAGE).ok).toBe(true)
 
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [{ name: 'Reservation A', slot: SLOT, table_ids: [] }],
     })
 
@@ -2496,7 +2589,7 @@ describe('a reservations PATCH citing an id the event does not have', () => {
     // ONE entry, citing the unknown id — #1482 caps EMPTY_SINGLES (round-robin) at
     // one reservation, so a second entry here would trip that cap instead of the
     // refusal this test is about.
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       reservations: [{ id: UNKNOWN, name: 'Reservation B', slot: SLOT, table_ids: [] }],
     })
 
@@ -2518,7 +2611,7 @@ describe('a reservations PATCH citing an id the event does not have', () => {
   // answers the 409 that names its groups rather than this 422. A cited-but-unknown id
   // is an addition as far as a standing draw is concerned.
   it('loses to the group-set freeze on an event whose draw is cut', () => {
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       reservations: [{ id: UNKNOWN, name: 'Reservation Z', slot: SLOT, table_ids: [] }],
     })
 
@@ -2541,7 +2634,7 @@ describe('the draw type freezes while a draw exists', () => {
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
 
   it('refuses a PATCH that re-labels the draw type of a cut draw', () => {
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       draw_type: 'single-elim',
     })
 
@@ -2563,7 +2656,7 @@ describe('the draw type freezes while a draw exists', () => {
   // tables. A guard that fired on the mere *presence* of `draw_type` would refuse that,
   // and the reservations editor would be unusable against a server that allows it.
   it('ALLOWS a PATCH that re-sends the SAME draw type (the whole-form save)', () => {
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       draw_type: 'rr-then-ko',
       reservations: eventOf(TWO_STAGE).reservations.map((r) => ({
         ...r,
@@ -2576,7 +2669,7 @@ describe('the draw type freezes while a draw exists', () => {
   })
 
   it('leaves an UNDRAWN event’s draw type free to change', () => {
-    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, {
+    const result = patchEvent(TOURNAMENT, EMPTY_SINGLES, {
       draw_type: 'round-robin',
     })
 
@@ -2590,7 +2683,7 @@ describe('the draw type freezes while a draw exists', () => {
     // #1482: `single-elim` holds at most one reservation, so the same PATCH that lifts
     // the type also has to leave it at one — exactly what a director flipping types
     // after un-cutting a two-reservation draw would send in one save.
-    const result = updateEvent(TOURNAMENT, TWO_STAGE, {
+    const result = patchEvent(TOURNAMENT, TWO_STAGE, {
       draw_type: 'single-elim',
       reservations: [{ name: 'Reservation A', slot: SLOT, table_ids: [] }],
     })

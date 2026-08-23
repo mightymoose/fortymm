@@ -47,6 +47,17 @@ export interface EventEditorProps {
   onOpenChange: (open: boolean) => void
   /** The event to edit. A new event has an id beginning `new-`. */
   event: TournamentEvent | null
+  /** The event's CURRENT `lock_version`, read live off the reconciled `tournament`
+   * prop — `tournament.events.find(e => e.id === editorEvent?.id)?.lockVersion`
+   * (`tournament-detail-page.tsx`) — and NOT `event.lockVersion` above, which is
+   * frozen at the moment the sheet opened (#1499). The override below sends THIS
+   * version, never the frozen one: reusing the frozen prop would have the override
+   * conflict forever, against a version the server already moved past.
+   *
+   * `null` means the event this sheet has open no longer exists on the tournament the
+   * page just re-read — another writer deleted it — so there is no live version left
+   * to overwrite, and the override is disabled rather than sent as a guess. */
+  currentLockVersion: number | null
   /** The tables available to this tournament (for the reservations tab). */
   tables: TournamentTable[]
   /** The draw formats the server offers, off the tournament payload (ADR 20260726) —
@@ -135,6 +146,7 @@ export const EventEditor = ({
   open,
   onOpenChange,
   event,
+  currentLockVersion,
   tables,
   drawTypes,
   canEdit,
@@ -236,31 +248,56 @@ export const EventEditor = ({
     form.setValue('match', next.match, opts)
   }
 
+  // Shared by the ordinary submit and the conflict banner's override (#1499): the
+  // only thing that differs between them is WHICH version goes on the wire — the one
+  // this sheet read the event at, or the fresh one the director just chose to
+  // overwrite. Everything else — building the draft, closing only on success, keeping
+  // the sheet and the failure otherwise — is one save, done twice for two reasons.
+  const performSave = async (formValues: EventFormValues, lockVersion: number) => {
+    if (!event) return
+    // The event that was opened, with every editable field taken from the form —
+    // `reservations` included, which is why this is an `EditedEvent` and not a
+    // `TournamentEvent`: the form holds entries, and an entry is not a reservation.
+    // Handing the read model's reservations back instead would re-send the ids on a
+    // create (a 422) and lose the added/kept distinction on a patch. `lockVersion` is
+    // the CALLER's to choose, not the frozen `event`'s — see the two call sites below.
+    const saved: EditedEvent = { ...event, ...formValues, lockVersion }
+    setFailure(null)
+    try {
+      await onSave(saved)
+      // The editor closes itself, and this is the ONLY thing that closes it: a
+      // rejection lands in the catch below, with the sheet — and the work in it —
+      // untouched.
+      onOpenChange(false)
+    } catch (error) {
+      setFailure(classifySaveFailure(error))
+    }
+  }
+
+  // Refused HERE, so nothing was sent and nothing can be lost. Take them to the tab
+  // holding the offending field: a save that failed on a tab you cannot see is
+  // indistinguishable from a button that does nothing.
+  const onInvalid = (formErrors: typeof errors) =>
+    setSection(firstInvalidSection(formErrors) ?? 'basics')
+
   const submit = form.handleSubmit(
-    async (formValues) => {
-      if (!event) return
-      // The event that was opened, with every editable field taken from the form —
-      // `reservations` included, which is why this is an `EditedEvent` and not a
-      // `TournamentEvent`: the form holds entries, and an entry is not a reservation.
-      // Handing the read model's reservations back instead would re-send the ids on a
-      // create (a 422) and lose the added/kept distinction on a patch.
-      const saved: EditedEvent = { ...event, ...formValues }
-      setFailure(null)
-      try {
-        await onSave(saved)
-        // The editor closes itself, and this is the ONLY thing that closes it: a
-        // rejection lands in the catch below, with the sheet — and the work in it —
-        // untouched.
-        onOpenChange(false)
-      } catch (error) {
-        setFailure(classifySaveFailure(error))
-      }
-    },
-    // Refused HERE, so nothing was sent and nothing can be lost. Take them to the tab
-    // holding the offending field: a save that failed on a tab you cannot see is
-    // indistinguishable from a button that does nothing.
-    (formErrors) => setSection(firstInvalidSection(formErrors) ?? 'basics'),
+    (formValues) => performSave(formValues, event?.lockVersion ?? 0),
+    onInvalid,
   )
+
+  /** The conflict banner's override (#1499): re-send the SAME draft — whatever the
+   * director has typed since the refusal, this is a live form, not a frozen snapshot
+   * — against the version this sheet has just READ (`currentLockVersion`), never the
+   * one `event` opened on. It is never automatic and never a retry the editor fires
+   * on its own: it exists only behind a button the director presses, on purpose, every
+   * time (`tables-tab.tsx`'s confirm-and-resend is the same shape, for the same
+   * reason — a director's deliberate choice to overwrite someone else's write). A
+   * `null` version means the other writer DELETED the event, so there is nothing left
+   * to overwrite; the button is disabled rather than sending a guessed version. */
+  const overrideSave = form.handleSubmit((formValues) => {
+    if (currentLockVersion === null) return
+    return performSave(formValues, currentLockVersion)
+  }, onInvalid)
 
   // "Edit event" is an imperative addressed to the person in control. A viewer
   // is not one — the panel is a rendering of the event, so it says so
@@ -436,6 +473,33 @@ export const EventEditor = ({
               <AlertDescription>
                 {saveFailureMessage(failure, EVENT_SAVE_TARGET)} Nothing was saved
                 — your changes are still here.
+                {/* The conflict's own override (#1499) — never automatic, never a
+                    retry the editor fires on its own: it exists only behind a button
+                    the director presses on purpose, every time (`tables-tab.tsx`'s
+                    confirm-and-resend is the same shape). Only for a director who can
+                    still edit — a viewer's read-only sheet gets the refusal and
+                    nothing to do about it. */}
+                {failure.kind === 'conflict' && canEdit && (
+                  <span className="mt-2 flex flex-wrap items-center gap-2">
+                    {currentLockVersion === null ? (
+                      <span data-testid="event-editor-conflict-deleted">
+                        It was deleted elsewhere, so there is nothing left to
+                        overwrite. Close this sheet and refresh the event list.
+                      </span>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        data-testid="event-editor-override"
+                        onClick={overrideSave}
+                        disabled={isSubmitting || saving}
+                      >
+                        Overwrite with my changes
+                      </Button>
+                    )}
+                  </span>
+                )}
               </AlertDescription>
             </Alert>
           </div>

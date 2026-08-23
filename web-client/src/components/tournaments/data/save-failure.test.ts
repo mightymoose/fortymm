@@ -1,4 +1,4 @@
-import { ApiError } from '@/api/client'
+import { ApiError, extractDetail } from '@/api/client'
 
 import {
   EVENT_SAVE_TARGET,
@@ -286,5 +286,72 @@ describe('saveFailureMessage · the tournament dialog', () => {
       detail: 'You already run a tournament by that name.',
     })
     expect(sayTournament(error)).toBe('You already run a tournament by that name.')
+  })
+})
+
+// #1499: the event editor's PATCH now requires `lock_version`, and answers a stale
+// one with a CODED 409 — distinct from the event editor's two other 409s (the
+// draw-type and group-set freezes), which are plain-string. These pin the
+// classifier's three-way split: coded → `conflict`, plain-string → `refused` (with
+// the SERVER's sentence), and everything else on this status untouched.
+describe('saveFailure · a stale lock_version (#1499)', () => {
+  /** The real shape, byte for byte (`_event_version_conflict`,
+   * `api/app/tournaments.py`): `{"detail": {"code": "event_version_conflict",
+   * "message": …}}`. */
+  const conflict = new ApiError(409, null, 'update event', {
+    detail: {
+      code: 'event_version_conflict',
+      message:
+        'This event was changed somewhere else while you had it open, so this ' +
+        'save was not applied. Reopen the event to see what it holds now.',
+    },
+  })
+
+  it('classifies the CODED 409 as a conflict, never as a refusal', () => {
+    expect(saveFailure(conflict)).toEqual<SaveFailure>({
+      kind: 'conflict',
+      message:
+        'This event was changed somewhere else while you had it open, so this ' +
+        'save was not applied. Reopen the event to see what it holds now.',
+    })
+  })
+
+  it('does NOT steal the two plain-string 409s on the same endpoint (the draw freezes)', () => {
+    // The exact shape `frozenDetail`/`groupSetFrozenDetail` produce — a bare string,
+    // no `code` anywhere. Matched on shape, not on the sentence.
+    const freeze = new ApiError(409, 'This event’s draw is already cut.', 'update event', {
+      detail: 'This event’s draw is already cut.',
+    })
+    expect(saveFailure(freeze)).toEqual<SaveFailure>({
+      kind: 'refused',
+      message: 'This event’s draw is already cut.',
+    })
+  })
+
+  it('reports the SERVER’s sentence for a caller that reads the generic path (extractDetail)', () => {
+    // `extractDetail` is what a caller with no knowledge of the code would fall back
+    // to — pinned directly, since `saveFailure` itself never falls through to
+    // `refused` for this code (it always resolves to `conflict` first).
+    expect(extractDetail(conflict.body)).toBe(
+      'This event was changed somewhere else while you had it open, so this ' +
+        'save was not applied. Reopen the event to see what it holds now.',
+    )
+  })
+
+  it('the banner speaks its OWN copy, never the server’s sentence (ADR-0968)', () => {
+    expect(saveFailureMessage(saveFailure(conflict), EVENT_SAVE_TARGET)).toBe(
+      'This event has changed since you opened it — someone else may have saved a ' +
+        'more recent edit.',
+    )
+  })
+
+  it('a coded 409 with an UNKNOWN code still falls through to refused, with its sentence', () => {
+    const other = new ApiError(409, null, 'update event', {
+      detail: { code: 'something_else', message: 'A different refusal entirely.' },
+    })
+    expect(saveFailure(other)).toEqual<SaveFailure>({
+      kind: 'refused',
+      message: 'A different refusal entirely.',
+    })
   })
 })

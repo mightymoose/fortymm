@@ -206,14 +206,21 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
   }
 
   /** `PATCH …/events/{id}` against a seeded event with **no draw cut**, so the draw-type
-   * freeze (a 409, a different rule) can never be what answers these. */
-  async function patchEvent(patch: components['schemas']['TournamentEventUpdate']) {
+   * freeze (a 409, a different rule) can never be what answers these.
+   *
+   * `lock_version` defaults to `1` — the seeded `ev-open-singles`'s own version
+   * (`tournaments-store.ts`) — so every case above, none of which is about #1499,
+   * can go on stating only the draw-configuration fields it means to test. A case
+   * that DOES want the version conflict overrides the key itself. */
+  async function patchEvent(
+    patch: Partial<components['schemas']['TournamentEventUpdate']>,
+  ) {
     const res = await fetch(
       `http://localhost/v1/tournaments/${BAY_AREA}/events/ev-open-singles`,
       {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(patch),
+        body: JSON.stringify({ lock_version: 1, ...patch }),
       },
     )
     return { status: res.status, body: await res.json() }
@@ -357,6 +364,83 @@ describe('the event write boundary — the draw configuration (ADR 20260727)', (
     // …and the stored configuration is untouched by an edit that never mentioned it.
     expect((body as TournamentEventRead).draw_type).toBe('round-robin')
     expect((body as TournamentEventRead).qualifiers_per_group).toBeNull()
+  })
+})
+
+// ----- the event write boundary — optimistic concurrency (#1499) -----------------
+//
+// `lock_version` moved from "carried, but not enforced" to a real Pydantic-required
+// field with a real guard behind it: a PATCH that omits it is a 422 (the schema
+// boundary), and one that names the wrong number is a CODED 409 — never a 200 that
+// quietly overwrites whatever the OTHER write touched. A mock that skipped either
+// check would let the editor's conflict banner look built while nothing behind it
+// enforced the thing it is a banner FOR.
+describe('the event write boundary — optimistic concurrency (#1499)', () => {
+  async function rawPatchEvent(body: unknown) {
+    const res = await fetch(
+      `http://localhost/v1/tournaments/${BAY_AREA}/events/ev-open-singles`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+    )
+    return { status: res.status, body: await res.json() }
+  }
+
+  it('422s a PATCH with NO lock_version at all — the field is required', async () => {
+    const { status } = await rawPatchEvent({ name: 'Renamed' })
+    expect(status).toBe(422)
+  })
+
+  it('409s a PATCH whose lock_version does not match, with the CODED body the client reads', async () => {
+    const { status, body } = await rawPatchEvent({
+      lock_version: 999,
+      name: 'Renamed',
+    })
+
+    expect(status).toBe(409)
+    // The shape `hasEventVersionConflictCode` (`data/save-failure.ts`) reads —
+    // never a plain string, which is what the two draw freezes on this same route
+    // answer instead.
+    const detail = (body as { detail: { code: string; message: string } }).detail
+    expect(detail.code).toBe('event_version_conflict')
+    expect(typeof detail.message).toBe('string')
+    expect(detail.message.length).toBeGreaterThan(0)
+  })
+
+  it('ACCEPTS the matching version, and moves it on by one', async () => {
+    const first = await rawPatchEvent({ lock_version: 1, name: 'Renamed Once' })
+    expect(first.status).toBe(200)
+    expect((first.body as TournamentEventRead).lock_version).toBe(2)
+
+    // The positive control's twin: re-sending the version the FIRST call was
+    // refused against a moment ago is refused again — the number really moved.
+    const stale = await rawPatchEvent({ lock_version: 1, name: 'Renamed Twice' })
+    expect(stale.status).toBe(409)
+
+    const second = await rawPatchEvent({ lock_version: 2, name: 'Renamed Twice' })
+    expect(second.status).toBe(200)
+    expect((second.body as TournamentEventRead).lock_version).toBe(3)
+  })
+
+  it('a freshly created event reads lock_version: 1', async () => {
+    const res = await fetch(`http://localhost/v1/tournaments/${BAY_AREA}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Brand New',
+        format: 'singles',
+        draw_type: 'single-elim',
+        entry_fee: 10,
+        timezone: 'America/Chicago',
+        slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
+        match_settings: { rated: true, length_games: 5 },
+      }),
+    })
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as TournamentEventRead
+    expect(body.lock_version).toBe(1)
   })
 })
 

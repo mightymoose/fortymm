@@ -1308,6 +1308,9 @@ export function buildTournamentEventRead(
     results: null,
     created_at: '2026-06-01T09:05:00Z',
     updated_at: '2026-06-09T12:00:00Z',
+    // The optimistic-concurrency version (#1499) — `1`, what a freshly created event
+    // reads. A fixture that wants a version conflict overrides it directly.
+    lock_version: 1,
     ...overrides,
     // **No knockout stage to qualify for, so NO qualifier count** (ADR 20260727): `null`
     // is the only value the settings table's `CHECK` admits for a round-robin or

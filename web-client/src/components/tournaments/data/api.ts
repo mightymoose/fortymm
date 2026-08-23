@@ -195,6 +195,10 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     // cell. `null` is the designed "no results" state (an uncut or non-round-robin event),
     // and parses straight through to `null`.
     results: parseResults(e.results),
+    // Carried across UNCHANGED (#1499) — the optimistic-concurrency version a PATCH must
+    // send back. Read-only here; `eventToUpdateBody` is the only place this client ever
+    // writes it back out.
+    lockVersion: e.lock_version,
   }
 }
 
@@ -536,11 +540,20 @@ export function eventToCreateBody(ev: EditedEvent): TournamentEventCreate {
  * or whose entries had lost their ids, reads as "remove every reservation you have", and
  * takes the draw dealt across their mapped groups with it. Build the entries from a read
  * (`keepReservations`) and the ids come along for free; that is what `eventToFormValues`
- * does, and it is the only path to here. */
+ * does, and it is the only path to here.
+ *
+ * **`lock_version` is required here, and ONLY here** (#1499) — `TournamentEventUpdate`
+ * requires it and `TournamentEventCreate` has no such field at all (`extra="forbid"`,
+ * so it would be a 422 on a create). It is deliberately NOT part of `eventToApiFields`,
+ * which both verbs share, for exactly that reason: putting it there would 422 every
+ * create the moment a director opened the "New event" sheet. Sent verbatim — the
+ * version this client read the event at, or (on the deliberate override,
+ * `event-editor.tsx`) the fresh version the director just chose to overwrite. */
 export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
   return {
     ...eventToApiFields(ev),
     reservations: reservationEntriesToApi(ev.reservations),
+    lock_version: ev.lockVersion,
   }
 }
 
@@ -792,7 +805,7 @@ export function useTables(id: string): TournamentTable[] {
 // | useTransitionTournament | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useDeleteTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
 // | useCreateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
-// | useUpdateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useUpdateEvent          | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useDeleteEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
 // | useEnterEvent           | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useWithdrawEntry        | ['tournaments'], ['tournaments', id]     | onSettled |
@@ -983,7 +996,17 @@ export function useCreateEvent(tournamentId: string) {
 
 /** Patch an event. Errors are the editor's to show — no global `onError` toast;
  * it surfaces the failure inline and keeps the panel open (#933, #934). See
- * `useCreateEvent`. */
+ * `useCreateEvent`.
+ *
+ * **Reconciles `onSettled`, AWAITED — not `onSuccess`** (#1499), unlike
+ * `useCreateEvent`/`useDeleteEvent` beside it, which stay `onSuccess`: a version
+ * conflict is precisely the moment this view is stale, and the editor's conflict
+ * banner — and the fresh `lockVersion` its override reads (`tournament-detail-page.tsx`
+ * derives it live off the reconciled `tournament` prop) — must be stamped against the
+ * state the server actually judged, not raced by a refetch still in flight. Awaiting
+ * what `onSettled` returns is what makes `mutateAsync` stay unsettled until that
+ * refetch has landed, exactly as `useTransitionTournament`'s does and for the same
+ * reason. */
 export function useUpdateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -998,7 +1021,7 @@ export function useUpdateEvent(tournamentId: string) {
           body: input.body,
         }),
       ),
-    onSuccess: () => invalidateTournament(qc, tournamentId),
+    onSettled: () => reconcileTournament(qc, tournamentId),
   })
 }
 
