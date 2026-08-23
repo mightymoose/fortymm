@@ -233,8 +233,18 @@ export const EventCard = ({
                 whether it applies (e.g. no Enter for a doubles event) and may
                 render nothing — an empty flex item would still take the parent's
                 `gap-2` and shift the row. */}
+            {/* `pointer-events-none` on the slot, `pointer-events-auto` on the
+                controls inside it: the slot is raised so the Enter / Withdraw button
+                can be clicked, but three of `EnterEventControl`'s five states are
+                inert `LeadReason` copy ("Entry opens when this tournament is
+                published.", full, ineligible) — and a raised wrapper with no handler
+                is a dead spot on a card whose header says "Click any event to edit"
+                (#1503). Making the WRAPPER stand aside is what lets the click reach
+                the stretched open target: a `pointer-events: none` child hands its
+                click to the nearest painted ancestor, which is this div, not to the
+                sibling button beneath. */}
             {action && (
-              <div className="relative z-10 flex items-center empty:hidden">
+              <div className="pointer-events-none relative z-10 flex items-center empty:hidden [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
                 {action}
               </div>
             )}
@@ -258,7 +268,14 @@ export const EventCard = ({
             Delete — and a button underneath that overlay would never receive a click.
             `empty:hidden` is not needed: the panel always renders *something* (its
             empty state is a designed data state, not nothing). */}
-        {draw && <div className="relative z-10">{draw}</div>}
+        {/* The wrapper stands aside (`pointer-events-none`) and hands the decision to
+            the panel itself: `DrawPanel`'s `<section>` takes its pointer events back
+            in every state but `undrawn`, where it is a heading, one owner-only button
+            and inert copy. A drawn panel therefore behaves exactly as it does today —
+            the section is this div's only child and covers its whole box — while "No
+            draw yet." stops swallowing the card's open target (#1503). The card
+            cannot make that call: it does not know whether the draw is cut. */}
+        {draw && <div className="pointer-events-none relative z-10">{draw}</div>}
       </Card>
 
       {/* Full-card open target: a sibling of the card, sitting beneath the

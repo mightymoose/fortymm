@@ -1,12 +1,10 @@
 import { interactiveElementsIn } from '@/test/read-only'
 import { SessionProbe } from '@/test/session-probe'
-import { render, screen, type Container } from '@/test/utilities'
+import { renderWithRouterContext } from '@/test/router'
+import { screen, type Container } from '@/test/utilities'
 
-import {
-  TournamentDetailPage,
-  type TournamentDetailPageProps,
-} from './tournament-detail-page'
-import { buildTournamentDetailPageProps } from './tournament-detail-page.factory'
+import type { TournamentDetailPageProps } from './tournament-detail-page'
+import { TournamentDetailPageHarness } from './tournament-detail-page.harness'
 import { confirmIrreversibleActDialogPage } from './tournament-detail-page/confirm-irreversible-act-dialog.page'
 import { eventsTabPage } from './tournament-detail-page/events-tab.page'
 
@@ -96,14 +94,22 @@ const scoped = (container: Container) => ({
 
 /** Test page-object for `TournamentDetailPage`. */
 export const tournamentDetailPagePage = {
+  /** Rendered under the router CONTEXT (not a matched route): the page hosts the
+   * event editor, whose discard guard reads the router (#1503).
+   * `renderWithRouterContext` still renders synchronously, so this suite's `getBy…`
+   * assertions are unchanged.
+   *
+   * `TournamentDetailPageHarness` supplies the fact the ROUTE owns — which event's
+   * editor the URL names — so a component test can still click "New event" and land
+   * in the editor. See that file for what it does and does not prove. */
   render(overrides: Partial<TournamentDetailPageProps> = {}) {
-    render(
+    renderWithRouterContext(
       <>
         {/* Inert marker so a test can `await findSessionReady()` before asserting a
             permission-gated control is absent (the page already fetches the session
             itself — this only exposes when it lands). */}
         <SessionProbe />
-        <TournamentDetailPage {...buildTournamentDetailPageProps(overrides)} />
+        <TournamentDetailPageHarness overrides={overrides} />
       </>,
     )
   },

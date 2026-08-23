@@ -7,7 +7,7 @@ export function buildEventEditorProps(
 ): EventEditorProps {
   return {
     open: true,
-    onOpenChange: () => {},
+    onClose: () => {},
     event: buildEvent(),
     tables: buildTables(12),
     drawTypes: buildDrawTypes(),

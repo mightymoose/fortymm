@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useBlocker } from '@tanstack/react-router'
 import { useForm, useWatch } from 'react-hook-form'
 import { Check, Trash2, TriangleAlert } from 'lucide-react'
 
@@ -31,6 +32,7 @@ import type {
   TournamentTable,
 } from '../data/types'
 import { BasicsSection } from './event-editor/basics-section'
+import { DiscardEventEditsDialog } from './event-editor/discard-event-edits-dialog'
 import { DrawStructureSection } from './event-editor/draw-structure-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
 import { MatchSection } from './event-editor/match-section'
@@ -45,7 +47,20 @@ import {
 
 export interface EventEditorProps {
   open: boolean
-  onOpenChange: (open: boolean) => void
+  /**
+   * Close the editor — which, since the open editor is a `?event=` search param
+   * (#1503), is a NAVIGATION the page owns rather than a `setState` here.
+   *
+   * Every close path funnels through this one call: Radix routes Escape, an overlay
+   * click and the sheet's own close control through `onOpenChange`, and Cancel, a
+   * successful save and a delete call it directly. That is what lets ONE `useBlocker`
+   * below guard all of them — and browser Back with them, because Back is the same
+   * navigation arriving from the other side.
+   *
+   * `force` skips that guard, for the two closes that are not a discard: a save has
+   * just persisted the work, and a delete raises its own confirmation.
+   */
+  onClose: (options?: { force?: boolean }) => void
   /** The event to edit. A new event has an id beginning `new-`. */
   event: TournamentEvent | null
   /** The tables available to this tournament (for the reservations tab). */
@@ -134,7 +149,7 @@ const DRAW_STRUCTURE_SECTION = { value: 'draw-structure', label: 'Draw structure
  * the red. */
 export const EventEditor = ({
   open,
-  onOpenChange,
+  onClose,
   event,
   tables,
   drawTypes,
@@ -145,6 +160,19 @@ export const EventEditor = ({
 }: EventEditorProps) => {
   const [section, setSection] = useState('basics')
   const [seenEvent, setSeenEvent] = useState(event)
+  /**
+   * Which **open** the draft on screen belongs to.
+   *
+   * The event object alone cannot notice a re-open. The page resolves `?event=` to an
+   * event of the tournament and holds it, so closing an editor and opening the same
+   * one again hands this component the very same object — and a draft keyed on
+   * identity alone would survive into the second open, dirty flag and all. The guard
+   * would then offer to discard changes nobody made this time, which is exactly the
+   * prompt people learn to click through.
+   */
+  const [openGeneration, setOpenGeneration] = useState(0)
+  const [seenOpenGeneration, setSeenOpenGeneration] = useState(0)
+  const [wasOpen, setWasOpen] = useState(open)
   /** How the last save was refused, or `null`. A classified failure — never a raw
    * server string (see `data/save-failure`). Never a reason to close. */
   const [failure, setFailure] = useState<SaveFailure | null>(null)
@@ -154,22 +182,31 @@ export const EventEditor = ({
     defaultValues: eventToFormValues(event),
   })
 
-  // Jump back to the first section whenever the editor is (re)opened on a
-  // different event — adjusting state during render rather than in an effect
-  // (https://react.dev/learn/you-might-not-need-an-effect).
-  if (event !== seenEvent) {
+  // Adjusting state during render rather than in an effect
+  // (https://react.dev/learn/you-might-not-need-an-effect) — the render already
+  // knows the sheet has just been opened.
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) setOpenGeneration((n) => n + 1)
+  }
+
+  // Jump back to the first section whenever the editor is opened, or opened on a
+  // different event.
+  if (event !== seenEvent || openGeneration !== seenOpenGeneration) {
     setSeenEvent(event)
+    setSeenOpenGeneration(openGeneration)
     setSection('basics')
-    // A fresh event starts clean: last time's red belongs to last time's draft.
+    // A fresh open starts clean: last time's red belongs to last time's draft.
     setFailure(null)
   }
 
-  // Re-seed the form to the new event's values (and clear any prior errors). The
-  // sheet stays mounted, so without this a second open would show the last
-  // attempt. `form.reset` writes RHF's own store, so it belongs in an effect.
+  // Re-seed the form (and clear any prior errors). The sheet stays mounted, so
+  // without this a second open would show the last attempt. `form.reset` writes
+  // RHF's own store, so it belongs in an effect. `openGeneration` is a dependency
+  // for the reason above it: re-opening the same event must re-seed too.
   useEffect(() => {
     form.reset(eventToFormValues(event))
-  }, [event, form])
+  }, [event, openGeneration, form])
 
   const isNew = !event || event.id.startsWith('new')
 
@@ -186,8 +223,41 @@ export const EventEditor = ({
     : null
 
   const {
-    formState: { errors, isSubmitting, isSubmitted },
+    formState: { errors, isSubmitting, isSubmitted, isDirty },
   } = form
+
+  /**
+   * **The one guard, on the one thing that closes this sheet.**
+   *
+   * Closing is a navigation now (`onClose` drops `?event=`), so browser Back, Escape,
+   * an overlay click, the sheet's close control and Cancel are all the same event to
+   * the router — and `useBlocker` sees every one of them. Guarding the navigation
+   * rather than `onOpenChange` is also what makes "keep editing" work with no extra
+   * state: the sheet is controlled by the URL, so a navigation that never happens
+   * leaves it open exactly as it was.
+   *
+   * `open &&` matters: this component stays mounted with the sheet shut, and a
+   * blocker armed on a closed editor's stale form would stop unrelated navigation
+   * dead.
+   *
+   * `isDirty` is React Hook Form's, so a field typed and then typed back counts as
+   * clean — and a reader, who edits nothing, is never dirty, which is why **Done**
+   * closes silently for them.
+   *
+   * Nothing here needs a "has it just saved?" escape hatch: a save closes through
+   * `onClose({ force: true })`, which sets `ignoreBlocker` on the navigation itself.
+   * That covers the delete path too, and it cannot go stale between opens the way a
+   * ref on a component that never unmounts can.
+   *
+   * `enableBeforeUnload` is the same predicate for the two exits the router cannot
+   * block: a refresh and a tab close get the browser's own leave prompt while the
+   * form is dirty, and nothing while it is clean.
+   */
+  const blocker = useBlocker({
+    shouldBlockFn: () => open && isDirty,
+    enableBeforeUnload: () => open && isDirty,
+    withResolver: true,
+  })
 
   // What is wrong with the RULES, row by row. The resolver's own verdict on
   // `predicates` is deliberately a single "this list is not sendable" issue
@@ -263,7 +333,13 @@ export const EventEditor = ({
         // The editor closes itself, and this is the ONLY thing that closes it: a
         // rejection lands in the catch below, with the sheet — and the work in it —
         // untouched.
-        onOpenChange(false)
+        //
+        // `force`, because the form is still dirty at this instant: it is not
+        // re-seeded until the refetched event arrives, so an unguarded close here
+        // would raise "Discard changes?" over work that has just been SAVED — a
+        // confirmation on the happy path, which is how people learn to click through
+        // the one that matters.
+        onClose({ force: true })
       } catch (error) {
         setFailure(classifySaveFailure(error))
       }
@@ -331,7 +407,15 @@ export const EventEditor = ({
     : 'basics'
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    // Radix routes Escape, an overlay click and the sheet's own close control
+    // through this one handler, and it goes where Cancel goes. There is no
+    // `onOpenChange(true)` to honour: what opens this sheet is the URL.
+    <Sheet
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+    >
       <SheetContent
         side="right"
         className="w-full gap-0 p-0 sm:w-[820px] sm:max-w-[820px]"
@@ -479,7 +563,7 @@ export const EventEditor = ({
           )}
           <span className="hidden sm:block sm:flex-1" />
           {/* A non-creator can only dismiss the read-only view. */}
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" onClick={() => onClose()}>
             {canEdit ? 'Cancel' : 'Done'}
           </Button>
           {canEdit && (
@@ -501,6 +585,17 @@ export const EventEditor = ({
           )}
         </SheetFooter>
       </SheetContent>
+
+      {/* The guard's face. It renders whatever the blocker is holding — a Back press,
+          an Escape, an overlay click, Cancel — because all of them are the same
+          navigation by the time they reach here. "Keep editing" resets the blocker,
+          which is what puts a popped history entry back, so the next Back press asks
+          again instead of leaving the page with the sheet open. */}
+      <DiscardEventEditsDialog
+        open={blocker.status === 'blocked'}
+        onLeave={() => blocker.proceed?.()}
+        onStay={() => blocker.reset?.()}
+      />
     </Sheet>
   )
 }
