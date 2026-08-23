@@ -38,6 +38,8 @@ pick_python() {
   fi
 }
 
+PY="$(pick_python)"
+
 if [ -z "${API_PORT:-}" ]; then
   # A short bind-to-port-0 probe: ask the OS for a free ephemeral port, read
   # it back, and release it immediately. `python`/`python3` is already a hard
@@ -47,7 +49,7 @@ if [ -z "${API_PORT:-}" ]; then
   # explicit API_PORT collision is handled below: the readiness loop notices
   # uvicorn died and fails loudly, it never falls back to whatever is now
   # listening.
-  API_PORT="$(API_HOST="$API_HOST" "$(pick_python)" -c '
+  API_PORT="$(API_HOST="$API_HOST" "$PY" -c '
 import os, socket
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.bind((os.environ["API_HOST"], 0))
@@ -60,9 +62,14 @@ else
   # port -- a foreign checkout's server, the exact hazard this script exists
   # to close -- it responds to /openapi.json exactly like a freshly started
   # one would, so the readiness loop's `probe()` below would report success
-  # for a server that never bound. Binding it ourselves, first, is the only
-  # check a pre-existing listener can't fool.
-  if ! bind_err="$(API_HOST="$API_HOST" API_PORT="$API_PORT" "$(pick_python)" -c '
+  # for a server that never bound. Binding it ourselves, first, gives a fast,
+  # specific diagnostic (the OS's own "Address already in use") instead of
+  # waiting out the readiness loop; the loop's own final check (below) is what
+  # actually closes this hazard for both port-selection paths, including the
+  # narrow race after this bind releases the port and before uvicorn's own
+  # bind -- this preflight is a UX improvement layered on that guarantee, not
+  # a second independent one.
+  if ! bind_err="$(API_HOST="$API_HOST" API_PORT="$API_PORT" "$PY" -c '
 import os, socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 try:
@@ -107,13 +114,20 @@ for _ in $(seq 1 60); do
   if probe; then break; fi
   # The process may already have died -- an explicit API_PORT already held, or
   # the rare free-port race above. Break out early instead of burning the full
-  # 30s timeout; the `! probe` check right below turns this into the same
+  # 30s timeout; the combined check right below turns this into the same
   # loud, non-zero-exit failure either way, with uvicorn's own bind-error log
   # line as the reason.
   if ! kill -0 "$API_PID" 2>/dev/null; then break; fi
   sleep 0.5
 done
-if ! probe; then
+# A successful probe alone isn't proof OUR uvicorn is what answered: in the
+# sliver between our preflight bind check releasing the port (or the
+# ephemeral-port probe above) and uvicorn's own bind, a foreign process can
+# grab the port and might itself answer /openapi.json coherently -- the same
+# false-provenance hazard this script exists to close, just relocated to a
+# race window instead of a stale-listener reuse. Require our own PID to still
+# be alive, not just a response, before calling the start a success.
+if ! probe || ! kill -0 "$API_PID" 2>/dev/null; then
   echo "API failed to start. Last log:" >&2
   tail -n 40 /tmp/fortymm-api.log >&2 || true
   kill "$API_PID" 2>/dev/null || true

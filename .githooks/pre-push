@@ -79,6 +79,22 @@ is_relevant() {
   esac
 }
 
+# Filter a newline-separated file list down to the subset `is_relevant`
+# accepts, printed one per line. Shared by the push-diff relevance check
+# below and the dirty-tree check further down, so both agree on exactly the
+# same set of paths that can move the generated spec.
+relevant_files_from() {
+  local list="$1" f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if is_relevant "$f"; then
+      printf '%s\n' "$f"
+    fi
+  done <<EOF
+$list
+EOF
+}
+
 # --- Work out what is actually being pushed -------------------------------
 #
 # git's pre-push protocol feeds us one line per ref on stdin:
@@ -121,15 +137,9 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     files="$(git show --pretty=format: --name-only "$local_sha" 2>/dev/null || true)"
   fi
 
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    if is_relevant "$f"; then
-      relevant=1
-      break
-    fi
-  done <<EOF
-$files
-EOF
+  if [ -n "$(relevant_files_from "$files")" ]; then
+    relevant=1
+  fi
 
   # NB: an `if`, not `[ "$relevant" -eq 1 ] && break`. Not because the latter
   # trips `set -e` — it doesn't; a failing non-final member of an `&&` list is
@@ -158,22 +168,20 @@ echo "pre-push: this push touches api/ or ios/openapi/ — checking generated Op
 # backstop, and they check out the committed tree.
 #
 # Same diff-against-HEAD shape as `has_drift` below ("what the push actually
-# sends"), and the same `is_relevant` filter as the push-diff check above —
-# reusing it, rather than a bare `api/` prefix test, is what keeps an
-# unrelated dirty `api/tests/*` or `api/CLAUDE.md` edit from disabling a check
-# that should still run.
+# sends"), and the same `is_relevant` filter as the push-diff check above (via
+# the shared `relevant_files_from` helper) — reusing it, rather than a bare
+# `api/` prefix test, is what keeps an unrelated dirty `api/tests/*` or
+# `api/CLAUDE.md` edit from disabling a check that should still run.
+#
+# Gated behind a plain `--quiet` check first: a clean api/ is the overwhelming
+# common case on every push this hook runs for, and `--quiet` skips building
+# and filtering a file list to find that out.
 # Plain string, not an array — see the note on `drifted_files` below for why.
 dirty_relevant_files=""
-dirty_files="$(git diff --name-only HEAD -- api/ 2>/dev/null || true)"
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  if is_relevant "$f"; then
-    dirty_relevant_files="$dirty_relevant_files
-$f"
-  fi
-done <<EOF
-$dirty_files
-EOF
+if ! git diff --quiet HEAD -- api/ 2>/dev/null; then
+  dirty_files="$(git diff --name-only HEAD -- api/ 2>/dev/null || true)"
+  dirty_relevant_files="$(relevant_files_from "$dirty_files")"
+fi
 
 if [ -n "$dirty_relevant_files" ]; then
   echo "pre-push: WARNING — api/ has uncommitted changes that can move the" >&2
