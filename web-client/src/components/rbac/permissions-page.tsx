@@ -35,6 +35,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { foldForSearch } from '@/lib/fold-text'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   type Permission,
@@ -106,10 +107,10 @@ export function PermissionsPage() {
 
   const grouped = useMemo(() => {
     if (!search) return allGroups
-    const q = search.toLowerCase()
+    const q = foldForSearch(search)
     return groupPermissions(
       permissions.filter(
-        (p) => p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q),
+        (p) => foldForSearch(p.name).includes(q) || foldForSearch(p.description || '').includes(q),
       ),
     )
   }, [allGroups, permissions, search])
@@ -344,7 +345,7 @@ function PermissionListRow({
   onDelete: () => void
 }) {
   return (
-    <div className="rbac-row" style={listRowStyle}>
+    <div className="rbac-row" style={listRowStyle} data-testid={`perm-row-${p.name}`}>
       <PermissionCode name={p.name} active />
       <div
         style={{

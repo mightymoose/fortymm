@@ -24,6 +24,57 @@ describe('TournamentsListPage', () => {
     expect(tournamentsListPagePage.getCard('Winter Classic 2025')).toBeInTheDocument()
   })
 
+  // Diacritics: `toLowerCase()` folds case and never folds accents, so a user on
+  // an ASCII keyboard could not reach an accented name at all. The fold is
+  // symmetric, so it widens in both directions and never narrows.
+  describe('searching a name that carries accents', () => {
+    const ACCENTED = '\u00c1rea da Ba\u00eda Aberto'
+
+    const renderWithAccented = () =>
+      renderList({
+        tournaments: [
+          buildTournament({ id: 'bay', name: 'Bay Area Open 2026', status: 'published' }),
+          buildTournament({ id: 'aberto', name: ACCENTED, status: 'published' }),
+          buildTournament({ id: 'winter', name: 'Winter Classic 2025', status: 'archived' }),
+        ],
+      })
+
+    it('finds it from unaccented text typed at the start of the name', async () => {
+      await renderWithAccented()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'area')
+
+      expect(tournamentsListPagePage.getCard(ACCENTED)).toBeInTheDocument()
+    })
+
+    it('finds it from unaccented text in the middle of the name', async () => {
+      await renderWithAccented()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'baia')
+
+      expect(tournamentsListPagePage.getCard(ACCENTED)).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryCard('Bay Area Open 2026')).toBeNull()
+    })
+
+    it('finds an unaccented name from accented text, because the fold is symmetric', async () => {
+      await renderWithAccented()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), '\u00c1rea')
+
+      expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
+    })
+
+    it('still narrows on plain text — folding widens, it does not stop filtering', async () => {
+      await renderWithAccented()
+
+      await userEvent.type(tournamentsListPagePage.getSearch(), 'Winter')
+
+      expect(tournamentsListPagePage.getCard('Winter Classic 2025')).toBeInTheDocument()
+      expect(tournamentsListPagePage.queryCard('Bay Area Open 2026')).toBeNull()
+      expect(tournamentsListPagePage.queryCard(ACCENTED)).toBeNull()
+    })
+  })
+
   it('filters the grid by status tab', async () => {
     await renderList()
     await userEvent.click(tournamentsListPagePage.getStatusTab('Drafts'))

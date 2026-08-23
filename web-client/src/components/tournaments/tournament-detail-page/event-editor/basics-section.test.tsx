@@ -714,6 +714,83 @@ describe('BasicsSection', () => {
     })
   })
 
+  /**
+   * #1501, rule 3: the event's own time-slot window must end after it starts. The
+   * rule is cross-field (it says nothing about any one of Date/Start/End alone), so
+   * unlike every other error above it does not live inside one `Field`'s hint slot —
+   * it renders once, under the whole grid.
+   */
+  describe('the event’s own slot error (#1501)', () => {
+    it('renders the message under the time-slot grid, not inside any single field', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ slot: { date: '2026-06-13', start: '18:00', end: '09:00' } }),
+        errors: { slot: 'This window must end after it starts.' },
+      })
+
+      expect(
+        basicsSectionPage.queryFieldError('This window must end after it starts.'),
+      ).toBeInTheDocument()
+      // Not inside any of the three field hints — none of Date/Start/End declares a
+      // `hint` of its own, so a screen reader landing on one of those three controls
+      // would never hear this message read out unless it stands on its own.
+      expect(screen.getByTestId('event-slot-error')).toBeInTheDocument()
+    })
+
+    // A `<p>` that merely sits below the grid is *beside* it on screen and nowhere at
+    // all to a screen reader — the same wiring `ReservationCard`'s window error uses.
+    it('marks all three boxes invalid and points them at the message', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ slot: { date: '2026-06-13', start: '18:00', end: '09:00' } }),
+        errors: { slot: 'This window must end after it starts.' },
+      })
+
+      expect(basicsSectionPage.getSlotDateInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(basicsSectionPage.getSlotStartInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(basicsSectionPage.getSlotEndInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+
+      const describedBy = basicsSectionPage
+        .getSlotStartInput()
+        .getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(screen.getByTestId('event-slot-error')).toHaveAttribute(
+        'id',
+        describedBy,
+      )
+    })
+
+    it('says nothing when it is given no slot issue', () => {
+      basicsSectionPage.render({ event: buildEvent() })
+      expect(screen.queryByTestId('event-slot-error')).toBeNull()
+      expect(basicsSectionPage.getSlotStartInput()).not.toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(basicsSectionPage.getSlotStartInput()).not.toHaveAttribute(
+        'aria-describedby',
+      )
+    })
+
+    // A viewer has no box to fix, so there is nothing to tell them — the same rule
+    // `ReservationCard`'s `windowError` follows for its own window message.
+    it('tells a viewer nothing about a slot they cannot edit', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ slot: { date: '2026-06-13', start: '18:00', end: '09:00' } }),
+        errors: { slot: 'This window must end after it starts.' },
+        canEdit: false,
+      })
+      expect(screen.queryByTestId('event-slot-error')).toBeNull()
+    })
+  })
+
   describe('for a non-owner (read-only)', () => {
     // The guard test (ADR 0015): a viewer gets a rendering of the data, never a
     // disabled editor. It fails loudly the moment someone adds an ungated

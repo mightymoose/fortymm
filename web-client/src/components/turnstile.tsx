@@ -90,11 +90,16 @@ export function Turnstile({
   onToken,
   onExpire,
   onError,
+  onLoadError,
   handleRef,
 }: {
   onToken: (token: string) => void
   onExpire?: () => void
   onError?: () => void
+  /** Fires when the script itself fails to load (the widget never mounts, so
+   *  the widget-level error callback can't fire). Lets the host form stop
+   *  waiting on a token that will never arrive. */
+  onLoadError?: () => void
   handleRef?: (handle: TurnstileHandle | null) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -107,10 +112,12 @@ export function Turnstile({
   const onTokenRef = useRef(onToken)
   const onExpireRef = useRef(onExpire)
   const onErrorRef = useRef(onError)
+  const onLoadErrorRef = useRef(onLoadError)
   useEffect(() => {
     onTokenRef.current = onToken
     onExpireRef.current = onExpire
     onErrorRef.current = onError
+    onLoadErrorRef.current = onLoadError
   })
 
   useEffect(() => {
@@ -139,7 +146,10 @@ export function Turnstile({
         })
       })
       .catch(() => {
-        if (!cancelled) setFailed(true)
+        if (!cancelled) {
+          setFailed(true)
+          onLoadErrorRef.current?.()
+        }
       })
 
     return () => {

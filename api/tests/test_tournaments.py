@@ -1242,7 +1242,10 @@ async def test_patch_event_by_creator_updates_jsonb(
     new_reservations = [
         {
             "name": "Reservation Z",
-            "slot": {"date": "2026-06-14", "start": "10:00", "end": "14:00"},
+            # Same date as the event's own slot (2026-06-13, set by ``_event_payload``)
+            # — containment (#1501) refuses a reservation dated off its event, and this
+            # test is about JSONB round-tripping, not about dates.
+            "slot": {"date": "2026-06-13", "start": "10:00", "end": "14:00"},
             "table_ids": [],
         }
     ]
@@ -1539,6 +1542,548 @@ async def test_patch_event_flipping_round_robin_to_rr_then_ko_is_accepted(
     response = await client.patch(
         f"/v1/tournaments/{created['id']}/events/{event['id']}",
         json={"draw_type": "rr-then-ko", "qualifiers_per_group": 2},
+    )
+    assert response.status_code == 200, response.text
+
+
+# ----- containment & ordering: a reservation's window must sit inside its event's,
+# and both windows must be well-formed (#1501) ------------------------------
+#
+# Three rules become invariants. A reservation's ``slot.end`` must come strictly
+# after its ``slot.start`` — a zero-length or backwards window is refused. A
+# reservation's window must fall inside its event's own ``slot``, bounds inclusive
+# (``reservation.start >= event.start`` and ``reservation.end <= event.end``), and its
+# ``slot.date`` must equal the event's. And the event's own ``slot`` gets the parse
+# rule the reservation's slot already had, plus the same end-after-start rule.
+
+_INVERTED_SLOT = {"date": "2026-06-13", "start": "12:00", "end": "09:00"}
+_ZERO_LENGTH_SLOT = {"date": "2026-06-13", "start": "09:00", "end": "09:00"}
+
+
+async def test_create_event_reservation_ending_before_its_start_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """A reservation whose ``end`` comes before its ``start`` is a negative-length
+    window — capacity the solver could never fill — and is refused at the boundary
+    (#1501)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            reservations=[
+                {"name": "Reservation A", "slot": _INVERTED_SLOT, "table_ids": []}
+            ]
+        ),
+    )
+    assert response.status_code == 422, response.text
+    assert "strictly after" in response.json()["detail"][0]["msg"]
+
+    # A 422 that had already written the event would be a 422 in name only.
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_create_event_reservation_ending_exactly_at_its_start_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A zero-length reservation is refused too: ``end`` must come STRICTLY after
+    ``start``, not merely not-before it."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            reservations=[
+                {"name": "Reservation A", "slot": _ZERO_LENGTH_SLOT, "table_ids": []}
+            ]
+        ),
+    )
+    assert response.status_code == 422, response.text
+    assert "strictly after" in response.json()["detail"][0]["msg"]
+
+
+async def test_patch_event_reservation_ending_before_its_start_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The update verb refuses the same backwards window a create does (#1501) — the
+    schema rule runs on both write shapes, so this needs no service-layer guard at
+    all."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={
+            "reservations": [
+                {"name": "Reservation A", "slot": _INVERTED_SLOT, "table_ids": []}
+            ]
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "strictly after" in response.json()["detail"][0]["msg"]
+
+
+async def test_create_event_reservation_dated_off_the_events_date_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A reservation's ``slot.date`` disagreeing with its event's is refused: a
+    ``Slot`` carries one date, so containment (#1501) starts there."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            # The event's own slot (from ``_event_payload``) is dated 2026-06-13.
+            reservations=[
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-14", "start": "09:00", "end": "12:00"},
+                    "table_ids": [],
+                }
+            ]
+        ),
+    )
+    assert response.status_code == 422, response.text
+    assert "Reservation A" in response.json()["detail"][0]["msg"]
+    assert "not inside" in response.json()["detail"][0]["msg"]
+
+
+async def test_patch_event_reservation_dated_off_the_events_date_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={
+            "reservations": [
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-14", "start": "09:00", "end": "12:00"},
+                    "table_ids": [],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "Reservation A" in response.json()["detail"][0]["msg"]
+
+
+async def test_create_event_reservation_window_outside_the_events_window_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """Same date, but the reservation starts before its event does — outside
+    containment even though the date matches."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            # The event's own slot is 09:00-18:00; this reservation starts an hour
+            # before it.
+            reservations=[
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-13", "start": "08:00", "end": "12:00"},
+                    "table_ids": [],
+                }
+            ]
+        ),
+    )
+    assert response.status_code == 422, response.text
+    assert "Reservation A" in response.json()["detail"][0]["msg"]
+
+
+async def test_patch_event_reservation_window_outside_the_events_window_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={
+            "reservations": [
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-13", "start": "08:00", "end": "12:00"},
+                    "table_ids": [],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "Reservation A" in response.json()["detail"][0]["msg"]
+
+
+async def test_create_event_reservation_window_exactly_equal_to_the_events_is_accepted(
+    authed_client: tuple[AsyncClient, User],
+):
+    """Bounds are INCLUSIVE: a reservation exactly as wide as its event is legal, not
+    an edge to round away (this is a real seeded case, ``p-cc-1`` on ``ev-cc-open``,
+    on the web client's mock store — acceptance check, not falsification)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+            reservations=[
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+                    "table_ids": [],
+                }
+            ],
+        ),
+    )
+    assert response.status_code == 201, response.text
+
+
+async def test_patch_event_shrinking_slot_under_a_stored_reservation_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A PATCH carrying only ``slot`` is judged against the event's STORED
+    reservations (the effective-pair pattern #1482 already set): shrinking the
+    event's window under a reservation it already holds is refused, naming that
+    reservation."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            # The default reservation is "Reservation A", 09:00-12:30.
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"slot": {"date": "2026-06-13", "start": "09:00", "end": "10:00"}},
+    )
+    assert response.status_code == 422, response.text
+    assert "Reservation A" in response.json()["detail"][0]["msg"]
+
+    # Refused before the write: the event's slot is untouched.
+    unchanged = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert unchanged["events"][0]["slot"] == {
+        "date": "2026-06-13",
+        "start": "09:00",
+        "end": "18:00",
+    }
+
+
+async def test_patch_event_reservations_judged_against_the_stored_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A PATCH carrying only ``reservations`` is judged against the event's STORED
+    ``slot`` (the effective-pair pattern's other half): widening a reservation past
+    the event's stored window is refused."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        # The event's own slot is 09:00-18:00 (default, untouched by this PATCH).
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={
+            "reservations": [
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "19:00"},
+                    "table_ids": [],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "Reservation A" in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.parametrize(
+    ("slot", "field"),
+    [
+        pytest.param(
+            {"date": "next Tuesday", "start": "09:00", "end": "18:00"}, "date"
+        ),
+        pytest.param({"date": "2026-06-13", "start": "9am", "end": "18:00"}, "start"),
+        pytest.param(
+            {"date": "2026-06-13", "start": "09:00:30", "end": "18:00"}, "seconds"
+        ),
+        # The two ``fromisoformat`` accepts and the wire shape does not (#1501 review).
+        # ``"09:00:00"`` parses to a time whose ``.second`` is 0, so a
+        # ``t.second or t.microsecond`` test waves it through while claiming to refuse
+        # seconds; stored on a reservation's TIME columns it reads back ``"09:00"``,
+        # breaking the round trip ``_slot_read`` promises. ``"20260613"`` is a real
+        # date in ISO BASIC format; an event's slot is JSONB stored verbatim, so it
+        # reads back as typed and the editor's own mirror then refuses to save it.
+        pytest.param(
+            {"date": "2026-06-13", "start": "09:00:00", "end": "18:00"},
+            "zero-seconds",
+        ),
+        pytest.param({"date": "20260613", "start": "09:00", "end": "18:00"}, "basic"),
+        # A shape is not validity: both of these match the pattern and are neither a
+        # real date nor a real time, so ``fromisoformat`` still has to run after it.
+        pytest.param(
+            {"date": "2026-13-45", "start": "09:00", "end": "18:00"}, "no-day"
+        ),
+        pytest.param(
+            {"date": "2026-06-13", "start": "25:99", "end": "18:00"}, "no-time"
+        ),
+    ],
+    ids=[
+        "unparseable-date",
+        "unparseable-start",
+        "a-time-carrying-seconds",
+        "a-time-carrying-ZERO-seconds",
+        "a-date-in-basic-format",
+        "a-shaped-date-that-is-no-day",
+        "a-shaped-time-that-is-no-time",
+    ],
+)
+async def test_create_event_with_a_malformed_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+    slot: dict[str, str],
+    field: str,
+):
+    """The event's own ``slot`` now gets the same parse rule a reservation's slot
+    already had (#1501): a malformed event window used to reach the schedule
+    preview's own ``date.fromisoformat`` and answer 500 for a payload this boundary
+    waved through."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(slot=slot),
+    )
+    assert response.status_code == 422, (field, response.text)
+
+
+async def test_patch_event_with_a_malformed_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"slot": {"date": "next Tuesday", "start": "09:00", "end": "18:00"}},
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_create_event_with_an_inverted_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The event's own ``slot`` gets the same end-after-start rule a reservation's
+    already had (#1501): an event slotted backwards makes every reservation
+    uncontainable."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        # No reservations: this is the event-slot rule alone, not containment.
+        json=_event_payload(slot=_INVERTED_SLOT, reservations=[]),
+    )
+    assert response.status_code == 422, response.text
+    assert "strictly after" in response.json()["detail"][0]["msg"]
+
+
+async def test_patch_event_with_an_inverted_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(reservations=[]),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"slot": _INVERTED_SLOT},
+    )
+    assert response.status_code == 422, response.text
+    assert "strictly after" in response.json()["detail"][0]["msg"]
+
+
+async def test_create_event_with_no_reservations_and_a_malformed_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """An event with no reservations has nothing for containment to judge, but the
+    event-slot rules still apply on their own (#1501's Edge Cases)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            slot={"date": "next Tuesday", "start": "09:00", "end": "18:00"},
+            reservations=[],
+        ),
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_patch_event_renaming_an_already_violating_event_succeeds(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """The escape hatch (#1501, mirroring #1482's): a PATCH that touches neither
+    ``slot`` nor ``reservations`` is not judged by containment or the event-slot
+    ordering rule at all. A legacy event already violating the rule — unreachable
+    through either write path once this guard exists, so built directly through the
+    ORM here — must still accept a rename. Without this, such a row could never be
+    edited at all, only deleted."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    event_id = uuid.UUID(event["id"])
+
+    # Mutate the stored row directly, past the write boundary that would now refuse
+    # this: the event's own slot becomes inverted.
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    row.slot = _INVERTED_SLOT
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event_id}",
+        json={"name": "Renamed Despite The Violation"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "Renamed Despite The Violation"
+
+
+@pytest.mark.parametrize(
+    "slot",
+    [
+        pytest.param({"date": "2026-06-13", "start": "09:00:00", "end": "18:00"}),
+        pytest.param({"date": "20260613", "start": "09:00", "end": "18:00"}),
+    ],
+    ids=["a-time-carrying-ZERO-seconds", "a-date-in-basic-format"],
+)
+async def test_create_event_reservation_with_an_off_shape_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+    slot: dict[str, str],
+):
+    """A reservation's window is pinned to the wire SHAPE, not merely to what
+    ``fromisoformat`` will swallow (#1501 review).
+
+    Both of these parse. Neither is the shape ``_slot_read`` promises to compose back
+    into, and that promise is load-bearing: a reservation's window goes through real
+    ``DATE``/``TIME`` columns, so ``"09:00:00"`` would be stored and read back as
+    ``"09:00"`` — the "lossless… character for character" round trip, quietly false.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            reservations=[
+                {"name": "Reservation A", "slot": slot, "table_ids": []},
+            ]
+        ),
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_patch_reservations_against_a_malformed_stored_slot_is_not_a_500(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """A ``reservations``-only PATCH against an event whose STORED slot does not spell
+    a window must not answer 500 (#1501 review).
+
+    The escape hatch does not cover this case: it fires only when a PATCH touches
+    neither ``slot`` nor ``reservations``, so this payload reaches the guard, which
+    then has to read a stored slot nothing ever validated. Parsing it unguarded raises
+    a bare ``ValueError`` out of a validation guard — this ticket's own bug (a 500 for
+    a value the boundary waved through) relocated into the verb written to fix it, and
+    a direct breach of its "refusals are 422, never 500" invariant.
+
+    Containment is skipped instead, and the write is accepted: an event slot that
+    frames no window gives a reservation no honest verdict to fail against. The editor
+    already reasons this way on its own side (``reservationWindowIssues`` says nothing
+    about any row when the event's slot cannot frame one). Nothing escapes permanently
+    — repairing the event's slot is a PATCH carrying ``slot``, which IS judged against
+    these stored reservations.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    event_id = uuid.UUID(event["id"])
+
+    # Past the write boundary, which now refuses this — a row that predates #1501.
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    row.slot = {"date": "next Tuesday", "start": "09:00", "end": "18:00"}
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event_id}",
+        json={
+            "reservations": [
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+                    "table_ids": [],
+                }
+            ]
+        },
     )
     assert response.status_code == 200, response.text
 

@@ -55,6 +55,22 @@ class User(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When a session cookie last resolved this row through the auth resolver
+    # (`app.sessions._resolve_current_user`), throttled to one write per window.
+    # NULL means no person has EVER browsed this account: it was minted by
+    # ``POST /v1/login/request`` for an unknown address (no session token is
+    # issued) or by an abandoned login-token consume, so nobody can reach it —
+    # which is exactly why public listings must not show it (#1438). A row that
+    # lists it would let an attacker diff the roster around ``POST
+    # /v1/login/request`` and learn which addresses hold accounts. The listings'
+    # single predicate lives in ``app.listed.is_listed_player``; the by-id
+    # lookups deliberately do NOT apply it, so a guest's own profile still
+    # resolves. Not stamped at mint: ``GET /v1/session`` mints without stamping,
+    # so a drive-by bootstrap call stays unlisted until the visitor actually
+    # browses.
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Set when this (ephemeral) user has been folded into another account by the
     # merge service. A live user has both NULL; a tombstoned guest has both set.
     # The row is kept (not deleted) so its session token still resolves and the

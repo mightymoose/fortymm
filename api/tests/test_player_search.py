@@ -77,6 +77,21 @@ async def test_excludes_tombstoned_users(db_session: AsyncSession):
     assert [player.username for player in results] == ["match.survivor"]
 
 
+async def test_omits_never_active_users(db_session: AsyncSession):
+    """A never-active user (#1438) — ``last_seen_at`` still NULL — is invisible
+    to opponent search: search is one of the enumerable surfaces the
+    sign-in-mint oracle ran through."""
+    caller = await make_user(db_session, "caller")
+    await make_user(db_session, "ada.browsed")
+    await make_user(db_session, "ada.never", last_seen_at=None)
+
+    results = await search_players_by_username(
+        db_session, query="ada.", current_user_id=caller.id
+    )
+
+    assert [player.username for player in results] == ["ada.browsed"]
+
+
 async def test_respects_the_limit(db_session: AsyncSession):
     caller = await make_user(db_session, "caller")
     for i in range(15):
