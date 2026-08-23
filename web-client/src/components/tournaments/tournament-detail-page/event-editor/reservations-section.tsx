@@ -273,9 +273,9 @@ export const ReservationsSection = ({
               `reservationCapMessage` in `event-form.ts` for why that distinction is
               load-bearing and why it does not reintroduce a client label catalogue. */}
           <AlertDescription>
-            Every draw type but round-robin-then-knockout runs its whole stage as one
-            group, so this event can hold only one reservation. Change the draw type on
-            the Basics tab to run several groups.
+            This event's draw type runs its whole stage as one group, so it can hold
+            only one reservation. Change the draw type on the Basics tab to
+            round-robin-then-knockout, the one draw that runs several groups.
           </AlertDescription>
         </Alert>
       )}

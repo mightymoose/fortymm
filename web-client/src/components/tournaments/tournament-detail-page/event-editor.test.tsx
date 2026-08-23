@@ -724,8 +724,10 @@ describe('EventEditor', () => {
       const error = eventEditorPage.queryReservationsCapError()
       expect(error).not.toBeNull()
       // The client's OWN sentence — never the server's raw detail string
-      // (`DEFINITION_OF_COMPLETE`), and it names the count actually held.
-      expect(error).toHaveTextContent('2')
+      // (`DEFINITION_OF_COMPLETE`), and it names the count actually held. A bare '2'
+      // would NOT prove that: the server's sentence ends "and this one holds 2" too,
+      // so the assertion has to name a fragment only the client's wording carries.
+      expect(error).toHaveTextContent('it currently holds 2')
       // …and ONLY that one. The Add button's cap notice says the same rule in weaker
       // words ("this event can hold only one reservation") without naming the count
       // held or the way down to one, so stacking it directly above the red would bury
@@ -843,7 +845,8 @@ describe('EventEditor', () => {
       expect(error?.textContent).not.toContain('rr-then-ko')
       expect(error?.textContent).toContain('round-robin-then-knockout')
       // …and it still names the count actually held, which is what makes it actionable.
-      expect(error).toHaveTextContent('2')
+      // The client's own phrasing, not a bare digit the server's sentence also carries.
+      expect(error).toHaveTextContent('it currently holds 2')
     })
 
     // The freeze notice, not this one, once the event is drawn — a director locked out
