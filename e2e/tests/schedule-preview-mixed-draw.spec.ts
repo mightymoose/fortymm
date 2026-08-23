@@ -142,8 +142,8 @@ test.describe('Tournament — schedule preview with a mixed draw', () => {
     })
     expect(groups, 'the round-robin needs a group to be drawn into').toHaveLength(1)
 
-    // Then the bracket, beside it — un-grouped end to end (ADR-0786), which is how a
-    // director really configures one. Same catalogue, so the two events share a venue.
+    // Then the bracket, beside it, booking nothing — which is how a director really
+    // configures one. Same catalogue, so the two events share a venue.
     const { eventId: bracketEventId, groups: bracketGroups } = await addEvent(
       director,
       tournamentId,
@@ -151,10 +151,15 @@ test.describe('Tournament — schedule preview with a mixed draw', () => {
       { name: KO_EVENT_NAME, drawType: 'single-elim', reservations: [] },
     )
     // THE PREMISE, both halves. Two distinct events on one tournament, and the second
-    // is the un-grouped draw type the preview covers nothing of. Without this a green
-    // run could not rule out that the seed had quietly made one event, or two
-    // round-robins.
-    expect(bracketGroups, 'a bracket is un-grouped end to end').toEqual([])
+    // is a draw type the preview covers nothing of. Without this a green run could not
+    // rule out that the seed had quietly made one event, or two round-robins.
+    //
+    // The bracket holds a group of its own since #1483 — mapped to no reservation,
+    // since it books nothing — and that is exactly what must NOT put it in the preview:
+    // the preview keeps a fixture because its STAGE seats both sides at the cut, never
+    // because it named a group.
+    expect(bracketGroups, 'the floor mints the bracket one group').toHaveLength(1)
+    expect(bracketGroups[0].reservation_id).toBeNull()
     expect(bracketEventId).not.toBe(roundRobinEventId)
 
     // ----- the browser: the director opens the preview -------------------------
