@@ -38,7 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attention import list_attention_kind
-from app.draws import group_label
+from app.draws import group_label, seats_both_sides_at_cut
 from app.match_queries import current_game_number, match_eager_options
 from app.models import (
     Match,
@@ -335,8 +335,21 @@ def _build_event(
         game_counts=game_counts,
         stage_draw_types=stage_draw_types,
     )
+    # The caller's group — but only a **group stage's** group. Asked of the fixture's
+    # own stage (:func:`~app.draws.seats_both_sides_at_cut`), never of whether it names
+    # a group at all: since #1483 a single-elim or swiss fixture names its stage's
+    # group too, and that group is not a group the player is "in" — a bracket has no
+    # standings table to sit in and no group field to place in, so labelling the panel
+    # "Group A" would name both. This one pick feeds both readers below (the standings
+    # row the record is taken from, and the ``group_label`` rendered on the panel), so
+    # there is exactly one place the rule lives.
     my_group_id = next(
-        (f.group_id for f in my_fixtures if f.group_id is not None),
+        (
+            f.group_id
+            for f in my_fixtures
+            if f.group_id is not None
+            and _seats_both_sides_at_cut(stage_draw_types, f.stage_id)
+        ),
         None,
     )
     my_standing = None
@@ -696,6 +709,24 @@ def _round_label(stage_draw_type: StageDrawType, round_number: int) -> str:
             return f"Round {round_number}"
         case _:
             assert_never(stage_draw_type)
+
+
+def _seats_both_sides_at_cut(
+    stage_draw_types: Mapping[uuid.UUID, StageDrawType], stage_id: uuid.UUID
+) -> bool:
+    """Whether this fixture's own stage seats both sides at the cut
+    (:func:`~app.draws.seats_both_sides_at_cut`) — the panel's one question about a
+    fixture's stage, asked through the map the caller already loaded.
+
+    ``.get``, not ``[...]``, for the reason ``_build_event``'s focus match already
+    states: ``stage_draw_types`` and the fixtures are two loads a beat apart, so a
+    stage a director's re-mint deleted between them (ADR 20260815) leaves a fixture
+    naming a stage this map no longer has. That is read skew on a background
+    dashboard refresh, and the honest answer for a stage nobody can describe is
+    "not a group stage" — the panel drops one label rather than 500ing.
+    """
+    draw_type = stage_draw_types.get(stage_id)
+    return draw_type is not None and seats_both_sides_at_cut(draw_type)
 
 
 def _stage_label(draw_type: DrawType, *, complete: bool) -> str:

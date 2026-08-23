@@ -331,11 +331,17 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     validated them with, whose ``min_length=1`` id is why a ``GroupId`` reaching the
     domain is never ``""``.
 
-    Every configured group is passed, whatever the draw type. An un-grouped strategy
-    (single-elim, #785, and swiss) ignores them and writes ``NULL`` group refs; a
-    grouped one deals the field across exactly these ids — which is what makes a
-    fixture's ``group_id`` a string ref that resolves against the event the client is
-    already holding.
+    Every configured group is passed, whatever the draw type, and **every strategy
+    now uses them**. A grouped one (round-robin, and the group half of rr-then-ko)
+    deals the field across exactly these ids; a single-stage un-grouped one
+    (single-elim, swiss) deals every fixture into the one group its stage holds
+    (#1483, ``app.draws._sole_group``) — which is what confines a bracket to its
+    reservation's tables and window. Either way a fixture's ``group_id`` is a string
+    ref that resolves against the event the client is already holding.
+
+    Only ``rr-then-ko``'s knockout stage still writes a ``NULL`` group ref, because
+    this relationship is pinned to stage 0 and that stage has no groups to name until
+    #1484 materialises them.
 
     The order is read off each group's ``position`` (ADR 20260801, "Groups carry an
     explicit ``position``") rather than taken from the JSONB array's incidental
@@ -810,25 +816,22 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     # ``event`` with its stages, so re-selecting them here would be a second
     # statement for a collection already in hand.
     stage_ids = {stage.position: stage.id for stage in event.stages}
-    # A planned fixture's STAGE (ADR 20260815 decision 5) — the write seam this chore
-    # adds, the strategy layer above knows nothing about it. Grouped fixtures always
-    # belong to the event's stage 0: a director's groups never hang off any other stage
-    # (decision 3), so every grouped draw type (round-robin, and rr-then-ko's group
-    # stage) resolves there. An un-grouped fixture belongs to the position-1 (knockout)
-    # stage only for rr-then-ko — the one draw type with a second stage — and to
-    # stage 0 for every single-stage draw type (single-elim, swiss) otherwise.
-    ungrouped_stage_position = (
-        1
-        if draw_settings_of(event.draw_settings).draw_type is DrawType.rr_then_ko
-        else 0
-    )
+    # A planned fixture's STAGE (ADR 20260815 decision 5) — taken from the fixture
+    # itself (``PlannedFixture.stage``, the same :class:`~app.draws.FixtureStage`
+    # projection the read side carries), never re-derived here.
+    #
+    # It used to be inferred: stage 0 for a fixture that named a group, the event's
+    # un-grouped stage otherwise. That was only ever correct while "names a group" and
+    # "belongs to the group stage" were the same set, and #1483 ends that — a
+    # single-elim bracket now names its stage's group and is emphatically not a group
+    # stage. The strategy that dealt the fixture is the thing that knows which stage it
+    # dealt it into, so it says so, and this seam stops guessing. #1484, which gives an
+    # rr-then-ko knockout stage groups of its own, would have silently sent every
+    # knockout fixture to stage 0 under the old inference.
     db.add_all(
         [
             TournamentFixture(
-                stage_id=_stage_id_at(
-                    stage_ids,
-                    0 if fixture.group_id is not None else ungrouped_stage_position,
-                ),
+                stage_id=_stage_id_at(stage_ids, fixture.stage.position),
                 group_id=fixture.group_id,
                 round=fixture.round,
                 position=fixture.position,
