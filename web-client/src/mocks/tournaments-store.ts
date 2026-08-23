@@ -307,8 +307,8 @@ const SLAM_RESERVATIONS: Reservation[] = [
  * gets a started tournament for free. */
 const GOLDEN_STATE_ID = GOLDEN_STATE_CLASSIC_ID
 
-const CUP_EVENT_ID = 'ev-challenge-cup'
-const SHIELD_EVENT_ID = 'ev-shield'
+const CUP_EVENT_ID = mockUuid('ev-challenge-cup')
+const SHIELD_EVENT_ID = mockUuid('ev-shield')
 
 /** An event's entrant ids in registration order — read off `otherEntrants` rather than
  * spelled out, so the ids a results block names and the ids the event actually holds
@@ -609,7 +609,7 @@ function seed(): StoredTournament[] {
       latest_schedule_solve: null,
       events: [
         {
-          id: 'ev-open-singles',
+          id: mockUuid('ev-open-singles'),
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'Open Singles',
           format: 'singles',
@@ -622,7 +622,7 @@ function seed(): StoredTournament[] {
           max_players: 64,
           entry_fee: 45,
           timezone: 'America/Chicago',
-          entrants: otherEntrants('ev-open-singles', 52),
+          entrants: otherEntrants(mockUuid('ev-open-singles'), 52),
           slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
           match_settings: { rated: true, length_games: 5 },
           predicates: [],
@@ -669,7 +669,7 @@ function seed(): StoredTournament[] {
           // per-group floor and refuses "0 entrants across 1 group would leave a group
           // with fewer than 2 entrants, who would have nobody to play." — the server's
           // OTHER round-robin refusal, not the one this event used to demonstrate.
-          id: 'ev-u1500',
+          id: mockUuid('ev-u1500'),
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1500 Singles',
           format: 'singles',
@@ -695,7 +695,7 @@ function seed(): StoredTournament[] {
           // the entrants themselves. The card offers no Enter button at all — it
           // says why instead (ADR-0015; #783). Seeded so `npm run dev` can show the
           // state without anyone having to click Enter sixteen times.
-          id: 'ev-champ-singles',
+          id: mockUuid('ev-champ-singles'),
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'Championship Singles',
           format: 'singles',
@@ -706,7 +706,7 @@ function seed(): StoredTournament[] {
           max_players: 16,
           entry_fee: 60,
           timezone: 'America/Los_Angeles',
-          entrants: otherEntrants('ev-champ-singles', 16),
+          entrants: otherEntrants(mockUuid('ev-champ-singles'), 16),
           slot: { date: '2026-06-14', start: '13:00', end: '18:00' },
           match_settings: { rated: true, length_games: 7 },
           predicates: [],
@@ -740,7 +740,7 @@ function seed(): StoredTournament[] {
           // all — nothing joins its two group winners. The cap is what makes a
           // round-robin event's champion unconditional; it did not give a multi-group
           // round-robin one.
-          id: 'ev-u1200',
+          id: mockUuid('ev-u1200'),
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1200 Singles',
           format: 'singles',
@@ -751,7 +751,7 @@ function seed(): StoredTournament[] {
           max_players: 24,
           entry_fee: 20,
           timezone: 'America/Los_Angeles',
-          entrants: otherEntrants('ev-u1200', 9),
+          entrants: otherEntrants(mockUuid('ev-u1200'), 9),
           slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
           match_settings: { rated: true, length_games: 3 },
           predicates: [{ id: 'pr-u1200', field: 'rating', op: '<', value: 1200 }],
@@ -762,7 +762,7 @@ function seed(): StoredTournament[] {
           // store could have cut, rather than a hand-written list that no cut would ever
           // produce.
           fixtures: planRoundRobinFixtures(
-            otherEntrants('ev-u1200', 9).map((e) => e.id),
+            otherEntrants(mockUuid('ev-u1200'), 9).map((e) => e.id),
             U1200_RESERVATION.map((r) => groupIdFor(r.id)),
           ),
           // COMPLETE results (ADR-0788), so `npm run dev` shows a champion live — the
@@ -806,7 +806,7 @@ function seed(): StoredTournament[] {
           // for the freeze mechanics only — the two-group `standings_then_finishes`
           // DEMO already lives at the Cup and the Shield below, so this fixture states
           // no results at all.
-          id: 'ev-two-stage-cut',
+          id: mockUuid('ev-two-stage-cut'),
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'Two-stage Singles (cut)',
           format: 'singles',
@@ -839,13 +839,13 @@ function seed(): StoredTournament[] {
           max_players: 9,
           entry_fee: 20,
           timezone: 'America/Los_Angeles',
-          entrants: otherEntrants('ev-two-stage-cut', 9),
+          entrants: otherEntrants(mockUuid('ev-two-stage-cut'), 9),
           slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
           match_settings: { rated: true, length_games: 3 },
           predicates: [],
           reservations: TWO_STAGE_CUT_RESERVATIONS,
           fixtures: planRoundRobinFixtures(
-            otherEntrants('ev-two-stage-cut', 9).map((e) => e.id),
+            otherEntrants(mockUuid('ev-two-stage-cut'), 9).map((e) => e.id),
             TWO_STAGE_CUT_RESERVATIONS.map((r) => groupIdFor(r.id)),
           ),
           results: null,
@@ -856,7 +856,7 @@ function seed(): StoredTournament[] {
           // A doubles event: entry is a singles-only affair (one row per user
           // cannot express a pairing — ADR-0016), so the API 400s here and the
           // UI offers no Enter control. Seeded so that case is visible in dev.
-          id: 'ev-mixed-doubles',
+          id: mockUuid('ev-mixed-doubles'),
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'Mixed Doubles',
           format: 'doubles',
@@ -917,7 +917,7 @@ function seed(): StoredTournament[] {
           // `current` by the same set-comparison the server makes. Publish this
           // tournament and Start works; publish the Bay Area Open — four of whose five
           // events have no draw — and Start is refused, by name. The seed holds both.
-          id: 'ev-slam-open',
+          id: mockUuid('ev-slam-open'),
           tournament_id: SUMMER_SLAM_ID,
           name: 'Slam Open Singles',
           format: 'singles',
@@ -928,13 +928,13 @@ function seed(): StoredTournament[] {
           max_players: 16,
           entry_fee: 20,
           timezone: 'America/New_York',
-          entrants: otherEntrants('ev-slam-open', 8),
+          entrants: otherEntrants(mockUuid('ev-slam-open'), 8),
           slot: { date: '2026-08-22', start: '09:00', end: '13:00' },
           match_settings: { rated: true, length_games: 5 },
           predicates: [],
           reservations: SLAM_RESERVATIONS,
           fixtures: planRoundRobinFixtures(
-            otherEntrants('ev-slam-open', 8).map((e) => e.id),
+            otherEntrants(mockUuid('ev-slam-open'), 8).map((e) => e.id),
             SLAM_RESERVATIONS.map((r) => groupIdFor(r.id)),
           ),
           // Drawn but unplayed — go-live materializes its fixtures into matches, but no
@@ -981,7 +981,7 @@ function seed(): StoredTournament[] {
           // On a tournament the dev user does NOT own (but which IS published):
           // entering is gated on the `tournament.enter` permission, not on
           // ownership, so Enter still shows.
-          id: 'ev-cc-open',
+          id: mockUuid('ev-cc-open'),
           tournament_id: CLUB_CHAMPS_ID,
           name: "Women's Championship Singles",
           format: 'singles',
@@ -992,7 +992,7 @@ function seed(): StoredTournament[] {
           max_players: 32,
           entry_fee: 40,
           timezone: 'America/Los_Angeles',
-          entrants: otherEntrants('ev-cc-open', 28),
+          entrants: otherEntrants(mockUuid('ev-cc-open'), 28),
           slot: { date: '2026-07-01', start: '17:00', end: '21:00' },
           match_settings: { rated: true, length_games: 5 },
           // The only non-owned row in the seed, so it is the only place the
@@ -1067,7 +1067,7 @@ function seed(): StoredTournament[] {
       latest_schedule_solve: null,
       events: [
         {
-          id: 'ev-garage-open',
+          id: mockUuid('ev-garage-open'),
           tournament_id: GARAGE_INVITATIONAL_ID,
           name: 'Garage Singles',
           format: 'singles',
@@ -1078,7 +1078,7 @@ function seed(): StoredTournament[] {
           max_players: 8,
           entry_fee: 0,
           timezone: 'America/Los_Angeles',
-          entrants: otherEntrants('ev-garage-open', 3),
+          entrants: otherEntrants(mockUuid('ev-garage-open'), 3),
           slot: { date: '2026-09-12', start: '13:00', end: '17:00' },
           match_settings: { rated: false, length_games: 3 },
           predicates: [],
@@ -2509,7 +2509,11 @@ export function createEvent(
   eventCounter += 1
   const now = new Date().toISOString()
   const event: StoredEvent = {
-    id: `ev-new-${eventCounter}`,
+    // `mockUuid`, for the same reason every seed id above is one: the open editor is a
+    // `?event=<uuid>` search param now (#1503), parsed at the route boundary. A slug id
+    // fails that parse, `.catch({})` drops it, and an event created under `npm run dev`
+    // could never be re-opened — the one event in the mock world a director just made.
+    id: mockUuid(`ev-new-${eventCounter}`),
     tournament_id: tournamentId,
     name: body.name,
     format: body.format,

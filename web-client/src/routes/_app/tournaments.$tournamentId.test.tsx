@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -11,6 +11,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 
+import {
+  buildTournamentDetailRead,
+  buildTournamentEntrantRead,
+  buildTournamentEventRead,
+} from '@/mocks/factories/tournaments/tournament.factory'
+import { mockUuid } from '@/mocks/mock-uuid'
 import { server } from '@/mocks/server'
 import { Route } from './tournaments.$tournamentId'
 
@@ -30,6 +36,11 @@ const TournamentNotFound = Route.options.notFoundComponent
 const shippedParseParams = (
   Route.options.params as { parse: (raw: unknown) => { tournamentId: string } }
 ).parse
+/** The REAL search parser (`validateSearch: zodValidator(eventEditorSearchSchema)`),
+ * likewise read off the shipped route rather than re-implemented here. It is what makes
+ * a garbage `?event=` a URL that names nothing instead of a value the page has to
+ * defend against (#1503, `.claude/rules/parse-at-boundaries.md`). */
+const shippedValidateSearch = Route.options.validateSearch!
 
 /** A well-formed uuid that names nothing — the "valid but unknown" case. */
 const UNKNOWN_ID = '00000000-0000-4000-8000-000000000000'
@@ -67,6 +78,12 @@ function renderRoute(initialEntry: string) {
     // The REAL param parser — the thing under test. A route that dropped it would
     // send `/tournaments/abc` to the API and blow up in the error boundary.
     params: { parse: (raw) => shippedParseParams(raw) },
+    // …and the REAL search parser beside it. Without this the harness has no boundary
+    // at all: a malformed `?event=` reaches the page verbatim, the editor stays closed
+    // because no event MATCHES it rather than because the value was dropped, and the
+    // refusal specs below pass against a route module with `validateSearch` deleted.
+    // Measured: with it missing, `location.search` was `{ event: 'not-a-uuid' }`.
+    validateSearch: shippedValidateSearch,
   })
   const listRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -84,6 +101,9 @@ function renderRoute(initialEntry: string) {
       </QueryClientProvider>,
     ),
     router,
+    // Exposed so a test can force the background refetch every event mutation
+    // (and the realtime feed) causes — the thing the open editor must survive.
+    queryClient,
   }
 }
 
@@ -205,3 +225,348 @@ describe('tournament detail route — a missing tournament is a not-found, not a
 // stand-in, which risks asserting a state the code path doesn't actually
 // reach — see `.claude/rules/verify-the-artifact-under-test.md` on a red built
 // from a fabricated setup proving nothing.
+
+/**
+ * **The open editor is a `?event=` search param** (#1503).
+ *
+ * These live at the ROUTE, not at `TournamentDetailPage`, because the claim is about
+ * the URL: the route's `validateSearch` parses the value, the page resolves it, and
+ * the editor's `useBlocker` guards the navigation that drops it. A component test
+ * stands in for all three and would prove none of them.
+ *
+ * ⚠️ **What jsdom cannot prove here, and does not pretend to.** There is no Back
+ * button in jsdom, and `@tanstack/history`'s blocked-pop path — the one that puts the
+ * entry back so a second Back press asks again — only exists in a real session
+ * history. Those live in `e2e/tournaments/event-editor-history.spec.ts`
+ * (`.claude/rules/verify-the-artifact-under-test.md`).
+ */
+describe('tournament detail route — which event editor is open lives in the URL (#1503)', () => {
+  /** A uuid that names an event of the served tournament. */
+  const EVENT_ID = mockUuid('route-test-open-singles')
+  /** …and one that names no event on it. */
+  const OTHER_EVENT_ID = mockUuid('route-test-some-other-tournaments-event')
+
+  /** Serve a real, parseable tournament, and count the detail fetches so a test can
+   * prove a garbage `?event=` made none of its own. */
+  function mockTournament(
+    overrides: Parameters<typeof buildTournamentDetailRead>[0] = {},
+    onRequest?: () => void,
+  ) {
+    server.use(
+      http.get('*/v1/tournaments/:id', () => {
+        onRequest?.()
+        return HttpResponse.json(
+          buildTournamentDetailRead({
+            id: UNKNOWN_ID,
+            events: [
+              buildTournamentEventRead({
+                id: EVENT_ID,
+                tournament_id: UNKNOWN_ID,
+                name: 'Open Singles',
+              }),
+            ],
+            ...overrides,
+          }),
+        )
+      }),
+    )
+  }
+
+  const editorSheet = () => screen.queryByRole('dialog')
+  const nameInput = () => screen.getByLabelText(/Event name/)
+  const discardDialog = () => screen.queryByTestId('discard-event-edits')
+
+  it('opens the named event on FIRST RENDER — a deep link, not a click', async () => {
+    mockTournament()
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(nameInput()).toHaveValue('Open Singles')
+  })
+
+  it('opens the UNSAVED editor for `?event=new`', async () => {
+    mockTournament()
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=new`)
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(await screen.findByTestId('event-editor-overline')).toHaveTextContent(
+      'New event',
+    )
+  })
+
+  it('leaves the editor CLOSED for `?event=new` when the viewer cannot edit', async () => {
+    // A read-only sheet over an event that does not exist is not a state the product
+    // has (ADR-0015: read-only is a view, and there is nothing here to view).
+    mockTournament({ can_edit: false })
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=new`)
+
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument()
+    expect(editorSheet()).not.toBeInTheDocument()
+  })
+
+  // Two different refusals, and the page's answer is the same for both: a well-formed
+  // uuid survives the boundary and is refused later, by resolution against THIS
+  // tournament's events; a value that is neither a uuid nor `new` never gets that far,
+  // because `validateSearch` drops it. Which refusal fired is not observable from here
+  // — `location.search` is the raw query object, not the validator's output — so the
+  // boundary's own half is pinned directly, in `data/event-editor-search.test.ts`.
+  it.each([
+    ['a uuid naming no event on this tournament', OTHER_EVENT_ID],
+    ['a value that is neither a uuid nor `new`', 'not-a-uuid'],
+    ['an empty value', ''],
+  ])('leaves the editor closed for %s — and makes no extra request', async (_label, value) => {
+    let requests = 0
+    mockTournament({}, () => {
+      requests += 1
+    })
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${value}`)
+
+    // The page renders exactly as it does without the param…
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument()
+    expect(editorSheet()).not.toBeInTheDocument()
+    // …no error boundary, no not-found…
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Tournament not found.' }),
+    ).not.toBeInTheDocument()
+    // …and the only fetch was the tournament's own. A URL that names no resource is
+    // never a request to make (ADR-1001).
+    expect(requests).toBe(1)
+  })
+
+  it('closes a CLEAN editor with no confirmation, and drops the param', async () => {
+    const user = userEvent.setup()
+    mockTournament()
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(editorSheet()).not.toBeInTheDocument())
+    expect(discardDialog()).not.toBeInTheDocument()
+    expect(router.state.location.search).toEqual({})
+  })
+
+  it('asks before discarding a DIRTY editor, and keeps everything when told to stay', async () => {
+    const user = userEvent.setup()
+    mockTournament()
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'Renamed')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(await screen.findByTestId('discard-event-edits')).toBeInTheDocument()
+    // Nothing has closed and nothing has navigated while the question is open.
+    // Read by TEST ID, not by role: the `AlertDialog` on top is modal, so Radix
+    // `aria-hidden`s the rest of the document and a role query cannot see the sheet
+    // underneath it — which would read as "the editor closed".
+    expect(screen.queryByTestId('event-editor-body')).toBeInTheDocument()
+    expect(router.state.location.search).toEqual({ event: EVENT_ID })
+
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }))
+
+    await waitFor(() => expect(discardDialog()).not.toBeInTheDocument())
+    expect(editorSheet()).toBeInTheDocument()
+    // The param is still there — which is what makes a second attempt ask again
+    // rather than leaving the page with the sheet open.
+    expect(router.state.location.search).toEqual({ event: EVENT_ID })
+    expect(nameInput()).toHaveValue('Renamed')
+  })
+
+  it('discards on request — the sheet goes and the param goes with it', async () => {
+    const user = userEvent.setup()
+    mockTournament()
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'Renamed')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Discard & leave' }),
+    )
+
+    await waitFor(() => expect(editorSheet()).not.toBeInTheDocument())
+    expect(router.state.location.search).toEqual({})
+  })
+
+  it('counts a field typed and typed BACK as clean — no confirmation', async () => {
+    // React Hook Form compares against `defaultValues`, so an edit that was undone
+    // is not an edit. The dirty predicate is the whole of the guard's arming
+    // condition, and a guard that fires over nothing is one people click through.
+    const user = userEvent.setup()
+    mockTournament()
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.type(nameInput(), '!')
+    await user.type(nameInput(), '{backspace}')
+    expect(nameInput()).toHaveValue('Open Singles')
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(editorSheet()).not.toBeInTheDocument())
+    expect(discardDialog()).not.toBeInTheDocument()
+  })
+
+  it('never asks a READER anything — Done closes silently', async () => {
+    const user = userEvent.setup()
+    mockTournament({ can_edit: false })
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+
+    await waitFor(() => expect(editorSheet()).not.toBeInTheDocument())
+    expect(discardDialog()).not.toBeInTheDocument()
+  })
+
+  it('re-seeds on every open — a second open never inherits the first draft', async () => {
+    // The trap the URL introduces: the page resolves `?event=` to an event of the
+    // tournament and holds it, so re-opening the same event hands the editor the very
+    // same object. Keyed on identity alone the draft would survive — and its dirty
+    // flag with it, arming the discard guard over work nobody typed this time.
+    const user = userEvent.setup()
+    mockTournament()
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'Renamed')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Discard & leave' }),
+    )
+    await waitFor(() => expect(editorSheet()).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Edit Open Singles' }))
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(nameInput()).toHaveValue('Open Singles')
+    // …and it is CLEAN: closing it asks nothing.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(editorSheet()).not.toBeInTheDocument())
+    expect(discardDialog()).not.toBeInTheDocument()
+  })
+
+  it('closes a SAVED event with no confirmation, though the draft is still dirty', async () => {
+    // The form is not re-seeded until the refetched event arrives, so `isDirty` is
+    // still true at close time. An unguarded close would confirm on every save —
+    // a prompt on the happy path.
+    const user = userEvent.setup()
+    mockTournament()
+    server.use(
+      http.patch('*/v1/tournaments/:id/events/:eventId', () =>
+        HttpResponse.json(
+          buildTournamentEventRead({
+            id: EVENT_ID,
+            tournament_id: UNKNOWN_ID,
+            name: 'Renamed',
+          }),
+        ),
+      ),
+    )
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'Renamed')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    // By TEST ID: a confirmation on top would `aria-hidden` the sheet, so a role
+    // query would report it "closed" while it is still there — the assertion would
+    // then pass against the very bug it is here to catch.
+    await waitFor(() =>
+      expect(screen.queryByTestId('event-editor-body')).not.toBeInTheDocument(),
+    )
+    expect(discardDialog()).not.toBeInTheDocument()
+    expect(router.state.location.search).toEqual({})
+  })
+
+  it('survives a background refetch that CHANGES the open event, with the draft intact', async () => {
+    // Every event mutation invalidates the tournament, and the realtime feed does too,
+    // so a refetch under an open editor is ordinary. Resolving `?event=` against
+    // `tournament.events` on every render would hand the editor a new object whenever
+    // one came back — and `EventEditor` re-seeds its form on that object's identity,
+    // wiping the director's typing while they were typing it.
+    //
+    // ⚠️ The refetched event must really have CHANGED. React Query applies structural
+    // sharing, so a byte-identical payload comes back as the very same object and the
+    // re-seed never fires — a test built on an unchanged refetch passes against the
+    // naive implementation too, and proves nothing
+    // (`.claude/rules/verify-the-artifact-under-test.md`). Somebody entering the event
+    // is the ordinary way this happens.
+    const user = userEvent.setup()
+    let entrants: ReturnType<typeof buildTournamentEntrantRead>[] = []
+    let requests = 0
+    server.use(
+      http.get('*/v1/tournaments/:id', () => {
+        requests += 1
+        return HttpResponse.json(
+          buildTournamentDetailRead({
+            id: UNKNOWN_ID,
+            events: [
+              buildTournamentEventRead({
+                id: EVENT_ID,
+                tournament_id: UNKNOWN_ID,
+                name: 'Open Singles',
+                entrants,
+              }),
+            ],
+          }),
+        )
+      }),
+    )
+
+    const { queryClient } = renderRoute(
+      `/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`,
+    )
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'Half-typed name')
+
+    // Somebody enters the event, and the tournament is refetched under the open sheet.
+    entrants = [buildTournamentEntrantRead()]
+    const before = requests
+    await act(async () => {
+      await queryClient.invalidateQueries()
+    })
+    await waitFor(() => expect(requests).toBeGreaterThan(before))
+
+    // The changed payload landed and the draft is untouched.
+    expect(nameInput()).toHaveValue('Half-typed name')
+  })
+
+  it('deletes without stacking a discard confirmation on the delete confirmation', async () => {
+    // `onDelete` closes the editor BEFORE raising the delete confirmation. Asking the
+    // director to protect edits they have just asked to delete the event holding is a
+    // second dialog over the first, and the answer to one is not the answer to both.
+    const user = userEvent.setup()
+    mockTournament()
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'About to be deleted')
+    await user.click(screen.getByRole('button', { name: 'Delete event' }))
+
+    // The delete confirmation, and only it.
+    expect(await screen.findByText('Delete event?')).toBeInTheDocument()
+    expect(discardDialog()).not.toBeInTheDocument()
+  })
+})

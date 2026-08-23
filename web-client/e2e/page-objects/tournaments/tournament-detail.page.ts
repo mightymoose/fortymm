@@ -541,8 +541,13 @@ export class TournamentDetailPage {
     return this.page.getByRole('combobox', { name: 'Operator' })
   }
 
+  /** Scoped to the editor dialog, not to the page. `getByLabel` matches an
+   * accessible name by CASE-INSENSITIVE SUBSTRING, so a page-wide "Value" also matches
+   * the router devtools' "Copy value to clipboard" button — which `vite dev` renders
+   * and `vite preview` (CI) does not, so the collision fails locally and passes on CI.
+   * The rule's value box is inside the sheet; nothing else in there is called Value. */
   get ruleValue(): Locator {
-    return this.page.getByLabel('Value')
+    return this.eventEditor.getByLabel('Value')
   }
 
   get ruleLowerBound(): Locator {

@@ -3,6 +3,7 @@ import { useId, useState } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 import { useCutDraw, useUncutDraw } from '../../data/api'
 import {
@@ -272,9 +273,24 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
     <section
       data-testid={`draw-panel-${event.id}`}
       aria-labelledby={headingId}
-      className="border-t border-[color:var(--border-subtle)] px-[18px] py-3"
+      className={cn(
+        'border-t border-[color:var(--border-subtle)] px-[18px] py-3',
+        // **Who takes a click in the draw's box.** The event card raises this panel
+        // above its stretched open target and then stands aside
+        // (`pointer-events-none` on the wrapper), because only the panel knows
+        // whether there is a draw here to click on.
+        //
+        // A CUT draw takes everything, exactly as it does today: a click on a
+        // fixture list is a click on the draw, never a request to open the editor
+        // (ADR-0786). An UNDRAWN one is a heading, one owner-only button and inert
+        // copy — nothing a click means anything to — so it lets "No draw yet." fall
+        // through to the open target the tab header advertises (#1503). The header
+        // row below takes its own pointer events back either way, so Generate draw
+        // is untouched.
+        state.kind === 'undrawn' ? 'pointer-events-none' : 'pointer-events-auto',
+      )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-2">
         <h3
           id={headingId}
           className="text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase"
@@ -386,7 +402,13 @@ export const DrawPanel = ({ tournamentId, event, canEdit }: DrawPanelProps) => {
         <Alert
           variant="destructive"
           data-testid={`draw-notice-${event.id}`}
-          className="mt-2.5"
+          // `pointer-events-auto`, as the header row above has it. An UNDRAWN section
+          // stands aside so "No draw yet." stops swallowing the card's open target
+          // (#1503) — but this refusal is the one thing in that section a director has
+          // to READ and often copy: it names the numbers a refused Generate wants
+          // changed. Left standing aside, a click on it would open the event editor
+          // over the message, and the message could not be selected at all.
+          className="pointer-events-auto mt-2.5"
         >
           <AlertTitle>{notice.title}</AlertTitle>
           <AlertDescription>{notice.description}</AlertDescription>
