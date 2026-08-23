@@ -52,12 +52,20 @@ export function groupIdFor(reservationId: string): string {
  * mints exactly one group per reservation, at the same position. Domain-side test
  * fixtures derive it the same way the mock stores do (`groupsFor`,
  * `mocks/factories/tournaments/solver-sim.ts`) rather than storing a second array a
- * fixture could let drift out of the 1:1. */
-export function groupsFor(reservations: Reservation[]): Group[] {
+ * fixture could let drift out of the 1:1.
+ *
+ * `stageId` defaults to `'s-1'` — a single-stage event's own stage, and an
+ * `rr-then-ko` event's group stage, in `mintStages`'s own numbering — because every
+ * caller of this helper is building a GROUP STAGE's groups: the reservation-per-group
+ * mapping this function models never applied to a knockout stage even before ADR
+ * 20260823, and a test wanting a knockout stage's own (structurally-one, unmapped)
+ * group builds it directly rather than through this 1:1. */
+export function groupsFor(reservations: Reservation[], stageId = 's-1'): Group[] {
   return reservations.map((r, position) => ({
     id: groupIdFor(r.id),
     position,
     reservationId: r.id,
+    stageId,
   }))
 }
 
@@ -82,7 +90,7 @@ export const UNBOOKED_GROUP_ID = groupIdFor('unbooked')
  * panel still renders a bracket or swiss rounds, because that decision reads the
  * fixture's stage (`seatsBothSidesAtCut`), never its group id. */
 export function unbookedGroup(): Group[] {
-  return [{ id: UNBOOKED_GROUP_ID, position: 0, reservationId: null }]
+  return [{ id: UNBOOKED_GROUP_ID, position: 0, reservationId: null, stageId: 's-1' }]
 }
 
 /** The seeded venue address. Every part is optional in the domain (blank =

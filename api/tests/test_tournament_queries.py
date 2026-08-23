@@ -34,6 +34,7 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
 )
@@ -119,7 +120,12 @@ async def _make_event(
         match_settings={"rated": True, "length_games": 5},
         stages=stages,
     )
-    stages[0].groups = event_groups(reservations, event=event)
+    # This file's ordering rule is unrelated to any draw type's real materialisation
+    # (#1484 floors round-robin at exactly one group) — it is exercised directly
+    # against ``GROUP_COUNT`` seeded groups, one per reservation.
+    stages[0].groups = event_groups(
+        reservations, event=event, group_count=len(reservations)
+    )
     db_session.add(event)
     await db_session.commit()
     # Both ``groups`` (VIEWONLY) and ``stages`` (not eager) are populated on refresh,
@@ -131,17 +137,22 @@ async def _make_event(
 async def _seed_fixtures(
     db_session: AsyncSession,
     event: TournamentEvent,
-    rows: list[tuple[uuid.UUID | None, int, int]],
+    rows: list[tuple[uuid.UUID, int, int]],
+    *,
+    stage_id: uuid.UUID | None = None,
 ) -> None:
     """Write ``(group_id, round, position)`` fixtures — in the order given, which
     every caller below deliberately scrambles: insertion order is what an unsorted
     read returns, so rows seeded in the right order could not tell a broken
-    ``ORDER BY`` from a working one."""
-    stage_id = _stage_a(event)
+    ``ORDER BY`` from a working one.
+
+    Defaults to the event's stage 0 — every caller but the cross-stage ordering test
+    below is single-stage."""
+    resolved_stage_id = stage_id if stage_id is not None else _stage_a(event)
     for group_id, round_number, position in rows:
         db_session.add(
             TournamentFixture(
-                stage_id=stage_id,
+                stage_id=resolved_stage_id,
                 group_id=group_id,
                 round=round_number,
                 position=position,
@@ -220,51 +231,109 @@ async def test_a_groups_round_and_position_still_decide_within_the_group(
     ]
 
 
-async def test_ungrouped_fixtures_sort_last_behind_every_group(
-    db_session: AsyncSession, ten_group_event: TournamentEvent
-) -> None:
-    """A NULL ``group_id`` is a real value — "this fixture belongs to no group" — and
-    it belongs LAST, after the groups that feed it: that is a groups-then-knockout
-    draw's KO stage following its group stage, and it is the claim the ``NULLS LAST``
-    in the loader exists for.
-
-    It survives the move onto ``position`` unchanged, and needs saying again
-    *because* it moved: the new key is a subquery that returns NULL for an ungrouped
-    fixture (it matches no group), so the ungrouped would sort wherever NULLs land by
-    default — which, for a ``DESC`` or a different dialect, is first, in front of the
-    groups.
-    """
-    await _seed_fixtures(
-        db_session,
-        ten_group_event,
-        [
-            (None, 1, 1),
-            (None, 1, 2),
-            (_group_ids(ten_group_event)[9], 1, 1),
-            (_group_ids(ten_group_event)[0], 1, 1),
-        ],
-    )
-
-    fixtures = (await fixtures_by_event(db_session, [ten_group_event.id]))[
-        ten_group_event.id
-    ]
-
-    assert [(f.group_id, f.position) for f in fixtures] == [
-        (_group_ids(ten_group_event)[0], 1),
-        (_group_ids(ten_group_event)[9], 1),
-        (None, 1),
-        (None, 2),
-    ]
-
-
 # There is deliberately no "groups stored before ``position`` existed keep their id
 # order" test any more. It seeded groups with no ``position`` key at all, which a
 # JSONB array could hold and the ``NOT NULL position`` column of
 # ``tournament_event_stage_groups`` cannot (ADR 20260801) — and, pre-deploy, there are
 # no such rows for it to describe. The group id remains the loader's secondary sort
-# key for the case that IS still reachable: an ungrouped draw, where the position
-# subquery is NULL for every fixture
-# (``test_ungrouped_fixtures_sort_last_behind_every_group``).
+# key regardless — a tie-break between two groups the position subquery ranks equally
+# — which ``test_each_events_group_order_is_read_from_its_own_groups`` below still
+# exercises through real, positioned groups.
+#
+# There is also deliberately no more "ungrouped fixtures sort last" test.
+# ``test_ungrouped_fixtures_sort_last_behind_every_group`` pinned the NULLS LAST
+# behavior of the loader's ``_group_position().asc().nulls_last()`` key against a
+# fixture with no group at all — a state #1484 makes unrepresentable
+# (``tournament_fixtures.group_id`` is ``NOT NULL``, and every stage a draw type's
+# template mints holds a group). The ``nulls_last()`` call itself is left in place,
+# unexercised defense against a group somehow failing to resolve, rather than removed
+# — see ``_group_position``'s own docstring. What replaces it is below: the SAME
+# "the knockout sorts after the groups that feed it" claim, now proven through a
+# real second stage rather than a NULL.
+
+
+async def test_a_knockout_stages_group_sorts_after_the_group_stages(
+    db_session: AsyncSession,
+) -> None:
+    """A groups-then-knockout draw's knockout stage sorts strictly after its group
+    stage, even though the two stages' groups can share a ``position`` (#1484: a
+    group's ``position`` is unique only within its own stage, so an
+    ``rr-then-ko`` event's knockout group and the group stage's own group 1 are
+    both ``position: 0``).
+
+    The knockout group's id is pinned **lower** than either pool group's
+    (``uuid.UUID(int=1)`` against ``int=2``/``int=3``), so a loader that ordered on
+    position and then group id — with no stage key ahead of them — would break the
+    ``position: 0`` tie in the knockout's favor and sort it FIRST, ahead of even the
+    group stage's own group 1. That is the #1348 sighting's shape: the knockout
+    escaping its group stage's order. Under a fix that leads with the fixture's own
+    stage, the id tie-break never gets a say — the knockout sorts last regardless of
+    which id is lower, which is what tells this test apart from one that merely
+    got lucky on uuid comparison.
+    """
+    owner = await make_user(db_session, "director-rrko-order")
+    league = await get_default_league(db_session)
+    assert league is not None, "the autouse default_league fixture seeds this"
+    tournament = Tournament(
+        name="Spring Open",
+        status=TournamentStatus.published,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "1 Shattuck Ave",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94704",
+            "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
+        },
+        league_id=league.id,
+        created_by_user_id=owner.id,
+    )
+    db_session.add(tournament)
+    await db_session.flush()
+
+    stages = mint_stages(DrawType.rr_then_ko)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.rr_then_ko),
+        max_players=64,
+        entry_fee=Decimal("20.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": True, "length_games": 5},
+        stages=stages,
+    )
+    pool_group_1 = TournamentEventStageGroup(id=uuid.UUID(int=2), position=0)
+    pool_group_2 = TournamentEventStageGroup(id=uuid.UUID(int=3), position=1)
+    stages[0].groups = [pool_group_1, pool_group_2]
+    # Deliberately the LOWER id of the three, so an id tie-break (no stage key ahead
+    # of it) would sort this group — and therefore the knockout stage — FIRST.
+    knockout_group = TournamentEventStageGroup(id=uuid.UUID(int=1), position=0)
+    stages[1].groups = [knockout_group]
+    db_session.add(event)
+    await db_session.commit()
+    await db_session.refresh(event, attribute_names=["stages"])
+
+    await _seed_fixtures(
+        db_session,
+        event,
+        [(pool_group_2.id, 1, 1), (pool_group_1.id, 1, 1)],
+        stage_id=stages[0].id,
+    )
+    await _seed_fixtures(
+        db_session, event, [(knockout_group.id, 1, 1)], stage_id=stages[1].id
+    )
+
+    fixtures = (await fixtures_by_event(db_session, [event.id]))[event.id]
+
+    assert [f.group_id for f in fixtures] == [
+        pool_group_1.id,
+        pool_group_2.id,
+        knockout_group.id,
+    ]
 
 
 async def test_each_events_group_order_is_read_from_its_own_groups(

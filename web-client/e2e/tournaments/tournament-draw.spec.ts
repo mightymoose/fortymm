@@ -320,10 +320,16 @@ test.describe('Tournaments · cutting the draw', () => {
     // claims.
     await expect(pom.groupDraw(event, 'Group A')).toHaveCount(0)
 
-    // The SERVER cut it, and every fixture it dealt belongs to no group.
+    // The SERVER cut it, and every fixture it dealt belongs to the bracket's OWN
+    // group (ADR 20260823, #1484) — a knockout stage holds a group of its own now,
+    // never `null`. It carries no director-facing label or panel (that is what the
+    // `groupDraw` assertion above already proves), but it is a real, shared id: this
+    // is the hop `restricting_reservation_key` walks to confine the bracket to its
+    // reservation's tables and window.
     const fixtures = store.fixturesOf(event)
     expect(fixtures).toHaveLength(4)
-    expect(fixtures.every((f) => f.group_id === null)).toBe(true)
+    expect(fixtures.every((f) => f.group_id !== null)).toBe(true)
+    expect(new Set(fixtures.map((f) => f.group_id)).size).toBe(1)
 
     await expect(pom.drawNotice(event)).toHaveCount(0)
     await expect(pom.toasts).toHaveCount(0)

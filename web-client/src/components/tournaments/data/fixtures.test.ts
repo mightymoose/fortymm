@@ -73,6 +73,27 @@ describe('parseFixtures — the happy path', () => {
     expect(fixture.entryBId).toBeNull()
   })
 
+  /**
+   * `group_id` is `NOT NULL` on the wire since #1484 — every fixture the real server
+   * sends now names a real group — so `buildTournamentFixtureRead`'s own TYPE no
+   * longer admits a `null` here (that is exactly why `wire()`'s `overrides` param is
+   * untyped `Record<string, unknown>` and not `Partial<TournamentFixtureRead>`: this
+   * test constructs a payload the wire's own type says can't happen).
+   *
+   * This parser still tolerates one defensively (`group_id: z.string().nullable()`,
+   * `./fixtures`'s own wire schema) rather than tightening to `z.string()` in lock
+   * step with the type — the same discipline `entry_a_id`/`winner_entry_id`/etc.
+   * follow: a schema that trusted the generated type's `NOT NULL` claim, and a real
+   * server that ever regressed (a stale row from before #1484 materialised every
+   * fixture's group, say), would surface as a hard parse failure across an entire
+   * event's draw rather than one un-grouped fixture rendered in the ungrouped block.
+   */
+  it('still tolerates a null group_id defensively, even though the wire no longer sends one', () => {
+    const [fixture] = parseFixtures([wire({ group_id: null })])
+
+    expect(fixture.groupId).toBeNull()
+  })
+
   it('carries a decided, materialized fixture through — winner, match id, and live status', () => {
     const [fixture] = parseFixtures([
       wire({

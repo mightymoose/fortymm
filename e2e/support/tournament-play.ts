@@ -37,9 +37,14 @@ interface PlayableEvent {
     readonly id: string
     readonly username: string
   }>
+  /** This event's stages (ADR 20260815), position 0..N-1 — what `playEvent`'s
+   * `'groups'` stage scopes against, since a fixture's `group_id` no longer tells
+   * the group stage apart from the knockout stage (ADR 20260823, #1484: every stage
+   * holds a group now). */
+  readonly stages: ReadonlyArray<{ readonly id: string; readonly position: number }>
   readonly fixtures: ReadonlyArray<{
     readonly id: string
-    readonly group_id: string | null
+    readonly stage_id: string
     /** Which round of the draw the fixture belongs to — what `playSwissRound` scopes
      * itself by. A swiss draw is cut whole, so every round's rows exist from the start
      * and "the fixtures that are playable" is never the same set as "this round's". */
@@ -140,18 +145,22 @@ export async function playEvent(
 
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
     const event = await readPlayableEvent(director, tournamentId, eventId)
+    // ``'groups'`` means the **group stage of an rr-then-ko draw** — position 0 of the
+    // event's stages, the one `mintStageReads`/`stage_template` numbering the rest of
+    // this codebase relies on. It is not a general "is this fixture grouped" test: a
+    // single-elim or swiss event's whole draw names a group now too (ADR 20260823,
+    // #1484), so this filter keeps all of it for those draw types — which is correct,
+    // they have one stage — and is why the only caller passing ``'groups'`` is the
+    // rr-then-ko spec. A fixture's `group_id` no longer tells the two stages apart
+    // (every stage holds a group since #1484), so this reads `stage_id` instead.
+    const groupStageId = [...event.stages].sort((a, b) => a.position - b.position)[0]
+      ?.id
     const playable = event.fixtures
       .filter(isMaterialized)
       .filter(
         (fixture) =>
           fixture.match_status !== 'completed' &&
-          // ``'groups'`` means the **group stage of an rr-then-ko draw**, whose knockout
-          // half is the only thing left carrying ``group_id: null`` after #1483. It is
-          // not a general "is this fixture grouped" test: a single-elim or swiss event's
-          // whole draw names a group now, so this filter would keep all of it — which is
-          // correct for those (they have one stage) and is why the only caller passing
-          // ``'groups'`` is the rr-then-ko spec.
-          (stage === 'all' || fixture.group_id !== null),
+          (stage === 'all' || fixture.stage_id === groupStageId),
       )
     if (playable.length === 0) return played
     played += await playFixtures(event, playable, entrants, inStraightGames(pickWinner))

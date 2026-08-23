@@ -12,12 +12,12 @@ const RESERVATION_A = {
   position: 0,
 }
 
-const GROUP_A = { id: 'grp-a', position: 0, reservation_id: 'res-a' }
+const GROUP_A = { id: 'grp-a', position: 0, reservation_id: 'res-a', stage_id: 's-1' }
 
 describe('parseGroupsAndReservations', () => {
   it('parses a group whose reservation_id resolves', () => {
     expect(parseGroupsAndReservations([GROUP_A], [RESERVATION_A])).toEqual({
-      groups: [{ id: 'grp-a', position: 0, reservationId: 'res-a' }],
+      groups: [{ id: 'grp-a', position: 0, reservationId: 'res-a', stageId: 's-1' }],
       reservations: [
         {
           id: 'res-a',
@@ -38,11 +38,11 @@ describe('parseGroupsAndReservations', () => {
    * `null`, never dropped and never a parse failure.
    */
   it('accepts a group whose reservation_id is null', () => {
-    const unmapped = { id: 'grp-b', position: 1, reservation_id: null }
+    const unmapped = { id: 'grp-b', position: 1, reservation_id: null, stage_id: 's-2' }
     expect(parseGroupsAndReservations([GROUP_A, unmapped], [RESERVATION_A])).toEqual({
       groups: [
-        { id: 'grp-a', position: 0, reservationId: 'res-a' },
-        { id: 'grp-b', position: 1, reservationId: null },
+        { id: 'grp-a', position: 0, reservationId: 'res-a', stageId: 's-1' },
+        { id: 'grp-b', position: 1, reservationId: null, stageId: 's-2' },
       ],
       reservations: [
         {
@@ -57,9 +57,26 @@ describe('parseGroupsAndReservations', () => {
   })
 
   it('accepts groups on an event with no reservation at all', () => {
-    const unmapped = { id: 'grp-a', position: 0, reservation_id: null }
+    const unmapped = { id: 'grp-a', position: 0, reservation_id: null, stage_id: 's-1' }
     expect(parseGroupsAndReservations([unmapped], [])).toEqual({
-      groups: [{ id: 'grp-a', position: 0, reservationId: null }],
+      groups: [{ id: 'grp-a', position: 0, reservationId: null, stageId: 's-1' }],
+      reservations: [],
+    })
+  })
+
+  /**
+   * `stage_id` (ADR 20260823) is NOT cross-checked against this event's `stages`
+   * (`./groups`'s own file header, and `Group.stageId`'s doc, `./types`): it resolves
+   * at the point of use (`DrawIndex.stageById`, `./draw`), the same discipline
+   * `Fixture.stageId` already follows. A group naming a stage id this event's `stages`
+   * (parsed separately, by `./stages`) does not list is still accepted here — it is
+   * `drawState`'s job to exclude it from the group panel, not this boundary's to
+   * refuse the payload over it.
+   */
+  it('does not cross-check stage_id against a stages array — it has none to check against', () => {
+    const orphanStage = { id: 'grp-a', position: 0, reservation_id: null, stage_id: 's-ghost' }
+    expect(parseGroupsAndReservations([orphanStage], [])).toEqual({
+      groups: [{ id: 'grp-a', position: 0, reservationId: null, stageId: 's-ghost' }],
       reservations: [],
     })
   })

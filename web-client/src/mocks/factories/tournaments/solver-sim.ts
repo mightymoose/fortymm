@@ -13,32 +13,137 @@
 
 import type { components } from '@/api/schema'
 import { mockUuid } from '@/mocks/mock-uuid'
+import { inPositionOrder } from '@/components/tournaments/data/helpers'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 type FixtureTimeRead = components['schemas']['FixtureTimeRead']
 type Reservation = components['schemas']['Reservation']
 type Group = components['schemas']['GroupRead']
+type DrawType = components['schemas']['DrawType']
 
 /** A seeded reservation's derived group id — deterministic and stable across reads,
  * because it is a pure function of the reservation's own id rather than a counter
  * (ticket #1369). Lives here, not in either store, because both stores' fixtures name a
  * `group_id` this way and the two worlds must derive the identical id from the identical
- * reservation or their fixtures would point at different groups for the same seed. */
+ * reservation or their fixtures would point at different groups for the same seed.
+ *
+ * Still exactly what its name says: the id a GROUP STAGE'S group takes when it maps to
+ * a real reservation. `groupsForEvent` below is what decides WHICH groups an event
+ * actually has (ADR 20260823) — this stays the pure `reservationId -> id` half of that,
+ * unchanged since ticket #1369. */
 export function groupIdFor(reservationId: string): string {
   return mockUuid(`tournament-event-group:${reservationId}`)
 }
 
-/** This slice's whole 1:1 (ticket #1369, `GroupRead`'s own doc): the server mints
- * exactly one group per reservation, at the same position. Neither store STORES this —
- * both derive it from `reservations` at read time (`groupIdFor`, above), so the 1:1 can
- * never drift out of step by itself. */
-export function groupsFor(reservations: readonly Reservation[]): Group[] {
+/** The id of a group that has no reservation to key off of — a standalone event's one
+ * group when it has booked none (the ADR 20260823 floor), or an `rr-then-ko` event's
+ * knockout-stage group (which never keys off a reservation the way a group-stage group
+ * does, even when its `position % reservation count` mapping resolves to a real one —
+ * see `groupsForEvent`). Keyed on the STAGE, never the reservation: two different
+ * groups of the same event can map to the very same reservation at once (the group
+ * stage's position-0 group and the knockout stage's own, both via `0 % N`), and they
+ * must never collide on id the way keying both off `reservations[0].id` would.
+ *
+ * Exported so a hand-drawn fixture literal (a played-out seed, e.g. a `rr-then-ko`
+ * event's knockout bracket in `tournaments-store.ts`) can name the same knockout-stage
+ * group id `groupsForEvent` mints for that event, rather than the pre-ADR-20260823
+ * `group_id: null` such a fixture used to carry — every fixture is grouped now, so a
+ * literal one must cite the real id or the wire's own `TournamentFixtureRead.group_id`
+ * (`NOT NULL` since #1484) type refuses it. */
+export function structuralGroupIdFor(stageId: string): string {
+  return mockUuid(`tournament-event-group:stage:${stageId}`)
+}
+
+/** This slice's original 1:1 (ticket #1369, `GroupRead`'s own doc): one group per
+ * reservation, at the same position, all belonging to `stageId` (a group stage's own
+ * id — `mintStageReads`'s `'s-1'` by default, since every caller of this helper today
+ * builds a group stage's own groups). Neither store STORES this — both derive it from
+ * `reservations` at read time, so the 1:1 can never drift out of step by itself.
+ *
+ * Still used directly for an `rr-then-ko` event's GROUP stage (`groupsForEvent`'s own
+ * `rr-then-ko` arm, unchanged since before ADR 20260823 — this mock has never modelled
+ * the real server's `ceil(field / 5)`, and closing that gap is not this ticket's job,
+ * see the ticket's own #1484 comments in `tournaments-store.ts`). Every OTHER stage's
+ * group count is decoupled from `reservations.length` entirely — `groupsForEvent`
+ * below, never this function, is what a store should call for an event's real groups. */
+export function groupsFor(reservations: readonly Reservation[], stageId = 's-1'): Group[] {
   return reservations.map((r, position) => ({
     id: groupIdFor(r.id),
     position,
     reservation_id: r.id,
+    stage_id: stageId,
   }))
+}
+
+/** The slice of an event `groupsForEvent` needs — both stores' event shapes satisfy it
+ * structurally. */
+interface SimEventForGroups {
+  draw_type: DrawType
+  stages: readonly { id: string; position: number }[]
+  reservations: readonly Reservation[]
+}
+
+/**
+ * An event's REAL groups (ADR 20260823, "every stage holds groups"): the one function
+ * a store should call to answer "what groups does this event have right now" — on a
+ * plain read, and (filtered to one stage) at the cut. Supersedes the old assumption
+ * that an event's group count is always `reservations.length`: it is, still, for an
+ * `rr-then-ko` event's own GROUP stage (unchanged, see `groupsFor` above), but every
+ * other stage this mock ever mints — a standalone event's one stage, and an
+ * `rr-then-ko` event's knockout stage — holds exactly ONE group, always, decoupled
+ * from the reservation count entirely.
+ *
+ * Each group still maps `position % reservation count` to a reservation, `null` when
+ * the event has none — the one mapping rule ADR 20260822 established and ADR 20260823
+ * leaves alone. A knockout stage's sole group sits at `position: 0` within ITS OWN
+ * stage, so `0 % N` maps it to `reservations[0]` exactly like the group stage's own
+ * position-0 group — the two are expected to share a reservation (ADR 20260823's own
+ * "the mapping stays derived" constraint), and it is precisely why they cannot share
+ * an id either (`structuralGroupIdFor`).
+ *
+ * Ordered `[...groupStageGroups, knockoutGroup]` for an `rr-then-ko` event — the group
+ * stage's groups first, in position order, then the knockout stage's one group last —
+ * which is a convenience for a caller that wants "every group", not a claim about
+ * cross-stage order (nothing here ranks a knockout group against a group-stage one).
+ */
+export function groupsForEvent(event: SimEventForGroups): Group[] {
+  const orderedStages = inPositionOrder(event.stages)
+  const reservationCount = event.reservations.length
+  const reservationIdAt = (position: number): string | null =>
+    reservationCount === 0 ? null : event.reservations[position % reservationCount].id
+
+  if (event.draw_type !== 'rr-then-ko') {
+    const stage = orderedStages[0]
+    if (!stage) return []
+    // Decoupled from the reservation count entirely (the ADR 20260823 floor): always
+    // exactly one group, whatever `reservationCount` is. When there IS a reservation,
+    // this keeps minting the SAME id `groupsFor` always has (`groupIdFor`), so every
+    // existing single-reservation seed and test keeps the group id it already asserts.
+    const id =
+      reservationCount > 0
+        ? groupIdFor(event.reservations[0].id)
+        : structuralGroupIdFor(stage.id)
+    return [{ id, position: 0, reservation_id: reservationIdAt(0), stage_id: stage.id }]
+  }
+
+  const groupStage = orderedStages[0]
+  const knockoutStage = orderedStages[1]
+  if (!groupStage || !knockoutStage) return []
+  // The group stage: UNCHANGED, still one group per reservation (see `groupsFor`'s own
+  // doc for why this mock does not attempt `ceil(field / 5)` here).
+  const groupStageGroups = groupsFor(event.reservations, groupStage.id)
+  // The knockout stage: NEW (ADR 20260823) — exactly one group, always, mapped by the
+  // same `position % reservation count` rule, with its own id so it never collides
+  // with the group stage's own position-0 group even when both map to
+  // `reservations[0]`.
+  const knockoutGroup: Group = {
+    id: structuralGroupIdFor(knockoutStage.id),
+    position: 0,
+    reservation_id: reservationIdAt(0),
+    stage_id: knockoutStage.id,
+  }
+  return [...groupStageGroups, knockoutGroup]
 }
 
 /** Shape a **naive venue wall-clock** stamp (`YYYY-MM-DDTHH:MM[:SS]`) into the wire

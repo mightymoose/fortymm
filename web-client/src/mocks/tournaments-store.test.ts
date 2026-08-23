@@ -1138,22 +1138,40 @@ describe('transitionTournament', () => {
 
   it('appends NO fix to a degenerate message that already names its own', () => {
     // The other arm of the fix rule, and the one every case above is blind to: the fix is
-    // appended for a field under two entrants and for NOTHING else. "A round-robin draw
-    // needs at least one group" already tells the director what to do, and this event has
-    // 52 entrants — "Add entrants, or remove the event" would be advice against the facts.
+    // appended for a field under two entrants and for NOTHING else. "Take fewer
+    // qualifiers…, or add entrants" already tells the director what to do, and this
+    // event has 52 entrants — a second, separate "Add entrants…" would repeat itself.
+    //
+    // "A round-robin draw needs at least one group" no longer serves this purpose (ADR
+    // 20260823): a standalone event's one stage now always holds exactly one group,
+    // decoupled from its reservation count, so that refusal is unreachable for a
+    // round-robin event — see `ev-u1500`'s own seed comment, `tournaments-store.ts`.
     const id = PUBLISHED
     for (const gone of [EMPTY_SINGLES, FULL_SINGLES, INELIGIBLE_SINGLES, DOUBLES]) {
       if (!deleteEvent(id, gone).ok) throw new Error(`setup failed: ${gone}`)
     }
-    // 52 entrants, and the groups taken away — the one refusal that is about the groups.
-    if (!updateEvent(id, FULLISH_SINGLES, { reservations: [] }).ok) {
-      throw new Error('setup failed: could not empty the reservations')
+    // 52 entrants, re-typed `rr-then-ko` across two reservations — the group stage still
+    // derives its count from `reservations.length` alone (`groupsForEvent`'s `rr-then-ko`
+    // arm is unchanged), so this snakes to 26 entrants a group — and K set past that
+    // smallest group, the one refusal that is about the qualifier count.
+    if (
+      !updateEvent(id, FULLISH_SINGLES, {
+        draw_type: 'rr-then-ko',
+        qualifiers_per_group: 27,
+        reservations: [
+          { name: 'Reservation A', slot: SLOT, table_ids: [] },
+          { name: 'Reservation B', slot: SLOT, table_ids: [] },
+        ],
+      }).ok
+    ) {
+      throw new Error('setup failed: could not re-type the event')
     }
 
     // No trailing fix, and no trailing space — which is why this is a `toBe`.
     expect(refusalDetail(transitionTournament(id, 'live'))).toBe(
-      'This tournament cannot start yet: “Open Singles”: A round-robin draw needs at ' +
-        'least one group.',
+      'This tournament cannot start yet: “Open Singles”: Taking 27 qualifiers from ' +
+        'each group is more than the 26 entrants in the smallest group — take fewer ' +
+        'qualifiers from each group, or add entrants.',
     )
   })
 
@@ -1596,16 +1614,27 @@ describe('cutting and un-cutting a draw', () => {
     expect(uncutDraw(TOURNAMENT, EMPTY_SINGLES)).toEqual({ ok: true })
   })
 
-  it('refuses a grouped draw with NO reservations — there is nowhere to deal the field', () => {
-    // `ev-open-singles` is a grouped round-robin in the seed; empty its reservations and
-    // keep the type, so the refusal can only be about the groups.
+  it('cuts a round-robin draw with NO reservations — the group floor no longer needs one (ADR 20260823)', () => {
+    // Before #1484 this refused ("A round-robin draw needs at least one group"): the
+    // group count came from `reservations.length` alone, and zero reservations meant
+    // zero groups. Since ADR 20260823 a standalone event's one stage always holds
+    // exactly one group, decoupled from its reservation count — so this now CUTS, into
+    // one group that maps to no reservation (an Edge Case the ticket names outright:
+    // "a zero-reservation event… their fixtures fall to the synthetic event-wide
+    // reservation… nothing here refuses that state").
     updateEvent(TOURNAMENT, FULLISH_SINGLES, { draw_type: 'round-robin', reservations: [] })
 
     const result = cutDraw(TOURNAMENT, FULLISH_SINGLES)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.status).toBe(422)
-    expect(result.status === 422 && result.detail).toContain('at least one group')
+    if (!result.ok) throw new Error(`expected a cut, got ${result.status}`)
+
+    const event = eventOf(TOURNAMENT, FULLISH_SINGLES)
+    expect(event.groups).toHaveLength(1)
+    expect(event.groups[0].reservation_id).toBeNull()
+    // Every fixture names the event's one (unmapped) group — never `null`, which is
+    // what this event's fixtures used to carry before there was a group to name.
+    expect(new Set(result.fixtures.map((f) => f.group_id))).toEqual(
+      new Set([event.groups[0].id]),
+    )
   })
 
   it('refuses a field too small for its groups — a group of one has nobody to play', () => {
@@ -1729,7 +1758,7 @@ describe('cutting a single-elimination draw', () => {
     expect(fixturesOf(BRACKET)).toEqual(fixtures)
   })
 
-  it('emits every round up front, halving each time, all of it ungrouped', () => {
+  it('emits every round up front, halving each time, all dealt into the stage’s one group', () => {
     const fixtures = cut(BRACKET) // 16 entrants → a 16-slot bracket, 4 rounds
 
     expect(round(fixtures, 1)).toHaveLength(8)
@@ -1737,8 +1766,11 @@ describe('cutting a single-elimination draw', () => {
     expect(round(fixtures, 3)).toHaveLength(2)
     expect(round(fixtures, 4)).toHaveLength(1)
     expect(fixtures).toHaveLength(15)
-    // A bracket is ungrouped — its fixtures name no group, whatever groups the event has.
-    expect(fixtures.every((f) => f.group_id === null)).toBe(true)
+    // A single-elim event's one stage holds exactly one group (#1483's floor), and
+    // every fixture of its bracket is dealt into it (ADR 20260823, #1484) — never
+    // `null`, whatever reservations the event has.
+    expect(fixtures[0].group_id).not.toBeNull()
+    expect(fixtures.every((f) => f.group_id === fixtures[0].group_id)).toBe(true)
     // `position` is contiguous within a round, and the later rounds are all TBD: nothing
     // is decided at the cut but round 1.
     expect(round(fixtures, 1).map((f) => f.position)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
@@ -1891,12 +1923,16 @@ describe('cutting a round-robin-then-knockout draw', () => {
     return result.fixtures
   }
 
-  /** The two stages, split the way the wire splits them: `group_id IS NULL` **is** the
-   * knockout stage (ADR-0786), and there is no other column that says so. */
+  /** The two stages, split by STAGE (position 1 is `mintStageReads`'s `'s-2'`, the
+   * knockout stage) — never by `group_id`, which no longer tells them apart: every
+   * fixture of both stages now names a real group (ADR 20260823, #1484), the group
+   * stage's own or the knockout stage's own. */
+  const knockoutStageIdOf = (eventId: string) =>
+    [...eventOf(eventId).stages].sort((a, b) => a.position - b.position)[1]!.id
   const grouped = (fixtures: ReturnType<typeof cut>) =>
-    fixtures.filter((f) => f.group_id !== null)
+    fixtures.filter((f) => f.stage_id !== knockoutStageIdOf(TWO_STAGE))
   const knockout = (fixtures: ReturnType<typeof cut>) =>
-    fixtures.filter((f) => f.group_id === null)
+    fixtures.filter((f) => f.stage_id === knockoutStageIdOf(TWO_STAGE))
 
   it('cuts BOTH stages in one stroke — the groups and the whole bracket', () => {
     // Not a convenience (ADR): `advance()` can only ever FILL a side of an existing
@@ -1920,9 +1956,19 @@ describe('cutting a round-robin-then-knockout draw', () => {
 
     const stage = grouped(cut(TWO_STAGE))
 
-    // Every fixture names one of THIS event's groups…
+    // Every fixture names one of THIS event's GROUP-STAGE groups — never the knockout
+    // stage's own group (ADR 20260823 mints one there too, but nothing here deals
+    // into it: this event's `fixtures` stay group-stage-only for the freeze mechanics
+    // this seed exists to cover).
+    const groupStageId = [...eventOf(TWO_STAGE).stages].sort(
+      (a, b) => a.position - b.position,
+    )[0]!.id
     expect(new Set(stage.map((f) => f.group_id))).toEqual(
-      new Set(eventOf(TWO_STAGE).groups.map((g) => g.id)),
+      new Set(
+        eventOf(TWO_STAGE)
+          .groups.filter((g) => g.stage_id === groupStageId)
+          .map((g) => g.id),
+      ),
     )
     // …every pair meets exactly once…
     const pairs = stage.map((f) => [f.entry_a_id, f.entry_b_id].sort().join('|'))
@@ -1940,14 +1986,21 @@ describe('cutting a round-robin-then-knockout draw', () => {
     }
   })
 
-  it('leaves the knockout stage UNGROUPED and entirely TBD', () => {
+  it('gives the knockout stage its OWN group, distinct from the group stage’s, and leaves it entirely TBD', () => {
     asRrThenKo(TWO_STAGE, 4)
 
-    const bracket = knockout(cut(TWO_STAGE))
+    const cutFixtures = cut(TWO_STAGE)
+    const bracket = knockout(cutFixtures)
+    const stage = grouped(cutFixtures)
 
-    // `group_id IS NULL` is not cosmetic — it is the whole stage discriminator, and what
-    // sends these rows to the bracket view instead of a group's fixture list.
-    expect(bracket.every((f) => f.group_id === null)).toBe(true)
+    // ADR 20260823, #1484: the knockout stage holds its own group now, never `null` —
+    // and never one of the group stage's own group ids either (a knockout fixture
+    // sharing an id with a pool fixture would deal it into the wrong stage's join row).
+    expect(bracket.length).toBeGreaterThan(0)
+    expect(bracket.every((f) => f.group_id !== null)).toBe(true)
+    expect(bracket.every((f) => f.group_id === bracket[0].group_id)).toBe(true)
+    const groupStageIds = new Set(stage.map((f) => f.group_id))
+    expect(groupStageIds.has(bracket[0].group_id)).toBe(false)
     // Nobody has qualified yet, so every side is TBD. A bracket cut with entrants
     // already in it would be seating people the groups have not chosen.
     for (const fixture of bracket) {
@@ -2102,7 +2155,10 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
     const plan = planDraw('rr-then-ko', entrants(8), groups(2), 1, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.filter((f) => f.group_id === null)).toHaveLength(1)
+    // `'s-2'` — `mintStageReads('rr-then-ko')`'s knockout stage, the default `planDraw`
+    // cuts against here (no real event's `stages` was passed). Never `group_id ===
+    // null`: the knockout stage holds its own group now too (ADR 20260823, #1484).
+    expect(plan.fixtures.filter((f) => f.stage_id === 's-2')).toHaveLength(1)
   })
 
   it('sizes the bracket from P × K — derived, never configured', () => {
@@ -2111,7 +2167,7 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
     const plan = planDraw('rr-then-ko', entrants(12), groups(2), 3, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.filter((f) => f.group_id === null)).toHaveLength(5)
+    expect(plan.fixtures.filter((f) => f.stage_id === 's-2')).toHaveLength(5)
   })
 
   it('refuses taking more qualifiers than the smallest group holds', () => {
@@ -2133,7 +2189,7 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
     const plan = planDraw('rr-then-ko', entrants(4), groups(1), 4, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.filter((f) => f.group_id === null)).toHaveLength(3)
+    expect(plan.fixtures.filter((f) => f.stage_id === 's-2')).toHaveLength(3)
   })
 })
 
@@ -2190,13 +2246,17 @@ describe('planDraw, swiss', () => {
     ).toBe(true)
   })
 
-  it('cuts ungrouped fixtures, whatever groups the event carries', () => {
-    // Swiss ranks the whole field in one table, so `group_id` is null throughout — and
-    // the event's groups are not consulted at all, exactly as on the server.
+  it('deals every fixture into ONE group, never partitioned across the list it is handed', () => {
+    // Swiss ranks the whole field in one table — the event's groups are not CONSULTED
+    // as a partition, exactly as on the server. But since ADR 20260823 (#1484) a swiss
+    // event's one stage still holds exactly one group (#1483's floor), and every
+    // fixture is dealt into it: `groupIds[0]`, never `groupIds[1]` — two ids reaching
+    // here is not a shape the real store ever produces (#1482 caps a swiss event at
+    // one reservation), but proves the arm reads only the first regardless.
     const plan = planDraw('swiss', entrants(8), ['grp-1', 'grp-2'], null, 2)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.every((f) => f.group_id === null)).toBe(true)
+    expect(plan.fixtures.every((f) => f.group_id === 'grp-1')).toBe(true)
   })
 
   it('byes the LOWEST-ranked entrant on an odd field, by leaving them out of every round', () => {
@@ -2865,10 +2925,17 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
     return results as TwoStageResults
   }
 
-  /** The knockout stage: `group_id IS NULL` IS the bracket (ADR-0786), which is exactly
-   * how the server tells the two stages apart. */
-  const bracketOf = (eventId: string): Fixture[] =>
-    eventOf(eventId).fixtures.filter((f) => f.group_id === null)
+  /** The knockout stage's own fixtures — its STAGE (position 1, `mintStageReads`'s
+   * `'s-2'` for an `rr-then-ko` event) is what tells the two stages apart, never a
+   * null `group_id` (ADR 20260823, #1484: every fixture, including the bracket's,
+   * names a real group now — the group its own stage holds). */
+  const bracketOf = (eventId: string): Fixture[] => {
+    const event = eventOf(eventId)
+    const knockoutStageId = [...event.stages].sort(
+      (a, b) => a.position - b.position,
+    )[1]?.id
+    return event.fixtures.filter((f) => f.stage_id === knockoutStageId)
+  }
 
   /** The FINAL — the single fixture in the bracket's last round. Its winner is the
    * event's champion, and `null` there is why an unfinished event has none. */
@@ -2921,10 +2988,19 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
     "%s's bracket is the one planDraw would cut — played out, not hand-drawn",
     (eventId) => {
       const event = eventOf(eventId)
+      // The GROUP STAGE's own group ids only (ADR 20260823) — never `event.groups` as a
+      // whole, which now also carries the knockout stage's own group (`groupsForEvent`).
+      // Handing the snake that one too would deal the field across an extra "group" the
+      // real cut never sees: "the snake deals only into the stage being dealt", the same
+      // filter `planEventDraw` (`tournaments-store.ts`) applies before calling `planDraw`.
+      const groupStageId = [...event.stages].sort((a, b) => a.position - b.position)[0]!.id
+      const groupIds = event.groups
+        .filter((g) => g.stage_id === groupStageId)
+        .map((g) => g.id)
       const plan = planDraw(
         'rr-then-ko',
         event.entrants.map((e) => e.id),
-        event.groups.map((g) => g.id),
+        groupIds,
         // The event's own count, unasserted: the planner takes `number | null` and
         // refuses the impossible pair loudly, so there is nothing here to talk past.
         event.qualifiers_per_group,

@@ -47,13 +47,13 @@ def upgrade() -> None:
         ),
         # Half of the composite foreign key declared at the bottom of this table: a
         # fixture's group is one of its OWN stage's groups (ADR 20260801, re-parented
-        # onto the stage by ADR 20260815). NULL = the draw is un-grouped (single-elim),
-        # or this is the KO stage of an rr-then-ko event — and a composite FK with a
-        # NULL member is satisfied vacuously under MATCH SIMPLE, which is exactly what
-        # an un-grouped fixture wants. The column is deliberately still named
-        # ``group_id``: it is what the wire calls the field, and renaming the column
-        # and the wire field is one move that belongs to one change, not two.
-        sa.Column("group_id", postgresql.UUID(as_uuid=True), nullable=True),
+        # onto the stage by ADR 20260815). NOT NULL (#1484): every stage a draw type's
+        # template mints now holds groups of its own, including a groups-then-knockout
+        # draw's knockout stage, so no fixture is un-grouped any more. The column is
+        # deliberately still named ``group_id``: it is what the wire calls the field,
+        # and renaming the column and the wire field is one move that belongs to one
+        # change, not two.
+        sa.Column("group_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("round", sa.Integer(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
         # NULL means exactly one thing: TBD — ``advance()`` fills it when the feeding
@@ -146,11 +146,11 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("0"),
         ),
-        # The identity a re-cut reconciles on. NULLS NOT DISTINCT (Postgres 15+):
-        # under the default, a NULL group_id compares unequal to itself, which would
-        # leave un-grouped draws (single-elim — every row has group_id IS NULL) with no
-        # uniqueness guard whatsoever. NULL is a real domain value here ("this draw has
-        # no groups"), so it is compared as one. Keyed on ``stage_id`` rather than
+        # The identity a re-cut reconciles on. No longer NULLS NOT DISTINCT (#1484):
+        # that clause existed only so the guard also covered un-grouped draws, where
+        # group_id was NULL for every row and the default (NULLS DISTINCT) would
+        # compare each such NULL unequal to itself. group_id is NOT NULL now, so a
+        # plain UNIQUE already compares every row. Keyed on ``stage_id`` rather than
         # ``event_id`` (ADR 20260815 decision 5) — which is also what makes the
         # knockout stage's round numbering restarting at 1 fall out of the key, rather
         # than needing to be a documented namespace rule the way it was under a single
@@ -161,7 +161,6 @@ def upgrade() -> None:
             "round",
             "position",
             name="uq_tournament_fixtures_stage_id_group_id_round_position",
-            postgresql_nulls_not_distinct=True,
         ),
         # "A fixture's group belongs to that fixture's own stage", as one line of DDL
         # (ADR 20260801, re-parented onto the stage by ADR 20260815). It references

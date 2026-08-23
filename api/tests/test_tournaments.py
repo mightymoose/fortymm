@@ -5523,7 +5523,10 @@ def _coords(event: dict[str, Any]) -> list[tuple[str | None, int, int]]:
     director reads. The mapping comes off the event's own ``groups``, joined to their
     ``reservations`` — the same join a client makes to title a bracket — so a fixture
     naming a group this event does not have would show up here as a ``KeyError``
-    rather than as a quietly unmatched id."""
+    rather than as a quietly unmatched id. A group with no reservation of its own
+    (never seeded by this file's ``_ensure_group``) would carry ``None`` in that
+    position, kept as the return type's own ``str | None`` for that reason — never
+    because ``group_id`` itself can be ``None`` (#1484 makes it ``NOT NULL``)."""
     reservation_by_group = {
         group["id"]: group["reservation_id"] for group in event["groups"]
     }
@@ -5532,8 +5535,8 @@ def _coords(event: dict[str, Any]) -> list[tuple[str | None, int, int]]:
     }
     return [
         (
-            names[reservation_by_group[f["group_id"]]]
-            if f["group_id"] is not None
+            names[reservation_id]
+            if (reservation_id := reservation_by_group[f["group_id"]]) is not None
             else None,
             f["round"],
             f["position"],
@@ -5556,16 +5559,15 @@ async def test_an_events_draw_comes_back_in_group_round_position_order(
     position — the three columns that identify a fixture within its draw.
 
     The rows are written in deliberately the WRONG order (round 2 before round 1, group
-    B before group A, the KO fixture first of all), because insertion order is what a
+    B before group A, group C first of all), because insertion order is what a
     read that forgot to order by anything would come back in — and on a draw cut in one
     pass, insertion order and the right order would happen to coincide. A test seeded
     in the right order could not tell the two apart, and would pass against a read with
     no ORDER BY at all.
 
-    The ungrouped fixture (``group_id`` NULL — as a knockout stage's fixtures are)
-    sorts LAST, after the groups that feed it. NULL is a real value in this domain
-    ("this fixture belongs to no group"), not a missing one, so it has a defined place
-    in the order rather than an incidental one.
+    Group C sorts LAST, after groups A and B — by its group's own **position**, the
+    same ordering every group sorts by (#1484 gives every fixture a real group, so
+    there is no more ``group_id IS NULL`` case to sort specially).
     """
     client, _ = authed_client
     tournament_id, (drawn, _) = await _tournament_with_events(
@@ -5577,12 +5579,13 @@ async def test_an_events_draw_comes_back_in_group_round_position_order(
     # order is what the read sorts by (ADR 20260801) and it is not the order the
     # fixtures are written in below — which is the whole point of writing them in the
     # wrong one. ``_cut`` would otherwise create each group as it first met it, and
-    # group B would legitimately come first.
+    # group C would legitimately come first.
     await _ensure_group(db_session, uuid.UUID(drawn["id"]), "g-a")
     await _ensure_group(db_session, uuid.UUID(drawn["id"]), "g-b")
+    await _ensure_group(db_session, uuid.UUID(drawn["id"]), "g-c")
 
     await _cut(db_session, drawn["id"], group_id="g-b", round=2, position=1)
-    await _cut(db_session, drawn["id"], group_id=None, round=1, position=1)
+    await _cut(db_session, drawn["id"], group_id="g-c", round=1, position=1)
     await _cut(db_session, drawn["id"], group_id="g-b", round=1, position=2)
     await _cut(db_session, drawn["id"], group_id="g-a", round=1, position=1)
     await _cut(db_session, drawn["id"], group_id="g-b", round=1, position=1)
@@ -5594,7 +5597,7 @@ async def test_an_events_draw_comes_back_in_group_round_position_order(
         ("g-b", 1, 1),
         ("g-b", 1, 2),
         ("g-b", 2, 1),
-        (None, 1, 1),
+        ("g-c", 1, 1),
     ]
 
 
@@ -7227,7 +7230,14 @@ async def _reservations_of(
 
     This is what "the refusal changed nothing" has to be asserted against. "The event
     still has reservations" would pass against a guard that 409'd *after* writing them.
+
+    Scoped to the GROUP STAGE — always position 0 (#1484) — rather than every stage of
+    the event: an ``rr-then-ko`` event's knockout stage holds its own single group,
+    which can map onto the SAME reservation one of the group stage's groups does
+    (``position % reservation count`` puts both at ``0 % N``), and reading every
+    stage's groups would return that reservation twice.
     """
+    stage_id = await stage_id_at(db_session, uuid.UUID(event_id), 0)
     rows = (
         await db_session.execute(
             joined_to_reservation(
@@ -7241,11 +7251,7 @@ async def _reservations_of(
                     TournamentEventStageGroup.position,
                 )
             )
-            .where(
-                TournamentEventStageGroup.stage_id.in_(
-                    stage_ids_for_events([uuid.UUID(event_id)])
-                )
-            )
+            .where(TournamentEventStageGroup.stage_id == stage_id)
             .order_by(TournamentEventStageGroup.position)
         )
     ).all()

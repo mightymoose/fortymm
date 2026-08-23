@@ -137,7 +137,12 @@ from app.scheduling import (
     Window,
 )
 from app.schemas.tournament import MatchSettings, Reservation, Slot, TournamentTable
-from app.tournament_draws import draw_config, event_reservations, strategy_for_event
+from app.tournament_draws import (
+    draw_config,
+    event_reservations,
+    group_stage_ids,
+    strategy_for_event,
+)
 from app.venue_time import anchor_wallclock
 
 #: The synthetic field size for an *uncapped* event (``max_players IS NULL``,
@@ -705,8 +710,18 @@ def build_preview_snapshot(
         keys_by_group = reservation_keys_by_group(
             plan.event.id, group_reservation_ids(plan.event)
         )
+        # Scoped to group-stage groups (#1484): ``plan.event.groups`` now spans every
+        # stage, and a knockout stage's sole group shares ``position: 0`` with the
+        # group stage's first group — labelling it too would print "Group A" for a
+        # bracket that has no group letter at all. ``group_stage_ids`` is the one
+        # definition of that filter, shared with ``group_order`` and the freeze's
+        # 409 sentence, so the three cannot drift apart on what counts as a
+        # group-stage stage.
+        stage_ids = group_stage_ids(plan.event)
         group_labels_by_id = {
-            group.id: group_label(group.position) for group in plan.event.groups
+            group.id: group_label(group.position)
+            for group in plan.event.groups
+            if group.stage_id in stage_ids
         }
         # The SAME filter the windows pass used (``_previewed_fixtures``), so the set
         # of fixtures that reach the snapshot is exactly the set the event-wide guard

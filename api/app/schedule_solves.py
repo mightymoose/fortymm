@@ -637,9 +637,18 @@ def restricting_reservation_key(
     the reservation it plays in, or ``None`` for a group that plays in none (#1387).
     The fixture takes that reservation's key (:func:`reservation_key`) when the hop
     lands on one, and the event-wide key (:func:`event_wide_reservation_key`)
-    otherwise — whether because it names no group at all (a single-elim or swiss
-    fixture, an rr-then-ko draw's knockout stage) or because its group has no
-    reservation (every group of an rr-then-ko event with no reservation booked).
+    otherwise — because its group has no reservation (every group of an event with
+    none booked, or a knockout stage's own group sharing the pool's un-mapped
+    position, #1484).
+
+    ``group_id`` itself stays ``uuid.UUID | None`` here for one caller only: the
+    schedule *preview* walks ``app.draws.PlannedFixture``s, which are plain,
+    un-persisted domain values and can still carry no group at all (see
+    ``PlannedFixture.group_id``'s own docstring). Every **persisted**
+    ``TournamentFixture`` names a real group (#1484's ``NOT NULL``), so the live
+    solve never actually calls this with ``None`` — the ``None`` branch below
+    exists so :func:`reservation_keys_by_group`'s map stays total over both
+    callers, not because a stored fixture can still be groupless.
 
     Total: exactly one key per fixture, never a set. Two groups that share a
     reservation resolve to one key, which is what keeps the CP-SAT interval

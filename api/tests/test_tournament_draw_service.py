@@ -113,10 +113,20 @@ async def _make_event(
         predicates=[],
         stages=stages,
     )
+    reservations = [RESERVATION_A, RESERVATION_B] if groups is None else groups
     stages[0].groups = event_groups(
-        [RESERVATION_A, RESERVATION_B] if groups is None else groups,
+        reservations,
         event=event,
         tournament=tournament,
+        # This file's tests deliberately seed a group per reservation, whatever the
+        # draw type — a raw ORM state #1484's floor no longer produces through any
+        # real route, but one several tests here still want directly (a multi-group
+        # cut). ``max(..., 1)`` is #1484's own floor, not this file's license: every
+        # stage holds at least one group now, so a caller passing ``groups=[]`` (no
+        # reservations) still gets the one group its stage requires, mapped to no
+        # reservation — never the zero-group, ``group_id IS NULL`` state #1484
+        # makes unrepresentable.
+        group_count=max(len(reservations), 1),
     )
     db.add(event)
     await db.commit()
@@ -203,12 +213,14 @@ async def test_owner_cut_of_a_single_elim_event_persists_the_bracket(
     default_league: League,
 ) -> None:
     """The second implemented draw type (ADR-0785): cutting a single-elim event no
-    longer raises ``UnsupportedDrawType`` — it persists a seeded bracket. Ungrouped, so
-    every fixture's ``group_id`` is ``NULL``, and unlike a round-robin cut the later
-    rounds are TBD (``NULL`` sides), filled by ``advance()`` as results land."""
+    longer raises ``UnsupportedDrawType`` — it persists a seeded bracket. Its one
+    stage holds its one group (#1484's floor), which every fixture names — mapped
+    to no reservation here — and unlike a round-robin cut the later rounds are TBD
+    (``NULL`` sides), filled by ``advance()`` as results land."""
     owner = await make_user(db_session, "owner-se-cut")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
-    # A single-elim event has no groups; the strategy ignores ``group_ids`` regardless.
+    # A single-elim event holds exactly one group, mapped to no reservation; the
+    # strategy ignores ``group_ids`` regardless, deferring to ``_sole_group``.
     event = await _make_event(
         db_session, tournament, draw_type=DrawType.single_elim, groups=[]
     )
@@ -225,8 +237,10 @@ async def test_owner_cut_of_a_single_elim_event_persists_the_bracket(
     assert len(result) == 4
     rows = await _fixture_rows(db_session, event_id)
     assert {f.id for f in result} == {r.id for r in rows}
-    # Ungrouped, one fixture in the final round, and nothing played yet.
-    assert all(r.group_id is None for r in rows)
+    # One group, shared by every fixture; one fixture in the final round, and
+    # nothing played yet.
+    (group_id,) = {r.group_id for r in rows}
+    assert group_id is not None
     assert sorted(r.round for r in rows) == [1, 2, 2, 3]
     assert all(r.winner_entry_id is None and r.match_id is None for r in rows)
     # Byes are absence and later rounds are TBD: unlike round-robin, not every fixture

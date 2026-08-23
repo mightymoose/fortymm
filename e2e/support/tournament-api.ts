@@ -189,6 +189,13 @@ export interface StoredReservation {
 export interface StoredGroup {
   readonly id: string
   readonly position: number
+  /** Which of this event's stages the group belongs to (ADR 20260823, #1484). Every
+   * stage now holds its own group rows, so `position` is unique only WITHIN one
+   * stage — an `rr-then-ko` event's knockout stage holds a group at `position: 0`
+   * too, sharing that number with the group stage's own first group. A caller that
+   * needs "the event's group-stage groups in order" must filter to one `stage_id`
+   * first (see `tournament-rr-then-ko.spec.ts`). */
+  readonly stage_id: string
   /** The reservation this group plays in, or `null` for a group that plays in none
    * (#1387) — the state a **reservation-less** event's one group is always in, since
    * #1483's floor mints a group whatever the reservation count. Its fixtures then fall
@@ -416,11 +423,14 @@ export interface SeededTournament extends CreatedTournament {
    * were sent. The only handle a spec has on a reservation id — what a future PATCH
    * would cite to keep the row. */
   readonly reservations: ReadonlyArray<StoredReservation>
-  /** The groups the server minted for those reservations, **in lockstep**, one per
-   * reservation and in the same order — **but never fewer than one** (#1483's floor).
-   * A seed that books nothing therefore reads back one group whose `reservation_id` is
-   * `null`. The id everything competitive is keyed by — a fixture's `group_id`, the
-   * draw's group sections, a standings table — and the order the draw must read in. */
+  /** The groups the server minted, from EVERY stage the event holds (ADR 20260823,
+   * #1484) — a non-composite draw type's own single stage's groups (one per
+   * reservation, but never fewer than one, #1483's floor), or, for `rr-then-ko`, its
+   * group stage's derived groups AND its knockout stage's own one, mixed together.
+   * A seed that books nothing therefore still reads back a group whose
+   * `reservation_id` is `null`. Filter on `stage_id` before reading `position` as an
+   * order — see `getEventStages`. The id everything competitive is keyed by — a
+   * fixture's `group_id`, the draw's group sections, a standings table. */
   readonly groups: ReadonlyArray<StoredGroup>
   /** The event's **first** group id — its only one under the default seed — so a spec
    * can scope its standings assertions without indexing `groups` itself.
@@ -668,17 +678,20 @@ export async function addEvent(
       `seeded ${reservations.length} reservations but the event stored ${created.reservations.length}`,
     )
   }
-  // The server owns the groups (ticket #1387, ADR 20260822). An `rr-then-ko` event
-  // derives `ceil(field / 5)` of them from its preview field — the cap, or 16 when
-  // uncapped — and every other draw type keeps one group per reservation, **but never
-  // fewer than one** (#1483's floor: a stage with no group row has no hop for the
-  // solver to reach a reservation through, so an event that books nothing still holds
-  // one group, mapped to none). A mismatch here means the server's rule moved, which no
-  // caller of this helper could ever observe from the reservations array alone.
+  // The server owns the groups (ticket #1387, ADR 20260822, ADR 20260823). Every
+  // stage now holds its own group rows (#1484) — an `rr-then-ko` event's group stage
+  // derives `ceil(field / 5)` of them from its preview field (the cap, or 16 when
+  // uncapped), and its knockout stage holds exactly ONE more, always — and every
+  // other draw type's one and only stage holds exactly one, decoupled from its
+  // reservation count entirely (#1483's floor: a stage with no group row has no hop
+  // for the solver to reach a reservation through, so an event that books nothing
+  // still holds one group, mapped to none). A mismatch here means the server's rule
+  // moved, which no caller of this helper could ever observe from the reservations
+  // array alone.
   const expectedGroups =
     (options.drawType ?? 'round-robin') === 'rr-then-ko'
-      ? Math.ceil((options.maxPlayers ?? 16) / 5)
-      : Math.max(reservations.length, 1)
+      ? Math.ceil((options.maxPlayers ?? 16) / 5) + 1
+      : 1
   if (created.groups.length !== expectedGroups) {
     throw new Error(
       `expected the event to mint ${expectedGroups} groups but it minted ${created.groups.length}`,
@@ -874,33 +887,75 @@ export async function getEventReservations(
   return event.reservations
 }
 
+/** One of an event's **stages** (ADR 20260815): its id and its `position` — 0 for a
+ * single-stage draw type's only stage, or an `rr-then-ko` event's group stage; 1 for
+ * its knockout stage. `getEventGroups`'s own `stage_id` resolves against this. */
+export interface StoredStage {
+  readonly id: string
+  readonly position: number
+}
+
 /**
- * Read an event's **groups** back off the tournament detail, **as stored** — the
- * competitive-face twin of `getEventReservations`.
+ * Read one event's **groups and stages** back off the tournament detail, **as
+ * stored**, in a single round trip — the shared fetch behind `getEventGroups` and
+ * `getEventStages` below, and a caller's own door onto both at once when it needs
+ * them together (as `tournament-group-order.spec.ts` and `tournament-rr-then-ko.spec.ts`
+ * do): fetching each separately would GET the identical `/tournaments/{id}` payload
+ * twice for data that already arrives together in one response.
  *
  * A group is never client-written, so there is no "did the server take the order"
- * question here the way there is for reservations — the server mints one group per
- * reservation, in lockstep, and stamps its `position` from the same list index. What a
- * caller *can* only learn here is the id everything competitive is keyed by: a
- * fixture's `group_id`, the draw's group sections, a standings table.
+ * question here the way there is for reservations — the server mints every stage's
+ * group rows from its own template entry (ADR 20260823, #1484), and stamps each
+ * group's `position` from its own stage's list index. **Every stage now**, not just
+ * the group stage: an `rr-then-ko` event's knockout stage has a group too, so
+ * `groups` holds rows from BOTH stages, mixed together — filter on `stage_id`
+ * (resolved against `stages`) before reading `position` as an order.
  */
-export async function getEventGroups(
+export async function getEventGroupsAndStages(
   viewer: Guest,
   tournamentId: string,
   eventId: string,
-): Promise<ReadonlyArray<StoredGroup>> {
+): Promise<{
+  groups: ReadonlyArray<StoredGroup>
+  stages: ReadonlyArray<StoredStage>
+}> {
   const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
   if (!res.ok()) {
     throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
   }
   const detail = (await res.json()) as {
-    events: ReadonlyArray<{ id: string; groups: ReadonlyArray<StoredGroup> }>
+    events: ReadonlyArray<{
+      id: string
+      groups: ReadonlyArray<StoredGroup>
+      stages: ReadonlyArray<StoredStage>
+    }>
   }
   const event = detail.events.find((e) => e.id === eventId)
   if (!event) {
     throw new Error(`no event ${eventId} on tournament ${tournamentId}`)
   }
-  return event.groups
+  return event
+}
+
+/** `getEventGroupsAndStages`'s groups alone, for a caller that has no use for the
+ * stages. */
+export async function getEventGroups(
+  viewer: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<ReadonlyArray<StoredGroup>> {
+  return (await getEventGroupsAndStages(viewer, tournamentId, eventId)).groups
+}
+
+/** `getEventGroupsAndStages`'s stages alone — the one way a caller of `getEventGroups`
+ * tells the group stage's groups apart from the knockout stage's (ADR 20260823,
+ * #1484): filter `groups` to the `stage_id` of the stage at `position: 0`. */
+export async function getEventStages(
+  viewer: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<ReadonlyArray<StoredStage>> {
+  return (await getEventGroupsAndStages(viewer, tournamentId, eventId)).stages
 }
 
 /**
@@ -996,11 +1051,19 @@ export interface FixtureTime {
 
 export interface FixtureDetail {
   readonly id: string
-  /** The group this fixture was drawn into, or `null` for an un-grouped one (a
-   * knockout slot). Read because the detail's fixtures arrive **ordered by their
-   * group's position** (ADR 20260801) — so the order these ids first appear in *is*
-   * the server's statement of the event's group order, before any client touches it. */
-  readonly group_id: string | null
+  /** Which of this event's stages the fixture belongs to (ADR 20260815) — the group
+   * stage or the knockout stage of an `rr-then-ko` draw, or the single stage of every
+   * other draw type. Read because a fixture's `group_id` no longer tells a group-stage
+   * fixture apart from a knockout one (ADR 20260823, #1484: every fixture is grouped
+   * now) — `stage_id` is the discriminator. */
+  readonly stage_id: string
+  /** The group this fixture was drawn into — never `null` since #1484: every stage
+   * holds a group, so a knockout fixture names one too, just not one any surface
+   * labels or ranks (that filter reads `stage_id`, not this). Read because the
+   * detail's fixtures arrive **ordered by their group's position within its own
+   * stage** (ADR 20260801) — so, WITHIN one stage's fixtures, the order these ids
+   * first appear in is the server's statement of that stage's group order. */
+  readonly group_id: string
   /** Which round of its draw the fixture belongs to, 1-based. The handle on a bracket's
    * **first round** — the only round of a freshly cut single-elim draw whose fixtures
    * have both sides, and therefore the only one the solver can place at all. */

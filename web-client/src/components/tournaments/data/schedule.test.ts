@@ -272,7 +272,7 @@ describe('buildSchedule', () => {
           drawType: 'rr-then-ko',
           slot: { date: '2026-06-14', start: '10:00', end: '16:00' },
           reservations: [],
-          groups: [{ id: 'grp-none', position: 0, reservationId: null }],
+          groups: [{ id: 'grp-none', position: 0, reservationId: null, stageId: 's-1' }],
           fixtures: [buildFixture({ id: 'x', groupId: 'grp-none' })],
         }),
       ],
@@ -296,8 +296,8 @@ describe('buildSchedule', () => {
             }),
           ],
           groups: [
-            { id: 'grp-0', position: 0, reservationId: 'res-a' },
-            { id: 'grp-1', position: 1, reservationId: 'res-a' },
+            { id: 'grp-0', position: 0, reservationId: 'res-a', stageId: 's-1' },
+            { id: 'grp-1', position: 1, reservationId: 'res-a', stageId: 's-1' },
           ],
           fixtures: [
             buildFixture({ id: 'x', groupId: 'grp-0' }),

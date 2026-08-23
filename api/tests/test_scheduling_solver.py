@@ -711,12 +711,19 @@ class TestInfeasibility:
         assert only.required_min <= only.available_min
 
     def test_overlapping_reservations_do_not_double_count_the_venue(self) -> None:
-        """An rr-then-ko event's shape: its group stage sits in a reservation, and its
-        knockout stage — which belongs to no reservation — sits in the event-wide
-        reservation, which covers the SAME tables over the SAME window (ADR
-        20260807 "a reservation restricts scheduling, it does not enable it"). Both
-        reservations describe one venue, so the day aggregate must describe that
-        venue once.
+        """This snapshot's shape, whatever real event produced it: two reservations
+        covering the SAME tables over the SAME window (ADR 20260807 "a reservation
+        restricts scheduling, it does not enable it") — one fixture resolves to
+        each. Both reservations describe one venue, so the day aggregate must
+        describe that venue once.
+
+        Constructed as a literal snapshot, not derived from a real event, because
+        the *pure* aggregation guard is what is under test, independent of which
+        draw shape can still produce two overlapping reservations at once (#1484: a
+        booked rr-then-ko event's group and knockout stages now share ONE
+        reservation rather than splitting across a booked one and the event-wide
+        one — see ``test_schedule_solve_service.py``'s
+        ``TestFixturesKeyOnTheReservation`` for that production path).
 
         ``available_min`` is director-facing — it renders as "there's enough
         total table-time (about Nh available)" — so summing the two reservations
