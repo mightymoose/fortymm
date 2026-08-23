@@ -119,15 +119,19 @@ jobs:
                 }
               }' > .rfp-pages.json
 
+          # The arriving tickets go to a file. Only their count becomes a step
+          # output. A ticket title is text someone else wrote, and a step output
+          # is substituted into the workflow by `${{ }}` before any shell runs,
+          # so passing a filename keeps every title out of that substitution.
+          # `.rfp-arrived.json` sits outside `.rfp-state/`, so it is not cached.
           python3 .github/scripts/ready_for_planning_diff.py \
-            .rfp-pages.json .rfp-state/column.json
+            .rfp-pages.json .rfp-state/column.json .rfp-arrived.json
 
       - name: Act on each ticket that arrived
-        if: steps.detect.outputs.arrived != '[]'
+        if: steps.detect.outputs.arrived_count != '0'
         env:
           GH_TOKEN: ${{ secrets.PROJECT_BOARD_TOKEN }}
           REPO: ${{ github.repository }}
-          ARRIVED: ${{ steps.detect.outputs.arrived }}
           DRY_RUN: ${{ inputs.dry_run }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -136,7 +140,7 @@ jobs:
           # This is the "do anything" hook. Today it posts one comment per
           # arriving ticket. Replace the body, or the whole step, with whatever
           # the arrival should really start.
-          echo "$ARRIVED" | jq -c '.[]' | while read -r item; do
+          jq -c '.[]' .rfp-arrived.json | while read -r item; do
             number="$(echo "$item" | jq -r '.number')"
             title="$(echo "$item" | jq -r '.title')"
 

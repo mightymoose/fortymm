@@ -9,12 +9,17 @@ only ever sees "is in the column now".
 
 Usage:
 
-    ready_for_planning_diff.py <pages.json> <state.json>
+    ready_for_planning_diff.py <pages.json> <state.json> <arrived.json>
+
+The arriving tickets go to a file, and only their count goes to GITHUB_OUTPUT.
+A ticket title is arbitrary text that someone else wrote, and a step output is
+substituted into the workflow by `${{ }}` before any shell sees it. Handing the
+next step a filename keeps every title out of that substitution.
 
 Environment:
 
     COLUMN               column name to watch (default: "Ready For Planning")
-    GITHUB_OUTPUT        written with `arrived=<json array>` when present
+    GITHUB_OUTPUT        written with `arrived_count=<n>` when present
     GITHUB_STEP_SUMMARY  written with a human-readable report when present
 
 Run it by hand against a saved `pages.json` to see what it would do.
@@ -97,9 +102,9 @@ def summarize(lines):
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         raise SystemExit(__doc__)
-    pages_path, state_path = sys.argv[1], sys.argv[2]
+    pages_path, state_path, arrived_path = sys.argv[1], sys.argv[2], sys.argv[3]
     column = os.environ.get("COLUMN") or "Ready For Planning"
 
     current = in_column(load_pages(pages_path), column)
@@ -120,7 +125,10 @@ def main():
     with open(state_path, "w") as handle:
         json.dump({"column": column, "items": sorted(current)}, handle, indent=2)
 
-    emit("arrived", json.dumps(arrived, separators=(",", ":")))
+    with open(arrived_path, "w") as handle:
+        json.dump(arrived, handle)
+
+    emit("arrived_count", str(len(arrived)))
 
     lines = [f"## {column}", ""]
     if seeding:
