@@ -33,6 +33,8 @@
 // its rows — so that is what a caller passes in (`SaveTarget`); the sentences live
 // here, once.
 
+import { z } from 'zod'
+
 import { validationFields, ApiError, extractDetail } from '@/api/client'
 
 import { conjoinWithAnd } from './helpers'
@@ -190,17 +192,25 @@ function isNoResponse(error: unknown): boolean {
  * never cast it. */
 const EVENT_VERSION_CONFLICT_CODE = 'event_version_conflict'
 
+/** The 409 body, **parsed rather than cast** (`.claude/rules/parse-at-boundaries.md`):
+ * an error body is untrusted input like any other. The same shape, and the same
+ * schema-not-cast treatment, as `entry-refusal.ts`'s `entryRefusalBodySchema` next
+ * door — the other coded-409 reader in this directory.
+ *
+ * `message` is deliberately not read here: the code is the contract, and the
+ * classifier keeps the sentence separately (through `extractDetail`, which every
+ * arm shares) rather than trusting this parse for it. */
+const eventVersionConflictBodySchema = z.object({
+  detail: z.object({ code: z.literal(EVENT_VERSION_CONFLICT_CODE) }),
+})
+
 /** True when a 409's body carries the coded event-version-conflict detail
  * (`{"detail": {"code": "event_version_conflict", "message": …}}`). Deliberately
  * NOT true of the event editor's other two 409s (the draw-type and group-set
  * freezes), whose `detail` is a bare string with no `code` at all — so this can
  * never steal them. */
 function hasEventVersionConflictCode(body: unknown): boolean {
-  if (!body || typeof body !== 'object') return false
-  const detail = (body as { detail?: unknown }).detail
-  if (!detail || typeof detail !== 'object') return false
-  const code = (detail as { code?: unknown }).code
-  return code === EVENT_VERSION_CONFLICT_CODE
+  return eventVersionConflictBodySchema.safeParse(body).success
 }
 
 /** Classify a rejected save. Nothing here reads a server *message* except the one
@@ -284,7 +294,13 @@ export function saveFailureMessage(
       // sentence, which stays on the value for completeness but is never read out
       // here. The event editor's banner offers the deliberate override
       // (`event-editor.tsx`); this sentence just says why the save didn't happen.
-      return 'This event has changed since you opened it — someone else may have saved a more recent edit.'
+      //
+      // `target.subject`, not a hardcoded "event", for the same reason every other
+      // arm here takes it: only the EVENT endpoint carries a version token today,
+      // but the noun is the one thing that would have to change if the tournament
+      // PATCH ever grew one, and a fixed noun is how a shared sentence stops being
+      // shared. Reads identically for `EVENT_SAVE_TARGET`, whose subject is "event".
+      return `This ${target.subject} has changed since you opened it — someone else may have saved a more recent edit.`
     case 'faulted':
       // The server ANSWERED — it just answered badly. So this says whose fault it is
       // (ours), and says nothing whatever about their connection: a 500 is not

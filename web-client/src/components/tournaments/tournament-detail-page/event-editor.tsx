@@ -253,15 +253,23 @@ export const EventEditor = ({
   // this sheet read the event at, or the fresh one the director just chose to
   // overwrite. Everything else — building the draft, closing only on success, keeping
   // the sheet and the failure otherwise — is one save, done twice for two reasons.
-  const performSave = async (formValues: EventFormValues, lockVersion: number) => {
+  // `lockVersion` is OPTIONAL, and resolved after the `!event` guard below rather
+  // than at the call site: the ordinary submit sends the version the sheet opened on,
+  // which is `event`'s own, and only the override has a different number to name. A
+  // caller-side `event?.lockVersion ?? 0` would put a `0` that can never reach the
+  // wire in front of a reader grepping for where a version comes from.
+  const performSave = async (formValues: EventFormValues, lockVersion?: number) => {
     if (!event) return
     // The event that was opened, with every editable field taken from the form —
     // `reservations` included, which is why this is an `EditedEvent` and not a
     // `TournamentEvent`: the form holds entries, and an entry is not a reservation.
     // Handing the read model's reservations back instead would re-send the ids on a
-    // create (a 422) and lose the added/kept distinction on a patch. `lockVersion` is
-    // the CALLER's to choose, not the frozen `event`'s — see the two call sites below.
-    const saved: EditedEvent = { ...event, ...formValues, lockVersion }
+    // create (a 422) and lose the added/kept distinction on a patch.
+    const saved: EditedEvent = {
+      ...event,
+      ...formValues,
+      lockVersion: lockVersion ?? event.lockVersion,
+    }
     setFailure(null)
     try {
       await onSave(saved)
@@ -280,10 +288,8 @@ export const EventEditor = ({
   const onInvalid = (formErrors: typeof errors) =>
     setSection(firstInvalidSection(formErrors) ?? 'basics')
 
-  const submit = form.handleSubmit(
-    (formValues) => performSave(formValues, event?.lockVersion ?? 0),
-    onInvalid,
-  )
+  // No version named: the ordinary save states the one the sheet was opened with.
+  const submit = form.handleSubmit((formValues) => performSave(formValues), onInvalid)
 
   /** The conflict banner's override (#1499): re-send the SAME draft — whatever the
    * director has typed since the refusal, this is a live form, not a frozen snapshot

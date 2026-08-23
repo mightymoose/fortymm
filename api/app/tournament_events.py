@@ -857,6 +857,22 @@ async def update_event(
     # Under the ``FOR UPDATE`` lock the owner-load above took, so no concurrent PATCH
     # can move the number between this comparison and the commit: the loser of a race
     # waits on the lock, then reads the winner's incremented version and is refused.
+    # Note that the atomicity here is INHERITED from that helper's ``with_for_update``
+    # rather than expressed locally — unlike ``MatchGameScore.version``, which is a
+    # conditional ``UPDATE … WHERE version = expected`` checked by ``rowcount`` and
+    # needs no lock. If the owner-load ever stops locking, this compare-then-assign
+    # becomes racy and nothing in ``api/tests`` would red.
+    #
+    # **The token moves on a PATCH of this event, and on nothing else.** Cutting or
+    # uncutting the draw rewrites the group set and flips both freezes without
+    # touching it (``tournament_draws.py``), so an editor left open across a cut still
+    # meets ``GroupSetFrozenError``/``DrawTypeFrozenError`` — the very "blamed for a
+    # field you never edited" outcome the ordering above exists to avoid, and with no
+    # override offered, since the client keys that off the conflict code alone. That
+    # is a DIAGNOSIS gap and not a lost update: groups, fixtures and entrants are all
+    # server-owned and read-only on this body, so a stale save cannot revert them.
+    # Widening the token to the draw verbs is a behaviour change on other endpoints
+    # and deliberately out of #1499's scope; see the pull request's review notes.
     if updates.lock_version != event.lock_version:
         raise EventVersionConflictError(current_version=event.lock_version)
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
@@ -913,11 +929,19 @@ async def update_event(
     # (a lazy relationship, not a plain column) — a lazy load in a sync context that
     # SQLAlchemy's async extension refuses with ``MissingGreenlet``.
     changes.pop("reservations", None)
-    # The concurrency token is popped for the same reason the four above are: the loop
-    # would ``setattr`` the CLIENT's number onto the column, so the version would stop
-    # moving and every subsequent stale write would be accepted — the bug this whole
-    # change exists to fix, reintroduced silently and with a green suite. The verb owns
-    # this column; a caller only ever states what it believes.
+    # The concurrency token, popped so the generic loop can never author a column the
+    # verb owns — a caller only ever states what it believes.
+    #
+    # Be honest about what this line does and does not buy, because the tempting
+    # summary is wrong. It is **redundant today**: the gate above has already refused
+    # every request whose ``lock_version`` differs from the stored one, so the
+    # ``setattr`` the pop removes would write the number the event already holds, and
+    # the increment below runs after the loop regardless. Deleting this line changes
+    # no behaviour and reds no test — Review checked, by deleting it and running the
+    # suite. It stays because it is free, and because it keeps the invariant true of
+    # the loop ITSELF rather than of two other lines that happen to bracket it: move
+    # the increment above the loop, or relax the gate to a comparison that admits more
+    # than equality, and without this pop the caller's number lands on the column.
     changes.pop("lock_version", None)
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is

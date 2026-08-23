@@ -526,8 +526,9 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // doesn't read `lockVersion` at all (`TournamentEventCreate` has no such field —
     // `extra="forbid"` would 422 it), and only `eventToUpdateBody` ever sends it, which
     // this draft can only reach once it exists on the server and carries a REAL version
-    // (`apiToEvent` overwrites this the moment the created event is read back). `0` is
-    // simply a value the type admits; any number would do the same job.
-    lockVersion: 0,
+    // (`apiToEvent` overwrites this the moment the created event is read back). `1` is
+    // what the server assigns a brand-new row, so this draft reads the same as the
+    // event it is about to become rather than inventing a second value for the concept.
+    lockVersion: 1,
   }
 }
