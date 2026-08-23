@@ -18,13 +18,6 @@
   line-height: 1.5;
   text-align: left;
 
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
-  --r-xl: 20px;
-  --r-pill: 999px;
-
   --dur-fast: 120ms;
   --dur-base: 200ms;
   --dur-slow: 360ms;
