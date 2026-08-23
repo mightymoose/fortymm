@@ -122,6 +122,14 @@ invariant.) This regen is the main session's job, not the `api` domain-expert
 subagent's — if you're that subagent, flag it in your summary instead of
 running it yourself (see `.claude/agents/api.md`).
 
+The regen boots its own throwaway API: `scripts/ensure-api-up.sh` binds a
+fresh ephemeral port every time and reuses nothing already listening, even on
+`:8000` — a listener there is not proof it came from this working tree (see
+`.claude/rules/verify-the-artifact-under-test.md`). `.githooks/pre-push` skips
+its drift check with a warning, rather than regenerating, whenever `api/` has
+uncommitted changes — booting from a dirty working tree would judge drift
+against code the push doesn't carry.
+
 ## Testing gotchas
 
 **`pytest` never runs the migrations.** The `engine` fixture in `tests/conftest.py`

@@ -129,6 +129,7 @@ jobs:
       - name: Regenerate OpenAPI types
         if: needs.changes.outputs.openapi != 'false'
         run: |
+          set -euo pipefail
           API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
           eval "$API_STATUS"
           trap '[ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
@@ -193,6 +194,7 @@ jobs:
       - name: Regenerate iOS OpenAPI types
         if: needs.changes.outputs.openapi != 'false'
         run: |
+          set -euo pipefail
           API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
           eval "$API_STATUS"
           TMP_SPEC=""

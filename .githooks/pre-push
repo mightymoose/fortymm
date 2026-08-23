@@ -27,10 +27,15 @@
 # does this for you). NOTE FOR WORKTREES: `core.hooksPath` set without
 # `--worktree` lands in the SHARED `.git/config`, so setting it from any one
 # worktree enables these hooks for the main checkout and every other worktree at
-# once — which is what we want here. The value is a RELATIVE path, and git
-# resolves a relative `core.hooksPath` against the top level of the *current*
-# working tree, so every worktree runs its own checked-out copy of this file
-# rather than the main checkout's.
+# once — which is what we want here. Whether that value is stored relative or
+# absolute depends on how it was set: a relative path resolves against the top
+# level of the *current* working tree, so each worktree would run its own
+# checked-out copy of this file. But `git config --get core.hooksPath` on this
+# repo returns an ABSOLUTE path, so every worktree instead runs the *main
+# checkout's* copy — a push from a worktree cannot verify an edit to this file
+# made in that worktree. Test hook changes by driving stdin directly (`echo
+# "<local ref> <sha> <remote ref> <remote sha>" | .githooks/pre-push`) or from
+# the main checkout.
 
 set -euo pipefail
 
@@ -140,6 +145,45 @@ if [ "$relevant" -ne 1 ]; then
 fi
 
 echo "pre-push: this push touches api/ or ios/openapi/ — checking generated OpenAPI types..." >&2
+
+# --- Refuse to judge drift against code the push does not carry -----------
+#
+# The check below boots the API from the WORKING TREE (ensure-api-up.sh runs
+# uvicorn with --app-dir pointed at api/ on disk) but compares the result
+# against HEAD (has_drift, below). Those match only when api/ is clean. A
+# dirty api/ would make the regenerated files reflect uncommitted edits, so a
+# passing push could carry code that doesn't match what was just verified —
+# and a failing one could block on drift the push doesn't actually contain.
+# Skip instead of guessing: CI's `verify` / `verify-ios` jobs are the
+# backstop, and they check out the committed tree.
+#
+# Same diff-against-HEAD shape as `has_drift` below ("what the push actually
+# sends"), and the same `is_relevant` filter as the push-diff check above —
+# reusing it, rather than a bare `api/` prefix test, is what keeps an
+# unrelated dirty `api/tests/*` or `api/CLAUDE.md` edit from disabling a check
+# that should still run.
+# Plain string, not an array — see the note on `drifted_files` below for why.
+dirty_relevant_files=""
+dirty_files="$(git diff --name-only HEAD -- api/ 2>/dev/null || true)"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if is_relevant "$f"; then
+    dirty_relevant_files="$dirty_relevant_files
+$f"
+  fi
+done <<EOF
+$dirty_files
+EOF
+
+if [ -n "$dirty_relevant_files" ]; then
+  echo "pre-push: WARNING — api/ has uncommitted changes that can move the" >&2
+  echo "          generated OpenAPI spec, so a regen right now would reflect" >&2
+  echo "          code this push does not carry. Skipping the drift check;" >&2
+  echo "          CI's 'verify' / 'verify-ios' jobs check the committed tree." >&2
+  echo "          Commit or stash the following and push again to check locally:" >&2
+  echo "$dirty_relevant_files" | sed '/^$/d; s/^/            - /' >&2
+  exit 0
+fi
 
 # --- Reach the toolchain mise.toml pins -----------------------------------
 #
@@ -266,8 +310,8 @@ fi
   echo
   echo " Skip just one half with SKIP_WEB_OPENAPI_CHECK=1 / SKIP_IOS_OPENAPI_CHECK=1."
   echo
-  echo " If the diff is not yours (e.g. unrelated uncommitted work under api/),"
-  echo " bypass with:  SKIP_OPENAPI_CHECK=1 git push"
+  echo " api/ was clean, so these types were regenerated from the committed"
+  echo " contents of api/ (HEAD) — this diff is real drift the push would carry."
   echo "================================================================"
 } >&2
 exit 1
