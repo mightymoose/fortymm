@@ -1190,7 +1190,7 @@ describe('entering and withdrawing, against the stateful mock store', () => {
   beforeEach(() => resetTournamentsStore())
 
   const TOURNAMENT = BAY_AREA_OPEN_ID
-  const EVENT = mockUuid(mockUuid('ev-u1500')) // seeded with nobody in it
+  const EVENT = mockUuid('ev-u1500') // seeded with nobody in it
 
   it('adds the entrant and increments the count; withdrawing reverses both', async () => {
     const { wrapper } = setupClient()
