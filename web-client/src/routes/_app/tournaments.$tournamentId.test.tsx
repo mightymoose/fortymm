@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildTournamentDetailRead,
+  buildTournamentEntrantRead,
   buildTournamentEventRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import { mockUuid } from '@/mocks/mock-uuid'
@@ -89,6 +90,9 @@ function renderRoute(initialEntry: string) {
       </QueryClientProvider>,
     ),
     router,
+    // Exposed so a test can force the background refetch every event mutation
+    // (and the realtime feed) causes — the thing the open editor must survive.
+    queryClient,
   }
 }
 
@@ -473,5 +477,79 @@ describe('tournament detail route — which event editor is open lives in the UR
     )
     expect(discardDialog()).not.toBeInTheDocument()
     expect(router.state.location.search).toEqual({})
+  })
+
+  it('survives a background refetch that CHANGES the open event, with the draft intact', async () => {
+    // Every event mutation invalidates the tournament, and the realtime feed does too,
+    // so a refetch under an open editor is ordinary. Resolving `?event=` against
+    // `tournament.events` on every render would hand the editor a new object whenever
+    // one came back — and `EventEditor` re-seeds its form on that object's identity,
+    // wiping the director's typing while they were typing it.
+    //
+    // ⚠️ The refetched event must really have CHANGED. React Query applies structural
+    // sharing, so a byte-identical payload comes back as the very same object and the
+    // re-seed never fires — a test built on an unchanged refetch passes against the
+    // naive implementation too, and proves nothing
+    // (`.claude/rules/verify-the-artifact-under-test.md`). Somebody entering the event
+    // is the ordinary way this happens.
+    const user = userEvent.setup()
+    let entrants: ReturnType<typeof buildTournamentEntrantRead>[] = []
+    let requests = 0
+    server.use(
+      http.get('*/v1/tournaments/:id', () => {
+        requests += 1
+        return HttpResponse.json(
+          buildTournamentDetailRead({
+            id: UNKNOWN_ID,
+            events: [
+              buildTournamentEventRead({
+                id: EVENT_ID,
+                tournament_id: UNKNOWN_ID,
+                name: 'Open Singles',
+                entrants,
+              }),
+            ],
+          }),
+        )
+      }),
+    )
+
+    const { queryClient } = renderRoute(
+      `/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`,
+    )
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'Half-typed name')
+
+    // Somebody enters the event, and the tournament is refetched under the open sheet.
+    entrants = [buildTournamentEntrantRead()]
+    const before = requests
+    await act(async () => {
+      await queryClient.invalidateQueries()
+    })
+    await waitFor(() => expect(requests).toBeGreaterThan(before))
+
+    // The changed payload landed and the draft is untouched.
+    expect(nameInput()).toHaveValue('Half-typed name')
+  })
+
+  it('deletes without stacking a discard confirmation on the delete confirmation', async () => {
+    // `onDelete` closes the editor BEFORE raising the delete confirmation. Asking the
+    // director to protect edits they have just asked to delete the event holding is a
+    // second dialog over the first, and the answer to one is not the answer to both.
+    const user = userEvent.setup()
+    mockTournament()
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}`)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    await user.clear(nameInput())
+    await user.type(nameInput(), 'About to be deleted')
+    await user.click(screen.getByRole('button', { name: 'Delete event' }))
+
+    // The delete confirmation, and only it.
+    expect(await screen.findByText('Delete event?')).toBeInTheDocument()
+    expect(discardDialog()).not.toBeInTheDocument()
   })
 })
