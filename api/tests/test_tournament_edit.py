@@ -32,6 +32,7 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -161,7 +162,14 @@ async def _draw_an_event(db: AsyncSession, tournament: Tournament) -> None:
     )
     db.add(event)
     await db.flush()
-    db.add(TournamentFixture(stage_id=stages[0].id, group_id=None, round=1, position=1))
+    # A single-elim stage still holds exactly one group (#1484's floor), so its
+    # fixtures' ``group_id`` is never NULL.
+    group = TournamentEventStageGroup(stage_id=stages[0].id, position=0)
+    db.add(group)
+    await db.flush()
+    db.add(
+        TournamentFixture(stage_id=stages[0].id, group_id=group.id, round=1, position=1)
+    )
     await db.commit()
 
 

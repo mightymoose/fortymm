@@ -40,12 +40,14 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentEventStage,
+    TournamentEventStageGroup,
     TournamentFixture,
     User,
 )
 from app.schemas.tournament import Address, TournamentEventCreate, TournamentEventUpdate
 from app.tournament_errors import DrawTypeFrozenError
 from app.tournament_event_stages import (
+    GroupCountSource,
     mint_stages,
     remint_stages_in_place,
     stage_template,
@@ -162,9 +164,10 @@ def _positions(
 
 async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     """Give ``event`` a fixture, which is all ``event_has_draw`` looks at — the same
-    minimal cut simulation ``test_tournament_events._add_cut_event`` uses, without a
-    real group to point the fixture at (single-elim/swiss fixtures carry no group
-    either).
+    minimal cut simulation ``test_tournament_events._add_cut_event`` uses. The
+    fixture names its stage's real group: every event write already materialises
+    one (#1484's floor), so ``group_id`` is never ``NULL`` and minting a second
+    row at the same ``(stage_id, position)`` would collide with it.
 
     Named by its stage 0, resolved through ``stage_id_at`` rather than
     ``event.stages[0]`` — not because ``TournamentEvent.stages`` would fail (it is
@@ -173,7 +176,15 @@ async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
     populated at all. The single-stage draw types this file drives never need
     position 1."""
     stage_id = await stage_id_at(db, event.id, 0)
-    db.add(TournamentFixture(stage_id=stage_id, group_id=None, round=1, position=1))
+    group_id = (
+        await db.execute(
+            select(TournamentEventStageGroup.id).where(
+                TournamentEventStageGroup.stage_id == stage_id,
+                TournamentEventStageGroup.position == 0,
+            )
+        )
+    ).scalar_one()
+    db.add(TournamentFixture(stage_id=stage_id, group_id=group_id, round=1, position=1))
     await db.commit()
 
 
@@ -183,18 +194,26 @@ async def _mark_drawn(db: AsyncSession, event: TournamentEvent) -> None:
 @pytest.mark.parametrize(
     ("draw_type", "expected"),
     [
-        (DrawType.round_robin, (DrawType.round_robin,)),
-        (DrawType.single_elim, (DrawType.single_elim,)),
-        (DrawType.swiss, (DrawType.swiss,)),
-        (DrawType.rr_then_ko, (DrawType.round_robin, DrawType.single_elim)),
+        (DrawType.round_robin, ((DrawType.round_robin, GroupCountSource.one),)),
+        (DrawType.single_elim, ((DrawType.single_elim, GroupCountSource.one),)),
+        (DrawType.swiss, ((DrawType.swiss, GroupCountSource.one),)),
+        (
+            DrawType.rr_then_ko,
+            (
+                (DrawType.round_robin, GroupCountSource.structural),
+                (DrawType.single_elim, GroupCountSource.one),
+            ),
+        ),
     ],
 )
 def test_stage_template_per_draw_type(
-    draw_type: DrawType, expected: tuple[DrawType, ...]
+    draw_type: DrawType, expected: tuple[tuple[DrawType, GroupCountSource], ...]
 ) -> None:
-    """Round robin, single elim and swiss are each their own one-stage template;
-    rr-then-ko is the only composite, and its two stages are round-robin then
-    single-elim, in that order (ADR 20260815 decision 3)."""
+    """Round robin, single elim and swiss are each their own one-stage template, and
+    hold exactly one group whatever the field (#1484); rr-then-ko is the only
+    composite, and its two stages are round-robin then single-elim, in that order
+    (ADR 20260815 decision 3) — the first deriving its count from the event's
+    structural settings, the second always exactly one (#1484 decision 1)."""
     assert stage_template(draw_type) == expected
 
 

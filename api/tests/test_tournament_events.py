@@ -40,6 +40,7 @@ from app.models import (
     User,
 )
 from app.schemas.tournament import Address, TournamentEventCreate, TournamentEventUpdate
+from app.tournament_draws import group_stage_ids
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
@@ -58,6 +59,7 @@ from tests._helpers import (
     event_groups,
     joined_to_reservation,
     make_user,
+    stage_id_at,
     venue_tables,
 )
 
@@ -291,8 +293,11 @@ def _reservation(name: str, **extra: Any) -> dict[str, Any]:
 
 
 def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
-    """``(name, position)`` per stored group, read off the ROWS in the relationship's
-    order (which is ``position`` ascending).
+    """``(name, position)`` per stored GROUP STAGE group, read off the ROWS in the
+    relationship's order (which is ``position`` ascending) — never ``event.groups``
+    whole: an ``rr-then-ko`` event's knockout stage holds its own single group too
+    (#1484), which shares this file's own reservations but is not what these
+    positions are about.
 
     Names, not ids, because a reservation named "Reservation C" sitting at position 0
     is the whole claim: it is the reservation the director put first, and it is not the
@@ -304,7 +309,12 @@ def _named_positions(event: TournamentEvent) -> list[tuple[str, int]]:
     """
     # The name is the RESERVATION's and the position is the GROUP's — the split the
     # projection reads back, spelled here against the rows.
-    return [(group.reservation.name, group.position) for group in event.groups]
+    stage_ids = group_stage_ids(event)
+    return [
+        (group.reservation.name, group.position)
+        for group in event.groups
+        if group.stage_id in stage_ids
+    ]
 
 
 async def test_create_positions_reservations_by_the_order_they_were_sent(
@@ -356,8 +366,12 @@ async def test_create_positions_reservations_by_the_order_they_were_sent(
         ("Reservation A", 1),
         ("Reservation B", 2),
     ]
-    # No two groups of one event share a position.
-    positions = [group.position for group in row.groups]
+    # No two groups of the GROUP STAGE share a position — never asked of the
+    # event's whole, widened ``groups`` (#1484): the knockout stage's own group is
+    # legitimately position 0 too, the same position the group stage's own group 1
+    # holds.
+    stage_ids = group_stage_ids(row)
+    positions = [group.position for group in row.groups if group.stage_id in stage_ids]
     assert len(set(positions)) == len(positions)
 
 
@@ -556,7 +570,11 @@ async def test_update_repositions_reservations_by_the_order_they_were_patched(
         ("Reservation C", 1),
         ("Reservation A", 2),
     ]
-    positions = [group.position for group in row.groups]
+    # No two groups of the GROUP STAGE share a position — see the sibling create
+    # test's comment for why this is scoped rather than asked of the whole,
+    # widened ``groups`` (#1484).
+    stage_ids = group_stage_ids(row)
+    positions = [group.position for group in row.groups if group.stage_id in stage_ids]
     assert len(set(positions)) == len(positions)
 
 
@@ -595,6 +613,13 @@ async def test_an_events_groups_and_reservations_are_rows_of_their_own(
     event_id = event.id
 
     db_session.expire_all()
+    # Scoped to the GROUP STAGE (position 0), not every stage: since #1484,
+    # ``create_event`` also materialises the knockout stage's own single group, which
+    # maps onto the SAME reservation one of the pool groups does
+    # (``position % reservation count`` puts both at ``0 % 2``) — reading every stage
+    # would return "Reservation A" twice and hide the claim this test makes about the
+    # pool groups specifically.
+    stage_id = await stage_id_at(db_session, event_id, 0)
     rows = (
         await db_session.execute(
             # The name and the window live on the reservation, the id and the position
@@ -613,7 +638,9 @@ async def test_an_events_groups_and_reservations_are_rows_of_their_own(
                     TournamentEventStage,
                     TournamentEventStage.id == TournamentEventStageGroup.stage_id,
                 )
-            ).order_by(TournamentEventStageGroup.position)
+            )
+            .where(TournamentEventStageGroup.stage_id == stage_id)
+            .order_by(TournamentEventStageGroup.position)
         )
     ).all()
 
@@ -899,6 +926,11 @@ async def _add_cut_event_with_two_groups(
         ],
         event=event,
         tournament=tournament,
+        # ``max_players=8`` above is pinned so the real structural count
+        # (``ceil(8 / 5) == 2``) matches the two reservations 1:1 (#1484) — this
+        # function's own docstring already explains the pin, this is what makes it
+        # true.
+        group_count=2,
     )
     stages[0].groups = groups
     db.add(event)
@@ -962,6 +994,11 @@ async def _add_legacy_cut_round_robin_event_with_two_reservations(
         ],
         event=event,
         tournament=tournament,
+        # The illegal-legacy state this helper exists to seed: two groups on a
+        # round-robin event, unreachable through any real route since #1484's floor
+        # (as well as #1482's reservation cap) — the direct ORM seed this whole
+        # function is for.
+        group_count=2,
     )
     stages[0].groups = groups
     db.add(event)
@@ -2017,7 +2054,12 @@ async def test_reservation_write_statement_count_does_not_drift(
         ),
     )
     event_id = event.id
-    reservation_ids = [group.reservation.id for group in event.groups]
+    # Deduped: the knockout stage's own group (#1484) shares Reservation A with the
+    # group stage's own group 1 (``0 % 2 == 0``), so ``event.groups`` names each
+    # reservation more than once — a PATCH must still cite each one exactly once.
+    reservation_ids = list(
+        dict.fromkeys(group.reservation.id for group in event.groups)
+    )
     await db_session.commit()
 
     async with counted_statements(engine) as (session, statements):

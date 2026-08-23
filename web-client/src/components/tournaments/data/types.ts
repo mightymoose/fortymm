@@ -104,13 +104,27 @@ export interface Group {
   id: string
   /** Where this group sits in its event's ordering — 0-based, and assigned by the
    * server (`groupLetter`, `./draw-structure`, is what turns this into `Group A`,
-   * `Group B`, …). */
+   * `Group B`, …). Unique only WITHIN a stage (ADR 20260823): since every stage now
+   * holds its own groups, an `rr-then-ko` event's knockout group shares `position: 0`
+   * with its group stage's first group. */
   position: number
   /** The reservation this group plays under — the id to look up in this same event's
    * `reservations` for its tables, its window and the name a director typed — or
    * `null` when it plays in none, in which case it renders without a window and
    * without tables. */
   reservationId: string | null
+  /** The **stage** (`Stage.id`) this group belongs to (ADR 20260823, "the wire says
+   * which stage a group belongs to") — resolved against this same event's `stages` at
+   * the point of use (`DrawIndex.stageById`, `./draw`), the same discipline
+   * `Fixture.stageId` already follows, and not cross-checked at this parse boundary
+   * for the same reason: every resolution site already has a defined, honest answer
+   * for a `stageId` naming no stage of this event (excluded from the panel, no
+   * label), so there is no plausible-but-wrong render for a boundary check to
+   * prevent — unlike `reservationId` above, whose dangling case WOULD silently
+   * resolve to the wrong window (`./groups`). Only a **group stage**'s groups are
+   * ever labelled, ranked, or given their own panel; a knockout stage's group is
+   * resolved through (for `fixtureReservation`) but never rendered as one. */
+  stageId: string
 }
 
 /** A slice of tables reserved for a window of time within an event — the **venue**

@@ -30,6 +30,7 @@ import {
 import { mockUuid } from '../../../src/mocks/mock-uuid'
 import { groupIdFor, groupsFor } from '../../../src/mocks/factories/tournaments/solver-sim'
 import { groupLetter } from '../../../src/components/tournaments/data/draw-structure'
+import { inPositionOrder } from '../../../src/components/tournaments/data/helpers'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
@@ -1252,10 +1253,24 @@ function drawOrder(entrants: TournamentEntrantRead[]): TournamentEntrantRead[] {
  * both stubs get that guarantee. What is left local is only how a row is read into the
  * planner's arguments. */
 function planEventDraw(event: TournamentEventRead): DrawPlan {
+  // `event.groups` is EVERY stage's groups now (ADR 20260823, #1484) — the group
+  // stage's AND, for `rr-then-ko`, the knockout stage's own. Only the group stage's
+  // own ids may reach `planDraw`'s `groupIds`: handing it the whole widened list would
+  // let the knockout stage's group leak into the snake as one more pool, corrupting
+  // the round-robin field it deals — the ticket's own "most dangerous consequence of
+  // the widening", and this stub's twin of `tournaments-store.ts`'s own
+  // `groupStageGroupIds` scoping (`src/mocks/tournaments-store.ts`).
+  const groupStageId = inPositionOrder(event.stages)[0]?.id
+  const groupStageGroupIds = event.groups
+    .filter((g) => g.stage_id === groupStageId)
+    .map((g) => g.id)
+  // The knockout stage's own group needs no threading of its own: `planDraw` derives
+  // exactly the id `groupsForEvent`/the real server mints for it directly from the
+  // stage id it already has (`structuralGroupIdFor`, unconditional).
   return planDraw(
     event.draw_type,
     drawOrder(event.entrants).map((e) => e.id),
-    event.groups.map((g) => g.id),
+    groupStageGroupIds,
     // **The event's own K** (ADR 20260727) — the count the director configured and the
     // PATCH stored, passed through unchanged. It is what sizes an `rr-then-ko` draw's
     // bracket (`P × K`), so substituting anything would cut a `P × 1` bracket for an event

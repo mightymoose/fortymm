@@ -59,7 +59,12 @@ from app.tournament_draw_settings import (
     draw_settings_row,
     store_draw_settings,
 )
-from app.tournament_draws import event_groups, event_has_draw, event_reservations
+from app.tournament_draws import (
+    event_groups,
+    event_has_draw,
+    event_reservations,
+    group_stage_ids,
+)
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
@@ -72,7 +77,7 @@ from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import (
     apply_event_reservations,
     materialise_event_groups,
-    materialise_groups,
+    materialise_stage_groups,
     ordered_reservations,
     stored_reservations,
 )
@@ -127,11 +132,12 @@ async def create_event(
     via ``model_dump``, the ``reservations`` as child **rows** through
     :func:`app.tournament_reservations.stored_reservations`, which composes them and
     stamps the server-assigned ``position`` the write shape has no field for, and the
-    ``groups`` as rows the server materialises from the draw type and the preview
-    field (:func:`app.tournament_reservations.materialise_groups`, #1387). Commits
-    and refreshes before returning. Never raises ``HTTPException`` — the caller adapts
-    each domain exception to its transport and shapes the read (a just-created event has
-    no entrants, draw or results, so those are all empty without a query).
+    ``groups`` of **every** stage the draw type's template mints as rows the server
+    materialises from that template and the preview field
+    (:func:`app.tournament_reservations.materialise_stage_groups`, #1387, #1484).
+    Commits and refreshes before returning. Never raises ``HTTPException`` — the caller
+    adapts each domain exception to its transport and shapes the read (a just-created
+    event has no entrants, draw or results, so those are all empty without a query).
 
     The tournament's ``league_id`` — already in hand from the owner-load — is returned
     beside the event so the adapter can shape the caller's ``entry_state`` (the ladder
@@ -173,20 +179,24 @@ async def create_event(
     # What a client submits is a RESERVATION, and the server owns the groups (#1387).
     # ``stored_reservations`` turns the WRITE shape, which carries no ``position``,
     # into rows that do, from each entry's index in the list this payload sent; they
-    # hang off the event. ``materialise_groups`` then mints the group rows onto the
-    # event's stage 0 (ADR 20260815, "Sequencing with #1338") against the PREVIEW
-    # field (the cap, or 16) — the one materialisation policy, the same function
-    # ``update_event`` reaches through ``materialise_event_groups`` on every later
-    # write, so a create and a patch cannot drift. Called on the stage directly rather
-    # than through that door because the stage is a fresh, unflushed object with no id
-    # to query by yet. Assigned onto the just-minted stage rather than passed into the
-    # ``TournamentEvent`` constructor above: ``TournamentEvent.groups`` is a read-only
-    # (VIEWONLY) association and would silently drop a write. ``event`` is already a
-    # live Python object at this point (just not flushed yet), which is all the
-    # reservations' own ``event`` relationship needs.
+    # hang off the event. ``materialise_stage_groups`` then mints the group rows onto
+    # EVERY stage the draw type's template mints (#1484) — not stage 0 alone, since an
+    # ``rr-then-ko`` event's knockout stage needs its own group row from the moment the
+    # event exists, or its first cut (with no intervening PATCH) would find nothing to
+    # hand its bracket — against the PREVIEW field (the cap, or 16). The one
+    # materialisation policy, the same function ``update_event`` reaches through
+    # ``materialise_event_groups`` on every later write (once #1484's Phase B widens
+    # that door past stage 0 too), so a create and a patch cannot drift. Called on the
+    # freshly-minted stages directly rather than through that door because they are
+    # unflushed objects with no id to query by yet. Assigned onto the just-minted
+    # stages rather than passed into the ``TournamentEvent`` constructor above:
+    # ``TournamentEvent.groups`` is a read-only (VIEWONLY) association and would
+    # silently drop a write. ``event`` is already a live Python object at this point
+    # (just not flushed yet), which is all the reservations' own ``event`` relationship
+    # needs.
     event.reservations = stored_reservations(event, tournament, payload.reservations)
-    materialise_groups(
-        stages[0],
+    materialise_stage_groups(
+        stages,
         event.reservations,
         draw_type=payload.draw_settings.draw_type,
         field_size=preview_field_size(payload.max_players),
@@ -514,9 +524,21 @@ async def _enforce_group_set_frozen(
         return
     existing = set(existing_order)
     incoming = set(incoming_order)
-    # The groups, in position order: the rows a refusal NAMES, by the label each
-    # position derives (ADR 20260808, ``group_label``) — a group has no name column.
-    current = sorted(event_groups(event), key=lambda group: group.position)
+    # The GROUP-STAGE groups, in position order: the rows a refusal NAMES, by the
+    # label each position derives (ADR 20260808, ``group_label``) — a group has no
+    # name column. Scoped to ``group_stage_ids`` (#1484): ``event_groups`` now spans
+    # every stage, and an ``rr-then-ko`` event's knockout stage's sole group shares
+    # ``position: 0`` with the group stage's first group — naming both would print
+    # two "Group A"s for one stranded reservation. Loses no refusal: a knockout
+    # group always maps to ``reservations[0]``, which the group stage's own
+    # position-0 group maps to as well (``position % reservation count``), so every
+    # reservation a knockout group could strand is already named through its
+    # group-stage sibling.
+    stage_ids = group_stage_ids(event)
+    current = sorted(
+        (group for group in event_groups(event) if group.stage_id in stage_ids),
+        key=lambda group: group.position,
+    )
     # A removed reservation strands every group mapped to it; those groups are the
     # ones named. An added reservation is COUNTED — it has no identity yet. An entry
     # citing an id this event does not have counts as an addition here — it is one in

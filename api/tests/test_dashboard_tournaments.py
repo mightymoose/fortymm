@@ -19,6 +19,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.dashboard_tournaments import build_tournament_panels
+from app.draws import seats_both_sides_at_cut
 from app.match_voiding import void_match
 from app.models import (
     Match,
@@ -952,11 +953,13 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
     """A two-stage event's round wording is a property of the **fixture's stage**, not
     of the event (ADR 20260727).
 
-    ``group_id IS NULL`` is already how the knockout stage is spelled everywhere else,
-    so ``_round_label`` reads the discriminator off the row: a grouped fixture is a
-    "Group match N", an ungrouped one a "Round N" — both vocabularies verbatim from
-    the one-stage draw types, because the same match must not read differently
-    depending on which event it happens to be in.
+    ``_round_label`` reads the discriminator off the fixture's own STAGE
+    (``seats_both_sides_at_cut``), never ``group_id`` — since #1484 a knockout stage
+    names its own group too, so ``group_id`` alone no longer tells a group-stage
+    fixture from a bracket one. A group-stage fixture is a "Group match N", a
+    knockout one a "Round N" — both vocabularies verbatim from the one-stage draw
+    types, because the same match must not read differently depending on which event
+    it happens to be in.
 
     Driven end to end: six players, two groups of three (the cut derives the count
     from the real field, #1387: ``ceil(6 / 5)``), top one out of each, so the group
@@ -1012,10 +1015,23 @@ async def test_an_rr_then_ko_panel_names_the_stage_each_fixture_is_in(
 
         # -- the group stage: a group match of the caller's is the focus, and it is a
         #    "Group match" (which round of the group's three is theirs first is the
-        #    round-robin pairing's business, not this test's).
-        groups = [f for f in await _fixture_rows(db_session, event["id"]) if f.group_id]
+        #    round-robin pairing's business, not this test's). Filtered by the
+        #    fixture's own STAGE (#1484: the knockout stage now names a group too, so
+        #    ``f.group_id`` alone no longer tells the two apart).
+        def _is_group_stage(fixture: TournamentFixture) -> bool:
+            return seats_both_sides_at_cut(fixture.stage.draw_type)
+
+        groups = [
+            f
+            for f in await _fixture_rows(db_session, event["id"])
+            if _is_group_stage(f)
+        ]
         await _call_fixtures(db_session, tournament_id, groups)
-        groups = [f for f in await _fixture_rows(db_session, event["id"]) if f.group_id]
+        groups = [
+            f
+            for f in await _fixture_rows(db_session, event["id"])
+            if _is_group_stage(f)
+        ]
         (panel,) = await _panels(client)
         (group_event,) = panel["events"]
         assert group_event["match"]["round_label"].startswith("Group match ")

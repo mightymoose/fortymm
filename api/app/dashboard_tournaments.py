@@ -337,18 +337,17 @@ def _build_event(
     )
     # The caller's group — but only a **group stage's** group. Asked of the fixture's
     # own stage (:func:`~app.draws.seats_both_sides_at_cut`), never of whether it names
-    # a group at all: since #1483 a single-elim or swiss fixture names its stage's
-    # group too, and that group is not a group the player is "in" — a bracket has no
-    # standings table to sit in and no group field to place in, so labelling the panel
-    # "Group A" would name both. This one pick feeds both readers below (the standings
-    # row the record is taken from, and the ``group_label`` rendered on the panel), so
-    # there is exactly one place the rule lives.
+    # a group at all: every fixture names one now (#1484), and a bracket's / swiss
+    # round's own group is not a group the player is "in" — a bracket has no standings
+    # table to sit in and no group field to place in, so labelling the panel "Group A"
+    # would name both. This one pick feeds both readers below (the standings row the
+    # record is taken from, and the ``group_label`` rendered on the panel), so there is
+    # exactly one place the rule lives.
     my_group_id = next(
         (
             f.group_id
             for f in my_fixtures
-            if f.group_id is not None
-            and _seats_both_sides_at_cut(stage_draw_types, f.stage_id)
+            if _seats_both_sides_at_cut(stage_draw_types, f.stage_id)
         ),
         None,
     )

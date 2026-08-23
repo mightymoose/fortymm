@@ -55,10 +55,15 @@ class TournamentFixture(Base):
     own stage's**". A plain FK to ``tournament_event_stage_groups.id`` would happily
     seat one stage's fixture in another stage's group, and that is the illegal state the
     ADR is about; it is unrepresentable here because the two tables share ``stage_id``
-    and the constraint requires it to agree. ``NULL`` means the draw is un-grouped —
-    single-elim, and the knockout stage of an rr-then-ko draw. (A composite FK with one
-    NULL member is satisfied vacuously under the SQL default MATCH SIMPLE, which is
-    exactly right: an un-grouped fixture names no group to check.)
+    and the constraint requires it to agree.
+
+    **``NOT NULL`` since #1484.** Every stage a draw type's template mints now holds
+    groups of its own — including a groups-then-knockout draw's knockout stage, which
+    used to hold none — so no fixture of any drawn event is un-grouped any more: a
+    single-elim or swiss stage's whole bracket/rounds are dealt into its one floor
+    group (#1483), and an ``rr-then-ko`` event's knockout stage is dealt into its own
+    single group. There is no longer a draw shape this column needs ``NULL`` to
+    describe.
 
     A fixture names its **stage**, not its event (ADR 20260815 decision 5) —
     ``event_id`` is dropped from this table entirely. The event is reachable through
@@ -70,14 +75,14 @@ class TournamentFixture(Base):
     methods expect).
 
     The ``UNIQUE (stage_id, group_id, round, position)`` below is the identity a re-cut
-    reconciles on, and it is declared **NULLS NOT DISTINCT** (Postgres 15+). Under the
-    default (NULLS DISTINCT) a ``NULL`` ``group_id`` would compare unequal to itself, so
-    an *un-grouped* draw — single-elim, every KO fixture — would have **no uniqueness
-    guard at all** and could persist the same ``(stage, round, position)`` twice. Since
-    ``NULL`` here is a real value in the domain ("this draw has no groups"), not a
-    missing one, it must be compared as one. Keying on ``stage_id`` rather than
-    ``event_id`` is also what makes the knockout stage's round numbering restarting at 1
-    fall out of the key, rather than needing to be a documented namespace rule.
+    reconciles on. It no longer needs **NULLS NOT DISTINCT** (Postgres 15+): that
+    clause existed only so the guard also covered an un-grouped draw, where
+    ``group_id`` was ``NULL`` for every row and the default (NULLS DISTINCT) would
+    compare each such ``NULL`` unequal to itself — no draw is un-grouped any more, so
+    the clause is gone with the state it existed for. Keying on ``stage_id`` rather
+    than ``event_id`` is also what makes the knockout stage's round numbering
+    restarting at 1 fall out of the key, rather than needing to be a documented
+    namespace rule.
     """
 
     __tablename__ = "tournament_fixtures"
@@ -111,16 +116,16 @@ class TournamentFixture(Base):
             deferrable=True,
             initially="DEFERRED",
         ),
-        # The identity of a fixture within its draw. NULLS NOT DISTINCT so the guard
-        # also covers un-grouped draws, where ``group_id`` is NULL for every row — see
-        # the class docstring.
+        # The identity of a fixture within its draw. No longer NULLS NOT DISTINCT
+        # (#1484): that existed only to cover an un-grouped draw, where ``group_id``
+        # was NULL for every row — see the class docstring. ``group_id`` is NOT NULL
+        # now, so a plain UNIQUE already compares every row.
         UniqueConstraint(
             "stage_id",
             "group_id",
             "round",
             "position",
             name="uq_tournament_fixtures_stage_id_group_id_round_position",
-            postgresql_nulls_not_distinct=True,
         ),
         # Every read of a draw is "the fixtures of this stage" — ``advance()`` loads
         # the whole set, and the detail BFF loads it per event (through its stages).
@@ -150,16 +155,15 @@ class TournamentFixture(Base):
         nullable=False,
     )
     #: Names a **group** of this fixture's own stage — half of the composite foreign key
-    #: declared above. ``NULL`` = the draw is un-grouped.
+    #: declared above. ``NOT NULL`` since #1484: every stage now holds groups, so every
+    #: fixture names one.
     #:
     #: The column name is deliberately still ``group_id``: it is the wire's own field
     #: name, and the two rename together or not at all (see the class docstring). What
     #: it points at is what moved. A ``uuid``, matching
     #: :attr:`~app.models.tournament_event_stage_group.TournamentEventStageGroup.id` —
     #: the column it references, and therefore the column whose type it *is*.
-    group_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    group_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     #: 1-based.
     round: Mapped[int] = mapped_column(Integer, nullable=False)
     #: 1-based within its round (and group, when grouped).

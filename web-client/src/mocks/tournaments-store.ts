@@ -31,7 +31,7 @@ import {
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
   groupIdFor,
-  groupsFor,
+  groupsForEvent,
   manualPlacementPin,
   NO_DRAWN_EVENTS_MESSAGE,
   queuedSolveRow,
@@ -39,6 +39,7 @@ import {
   SOLVE_TICK_DWELL_MS,
   solveRowInFlight,
   stepScheduleSolve,
+  structuralGroupIdFor,
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
 import {
@@ -49,7 +50,11 @@ import {
   LEAGUE_OFFICE_DRAFT_ID,
   SUMMER_SLAM_ID,
 } from '@/mocks/factories/tournaments/tournament-ids'
-import { conjoinWithAnd, hasVenue } from '@/components/tournaments/data/helpers'
+import {
+  conjoinWithAnd,
+  hasVenue,
+  inPositionOrder,
+} from '@/components/tournaments/data/helpers'
 import type { TournamentsNearMe } from '@/components/tournaments/data/api'
 import { groupLetter } from '@/components/tournaments/data/draw-structure'
 
@@ -483,7 +488,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 1,
     entry_a_id: cup(5),
@@ -495,7 +500,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 2,
     entry_a_id: cup(3),
@@ -507,7 +512,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 2,
     position: 1,
     entry_a_id: cup(2),
@@ -537,7 +542,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 1,
     entry_a_id: shield(1),
@@ -549,7 +554,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 2,
     entry_a_id: shield(2),
@@ -562,7 +567,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 2,
     position: 1,
     entry_a_id: shield(1),
@@ -648,19 +653,23 @@ function seed(): StoredTournament[] {
           // Deliberately empty: the designed empty entrants state, and the event
           // whose count a dev demo ticks from 0 to 1.
           //
-          // It is ALSO the seed's **uncuttable** event: round-robin with **NO GROUPS**,
-          // which this store refuses with "A round-robin draw needs at least one group."
-          // Do not give it reservations.
+          // It is ALSO the seed's **uncuttable** event — still, after #1484, just for a
+          // DIFFERENT reason than it used to be. Do not give it reservations: that is
+          // not what keeps it uncuttable any more.
           //
-          // ⚠️ A **known divergence from the real server**, and a deliberate one. Since
-          // #1483 the server mints a group for every stage whatever the reservation
-          // count, so it would cut this event rather than refuse it; this store derives
-          // its group count from `reservations.length` alone, unconditionally, and
-          // closing that gap is #1484's job (see `ev-two-stage-cut` below, where the
-          // same divergence is already written down). Until then this seed keeps a
-          // permanently-refused event for the dev demo, and the refusal it demonstrates
-          // is still one the domain writes — a caller reaching the round-robin strategy
-          // with no group gets exactly this sentence.
+          // The gap this comment used to name is now closed: since ADR 20260823 every
+          // standalone event's one stage holds exactly one group, whatever its
+          // reservation count (0 or 1, #1482's cap) — decoupled entirely, the same way
+          // #1483 already decoupled single-elim's and swiss's. So this event has ONE
+          // group on every read (`groupsForEvent`), never zero, and `planEventDraw`
+          // hands the cut that same one group id — never `event.reservations.map(...)`
+          // — so the read and the cut cannot disagree. `snakeRefusal`'s "needs at least
+          // one group" branch is now UNREACHABLE for a round-robin event: the count is
+          // never zero any more. This event stays uncuttable on its EMPTY FIELD instead:
+          // `snakedGroups([], 1)` deals nobody into that one group, so it fails the
+          // per-group floor and refuses "0 entrants across 1 group would leave a group
+          // with fewer than 2 entrants, who would have nobody to play." — the server's
+          // OTHER round-robin refusal, not the one this event used to demonstrate.
           id: mockUuid('ev-u1500'),
           tournament_id: BAY_AREA_OPEN_ID,
           name: 'U1500 Singles',
@@ -810,13 +819,27 @@ function seed(): StoredTournament[] {
           qualifiers_per_group: 2,
           rounds: null,
           // Matches the entrant count below, the same convention the Cup and the
-          // Shield use — this store derives its group count from `reservations.length`
-          // alone (`groupsFor`), unconditionally for every draw type, a pre-existing
-          // divergence from the real server's `ceil(field / 5)` (#1316/#1483/#1484
-          // territory). A field this fixture's TWO reservations would derive
-          // differently under that real formula (`ceil(9/5) = 2`, which happens to
-          // agree) is a coincidence worth keeping rather than a field far enough off
-          // to make the divergence more visible than it already is on `main`.
+          // Shield use — this event's GROUP STAGE still derives its count from
+          // `reservations.length` alone (`groupsForEvent`'s `rr-then-ko` arm), a
+          // pre-existing divergence from the real server's `ceil(field / 5)` that
+          // #1484 deliberately leaves open (see `groupsFor`'s own doc,
+          // `mocks/factories/tournaments/solver-sim.ts`: this mock has never modelled
+          // that formula, and closing it is not this ticket's job). A field this
+          // fixture's TWO reservations would derive differently under that real
+          // formula (`ceil(9/5) = 2`, which happens to agree) is a coincidence worth
+          // keeping rather than a field far enough off to make the divergence more
+          // visible than it already is on `main`.
+          //
+          // What #1484 DOES change here: this event's KNOCKOUT stage now also holds
+          // one group (`groupsForEvent`'s new stage-1 arm) — at `position: 0`, mapped
+          // to `reservations[0]` by the same `position % reservation count` rule its
+          // group stage's own position-0 group already follows, and with its own id
+          // (never `groupIdFor(reservations[0].id)`, which the group stage's group
+          // already holds). Nothing below adds knockout fixtures for it to confine —
+          // this event's `fixtures` stay group-stage-only, for the freeze mechanics
+          // this seed exists to cover — so the new group rides on the wire unused by
+          // any fixture, exactly as it would on a real event that has not been fully
+          // cut yet.
           max_players: 9,
           entry_fee: 20,
           timezone: 'America/Los_Angeles',
@@ -1356,14 +1379,16 @@ function entryState(event: StoredEvent): TournamentEventRead['entry_state'] {
 
 /** Project a stored event onto the wire shape, deriving the `entered` count from
  * the entrants — the one place the count comes from — the caller-aware `entry_state`
- * from the entrants and the seeded rating verdict, and `groups` from `reservations`
- * (`groupsFor`, ticket #1369). */
+ * from the entrants and the seeded rating verdict, and `groups` from the event's own
+ * stages and reservations (`groupsForEvent`, ADR 20260823 — every stage holds its own
+ * groups, decoupled from the reservation count except for an `rr-then-ko` event's
+ * group stage, which keeps deriving from `reservations.length` as it always has). */
 function readEvent(event: StoredEvent): TournamentEventRead {
   const { ineligible, ...wire } = event
   void ineligible
   return {
     ...wire,
-    groups: groupsFor(event.reservations),
+    groups: groupsForEvent(event),
     entered: event.entrants.length,
     entry_state: entryState(event),
   }
@@ -2911,13 +2936,26 @@ function planEventDraw(event: StoredEvent): DrawPlan {
   const ordered = [...event.entrants].sort(
     (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
   )
+  // The GROUP STAGE's own group ids — `groupsForEvent` (ADR 20260823), filtered to
+  // stage 0, never the raw reservation list: since this event's stages must agree
+  // with what `readEvent` shows for the SAME event (never a lying mock — the wire's
+  // `groups[]` and what the snake actually deals into must be the one derivation),
+  // and never the knockout stage's own group either — "the snake deals only into the
+  // stage being dealt" is this client's twin of the ticket's own most-dangerous-
+  // consequence guard. Stage 0 is every draw type's group stage (or its one and only
+  // stage, for the three that have no knockout stage to distinguish it from). The
+  // knockout stage's own group needs no threading of its own: `planDraw` derives
+  // exactly the same id `groupsForEvent` mints for it, both off the identical stage
+  // id (`structuralGroupIdFor`, unconditional — unlike the group stage's own group,
+  // which is `groupIdFor(reservation.id)` whenever a reservation exists).
+  const groupStageId = inPositionOrder(event.stages)[0]?.id
+  const groupStageGroupIds = groupsForEvent(event)
+    .filter((g) => g.stage_id === groupStageId)
+    .map((g) => g.id)
   return planDraw(
     event.draw_type,
     ordered.map((e) => e.id),
-    // The event's own GROUP ids (`groupIdFor`, derived from its reservations — this
-    // slice's 1:1, ticket #1369) — never the reservation ids themselves, which is what a
-    // fixture's `group_id` must end up naming.
-    event.reservations.map((r) => groupIdFor(r.id)),
+    groupStageGroupIds,
     // **The event's own K** (ADR 20260727) — the stored number, passed through unchanged.
     // `null` is the honest answer for a count-less draw type, and only the `rr-then-ko`
     // arm reads it at all; an `rr-then-ko` event always has one (its create/patch body is

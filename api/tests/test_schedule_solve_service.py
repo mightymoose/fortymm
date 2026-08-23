@@ -51,6 +51,7 @@ from sqlalchemy.sql import Executable
 
 from app import queue as queue_module
 from app import schedule_solves, scheduling
+from app.draws import seats_both_sides_at_cut
 from app.leagues import get_default_league
 from app.models import (
     DrawType,
@@ -197,12 +198,14 @@ async def _make_tournament(
     fixture with no match can never complete, and a draw seeded from results
     (``rr-then-ko``) can never advance past its first stage without one.
 
-    Passing ``reservations=[]`` is the un-grouped event the event-wide reservation
-    exists for (ADR "a reservation restricts scheduling, it does not enable it"):
-    no group row, so every fixture's ``group_id`` is NULL. It is spelled that
-    way at the call site, rather than hidden behind a named variant helper,
-    because in those tests the absent group is the whole subject — an explicit
-    empty list says so louder than a helper name does.
+    Passing ``reservations=[]`` is the event the event-wide reservation exists for
+    (ADR "a reservation restricts scheduling, it does not enable it"): its stage(s)
+    still hold their groups (#1483's floor, #1484's per-stage widening), each mapped
+    to NO reservation, so every one of its fixtures falls to the event-wide
+    reservation rather than a booked one. It is spelled that way at the call site,
+    rather than hidden behind a named variant helper, because in those tests the
+    absent reservation is the whole subject — an explicit empty list says so louder
+    than a helper name does.
     """
     owner = await make_user(db, f"director-{uuid.uuid4().hex[:8]}")
     league = await get_default_league(db)
@@ -255,9 +258,43 @@ async def _make_tournament(
         match_settings={"rated": False, "length_games": length_games},
         stages=stages,
     )
-    stages[0].groups = event_groups(
-        reservation_specs, event=event, tournament=tournament
+    pool_groups = event_groups(
+        reservation_specs,
+        event=event,
+        tournament=tournament,
+        # This module's tests seed a group per reservation, whatever the draw type —
+        # a raw ORM state #1484's floor no longer produces through any real route,
+        # but the one several tests here (this file's own confinement regression
+        # bed among them) still want directly. ``max(..., 1)`` mirrors
+        # ``event_groups``'s own pre-#1484 default AND #1483's floor: an empty
+        # ``reservations=[]`` still gets its one group, mapped to none, rather than
+        # the un-grouped state ``group_id`` no longer represents.
+        group_count=max(len(reservation_specs), 1),
     )
+    stages[0].groups = pool_groups
+    if draw_type is DrawType.rr_then_ko:
+        # The knockout stage's own group (#1484) — always exactly one, mapped onto
+        # the SAME reservation the pool's own position-0 group is (``position %
+        # reservation count`` puts both at ``0 % N``). Built from the pool groups'
+        # already-constructed reservation rows rather than a second
+        # ``event_groups`` call, which would mint a second, duplicate set of
+        # reservations instead of sharing these.
+        pool_reservations = [
+            group.reservation_link.reservation
+            for group in pool_groups
+            if group.reservation_link is not None
+        ]
+        target = pool_reservations[0] if pool_reservations else None
+        stages[1].groups = [
+            TournamentEventStageGroup(
+                position=0,
+                reservation_link=(
+                    TournamentEventGroupReservation(reservation=target)
+                    if target is not None
+                    else None
+                ),
+            )
+        ]
     db.add(event)
     await db.flush()
     # ``TournamentEvent.groups`` is a VIEWONLY association through the event's stage now
@@ -325,6 +362,14 @@ async def _fixtures_of(
         .scalars()
         .all()
     )
+
+
+def _is_knockout(fixture: TournamentFixture) -> bool:
+    """Whether ``fixture`` belongs to a stage that does NOT seat both sides at the
+    cut — a bracket or a swiss round, never a round-robin group stage (#1484:
+    every stage now names a real group of its own, so ``group_id is None`` no
+    longer tells the two apart)."""
+    return not seats_both_sides_at_cut(fixture.stage.draw_type)
 
 
 async def _solve_rows(
@@ -2352,53 +2397,6 @@ class TestEventWideReservation:
             assert resolved.reservation == "event"
             assert resolved.reservation_name == "Open Singles (whole venue)"
 
-    async def test_an_rr_then_ko_event_counts_its_venue_once(
-        self, db_session: AsyncSession
-    ) -> None:
-        """An rr-then-ko event carries BOTH reservations at once — a real, booked
-        one for its group stage, the event-wide one for its bracket — and they
-        cover the same two tables over the same eight hours.
-
-        The day aggregate behind ``no_single_cause`` is director-facing: it
-        renders as "there's enough total table-time (about Nh available)", beside
-        copy that already asserts the room exists. Summing the reservations would
-        report 32 table-hours at a venue that has 16, making a confident claim
-        more wrong. Two tables, 09:00 to 17:00: 960 table-minutes."""
-        tournament_id, event_id = await _make_tournament(
-            db_session,
-            entrants=6,
-            draw_type=DrawType.rr_then_ko,
-            qualifiers_per_group=2,
-        )
-
-        fixtures = await _fixtures_of(db_session, event_id)
-        # The shape the double-count needs: a grouped group stage and an
-        # un-grouped bracket in one event. Asserted from the fixture rows, so
-        # this reds if a later change stops the draw leaving its knockout
-        # un-grouped.
-        assert any(fixture.group_id is not None for fixture in fixtures)
-        assert any(fixture.group_id is None for fixture in fixtures)
-
-        inputs = await schedule_solves._load_solver_inputs(
-            db_session, tournament_id, now=BASE, lock=False
-        )
-        assert inputs is not None
-        reservation_key = await _solver_reservation_id(db_session, event_id)
-        event_wide_key = schedule_solves.event_wide_reservation_key(event_id)
-        by_id = {
-            reservation.id: reservation for reservation in inputs.snapshot.reservations
-        }
-        assert set(by_id) == {reservation_key, event_wide_key}
-        # They overlap wholesale — same tables, same window — which is why one
-        # venue must not be counted twice.
-        assert set(by_id[reservation_key].table_ids) == set(
-            by_id[event_wide_key].table_ids
-        )
-        assert by_id[reservation_key].window == by_id[event_wide_key].window
-
-        _required_min, available_min = scheduling._aggregate_capacity(inputs.snapshot)
-        assert available_min == 2 * 8 * 60
-
     async def test_a_fixture_with_a_side_still_unknown_stays_unplaced(
         self, db_session: AsyncSession
     ) -> None:
@@ -2449,26 +2447,19 @@ async def _make_groups_then_knockout_tournament(
     """A tournament whose one event is **round-robin-then-knockout**: two groups
     of three that genuinely restrict — Reservation A on table 1 in the morning,
     Reservation B on table 1 in the afternoon — and a knockout stage of four
-    qualifiers (two semis and a final) that belongs to no group at all.
+    qualifiers (two semis and a final) with its own group, position 0 of its own
+    stage.
 
-    The geometry is contrived, deliberately, so that a knockout **wrongly confined
-    to a group** is distinguishable from one placed over the event-wide
-    reservation. Both halves of that confinement are ruled out by a fact the
-    solver is forced to produce, because the objective's top tier is makespan:
+    #1484's mapping is derived, ``position % reservation_count``: the knockout
+    stage's sole group is also position 0, so it shares **Reservation A** with the
+    pool's own group 1 — ``0 % 2 == 0`` both times. That is the headline behavior
+    under test (#1348): the knockout is now genuinely confined to the reservation
+    its group maps to, on table 1, morning only — not left to float over the
+    event-wide window the way an un-grouped fixture used to.
 
-    * **The event opens at 08:00, an hour before the first group does.** Once the
-      groups are decided they leave the model, so the two semis are the whole of
-      it, and the earliest finish puts them in that opening hour — a time **no
-      group's window covers**.
-    * **Table 2 is reserved by no group**, since both groups share table 1. The
-      two semis have four distinct players, so the earliest finish plays them in
-      parallel, one table each — which puts one of them on a table **no group
-      holds**.
-
-    Both facts also arm the other half of the claim, the one about *grouped*
-    fixtures: a grouped fixture handed the event-wide reservation would be free
-    to take the idle second table, or the hour before its group opens, and
-    :func:`_assert_confined_to_its_group` reads exactly that.
+    **Table 2 is reserved by no group**, since both groups share table 1 — kept so
+    a build that regressed back to the event-wide reservation (whole catalogue,
+    whole day) would be distinguishable from one confined to Reservation A.
 
     Its group fixtures are **materialized into matches** before the return, as
     go-live does, because the knockout is seeded from *results*: a group's
@@ -2573,37 +2564,6 @@ def _assert_confined_to_its_group(
     )
 
 
-def _assert_no_group_would_have_allowed_it(
-    fixture: TournamentFixture,
-    reservations: dict[uuid.UUID, tuple[datetime, datetime, set[str]]],
-) -> None:
-    """An un-grouped fixture is placed where **no group of its event would have
-    allowed it** — the discriminating half of "a knockout does not inherit its
-    event's group windows" (ADR "a reservation restricts scheduling, it does not
-    enable it").
-
-    "Inside the event window, on a catalogue table" cannot say this on its own:
-    the event window contains every group window and the catalogue contains
-    every group's tables, so a fixture wrongly confined to a group satisfies
-    both. This asks the opposite question of each group in turn — could this
-    placement have come out of *your* reservation? — and every answer must be
-    no. ``_make_groups_then_knockout_tournament``'s geometry is what makes that
-    answerable: see its docstring."""
-    assert fixture.table_id is not None
-    assert fixture.scheduled_start is not None
-    end = fixture.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
-    for group_id, (window_start, window_end, tables) in reservations.items():
-        assert not (
-            fixture.table_id in tables
-            and window_start <= fixture.scheduled_start
-            and end <= window_end
-        ), (
-            f"placed on {fixture.table_id} at {fixture.scheduled_start}, which "
-            f"group {group_id} would have allowed — the event-wide reservation "
-            "is not distinguishable from that group's here"
-        )
-
-
 async def _score_and_complete(
     db: AsyncSession, fixture: TournamentFixture, *, winner_entry_id: uuid.UUID
 ) -> None:
@@ -2664,7 +2624,7 @@ async def _play_out_the_groups(db: AsyncSession, event_id: uuid.UUID) -> None:
     """
     by_group: defaultdict[uuid.UUID, list[TournamentFixture]] = defaultdict(list)
     for fixture in await _fixtures_of(db, event_id):
-        if fixture.group_id is not None:
+        if not _is_knockout(fixture):
             by_group[fixture.group_id].append(fixture)
     for group_fixtures in by_group.values():
         top = group_fixtures[0].entry_a_id
@@ -2700,7 +2660,12 @@ class TestFixturesKeyOnTheReservation:
         dictionaries and dedupe a duplicate silently, but the spec list does not,
         and two ``ScheduleReservation`` rows carrying one id double-count that
         reservation's table-minutes, so an infeasible reservation solves as
-        feasible. Nothing errors. A key assertion alone stays green against it."""
+        feasible. Nothing errors. A key assertion alone stays green against it.
+
+        With one booked reservation, the knockout stage's own group maps to it too
+        (#1484: ``position % reservation_count`` gives every stage's position-0
+        group ``reservations[0]``) — so this event has no event-wide reservation
+        left at all; three groups, one key."""
         tournament_id, event_id = await _make_tournament(
             db_session,
             entrants=8,
@@ -2708,7 +2673,11 @@ class TestFixturesKeyOnTheReservation:
             qualifiers_per_group=2,
         )
         fixtures = await _fixtures_of(db_session, event_id)
-        group_ids = {f.group_id for f in fixtures if f.group_id is not None}
+        # The GROUP stage's own groups (#1484: the knockout stage now names its own
+        # single group too, which shares this reservation rather than adding a
+        # second one — see below).
+        group_stage_ids = {str(f.id) for f in fixtures if not _is_knockout(f)}
+        group_ids = {f.group_id for f in fixtures if not _is_knockout(f)}
         assert len(group_ids) == 2, "eight entrants derive two groups (#1386)"
 
         inputs = await schedule_solves._load_solver_inputs(
@@ -2716,24 +2685,28 @@ class TestFixturesKeyOnTheReservation:
         )
         assert inputs is not None
         reservation_key = await _solver_reservation_id(db_session, event_id)
-        event_wide_key = schedule_solves.event_wide_reservation_key(event_id)
 
-        # One spec per reservation: the booked one and the bracket's event-wide one,
-        # and nothing else — counted, so a per-group duplicate reds here.
+        # One spec, one reservation: the booked one. No event-wide reservation is
+        # built at all, because every fixture — pool and knockout alike — resolves
+        # to the booked key (#1484 removes the bracket's last event-wide caller for
+        # a drawn, booked event).
         spec_ids = [r.id for r in inputs.snapshot.reservations]
-        assert sorted(spec_ids) == sorted([reservation_key, event_wide_key])
-        assert spec_ids.count(reservation_key) == 1
+        assert spec_ids == [reservation_key]
 
-        # Every group-stage fixture of both groups resolves to the one booked key.
-        group_stage = [
-            f for f in inputs.snapshot.fixtures if f.reservation_id != event_wide_key
-        ]
+        # Every fixture of both pool groups resolves to the one booked key.
+        group_stage = [f for f in inputs.snapshot.fixtures if f.id in group_stage_ids]
         assert group_stage, "the group stage reached the snapshot"
         assert {f.reservation_id for f in group_stage} == {reservation_key}
         assert len(group_stage) == 2 * len(list(combinations(range(4), 2)))
+        # The knockout stage's semis are still TBD (nobody has qualified), so the
+        # guard in test_a_fixture_with_a_side_still_unknown_stays_unplaced keeps
+        # them out of the snapshot entirely — they contribute no fixture here, only
+        # a group that maps to this same key (below).
+        assert all(f.id in group_stage_ids for f in inputs.snapshot.fixtures)
 
-        # The over-capacity reason names how many groups share the reservation, the
-        # cause a director acts on by adding a reservation.
+        # The over-capacity reason names how many groups share the reservation —
+        # the two pool groups plus the knockout's own — the cause a director acts
+        # on by adding a reservation.
         resolved = schedule_solves._resolve_reason(
             ReservationOverCapacity(
                 reservation_id=reservation_key,
@@ -2744,7 +2717,7 @@ class TestFixturesKeyOnTheReservation:
             inputs,
         )
         assert isinstance(resolved, ReservationOverCapacityRead)
-        assert resolved.group_count == 2
+        assert resolved.group_count == 3
         assert resolved.reservation == "booked"
 
     async def test_a_group_with_no_reservation_takes_the_event_wide_reservation(
@@ -2753,12 +2726,13 @@ class TestFixturesKeyOnTheReservation:
         """An rr-then-ko event with no reservation holds groups with none (#1387).
         Their fixtures name a group, so a site asking "does it name a group" took
         the group arm and asked for a key with no window. Asking "which reservation
-        restricts it" gives the event-wide one, as for an ungrouped fixture — and
-        the guard builds that reservation, so the lookup is total.
+        restricts it" gives the event-wide one, as for a group with no reservation —
+        and the guard builds that reservation, so the lookup is total.
 
-        The event holds both kinds of fixture at once: a group stage in groups with no
-        reservation, and a knockout stage naming no group. One event-wide reservation
-        serves both, and the guard builds exactly one."""
+        The event holds both kinds of fixture at once: a group stage in groups with
+        no reservation, and a knockout stage in its own group, also with no
+        reservation (#1484). One event-wide reservation serves both, and the guard
+        builds exactly one."""
         tournament_id, event_id = await _make_tournament(
             db_session,
             entrants=8,
@@ -2767,8 +2741,8 @@ class TestFixturesKeyOnTheReservation:
             reservations=[],
         )
         fixtures = await _fixtures_of(db_session, event_id)
-        assert any(f.group_id is not None for f in fixtures)
-        assert any(f.group_id is None for f in fixtures)
+        assert any(not _is_knockout(f) for f in fixtures)
+        assert any(_is_knockout(f) for f in fixtures)
 
         inputs = await schedule_solves._load_solver_inputs(
             db_session, tournament_id, now=BASE, lock=False
@@ -2793,7 +2767,9 @@ class TestFixturesKeyOnTheReservation:
         assert result.verdict in (Verdict.feasible, Verdict.optimal)
 
         # The event-wide reservation counts the groups with no reservation — the
-        # groups whose fixtures it holds — and is answered with the event's remedies.
+        # groups whose fixtures it holds: the group stage's two, plus the knockout
+        # stage's own (#1484 — the knockout now names a real group too, mapped here
+        # to no reservation same as the pool's).
         resolved = schedule_solves._resolve_reason(
             ReservationOverCapacity(
                 reservation_id=event_wide_key,
@@ -2804,45 +2780,28 @@ class TestFixturesKeyOnTheReservation:
             inputs,
         )
         assert isinstance(resolved, ReservationOverCapacityRead)
-        assert resolved.group_count == 2
+        assert resolved.group_count == 3
         assert resolved.reservation == "event"
 
-    async def test_an_event_wide_reservation_holding_only_a_knockout_counts_no_group(
-        self, db_session: AsyncSession
-    ) -> None:
-        """``group_count`` is total: for the event-wide reservation of an event whose
-        groups are all booked, the only fixtures it holds are the knockout stage's,
-        which belong to no group, so it reports 0 rather than an undefined count."""
-        tournament_id, event_id = await _make_tournament(
-            db_session,
-            entrants=6,
-            draw_type=DrawType.rr_then_ko,
-            qualifiers_per_group=2,
-        )
-        inputs = await schedule_solves._load_solver_inputs(
-            db_session, tournament_id, now=BASE, lock=False
-        )
-        assert inputs is not None
-        event_wide_key = schedule_solves.event_wide_reservation_key(event_id)
-        resolved = schedule_solves._resolve_reason(
-            ReservationOverCapacity(
-                reservation_id=event_wide_key,
-                required_min=600,
-                capacity_min=480,
-                table_count=2,
-            ),
-            inputs,
-        )
-        assert isinstance(resolved, ReservationOverCapacityRead)
-        assert resolved.group_count == 0
+    # `test_an_event_wide_reservation_holding_only_a_knockout_counts_no_group` is
+    # deleted, not fixed: it named a scenario — a booked rr-then-ko event whose
+    # knockout stage belongs to no group, so it falls to the event-wide reservation
+    # alone — that #1484 makes unreachable. The knockout stage now names its own
+    # real group (`position % reservation_count`), and with a real reservation
+    # booked that group resolves to it, same as the pool's; the event-wide
+    # reservation is built only when an event has none at all
+    # (`test_a_group_with_no_reservation_takes_the_event_wide_reservation`, above).
+    # Per the ticket's own Non-Goals: "This ticket removes their [the event-wide
+    # reservation's / `TournamentEvent.slot`'s] last caller for drawn events."
 
 
 class TestUnGroupedDrawShapes:
-    """The two un-grouped shapes that are **not** single-elim ride the same
-    event-wide reservation, with no further production change (ADR "a
-    reservation restricts scheduling, it does not enable it"): a swiss draw,
-    which is un-grouped end to end, and a round-robin-then-knockout draw,
-    whose second stage is.
+    """The two shapes whose fixtures ride the event-wide reservation by falling
+    into a group with no reservation, not by naming no group at all — a swiss
+    draw, whose sole floor group has no reservation booked, and a
+    round-robin-then-knockout draw, whose own knockout-stage group likewise has
+    none (#1483's floor, #1484's per-stage widening; ADR "a reservation
+    restricts scheduling, it does not enable it").
 
     These run the whole job through the queue and read the fixture ROWS back,
     rather than reading a snapshot: the claim is that these events' matches now
@@ -2858,7 +2817,10 @@ class TestUnGroupedDrawShapes:
         everything the event holds."""
         tournament_id, event_id = await _make_swiss_tournament(db_session)
         fixtures = await _fixtures_of(db_session, event_id)
-        assert all(fixture.group_id is None for fixture in fixtures)
+        # Swiss deals every fixture into its event's sole floor group (#1483) —
+        # one group, shared by every fixture, mapped to no reservation.
+        (group_id,) = {fixture.group_id for fixture in fixtures}
+        assert group_id is not None
         round_one = [fixture.id for fixture in fixtures if fixture.round == 1]
         round_two = [fixture for fixture in fixtures if fixture.round == 2]
         assert len(round_one) == 2  # four entrants, two pairings
@@ -2919,35 +2881,29 @@ class TestUnGroupedDrawShapes:
         so both states are asserted, on the persisted rows, either side of the
         completions.
 
-        Where the semis land is the other claim: on a table and at an hour **no
-        group of this event reserves**, which is the knockout not inheriting its
-        event's group windows. The groups stay confined to their own table and
-        their own half of the day throughout, so a builder that handed the
-        grouped fixtures the event-wide reservation would show up here too. The
-        seed's geometry is what makes both readable — see
-        ``_make_groups_then_knockout_tournament``.
+        Where the semis land is the other claim, and it is the ticket's headline
+        fix (#1348): the knockout stage now names its own group, which the derived
+        ``position % reservation_count`` mapping puts on **Reservation A** — the
+        same reservation the pool's own group 1 holds, since both are position 0.
+        So the semis are genuinely confined to Reservation A's table and window,
+        exactly as :func:`_assert_confined_to_its_group` already checks for a pool
+        fixture — not left to float over the event-wide reservation the way an
+        un-grouped fixture used to. Reservation A books only one table, so the two
+        semis cannot run in parallel: that serialization is the solver's per-table
+        no-overlap constraint doing its job once the group mapping has already
+        confined both fixtures to it, which is the second half of the claim.
         """
         tournament_id, event_id = await _make_groups_then_knockout_tournament(
             db_session
         )
         reservations = await _group_reservation_windows(db_session, event_id)
-        catalogue = set(await table_ids_of(db_session, tournament_id))
         fixtures = await _fixtures_of(db_session, event_id)
-        grouped = [fixture.id for fixture in fixtures if fixture.group_id is not None]
-        knockout = [fixture for fixture in fixtures if fixture.group_id is None]
+        grouped = [fixture.id for fixture in fixtures if not _is_knockout(fixture)]
+        knockout = [fixture for fixture in fixtures if _is_knockout(fixture)]
         semis = [fixture.id for fixture in knockout if fixture.round == 1]
         (final,) = [fixture.id for fixture in knockout if fixture.round == 2]
         assert len(grouped) == 6  # two groups of three, three pairings each
         assert len(semis) == 2  # four qualifiers: two semi-finals and a final
-        reserved_tables = {
-            table_id
-            for _start, _end, tables in reservations.values()
-            for table_id in tables
-        }
-        assert reserved_tables < catalogue, (
-            "the seed must leave a table no group reserves, or 'the semis took "
-            "a table no group holds' is not a claim this test can make"
-        )
         assert all(
             fixture.entry_a_id is None and fixture.entry_b_id is None
             for fixture in knockout
@@ -3003,24 +2959,36 @@ class TestUnGroupedDrawShapes:
         after = {
             fixture.id: fixture for fixture in await _fixtures_of(db_session, event_id)
         }
-        event_start = datetime(2030, 1, 1, 8, 0, tzinfo=VENUE_TZ)
-        event_end = datetime(2030, 1, 1, 19, 0, tzinfo=VENUE_TZ)
         for fixture_id in semis:
-            semi = after[fixture_id]
-            assert semi.table_id in catalogue
-            assert semi.scheduled_start is not None
-            assert event_start <= semi.scheduled_start
-            assert (
-                semi.scheduled_start + timedelta(minutes=scheduling.match_minutes(3))
-                <= event_end
+            # The whole of the confinement claim: on Reservation A's table, inside
+            # Reservation A's window — the same reservation group 1 holds, because
+            # the knockout's own group is position 0 too.
+            _assert_confined_to_its_group(after[fixture_id], reservations)
+        # Both semis' group is the knockout stage's own — one group, so one
+        # reservation, so (checked next) one table between the two of them.
+        (knockout_group_id,) = {after[fixture_id].group_id for fixture_id in semis}
+        _window_start, _window_end, knockout_tables = reservations[knockout_group_id]
+        assert len(knockout_tables) == 1, (
+            "Reservation A books exactly one table — the seed's premise for "
+            "proving the semis serialize rather than run in parallel"
+        )
+        assert {after[fixture_id].table_id for fixture_id in semis} == knockout_tables
+        # One table between them: the solver's per-table no-overlap is what
+        # actually keeps the two semis apart, now that the group mapping alone
+        # already confines both to it.
+        windows = sorted(
+            (
+                after[fixture_id].scheduled_start,
+                after[fixture_id].scheduled_start
+                + timedelta(minutes=scheduling.match_minutes(3)),
             )
-            # The whole of the confinement claim: inside the event's own
-            # reservation, and inside none of its groups'.
-            _assert_no_group_would_have_allowed_it(semi, reservations)
-        # The pair together takes a table no group reserves — the seed's idle
-        # second one. A knockout confined to a group has one table between the
-        # two semis, so it could only ever have played them one after the other.
-        assert {after[fixture_id].table_id for fixture_id in semis} == catalogue
+            for fixture_id in semis
+            if after[fixture_id].scheduled_start is not None
+        )
+        assert len(windows) == 2
+        assert windows[0][1] <= windows[1][0], (
+            "one shared table forces the semis to run one after another"
+        )
         # The final's feeders are the semis, which nobody has played: still TBD,
         # so still unplaced — in the very same solve that placed the semis.
         assert after[final].entry_a_id is None and after[final].entry_b_id is None

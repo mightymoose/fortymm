@@ -27,6 +27,18 @@
 // genuinely allows a knockout fixture that names no group. Reject-unknown here and
 // tolerate-unknown there are not in tension: one is a wire invariant the server
 // guarantees and never violates; the other is a real, reachable domain state.
+//
+// `stage_id` (ADR 20260823) is parsed here too, but deliberately joins the SECOND
+// camp, not the first: it is `Fixture.stageId`'s sibling, not `reservation_id`'s. Both
+// are resolved against `event.stages` at the point of use (`DrawIndex.stageById`,
+// `./draw`), and both resolution sites already have a defined, honest answer for an id
+// that names no stage of this event — excluded from the group-stage panel, no label,
+// same fallback `fixtureGroupLabel` gives an orphaned fixture. `reservation_id` is
+// cross-checked HERE because a dangling one would silently render a *plausible but
+// wrong* window (a group whose id happens to collide with another reservation); a
+// dangling `stage_id` has no such failure mode to guard against, so adding the check
+// would buy nothing a reviewer couldn't already see at the (already-guarded)
+// resolution site.
 
 import { z } from 'zod'
 
@@ -44,6 +56,7 @@ const groupWireSchema = z.object({
   id: z.string(),
   position: z.number().int(),
   reservation_id: z.string().nullable(),
+  stage_id: z.string(),
 })
 
 /** The wire shape (`Reservation`, the read model): everything a client wrote
@@ -89,6 +102,7 @@ const groupsAndReservationsWireSchema = z
           id: g.id,
           position: g.position,
           reservationId: g.reservation_id,
+          stageId: g.stage_id,
         }),
       ),
       reservations: value.reservations.map(

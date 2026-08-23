@@ -32,6 +32,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -544,9 +545,15 @@ async def test_delete_of_a_tournament_whose_fixture_is_placed_still_removes_it(
     )
     db_session.add(event)
     await db_session.commit()
+    # A round-robin stage holds exactly one group (#1484's floor), which its
+    # fixture's ``group_id`` — NOT NULL — must name.
+    group = TournamentEventStageGroup(stage_id=stages[0].id, position=0)
+    db_session.add(group)
+    await db_session.flush()
     db_session.add(
         TournamentFixture(
             stage_id=stages[0].id,
+            group_id=group.id,
             round=1,
             position=1,
             table_id=str(tournament.tables[0].id),
@@ -749,8 +756,16 @@ async def _add_event(
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
+    # This helper's own contract is "however many groups ``group_count`` says",
+    # including zero — a state no real materialisation produces since #1483's floor,
+    # but one this file's snake-refusal tests deliberately construct. So the
+    # reservation list AND the group count are both driven by it explicitly, rather
+    # than leaning on ``event_groups``'s new one-group default (#1484).
     stages[0].groups = event_groups(
-        [{} for _ in range(group_count)], event=event, tournament=tournament
+        [{} for _ in range(group_count)],
+        event=event,
+        tournament=tournament,
+        group_count=group_count,
     )
     db.add(event)
     # Committed, not merely flushed: ``created_at`` is a server-side ``now()``

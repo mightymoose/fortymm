@@ -5,7 +5,7 @@ import { TournamentDetailPage } from '../page-objects/tournament-detail.page'
 import { guestFromContext } from '../support/match-api'
 import { grantBetaTester } from '../support/rbac-grant'
 import {
-  getEventGroups,
+  getEventGroupsAndStages,
   getEventReservations,
   getScheduleDetail,
   groupLabel,
@@ -118,7 +118,10 @@ function sortedByCodepoint(ids: ReadonlyArray<string>): string[] {
  * here, since deriving it honestly would mean re-deriving the bracket's own bye
  * arithmetic (`_bracket_size`, `_knockout_fixtures` in `api/app/draws.py`) for a fact
  * this spec's subject (group order) has no use for. What it asserts instead is the
- * group-stage fixture count alone — the fixtures whose `group_id` is not `null`. */
+ * group-stage fixture count alone — the fixtures whose `stage_id` names the event's
+ * GROUP stage (position 0), never the knockout stage's (ADR 20260823, #1484: every
+ * fixture of both stages now names a real, non-null `group_id`, so that column no
+ * longer tells them apart). */
 const GROUP_STAGE_FIXTURES_PER_GROUP = 10
 const GROUP_STAGE_FIXTURE_COUNT = GROUP_STAGE_FIXTURES_PER_GROUP * RESERVATION_COUNT
 
@@ -249,7 +252,20 @@ test.describe('Tournament — six-group rr-then-ko draw order', () => {
       },
     )
     const reservationIds = reservations.map((reservation) => reservation.id)
-    const groupIds = groups.map((group) => group.id)
+    // `groups` carries EVERY stage's rows now (ADR 20260823, #1484) — this
+    // `rr-then-ko` event's six group-stage groups AND its knockout stage's own one,
+    // mixed together. Scoped to the group stage (position 0) before this spec's
+    // subject — group ORDER — is asked about it; the knockout stage's single group
+    // has no order of its own to be wrong about.
+    const { stages, groups: storedGroupsBeforeCut } = await getEventGroupsAndStages(
+      director,
+      tournamentId,
+      eventId,
+    )
+    const groupStageId = [...stages].sort((a, b) => a.position - b.position)[0]!.id
+    const groupIds = groups
+      .filter((group) => group.stage_id === groupStageId)
+      .map((group) => group.id)
 
     // The fixture's own falsification guard, and it can only be asked once the ids
     // exist: if the minted ids happened to sort the way the positions do, every
@@ -273,7 +289,14 @@ test.describe('Tournament — six-group rr-then-ko draw order', () => {
     expect(storedReservations.map((reservation) => reservation.position)).toEqual(
       RESERVATIONS.map((_, index) => index),
     )
-    const storedGroups = await getEventGroups(director, tournamentId, eventId)
+    // Scoped to the GROUP STAGE (`groupStageId`, resolved above) — the fetch above
+    // returns every stage's rows now (ADR 20260823, #1484), and this `rr-then-ko`
+    // event's knockout stage holds one more, at `position: 0`, sharing that number
+    // with the group stage's own first group. Reused from the combined fetch above
+    // rather than a second round trip: nothing mutates the event between them.
+    const storedGroups = storedGroupsBeforeCut.filter(
+      (group) => group.stage_id === groupStageId,
+    )
     expect(storedGroups.map((group) => group.id)).toEqual(groupIds)
     expect(storedGroups.map((group) => group.position)).toEqual(
       RESERVATIONS.map((_, index) => index),
@@ -337,23 +360,24 @@ test.describe('Tournament — six-group rr-then-ko draw order', () => {
 
     // ----- 2. and the WIRE carried that order to get here ---------------------
     // Read last, of the draw the browser just cut: the detail's fixtures come back
-    // ordered by their group's position (knockout fixtures, `group_id: null`, sort
-    // last), so the group ids in first-appearance order are the server's own statement
-    // of the event's group order — the one the page above rendered.
+    // ordered by their group's position WITHIN its own stage (knockout fixtures sort
+    // after every group-stage one, ADR 20260801's own ordering), so the GROUP STAGE's
+    // group ids in first-appearance order are the server's own statement of the
+    // event's group order — the one the page above rendered.
     const schedule = await getScheduleDetail(director, tournamentId)
     const fixtures = schedule.events.find((e) => e.id === eventId)?.fixtures ?? []
     // Group-stage fixtures only — `rr-then-ko` also cuts the knockout bracket upfront in
     // the same stroke (ADR "rr-then-ko cuts both stages upfront"), and this spec's
     // subject is group order, not the bracket's own bye arithmetic. See
-    // `GROUP_STAGE_FIXTURE_COUNT`.
-    const groupStageFixtures = fixtures.filter((fixture) => fixture.group_id !== null)
+    // `GROUP_STAGE_FIXTURE_COUNT`. Scoped by `stage_id` (`groupStageId`, resolved
+    // above), never `group_id`, which no longer tells the two stages apart (ADR
+    // 20260823, #1484: every fixture of both stages now names a real group).
+    const groupStageFixtures = fixtures.filter(
+      (fixture) => fixture.stage_id === groupStageId,
+    )
     expect(groupStageFixtures).toHaveLength(GROUP_STAGE_FIXTURE_COUNT)
     const groupIdsOnTheWire = [
-      ...new Set(
-        fixtures.flatMap((fixture) =>
-          fixture.group_id === null ? [] : [fixture.group_id],
-        ),
-      ),
+      ...new Set(groupStageFixtures.map((fixture) => fixture.group_id)),
     ]
     expect(groupIdsOnTheWire).toEqual(groupIds)
 

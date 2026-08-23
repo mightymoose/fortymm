@@ -1165,7 +1165,9 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
                 TournamentFixtureRead(
                     id=uuid.uuid4(),
                     stage_id=uuid.uuid4(),
-                    group_id=None,
+                    # A swiss stage's sole group (#1484) — no group-related claim is
+                    # under test here, so a fresh literal stands in.
+                    group_id=uuid.uuid4(),
                     round=1,
                     position=1,
                     entry_a_id=entry_a_id,
@@ -1189,7 +1191,9 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
                     TournamentFixture(
                         id=uuid.uuid4(),
                         stage_id=uuid.uuid4(),
-                        group_id=None,
+                        # A swiss stage's sole group (#1484) — no group-related claim
+                        # is under test here, so a fresh literal stands in.
+                        group_id=uuid.uuid4(),
                         round=1,
                         position=1,
                         entry_a_id=entry_a_id,
@@ -1256,7 +1260,9 @@ def _row(
         # A swiss event has exactly one stage; every row this helper builds belongs to
         # it, so a fixed literal stands in for the real stage id.
         stage_id=uuid.UUID(int=1),
-        group_id=None,
+        # And its stage holds exactly one group (#1484's floor) — every row this
+        # helper builds belongs to it too, so a fixed literal stands in here as well.
+        group_id=uuid.UUID(int=2),
         round=round_number,
         position=position,
         entry_a_id=_entry(pairing[0]) if pairing else None,

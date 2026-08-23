@@ -570,8 +570,17 @@ class TestStrategyRegistry:
         that can fail when the field comes back, and it is what stops the next strategy
         to land from branching on ``config.draw_type`` in the belief that it is
         authoritative.
+
+        ``knockout_group_id`` (#1484) is not the same kind of field and does not
+        reopen this finding: it is not a copy of ``draw_type``, it is read by exactly
+        one strategy (``RrThenKoStrategy``, the only one with a knockout stage to
+        name), and it is genuinely load-bearing — ``_knockout_fixtures`` uses it to
+        confine the bracket to its own stage's group rather than the group stage's.
         """
-        assert [field.name for field in dataclasses.fields(DrawConfig)] == ["group_ids"]
+        assert [field.name for field in dataclasses.fields(DrawConfig)] == [
+            "group_ids",
+            "knockout_group_id",
+        ]
 
 
 class TestRoundRobinCut:

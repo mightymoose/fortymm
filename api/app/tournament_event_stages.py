@@ -41,14 +41,41 @@ moved, the freeze above has already proven the event has no draw — it would ha
 otherwise — so this gate needs no COUNT of its own to establish that.
 """
 
+import enum
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DrawType, TournamentEvent, TournamentEventStage
 
 
-def stage_template(draw_type: DrawType) -> tuple[DrawType, ...]:
-    """The stage sequence ``draw_type`` mints (ADR 20260815 decision 3).
+class GroupCountSource(enum.Enum):
+    """Where a stage's group count comes from (#1484, ADR 20260815 decision 3's
+    sibling) — the fact :func:`stage_template` grows per position, alongside the
+    stage's own ``draw_type``.
+
+    ``group_count_for`` (``app.tournament_reservations``) cannot key its answer on
+    either the *event's* draw type or the *stage's own* — an ``rr-then-ko`` event's
+    stage 0 and a standalone ``round-robin`` event's only stage are both a
+    ``round_robin`` component, and they hold different counts (``ceil(field / 5)``
+    against exactly one). The stage template is the one place that already knows
+    which stage of which draw type it is minting, so it is where this declaration
+    belongs.
+    """
+
+    #: Derived from the event's structural settings — today, ``ceil(field / 5)``-style
+    #: (``app.draw_structure.derive_draw_structure``), the arithmetic that used to run
+    #: only inside ``group_count_for``'s ``rr_then_ko`` branch.
+    structural = "structural"
+    #: Always exactly one group, whatever the field or the reservation count.
+    one = "one"
+
+
+def stage_template(
+    draw_type: DrawType,
+) -> tuple[tuple[DrawType, GroupCountSource], ...]:
+    """The stage sequence ``draw_type`` mints (ADR 20260815 decision 3), each paired
+    with where that stage's group count comes from (#1484).
 
     Exhaustive over :class:`DrawType`, no catch-all: a fifth draw type is a ``mypy``
     error here until this function says what it mints, the same shape
@@ -60,16 +87,26 @@ def stage_template(draw_type: DrawType) -> tuple[DrawType, ...]:
     stage-runnable flag; the code refuses rr_then_ko as a stage's type at the
     boundary" — and :attr:`TournamentEventStage.draw_type`'s setter is the boundary
     that would refuse it if a future branch ever tried.
+
+    The count source is what tells apart a standalone ``round-robin`` event's only
+    stage (:data:`GroupCountSource.one` — #1483's floor, decoupled from the field)
+    from ``rr-then-ko``'s stage 0, the same ``round_robin`` component but
+    :data:`GroupCountSource.structural` (``ceil(field / 5)``-style). The knockout
+    stage of an ``rr-then-ko`` event is always :data:`GroupCountSource.one` too — one
+    bracket, one group, whatever the field.
     """
     match draw_type:
         case DrawType.round_robin:
-            return (DrawType.round_robin,)
+            return ((DrawType.round_robin, GroupCountSource.one),)
         case DrawType.single_elim:
-            return (DrawType.single_elim,)
+            return ((DrawType.single_elim, GroupCountSource.one),)
         case DrawType.swiss:
-            return (DrawType.swiss,)
+            return ((DrawType.swiss, GroupCountSource.one),)
         case DrawType.rr_then_ko:
-            return (DrawType.round_robin, DrawType.single_elim)
+            return (
+                (DrawType.round_robin, GroupCountSource.structural),
+                (DrawType.single_elim, GroupCountSource.one),
+            )
 
 
 def mint_stages(draw_type: DrawType) -> list[TournamentEventStage]:
@@ -80,10 +117,15 @@ def mint_stages(draw_type: DrawType) -> list[TournamentEventStage]:
     need one set here: SQLAlchemy fills it in from the parent at flush, the same way
     ``app.tournament_reservations.stored_reservations`` already works for a brand-new
     event's reservations.
+
+    Only the stage's own ``draw_type`` is written here — the group-count source
+    :func:`stage_template` now carries alongside it is read by
+    ``app.tournament_reservations.materialise_stage_groups``, not by this function,
+    which mints rows and nothing else.
     """
     return [
         TournamentEventStage(position=position, draw_type=component)
-        for position, component in enumerate(stage_template(draw_type))
+        for position, (component, _count_source) in enumerate(stage_template(draw_type))
     ]
 
 
@@ -133,7 +175,7 @@ async def remint_stages_in_place(
         .scalars()
         .all()
     )
-    for position, component in enumerate(template):
+    for position, (component, _count_source) in enumerate(template):
         if position < len(existing):
             existing[position].draw_type = component
         else:

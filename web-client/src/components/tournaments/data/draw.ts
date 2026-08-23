@@ -135,8 +135,7 @@ export function fixtureGroupLabel(
   index: DrawIndex,
   fixture: Pick<Fixture, 'groupId' | 'stageId'>,
 ): string | null {
-  const stage = index.stageById.get(fixture.stageId)
-  if (stage === undefined || !seatsBothSidesAtCut(stage.drawType)) return null
+  if (!isGroupStageId(index.stageById, fixture.stageId)) return null
   const { group } = fixtureReservation(index, fixture)
   return group !== null ? groupLabel(group) : null
 }
@@ -339,6 +338,16 @@ export function seatsBothSidesAtCut(stageDrawType: StageDrawType): boolean {
       return exhaustive
     }
   }
+}
+
+/** Whether `stageId` names a **group stage** of this event — one lookup plus
+ * `seatsBothSidesAtCut`, asked identically by every reader that labels, buckets or
+ * panels a group (`fixtureGroupLabel`, `drawState`'s per-fixture bucketing, and its
+ * group-panel filter). A `stageId` the map does not carry answers `false`, the same
+ * honest exclusion every one of those callers already gave it on its own. */
+function isGroupStageId(stagesById: Map<string, Stage>, stageId: string): boolean {
+  const stage = stagesById.get(stageId)
+  return stage !== undefined && seatsBothSidesAtCut(stage.drawType)
 }
 
 /**
@@ -591,11 +600,9 @@ export function drawState(event: TournamentEvent): DrawState {
     //
     // A stage this event does not list answers `false` and the fixture is shown
     // ungrouped, which is the same honest fallback `ungroupedShapeOf` gives it.
-    const stage = stagesById.get(fixture.stageId)
     const groupId = fixture.groupId
     if (
-      stage === undefined ||
-      !seatsBothSidesAtCut(stage.drawType) ||
+      !isGroupStageId(stagesById, fixture.stageId) ||
       groupId === null ||
       !groupIds.has(groupId)
     ) {
@@ -607,11 +614,27 @@ export function drawState(event: TournamentEvent): DrawState {
     else byGroup.set(groupId, [fixture])
   }
 
+  // Filtered to **group-stage groups only**, BEFORE `inPositionOrder` — never handed
+  // the whole array and left to an empty `byGroup` bucket to quietly drop the rest.
+  // Since ADR 20260823 every stage holds a group, so a knockout stage's group now
+  // shares `position: 0` with its event's group stage's own first group — two
+  // different groups, the same position, in the same array. `inPositionOrder` sorts
+  // by `position` alone (`./helpers`) and has no way to break that tie, so handing it
+  // both would make which one lands first an accident of array order rather than a
+  // decision. It happened to work before this filter existed only because a knockout
+  // group never accumulated fixtures in `byGroup` (its fixtures are bucketed into
+  // `ungrouped` above); relying on that emptiness was incidental, and the ticket's own
+  // acceptance criterion ("`inPositionOrder` is never handed two groups that share a
+  // position") asks for it stated, not implied.
+  const groupStageGroups = event.groups.filter((group) =>
+    isGroupStageId(stagesById, group.stageId),
+  )
+
   // **In POSITION order** (`inPositionOrder`), which is the order the director arranged
   // them in and the order the event editor shows them in — not the order they arrived
   // in, and emphatically not by id: reservation-derived ids sort by nothing meaningful,
   // which is exactly the bug `inPositionOrder`'s own history documents (`./helpers`).
-  const groups: GroupDraw[] = inPositionOrder(event.groups).flatMap((group) => {
+  const groups: GroupDraw[] = inPositionOrder(groupStageGroups).flatMap((group) => {
     const fixtures = byGroup.get(group.id)
     if (!fixtures) return []
     // Membership is the entry ids the group's own fixtures name — the derivation
@@ -828,6 +851,11 @@ export function drawRefusalScope(event: TournamentEvent): string {
     event.format,
     drawConfig(event),
     drawSeating(event),
+    // The WHOLE array, knockout group included — deliberately unfiltered, unlike the
+    // group panel above (`groupStageGroups`). This scope only has to change VALUE when
+    // the group set changes, never to label or rank anything, so a knockout group's id
+    // riding along is harmless: it is one more stable string in the join, not a
+    // rendering decision.
     event.groups.map((group) => group.id).join(','),
   ].join('|')
 }
