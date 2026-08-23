@@ -37,9 +37,7 @@
  * numbers came back identical to the unfixed tree's, to the pixel. `break-words`
  * changes nothing about this defect.
  *
- * `min-w-0` earns nothing here and is kept only because it is harmless: the container
- * is fixed-width, so its own min-width never sizes the track. `wrap-anywhere` is the
- * whole fix.
+ * `wrap-anywhere` is the whole fix.
  *
  * ## Observed failing
  *
