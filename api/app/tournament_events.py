@@ -20,7 +20,7 @@ absent id existed), exactly as the slice-1 lifecycle verbs do.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -41,6 +41,7 @@ from app.schedule_solves import request_solve
 from app.schemas.tournament import (
     DrawSettingsWriteArm,
     MatchSettings,
+    ReservationWindow,
     RoundRobinDrawSettingsWrite,
     RrThenKoDrawSettingsWrite,
     SingleElimDrawSettingsWrite,
@@ -49,7 +50,9 @@ from app.schemas.tournament import (
     TournamentEventCreate,
     TournamentEventUpdate,
     enforce_event_reservation_cap,
+    enforce_reservation_containment,
     named_list,
+    reservation_windows,
 )
 from app.tournament_draw_settings import (
     draw_settings_of,
@@ -680,6 +683,124 @@ def _enforce_reservation_cap(
     enforce_event_reservation_cap(draw_type, reservation_count)
 
 
+def _stored_event_window(event: TournamentEvent) -> tuple[date, time, time] | None:
+    """This event's **stored** ``slot`` as a parsed ``(date, start, end)`` triple, or
+    ``None`` when the stored value does not spell one (#1501 review).
+
+    ``event.slot`` is untyped JSONB — three keys, no columns behind it — and until
+    #1501 nothing validated it on the way in, so a row written before this branch may
+    hold ``{"date": "next Tuesday"}`` or be missing a key outright. Both write shapes
+    now carry :data:`~app.schemas.tournament.WellFormedSlot`, so no NEW such row can be
+    created, and no environment holds an old one (#1501's Evidence, and the repo's
+    no-data-preservation decision).
+
+    A **partial** function all the same, returning ``None`` rather than raising, and the
+    reason is the ticket's own invariant: refusals here are 422, never 500. An unhandled
+    ``ValueError`` out of a validation guard is precisely the failure #1501 exists to
+    remove, and ``KeyError`` on a missing key is the same fault in a different colour —
+    so both are caught, and the caller decides what an unjudgeable window means rather
+    than the process deciding for it. This is the opposite call from
+    :func:`~app.tournament_reservations._slot_columns`, deliberately: that one reads a
+    value the boundary guarantees, and this one reads a value that predates the
+    guarantee.
+    """
+    try:
+        return (
+            date.fromisoformat(event.slot["date"]),
+            time.fromisoformat(event.slot["start"]),
+            time.fromisoformat(event.slot["end"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _enforce_reservation_containment(
+    event: TournamentEvent, updates: TournamentEventUpdate
+) -> None:
+    """Raise :class:`ReservationOutsideEventWindowError` once this PATCH would leave a
+    reservation outside its event's own ``slot`` (#1501), by calling
+    :func:`app.schemas.tournament.enforce_reservation_containment` — the one function
+    both this call site and the create schema's validator use.
+
+    **The effective-pair pattern, exactly as** :func:`_enforce_reservation_cap` **above
+    plays it.** The event window judged is ``updates.slot`` when this patch touches the
+    event's own slot, else the event's stored one; the reservations judged are
+    ``updates.reservations`` when this patch touches them, else the event's stored ones
+    (:func:`~app.tournament_reservations.ordered_reservations`, the same eager access
+    :func:`_enforce_group_set_frozen` and :func:`_enforce_reservation_cap` already use).
+    So a PATCH that shortens the event's slot under a stored reservation is refused
+    naming that reservation, and a PATCH that widens a reservation past the event's
+    stored slot is refused too — each half of the pair is judged against the truth the
+    OTHER half would leave standing.
+
+    **The escape hatch, checked FIRST — before ``event.slot`` is ever read.** A patch
+    touching neither ``slot`` nor ``reservations`` is not judged at all, the same
+    contract :func:`_enforce_reservation_cap` states for the cap: a legacy event already
+    violating the rule (unreachable through either write path once this guard exists)
+    must still accept a rename, a fee change, or anything else that is not itself a
+    window edit. Checking this before touching ``event.slot`` is not just the policy —
+    it is what keeps the read below TOTAL: a row that already violates the rule may
+    also hold a malformed stored slot, and reading it before the early return would turn
+    an unrelated rename into a 500, which is this ticket's own bug relocated to the
+    verb that was supposed to fix it.
+
+    **The stored event slot is read through** :func:`_stored_event_window`, **which can
+    answer "no window"** (#1501 review). ``event.slot`` is still untyped JSONB with no
+    columns behind it, and nothing validated it before this branch, so a row that
+    predates #1501 may not spell a window at all. When it does not, this guard returns
+    without judging: an event slot that frames nothing gives a reservation no honest
+    verdict, and raising instead would answer 500 out of the very guard whose contract
+    is 422. The editor made the same call on its own side — ``reservationWindowIssues``
+    says nothing about any row when the event's slot cannot frame one.
+
+    Asked **after** :func:`_enforce_reservation_cap` in the guard chain
+    (``update_event`` below), which is itself already after both freezes: a cut event
+    over the cap still answers the cap's 422 before this one, and a cut event at all
+    still answers a freeze's 409 before either.
+    """
+    if updates.reservations is None and updates.slot is None:
+        return
+    if updates.slot is not None:
+        event_window = (
+            date.fromisoformat(updates.slot.date),
+            time.fromisoformat(updates.slot.start),
+            time.fromisoformat(updates.slot.end),
+        )
+    else:
+        stored_window = _stored_event_window(event)
+        # Nothing to judge against. A stored slot that will not parse frames no window,
+        # so there is no honest verdict to give a reservation — and inventing one here
+        # would be a 500 (an unhandled ``ValueError`` out of a guard whose whole job is
+        # to answer 422), i.e. this ticket's own bug relocated into the verb meant to
+        # fix it.
+        # The editor already made exactly this call on its own side:
+        # ``reservationWindowIssues`` says nothing about ANY row when the event's slot
+        # cannot frame one, because the slot is the thing to fix first.
+        #
+        # Nothing is let through permanently. The reservations in this payload are still
+        # judged well-formed on their own (:data:`WellFormedSlot`), both write shapes
+        # now refuse a malformed event slot so no new such row exists, and the moment a
+        # director repairs this event's slot that PATCH carries ``slot`` — which IS
+        # judged, against these stored reservations, by the branch above.
+        if stored_window is None:
+            return
+        event_window = stored_window
+    if updates.reservations is not None:
+        reservations = reservation_windows(updates.reservations)
+    else:
+        reservations = [
+            ReservationWindow(
+                position=stored.position,
+                name=stored.name,
+                slot_date=stored.slot_date,
+                slot_start=stored.slot_start,
+                slot_end=stored.slot_end,
+            )
+            for stored in ordered_reservations(event)
+        ]
+    enforce_reservation_containment(event_window, reservations)
+
+
 def _event_scheduling_facts(
     event: TournamentEvent,
 ) -> tuple[tuple[tuple[uuid.UUID, Slot, tuple[str, ...]], ...], int, str]:
@@ -879,10 +1000,14 @@ async def update_event(
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
-    # The reservation cap (#1482) is judged last of the three, after both freezes:
-    # the freeze is the refusal a director can act on, so a cut event over the cap
-    # answers the 409 that names its groups before this 422.
+    # The reservation cap (#1482) is judged after both freezes: the freeze is the
+    # refusal a director can act on, so a cut event over the cap answers the 409 that
+    # names its groups before this 422.
     _enforce_reservation_cap(event, updates)
+    # Containment (#1501) is judged last of the four: after both freezes and the cap,
+    # so a cut event over the cap still answers the cap's 422 first, and a cut event
+    # at all still answers a freeze's 409 first.
+    _enforce_reservation_containment(event, updates)
     # Read ONCE, under the row lock, for the two gates below (the materialisation and
     # the re-solve trigger): a draw is cut or removed only under this same lock, so
     # the answer cannot move between here and the commit.

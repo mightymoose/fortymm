@@ -8,8 +8,8 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import date, time
-from typing import Any
+from datetime import UTC, date, datetime, time
+from typing import Any, Literal
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Request, Response
@@ -119,17 +119,46 @@ CSRF_EVENT_HOOKS = {"request": [_attach_csrf_header]}
 
 
 async def start_session(api_client: AsyncClient, db_session: AsyncSession) -> User:
-    """Establish a session cookie on the client and return the signed-in user."""
+    """Establish a session cookie on the client and return the signed-in user.
+
+    Stamps the row's ``last_seen_at`` after minting: the helper models a
+    visitor who loaded the site and browsed — the page's authenticated BFF
+    calls resolve the cookie through ``get_current_user``, which stamps
+    (#1438). ``GET /v1/session`` itself never stamps, so without this every
+    seeded guest would be invisible to the public listings and every roster
+    test would pass for the wrong reason. A test that wants a NEVER-ACTIVE
+    row seeds one with ``make_user(..., last_seen_at=None)`` instead.
+    """
     response = await api_client.get("/v1/session")
     assert response.status_code == 200
     username = response.json()["data"]["user"]["username"]
-    return (
+    user = (
         await db_session.execute(select(User).where(User.username == username))
     ).scalar_one()
+    if user.last_seen_at is None:
+        user.last_seen_at = datetime.now(UTC)
+        await db_session.commit()
+    return user
 
 
-async def make_user(db_session: AsyncSession, username: str) -> User:
-    user = User(username=username)
+async def make_user(
+    db_session: AsyncSession,
+    username: str,
+    *,
+    last_seen_at: datetime | None | Literal["now"] = "now",
+) -> User:
+    """Seed a user row straight through the ORM.
+
+    ``last_seen_at`` defaults to ``"now"`` — the way a row looks after a real
+    visit, so seeded users stay visible in the public listings exactly as
+    production users are (#1438). Pass ``None`` for a NEVER-ACTIVE row the
+    listings must omit (a pending sign-in mint or an abandoned token
+    consume), or an explicit aware timestamp to age the stamp.
+    """
+    user = User(
+        username=username,
+        last_seen_at=datetime.now(UTC) if last_seen_at == "now" else last_seen_at,
+    )
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)

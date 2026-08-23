@@ -92,6 +92,85 @@ describe('ReservationCard', () => {
     })
   })
 
+  /**
+   * #1501: a window the server would refuse — end not after start, or outside the
+   * event's own window. `ReservationCard` does not judge it (the editor's resolver
+   * does, via `reservationWindowIssues`); what it owes is the verdict, under the
+   * window it is about, in red, wired so a screen reader hears it too — the same
+   * treatment `nameError` already gets.
+   */
+  describe('a window the server would refuse', () => {
+    it('renders the message under the window, and marks all three boxes invalid', () => {
+      reservationCardPage.render({
+        windowError: 'This window must end after it starts.',
+      })
+
+      expect(reservationCardPage.queryWindowError()).toHaveTextContent(
+        'This window must end after it starts.',
+      )
+      expect(reservationCardPage.getDateInput()).toHaveAttribute('aria-invalid', 'true')
+      expect(reservationCardPage.getStartInput()).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(reservationCardPage.getEndInput()).toHaveAttribute('aria-invalid', 'true')
+    })
+
+    // A `<p>` that merely sits below the grid is *beside* it on screen and nowhere at
+    // all to a screen reader.
+    it('points the boxes at the message', () => {
+      reservationCardPage.render({
+        windowError: 'This window must end after it starts.',
+      })
+
+      const describedBy = reservationCardPage
+        .getStartInput()
+        .getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      expect(reservationCardPage.queryWindowError()).toHaveAttribute('id', describedBy)
+    })
+
+    it('says nothing, and claims nothing, when the window is fine', () => {
+      reservationCardPage.render({})
+
+      expect(reservationCardPage.queryWindowError()).toBeNull()
+      expect(reservationCardPage.getStartInput()).not.toHaveAttribute(
+        'aria-invalid',
+        'true',
+      )
+      expect(reservationCardPage.getStartInput()).not.toHaveAttribute(
+        'aria-describedby',
+      )
+    })
+
+    // A viewer has no window to fix, so there is nothing to tell them.
+    it('tells a viewer nothing about a window they cannot edit', () => {
+      reservationCardPage.render({
+        windowError: 'This window must end after it starts.',
+        canEdit: false,
+      })
+
+      expect(reservationCardPage.queryWindowError()).toBeNull()
+    })
+
+    // The window box stays live under a #1501 refusal — editing it is exactly how the
+    // director fixes it, so `onChange` must still fire.
+    it('leaves the window editable while it is red', () => {
+      const onChange = vi.fn()
+      reservationCardPage.render({
+        windowError: 'This window must end after it starts.',
+        onChange,
+      })
+
+      fireEvent.change(reservationCardPage.getEndInput(), {
+        target: { value: '13:15' },
+      })
+      expect(onChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ slot: expect.objectContaining({ end: '13:15' }) }),
+      )
+    })
+  })
+
   // The reservation-set freeze, at the level of one card (ADR-0786). The *reason* is not the
   // card's to say — the section says it once, above the cards — so what the card owes is
   // a dead button that points at it.

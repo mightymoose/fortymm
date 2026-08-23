@@ -662,6 +662,280 @@ describe('EventEditor', () => {
   })
 
   /**
+   * #1501: a reservation's window must end after it starts and must fall inside its
+   * event's own window (bounds inclusive, and the reservation's date must equal the
+   * event's). The seeded event's slot is `09:00`–`18:00` on `2026-06-13`, and its one
+   * seeded reservation (`09:00`–`12:30`, same date) is contained by construction — every
+   * case below edits exactly one of the three window fields to break exactly one rule.
+   */
+  describe('a reservation window the server would refuse (#1501)', () => {
+    it('refuses an end-before-start reservation, reds that row, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('Start'), { target: { value: '13:00' } })
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '09:00' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(
+        screen.getByTestId('reservation-window-error'),
+      ).toHaveTextContent('This window must end after it starts.')
+      // No banner: a banner reports a refusal that came back from somewhere.
+      expect(eventEditorPage.queryFailure()).toBeNull()
+    })
+
+    it('refuses a zero-length reservation — end equal to start', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '09:00' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(screen.getByTestId('reservation-window-error')).toHaveTextContent(
+        'This window must end after it starts.',
+      )
+    })
+
+    it('refuses a reservation dated off the event', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('Date'), {
+        target: { value: '2026-06-14' },
+      })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      // States the event's own window, so the director can read the target without
+      // leaving this tab for Basics.
+      expect(screen.getByTestId('reservation-window-error')).toHaveTextContent(
+        "the event's own window",
+      )
+    })
+
+    it('refuses a reservation whose window falls outside the event’s', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '19:00' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(screen.getByTestId('reservation-window-error')).toBeInTheDocument()
+    })
+
+    // Bounds are INCLUSIVE — a reservation widened to exactly match the event's window
+    // still saves.
+    it('accepts a reservation whose window exactly equals the event’s', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('Start'), { target: { value: '09:00' } })
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '18:00' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+    })
+
+    // Per ROW, not per section — several bad reservations, several messages.
+    it('names every bad row with its own message', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildEvent({
+          reservations: [
+            buildReservation({
+              id: 'res-a',
+              name: 'Reservation A',
+              slot: { date: '2026-06-13', start: '13:00', end: '09:00' },
+              position: 0,
+            }),
+            buildReservation({
+              id: 'res-b',
+              name: 'Reservation B',
+              slot: { date: '2026-06-20', start: '09:00', end: '10:00' },
+              position: 1,
+            }),
+          ],
+        }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      const errors = screen.queryAllByTestId('reservation-window-error')
+      expect(errors).toHaveLength(2)
+      expect(errors[0]).toHaveTextContent('This window must end after it starts.')
+      expect(errors[1]).toHaveTextContent("the event's own window")
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    it('says nothing in red until the organizer actually tries to save', async () => {
+      eventEditorPage.render({ event: buildEvent() })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '09:00' } })
+
+      expect(screen.queryByTestId('reservation-window-error')).toBeNull()
+    })
+
+    it('clears the message the moment the window is fixed, and then saves', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '09:00' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(screen.getByTestId('reservation-window-error')).toBeInTheDocument()
+
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '12:30' } })
+      await waitFor(() =>
+        expect(screen.queryByTestId('reservation-window-error')).toBeNull(),
+      )
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+    })
+
+    // A new reservation defaults to the event's own window (`reservations-section.tsx`,
+    // `slot: { ...eventSlot }`) and so is contained BY CONSTRUCTION — adding one must
+    // never start in a refused state, even once `isSubmitted` is armed and every other
+    // row's red is live. `isSubmitted` is armed with a first, otherwise-clean Save (an
+    // empty reservation list saves fine — containment has nothing to judge), which is
+    // what makes this test discriminating: added BEFORE any Save, `windowIssues` is
+    // `undefined` and this would pass against anything.
+    it('adding a reservation never starts refused, once `isSubmitted` is armed', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildEvent({ reservations: [] }), onSave })
+
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+      // The empty state's OWN "Add first reservation" button, not the header's — an
+      // empty list renders both, and `getAddReservationButton`'s regex matches either.
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Add first reservation' }),
+      )
+      expect(screen.queryByTestId('reservation-window-error')).toBeNull()
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2))
+      expect(onSave.mock.calls.at(-1)?.[0].reservations).toHaveLength(1)
+    })
+  })
+
+  /**
+   * #1501, rule 3: the event's own slot must end after it starts — an inverted event
+   * slot makes every reservation uncontainable, so this has to refuse before the
+   * Reservations tab is even worth judging.
+   */
+  describe('the event’s own slot the server would refuse (#1501)', () => {
+    it('refuses an end-before-start event slot, reports it on Basics under the grid, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      fireEvent.change(screen.getByLabelText('Start'), { target: { value: '18:00' } })
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '09:00' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(screen.getByTestId('event-slot-error')).toHaveTextContent(
+        'This window must end after it starts.',
+      )
+      expect(eventEditorPage.queryFailure()).toBeNull()
+    })
+
+    /**
+     * ⚠️ **A cleared box, not merely an inverted pair.** `<input type="date">` and
+     * `<input type="time">` cannot emit anything malformed, but they CAN be cleared —
+     * and a blank Start next to an untouched real End would, without the parse check,
+     * read as "ordered" (`isSlotOrdered`'s string comparison sorts `''` before every real
+     * `HH:MM`) and build a request the server 500s trying to parse.
+     */
+    it('refuses a CLEARED Start box, and sends nothing', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      fireEvent.change(screen.getByLabelText('Start'), { target: { value: '' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(screen.getByTestId('event-slot-error')).toHaveTextContent(
+        'The date and both times are required.',
+      )
+    })
+
+    it('refuses a CLEARED Date box, even with an otherwise-ordered window', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent({ reservations: [] }), onSave })
+
+      fireEvent.change(screen.getByLabelText('Date'), { target: { value: '' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(screen.getByTestId('event-slot-error')).toHaveTextContent(
+        'The date and both times are required.',
+      )
+    })
+
+    // `firstErrorTab` (named `firstInvalidSection` in the code, `event-form.ts`) routes
+    // the director to the tab holding the first error — a save refused on a tab you
+    // cannot see is indistinguishable from a button that does nothing.
+    it('routes the director to Basics even when they are looking at Reservations', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      fireEvent.change(screen.getByLabelText('Start'), { target: { value: '18:00' } })
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '09:00' } })
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      expect(eventEditorPage.getSectionTab('Basics')).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    it('says nothing in red until the organizer actually tries to save', () => {
+      eventEditorPage.render({
+        event: buildEvent({
+          slot: { date: '2026-06-13', start: '18:00', end: '09:00' },
+        }),
+      })
+      expect(screen.queryByTestId('event-slot-error')).toBeNull()
+    })
+
+    it('clears the message the moment the slot is fixed, and then saves', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildEvent(), onSave })
+
+      fireEvent.change(screen.getByLabelText('Start'), { target: { value: '18:00' } })
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '09:00' } })
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(screen.getByTestId('event-slot-error')).toBeInTheDocument()
+
+      // Restore an ORDERED window — flipping just one bound back would leave the pair
+      // still inverted or zero-length.
+      fireEvent.change(screen.getByLabelText('Start'), { target: { value: '09:00' } })
+      fireEvent.change(screen.getByLabelText('End'), { target: { value: '18:00' } })
+      await waitFor(() =>
+        expect(screen.queryByTestId('event-slot-error')).toBeNull(),
+      )
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+    })
+  })
+
+  /**
    * #1482: a non-`rr-then-ko` event holds AT MOST ONE reservation. The editor declines
    * to build a second one (Add disables, with its reason in visible text) — but a
    * director can still reach an over-cap draft by flipping the Basics draw-type picker

@@ -83,13 +83,19 @@ async def _make_tournament(
     owner: User,
     *,
     tables: tuple[str, ...] = ("t1", "t2"),
+    event_slot_end: str = "17:00",
 ) -> tuple[uuid.UUID, TournamentEvent]:
     """A published tournament owned by ``owner`` (the authed client's user, so
     the transitions route accepts them) with a table catalogue and one grouped
     unrated round-robin event — unrated so a completion needs only the one
     proposing participant, no acceptance verb. Entrants and the cut are the
     test's business: which humans enter decides which *clients* can finish the
-    matches."""
+    matches.
+
+    ``event_slot_end`` widens the event's own window past the default ``17:00`` —
+    the one caller that moves a reservation's ``end`` past it (#1501's containment)
+    passes a wider value here rather than everyone else's default drifting to
+    accommodate one test."""
     league = await get_default_league(db)
     assert league is not None, "the autouse default_league fixture seeds this"
     catalogue = venue_tables(*((table.upper(), "Main") for table in tables))
@@ -121,7 +127,7 @@ async def _make_tournament(
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
-        slot={"date": DATE, "start": "09:00", "end": "17:00"},
+        slot={"date": DATE, "start": "09:00", "end": event_slot_end},
         match_settings={"rated": False, "length_games": 3},
         stages=stages,
     )
@@ -643,9 +649,16 @@ async def test_a_reservation_window_edit_requests_a_settings_solve(
 ) -> None:
     """Moving a reservation's slot window (same reservation id, so the group-set
     freeze allows it) changes where fixtures may be placed — one ``settings_changed``
-    row."""
+    row.
+
+    Widens the event's own slot to ``18:00`` too (#1501's containment): the event is
+    the authority a reservation's window is judged against, so a reservation widened
+    past its event's stored end would otherwise be refused with a 422 that has nothing
+    to do with what this test asserts."""
     client, owner = authed_client
-    tournament_id, event = await _make_tournament(db_session, owner)
+    tournament_id, event = await _make_tournament(
+        db_session, owner, event_slot_end="18:00"
+    )
     entrants = [await make_user(db_session, f"win-{i}") for i in range(3)]
     await _enter_and_cut(db_session, event, entrants)
     table_ids = await _catalogue_ids(db_session, tournament_id)

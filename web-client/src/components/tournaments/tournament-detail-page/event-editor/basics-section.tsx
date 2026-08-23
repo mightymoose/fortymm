@@ -1,3 +1,5 @@
+import { useId } from 'react'
+
 import { Input } from '@/components/ui/input'
 
 import type { EditFreeze } from '../../data/draw'
@@ -42,6 +44,12 @@ export interface BasicsFieldErrors {
    * this is a backstop for a malformed draft the resolver still rejects (an empty
    * `timezone`, ADR 20260719) — never a message the picker itself can produce. */
   timezone?: string
+  /** The event's own time-slot window is not after its start — #1501's rule 3, raised
+   * on the resolver's `slot` path (`isSlotOrdered`, `event-form.ts`). Cross-field, so it
+   * is never inside one of the three `Field`s below: it belongs under the whole
+   * Date/Start/End grid, the way a `between` rule's message belongs under the whole
+   * rule rather than inside one of its two boxes. */
+  slot?: string
 }
 
 export interface BasicsSectionProps {
@@ -193,6 +201,11 @@ export const BasicsSection = ({
   const setSlot = (patch: Partial<TournamentEvent['slot']>) =>
     set({ slot: { ...event.slot, ...patch } })
   const readOnly = !canEdit
+  // The id of the cross-field slot message (#1501), so all three boxes point at it
+  // (`aria-describedby`) — the same treatment `ReservationCard`'s window error gives its
+  // three boxes. A `<p>` that merely sits below the grid is next to it on screen and
+  // nowhere at all to a screen reader.
+  const slotErrorId = useId()
 
   return (
     <div className="flex flex-col gap-5" data-testid="basics-section">
@@ -482,6 +495,8 @@ export const BasicsSection = ({
               id={id}
               type="date"
               value={event.slot.date}
+              aria-invalid={!!errors.slot}
+              aria-describedby={errors.slot ? slotErrorId : undefined}
               onChange={(e) => setSlot({ date: e.target.value })}
             />
           )}
@@ -498,6 +513,8 @@ export const BasicsSection = ({
               type="time"
               className="font-mono"
               value={event.slot.start}
+              aria-invalid={!!errors.slot}
+              aria-describedby={errors.slot ? slotErrorId : undefined}
               onChange={(e) => setSlot({ start: e.target.value })}
             />
           )}
@@ -514,11 +531,38 @@ export const BasicsSection = ({
               type="time"
               className="font-mono"
               value={event.slot.end}
+              aria-invalid={!!errors.slot}
+              aria-describedby={errors.slot ? slotErrorId : undefined}
               onChange={(e) => setSlot({ end: e.target.value })}
             />
           )}
         </Field>
       </div>
+
+      {/* The event's own window is cross-field (#1501, rule 3) — it belongs to no
+          single one of the three boxes above it, so it is not inside any `Field`'s
+          hint slot. It goes UNDER the whole grid instead, the same house rule the
+          reservation cap's message follows one tab over (`CLAUDE.md`, `## Forms`:
+          inline, in red, never a toast or a banner). All three boxes point at it via
+          `aria-describedby`, the same treatment `ReservationCard`'s window error gives
+          its own three boxes.
+
+          `!readOnly` guards it explicitly: unlike every other message on this tab, it
+          is not riding `Field`'s hint slot (which `Field` itself drops for a reader,
+          ADR 0015) — it is markup this section renders directly, so the section has to
+          drop it itself. Unreachable today (a viewer has no Save button, so `errors`
+          never populates), but a validation message is form furniture, and a reader
+          gets none of it — the same rule `ReservationCard`'s `windowError` follows by
+          sitting inside its own `canEdit` branch. */}
+      {!readOnly && errors.slot && (
+        <p
+          id={slotErrorId}
+          data-testid="event-slot-error"
+          className="-mt-2 text-xs text-[color:var(--loss)]"
+        >
+          {errors.slot}
+        </p>
+      )}
     </div>
   )
 }

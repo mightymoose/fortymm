@@ -555,6 +555,54 @@ describe('ReservationsSection', () => {
     })
   })
 
+  /**
+   * #1501: a reservation whose window the server would refuse (end not after start, or
+   * outside the event's own window). The section does not judge it — the editor's
+   * resolver does — but the verdict has to land under the card it is about, the same
+   * shape `nameIssues` already uses.
+   */
+  describe('a reservation with a bad window (#1501)', () => {
+    it('reds the named reservation’s window and no other', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ reservations: twoReservations() }),
+        windowIssues: { 'p-2': 'This window must end after it starts.' },
+      })
+
+      const errors = reservationsSectionPage
+        .queryReservationCards()
+        .map(
+          (card: HTMLElement) =>
+            card.querySelector('[data-testid="reservation-window-error"]')
+              ?.textContent ?? null,
+        )
+      expect(errors).toEqual([null, 'This window must end after it starts.'])
+    })
+
+    it('says nothing in red when the editor hands it no issues', () => {
+      reservationsSectionPage.render({ event: buildEvent({ reservations: twoReservations() }) })
+      expect(screen.queryByTestId('reservation-window-error')).toBeNull()
+    })
+
+    // A card can be red for BOTH reasons at once — a cleared name and a bad window —
+    // and each channel says its own thing, under its own box.
+    it('shows both a name error and a window error on the same card when both fire', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({
+          reservations: [buildReservation({ id: 'p-1', name: '' })],
+        }),
+        nameIssues: { 'p-1': 'Name is required.' },
+        windowIssues: { 'p-1': 'This window must end after it starts.' },
+      })
+
+      expect(reservationsSectionPage.getReservationNameErrors()).toEqual([
+        'Name is required.',
+      ])
+      expect(screen.getByTestId('reservation-window-error')).toHaveTextContent(
+        'This window must end after it starts.',
+      )
+    })
+  })
+
   describe('for a non-owner (read-only)', () => {
     // The guard test (ADR 0015, rule 6). Rendered *with* reservations on purpose: an
     // event with none has nothing but the Add button, so a sweep over the empty

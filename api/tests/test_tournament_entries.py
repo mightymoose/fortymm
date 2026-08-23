@@ -1965,6 +1965,30 @@ async def test_the_owner_enters_another_player_who_appears_as_an_entrant(
     assert [e["user_id"] for e in await _entrants_of(client, event)] == [str(player.id)]
 
 
+async def test_the_owner_enters_a_never_active_guest(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A NEVER-ACTIVE user (#1438: ``last_seen_at`` NULL — a pending
+    first-sign-in mint) is unlisted but still enterable by id: the entrant
+    lookup deliberately carries no listing predicate. Delisting must not
+    strand a walk-in a director can name."""
+    client, owner = director_client
+    await grant_permissions(db_session, owner, (TOURNAMENT_VIEW,))
+    guest = await make_user(
+        db_session, f"walk-in-{uuid.uuid4().hex[:8]}", last_seen_at=None
+    )
+    event = await _make_event(db_session, owner=owner)
+
+    response = await client.post(_entries_url(event), json={"user_id": str(guest.id)})
+
+    assert response.status_code == 201, response.text
+    assert response.json()["user_id"] == str(guest.id)
+    (row,) = await _active_entries(db_session, event.id)
+    assert row.user_id == guest.id
+    assert row.added_by_user_id == owner.id
+
+
 async def test_a_non_owner_naming_another_players_user_id_is_a_403(
     entrant_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

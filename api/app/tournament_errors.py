@@ -302,6 +302,46 @@ class EventReservationCapExceededError(ValueError):
         self.reservation_count = reservation_count
 
 
+class ReservationOutsideEventWindowError(ValueError):
+    """Raised when a reservation's window is not fully inside its event's own ``slot``
+    (#1501) — judged by ``app.schemas.tournament.enforce_reservation_containment`` and
+    raised by both the create schema's ``model_validator`` and the update verb.
+
+    A **``ValueError``**, not a plain ``Exception`` like this module's other members,
+    for the same load-bearing reason :class:`EventReservationCapExceededError` is one:
+    raised inside a Pydantic ``model_validator(mode="after")``, a ``ValueError`` is what
+    Pydantic folds into the model's own ``ValidationError`` — so the create path becomes
+    a 422 with no adapter at all. The update path raises the identical class from
+    ordinary Python code (not a validator), so its adapter — the HTTP route and the MCP
+    tool, beside their existing ``except EventReservationCapExceededError`` — catches it
+    explicitly rather than relying on Pydantic's fold, which only ever happens inside a
+    validator.
+
+    Containment has two parts, and either can trip this: the reservation's ``slot.date``
+    disagreeing with the event's, or the reservation's ``start``/``end`` falling
+    outside the event's (bounds inclusive — a reservation exactly as wide as its event
+    is legal). The predicate stops at the first violation it finds and this error names
+    only that
+    one, which is why it is raised, not collected into a list: a director fixes one row,
+    saves again, and finds the next if there is one — the same one-refusal-at-a-time
+    shape every other 422 on these two write shapes already has.
+
+    Carries the already-composed sentence (``message``) plus structured detail for any
+    adapter that wants to reshape rather than echo, exactly as
+    :class:`EventReservationCapExceededError` does: ``reservation_index`` (the 0-based
+    position of the offending entry in the ``reservations`` list the request carried or
+    the event's stored order) and ``reservation_name``, so a caller can point at the row
+    without re-parsing the composed sentence. Never an ``HTTPException`` — the caller
+    adapts it to its transport."""
+
+    def __init__(
+        self, message: str, *, reservation_index: int, reservation_name: str
+    ) -> None:
+        super().__init__(message)
+        self.reservation_index = reservation_index
+        self.reservation_name = reservation_name
+
+
 class TableNotInCatalogueError(Exception):
     """Raised by the edit verb when an entry of a submitted ``table_catalogue`` cites an
     ``id`` that names no table of **this** tournament's catalogue (ADR 20260801).
