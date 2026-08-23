@@ -50,7 +50,11 @@ import {
   LEAGUE_OFFICE_DRAFT_ID,
   SUMMER_SLAM_ID,
 } from '@/mocks/factories/tournaments/tournament-ids'
-import { conjoinWithAnd, hasVenue } from '@/components/tournaments/data/helpers'
+import {
+  conjoinWithAnd,
+  hasVenue,
+  inPositionOrder,
+} from '@/components/tournaments/data/helpers'
 import type { TournamentsNearMe } from '@/components/tournaments/data/api'
 import { groupLetter } from '@/components/tournaments/data/draw-structure'
 
@@ -2890,7 +2894,7 @@ function planEventDraw(event: StoredEvent): DrawPlan {
   // exactly the same id `groupsForEvent` mints for it, both off the identical stage
   // id (`structuralGroupIdFor`, unconditional — unlike the group stage's own group,
   // which is `groupIdFor(reservation.id)` whenever a reservation exists).
-  const groupStageId = [...event.stages].sort((a, b) => a.position - b.position)[0]?.id
+  const groupStageId = inPositionOrder(event.stages)[0]?.id
   const groupStageGroupIds = groupsForEvent(event)
     .filter((g) => g.stage_id === groupStageId)
     .map((g) => g.id)

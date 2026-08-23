@@ -5,9 +5,8 @@ import { TournamentDetailPage } from '../page-objects/tournament-detail.page'
 import { guestFromContext } from '../support/match-api'
 import { grantBetaTester } from '../support/rbac-grant'
 import {
-  getEventGroups,
+  getEventGroupsAndStages,
   getEventReservations,
-  getEventStages,
   getScheduleDetail,
   groupLabel,
   seedEntrants,
@@ -258,7 +257,11 @@ test.describe('Tournament — six-group rr-then-ko draw order', () => {
     // mixed together. Scoped to the group stage (position 0) before this spec's
     // subject — group ORDER — is asked about it; the knockout stage's single group
     // has no order of its own to be wrong about.
-    const stages = await getEventStages(director, tournamentId, eventId)
+    const { stages, groups: storedGroupsBeforeCut } = await getEventGroupsAndStages(
+      director,
+      tournamentId,
+      eventId,
+    )
     const groupStageId = [...stages].sort((a, b) => a.position - b.position)[0]!.id
     const groupIds = groups
       .filter((group) => group.stage_id === groupStageId)
@@ -286,11 +289,12 @@ test.describe('Tournament — six-group rr-then-ko draw order', () => {
     expect(storedReservations.map((reservation) => reservation.position)).toEqual(
       RESERVATIONS.map((_, index) => index),
     )
-    // Scoped to the GROUP STAGE (`groupStageId`, resolved above) — `getEventGroups`
+    // Scoped to the GROUP STAGE (`groupStageId`, resolved above) — the fetch above
     // returns every stage's rows now (ADR 20260823, #1484), and this `rr-then-ko`
     // event's knockout stage holds one more, at `position: 0`, sharing that number
-    // with the group stage's own first group.
-    const storedGroups = (await getEventGroups(director, tournamentId, eventId)).filter(
+    // with the group stage's own first group. Reused from the combined fetch above
+    // rather than a second round trip: nothing mutates the event between them.
+    const storedGroups = storedGroupsBeforeCut.filter(
       (group) => group.stage_id === groupStageId,
     )
     expect(storedGroups.map((group) => group.id)).toEqual(groupIds)

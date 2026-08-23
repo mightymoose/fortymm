@@ -533,12 +533,9 @@ async def _enforce_group_set_frozen(
     # position-0 group maps to as well (``position % reservation count``), so every
     # reservation a knockout group could strand is already named through its
     # group-stage sibling.
+    stage_ids = group_stage_ids(event)
     current = sorted(
-        (
-            group
-            for group in event_groups(event)
-            if group.stage_id in group_stage_ids(event)
-        ),
+        (group for group in event_groups(event) if group.stage_id in stage_ids),
         key=lambda group: group.position,
     )
     # A removed reservation strands every group mapped to it; those groups are the

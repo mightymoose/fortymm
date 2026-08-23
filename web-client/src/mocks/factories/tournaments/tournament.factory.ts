@@ -1,4 +1,5 @@
 import type { components } from '@/api/schema'
+import { inPositionOrder } from '@/components/tournaments/data/helpers'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
 import {
   groupsFor,
@@ -904,7 +905,7 @@ export function planDraw(
    * group stage at position 0 and the knockout stage at position 1. */
   stages: readonly { id: string; position: number }[] = mintStageReads(drawType),
 ): DrawPlan {
-  const orderedStages = [...stages].sort((a, b) => a.position - b.position)
+  const orderedStages = inPositionOrder(stages)
   const firstStage = orderedStages[0]
   if (!firstStage) {
     throw new Error('planDraw: no stages to cut this draw against.')

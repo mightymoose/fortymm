@@ -1931,7 +1931,7 @@ describe('cutting a round-robin-then-knockout draw', () => {
     expect(new Set(stage.map((f) => f.group_id))).toEqual(
       new Set(
         eventOf(TWO_STAGE)
-          .groups.filter((g) => (g as unknown as { stage_id: string }).stage_id === groupStageId)
+          .groups.filter((g) => g.stage_id === groupStageId)
           .map((g) => g.id),
       ),
     )
@@ -2959,11 +2959,8 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
       // real cut never sees: "the snake deals only into the stage being dealt", the same
       // filter `planEventDraw` (`tournaments-store.ts`) applies before calling `planDraw`.
       const groupStageId = [...event.stages].sort((a, b) => a.position - b.position)[0]!.id
-      // `stage_id` (ADR 20260823) is not yet on the generated `GroupRead` — the
-      // regenerated `schema.d.ts` lands with the API companion change, see
-      // `mocks/factories/tournaments/solver-sim.ts`'s own widened `Group` type.
       const groupIds = event.groups
-        .filter((g) => (g as unknown as { stage_id: string }).stage_id === groupStageId)
+        .filter((g) => g.stage_id === groupStageId)
         .map((g) => g.id)
       const plan = planDraw(
         'rr-then-ko',

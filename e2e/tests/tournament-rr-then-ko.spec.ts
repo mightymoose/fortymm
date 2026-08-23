@@ -7,9 +7,8 @@ import { grantBetaTester } from '../support/rbac-grant'
 import {
   createTournament,
   findEventByName,
-  getEventGroups,
+  getEventGroupsAndStages,
   getEventReservations,
-  getEventStages,
   getScheduleDetail,
   groupLabel,
   seedEntrants,
@@ -333,9 +332,12 @@ test.describe('Tournament — rr-then-ko draw', () => {
     // has one too, at `position: 0` — sharing that number with the group stage's own
     // first group. Checking `position` across both stages unfiltered would see
     // `[0, 0, 1, 2]`, not the plain 1:1 sequence this assertion is actually about.
-    const stages = await getEventStages(director, tournamentId, eventId)
+    const { stages, groups: allGroups } = await getEventGroupsAndStages(
+      director,
+      tournamentId,
+      eventId,
+    )
     const groupStageId = [...stages].sort((a, b) => a.position - b.position)[0]!.id
-    const allGroups = await getEventGroups(director, tournamentId, eventId)
     const groups = allGroups.filter((group) => group.stage_id === groupStageId)
     expect(groups.map((group) => group.position)).toEqual([0, 1, 2])
     expect(groups.map((group) => group.reservation_id)).toEqual(

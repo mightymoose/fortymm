@@ -13,19 +13,13 @@
 
 import type { components } from '@/api/schema'
 import { mockUuid } from '@/mocks/mock-uuid'
+import { inPositionOrder } from '@/components/tournaments/data/helpers'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
 type FixtureTimeRead = components['schemas']['FixtureTimeRead']
 type Reservation = components['schemas']['Reservation']
-/** `GroupRead` widened with `stage_id` (ADR 20260823) AHEAD of `mise run
- * regen-api-types`: the API companion change adding this field lands separately (see
- * `web-client/src/components/tournaments/data/groups.ts`'s own wire schema, hand-
- * maintained the same way for the same reason — `schema.d.ts` is a compile-time claim
- * about a payload the server does not send yet). Drop this intersection once the
- * regenerated `GroupRead` carries `stage_id` itself; it will become a harmless no-op
- * the day it does. */
-type Group = components['schemas']['GroupRead'] & { stage_id: string }
+type Group = components['schemas']['GroupRead']
 type DrawType = components['schemas']['DrawType']
 
 /** A seeded reservation's derived group id — deterministic and stable across reads,
@@ -114,7 +108,7 @@ interface SimEventForGroups {
  * cross-stage order (nothing here ranks a knockout group against a group-stage one).
  */
 export function groupsForEvent(event: SimEventForGroups): Group[] {
-  const orderedStages = [...event.stages].sort((a, b) => a.position - b.position)
+  const orderedStages = inPositionOrder(event.stages)
   const reservationCount = event.reservations.length
   const reservationIdAt = (position: number): string | null =>
     reservationCount === 0 ? null : event.reservations[position % reservationCount].id

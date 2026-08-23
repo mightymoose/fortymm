@@ -30,6 +30,7 @@ import {
 import { mockUuid } from '../../../src/mocks/mock-uuid'
 import { groupIdFor, groupsFor } from '../../../src/mocks/factories/tournaments/solver-sim'
 import { groupLetter } from '../../../src/components/tournaments/data/draw-structure'
+import { inPositionOrder } from '../../../src/components/tournaments/data/helpers'
 import { sessionResponse } from '../../../src/test/factories'
 import { fulfillParkedStream, STREAM_PATH } from '../../support/realtime'
 
@@ -1259,7 +1260,7 @@ function planEventDraw(event: TournamentEventRead): DrawPlan {
   // the round-robin field it deals — the ticket's own "most dangerous consequence of
   // the widening", and this stub's twin of `tournaments-store.ts`'s own
   // `groupStageGroupIds` scoping (`src/mocks/tournaments-store.ts`).
-  const groupStageId = [...event.stages].sort((a, b) => a.position - b.position)[0]?.id
+  const groupStageId = inPositionOrder(event.stages)[0]?.id
   const groupStageGroupIds = event.groups
     .filter((g) => g.stage_id === groupStageId)
     .map((g) => g.id)

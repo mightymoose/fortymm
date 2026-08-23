@@ -887,39 +887,6 @@ export async function getEventReservations(
   return event.reservations
 }
 
-/**
- * Read an event's **groups** back off the tournament detail, **as stored** — the
- * competitive-face twin of `getEventReservations`.
- *
- * A group is never client-written, so there is no "did the server take the order"
- * question here the way there is for reservations — the server mints every stage's
- * group rows from its own template entry (ADR 20260823, #1484), and stamps each
- * group's `position` from its own stage's list index. **Every stage now**, not just
- * the group stage: an `rr-then-ko` event's knockout stage has a group too, so this
- * returns groups from BOTH stages, mixed together — filter on `stage_id` before
- * reading `position` as an order. What a caller *can* only learn here is the id
- * everything competitive is keyed by: a fixture's `group_id`, the draw's group
- * sections, a standings table.
- */
-export async function getEventGroups(
-  viewer: Guest,
-  tournamentId: string,
-  eventId: string,
-): Promise<ReadonlyArray<StoredGroup>> {
-  const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
-  if (!res.ok()) {
-    throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
-  }
-  const detail = (await res.json()) as {
-    events: ReadonlyArray<{ id: string; groups: ReadonlyArray<StoredGroup> }>
-  }
-  const event = detail.events.find((e) => e.id === eventId)
-  if (!event) {
-    throw new Error(`no event ${eventId} on tournament ${tournamentId}`)
-  }
-  return event.groups
-}
-
 /** One of an event's **stages** (ADR 20260815): its id and its `position` — 0 for a
  * single-stage draw type's only stage, or an `rr-then-ko` event's group stage; 1 for
  * its knockout stage. `getEventGroups`'s own `stage_id` resolves against this. */
@@ -928,27 +895,67 @@ export interface StoredStage {
   readonly position: number
 }
 
-/** Read an event's **stages** back off the tournament detail — the one way a caller
- * of `getEventGroups` tells the group stage's groups apart from the knockout stage's
- * (ADR 20260823, #1484): filter `groups` to the `stage_id` of the stage at
- * `position: 0`. */
-export async function getEventStages(
+/**
+ * Read one event's **groups and stages** back off the tournament detail, **as
+ * stored**, in a single round trip — the shared fetch behind `getEventGroups` and
+ * `getEventStages` below, and a caller's own door onto both at once when it needs
+ * them together (as `tournament-group-order.spec.ts` and `tournament-rr-then-ko.spec.ts`
+ * do): fetching each separately would GET the identical `/tournaments/{id}` payload
+ * twice for data that already arrives together in one response.
+ *
+ * A group is never client-written, so there is no "did the server take the order"
+ * question here the way there is for reservations — the server mints every stage's
+ * group rows from its own template entry (ADR 20260823, #1484), and stamps each
+ * group's `position` from its own stage's list index. **Every stage now**, not just
+ * the group stage: an `rr-then-ko` event's knockout stage has a group too, so
+ * `groups` holds rows from BOTH stages, mixed together — filter on `stage_id`
+ * (resolved against `stages`) before reading `position` as an order.
+ */
+export async function getEventGroupsAndStages(
   viewer: Guest,
   tournamentId: string,
   eventId: string,
-): Promise<ReadonlyArray<StoredStage>> {
+): Promise<{
+  groups: ReadonlyArray<StoredGroup>
+  stages: ReadonlyArray<StoredStage>
+}> {
   const res = await viewer.ctx.get(`${API}/tournaments/${tournamentId}`)
   if (!res.ok()) {
     throw new Error(`load tournament failed: ${res.status()} ${await res.text()}`)
   }
   const detail = (await res.json()) as {
-    events: ReadonlyArray<{ id: string; stages: ReadonlyArray<StoredStage> }>
+    events: ReadonlyArray<{
+      id: string
+      groups: ReadonlyArray<StoredGroup>
+      stages: ReadonlyArray<StoredStage>
+    }>
   }
   const event = detail.events.find((e) => e.id === eventId)
   if (!event) {
     throw new Error(`no event ${eventId} on tournament ${tournamentId}`)
   }
-  return event.stages
+  return event
+}
+
+/** `getEventGroupsAndStages`'s groups alone, for a caller that has no use for the
+ * stages. */
+export async function getEventGroups(
+  viewer: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<ReadonlyArray<StoredGroup>> {
+  return (await getEventGroupsAndStages(viewer, tournamentId, eventId)).groups
+}
+
+/** `getEventGroupsAndStages`'s stages alone — the one way a caller of `getEventGroups`
+ * tells the group stage's groups apart from the knockout stage's (ADR 20260823,
+ * #1484): filter `groups` to the `stage_id` of the stage at `position: 0`. */
+export async function getEventStages(
+  viewer: Guest,
+  tournamentId: string,
+  eventId: string,
+): Promise<ReadonlyArray<StoredStage>> {
+  return (await getEventGroupsAndStages(viewer, tournamentId, eventId)).stages
 }
 
 /**

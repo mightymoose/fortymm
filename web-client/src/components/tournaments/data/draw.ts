@@ -135,8 +135,7 @@ export function fixtureGroupLabel(
   index: DrawIndex,
   fixture: Pick<Fixture, 'groupId' | 'stageId'>,
 ): string | null {
-  const stage = index.stageById.get(fixture.stageId)
-  if (stage === undefined || !seatsBothSidesAtCut(stage.drawType)) return null
+  if (!isGroupStageId(index.stageById, fixture.stageId)) return null
   const { group } = fixtureReservation(index, fixture)
   return group !== null ? groupLabel(group) : null
 }
@@ -339,6 +338,16 @@ export function seatsBothSidesAtCut(stageDrawType: StageDrawType): boolean {
       return exhaustive
     }
   }
+}
+
+/** Whether `stageId` names a **group stage** of this event — one lookup plus
+ * `seatsBothSidesAtCut`, asked identically by every reader that labels, buckets or
+ * panels a group (`fixtureGroupLabel`, `drawState`'s per-fixture bucketing, and its
+ * group-panel filter). A `stageId` the map does not carry answers `false`, the same
+ * honest exclusion every one of those callers already gave it on its own. */
+function isGroupStageId(stagesById: Map<string, Stage>, stageId: string): boolean {
+  const stage = stagesById.get(stageId)
+  return stage !== undefined && seatsBothSidesAtCut(stage.drawType)
 }
 
 /**
@@ -591,11 +600,9 @@ export function drawState(event: TournamentEvent): DrawState {
     //
     // A stage this event does not list answers `false` and the fixture is shown
     // ungrouped, which is the same honest fallback `ungroupedShapeOf` gives it.
-    const stage = stagesById.get(fixture.stageId)
     const groupId = fixture.groupId
     if (
-      stage === undefined ||
-      !seatsBothSidesAtCut(stage.drawType) ||
+      !isGroupStageId(stagesById, fixture.stageId) ||
       groupId === null ||
       !groupIds.has(groupId)
     ) {
@@ -619,13 +626,9 @@ export function drawState(event: TournamentEvent): DrawState {
   // `ungrouped` above); relying on that emptiness was incidental, and the ticket's own
   // acceptance criterion ("`inPositionOrder` is never handed two groups that share a
   // position") asks for it stated, not implied.
-  const groupStageGroups = event.groups.filter((group) => {
-    const stage = stagesById.get(group.stageId)
-    // A `stageId` this event does not list gets the same honest exclusion a fixture's
-    // unresolved stage gets elsewhere in this function (`fixtureGroupLabel`): left out
-    // of the group panel rather than guessed at.
-    return stage !== undefined && seatsBothSidesAtCut(stage.drawType)
-  })
+  const groupStageGroups = event.groups.filter((group) =>
+    isGroupStageId(stagesById, group.stageId),
+  )
 
   // **In POSITION order** (`inPositionOrder`), which is the order the director arranged
   // them in and the order the event editor shows them in — not the order they arrived

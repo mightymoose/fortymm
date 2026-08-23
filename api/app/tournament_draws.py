@@ -224,6 +224,23 @@ def _stage_id_at_position(event: TournamentEvent, position: int) -> uuid.UUID | 
     )
 
 
+def _stage_groups(event: TournamentEvent, position: int) -> list[GroupRead]:
+    """This event's groups belonging to the stage at ``position``, in the event's own
+    group order — the one filter :func:`draw_config` (which needs both stage 0's
+    groups and stage 1's) and :func:`cut_draw`'s re-materialise check (which needs
+    only stage 0's count) both build the same way (#1484), rather than each pairing
+    :func:`_stage_id_at_position` with its own inline ``stage_id ==`` filter.
+
+    Answers a **position**, not the "seats both sides at the cut" predicate
+    :func:`group_stage_ids` answers — the two agree for every draw type today, but
+    single-elim and swiss mint their one stage at position 0 without seating both
+    sides, so they are genuinely different questions asked for different reasons, not
+    two spellings of one.
+    """
+    stage_id = _stage_id_at_position(event, position)
+    return [group for group in _ordered_groups(event) if group.stage_id == stage_id]
+
+
 def _ordered_groups(event: TournamentEvent) -> list[GroupRead]:
     """This event's groups, projected, in the director's order — ascending ``position``.
 
@@ -418,18 +435,10 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     them in. A ``sorted`` is stable, so groups stored before the field existed (every
     ``position`` defaulting to ``0``) keep the array order they have always had.
     """
-    groups = _ordered_groups(event)
-    group_stage_id = _stage_id_at_position(event, 0)
-    knockout_stage_id = _stage_id_at_position(event, 1)
-    knockout_groups = (
-        [group for group in groups if group.stage_id == knockout_stage_id]
-        if knockout_stage_id is not None
-        else []
-    )
+    group_stage_groups = _stage_groups(event, 0)
+    knockout_groups = _stage_groups(event, 1)
     return DrawConfig(
-        group_ids=tuple(
-            GroupId(group.id) for group in groups if group.stage_id == group_stage_id
-        ),
+        group_ids=tuple(GroupId(group.id) for group in group_stage_groups),
         # Exactly one, never a guess: "the knockout stage's group" has no answer when
         # its stage holds none yet or (should the template ever change) more than one
         # — see ``app.draws._sole_group``'s sibling reasoning for the same refusal to
@@ -878,15 +887,11 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     # Compared against the GROUP STAGE's own rows (#1484), never
     # ``len(event.groups)`` — see the docstring's own note on why an event-wide
     # length would never let this comparison hold once every stage carries groups.
-    group_stage_id = _stage_id_at_position(event, 0)
-    group_stage_count = sum(
-        1 for group in event.groups if group.stage_id == group_stage_id
-    )
-    re_materialised = (
-        draw_settings_of(event.draw_settings).draw_type is DrawType.rr_then_ko
-        and group_count_for(GroupCountSource.structural, field_size=len(entrants))
-        != group_stage_count
-    )
+    re_materialised = draw_settings_of(
+        event.draw_settings
+    ).draw_type is DrawType.rr_then_ko and group_count_for(
+        GroupCountSource.structural, field_size=len(entrants)
+    ) != len(_stage_groups(event, 0))
     if re_materialised:
         # Delete-first, the one branch where the wholesale ordering below cannot be
         # kept: a fixture names its group, so a group row cannot go while a fixture of
