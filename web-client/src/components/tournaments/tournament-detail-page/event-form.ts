@@ -11,9 +11,9 @@ import {
   swissRoundsSchema,
   type EventSection,
 } from '../data/event-validation'
-import { browserTimezone, inPositionOrder } from '../data/helpers'
+import { browserTimezone, fmtDate, fmtTimeWindow, inPositionOrder } from '../data/helpers'
 import { PRED_OPS_BY_TYPE, type PredicateOp } from '../data/options'
-import { keepReservations } from '../data/reservation-entries'
+import { keepReservations, reservationEntryKey } from '../data/reservation-entries'
 import { eligibilityIssues } from '../data/predicate-validation'
 import type {
   ReservationEntry,
@@ -29,6 +29,11 @@ const slotSchema = z.object({
   start: z.string(),
   end: z.string(),
 })
+
+/** The shape both an event's `slot` and a reservation's `slot` share — named once so
+ * #1501's ordering/containment predicates below can judge either without caring which
+ * one they were handed. */
+type SlotDraft = z.infer<typeof slotSchema>
 
 /** An eligibility predicate's value: a rating, a `[min, max]` pair for `between`,
  * or unset. Typed as `PredicateValue` rather than inferred, so the form's value and
@@ -166,6 +171,155 @@ export function isOverReservationCap(
   reservationCount: number,
 ): boolean {
   return drawType !== 'rr-then-ko' && reservationCount > 1
+}
+
+/**
+ * **A slot's own ordering (#1501)** — is `end` strictly after `start`? Comparing the two
+ * `HH:MM` strings directly is safe: an `<input type="time">` never emits anything but a
+ * zero-padded, fixed-width `HH:MM`, so lexicographic order and clock order agree. A
+ * zero-length window (`end === start`) is refused along with a genuinely inverted one —
+ * a slot that starts and ends at the same instant reserves no time at all, exactly as
+ * the server's mirrored rule (`_slot_is_well_formed`) refuses it.
+ *
+ * Exported because it judges TWO different slots the same way: the event's own `slot`
+ * on Basics, and every reservation's `slot` on Reservations (#1501's rules 3 and 1) —
+ * one predicate, so the two tabs can never disagree about what "ordered" means.
+ */
+export function isSlotOrdered(slot: SlotDraft): boolean {
+  return slot.end > slot.start
+}
+
+/** A `YYYY-MM-DD` date. */
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+/** An `HH:MM` time — no seconds. The same shape the server's parse rule asks of the
+ * event's own slot (#1501, rule 3). */
+const TIME_PATTERN = /^\d{2}:\d{2}$/
+
+/**
+ * **The event's own slot is well-formed (#1501, rule 3's parse half)** — a real date, a
+ * real time either side, no seconds. `<input type="date">` / `<input type="time">`
+ * cannot *emit* anything malformed, but they CAN be cleared: a director who blanks the
+ * Date box (or either time box) and presses Save has authored `''`, a value the boxes
+ * themselves happily hold.
+ *
+ * That value is not merely blank, it is DANGEROUS: `isSlotOrdered`'s `end > start`
+ * string comparison treats `''` as sorting before every real `HH:MM`, so a blank Start
+ * with a real End reads as "ordered" — and a blank Date with no reservations to trip
+ * containment on would sail through both #1501 checks and build a request the server
+ * 422s on `date.fromisoformat('')`. This predicate is what stops it: asked BEFORE
+ * ordering (see the `superRefine` below), so a cleared box is told it is empty, never
+ * that its window "must end after it starts."
+ *
+ * Scoped to the EVENT's own slot only. A reservation's slot has no parse rule of its own
+ * to mirror here — clearing one of its three boxes is already caught by containment or
+ * ordering once the event's own slot is well-formed (a blank reservation date can never
+ * equal a real event date; a blank reservation time sorts outside a real event window on
+ * at least one side) — see `event-validation.ts`'s mirror-table entry for the fuller
+ * accounting of what is, and is not, mirrored here.
+ */
+export function isEventSlotWellFormed(slot: SlotDraft): boolean {
+  return (
+    DATE_PATTERN.test(slot.date) &&
+    TIME_PATTERN.test(slot.start) &&
+    TIME_PATTERN.test(slot.end)
+  )
+}
+
+/**
+ * **A reservation's containment inside its event's window (#1501, rule 2)** — on the
+ * SAME date, and no earlier than the event starts, no later than the event ends. Bounds
+ * are INCLUSIVE: a reservation whose window exactly equals the event's is legal — the
+ * seeded `ev-cc-open` / `p-cc-1` pair (`mocks/tournaments-store.ts`) is exactly this
+ * case, and refusing it would refuse a save the server accepts.
+ *
+ * Because a `Slot` carries one `date`, containment on the date axis is EQUALITY, not a
+ * range — the same reasoning the server's rule follows.
+ */
+export function isReservationContained(
+  reservationSlot: SlotDraft,
+  eventSlot: SlotDraft,
+): boolean {
+  return (
+    reservationSlot.date === eventSlot.date &&
+    reservationSlot.start >= eventSlot.start &&
+    reservationSlot.end <= eventSlot.end
+  )
+}
+
+/**
+ * The client's own sentence for a window (a reservation's, or the event's own) whose
+ * `end` is not strictly after its `start` — #1501's ordering rule, raised inline before
+ * any request exists. Deliberately its own words, not the server's `_slot_is_well_formed`
+ * message, the same reason `reservationCapMessage` is not a transplant of the server's
+ * cap sentence.
+ */
+function slotOrderMessage(): string {
+  return 'This window must end after it starts.'
+}
+
+/**
+ * The client's own sentence for an event slot with a cleared box — #1501, rule 3's
+ * parse half (`isEventSlotWellFormed`). Named after what the director actually did
+ * (left a box empty), never "invalid" or "malformed": the fix is to fill it back in,
+ * and the sentence should say so.
+ */
+function slotParseMessage(): string {
+  return 'The date and both times are required.'
+}
+
+/**
+ * The client's own sentence for a reservation whose window falls outside its event's —
+ * #1501's containment rule. **States the event's own window**, so the director can read
+ * the target without leaving the Reservations tab for Basics — a constraint Discovery
+ * carried straight into the acceptance criteria.
+ */
+function reservationWindowMessage(eventSlot: SlotDraft): string {
+  return (
+    `This reservation must fall on ${fmtDate(eventSlot.date)}, between ` +
+    `${fmtTimeWindow(eventSlot.start, eventSlot.end)} — the event's own window.`
+  )
+}
+
+/**
+ * What is wrong with each reservation's **window**, keyed by `reservationEntryKey` —
+ * #1501's ordering and containment rules, read a second way for the tab that puts the
+ * red under the box (mirrors `reservationNameIssues`, `data/event-validation`, for the
+ * identical reason: RHF's `useFieldArray.update()` does not re-run the resolver, so a
+ * card's own edit has to be re-judged from LIVE form values or the red would outlive
+ * the fix — see `ReservationsSection`'s `nameIssues` doc for the full mechanism).
+ *
+ * Ordering is asked before containment, for one row at a time: an end-before-start
+ * window is already wrong regardless of what the event's slot says, so there is never a
+ * reason to also tell the director it is outside a window it cannot even form.
+ *
+ * **Says nothing about ANY row when the event's own slot cannot frame one** — cleared,
+ * malformed, or itself end-before-start. A containment message quotes the event's
+ * window (`reservationWindowMessage`), and there is no honest window to quote against
+ * an event slotted (say) `18:00`–`09:00`: every reservation would read "must fall
+ * between 18:00–09:00", a window that cannot exist, sending the director back to
+ * Reservations to fit inside something Basics already told them to fix first. The event
+ * slot IS the thing to fix first — the same reasoning ordering-before-containment uses
+ * for one row, one level up.
+ *
+ * The two `superRefine`s below call this SAME function for the verdict that refuses the
+ * save, so the refusal and the red under the box can never say two different things.
+ */
+export function reservationWindowIssues(
+  reservations: readonly ReservationEntry[],
+  eventSlot: SlotDraft,
+): Record<string, string> {
+  if (!isEventSlotWellFormed(eventSlot) || !isSlotOrdered(eventSlot)) return {}
+  const issues: Record<string, string> = {}
+  for (const reservation of reservations) {
+    if (!isSlotOrdered(reservation.slot)) {
+      issues[reservationEntryKey(reservation)] = slotOrderMessage()
+      continue
+    }
+    if (!isReservationContained(reservation.slot, eventSlot)) {
+      issues[reservationEntryKey(reservation)] = reservationWindowMessage(eventSlot)
+    }
+  }
+  return issues
 }
 
 /**
@@ -321,6 +475,57 @@ export const eventSchema = z.object({
     })
   })
 
+  // **Reservation ordering + containment (#1501, rules 1 and 2)**: raised PER ROW at
+  // that reservation's own `slot` path — the same shape a per-row error already has for
+  // a blank name (`RESERVATION_DRAFT_FIELDS.name`), so `firstInvalidSection`'s existing
+  // `errors.reservations` arm already opens the right tab with no change of its own.
+  //
+  // The verdict is `reservationWindowIssues` above, never re-derived here: one rule, two
+  // readers (the resolver that refuses the save, and `ReservationsSection`'s live-value
+  // channel that puts the red under the box) — the same discipline `reservationCapMessage`
+  // /`isOverReservationCap` already follow.
+  .superRefine((values, ctx) => {
+    const issues = reservationWindowIssues(values.reservations, values.slot)
+    values.reservations.forEach((reservation, i) => {
+      const message = issues[reservationEntryKey(reservation)]
+      if (!message) return
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reservations', i, 'slot'],
+        message,
+      })
+    })
+  })
+
+  // **The event's own slot — parse, then ordering (#1501, rule 3)**: mirrors the
+  // reservation's own ordering rule, one level up — an event slotted end-before-start
+  // makes every reservation uncontainable (containment above can never pass), so this
+  // has to refuse before the Reservations tab is even worth judging. Raised on `slot`
+  // itself, so `firstInvalidSection`'s new `errors.slot` arm can route a director to the
+  // tab that holds it — the Basics tab, under the time-slot fields (`BasicsSection`).
+  //
+  // Parse is asked FIRST: a cleared Date/Start/End box is `''`, and `isSlotOrdered`'s
+  // string comparison treats `''` as sorting before every real `HH:MM` — so a blank
+  // Start next to a real End reads as "ordered", and the request would go out with a
+  // date the server 500s trying to parse. A cleared box is told it is empty, never
+  // that its window "must end after it starts."
+  .superRefine((values, ctx) => {
+    if (!isEventSlotWellFormed(values.slot)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['slot'],
+        message: slotParseMessage(),
+      })
+      return
+    }
+    if (isSlotOrdered(values.slot)) return
+    ctx.addIssue({
+      code: 'custom',
+      path: ['slot'],
+      message: slotOrderMessage(),
+    })
+  })
+
 // The schema mirrors the domain types (`Predicate`, `ReservationEntry`) so the nested-array
 // sub-forms are validated by this one resolver; the section code that rebuilds a
 // clean `Predicate`/`ReservationEntry` from each `useFieldArray` field is the compile-time
@@ -418,13 +623,18 @@ export function firstInvalidSection(
   // `qualifiersPerGroup` and `rounds` both live on Basics beside the draw type that decides
   // whether either is asked at all, so a refused two-stage or swiss save opens the tab
   // holding the empty box.
+  // `slot` is the event's own time-slot window (#1501, rule 3) — cross-field, so it
+  // cannot live inside one field's schema, but it lives on Basics beside the other
+  // cross-field rules above, and the same reasoning applies: a save refused for a
+  // window nobody can see is a button that does nothing.
   if (
     errors.name ||
     errors.qualifiersPerGroup ||
     errors.rounds ||
     errors.maxPlayers ||
     errors.entryFee ||
-    errors.timezone
+    errors.timezone ||
+    errors.slot
   )
     return 'basics'
   if (errors.predicates) return 'eligibility'

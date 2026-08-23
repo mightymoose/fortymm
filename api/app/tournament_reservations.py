@@ -130,7 +130,7 @@ def _slot_columns(slot: Slot) -> tuple[date, time, time]:
     ``fromisoformat`` and not a hand-rolled ``strptime``: it is the parser the rest of
     this codebase already reads dates with (``app.schedule_preview_solve``), and the
     boundary has already refused anything it would choke on
-    (:data:`~app.schemas.tournament.ReservationSlot`) — so this is a total function of
+    (:data:`~app.schemas.tournament.WellFormedSlot`) — so this is a total function of
     what can reach it, not a parse that needs a failure branch.
     """
     return (
@@ -144,10 +144,10 @@ def _slot_read(reservation: TournamentEventReservation) -> Slot:
     """The wire :class:`Slot` a stored reservation's three columns compose back into.
 
     ``%H:%M`` exactly, with no seconds, because that is the shape the boundary accepts
-    and therefore the only shape a stored value can have had (:data:`ReservationSlot`
-    refuses a time carrying seconds rather than storing one it would later have to
-    truncate). The round trip is lossless: what a client sends is what it reads back,
-    character for character.
+    and therefore the only shape a stored value can have had (:data:`WellFormedSlot
+    <app.schemas.tournament.WellFormedSlot>` refuses a time carrying seconds rather
+    than storing one it would later have to truncate). The round trip is lossless:
+    what a client sends is what it reads back, character for character.
     """
     return Slot(
         date=reservation.slot_date.isoformat(),

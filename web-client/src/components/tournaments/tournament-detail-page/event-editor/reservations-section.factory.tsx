@@ -19,6 +19,11 @@ export interface ReservationsHarnessInputs {
    * is normally in: the editor says nothing in red until the organizer has actually
    * tried to save. */
   nameIssues?: Record<string, string>
+  /** What is wrong with each reservation's **window**, keyed by reservation id
+   * (`reservationWindowIssues`). `undefined` by default, for the same reason
+   * `nameIssues` is: the editor says nothing in red until the organizer has tried to
+   * save. */
+  windowIssues?: Record<string, string>
   /** Seeds the FORM's `drawType` at a value that DIVERGES from `event.drawType` —
    * #1482's reservation cap reads the form's watched draw type, never the stored
    * event's, and this is how a test proves that without driving a live Basics-tab

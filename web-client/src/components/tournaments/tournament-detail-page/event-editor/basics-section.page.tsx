@@ -21,6 +21,18 @@ const scoped = (container: Container) => ({
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
   },
+  /** The three time-slot boxes (#1501) — used to assert the cross-field slot error's
+   * `aria-invalid` / `aria-describedby` wiring, the same treatment `ReservationCard`'s
+   * window boxes get. */
+  getSlotDateInput() {
+    return container.getByLabelText('Date')
+  },
+  getSlotStartInput() {
+    return container.getByLabelText('Start')
+  },
+  getSlotEndInput() {
+    return container.getByLabelText('End')
+  },
   /** **K** — the qualifier-count box, which exists only for an `rr-then-ko` event
    * (ADR 20260727). `get` for the case that expects it. */
   getQualifiersInput() {
