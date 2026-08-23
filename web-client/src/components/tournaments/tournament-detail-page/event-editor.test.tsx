@@ -764,6 +764,43 @@ describe('EventEditor', () => {
       expect(eventEditorPage.queryReservationsCapError()).not.toBeNull()
     })
 
+    // The refusal must not OUTLIVE its condition. Its own second remedy is "switch the
+    // draw type to rr-then-ko", and taking it used to leave the red alert on screen
+    // insisting the draw type is not rr-then-ko — false at the moment it was rendered,
+    // beside an Add button that had just re-enabled. RHF revalidates the field that
+    // CHANGED, never a sibling, so the array-level error raised at `['reservations']`
+    // survives a `drawType` edit; the section re-derives the condition instead of
+    // trusting that stale error object.
+    it('clears the cap refusal when the director takes its own rr-then-ko remedy', async () => {
+      const onSave = vi.fn()
+      eventEditorPage.render({
+        event: buildRrThenKoEvent({
+          reservations: [
+            buildReservation({ id: 'res-a', name: 'Reservation A', position: 0 }),
+            buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
+          ],
+        }),
+        onSave,
+      })
+
+      await eventEditorPage.chooseDrawType('Round robin')
+      await userEvent.click(eventEditorPage.getSaveButton())
+      expect(onSave).not.toHaveBeenCalled()
+      expect(eventEditorPage.queryReservationsCapError()).not.toBeNull()
+
+      // The remedy the message itself offers, taken on the tab it points at.
+      await userEvent.click(eventEditorPage.getSectionTab('Basics'))
+      await eventEditorPage.chooseDrawType('Round-robin then knockout')
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+
+      // The red alert is gone, and so is the notice: at rr-then-ko the cap does not
+      // apply at all, so neither story about it may be on screen.
+      expect(eventEditorPage.queryReservationsCapError()).toBeNull()
+      expect(eventEditorPage.queryReservationsCapNotice()).toBeNull()
+      // …and Add is live again, because two reservations are legal for this draw type.
+      expect(eventEditorPage.getAddReservationButton()).toBeEnabled()
+    })
+
     // The freeze notice, not this one, once the event is drawn — a director locked out
     // by a cut draw is told to delete the draw first (the actionable instruction); the
     // cap notice would be a second, less useful story about the very same dead button.

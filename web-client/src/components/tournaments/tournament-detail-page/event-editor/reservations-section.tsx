@@ -146,15 +146,28 @@ export const ReservationsSection = ({
   // it back as `event.drawType`.
   const drawType = useWatch({ control, name: 'drawType' })
 
-  // The array-level save refusal (`eventSchema`'s `superRefine`, `event-form.ts`) —
-  // read straight off the resolver's own verdict, unlike `reservationNameIssues` above:
-  // append/remove (how this cap is ever reached) DO re-run the resolver, unlike
-  // `update()`, so there is no staleness to work around here. RHF nests an array-level
-  // custom issue under `.root` once a PER-ROW error joins it (a blank name alongside
-  // the cap), and leaves it as the array's own `.message` when the cap is the only
-  // reservations error — read both, so neither shape goes silently blank.
+  // The array-level save refusal (`eventSchema`'s `superRefine`, `event-form.ts`). RHF
+  // nests an array-level custom issue under `.root` once a PER-ROW error joins it (a
+  // blank name alongside the cap), and leaves it as the array's own `.message` when the
+  // cap is the only reservations error — read both, so neither shape goes silently blank.
+  //
+  // **Gated on the live watched pair, because RHF's error object goes STALE here.** The
+  // refusal is raised at the ARRAY's path but its condition reads `drawType`, a
+  // DIFFERENT field, and RHF revalidates the field that changed, never a sibling. So a
+  // director who takes this very message's second remedy ("switch the draw type to
+  // rr-then-ko") watches Add re-enable beside a red alert still insisting the draw type
+  // is not rr-then-ko. The sentence is false at the moment it is on screen, and it is
+  // false precisely because the director did what it asked.
+  //
+  // Re-deriving the condition costs nothing and cannot go stale: `drawType` is already
+  // watched above and `fields` is the live array. The `superRefine` itself STAYS — it is
+  // what refuses the save, and `firstInvalidSection` reads `errors.reservations` to jump
+  // to this tab. This gate only decides whether the sentence is still TRUE.
   const { errors } = useFormState({ control })
-  const capError = errors.reservations?.root?.message ?? errors.reservations?.message
+  const overCap = drawType !== 'rr-then-ko' && fields.length > 1
+  const capError = overCap
+    ? (errors.reservations?.root?.message ?? errors.reservations?.message)
+    : undefined
 
   const capped = !frozen && drawType !== 'rr-then-ko' && fields.length >= 1
 
