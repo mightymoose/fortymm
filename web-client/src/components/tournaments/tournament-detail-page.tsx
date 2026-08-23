@@ -227,11 +227,12 @@ export const TournamentDetailPage = ({
       : onUpdateEvent(ev)
 
   /** The open sheet's event's CURRENT `lock_version` (#1499) — read live off THIS
-   * render's `tournament` prop, never off `editorEvent`. `editorEvent` is frozen the
-   * moment `openEvent` copies the event into state, and a refetch that reconciles the
-   * tournament does not reach back in and replace it — so reusing it here would hand
-   * the editor's override the SAME stale version its conflict was just refused for,
-   * and the override button would conflict forever. `null` when this event no longer
+   * render's `tournament` prop, never off `editorEvent`. `useOpenEditorEvent` resolves
+   * `?event=` once per value of the param and then HOLDS the result (#1503), so
+   * `editorEvent` is frozen at the version the sheet opened on: a refetch that
+   * reconciles the tournament does not reach back in and replace it — so reusing it
+   * here would hand the editor's override the SAME stale version its conflict was just
+   * refused for, and the override would conflict forever. `null` when this event no longer
    * appears on the reconciled tournament at all — another writer deleted it while the
    * sheet sat open, and there is no live version left to overwrite. */
   const currentLockVersion =
