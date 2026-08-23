@@ -176,9 +176,6 @@ async def _frequent_opponents(
             .join(User, User.id == meetings.c.opponent_id)
             # Tombstoned (merged-away) users hold no side rows once the merge
             # has re-pointed them, so this excludes nothing in practice — it is
-            # here so a ghost can never surface as somebody's rival.
-            # Tombstoned (merged-away) users hold no side rows once the merge
-            # has re-pointed them, so this excludes nothing in practice — it is
             # here so a ghost can never surface as somebody's rival. The
             # never-active conjunct is the same story twice over: a rival is
             # met through match sides, which a never-active row cannot hold —
