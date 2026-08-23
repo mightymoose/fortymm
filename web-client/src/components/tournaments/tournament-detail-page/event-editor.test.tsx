@@ -849,9 +849,24 @@ describe('EventEditor', () => {
     // The freeze notice, not this one, once the event is drawn — a director locked out
     // by a cut draw is told to delete the draw first (the actionable instruction); the
     // cap notice would be a second, less useful story about the very same dead button.
+    //
+    // **The draw type here must NOT be `rr-then-ko`.** This test used to build one, and
+    // that made it unfalsifiable: `capped` is already false for an `rr-then-ko` event on
+    // its draw-type clause alone, so the `!frozen` clause this test exists to pin was
+    // never the reason the notice was absent, and dropping `!frozen` left it green. A
+    // cut ROUND-ROBIN holding two legacy reservations (data only reachable pre-#1482) is
+    // the state that discriminates: every other clause of `capped` is true, so the
+    // notice is absent if and only if the freeze suppressed it.
+    //
+    // No save is submitted, deliberately. `capError` does not exist until a submit has
+    // run, so `showCapNotice` reduces to `capped` here — leaving the freeze as the only
+    // thing that can suppress the notice, rather than letting `!capError` do it and pass
+    // the test for the wrong reason.
     it('shows no cap notice once the draw is cut, even while over cap', async () => {
       eventEditorPage.render({
-        event: buildRrThenKoEvent({
+        event: buildEvent({
+          id: 'ev-1',
+          drawType: 'round-robin',
           reservations: [
             buildReservation({ id: 'res-a', name: 'Reservation A', position: 0 }),
             buildReservation({ id: 'res-b', name: 'Reservation B', position: 1 }),
@@ -863,6 +878,8 @@ describe('EventEditor', () => {
       await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
 
       expect(eventEditorPage.getAddReservationButton()).toBeDisabled()
+      // The freeze's own notice IS on screen — the one actionable sentence, said once.
+      expect(screen.getByTestId('reservations-frozen-notice')).toBeInTheDocument()
       expect(eventEditorPage.queryReservationsCapNotice()).toBeNull()
     })
   })

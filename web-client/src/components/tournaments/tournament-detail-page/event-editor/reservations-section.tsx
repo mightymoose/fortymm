@@ -174,7 +174,7 @@ export const ReservationsSection = ({
     ? (errors.reservations?.root?.message ?? errors.reservations?.message)
     : undefined
 
-  const capped = drawType !== 'rr-then-ko' && fields.length >= 1
+  const capped = !frozen && drawType !== 'rr-then-ko' && fields.length >= 1
 
   // Whether the button is DEAD and whether this notice EXPLAINS it are two questions,
   // and they must not share one flag: `capped` disables Add from the first reservation
