@@ -179,7 +179,7 @@ export function isOverReservationCap(
  * zero-padded, fixed-width `HH:MM`, so lexicographic order and clock order agree. A
  * zero-length window (`end === start`) is refused along with a genuinely inverted one —
  * a slot that starts and ends at the same instant reserves no time at all, exactly as
- * the server's mirrored rule (the tightened `_slot_is_storable`) refuses it.
+ * the server's mirrored rule (`_slot_is_well_formed`) refuses it.
  *
  * Exported because it judges TWO different slots the same way: the event's own `slot`
  * on Basics, and every reservation's `slot` on Reservations (#1501's rules 3 and 1) —
@@ -249,7 +249,7 @@ export function isReservationContained(
 /**
  * The client's own sentence for a window (a reservation's, or the event's own) whose
  * `end` is not strictly after its `start` — #1501's ordering rule, raised inline before
- * any request exists. Deliberately its own words, not the server's `_slot_is_storable`
+ * any request exists. Deliberately its own words, not the server's `_slot_is_well_formed`
  * message, the same reason `reservationCapMessage` is not a transplant of the server's
  * cap sentence.
  */

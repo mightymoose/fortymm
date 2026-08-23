@@ -2349,6 +2349,45 @@ class ReservationWindow(NamedTuple):
     slot_end: time
 
 
+def reservation_windows(
+    reservations: Sequence[ReservationWrite],
+) -> list[ReservationWindow]:
+    """Every reservation of a **write payload**, as the :class:`ReservationWindow`
+    triples :func:`enforce_reservation_containment` judges (#1501).
+
+    One function, so the create schema's validator and the update verb cannot drift on
+    which wire field feeds which parsed one — the same reason the predicate itself is
+    one function with two call sites. Both write shapes are covered:
+    :class:`ReservationWrite` is the create entry and :class:`ReservationUpsert` extends
+    it, so a PATCH's list passes here unchanged.
+
+    ``position`` is the entry's 0-based place in the list, which is what a write
+    payload's order MEANS on either shape (:data:`EventReservations`,
+    :data:`EditedEventReservations`) — the same order
+    :func:`~app.tournament_reservations.apply_event_reservations` turns into the stored
+    positions, so a refusal's index names the row the director sees.
+
+    A **total** conversion, not a parse that can fail: every entry's ``slot`` is a
+    :data:`WellFormedSlot`, so :func:`_slot_is_well_formed` has already refused anything
+    ``date.fromisoformat``/``time.fromisoformat`` would choke on. The same move, for the
+    same stated reason, as :func:`~app.tournament_reservations._slot_columns`.
+
+    The **stored** side has no counterpart here and needs none: the update verb reads
+    the ORM's own ``slot_date``/``slot_start``/``slot_end`` columns, which are already
+    the parsed types, so there is nothing to convert.
+    """
+    return [
+        ReservationWindow(
+            position=index,
+            name=reservation.name,
+            slot_date=date.fromisoformat(reservation.slot.date),
+            slot_start=time.fromisoformat(reservation.slot.start),
+            slot_end=time.fromisoformat(reservation.slot.end),
+        )
+        for index, reservation in enumerate(reservations)
+    ]
+
+
 def enforce_reservation_containment(
     event_window: tuple[date, time, time],
     reservations: Sequence[ReservationWindow],
@@ -2555,17 +2594,7 @@ class TournamentEventCreate(BaseModel):
             time.fromisoformat(self.slot.end),
         )
         enforce_reservation_containment(
-            event_window,
-            [
-                ReservationWindow(
-                    position=index,
-                    name=reservation.name,
-                    slot_date=date.fromisoformat(reservation.slot.date),
-                    slot_start=time.fromisoformat(reservation.slot.start),
-                    slot_end=time.fromisoformat(reservation.slot.end),
-                )
-                for index, reservation in enumerate(self.reservations)
-            ],
+            event_window, reservation_windows(self.reservations)
         )
         return self
 

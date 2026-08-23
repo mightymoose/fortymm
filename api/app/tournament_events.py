@@ -52,6 +52,7 @@ from app.schemas.tournament import (
     enforce_event_reservation_cap,
     enforce_reservation_containment,
     named_list,
+    reservation_windows,
 )
 from app.tournament_draw_settings import (
     draw_settings_of,
@@ -742,16 +743,7 @@ def _enforce_reservation_containment(
             time.fromisoformat(stored_slot["end"]),
         )
     if updates.reservations is not None:
-        reservations = [
-            ReservationWindow(
-                position=index,
-                name=reservation.name,
-                slot_date=date.fromisoformat(reservation.slot.date),
-                slot_start=time.fromisoformat(reservation.slot.start),
-                slot_end=time.fromisoformat(reservation.slot.end),
-            )
-            for index, reservation in enumerate(updates.reservations)
-        ]
+        reservations = reservation_windows(updates.reservations)
     else:
         reservations = [
             ReservationWindow(
