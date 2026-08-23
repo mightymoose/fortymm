@@ -1,6 +1,10 @@
 import type { components } from '@/api/schema'
 import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
-import { groupsFor, simFixtureTime } from '@/mocks/factories/tournaments/solver-sim'
+import {
+  groupsFor,
+  simFixtureTime,
+  structuralGroupIdFor,
+} from '@/mocks/factories/tournaments/solver-sim'
 import {
   BAY_AREA_OPEN_ID,
   SUMMER_SLAM_ID,
@@ -162,7 +166,14 @@ export function buildTournamentFixtureRead(
     // multi-stage event's second stage (an `rr-then-ko` bracket) overrides this to
     // `'s-2'`, matching `mintStageReads`'s own numbering.
     stage_id: 's-1',
-    group_id: null,
+    // `NOT NULL` on the wire since #1484 — every fixture the real server sends now
+    // names a real group. `structuralGroupIdFor('s-1')` needs no reservation to
+    // exist (unlike `groupIdFor`), so it is a default this builder can always supply
+    // on its own — matching `stage_id`'s own default, the group a standalone event's
+    // one stage holds when it has booked no reservation (`groupsForEvent`'s floor,
+    // `solver-sim.ts`). A fixture that means a *specific* group overrides this the
+    // same way it already overrides `stage_id`.
+    group_id: structuralGroupIdFor('s-1'),
     round: 1,
     position: 1,
     entry_a_id: 'entry-1',
@@ -608,9 +619,12 @@ function knockoutSeats(fieldSize: number): Map<number, KnockoutSeat> {
  * - **`position` is the FULL-bracket slot index**, 1-based, never a contiguous
  *   renumbering of the surviving matches: it is what makes the successor arithmetic feed
  *   the right next-round slot, and a byed round-1 slot simply leaves a gap in it.
- * - **`group_id` is null throughout** — a bracket is ungrouped; the event's groups (if
- *   any) are irrelevant to it, exactly as on the server. For an `rr-then-ko` draw that is
- *   not cosmetic: `group_id IS NULL` **is** the knockout stage, and it is what routes
+ * - **`group_id` is the caller's own bracket's group, on every fixture** (ADR 20260823,
+ *   #1484) — never `null`. A plain single-elim/swiss event's one stage holds exactly one
+ *   group (#1483's floor) and every fixture of its draw is dealt into it; an
+ *   `rr-then-ko` event's knockout stage holds its own group too, distinct from the group
+ *   stage's. Either way the caller passes the real id — see `groupId` below — and it is
+ *   the fixture's *stage* (`seatsBothSidesAtCut`), never a null `group_id`, that routes
  *   these fixtures to the bracket view rather than into a group's list.
  * - **Rounds are numbered from 1 for both callers.** For a knockout stage that is a
  *   *restart*, not a continuation of the group rounds (ADR): groups may differ in size,
@@ -630,6 +644,13 @@ function planKnockoutFixtures(
    * event's one stage, `'s-2'` for an `rr-then-ko` event's knockout stage
    * (`mintStageReads`'s numbering). */
   stageId = 's-1',
+  /** This bracket's own group id (ADR 20260823, #1484) — the one group its stage
+   * holds, stamped on every fixture the bracket cuts. Defaults to
+   * `structuralGroupIdFor(stageId)` — the same deterministic id
+   * `buildTournamentFixtureRead`'s own default uses — so a caller with no real
+   * event to read a group off of (a bare planner test) still cuts a self-consistent
+   * shape, the same convenience `stageId`'s own default is. */
+  groupId = structuralGroupIdFor(stageId),
 ): TournamentFixtureRead[] {
   // `bracket` = the smallest power of two ≥ the field; `rounds` = its depth (log2).
   let bracket = 1
@@ -653,7 +674,7 @@ function planKnockoutFixtures(
     buildTournamentFixtureRead({
       id: `${idPrefix}-r${round}-p${position}`,
       stage_id: stageId,
-      group_id: null,
+      group_id: groupId,
       round,
       position,
       entry_a_id: sideOf(round, position, 'a'),
@@ -701,12 +722,15 @@ export function planSingleElimFixtures(
   entryIds: readonly string[],
   /** This bracket's own stage id (ADR 20260815) — see `planKnockoutFixtures`. */
   stageId = 's-1',
+  /** This bracket's own group id (ADR 20260823, #1484) — see `planKnockoutFixtures`. */
+  groupId = structuralGroupIdFor(stageId),
 ): TournamentFixtureRead[] {
   return planKnockoutFixtures(
     entryIds.length,
     new Map(entryIds.map((entryId, index) => [index + 1, entryId])),
     'fx-se',
     stageId,
+    groupId,
   )
 }
 
@@ -750,6 +774,11 @@ export function planSwissFixtures(
   /** This swiss event's own (sole) stage id (ADR 20260815) — `'s-1'`,
    * `mintStageReads`'s id for a swiss event's one stage. */
   stageId = 's-1',
+  /** This swiss event's own group id (ADR 20260823, #1484) — the one group its
+   * stage holds (#1483's floor), stamped on every round this cuts. Defaults to
+   * `structuralGroupIdFor(stageId)`, the same deterministic id
+   * `buildTournamentFixtureRead`'s own default uses. */
+  groupId = structuralGroupIdFor(stageId),
 ): TournamentFixtureRead[] {
   // The odd entrant out sits the round, so every round holds ⌊n/2⌋ fixtures whatever the
   // parity.
@@ -761,7 +790,7 @@ export function planSwissFixtures(
         buildTournamentFixtureRead({
           id: `fx-sw-r${round}-p${position}`,
           stage_id: stageId,
-          group_id: null,
+          group_id: groupId,
           round,
           position,
           // Round 1 alone is paired at the cut: draw-order index `i` meets index
@@ -889,6 +918,13 @@ export function planDraw(
   // arms, which never read it — no real `rr-then-ko` event can reach here with fewer than
   // two stages (`mintStageReads('rr-then-ko')` always mints both).
   const knockoutStageId = orderedStages[1]?.id ?? firstStageId
+  // The GROUP STAGE's own group id (ADR 20260823, #1484) — what `single-elim` and
+  // `swiss` deal every fixture of their one stage into (#1483's floor). Those two draw
+  // types have no director-configured groups, so `groupIds` reaching here is either
+  // the caller's own floor group (`planEventDraw` passes `groupsForEvent`'s answer) or
+  // empty (a bare planner test) — the fallback keeps both arms self-consistent either
+  // way, the same convenience `stages`'s own default is.
+  const firstGroupId = groupIds[0] ?? structuralGroupIdFor(firstStageId)
   switch (drawType) {
     case 'round-robin': {
       const refusal = snakeRefusal(entryIds, groupIds)
@@ -900,9 +936,11 @@ export function planDraw(
     }
     case 'single-elim': {
       // Round-robin's per-group floor, one level up: a bracket of one has no fixtures and
-      // is not a competition. The event's GROUPS are not consulted at all — a bracket is
-      // ungrouped, so a single-elim event with groups cuts perfectly well and a
-      // single-elim event with none is not refused, exactly as on the server.
+      // is not a competition. No DIRECTOR-configured group is consulted — a single-elim
+      // event with reservations cuts perfectly well and one with none is not refused,
+      // exactly as on the server — but the bracket is not ungrouped either (ADR 20260823,
+      // #1484): every fixture is dealt into the event's one floor group (`firstGroupId`),
+      // which is what confines it to that group's reservation.
       if (entryIds.length < 2) {
         return {
           ok: false,
@@ -913,7 +951,10 @@ export function planDraw(
       }
       // A single-elim event's ONE stage is `firstStageId` — a plain bracket event has no
       // group stage at all, and its one stage still mints at `mintStageReads`'s `'s-1'`.
-      return { ok: true, fixtures: planSingleElimFixtures(entryIds, firstStageId) }
+      return {
+        ok: true,
+        fixtures: planSingleElimFixtures(entryIds, firstStageId, firstGroupId),
+      }
     }
     case 'rr-then-ko': {
       // BOTH STAGES IN ONE STROKE (ADR "rr-then-ko cuts both stages upfront and seeds
@@ -977,12 +1018,23 @@ export function planDraw(
           // …and the knockout stage is single-elim's bracket, sized `P × K` (derived,
           // never configured, so it cannot contradict the qualifier count) with an EMPTY
           // seed map: nobody has qualified, so every side is TBD. Its own stage id,
-          // `knockoutStageId` (`mintStageReads`'s position-1 stage).
+          // `knockoutStageId` (`mintStageReads`'s position-1 stage), and its OWN group
+          // (ADR 20260823, #1484) — never `firstGroupId`, the group STAGE's own group:
+          // that would deal the bracket into the round-robin half the qualifiers are
+          // picked from, the same hazard the server's own `DrawConfig.knockout_group_id`
+          // split exists to avoid (`api/app/draws.py`). No parameter needed to carry
+          // it in: `structuralGroupIdFor(knockoutStageId)` is exactly the id
+          // `groupsForEvent` (`solver-sim.ts`) mints for a real event's knockout
+          // group — UNCONDITIONALLY, unlike the group stage's own group (which is
+          // `groupIdFor(reservation.id)` whenever a reservation exists) — so both
+          // sides derive the identical id from the identical stage id with no
+          // threading, and this call can never disagree with what the wire shows.
           ...planKnockoutFixtures(
             groupIds.length * qualifiersPerGroup,
             new Map(),
             'fx-ko',
             knockoutStageId,
+            structuralGroupIdFor(knockoutStageId),
           ),
         ],
       }
@@ -1000,10 +1052,12 @@ export function planDraw(
             'never a fallback.',
         )
       }
-      // Round-robin's per-group floor, one level up and group-less, exactly as
-      // single-elim's is. The event's GROUPS are not consulted at all: swiss ranks the
-      // whole field in one table, so a swiss event with groups cuts perfectly well and
-      // one with none is not refused. The two sentences below are the SERVER's, verbatim
+      // Round-robin's per-group floor, one level up, exactly as single-elim's is. No
+      // DIRECTOR-configured group is consulted: swiss ranks the whole field in one
+      // table, so a swiss event with reservations cuts perfectly well and one with none
+      // is not refused — but every fixture is still dealt into the event's one floor
+      // group (`firstGroupId`, ADR 20260823, #1484), which is what confines it to that
+      // group's reservation. The two sentences below are the SERVER's, verbatim
       // (`SwissStrategy.plan_initial`), because for a refusal the sentence *is* the answer.
       if (entryIds.length < 2) {
         return {
@@ -1031,7 +1085,10 @@ export function planDraw(
       }
       // A swiss event's ONE stage is `firstStageId` — a swiss event has no group stage,
       // and its one stage still mints at `mintStageReads`'s `'s-1'`.
-      return { ok: true, fixtures: planSwissFixtures(entryIds, rounds, firstStageId) }
+      return {
+        ok: true,
+        fixtures: planSwissFixtures(entryIds, rounds, firstStageId, firstGroupId),
+      }
     }
   }
 }

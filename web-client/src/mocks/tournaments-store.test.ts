@@ -1723,7 +1723,7 @@ describe('cutting a single-elimination draw', () => {
     expect(fixturesOf(BRACKET)).toEqual(fixtures)
   })
 
-  it('emits every round up front, halving each time, all of it ungrouped', () => {
+  it('emits every round up front, halving each time, all dealt into the stage’s one group', () => {
     const fixtures = cut(BRACKET) // 16 entrants → a 16-slot bracket, 4 rounds
 
     expect(round(fixtures, 1)).toHaveLength(8)
@@ -1731,8 +1731,11 @@ describe('cutting a single-elimination draw', () => {
     expect(round(fixtures, 3)).toHaveLength(2)
     expect(round(fixtures, 4)).toHaveLength(1)
     expect(fixtures).toHaveLength(15)
-    // A bracket is ungrouped — its fixtures name no group, whatever groups the event has.
-    expect(fixtures.every((f) => f.group_id === null)).toBe(true)
+    // A single-elim event's one stage holds exactly one group (#1483's floor), and
+    // every fixture of its bracket is dealt into it (ADR 20260823, #1484) — never
+    // `null`, whatever reservations the event has.
+    expect(fixtures[0].group_id).not.toBeNull()
+    expect(fixtures.every((f) => f.group_id === fixtures[0].group_id)).toBe(true)
     // `position` is contiguous within a round, and the later rounds are all TBD: nothing
     // is decided at the cut but round 1.
     expect(round(fixtures, 1).map((f) => f.position)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
@@ -1885,12 +1888,16 @@ describe('cutting a round-robin-then-knockout draw', () => {
     return result.fixtures
   }
 
-  /** The two stages, split the way the wire splits them: `group_id IS NULL` **is** the
-   * knockout stage (ADR-0786), and there is no other column that says so. */
+  /** The two stages, split by STAGE (position 1 is `mintStageReads`'s `'s-2'`, the
+   * knockout stage) — never by `group_id`, which no longer tells them apart: every
+   * fixture of both stages now names a real group (ADR 20260823, #1484), the group
+   * stage's own or the knockout stage's own. */
+  const knockoutStageIdOf = (eventId: string) =>
+    [...eventOf(eventId).stages].sort((a, b) => a.position - b.position)[1]!.id
   const grouped = (fixtures: ReturnType<typeof cut>) =>
-    fixtures.filter((f) => f.group_id !== null)
+    fixtures.filter((f) => f.stage_id !== knockoutStageIdOf(TWO_STAGE))
   const knockout = (fixtures: ReturnType<typeof cut>) =>
-    fixtures.filter((f) => f.group_id === null)
+    fixtures.filter((f) => f.stage_id === knockoutStageIdOf(TWO_STAGE))
 
   it('cuts BOTH stages in one stroke — the groups and the whole bracket', () => {
     // Not a convenience (ADR): `advance()` can only ever FILL a side of an existing
@@ -1944,14 +1951,21 @@ describe('cutting a round-robin-then-knockout draw', () => {
     }
   })
 
-  it('leaves the knockout stage UNGROUPED and entirely TBD', () => {
+  it('gives the knockout stage its OWN group, distinct from the group stage’s, and leaves it entirely TBD', () => {
     asRrThenKo(TWO_STAGE, 4)
 
-    const bracket = knockout(cut(TWO_STAGE))
+    const cutFixtures = cut(TWO_STAGE)
+    const bracket = knockout(cutFixtures)
+    const stage = grouped(cutFixtures)
 
-    // `group_id IS NULL` is not cosmetic — it is the whole stage discriminator, and what
-    // sends these rows to the bracket view instead of a group's fixture list.
-    expect(bracket.every((f) => f.group_id === null)).toBe(true)
+    // ADR 20260823, #1484: the knockout stage holds its own group now, never `null` —
+    // and never one of the group stage's own group ids either (a knockout fixture
+    // sharing an id with a pool fixture would deal it into the wrong stage's join row).
+    expect(bracket.length).toBeGreaterThan(0)
+    expect(bracket.every((f) => f.group_id !== null)).toBe(true)
+    expect(bracket.every((f) => f.group_id === bracket[0].group_id)).toBe(true)
+    const groupStageIds = new Set(stage.map((f) => f.group_id))
+    expect(groupStageIds.has(bracket[0].group_id)).toBe(false)
     // Nobody has qualified yet, so every side is TBD. A bracket cut with entrants
     // already in it would be seating people the groups have not chosen.
     for (const fixture of bracket) {
@@ -2106,7 +2120,10 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
     const plan = planDraw('rr-then-ko', entrants(8), groups(2), 1, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.filter((f) => f.group_id === null)).toHaveLength(1)
+    // `'s-2'` — `mintStageReads('rr-then-ko')`'s knockout stage, the default `planDraw`
+    // cuts against here (no real event's `stages` was passed). Never `group_id ===
+    // null`: the knockout stage holds its own group now too (ADR 20260823, #1484).
+    expect(plan.fixtures.filter((f) => f.stage_id === 's-2')).toHaveLength(1)
   })
 
   it('sizes the bracket from P × K — derived, never configured', () => {
@@ -2115,7 +2132,7 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
     const plan = planDraw('rr-then-ko', entrants(12), groups(2), 3, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.filter((f) => f.group_id === null)).toHaveLength(5)
+    expect(plan.fixtures.filter((f) => f.stage_id === 's-2')).toHaveLength(5)
   })
 
   it('refuses taking more qualifiers than the smallest group holds', () => {
@@ -2137,7 +2154,7 @@ describe('planDraw, rr-then-ko, with a qualifier count', () => {
     const plan = planDraw('rr-then-ko', entrants(4), groups(1), 4, null)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.filter((f) => f.group_id === null)).toHaveLength(3)
+    expect(plan.fixtures.filter((f) => f.stage_id === 's-2')).toHaveLength(3)
   })
 })
 
@@ -2194,13 +2211,17 @@ describe('planDraw, swiss', () => {
     ).toBe(true)
   })
 
-  it('cuts ungrouped fixtures, whatever groups the event carries', () => {
-    // Swiss ranks the whole field in one table, so `group_id` is null throughout — and
-    // the event's groups are not consulted at all, exactly as on the server.
+  it('deals every fixture into ONE group, never partitioned across the list it is handed', () => {
+    // Swiss ranks the whole field in one table — the event's groups are not CONSULTED
+    // as a partition, exactly as on the server. But since ADR 20260823 (#1484) a swiss
+    // event's one stage still holds exactly one group (#1483's floor), and every
+    // fixture is dealt into it: `groupIds[0]`, never `groupIds[1]` — two ids reaching
+    // here is not a shape the real store ever produces (#1482 caps a swiss event at
+    // one reservation), but proves the arm reads only the first regardless.
     const plan = planDraw('swiss', entrants(8), ['grp-1', 'grp-2'], null, 2)
 
     if (!plan.ok) throw new Error(`expected a plan, got: ${plan.detail}`)
-    expect(plan.fixtures.every((f) => f.group_id === null)).toBe(true)
+    expect(plan.fixtures.every((f) => f.group_id === 'grp-1')).toBe(true)
   })
 
   it('byes the LOWEST-ranked entrant on an odd field, by leaving them out of every round', () => {
@@ -2869,10 +2890,17 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
     return results as TwoStageResults
   }
 
-  /** The knockout stage: `group_id IS NULL` IS the bracket (ADR-0786), which is exactly
-   * how the server tells the two stages apart. */
-  const bracketOf = (eventId: string): Fixture[] =>
-    eventOf(eventId).fixtures.filter((f) => f.group_id === null)
+  /** The knockout stage's own fixtures — its STAGE (position 1, `mintStageReads`'s
+   * `'s-2'` for an `rr-then-ko` event) is what tells the two stages apart, never a
+   * null `group_id` (ADR 20260823, #1484: every fixture, including the bracket's,
+   * names a real group now — the group its own stage holds). */
+  const bracketOf = (eventId: string): Fixture[] => {
+    const event = eventOf(eventId)
+    const knockoutStageId = [...event.stages].sort(
+      (a, b) => a.position - b.position,
+    )[1]?.id
+    return event.fixtures.filter((f) => f.stage_id === knockoutStageId)
+  }
 
   /** The FINAL — the single fixture in the bracket's last round. Its winner is the
    * event's champion, and `null` there is why an unfinished event has none. */

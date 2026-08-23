@@ -246,7 +246,8 @@ describe('apiToEvent — the draw', () => {
   // literal can no longer construct the null case. The client's parser
   // (`./fixtures`, `group_id: z.string().nullable()`) still tolerates a null
   // defensively, but that tolerance is exercised where it belongs — against the
-  // parser directly, not through this wire-shaped factory.
+  // parser directly, not through this wire-shaped factory: see
+  // `fixtures.test.ts`'s "still tolerates a null group_id defensively" test.
   it('carries every null through — TBD sides, undecided, un-materialized', () => {
     const event = apiToEvent(
       buildTournamentEventRead({

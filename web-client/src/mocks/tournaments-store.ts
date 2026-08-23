@@ -2885,7 +2885,11 @@ function planEventDraw(event: StoredEvent): DrawPlan {
   // and never the knockout stage's own group either — "the snake deals only into the
   // stage being dealt" is this client's twin of the ticket's own most-dangerous-
   // consequence guard. Stage 0 is every draw type's group stage (or its one and only
-  // stage, for the three that have no knockout stage to distinguish it from).
+  // stage, for the three that have no knockout stage to distinguish it from). The
+  // knockout stage's own group needs no threading of its own: `planDraw` derives
+  // exactly the same id `groupsForEvent` mints for it, both off the identical stage
+  // id (`structuralGroupIdFor`, unconditional — unlike the group stage's own group,
+  // which is `groupIdFor(reservation.id)` whenever a reservation exists).
   const groupStageId = [...event.stages].sort((a, b) => a.position - b.position)[0]?.id
   const groupStageGroupIds = groupsForEvent(event)
     .filter((g) => g.stage_id === groupStageId)
