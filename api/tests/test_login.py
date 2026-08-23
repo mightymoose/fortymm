@@ -970,6 +970,65 @@ async def test_first_sign_in_link_signs_the_person_in(
     assert signed_in.confirmed_at.tzinfo is not None
 
 
+async def test_requesting_an_unknown_address_does_not_move_the_roster(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """THE ORACLE TEST (#1438). ``POST /v1/login/request`` mints a row for an
+    unknown address; if that row were listed, an attacker could read the roster,
+    submit an address, and read it again — a new player means no account there,
+    no new player means one. That answers the question #1292's
+    indistinguishability constraint forbids answering. So the mint must happen
+    (the link really works) AND never surface in a public listing: same roster,
+    same ``total``, before and after."""
+    attacker = await start_session(api_client, db_session)
+
+    before = await api_client.get("/v1/players", params={"page_size": 100})
+    assert before.status_code == 200
+    assert [p["username"] for p in before.json()["items"]] == [attacker.username]
+    total_before = before.json()["total"]
+
+    response = await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    assert response.status_code == 202
+
+    # The unknown-address branch really did mint: the row exists, unclaimed.
+    # The oracle closes because the listings omit the row, not because nothing
+    # was written.
+    users = (await db_session.execute(select(User))).scalars().all()
+    assert len(users) == 2
+
+    after = await api_client.get("/v1/players", params={"page_size": 100})
+    assert after.status_code == 200
+    assert [p["username"] for p in after.json()["items"]] == [attacker.username]
+    assert after.json()["total"] == total_before
+
+
+async def test_first_sign_in_then_browse_lists_the_user(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The person behind the mint becomes listable by BROWSING (#1438): the
+    consume stamps no visit, but their first authenticated request resolves the
+    cookie through ``get_current_user``, which stamps ``last_seen_at``."""
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+
+    async with make_client() as cookieless:
+        consumed = await cookieless.post("/v1/login/consume", json={"token": raw})
+        assert consumed.status_code == 200
+        username = consumed.json()["data"]["user"]["username"]
+
+        signed_in = (
+            await db_session.execute(
+                select(User).where(User.email == "brand.new.quinn@example.com")
+            )
+        ).scalar_one()
+        # Claiming the link alone is not browsing — they are not listed yet.
+        assert signed_in.last_seen_at is None
+
+        browsed = await cookieless.get("/v1/players", params={"page_size": 100})
+        assert browsed.status_code == 200
+        assert username in [p["username"] for p in browsed.json()["items"]]
+
+
 async def test_minted_user_joins_the_default_league_and_holds_the_default_role(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):

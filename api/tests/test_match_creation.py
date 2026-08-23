@@ -67,6 +67,29 @@ async def test_create_rated_match_against_registered_opponent(
     assert [p.user_id for p in sides[1].players] == [opponent.id]
 
 
+async def test_create_match_against_a_never_active_opponent(
+    db_session: AsyncSession,
+) -> None:
+    """A never-active user (#1438: ``last_seen_at`` NULL, unlisted everywhere)
+    is still matchable by id — the opponent lookup deliberately carries no
+    listing predicate. Delisting must not break creating a match against a
+    guest a player can name."""
+    creator = await make_user(db_session, "match-creator")
+    opponent = await make_user(db_session, "never-active-opponent", last_seen_at=None)
+
+    match = await create_match(
+        db_session,
+        creator=creator,
+        opponent_user_id=opponent.id,
+        league_id=None,
+        best_of=3,
+        rated=True,
+    )
+
+    sides = sorted(match.sides, key=lambda s: s.side_number)
+    assert [p.user_id for p in sides[1].players] == [opponent.id]
+
+
 async def test_self_match_raises_self_match_error(db_session: AsyncSession) -> None:
     creator = await make_user(db_session, "self-player")
 

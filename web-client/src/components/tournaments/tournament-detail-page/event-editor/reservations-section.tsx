@@ -42,6 +42,11 @@ export interface ReservationsSectionProps {
    * re-typing is not yet wrong. The same shape, and the same reasoning, as
    * `EligibilitySection`'s `issues`. */
   nameIssues?: Record<string, string>
+  /** What is wrong with each reservation's **window**, keyed by `reservationEntryKey`
+   * (`reservationWindowIssues`, `../event-form`) — #1501's ordering and containment
+   * rules, rendered in red under the box. The same shape and the same reasoning as
+   * `nameIssues` above: `undefined` until the organizer has actually pressed Save. */
+  windowIssues?: Record<string, string>
 }
 
 /**
@@ -92,6 +97,7 @@ export const ReservationsSection = ({
   canEdit,
   freeze,
   nameIssues,
+  windowIssues,
 }: ReservationsSectionProps) => {
   // The frozen notice is what both the Add button and every Remove button point at with
   // `aria-describedby`: one explanation, in one place, said once.
@@ -377,6 +383,10 @@ export const ReservationsSection = ({
               // now refuses a reservation with no name (`min_length=1`). The card says
               // so under the box; the save never leaves the room.
               nameError={nameIssues?.[reservationEntryKey(entry)]}
+              // #1501's window channel — the reservation ordering/containment rules,
+              // read the same way the name error is: keyed off this entry's stable key,
+              // never off the field array's index.
+              windowError={windowIssues?.[reservationEntryKey(entry)]}
               // The card hands back a `ReservationDraft` — the three fields it can edit
               // — and the entry's identity is re-attached HERE, from the entry that is
               // already in form state. That is what makes it structurally impossible for

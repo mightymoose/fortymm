@@ -36,6 +36,7 @@ from app import queue as queue_module
 from app.leagues import get_default_league
 from app.match_calls import (
     RUN_PIN_TICK_JOB,
+    CopyIngredients,
     enqueue_pin_ticks,
     run_pin_tick,
 )
@@ -178,6 +179,58 @@ async def _make_tournament(
     await cut_draw(db, event)
     await db.commit()
     return tournament.id, event.id
+
+
+@pytest.mark.parametrize(
+    ("stage_draw_type", "expected"),
+    [
+        pytest.param(DrawType.round_robin, "Group A", id="round-robin"),
+        pytest.param(DrawType.single_elim, None, id="single-elim"),
+        pytest.param(DrawType.swiss, None, id="swiss"),
+    ],
+)
+def test_a_call_names_a_group_only_for_a_group_stage(
+    stage_draw_type: DrawType, expected: str | None
+) -> None:
+    """A match call carries a ``group_label`` when the fixture's **stage seats both
+    sides at the cut** (``app.draws.seats_both_sides_at_cut``), and not otherwise —
+    even though every one of these fixtures names a group row (#1483).
+
+    A bracket player is not "in Group A": there is no group standings table for them
+    to sit in and no group field they were dealt across. The group their fixture names
+    exists so the scheduler can reach their reservation through it, which is not
+    something to tell a player about at all. Their call still names the tournament and
+    the event, which is the whole of what a bracket has to say about where a match
+    sits.
+
+    A unit test over ``CopyIngredients``, because the method is pure over already
+    loaded objects and the claim is exactly about which of them it reads: routing it
+    through a seeded call would prove the same thing with a solve, a go-live and a
+    notification fan-out in the way.
+    """
+    tournament = Tournament(name="Called Open")
+    event = TournamentEvent(id=uuid.uuid4(), name="Open Singles")
+    stage_id = uuid.uuid4()
+    group_id = uuid.uuid4()
+    ingredients = CopyIngredients(
+        entry_user={},
+        users={},
+        events={event.id: event},
+        table_labels={},
+        group_labels={event.id: {group_id: "Group A"}},
+        stage_draw_types={stage_id: stage_draw_type},
+    )
+    fixture = TournamentFixture(
+        stage_id=stage_id, group_id=group_id, round=1, position=1
+    )
+
+    context = ingredients.context_for(tournament, event, fixture)
+
+    assert context.group_label == expected
+    assert (context.tournament_name, context.event_name) == (
+        "Called Open",
+        "Open Singles",
+    ), "the tournament and the event are named whatever the stage runs"
 
 
 async def _the_fixture(db: AsyncSession, event_id: uuid.UUID) -> TournamentFixture:

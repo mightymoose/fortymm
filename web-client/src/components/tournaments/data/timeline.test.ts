@@ -1,4 +1,5 @@
 import {
+  buildBracketDrawnEvent,
   buildDrawnEvent,
   buildEntrants,
   buildFixture,
@@ -302,6 +303,50 @@ describe('buildTimelineBoard', () => {
     expect(bar.label).toBe('player.1 vs player.4')
     expect(bar.tableLabel).toBe('T1')
     expect(bar.groupLabel).toBe('Group A')
+  })
+
+  /**
+   * **A bracket is never labelled with a group** (ticket #1483), on either surface the
+   * board renders: the placed bars and the unscheduled rail.
+   *
+   * Since #1483 a single-elim or swiss fixture is dealt into its stage's one group —
+   * which is what confines it to the reservation its director booked — so the label
+   * can no longer be read off "did this fixture resolve a group". It asks the fixture's
+   * STAGE (`fixtureGroupLabel` / `seatsBothSidesAtCut`, `./draw`). Read the old way, a
+   * placed semifinal renders as "Championship Singles · Group A" (`timeline-bar.tsx`),
+   * naming a group with no standings table behind it and no field the player is in.
+   *
+   * The premise is asserted first: these fixtures really do resolve a group of this
+   * event. Without it the test would pass against the pre-#1483 payload, where they
+   * carried no group at all and there was nothing to get wrong.
+   */
+  it('never labels a bracket fixture with a group, on the bars or on the rail', () => {
+    const cut = buildBracketDrawnEvent()
+    const event = buildBracketDrawnEvent({
+      fixtures: [
+        // Placed — this is the bar.
+        buildFixture({
+          ...cut.fixtures[0],
+          tableId: 't1',
+          scheduledStart: buildFixtureTime('2026-06-13T09:00:00'),
+        }),
+        // Left unplaced — this is the rail.
+        cut.fixtures[2],
+      ],
+    })
+    const groupIds = new Set(event.groups.map((g) => g.id))
+    expect(groupIds.size).toBe(1)
+    for (const fixture of event.fixtures) {
+      expect(groupIds.has(fixture.groupId as string)).toBe(true)
+    }
+
+    const board = boardOf(buildTournament({ events: [event] }))
+
+    const bars = board.tables.flatMap((r) => r.bars)
+    expect(bars).toHaveLength(1)
+    expect(bars[0].groupLabel).toBeNull()
+    expect(board.unscheduled).toHaveLength(1)
+    expect(board.unscheduled[0].contextLabel).toBeNull()
   })
 
   it('counts minutes across days by instant differencing, from the earliest placed bar', () => {

@@ -169,6 +169,7 @@ from app.tournament_errors import (
     PlacementTableNotFoundError,
     PlayerNotFoundError,
     ReservationNotInEventError,
+    ReservationOutsideEventWindowError,
     ScheduleQueueUnavailableError,
     TableInUseError,
     TableNotInCatalogueError,
@@ -1474,6 +1475,12 @@ async def update_event(
             # reservation (#1482) — an agent reads prose, so the carried,
             # domain-authored sentence rides straight through, same as the two
             # freezes above.
+            raise ToolError(str(exc)) from exc
+        except ReservationOutsideEventWindowError as exc:
+            # A reservation's window would fall outside its event's own slot
+            # (#1501) — an agent reads prose, so the carried, domain-authored
+            # sentence (which already names the offending reservation) rides
+            # straight through, same as the cap above.
             raise ToolError(str(exc)) from exc
         # The verb returns the tournament's ``league_id`` (the ladder the caller's
         # ``entry_state`` is judged on, ADR-0783) already loaded under the owner lock,

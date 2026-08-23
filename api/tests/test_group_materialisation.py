@@ -147,8 +147,10 @@ async def _ensure_group(
     sibling assert a state (several reservations on a non-``rr-then-ko`` event) the
     real create/update routes now refuse to produce, since only ``rr-then-ko`` may
     hold more than one reservation. The DERIVATION those tests pin
-    (``group_count_for``'s non-``rr-then-ko`` branch, ``return reservation_count``)
-    is untouched by #1482 — there is simply at most one reservation reachable
+    (``group_count_for``'s non-``rr-then-ko`` branch, ``max(reservation_count, 1)``
+    since #1483's floor, and a plain ``reservation_count`` before it — either way
+    the count under test here, at one reservation and above, is the reservation
+    count) is untouched by #1482 — there is simply at most one reservation reachable
     through the API to derive from now — so the coverage moves here, below the
     cap, rather than being lost: seed the extra reservations directly, the way an
     ORM seed always could, and read the result back through the real GET/PATCH/cut

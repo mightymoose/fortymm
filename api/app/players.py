@@ -11,6 +11,7 @@ from app.career import player_career
 from app.db import get_session
 from app.head_to_head import player_head_to_head
 from app.leagues import player_leagues, resolve_league, resolve_league_or_default
+from app.listed import is_listed_player
 from app.models import (
     Match,
     MatchSidePlayer,
@@ -107,6 +108,12 @@ async def list_recent_opponents(
                 .where(
                     User.id != current_user.id,
                     User.merged_into_user_id.is_(None),
+                    # Both conjuncts are the listing rule; see
+                    # ``app.listed.is_listed_player`` (#1438). Joins through
+                    # match sides already exclude a never-active row, so this
+                    # changes nothing in practice — it is here so no listing
+                    # carries a different rule.
+                    is_listed_player(),
                 )
                 .group_by(User.id)
                 # Stable tiebreaker so ties on created_at (seed data, tests,
@@ -191,7 +198,14 @@ async def list_players(
 
     base = (
         select(User)
-        .where(User.merged_into_user_id.is_(None))
+        .where(
+            User.merged_into_user_id.is_(None),
+            # Never-active rows stay off the roster (#1438) — see
+            # ``app.listed.is_listed_player``. The count below MUST answer with
+            # this same population, or the total alone answers the enumeration
+            # question the body refuses.
+            is_listed_player(),
+        )
         .outerjoin(
             UserLeagueRating,
             and_(
@@ -219,7 +233,13 @@ async def list_players(
     # Build the count from the same `q` filter; an unfiltered roster total
     # would mislead users searching for a niche substring.
     count_query: Select[tuple[int]] = (
-        select(func.count()).select_from(User).where(User.merged_into_user_id.is_(None))
+        select(func.count())
+        .select_from(User)
+        .where(
+            User.merged_into_user_id.is_(None),
+            # Same population as the body — see the roster query above (#1438).
+            is_listed_player(),
+        )
     )
     if q and q.strip():
         count_query = _username_substring_filter(count_query, q)

@@ -21,6 +21,7 @@ export const ReservationsHarness = ({
   canEdit,
   freeze,
   nameIssues,
+  windowIssues,
   formDrawType,
 }: ReservationsHarnessInputs) => {
   const form = useForm<EventFormValues>({
@@ -44,6 +45,7 @@ export const ReservationsHarness = ({
         // it is given and computes none of its own. (Whether the *editor* computes the
         // right one, and refuses the save, is `event-editor.test.tsx`'s claim.)
         nameIssues={nameIssues}
+        windowIssues={windowIssues}
       />
       <ReservationsProbe control={form.control} />
     </>

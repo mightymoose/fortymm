@@ -79,6 +79,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentEventReservation,
     TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
@@ -3887,6 +3888,101 @@ async def test_update_event_non_owner_raises_tool_error_and_writes_nothing(
         )
     ).scalar_one()
     assert persisted.name == "Existing Singles"
+
+
+async def _seed_event_with_reservation(
+    db: AsyncSession, tournament: Tournament
+) -> TournamentEvent:
+    """An event holding one reservation inside its own window — the target the
+    containment (#1501) tool test widens past."""
+    stages = mint_stages(DrawType.round_robin)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Windowed Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        predicates=[],
+        stages=stages,
+    )
+    stages[0].groups = event_groups(
+        [
+            {
+                "name": "Reservation A",
+                "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+                "table_ids": [],
+            }
+        ],
+        event=event,
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+async def test_update_event_reservation_outside_event_window_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Containment's refusal (#1501) maps to a ``ToolError`` the same way the
+    reservation cap (#1482) does above: a reservation widened past its event's
+    stored window surfaces the domain-authored sentence — naming the offending
+    reservation — and writes nothing."""
+    owner = await make_user(db_session, "mcp-update-event-containment-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Containment Cup", TournamentStatus.draft
+    )
+    event = await _seed_event_with_reservation(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+    reservation_id = (
+        await db_session.execute(
+            select(TournamentEventReservation.id).where(
+                TournamentEventReservation.event_id == event_id
+            )
+        )
+    ).scalar_one()
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="Reservation A"):
+            await client.call_tool(
+                "update_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "updates": {
+                        "reservations": [
+                            {
+                                "id": str(reservation_id),
+                                "name": "Reservation A",
+                                # Past the event's own stored end (17:00).
+                                "slot": {
+                                    "date": "2026-08-01",
+                                    "start": "09:00",
+                                    "end": "18:00",
+                                },
+                                "table_ids": [],
+                            }
+                        ]
+                    },
+                },
+            )
+
+    # Refused before the write: the reservation's window is untouched.
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEventReservation).where(
+                TournamentEventReservation.id == reservation_id
+            )
+        )
+    ).scalar_one()
+    assert persisted.slot_end.strftime("%H:%M") == "12:30"
 
 
 # ----- enter_event tool ----------------------------------------------------

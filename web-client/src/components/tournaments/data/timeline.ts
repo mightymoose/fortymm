@@ -20,8 +20,8 @@ import type { MatchStatus } from '@/api/matches'
 
 import {
   buildDrawIndex,
+  fixtureGroupLabel,
   fixtureReservation,
-  groupLabel,
   TBD_LABEL,
   WITHDRAWN_LABEL,
   type DrawIndex,
@@ -524,7 +524,7 @@ export function buildTimelineBoard(
       }
     }
     const endMin = startMin + durationMin
-    const { group, reservation } = fixtureReservation(drawIndex, fixture)
+    const { reservation } = fixtureReservation(drawIndex, fixture)
     const a = sideOf(fixture.entryAId, entrantById)
     const b = sideOf(fixture.entryBId, entrantById)
     // The end reads in the bar's OWN venue frame: a decided fixture's real
@@ -537,7 +537,11 @@ export function buildTimelineBoard(
     barByFixture.set(fixture.id, {
       fixtureId: fixture.id,
       eventName: event.name,
-      groupLabel: group !== null ? groupLabel(group) : null,
+      // Asked of the fixture's STAGE, never of whether it resolved a group
+      // (`fixtureGroupLabel`, `./draw`): since #1483 a bracket or swiss fixture names
+      // its stage's group too, and a bar reading "Championship Singles · Group A"
+      // would name a group with no standings table behind it.
+      groupLabel: fixtureGroupLabel(drawIndex, fixture),
       label: `${a} vs ${b}`,
       a,
       b,
@@ -622,11 +626,12 @@ export function buildTimelineBoard(
   const unscheduled: UnscheduledFixture[] = []
   for (const { fixture, event, entrantById, drawIndex } of all) {
     if (fixture.tableId !== null && fixture.scheduledStart !== null) continue
-    const { group } = fixtureReservation(drawIndex, fixture)
     unscheduled.push({
       fixtureId: fixture.id,
       eventName: event.name,
-      contextLabel: group !== null ? groupLabel(group) : null,
+      // The same stage-first rule the bars use (`fixtureGroupLabel`, `./draw`): an
+      // un-placed bracket fixture on this rail is not in "Group A" either.
+      contextLabel: fixtureGroupLabel(drawIndex, fixture),
       label: `${sideOf(fixture.entryAId, entrantById)} vs ${sideOf(fixture.entryBId, entrantById)}`,
       tableLabel:
         fixture.tableId !== null

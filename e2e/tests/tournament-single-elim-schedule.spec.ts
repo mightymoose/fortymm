@@ -93,10 +93,14 @@ function placedAt(instant: string): { date: string; minutes: number } {
  *
  * ## What is asserted, and why each half is load-bearing
  *
- * * **The premise.** The event is seeded with `reservations: []` (and therefore mints no
- *   groups) and every fixture reads back `group_id: null`. Without this a green run
- *   could not rule out that some group did the work — which is the one thing that was
- *   never in doubt.
+ * * **The premise.** The event is seeded with `reservations: []`, so its one group
+ *   (#1483's floor mints one whatever the reservation count) maps to **no reservation**
+ *   — and its fixtures therefore resolve to the synthetic event-wide reservation, not
+ *   to a booked window of their own. Read back off the wire as
+ *   `groups[0].reservation_id: null`. Without this a green run could not rule out that
+ *   a booked reservation did the work, which is the one thing that was never in doubt.
+ *   #1364 closes this fallback by minting the reservation, and rewrites the assertions
+ *   below when it does.
  * * **The placement, on the wire.** Each first-round fixture carries a `table_id` **of
  *   this tournament's catalogue** and a `scheduled_start` **inside the event's own
  *   window**. "Has a non-null time" would also pass an implementation that placed the
@@ -149,10 +153,19 @@ test.describe('Tournament — single-elim schedule', () => {
       { slot, tables: TABLES, reservations: [], drawType: 'single-elim' },
     )
 
-    // THE PREMISE. The event books nothing: no reservation, so no group, no group window
-    // and no group tables. Everything below is therefore a statement about a fixture that
-    // names no reservation of its own — which is the whole subject.
-    expect(groups, 'the seeded event must hold no groups at all').toEqual([])
+    // THE PREMISE. The event books nothing: no reservation, so its one group maps to
+    // none, and there is no group window and no group tables. Everything below is
+    // therefore a statement about a fixture that resolves to no reservation of its own
+    // — which is the whole subject.
+    //
+    // Its group EXISTS (#1483's floor mints one for every stage), and that is not the
+    // premise: what the fallback turns on is the group having no reservation, so that
+    // is what is asserted.
+    expect(groups, 'the floor mints exactly one group').toHaveLength(1)
+    expect(
+      groups[0].reservation_id,
+      'the seeded event books nothing, so its group maps to no reservation',
+    ).toBeNull()
     expect(tables).toHaveLength(TABLES.length)
     const tableIds = tables.map((table) => table.id)
 
@@ -187,7 +200,7 @@ test.describe('Tournament — single-elim schedule', () => {
     // The bracket is the un-grouped block — a draw with no group sections at all.
     await expect(detail.bracket(eventId)).toBeVisible()
 
-    // ----- the fixtures belong to no group -------------------------------------
+    // ----- the fixtures resolve to no booked reservation -----------------------
     const fixturesOf = async (): Promise<ReadonlyArray<FixtureDetail>> => {
       const schedule = await getScheduleDetail(director, tournamentId)
       const event = schedule.events.find((e) => e.id === eventId)
@@ -199,11 +212,16 @@ test.describe('Tournament — single-elim schedule', () => {
     expect(cut, 'a four-slot bracket is two first-round fixtures and a final').toHaveLength(
       BRACKET_FIXTURES,
     )
+    const bracketGroupId = groups[0].id
     for (const fixture of cut) {
+      // Every bracket fixture is dealt into the stage's one group (#1483) — the hop the
+      // solver resolves a reservation through. That group books nothing, asserted above,
+      // so the hop lands on the event-wide reservation and the placement rule under test
+      // is the un-booked one.
       expect(
         fixture.group_id,
-        `fixture ${fixture.id} belongs to a group — the premise of this spec is that none do`,
-      ).toBeNull()
+        `fixture ${fixture.id} is not in the stage's group`,
+      ).toBe(bracketGroupId)
     }
     const cutRoundOne = cut.filter((fixture) => fixture.round === 1)
     expect(cutRoundOne).toHaveLength(ROUND_ONE_FIXTURES)

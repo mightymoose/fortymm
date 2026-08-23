@@ -130,7 +130,7 @@ def _slot_columns(slot: Slot) -> tuple[date, time, time]:
     ``fromisoformat`` and not a hand-rolled ``strptime``: it is the parser the rest of
     this codebase already reads dates with (``app.schedule_preview_solve``), and the
     boundary has already refused anything it would choke on
-    (:data:`~app.schemas.tournament.ReservationSlot`) — so this is a total function of
+    (:data:`~app.schemas.tournament.WellFormedSlot`) — so this is a total function of
     what can reach it, not a parse that needs a failure branch.
     """
     return (
@@ -144,10 +144,10 @@ def _slot_read(reservation: TournamentEventReservation) -> Slot:
     """The wire :class:`Slot` a stored reservation's three columns compose back into.
 
     ``%H:%M`` exactly, with no seconds, because that is the shape the boundary accepts
-    and therefore the only shape a stored value can have had (:data:`ReservationSlot`
-    refuses a time carrying seconds rather than storing one it would later have to
-    truncate). The round trip is lossless: what a client sends is what it reads back,
-    character for character.
+    and therefore the only shape a stored value can have had (:data:`WellFormedSlot
+    <app.schemas.tournament.WellFormedSlot>` refuses a time carrying seconds rather
+    than storing one it would later have to truncate). The round trip is lossless:
+    what a client sends is what it reads back, character for character.
     """
     return Slot(
         date=reservation.slot_date.isoformat(),
@@ -323,11 +323,23 @@ def group_count_for(
     **Two rules, stated rather than hidden.** An ``rr-then-ko`` event derives its
     count from the field through #1386's derivation, with every structural setting
     automatic (``ceil(field / 5)``, at least one) — the reservation count plays no
-    part, which is why adding a reservation adds no group. Every other draw type keeps
-    one group per reservation, exactly as it behaved before the derivation existed:
-    ``single-elim`` and ``swiss`` deal nothing into groups, and whether ``round-robin``
-    should run groups of five is a product question about that draw type, not a
-    materialisation one (#1387 decision 2).
+    part, which is why adding a reservation adds no group. Every other draw type has
+    no structural-settings source for a count at all, so it keeps one group per
+    reservation — **and never fewer than one** (#1483's floor). Whether
+    ``round-robin`` should run groups of five is a product question about that draw
+    type, not a materialisation one (#1387 decision 2).
+
+    **The floor is what lets every stage hold a group.** A fixture reaches the
+    reservation that restricts it through its group
+    (``app.schedule_solves.restricting_reservation_key``), so a stage with no group
+    row has no hop to make and its fixtures fall to the synthetic event-wide
+    reservation — the whole venue, the whole day. A single-elim or swiss event
+    booking one reservation therefore had its bracket placed across the tournament's
+    entire table catalogue until the group existed to carry the restriction. At least
+    one group, always, is what closes that. The zero-reservation case is unchanged in
+    outcome and not refused: the group exists, maps to no reservation, and its
+    fixtures still fall to the event-wide one until #1364 mints a real reservation
+    for them.
 
     ``field_size`` is the **caller's** question — the preview field (the cap, or 16)
     on an event write, the real registered field at the cut — and this function only
@@ -335,7 +347,7 @@ def group_count_for(
     derivation's, called with whichever field the caller holds.
     """
     if draw_type is not DrawType.rr_then_ko:
-        return reservation_count
+        return max(reservation_count, 1)
     return derive_draw_structure(
         DrawStructureOptions(
             preview_field_size=field_size,

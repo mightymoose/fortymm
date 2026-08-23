@@ -1,7 +1,8 @@
 import { waitFor } from '@/test/utilities'
 import { mockSession } from '@/mocks/handlers'
 import { usersPage } from './users-page.page'
-import { DEFAULT_ROLE_ID, PLAIN_ROLE_ID, USER_ID } from './users-page.factory'
+import { DEFAULT_ROLE_ID, PLAIN_ROLE_ID, USER_ID, buildUsersSeed } from './users-page.factory'
+import { USERNAME_HINT } from '@/lib/username'
 
 // ADR-0016: `User` is held by every account on the platform. A full-replace
 // PUT could otherwise strip it from one user, so the per-user editor disables
@@ -89,5 +90,81 @@ describe('UsersPage — self-removal guard keys off id, not username', () => {
     await usersPage.open(sessionUsername)
 
     expect(await usersPage.findRemoveButton()).toBeEnabled()
+  })
+})
+
+// `toLowerCase()` folds case and never folds accents. `POST /v1/users` now
+// refuses an accented username, so this fold matters only for a row created
+// through that gap before it closed — and it keeps all four client-side
+// lists folding the same way.
+describe('UsersPage \u2014 search', () => {
+  const LEGACY_ACCENTED = '\u00c1rni.P\u00e1l'
+
+  const seedWithLegacyRow = () =>
+    buildUsersSeed({
+      users: [
+        { id: USER_ID, username: 'eun.han', role_ids: [DEFAULT_ROLE_ID] },
+        { id: 'u_legacy', username: LEGACY_ACCENTED, role_ids: [DEFAULT_ROLE_ID] },
+      ],
+    })
+
+  it('still narrows on plain text', async () => {
+    usersPage.render(seedWithLegacyRow())
+
+    await usersPage.search('eun')
+
+    expect(await usersPage.findUserRow('eun.han')).toBeInTheDocument()
+    expect(usersPage.queryUserRows()).toHaveLength(1)
+  })
+
+  it('finds an accented username from unaccented text', async () => {
+    usersPage.render(seedWithLegacyRow())
+
+    await usersPage.search('arni')
+
+    expect(await usersPage.findUserRow(LEGACY_ACCENTED)).toBeInTheDocument()
+    expect(usersPage.queryUserRows()).toHaveLength(1)
+  })
+})
+
+// The modal used to accept `AB` and `Bob`, which `POST /v1/users` rejects with a
+// 422. A form must never allow what the API refuses.
+describe('UsersPage \u2014 the add-user modal', () => {
+  it('refuses a name shorter than the API minimum', async () => {
+    usersPage.render()
+
+    expect(await usersPage.typeNewUsername('ab')).toBeDisabled()
+  })
+
+  it('refuses an uppercase name', async () => {
+    usersPage.render()
+
+    expect(await usersPage.typeNewUsername('Bob')).toBeDisabled()
+  })
+
+  it('refuses an accented name, the gap the API now closes', async () => {
+    usersPage.render()
+
+    expect(await usersPage.typeNewUsername('\u00e1rni.pal')).toBeDisabled()
+  })
+
+  it('refuses a name longer than the API maximum', async () => {
+    usersPage.render()
+
+    expect(await usersPage.typeNewUsername('a'.repeat(41))).toBeDisabled()
+  })
+
+  it('accepts a name the API accepts', async () => {
+    usersPage.render()
+
+    expect(await usersPage.typeNewUsername('jamie.tran')).toBeEnabled()
+  })
+
+  it('states the rule it actually enforces', async () => {
+    usersPage.render()
+
+    await usersPage.typeNewUsername('ab')
+
+    expect(usersPage.queryHint(USERNAME_HINT)).toBeInTheDocument()
   })
 })

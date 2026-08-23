@@ -51,6 +51,13 @@ import {
   validateEmail,
   type Validation,
 } from '@/lib/form-helpers'
+import {
+  USERNAME_HINT,
+  USERNAME_MAX,
+  USERNAME_MIN,
+  USERNAME_RE,
+  hasDisallowedUsernameChar,
+} from '@/lib/username'
 import { pageTitle } from '@/lib/page-title'
 import './settings.css'
 
@@ -64,13 +71,6 @@ export const Route = createFileRoute('/_app/settings')({
 /* ------------------------------------------------------------------ */
 /*  Types & helpers                                                   */
 /* ------------------------------------------------------------------ */
-
-// Mirrors api/app/schemas/session.py USERNAME_PATTERN. Client-side validation
-// is for fast feedback; the server still enforces the same rules and returns
-// 409 on duplicates.
-const USERNAME_RE = /^[a-z0-9](?:[a-z0-9._-]{1,38}[a-z0-9])?$/
-const USERNAME_MIN = 3
-const USERNAME_MAX = 40
 
 function validateUsername(u: string): Validation {
   if (!u) return { ok: false, err: 'Username is required.' }
@@ -513,7 +513,7 @@ function UsernameSection({
   // punctuation outside the allowed set), surface that immediately — the user
   // just typed it and we want them to know it's not going through. Length
   // errors stay gated on blur so we don't nag while they're still typing.
-  const hasInvalidChar = /[^a-z0-9._-]/.test(val)
+  const hasInvalidChar = hasDisallowedUsernameChar(val)
   const displayedErr =
     serverErr ?? ((touched || hasInvalidChar) && !clientV.ok ? (clientV.err ?? null) : null)
 
@@ -563,7 +563,7 @@ function UsernameSection({
       <Field
         label="Username"
         htmlFor="username"
-        hint={`Lowercase letters, numbers, dots, hyphens and underscores. ${USERNAME_MIN}–${USERNAME_MAX} characters.`}
+        hint={USERNAME_HINT}
         error={displayedErr}
         success={dirty && clientV.ok && !serverErr ? 'Looks good. Save to make it stick.' : null}
         right={

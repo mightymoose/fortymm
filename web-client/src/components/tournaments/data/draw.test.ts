@@ -9,6 +9,7 @@ import {
   drawVerbFreeze,
   fixtureReservation,
   groupSetFreeze,
+  seatsBothSidesAtCut,
   shapeForStage,
   undrawnLead,
   type DrawState,
@@ -110,6 +111,77 @@ describe('shapeForStage', () => {
       expect(['bracket', 'swiss-rounds', 'orphaned']).toContain(
         shapeForStage(drawType),
       )
+    }
+  })
+})
+
+/**
+ * **Bucketing is the stage's decision, never the group id's** (ticket #1483).
+ *
+ * The server deals a single-elim or swiss stage's fixtures into that stage's one group,
+ * so the scheduler can reach their reservation through it. Every one of those fixtures
+ * therefore *resolves* a group — and none of them belongs in a group panel. The
+ * discriminating part of these fixtures is exactly that: `buildBracketDrawnEvent` and
+ * `buildSwissDrawnEvent` name a real group of their event, so a `drawState` that
+ * bucketed by `groupId` would put a whole bracket under a heading reading "Group A" and
+ * hand `swissByesOf` an empty list.
+ */
+describe('bucketing by stage, not by group id', () => {
+  it('keeps a single-elim event’s whole bracket out of the groups, though every fixture names one', () => {
+    const event = buildBracketDrawnEvent()
+    // The premise: these fixtures really do resolve a group of this event. Without it
+    // the assertions below would pass against the pre-#1483 payload too.
+    const groupIds = new Set(event.groups.map((g) => g.id))
+    expect(event.fixtures.length).toBeGreaterThan(0)
+    for (const fixture of event.fixtures) {
+      expect(fixture.groupId).not.toBeNull()
+      expect(groupIds.has(fixture.groupId as string)).toBe(true)
+    }
+
+    const state = drawn(drawState(event))
+
+    expect(state.groups).toEqual([])
+    expect(state.ungroupedShape).toBe('bracket')
+    expect(state.ungrouped.flatMap((r) => r.fixtures)).toHaveLength(
+      event.fixtures.length,
+    )
+  })
+
+  it('keeps a swiss event’s rounds out of the groups, and leaves swissByes readable', () => {
+    // The ODD-field cut, whose round 1 really byes somebody — that list is one
+    // `swissByesOf` can only build from a populated `ungrouped`. Bucketed by group id
+    // these fixtures would leave for the group panel, and the round would report no
+    // bye at all rather than reporting a wrong one.
+    const event = buildSwissOddDrawnEvent()
+    expect(event.fixtures.every((f) => f.groupId !== null)).toBe(true)
+
+    const state = drawn(drawState(event))
+
+    expect(state.groups).toEqual([])
+    expect(state.ungroupedShape).toBe('swiss-rounds')
+    expect(state.swissByes.get(1)?.map((e) => e.username)).toEqual(['player.7'])
+  })
+
+  it('still buckets an rr-then-ko group stage into its groups, and its bracket out of them', () => {
+    const state = drawn(drawState(buildTwoStageDrawnEvent()))
+
+    expect(state.groups.length).toBeGreaterThan(0)
+    expect(state.ungroupedShape).toBe('bracket')
+    expect(state.ungrouped.length).toBeGreaterThan(0)
+  })
+})
+
+/** Exhaustive over the vocabulary, the runtime half of the `never` default — the same
+ * discipline `shapeForStage` above is held to. Only a round-robin stage seats both
+ * sides at the cut today; the other two pair as the event runs. */
+describe('seatsBothSidesAtCut', () => {
+  it('answers true for round-robin alone', () => {
+    expect(STAGE_DRAW_TYPES.filter(seatsBothSidesAtCut)).toEqual(['round-robin'])
+  })
+
+  it('answers for every stage draw type in the vocabulary', () => {
+    for (const drawType of STAGE_DRAW_TYPES) {
+      expect(typeof seatsBothSidesAtCut(drawType)).toBe('boolean')
     }
   })
 })
@@ -908,6 +980,7 @@ describe('fixtureReservation', () => {
     const index = buildDrawIndex({
       groups: [{ id: 'grp-a', position: 0, reservationId: null }],
       reservations: [],
+      stages: [],
     })
     expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
       group: { id: 'grp-a', position: 0, reservationId: null },
@@ -920,6 +993,7 @@ describe('fixtureReservation', () => {
     const index = buildDrawIndex({
       groups: [{ id: 'grp-a', position: 0, reservationId: 'res-a' }],
       reservations: [reservation],
+      stages: [],
     })
     expect(fixtureReservation(index, { groupId: 'grp-a' })).toEqual({
       group: { id: 'grp-a', position: 0, reservationId: 'res-a' },

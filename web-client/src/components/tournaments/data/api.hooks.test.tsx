@@ -1190,7 +1190,7 @@ describe('entering and withdrawing, against the stateful mock store', () => {
   beforeEach(() => resetTournamentsStore())
 
   const TOURNAMENT = BAY_AREA_OPEN_ID
-  const EVENT = mockUuid('ev-u1500') // seeded with nobody in it
+  const EVENT = mockUuid(mockUuid('ev-u1500')) // seeded with nobody in it
 
   it('adds the entrant and increments the count; withdrawing reverses both', async () => {
     const { wrapper } = setupClient()
@@ -1657,10 +1657,16 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
    * group, nine entrants — and seeded already drawn (#1482 caps a round-robin event at
    * one reservation, so one group is all it can hold). */
   const DRAWN = mockUuid('ev-u1200')
-  /** Seeded round-robin with **no reservations (and therefore no groups)** and nobody
-   * entered — the event a cut REFUSES, and (ADR 20260726) the refusal that survives: an
-   * unplannable draw type left the enum, a groupless round-robin has nowhere to deal the
-   * field forever. */
+  /** Seeded round-robin with **no reservations, and therefore — in this store — no
+   * groups**, and nobody entered: the event a cut REFUSES.
+   *
+   * ⚠️ The refusal is the MOCK's, and since #1483 it is a **known divergence from the
+   * real server**, which mints a group for every stage whatever the reservation count
+   * and so cuts this event rather than refusing it. The store derives its group count
+   * from `reservations.length` unconditionally; closing that gap is #1484's job, and
+   * the seed comment on `ev-u1500` in `mocks/tournaments-store.ts` is where the
+   * divergence is written down. What is asserted below is therefore that the store
+   * refuses what the store cannot plan — not that a director meets this 422 today. */
   const UNCUTTABLE = mockUuid('ev-u1500')
 
   it('the seeded draw arrives on the detail read, grouped, with no draw on the other events', async () => {
@@ -1734,9 +1740,12 @@ describe('cutting and un-cutting, against the stateful mock store', () => {
     const { wrapper } = setupClient()
     const { result } = renderHookRaw(() => useCutDraw(TOURNAMENT), { wrapper })
 
-    // `ev-u1500` is a round-robin with no reservations — there is nowhere to deal the field, so
-    // the cut is refused before the entrants are even looked at. The refusal a director
-    // meets today, and the one the mock must not be more permissive about than the API.
+    // `ev-u1500` is a round-robin the STORE holds no groups for — there is nowhere to
+    // deal the field, so the cut is refused before the entrants are even looked at.
+    // What this pins is the client's handling of a 422 from the cut verb: the error is
+    // surfaced rather than swallowed, and its status reaches the caller. The real API
+    // no longer produces this particular 422 (see `UNCUTTABLE` above), so read the
+    // assertion as being about the client, not about the refusal.
     result.current.mutate(UNCUTTABLE)
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))

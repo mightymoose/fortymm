@@ -25,6 +25,21 @@ const scoped = (container: Container) => ({
   queryNameError() {
     return container.queryByTestId('reservation-name-error')
   },
+  /** The red message under the reservation's window — #1501's ordering/containment
+   * verdict (`reservationWindowIssues`, `event-form.ts`). Absent until a save is
+   * actually attempted, and absent for a viewer. */
+  queryWindowError() {
+    return container.queryByTestId('reservation-window-error')
+  },
+  getDateInput() {
+    return container.getByLabelText('Date')
+  },
+  getStartInput() {
+    return container.getByLabelText('Start')
+  },
+  getEndInput() {
+    return container.getByLabelText('End')
+  },
   getTableToggle(label: string) {
     return container.getByRole('button', { name: label, pressed: false })
   },
