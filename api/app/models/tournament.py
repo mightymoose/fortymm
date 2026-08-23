@@ -306,6 +306,26 @@ class TournamentEvent(Base):
     # ``reservations`` relationships below now, so a fixture can foreign-key the group
     # it names — and name one of its OWN event's groups (ADR 20260801, on what belongs
     # to an event rather than to its draw settings).
+    #
+    # Monotonic optimistic-concurrency token (#1499), the same device
+    # ``MatchGameScore.version`` is. Every accepted PATCH of this event bumps it by
+    # one, and a PATCH stating a different number is refused with a 409 before it
+    # writes anything — so a director's second tab, holding a read from before some
+    # other write, can no longer clobber the whole editable surface silently.
+    #
+    # It exists because ``updated_at`` **cannot** serve as the token. The write path
+    # assigns ``event.reservations``, a relationship: SQLAlchemy writes the child rows
+    # and never marks this parent row dirty, so ``onupdate`` above does not fire and
+    # ``updated_at`` does not move on exactly the edit the conflict was found on. This
+    # column is a plain scalar the verb assigns explicitly, so the parent is dirtied
+    # every time and the number always moves.
+    #
+    # ``default=1`` as well as ``server_default``: the read schema types it ``int``
+    # and NOT optional, so an unrefreshed instance whose attribute was still ``None``
+    # would make a freshly created event a 500 at the read boundary rather than a 1.
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

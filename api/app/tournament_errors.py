@@ -376,6 +376,50 @@ class DrawTypeFrozenError(Exception):
         self.draw_type = draw_type
 
 
+#: The ``detail.code`` the event-version conflict is told apart by (#1499). It is on
+#: the wire, so it is a value both surfaces and the web client agree on — the client
+#: matches on THIS, never on the sentence beside it, which is copy and may be reworded
+#: at any time. The shape mirrors the structured 401s (``session_ended``) and the
+#: score-write 409: ``{"detail": {"code": ..., "message": ...}}``, which
+#: ``extractDetail`` already degrades to the sentence for any client that does not know
+#: the code.
+EVENT_VERSION_CONFLICT_CODE = "event_version_conflict"
+
+
+class EventVersionConflictError(Exception):
+    """Raised by the update-event verb when the PATCH states a ``lock_version`` that is
+    not the one the event currently holds (#1499) — the write is based on a read that
+    something has since superseded.
+
+    A plain ``Exception``, pointedly **not** a ``ValueError`` like
+    :class:`EventReservationCapExceededError`: a ``ValueError`` is what Pydantic folds
+    into a model's ``ValidationError``, and this refusal is a 409 about the state of the
+    resource, never a 422 about a field.
+
+    It is judged **first** of every payload gate — before both draw freezes and before
+    the reservation cap — and that ordering is the point of the whole device. A stale
+    draft usually trips something else on its way through (it cites a reservation that
+    another write removed, or it re-sends a draw type that another write froze), and
+    reporting *that* tells the director to fix a field they never edited. The honest
+    answer is that they are looking at an event which has moved, so it is the one this
+    gate gives. It runs under the ``FOR UPDATE`` tournament lock the owner-load already
+    took, so no concurrent write can move the number between the check and the commit.
+
+    Carries the current ``lock_version`` for an adapter that wants it, and a
+    domain-authored sentence for one that only echoes. The HTTP adapter answers
+    ``{"detail": {"code": EVENT_VERSION_CONFLICT_CODE, "message": str(exc)}}`` — the
+    code is what a knowing client branches on, and the sentence is the fallback for one
+    that does not (ADR-0968: the client owns its own copy, the server's words are the
+    last resort). Never an ``HTTPException``."""
+
+    def __init__(self, *, current_version: int) -> None:
+        super().__init__(
+            "This event was changed somewhere else while you had it open, so this "
+            "save was not applied. Reopen the event to see what it holds now."
+        )
+        self.current_version = current_version
+
+
 class DrawUnderWayError(Exception):
     """Raised by the draw verbs when an event's draw shows **evidence of play** — a
     fixture with a recorded winner or a linked match — the single gate on both

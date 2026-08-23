@@ -812,6 +812,12 @@ def serialize_event(
             # collection feeds ``_stage_draw_types`` for the results projection below,
             # so the served stages and the stage-split of the results cannot disagree.
             "stages": stage_reads,
+            # The optimistic-concurrency token (#1499) the next PATCH of this event has
+            # to state back. This is the app's only ``TournamentEventRead`` build, so
+            # one key here puts the version on the list, the detail, create, update and
+            # both MCP tools at once — which is what makes "the editor sends the version
+            # it read" true of every surface that can read an event.
+            "lock_version": e.lock_version,
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,

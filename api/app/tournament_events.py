@@ -61,6 +61,7 @@ from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
     EventNotFoundError,
+    EventVersionConflictError,
     GroupSetFrozenError,
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
@@ -794,6 +795,11 @@ async def update_event(
       :class:`NotTournamentOwnerError`. Event mutations are owner-gated, not RBAC-gated.
     * **404** — an event id that names no event under this tournament raises
       :class:`EventNotFoundError`.
+    * **409** — a ``lock_version`` that is not the one the event currently holds raises
+      :class:`EventVersionConflictError` (#1499). Judged **first** of the payload gates
+      and under the same row lock, so a write built on a superseded read is refused
+      before any other gate can blame a field the caller never edited, and nothing is
+      written. Every accepted update moves the token on by one.
     * **409** — once the event's draw is cut, two things freeze (ADR-0786): a ``groups``
       payload that changes *which groups* the event has, **or the order they stand in**,
       raises :class:`GroupSetFrozenError`, and a draw-configuration payload that changes
@@ -837,6 +843,22 @@ async def update_event(
     # adapter so the read it shapes need not re-query that column.
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
+    # FIRST of every payload gate, and after all three identity gates (#1499). The
+    # ordering is the whole point of the device, in both directions:
+    #
+    # * after 404 → 403 → 404, because a stranger and a bad id must never learn
+    #   anything about this event's state (ADR-0017);
+    # * before the two freezes and the reservation cap, because a stale draft usually
+    #   trips one of those on its way through — it cites a reservation another write
+    #   removed, or re-sends a draw type another write froze — and reporting THAT sends
+    #   the director to fix a field they never touched. The true answer is that the
+    #   event has moved under them.
+    #
+    # Under the ``FOR UPDATE`` lock the owner-load above took, so no concurrent PATCH
+    # can move the number between this comparison and the commit: the loser of a race
+    # waits on the lock, then reads the winner's incremented version and is refused.
+    if updates.lock_version != event.lock_version:
+        raise EventVersionConflictError(current_version=event.lock_version)
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
@@ -891,6 +913,12 @@ async def update_event(
     # (a lazy relationship, not a plain column) — a lazy load in a sync context that
     # SQLAlchemy's async extension refuses with ``MissingGreenlet``.
     changes.pop("reservations", None)
+    # The concurrency token is popped for the same reason the four above are: the loop
+    # would ``setattr`` the CLIENT's number onto the column, so the version would stop
+    # moving and every subsequent stale write would be accepted — the bug this whole
+    # change exists to fix, reintroduced silently and with a green suite. The verb owns
+    # this column; a caller only ever states what it believes.
+    changes.pop("lock_version", None)
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is
     # one the write union accepted at the request boundary (ADR 20260727). That union is
@@ -899,6 +927,19 @@ async def update_event(
     draw_settings = updates.draw_settings
     for key, value in changes.items():
         setattr(event, key, value)
+    # Every accepted PATCH moves the token, unconditionally — including one whose
+    # payload equals what the event already holds. One sentence and one test, at the
+    # cost of a true no-op save invalidating another open editor; the editor always
+    # sends the whole editable surface, so a genuine no-op is rare, and the alternative
+    # (bump only on a real change) means deciding what "changed" means across scalars,
+    # JSONB value-objects, a settings row and a child-row diff — four answers that can
+    # disagree, on the one number every refusal depends on.
+    #
+    # Assigned explicitly rather than left to a SQLAlchemy ``version_id_col``, so this
+    # moves on a reservations-only edit too: that edit writes only child rows, and a
+    # parent nothing dirties is a parent whose version SQLAlchemy would not bump. This
+    # write is what dirties it.
+    event.lock_version = event.lock_version + 1
     if updates.reservations is not None:
         await apply_event_reservations(db, tournament, event, updates.reservations)
     if draw_settings is not None:

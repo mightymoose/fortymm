@@ -58,12 +58,14 @@ from app.tournament_entries import enter_event as enter_event_core
 from app.tournament_entries import withdraw_from_event as withdraw_from_event_core
 from app.tournament_entry_refusals import entry_refused
 from app.tournament_errors import (
+    EVENT_VERSION_CONFLICT_CODE,
     DrawTypeFrozenError,
     DrawUnderWayError,
     EntryNotFoundError,
     EntryRefusedError,
     EventNotFoundError,
     EventReservationCapExceededError,
+    EventVersionConflictError,
     FixtureNotFoundError,
     FixturePlacementFrozenError,
     GroupSetFrozenError,
@@ -797,6 +799,33 @@ def _event_reservation_cap_exceeded(
     )
 
 
+def _event_version_conflict(exc: EventVersionConflictError) -> HTTPException:
+    """The **409** for a PATCH built on a superseded read of the event (#1499).
+
+    A structured ``detail``, where the two draw freezes on this same route answer a
+    plain string. That is what lets a client tell the three apart: one status, one code
+    per refusal, exactly the arrangement the structured 401s (``session_ended``) and the
+    score-write conflict already use. The client matches on ``detail.code`` and never on
+    ``detail.message``, which is copy and may be reworded without breaking anything.
+
+    The sentence still travels, because ``extractDetail`` reads ``detail.message`` — so
+    a caller that has never heard of this code reports the server's own words rather
+    than falling through to "something went wrong". The client that DOES know the code
+    replaces it with its own copy and an override, which the server could not author:
+    ADR-0968 puts the button label and its confirmation on the client's side of the
+    line.
+
+    The current ``lock_version`` is deliberately **not** on the wire. The client that
+    offers the override re-reads the event to get it — the conflicting write is one it
+    must judge against the state the server actually holds, not against a number handed
+    to it by the refusal.
+    """
+    return HTTPException(
+        status_code=409,
+        detail={"code": EVENT_VERSION_CONFLICT_CODE, "message": str(exc)},
+    )
+
+
 @router.patch(
     "/tournaments/{tournament_id}/events/{event_id}",
     response_model=TournamentEventRead,
@@ -810,6 +839,15 @@ async def update_event(
 ) -> TournamentEventRead:
     """Edit an event. Absent fields are left alone; `predicates` replaces wholesale when
     sent.
+
+    **`lock_version` is required on every edit.** Send back the `lock_version` you read
+    off the event you are editing. If the event has been written since that read, this
+    request is refused with a `409` carrying
+    `{"detail": {"code": "event_version_conflict", "message": …}}` and **nothing is
+    written** — read the event again and decide what to do with your draft. Every edit
+    this endpoint accepts moves the event's `lock_version` on by one, whatever it
+    changed. The check runs before every other check on the body, so a stale edit is
+    told it is stale rather than blamed on a field it did not touch.
 
     **`reservations` is an id-keyed diff, sent in full and in order.** Each entry either
     carries the `id` of a reservation this event already has — keeping it, with the
@@ -860,6 +898,7 @@ async def update_event(
     #   TournamentNotFoundError  -> 404 "Tournament not found."
     #   NotTournamentOwnerError  -> 403 "You can only modify tournaments you created."
     #   EventNotFoundError       -> 404 "Event not found."
+    #   EventVersionConflictError -> 409 (coded detail, ``event_version_conflict``)
     #   GroupSetFrozenError       -> 409 (its carried, domain-authored sentence)
     #   DrawTypeFrozenError      -> 409 (its carried, domain-authored sentence)
     try:
@@ -870,6 +909,15 @@ async def update_event(
             actor=current_user,
             updates=payload,
         )
+    except EventVersionConflictError as exc:
+        # A **structured** 409, unlike the two plain-string freezes below, and caught
+        # before them so the two cannot be confused: the body carries a stable
+        # ``detail.code`` a client branches on, plus the domain sentence under
+        # ``detail.message`` for one that does not know the code (``extractDetail``
+        # already reads that key, so an unknowing client degrades to the server's
+        # words rather than to nothing). Same shape as the structured 401s and the
+        # score-write conflict — one status, told apart by a code, never by prose.
+        raise _event_version_conflict(exc) from exc
     except (GroupSetFrozenError, DrawTypeFrozenError) as exc:
         # Both freezes carry the exact 409 sentence the handler used to compose inline —
         # rebuilt verbatim with ``str(exc)``.
