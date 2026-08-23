@@ -49,8 +49,15 @@ export function groupIdFor(reservationId: string): string {
  * see `groupsForEvent`). Keyed on the STAGE, never the reservation: two different
  * groups of the same event can map to the very same reservation at once (the group
  * stage's position-0 group and the knockout stage's own, both via `0 % N`), and they
- * must never collide on id the way keying both off `reservations[0].id` would. */
-function structuralGroupIdFor(stageId: string): string {
+ * must never collide on id the way keying both off `reservations[0].id` would.
+ *
+ * Exported so a hand-drawn fixture literal (a played-out seed, e.g. a `rr-then-ko`
+ * event's knockout bracket in `tournaments-store.ts`) can name the same knockout-stage
+ * group id `groupsForEvent` mints for that event, rather than the pre-ADR-20260823
+ * `group_id: null` such a fixture used to carry — every fixture is grouped now, so a
+ * literal one must cite the real id or the wire's own `TournamentFixtureRead.group_id`
+ * (`NOT NULL` since #1484) type refuses it. */
+export function structuralGroupIdFor(stageId: string): string {
   return mockUuid(`tournament-event-group:stage:${stageId}`)
 }
 

@@ -39,6 +39,7 @@ import {
   SOLVE_TICK_DWELL_MS,
   solveRowInFlight,
   stepScheduleSolve,
+  structuralGroupIdFor,
 } from '@/mocks/factories/tournaments/solver-sim'
 import { mockUuid } from '@/mocks/mock-uuid'
 import {
@@ -483,7 +484,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 1,
     entry_a_id: cup(5),
@@ -495,7 +496,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 2,
     entry_a_id: cup(3),
@@ -507,7 +508,7 @@ const CUP_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 2,
     position: 1,
     entry_a_id: cup(2),
@@ -537,7 +538,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 1,
     entry_a_id: shield(1),
@@ -549,7 +550,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r1-p2',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 1,
     position: 2,
     entry_a_id: shield(2),
@@ -562,7 +563,7 @@ const SHIELD_KNOCKOUT_FIXTURES: TournamentFixtureRead[] = [
   buildTournamentFixtureRead({
     id: 'fx-ko-r2-p1',
     stage_id: 's-2',
-    group_id: null,
+    group_id: structuralGroupIdFor('s-2'),
     round: 2,
     position: 1,
     entry_a_id: shield(1),

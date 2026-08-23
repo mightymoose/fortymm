@@ -238,15 +238,22 @@ describe('apiToEvent — the draw', () => {
 
   // Every null on a fixture is a FACT (ADR-0786), and a mapper that coalesced any of
   // them would erase the thing the draw exists to say: a null side is TBD, a null
-  // winner is undecided, a null match (and null status) is un-materialized, a null group
-  // is ungrouped.
-  it('carries every null through — TBD sides, undecided, un-materialized, ungrouped', () => {
+  // winner is undecided, a null match (and null status) is un-materialized.
+  //
+  // `group_id` is deliberately NOT one of the nulls exercised here any more (#1484):
+  // every fixture the real server sends now names a real group
+  // (`TournamentFixtureRead.group_id` is `NOT NULL` on the wire), so a wire-typed
+  // literal can no longer construct the null case. The client's parser
+  // (`./fixtures`, `group_id: z.string().nullable()`) still tolerates a null
+  // defensively, but that tolerance is exercised where it belongs — against the
+  // parser directly, not through this wire-shaped factory.
+  it('carries every null through — TBD sides, undecided, un-materialized', () => {
     const event = apiToEvent(
       buildTournamentEventRead({
         fixtures: [
           buildTournamentFixtureRead({
             id: 'fx-final',
-            group_id: null,
+            group_id: 'grp-final',
             round: 3,
             position: 1,
             entry_a_id: null,
@@ -259,7 +266,7 @@ describe('apiToEvent — the draw', () => {
     expect(event.fixtures[0]).toEqual({
       id: 'fx-final',
       stageId: 's-1',
-      groupId: null,
+      groupId: 'grp-final',
       round: 3,
       position: 1,
       entryAId: null,
