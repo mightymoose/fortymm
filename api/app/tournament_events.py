@@ -682,6 +682,37 @@ def _enforce_reservation_cap(
     enforce_event_reservation_cap(draw_type, reservation_count)
 
 
+def _stored_event_window(event: TournamentEvent) -> tuple[date, time, time] | None:
+    """This event's **stored** ``slot`` as a parsed ``(date, start, end)`` triple, or
+    ``None`` when the stored value does not spell one (#1501 review).
+
+    ``event.slot`` is untyped JSONB — three keys, no columns behind it — and until
+    #1501 nothing validated it on the way in, so a row written before this branch may
+    hold ``{"date": "next Tuesday"}`` or be missing a key outright. Both write shapes
+    now carry :data:`~app.schemas.tournament.WellFormedSlot`, so no NEW such row can be
+    created, and no environment holds an old one (#1501's Evidence, and the repo's
+    no-data-preservation decision).
+
+    A **partial** function all the same, returning ``None`` rather than raising, and the
+    reason is the ticket's own invariant: refusals here are 422, never 500. An unhandled
+    ``ValueError`` out of a validation guard is precisely the failure #1501 exists to
+    remove, and ``KeyError`` on a missing key is the same fault in a different colour —
+    so both are caught, and the caller decides what an unjudgeable window means rather
+    than the process deciding for it. This is the opposite call from
+    :func:`~app.tournament_reservations._slot_columns`, deliberately: that one reads a
+    value the boundary guarantees, and this one reads a value that predates the
+    guarantee.
+    """
+    try:
+        return (
+            date.fromisoformat(event.slot["date"]),
+            time.fromisoformat(event.slot["start"]),
+            time.fromisoformat(event.slot["end"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _enforce_reservation_containment(
     event: TournamentEvent, updates: TournamentEventUpdate
 ) -> None:
@@ -712,15 +743,14 @@ def _enforce_reservation_containment(
     an unrelated rename into a 500, which is this ticket's own bug relocated to the
     verb that was supposed to fix it.
 
-    **The stored event slot is read as a total function, not a parse.** ``event.slot``
-    is still the untyped JSONB dict (three keys, no columns behind it), and
-    ``date.fromisoformat``/``time.fromisoformat`` run with no ``try``/``except`` around
-    them — mirroring the stated precedent at
-    :func:`app.tournament_reservations._slot_columns`: no environment holds a malformed
-    stored event slot (#1501's Evidence, and the repo's no-data-preservation decision),
-    so this is a total function of what can reach it. Recorded here, deliberately, so
-    the choice is examined rather than inherited the next time someone reads this
-    function.
+    **The stored event slot is read through** :func:`_stored_event_window`, **which can
+    answer "no window"** (#1501 review). ``event.slot`` is still untyped JSONB with no
+    columns behind it, and nothing validated it before this branch, so a row that
+    predates #1501 may not spell a window at all. When it does not, this guard returns
+    without judging: an event slot that frames nothing gives a reservation no honest
+    verdict, and raising instead would answer 500 out of the very guard whose contract
+    is 422. The editor made the same call on its own side — ``reservationWindowIssues``
+    says nothing about any row when the event's slot cannot frame one.
 
     Asked **after** :func:`_enforce_reservation_cap` in the guard chain
     (``update_event`` below), which is itself already after both freezes: a cut event
@@ -736,12 +766,24 @@ def _enforce_reservation_containment(
             time.fromisoformat(updates.slot.end),
         )
     else:
-        stored_slot = event.slot
-        event_window = (
-            date.fromisoformat(stored_slot["date"]),
-            time.fromisoformat(stored_slot["start"]),
-            time.fromisoformat(stored_slot["end"]),
-        )
+        stored_window = _stored_event_window(event)
+        # Nothing to judge against. A stored slot that will not parse frames no window,
+        # so there is no honest verdict to give a reservation — and inventing one here
+        # would be a 500 (an unhandled ``ValueError`` out of a guard whose whole job is
+        # to answer 422), i.e. this ticket's own bug relocated into the verb meant to
+        # fix it.
+        # The editor already made exactly this call on its own side:
+        # ``reservationWindowIssues`` says nothing about ANY row when the event's slot
+        # cannot frame one, because the slot is the thing to fix first.
+        #
+        # Nothing is let through permanently. The reservations in this payload are still
+        # judged well-formed on their own (:data:`WellFormedSlot`), both write shapes
+        # now refuse a malformed event slot so no new such row exists, and the moment a
+        # director repairs this event's slot that PATCH carries ``slot`` — which IS
+        # judged, against these stored reservations, by the branch above.
+        if stored_window is None:
+            return
+        event_window = stored_window
     if updates.reservations is not None:
         reservations = reservation_windows(updates.reservations)
     else:

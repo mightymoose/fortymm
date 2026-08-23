@@ -1,3 +1,4 @@
+import re
 import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -866,6 +867,16 @@ one event share a position" unrepresentable through the API, and it is why
 field a client cannot send is a field it cannot decide."""
 
 
+_SLOT_DATE_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}")
+"""The one wire shape a :class:`Slot`'s ``date`` may take: ``YYYY-MM-DD``, extended
+ISO-8601, zero-padded and fixed-width. See :func:`_slot_is_well_formed` for why the
+SHAPE is pinned rather than left to ``date.fromisoformat``."""
+
+_SLOT_TIME_SHAPE = re.compile(r"\d{2}:\d{2}")
+"""The one wire shape a :class:`Slot`'s ``start``/``end`` may take: ``HH:MM``, to the
+minute, with no seconds. See :func:`_slot_is_well_formed`."""
+
+
 def _slot_is_well_formed(slot: Slot) -> Slot:
     """Refuse a window whose strings are not the ``YYYY-MM-DD`` / ``HH:MM`` this shape
     has always claimed to be, and refuse one whose ``end`` does not come strictly after
@@ -882,6 +893,23 @@ def _slot_is_well_formed(slot: Slot) -> Slot:
     wire shape promises, and a window silently read back one minute from where the
     director set it is worse than a refusal that says what to send.
 
+    **The SHAPE is pinned first, and the parse only judges validity.** The two are
+    different questions and ``fromisoformat`` answers only the second. It accepts every
+    ISO-8601 spelling, not the one this shape promises: ``"20260613"`` is a real date in
+    basic format, and ``"09:00:00"`` is a real time — with ``second == 0``, so a
+    ``t.second or t.microsecond`` test waves it straight through while the docstring
+    above claims seconds are refused. Both used to be storable (#1501 review), and both
+    broke a promise made elsewhere. An event's ``slot`` is JSONB written from
+    ``model_dump()``, so ``"20260613"`` reads back verbatim and the editor's own mirror
+    (``isEventSlotWellFormed``, ``event-form.ts``) then refuses to save the event at
+    all — a row the API accepted that the UI cannot edit. A reservation's ``"09:00:00"``
+    goes through TIME columns and reads back ``"09:00"``, falsifying the lossless
+    round trip :func:`~app.tournament_reservations._slot_read` states in as many words.
+    So :data:`_SLOT_DATE_SHAPE` and :data:`_SLOT_TIME_SHAPE` run first, and
+    ``fromisoformat`` still runs after them, because a shape is not validity —
+    ``"2026-13-45"`` and ``"25:99"`` both match their pattern and are neither a date nor
+    a time.
+
     **The ordering rule.** ``end`` strictly after ``start`` — a zero-length or negative
     window is refused outright, whether it is a reservation's own window or an event's
     (#1501). An overnight window (``22:00`` to ``02:00``) stays unsayable; the shape has
@@ -896,6 +924,15 @@ def _slot_is_well_formed(slot: Slot) -> Slot:
     validated against it, or the schedule preview's own ``date.fromisoformat``
     (``app.schedule_preview_solve``), where it used to answer 500.
     """
+    if not (
+        _SLOT_DATE_SHAPE.fullmatch(slot.date)
+        and _SLOT_TIME_SHAPE.fullmatch(slot.start)
+        and _SLOT_TIME_SHAPE.fullmatch(slot.end)
+    ):
+        raise ValueError(
+            "A window is a date and two times, stated exactly: “date” must be "
+            "YYYY-MM-DD and “start”/“end” must be HH:MM, with no seconds."
+        )
     try:
         date.fromisoformat(slot.date)
         start = time.fromisoformat(slot.start)
@@ -905,11 +942,6 @@ def _slot_is_well_formed(slot: Slot) -> Slot:
             "A window is a date and two times: “date” must be YYYY-MM-DD and "
             f"“start”/“end” must be HH:MM ({exc})."
         ) from exc
-    if any(t.second or t.microsecond for t in (start, end)):
-        raise ValueError(
-            "A window is stated to the minute: “start” and “end” must be HH:MM, "
-            "with no seconds."
-        )
     if end <= start:
         raise ValueError(
             "A window's “end” must come strictly after its “start” — a zero-length "

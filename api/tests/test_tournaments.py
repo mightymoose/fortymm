@@ -1839,8 +1839,36 @@ async def test_patch_event_reservations_judged_against_the_stored_slot_is_422(
         pytest.param(
             {"date": "2026-06-13", "start": "09:00:30", "end": "18:00"}, "seconds"
         ),
+        # The two ``fromisoformat`` accepts and the wire shape does not (#1501 review).
+        # ``"09:00:00"`` parses to a time whose ``.second`` is 0, so a
+        # ``t.second or t.microsecond`` test waves it through while claiming to refuse
+        # seconds; stored on a reservation's TIME columns it reads back ``"09:00"``,
+        # breaking the round trip ``_slot_read`` promises. ``"20260613"`` is a real
+        # date in ISO BASIC format; an event's slot is JSONB stored verbatim, so it
+        # reads back as typed and the editor's own mirror then refuses to save it.
+        pytest.param(
+            {"date": "2026-06-13", "start": "09:00:00", "end": "18:00"},
+            "zero-seconds",
+        ),
+        pytest.param({"date": "20260613", "start": "09:00", "end": "18:00"}, "basic"),
+        # A shape is not validity: both of these match the pattern and are neither a
+        # real date nor a real time, so ``fromisoformat`` still has to run after it.
+        pytest.param(
+            {"date": "2026-13-45", "start": "09:00", "end": "18:00"}, "no-day"
+        ),
+        pytest.param(
+            {"date": "2026-06-13", "start": "25:99", "end": "18:00"}, "no-time"
+        ),
     ],
-    ids=["unparseable-date", "unparseable-start", "a-time-carrying-seconds"],
+    ids=[
+        "unparseable-date",
+        "unparseable-start",
+        "a-time-carrying-seconds",
+        "a-time-carrying-ZERO-seconds",
+        "a-date-in-basic-format",
+        "a-shaped-date-that-is-no-day",
+        "a-shaped-time-that-is-no-time",
+    ],
 )
 async def test_create_event_with_a_malformed_slot_is_422(
     authed_client: tuple[AsyncClient, User],
@@ -1970,6 +1998,94 @@ async def test_patch_event_renaming_an_already_violating_event_succeeds(
     )
     assert response.status_code == 200, response.text
     assert response.json()["name"] == "Renamed Despite The Violation"
+
+
+@pytest.mark.parametrize(
+    "slot",
+    [
+        pytest.param({"date": "2026-06-13", "start": "09:00:00", "end": "18:00"}),
+        pytest.param({"date": "20260613", "start": "09:00", "end": "18:00"}),
+    ],
+    ids=["a-time-carrying-ZERO-seconds", "a-date-in-basic-format"],
+)
+async def test_create_event_reservation_with_an_off_shape_slot_is_422(
+    authed_client: tuple[AsyncClient, User],
+    slot: dict[str, str],
+):
+    """A reservation's window is pinned to the wire SHAPE, not merely to what
+    ``fromisoformat`` will swallow (#1501 review).
+
+    Both of these parse. Neither is the shape ``_slot_read`` promises to compose back
+    into, and that promise is load-bearing: a reservation's window goes through real
+    ``DATE``/``TIME`` columns, so ``"09:00:00"`` would be stored and read back as
+    ``"09:00"`` — the "lossless… character for character" round trip, quietly false.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(
+            reservations=[
+                {"name": "Reservation A", "slot": slot, "table_ids": []},
+            ]
+        ),
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_patch_reservations_against_a_malformed_stored_slot_is_not_a_500(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """A ``reservations``-only PATCH against an event whose STORED slot does not spell
+    a window must not answer 500 (#1501 review).
+
+    The escape hatch does not cover this case: it fires only when a PATCH touches
+    neither ``slot`` nor ``reservations``, so this payload reaches the guard, which
+    then has to read a stored slot nothing ever validated. Parsing it unguarded raises
+    a bare ``ValueError`` out of a validation guard — this ticket's own bug (a 500 for
+    a value the boundary waved through) relocated into the verb written to fix it, and
+    a direct breach of its "refusals are 422, never 500" invariant.
+
+    Containment is skipped instead, and the write is accepted: an event slot that
+    frames no window gives a reservation no honest verdict to fail against. The editor
+    already reasons this way on its own side (``reservationWindowIssues`` says nothing
+    about any row when the event's slot cannot frame one). Nothing escapes permanently
+    — repairing the event's slot is a PATCH carrying ``slot``, which IS judged against
+    these stored reservations.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    event_id = uuid.UUID(event["id"])
+
+    # Past the write boundary, which now refuses this — a row that predates #1501.
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    row.slot = {"date": "next Tuesday", "start": "09:00", "end": "18:00"}
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event_id}",
+        json={
+            "reservations": [
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+                    "table_ids": [],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
 
 
 # ----- the column is a constraint too (#783 QA, round three) ----------------
