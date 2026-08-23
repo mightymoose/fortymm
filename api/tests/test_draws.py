@@ -179,6 +179,13 @@ def _config(group_count: int) -> DrawConfig:
     return DrawConfig(group_ids=_group_ids(group_count))
 
 
+#: The stage a swiss draw's fixtures are dealt into — one stage, position 0, running
+#: swiss (``app.tournament_event_stages.stage_template``). Named once because the
+#: hand-built ``PlannedFixture`` literals below stand in for a cut this strategy would
+#: have written, and every one of them carries it.
+_SWISS_STAGE = FixtureStage(position=0, draw_type=DrawType.swiss)
+
+
 def _members_by_group(fixtures: list[PlannedFixture]) -> dict[GroupId | None, set[int]]:
     """Group membership is *derived from the fixtures* — there is no assignment table
     (ADR-0786), so this is how the rest of the system will read it too."""
@@ -723,6 +730,7 @@ class TestRoundRobinCut:
 
         assert fixtures == [
             PlannedFixture(
+                stage=FixtureStage(position=0, draw_type=DrawType.round_robin),
                 group_id=_group("A"),
                 round=1,
                 position=1,
@@ -1647,13 +1655,19 @@ def _rr_then_ko(qualifiers_per_group: int) -> RrThenKoStrategy:
 
 
 def _knockout(fixtures: Sequence[PlannedFixture]) -> list[PlannedFixture]:
-    """The knockout stage — which *is* ``group_id IS NULL`` (ADR-0786), no new
-    column."""
-    return [f for f in fixtures if f.group_id is None]
+    """The knockout stage of an **rr-then-ko** cut — the fixtures its composite deals
+    onto the single-elim stage the template mints at position 1.
+
+    Read off the fixture's own stage, not off ``group_id IS NULL``. That spelling was
+    right only while an un-grouped fixture could belong to nothing else; #1483 makes a
+    whole-event single-elim bracket grouped, so "un-grouped" and "the knockout half"
+    are no longer the same set anywhere but inside this one composite."""
+    return [f for f in fixtures if f.stage.position == 1]
 
 
 def _grouped(fixtures: Sequence[PlannedFixture]) -> list[PlannedFixture]:
-    return [f for f in fixtures if f.group_id is not None]
+    """The group half of an **rr-then-ko** cut — its round-robin stage, position 0."""
+    return [f for f in fixtures if f.stage.draw_type is DrawType.round_robin]
 
 
 def _played(
@@ -1882,8 +1896,17 @@ class TestRrThenKoCut:
         # rather than a restatement, so the two cannot drift.
         cut = _rr_then_ko(2).plan_initial(_config(3), _ordered(12))
 
+        # Normalised on the two axes the two cuts legitimately differ on, so what is
+        # left is the bracket's own shape: the seats (a composite's qualifiers are
+        # unknown at the cut) and the STAGE (a composite's bracket is its position-1
+        # stage, a whole-event single-elim's is its only stage, position 0).
         assert _knockout(cut) == [
-            dataclasses.replace(f, entry_a_id=None, entry_b_id=None)
+            dataclasses.replace(
+                f,
+                entry_a_id=None,
+                entry_b_id=None,
+                stage=FixtureStage(position=1, draw_type=DrawType.single_elim),
+            )
             for f in SingleElimStrategy().plan_initial(DrawConfig(), _ordered(6))
         ]
 
@@ -2980,6 +3003,7 @@ class TestSwissAdvance:
             _persisted(
                 [
                     PlannedFixture(
+                        stage=_SWISS_STAGE,
                         group_id=None,
                         round=1,
                         position=1,
@@ -2987,6 +3011,7 @@ class TestSwissAdvance:
                         entry_b_id=_entry_id(2),
                     ),
                     PlannedFixture(
+                        stage=_SWISS_STAGE,
                         group_id=None,
                         round=2,
                         position=1,
@@ -2994,13 +3019,14 @@ class TestSwissAdvance:
                         entry_b_id=_entry_id(3),
                     ),
                     PlannedFixture(
+                        stage=_SWISS_STAGE,
                         group_id=None,
                         round=3,
                         position=1,
                         entry_a_id=_entry_id(2),
                         entry_b_id=_entry_id(3),
                     ),
-                    PlannedFixture(group_id=None, round=4, position=1),
+                    PlannedFixture(stage=_SWISS_STAGE, group_id=None, round=4, position=1),
                 ]
             ),
             {

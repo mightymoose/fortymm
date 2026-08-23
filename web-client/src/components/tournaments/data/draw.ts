@@ -78,8 +78,12 @@ export function buildDrawIndex(
  * (`buildDrawIndex`).
  *
  * Both hops tolerate an unresolved id rather than throwing: a fixture whose `groupId`
- * names no entry of `event.groups` is a domain-legal state (a knockout fixture simply
- * has none, and it is shown in the ungrouped block, never dropped — `drawState` below).
+ * names no entry of `event.groups`, or names none at all, is a domain-legal state — the
+ * knockout stage of an `rr-then-ko` draw still carries no group id, and either way the
+ * fixture is shown in the ungrouped block, never dropped (`drawState` below). Note that
+ * resolving a group says nothing about which block a fixture lands in: a single-elim or
+ * swiss fixture resolves one and is still rendered as a bracket or as swiss rounds,
+ * because that decision is the *stage*'s (`seatsBothSidesAtCut`), not the group id's.
  * A group's `reservationId` may be `null` (ticket #1387: a group that plays in no
  * reservation), and a non-null one is guaranteed to resolve by the API's own foreign
  * key (`GroupRead`, `schema.d.ts`) — parsed and rejected at the boundary if it ever
@@ -270,6 +274,41 @@ export function shapeForStage(stageDrawType: StageDrawType): UngroupedShape {
 }
 
 /**
+ * Whether a stage running `stageDrawType` knows **both sides of every one of its fixtures
+ * at the cut** — the client's half of the server's `seats_both_sides_at_cut`
+ * (`api/app/draws.py`), and the one question that decides whether a fixture's group is a
+ * *group stage's* group.
+ *
+ * A round-robin stage does: the whole group is paired up front. A single-elim stage does
+ * not (round one is seeded, every later round is TBD until its feeders are decided), and
+ * neither does swiss (only round one is seeded; the rest are paired as the event runs).
+ *
+ * **It replaced `groupId !== null`.** Those two answered alike only while a bracket was
+ * un-grouped end to end. Since the server deals a single-elim or swiss stage's fixtures
+ * into its stage's group — which is what confines them to the reservation the director
+ * booked — reading "has a group" as "is a group" would render a bracket as a panel titled
+ * "Group A" and take `swissByesOf`'s list away from it.
+ *
+ * **Exhaustive over `StageDrawType`, no catch-all**, exactly like `shapeForStage` above,
+ * so a fourth single-stage draw type is a compile error here until somebody says whether
+ * it seats its field at the cut.
+ */
+export function seatsBothSidesAtCut(stageDrawType: StageDrawType): boolean {
+  switch (stageDrawType) {
+    case 'round-robin':
+      return true
+    case 'single-elim':
+      return false
+    case 'swiss':
+      return false
+    default: {
+      const exhaustive: never = stageDrawType
+      return exhaustive
+    }
+  }
+}
+
+/**
  * Which view an event's **un-grouped block** gets — the shape `drawState` actually reads
  * off, resolved from the stage(s) the un-grouped fixtures name.
  *
@@ -283,8 +322,10 @@ export function shapeForStage(stageDrawType: StageDrawType): UngroupedShape {
  * anomaly sharing the same un-grouped list. Nothing but `round-robin` stages (or a
  * fixture naming a stage this event does not have) leaves every fixture `'orphaned'`.
  */
-function ungroupedShapeOf(event: TournamentEvent, ungrouped: readonly Fixture[]): UngroupedShape {
-  const stagesById = new Map(event.stages.map((s): [string, Stage] => [s.id, s]))
+function ungroupedShapeOf(
+  stagesById: ReadonlyMap<string, Stage>,
+  ungrouped: readonly Fixture[],
+): UngroupedShape {
   for (const fixture of ungrouped) {
     const stage = stagesById.get(fixture.stageId)
     if (stage && stage.drawType !== 'round-robin') return shapeForStage(stage.drawType)
@@ -307,10 +348,15 @@ export type DrawState =
       kind: 'drawn'
       /** The groups the draw actually used, in the event's own group order. */
       groups: GroupDraw[]
-      /** Fixtures belonging to **no group** — a group-less draw (single-elim, swiss), or the
-       * knockout stage of an `rr-then-ko` draw (ADR 20260815: `group_id` is `null` for all
-       * of them). A fixture that has no group must not be *dropped*: it is rendered,
-       * honestly, outside the groups.
+      /** Fixtures belonging to no **group stage** — every fixture whose own stage does not
+       * seat both sides at the cut (`seatsBothSidesAtCut`): a single-elim or swiss event's
+       * whole draw, and the knockout stage of an `rr-then-ko` one. Most of them now carry a
+       * `groupId` (the server deals them into their stage's group so the scheduler can
+       * confine them); that id is not what puts them here, and reading it as if it were
+       * would render a bracket as a group panel.
+       *
+       * A fixture is never *dropped*: one that names a group this event does not list lands
+       * here too, rendered honestly outside the groups.
        *
        * **Which view it gets is `ungroupedShape` below, not this list.** */
       ungrouped: DrawRound[]
@@ -499,11 +545,27 @@ export function drawState(event: TournamentEvent): DrawState {
 
   const byId = new Map(event.entrants.map((e) => [e.id, e]))
   const groupIds = new Set(event.groups.map((g) => g.id))
+  const stagesById = new Map(event.stages.map((s): [string, Stage] => [s.id, s]))
   const byGroup = new Map<string, Fixture[]>()
   const ungrouped: Fixture[] = []
   for (const fixture of event.fixtures) {
+    // Which block a fixture lands in is its **stage's** decision, never its group id's
+    // (`seatsBothSidesAtCut`). A single-elim or swiss fixture now names its stage's
+    // group — that is what confines it to a reservation — but its stage does not seat
+    // both sides at the cut, so it belongs in the ungrouped block and renders as a
+    // bracket or as swiss rounds. Reading the group id here instead would title a
+    // bracket "Group A" and leave `swissByesOf` with an empty list to work from.
+    //
+    // A stage this event does not list answers `false` and the fixture is shown
+    // ungrouped, which is the same honest fallback `ungroupedShapeOf` gives it.
+    const stage = stagesById.get(fixture.stageId)
     const groupId = fixture.groupId
-    if (groupId === null || !groupIds.has(groupId)) {
+    if (
+      stage === undefined ||
+      !seatsBothSidesAtCut(stage.drawType) ||
+      groupId === null ||
+      !groupIds.has(groupId)
+    ) {
       ungrouped.push(fixture)
       continue
     }
@@ -541,7 +603,7 @@ export function drawState(event: TournamentEvent): DrawState {
   // Read off the un-grouped fixtures' own STAGE, never off the null group id they were
   // bucketed by above — see `ungroupedShapeOf`. Resolved once, here, so `swissByes`
   // reads the same answer rather than re-deriving it.
-  const shape = ungroupedShapeOf(event, ungrouped)
+  const shape = ungroupedShapeOf(stagesById, ungrouped)
 
   return {
     kind: 'drawn',
