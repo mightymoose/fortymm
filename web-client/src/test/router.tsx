@@ -1,4 +1,5 @@
 import {
+  RouterContextProvider,
   RouterProvider,
   createMemoryHistory,
   createRootRoute,
@@ -56,4 +57,34 @@ export function renderWithRoutes(
   })
 
   return render(<RouterProvider router={router} />)
+}
+
+/**
+ * Render a component that needs the router **context** — `useRouter`, `useBlocker`,
+ * `router.history` — but not a matched route.
+ *
+ * The difference from `renderWithRoutes` above is the whole reason this exists:
+ * `RouterProvider` renders `<Matches>`, so its subject appears only after the router
+ * has resolved, and every assertion against it has to start with an `await find…()`.
+ * `RouterContextProvider` renders its children **synchronously**, so a component that
+ * merely reads the router (the event editor's discard guard, #1503) keeps the plain
+ * `getBy…` assertions its suite already has.
+ *
+ * Use `renderWithRoutes` instead whenever the subject contains a typed `<Link>`, or
+ * when the test is about routing itself — a search param, a loader, a boundary. Those
+ * need real matches, and a route test (`routes/…​.test.tsx`) is where they belong.
+ */
+export function renderWithRouterContext(
+  ui: ReactNode,
+  { initialEntries = ['/'] }: { initialEntries?: string[] } = {},
+) {
+  const rootRoute = createRootRoute()
+  const router = createRouter({
+    routeTree: rootRoute,
+    history: createMemoryHistory({ initialEntries }),
+  })
+
+  return render(
+    <RouterContextProvider router={router}>{ui}</RouterContextProvider>,
+  )
 }

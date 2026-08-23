@@ -10,6 +10,7 @@ import {
   DRAW_TYPE_CATALOGUE,
   planDraw,
 } from '@/mocks/factories/tournaments/tournament.factory'
+import { mockUuid } from '@/mocks/mock-uuid'
 import {
   BAY_AREA_OPEN_ID,
   CLUB_CHAMPS_ID,
@@ -48,11 +49,11 @@ type TournamentTableUpsert = components['schemas']['TournamentTableUpsert']
 
 const TOURNAMENT = BAY_AREA_OPEN_ID // seeded `published`, owned
 const DRAFT_TOURNAMENT = SUMMER_SLAM_ID // seeded `draft`, owned, one drawn event
-const EMPTY_SINGLES = 'ev-u1500' // seeded with no entrants
-const FULLISH_SINGLES = 'ev-open-singles' // seeded with 52 other players, cap 64
-const FULL_SINGLES = 'ev-champ-singles' // seeded 16 of 16 — no room (#783)
-const INELIGIBLE_SINGLES = 'ev-u1200' // rating < 1200; the dev user is 1650 (#783)
-const DOUBLES = 'ev-mixed-doubles'
+const EMPTY_SINGLES = mockUuid('ev-u1500') // seeded with no entrants
+const FULLISH_SINGLES = mockUuid('ev-open-singles') // seeded with 52 other players, cap 64
+const FULL_SINGLES = mockUuid('ev-champ-singles') // seeded 16 of 16 — no room (#783)
+const INELIGIBLE_SINGLES = mockUuid('ev-u1200') // rating < 1200; the dev user is 1650 (#783)
+const DOUBLES = mockUuid('ev-mixed-doubles')
 
 /** What each closed status must SAY — the distinctive phrase of the server's
  * sentence for it (`_registration_closed_detail`, `api/app/tournaments.py`), the
@@ -383,7 +384,7 @@ describe('enterEvent', () => {
 
   it('404s an unknown tournament or event', () => {
     expect(enterEvent('nope', EMPTY_SINGLES)).toEqual({ ok: false, status: 404 })
-    expect(enterEvent(TOURNAMENT, 'ev-nope')).toEqual({ ok: false, status: 404 })
+    expect(enterEvent(TOURNAMENT, mockUuid('ev-nope'))).toEqual({ ok: false, status: 404 })
   })
 
   it('is allowed on a tournament the entrant does not own — entry is not creator-gated', () => {
@@ -393,11 +394,11 @@ describe('enterEvent', () => {
     expect(notMine.can_edit).toBe(false)
     expect(notMine.status).toBe('published')
 
-    const result = enterEvent(CLUB_CHAMPS_ID, 'ev-cc-open')
+    const result = enterEvent(CLUB_CHAMPS_ID, mockUuid('ev-cc-open'))
 
     expect(result.ok).toBe(true)
     const found = findTournament(CLUB_CHAMPS_ID)!.events.find(
-      (e) => e.id === 'ev-cc-open',
+      (e) => e.id === mockUuid('ev-cc-open'),
     )!
     expect(found.entered).toBe(29)
   })
@@ -758,7 +759,7 @@ describe('transitionTournament', () => {
   /** `DRAFT`'s only event: round-robin, 8 entrants, a draw already cut across its one
    * group (#1482) — i.e. the one seeded event whose draw is CURRENT, which is what
    * makes that tournament the only one in the seed that can go live at all. */
-  const SLAM_EVENT = 'ev-slam-open'
+  const SLAM_EVENT = mockUuid('ev-slam-open')
 
   const LEGAL: [TournamentStatus, TournamentStatus][] = [
     ['draft', 'published'],
@@ -959,7 +960,7 @@ describe('transitionTournament', () => {
     // Registration stays open right up to go-live, which is exactly how a draw goes
     // stale: the field the fixtures were dealt from is not the field that would play.
     const id = at('published')
-    const entered = enterEvent(id, 'ev-slam-open')
+    const entered = enterEvent(id, mockUuid('ev-slam-open'))
     if (!entered.ok) throw new Error('setup failed: could not enter')
 
     const detail = refusalDetail(transitionTournament(id, 'live'))
@@ -1032,10 +1033,10 @@ describe('transitionTournament', () => {
     // The way out, end to end — and the proof that the refusal above is about the draw's
     // currency and not about the entrant simply existing.
     const id = at('published')
-    enterEvent(id, 'ev-slam-open')
+    enterEvent(id, mockUuid('ev-slam-open'))
     expect(transitionTournament(id, 'live').ok).toBe(false)
 
-    const recut = cutDraw(id, 'ev-slam-open')
+    const recut = cutDraw(id, mockUuid('ev-slam-open'))
     if (!recut.ok) throw new Error('setup failed: could not re-cut')
 
     expect(transitionTournament(id, 'live').ok).toBe(true)
@@ -1453,14 +1454,14 @@ describe('cutting and un-cutting a draw', () => {
   beforeEach(() => resetTournamentsStore())
 
   const FOREIGN = CLUB_CHAMPS_ID // `u-office`'s, published: readable, not writable
-  const FOREIGN_EVENT = 'ev-cc-open'
+  const FOREIGN_EVENT = mockUuid('ev-cc-open')
   /** Round-robin, one group, nine entrants, cut — the seed's `ev-u1200` (#1482: a
    * round-robin event holds at most one reservation, so this is also the store's ONE
    * cuttable round-robin event, because round-robin is the only draw type with a
    * generator today). There is no seeded round-robin event with two groups any more —
    * that state is reachable only through data minted before the cap existed, and this
    * store mints fresh on every run, so it seeds none. */
-  const ROUND_ROBIN = 'ev-u1200'
+  const ROUND_ROBIN = mockUuid('ev-u1200')
 
   const eventOf = (tournamentId: string, eventId: string) =>
     findTournament(tournamentId)!.events.find((e) => e.id === eventId)!
@@ -1481,7 +1482,7 @@ describe('cutting and un-cutting a draw', () => {
     // One other event in this seed is ALSO drawn: `ev-two-stage-cut` (`rr-then-ko`, the
     // group-set-freeze fixture below) — deliberate, so this sweep excludes it by name
     // rather than asserting a state the seed no longer has.
-    const alsoDrawn = new Set(['ev-two-stage-cut'])
+    const alsoDrawn = new Set([mockUuid('ev-two-stage-cut')])
     for (const other of findTournament(TOURNAMENT)!.events.filter(
       (e) => e.id !== ROUND_ROBIN && !alsoDrawn.has(e.id),
     )) {
@@ -1629,8 +1630,8 @@ describe('cutting and un-cutting a draw', () => {
   it("refuses a stranger's cut with a 403, and an unknown event with a 404", () => {
     expect(cutDraw(FOREIGN, FOREIGN_EVENT)).toEqual({ ok: false, status: 403 })
     expect(uncutDraw(FOREIGN, FOREIGN_EVENT)).toEqual({ ok: false, status: 403 })
-    expect(cutDraw(TOURNAMENT, 'ev-nope')).toEqual({ ok: false, status: 404 })
-    expect(uncutDraw('no-such-tournament', 'ev-nope')).toEqual({
+    expect(cutDraw(TOURNAMENT, mockUuid('ev-nope'))).toEqual({ ok: false, status: 404 })
+    expect(uncutDraw('no-such-tournament', mockUuid('ev-nope'))).toEqual({
       ok: false,
       status: 404,
     })
@@ -2316,7 +2317,7 @@ describe('the group set freezes while a draw exists', () => {
   // #1482: `rr-then-ko` is the one draw type the reservation cap does not apply to,
   // so it is where this suite's multi-reservation coverage now lives — `ev-u1200`
   // itself holds only one now.
-  const TWO_STAGE = 'ev-two-stage-cut'
+  const TWO_STAGE = mockUuid('ev-two-stage-cut')
   const reservationsOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!.reservations
 
@@ -2484,7 +2485,7 @@ describe('a reservations PATCH citing an id the event does not have', () => {
 
   // #1482: `rr-then-ko`, so a cut draw can still stand here to exercise the freeze
   // ordering below regardless of the reservation cap.
-  const TWO_STAGE = 'ev-two-stage-cut' // seeded WITH a draw
+  const TWO_STAGE = mockUuid('ev-two-stage-cut') // seeded WITH a draw
   const eventOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
 
@@ -2536,7 +2537,7 @@ describe('the draw type freezes while a draw exists', () => {
 
   // #1482: `rr-then-ko`, the one draw type the reservation cap does not apply to, so
   // this block's own multi-reservation cases keep working undisturbed by it.
-  const TWO_STAGE = 'ev-two-stage-cut'
+  const TWO_STAGE = mockUuid('ev-two-stage-cut')
   const eventOf = (eventId: string) =>
     findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)!
 
@@ -2809,8 +2810,8 @@ describe('the seeded two-stage (rr-then-ko) events', () => {
   beforeEach(() => resetTournamentsStore())
 
   const GOLDEN_STATE = GOLDEN_STATE_CLASSIC_ID
-  const FINISHED = 'ev-challenge-cup' // groups decided, bracket decided, champion crowned
-  const MID_FLIGHT = 'ev-shield' // groups decided, the final still to be played
+  const FINISHED = mockUuid('ev-challenge-cup') // groups decided, bracket decided, champion crowned
+  const MID_FLIGHT = mockUuid('ev-shield') // groups decided, the final still to be played
 
   type Fixture = components['schemas']['TournamentFixtureRead']
   type TwoStageResults =

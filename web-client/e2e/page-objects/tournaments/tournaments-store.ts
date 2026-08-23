@@ -530,7 +530,7 @@ const CUP_RESULTS_MID_FLIGHT: StandingsThenFinishesResultsRead =
 function twoStageEvents(): TournamentEventRead[] {
   return [
     buildTournamentEventRead({
-      id: 'ev-cup',
+      id: mockUuid('ev-cup'),
       name: EVENT.TWO_STAGE,
       format: 'singles',
       draw_type: 'rr-then-ko',
@@ -552,7 +552,7 @@ function twoStageEvents(): TournamentEventRead[] {
 function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[] {
   return [
     buildTournamentEventRead({
-      id: 'ev-open-singles',
+      id: mockUuid('ev-open-singles'),
       name: EVENT.JOURNEY,
       format: 'singles',
       draw_type: 'round-robin',
@@ -561,7 +561,7 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
       reservations: JOURNEY_RESERVATIONS,
     }),
     buildTournamentEventRead({
-      id: 'ev-group-play',
+      id: mockUuid('ev-group-play'),
       name: EVENT.GROUPS,
       format: 'singles',
       draw_type: 'round-robin',
@@ -588,7 +588,7 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
 function bracketEvents(): TournamentEventRead[] {
   return [
     buildTournamentEventRead({
-      id: 'ev-championship',
+      id: mockUuid('ev-championship'),
       name: EVENT.BRACKET,
       format: 'singles',
       draw_type: 'single-elim',
@@ -597,7 +597,7 @@ function bracketEvents(): TournamentEventRead[] {
       reservations: [],
     }),
     buildTournamentEventRead({
-      id: 'ev-novice',
+      id: mockUuid('ev-novice'),
       name: EVENT.LONE,
       format: 'singles',
       draw_type: 'single-elim',
@@ -689,14 +689,14 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
     ...name,
     events: [
       buildTournamentEventRead({
-        id: 'ev-open-singles',
+        id: mockUuid('ev-open-singles'),
         name: EVENT.JOURNEY,
         format: 'singles',
         max_players: 64,
         entrants: OTHERS,
       }),
       buildTournamentEventRead({
-        id: 'ev-u1500',
+        id: mockUuid('ev-u1500'),
         name: EVENT.EMPTY,
         format: 'singles',
         // The **refusal** fixture: a round-robin with NO RESERVATIONS (and so no
@@ -712,7 +712,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
         reservations: [],
       }),
       buildTournamentEventRead({
-        id: 'ev-mixed-doubles',
+        id: mockUuid('ev-mixed-doubles'),
         name: EVENT.DOUBLES,
         format: 'doubles',
         max_players: 32,
@@ -722,7 +722,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
       ...(crowded
         ? [
             buildTournamentEventRead({
-              id: 'ev-veterans',
+              id: mockUuid('ev-veterans'),
               name: EVENT.CROWDED,
               format: 'singles',
               max_players: 64,
@@ -734,7 +734,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
       ...(options.unrated ?? false
         ? [
             buildTournamentEventRead({
-              id: 'ev-beginners',
+              id: mockUuid('ev-beginners'),
               name: EVENT.ALL_UNRATED,
               format: 'singles',
               max_players: 32,
@@ -771,7 +771,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
 function gatedEvents(): TournamentEventRead[] {
   return [
     buildTournamentEventRead({
-      id: 'ev-masters',
+      id: mockUuid('ev-masters'),
       name: EVENT.FULL,
       format: 'singles',
       max_players: SMALL_CAP,
@@ -779,7 +779,7 @@ function gatedEvents(): TournamentEventRead[] {
       reservations: [],
     }),
     buildTournamentEventRead({
-      id: 'ev-legends',
+      id: mockUuid('ev-legends'),
       name: EVENT.FULL_WITH_ME,
       format: 'singles',
       max_players: SMALL_CAP,
@@ -789,7 +789,7 @@ function gatedEvents(): TournamentEventRead[] {
       reservations: [],
     }),
     buildTournamentEventRead({
-      id: 'ev-u1200',
+      id: mockUuid('ev-u1200'),
       name: EVENT.INELIGIBLE,
       format: 'singles',
       max_players: 24,

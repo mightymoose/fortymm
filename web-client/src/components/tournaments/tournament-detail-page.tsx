@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Calendar, Layers, MapPin, Table2, Trophy, Users } from 'lucide-react'
 
 import { LocationMap } from '@/components/maps/location-map'
@@ -14,6 +14,10 @@ import {
   fmtVenueLine,
   genId,
 } from './data/helpers'
+import {
+  NEW_EVENT_PARAM,
+  type EventEditorSearch,
+} from './data/event-editor-search'
 import { lifecycleEdgeFor } from './data/lifecycle'
 import type {
   EditedEvent,
@@ -59,6 +63,56 @@ export interface TournamentDetailPageProps {
    * `EventEditor`'s `saving` prop for why `isSubmitting` alone was not enough (#1231). */
   savingEvent?: boolean
   onBack: () => void
+  /** Which event's editor the URL says is open — a uuid, the `new` sentinel, or
+   * `undefined` for none. Already parsed at the route boundary
+   * (`data/event-editor-search`); resolving it to an event of THIS tournament is
+   * this page's job, because this is the first place that holds one. */
+  openEditorFor?: EventEditorSearch
+  /** Open an event's editor — a navigation that pushes exactly one history entry, so
+   * one Back press dismisses the sheet (#1503). */
+  onOpenEditor: (eventKey: string) => void
+  /** Close it. `force` skips the discard confirmation, for the two closes that are
+   * not a discard: a save has just persisted the work, and a delete raises a
+   * confirmation of its own that must not be stacked on. */
+  onCloseEditor: (options?: { force?: boolean }) => void
+}
+
+/**
+ * The event whose editor is open, resolved from the URL — and then **held**.
+ *
+ * Held, because `EventEditor` re-seeds its form whenever this object's IDENTITY
+ * changes, and the tournament refetches in the background (every event mutation
+ * invalidates it, and the realtime `tournament.changed` feed does too). Resolving
+ * against `tournament.events` on every render would hand the editor an equal-but-new
+ * object after any such refetch, and reset the form under the director's hands. So
+ * the memo is keyed on WHICH event is open, never on the payload it came from — the
+ * URL is the only thing that decides when to re-seed, which is also what makes "the
+ * editor is re-seeded on every open" true.
+ */
+function useOpenEditorEvent(
+  openEditorFor: EventEditorSearch,
+  tournament: Tournament,
+  canEdit: boolean,
+): TournamentEvent | null {
+  // Read on demand, depended on never. A ref is stable, so the memo below cannot
+  // be re-run by a refetch that changed nothing about which editor is open.
+  const latest = useRef({ tournament, canEdit })
+  latest.current = { tournament, canEdit }
+
+  return useMemo(() => {
+    const { tournament: t, canEdit: editable } = latest.current
+    if (openEditorFor === undefined) return null
+    // `new` is an editor over an event that does not exist yet — not a state a
+    // reader has. A viewer's `?event=new` is as meaningless as an unknown uuid, and
+    // closes the same way (ADR-0015: read-only is a view, and there is nothing to
+    // view here).
+    if (openEditorFor === NEW_EVENT_PARAM) {
+      return editable ? emptyEvent(t) : null
+    }
+    // A well-formed uuid naming no event on THIS tournament is a URL that names no
+    // resource: the editor stays closed, and nothing is requested (ADR-1001).
+    return t.events.find((e) => e.id === openEditorFor) ?? null
+  }, [openEditorFor])
 }
 
 function MetaItem({
@@ -94,10 +148,11 @@ export const TournamentDetailPage = ({
   onDeleteEvent,
   savingEvent = false,
   onBack,
+  openEditorFor,
+  onOpenEditor,
+  onCloseEditor,
 }: TournamentDetailPageProps) => {
   const [tab, setTab] = useState('events')
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [editorEvent, setEditorEvent] = useState<TournamentEvent | null>(null)
   const [pendingDelete, setPendingDelete] = useState<TournamentEvent | null>(null)
 
   const tournamentTables = tournament.tableIds
@@ -132,14 +187,17 @@ export const TournamentDetailPage = ({
   // (#1206).
   const venue = fmtVenueLine(address)
 
-  const openEvent = (ev: TournamentEvent) => {
-    setEditorEvent(ev)
-    setEditorOpen(true)
-  }
-  const openNewEvent = () => {
-    setEditorEvent(emptyEvent(tournament))
-    setEditorOpen(true)
-  }
+  const editorEvent = useOpenEditorEvent(openEditorFor, tournament, canEdit)
+  // Radix keeps the sheet mounted through its slide-out, so blanking the event the
+  // instant the URL drops the param would empty the panel mid-animation. Hold the
+  // last one open. Adjusted during render rather than in an effect — the render
+  // already knows (https://react.dev/learn/you-might-not-need-an-effect), the same
+  // way `EventEditor` tracks the event it last seeded from.
+  const [shownEvent, setShownEvent] = useState<TournamentEvent | null>(editorEvent)
+  if (editorEvent && editorEvent !== shownEvent) setShownEvent(editorEvent)
+
+  const openEvent = (ev: TournamentEvent) => onOpenEditor(ev.id)
+  const openNewEvent = () => onOpenEditor(NEW_EVENT_PARAM)
   /** Persist the editor's draft — and **do not close anything here**.
    *
    * The promise is returned rather than swallowed, and the rejection is deliberately
@@ -315,9 +373,9 @@ export const TournamentDetailPage = ({
       </Tabs>
 
       <EventEditor
-        open={editorOpen}
-        onOpenChange={setEditorOpen}
-        event={editorEvent}
+        open={editorEvent !== null}
+        onClose={onCloseEditor}
+        event={shownEvent}
         tables={tournamentTables}
         drawTypes={drawTypes}
         canEdit={canEdit}
@@ -325,7 +383,12 @@ export const TournamentDetailPage = ({
         onSave={saveEvent}
         onDelete={(id) => {
           const ev = tournament.events.find((e) => e.id === id) ?? null
-          setEditorOpen(false)
+          // `force`: the delete confirmation is about to open, and stacking "Discard
+          // changes?" in front of it would ask the director to protect edits they
+          // have just asked to delete the event holding. The existing sharp edge
+          // this leaves is unchanged — cancelling the delete does not bring the
+          // editor back — but it is not made worse.
+          onCloseEditor({ force: true })
           setPendingDelete(ev)
         }}
       />

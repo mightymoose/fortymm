@@ -26,11 +26,11 @@ const OVER_LONG_NAME = 'A'.repeat(300)
 describe('EventEditor', () => {
   it('saves the working draft and closes on success', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
-    const onOpenChange = vi.fn()
+    const onClose = vi.fn()
     eventEditorPage.render({
       event: buildEvent({ name: 'Open Singles' }),
       onSave,
-      onOpenChange,
+      onClose,
     })
 
     await userEvent.click(eventEditorPage.getSaveButton())
@@ -40,7 +40,8 @@ describe('EventEditor', () => {
       ),
     )
     // The panel closes only after the save resolves.
-    expect(onOpenChange).toHaveBeenCalledWith(false)
+    // `force`, so the guard is skipped: the work has just been persisted.
+    expect(onClose).toHaveBeenCalledWith({ force: true })
   })
 
   /**
@@ -914,11 +915,11 @@ describe('EventEditor', () => {
       const onSave = rejectWith(
         pydantic422('name', 'String should have at most 255 characters'),
       )
-      const onOpenChange = vi.fn()
+      const onClose = vi.fn()
       eventEditorPage.render({
         event: buildEvent({ id: 'new-1', name: 'Open Singles' }),
         onSave,
-        onOpenChange,
+        onClose,
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
@@ -940,7 +941,7 @@ describe('EventEditor', () => {
       // Still open — and it is the EDITOR that has not closed, not merely a parent
       // that happens to have kept it mounted: nothing asked for it to close.
       expect(eventEditorPage.querySheet()).toBeInTheDocument()
-      expect(onOpenChange).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
       // …and the work is still in it.
       expect(eventEditorPage.getNameInput()).toHaveValue('Open Singles')
     })
@@ -1062,11 +1063,11 @@ describe('EventEditor', () => {
       const onSave = rejectWith(
         new ApiError(409, refusal, 'update event', { detail: refusal }),
       )
-      const onOpenChange = vi.fn()
+      const onClose = vi.fn()
       eventEditorPage.render({
         event: buildEvent({ id: 'ev-1', reservations: [buildReservation()] }),
         onSave,
-        onOpenChange,
+        onClose,
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
@@ -1077,7 +1078,7 @@ describe('EventEditor', () => {
       expect(eventEditorPage.queryFailure()).toHaveTextContent(refusal)
       // Not swallowed, not a raw crash, and not a closed sheet over a discarded draft.
       expect(eventEditorPage.querySheet()).toBeInTheDocument()
-      expect(onOpenChange).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
       expect(eventEditorPage.queryFailure()).toHaveTextContent(
         'your changes are still here',
       )
@@ -1273,11 +1274,11 @@ describe('EventEditor', () => {
   describe('validation keeps the panel open', () => {
     it('rejects an over-long name inline without saving or closing', async () => {
       const onSave = vi.fn().mockResolvedValue(undefined)
-      const onOpenChange = vi.fn()
+      const onClose = vi.fn()
       eventEditorPage.render({
         event: buildEvent({ id: 'new-1', name: '' }),
         onSave,
-        onOpenChange,
+        onClose,
       })
 
       fireEvent.change(eventEditorPage.getNameInput(), {
@@ -1291,7 +1292,7 @@ describe('EventEditor', () => {
         ).toBeInTheDocument(),
       )
       expect(onSave).not.toHaveBeenCalled()
-      expect(onOpenChange).not.toHaveBeenCalledWith(false)
+      expect(onClose).not.toHaveBeenCalled()
       // The typed value is retained, not discarded.
       expect(eventEditorPage.getNameInput()).toHaveValue(OVER_LONG_NAME)
     })
@@ -1365,11 +1366,11 @@ describe('EventEditor', () => {
         .mockRejectedValue(
           new ApiError(422, 'That name is already taken.', 'save event'),
         )
-      const onOpenChange = vi.fn()
+      const onClose = vi.fn()
       eventEditorPage.render({
         event: buildEvent({ name: 'Open Singles' }),
         onSave,
-        onOpenChange,
+        onClose,
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
@@ -1385,7 +1386,7 @@ describe('EventEditor', () => {
         'That name is already taken.',
       )
       // Rejected: the panel did not close, and the work is still in it.
-      expect(onOpenChange).not.toHaveBeenCalledWith(false)
+      expect(onClose).not.toHaveBeenCalled()
       expect(eventEditorPage.getNameInput()).toHaveValue('Open Singles')
     })
   })

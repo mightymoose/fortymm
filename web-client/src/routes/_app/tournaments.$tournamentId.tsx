@@ -1,4 +1,11 @@
-import { createFileRoute, notFound, useNavigate } from '@tanstack/react-router'
+import { useEffect, useRef } from 'react'
+import {
+  createFileRoute,
+  notFound,
+  useNavigate,
+  useRouter,
+} from '@tanstack/react-router'
+import { zodValidator } from '@tanstack/zod-adapter'
 import { z } from 'zod'
 
 import { TournamentDetailPage } from '@/components/tournaments/tournament-detail-page'
@@ -16,6 +23,7 @@ import {
   useUpdateTableCatalogue,
   useUpdateTournament,
 } from '@/components/tournaments/data/api'
+import { eventEditorSearchSchema } from '@/components/tournaments/data/event-editor-search'
 import { pageTitle } from '@/lib/page-title'
 
 /** The tournament id segment. The API types `tournament_id` as a `uuid.UUID`, so a
@@ -36,6 +44,8 @@ export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
       return { tournamentId: parsed.data }
     },
   },
+  // Which event's editor is open, parsed at the boundary beside the id above.
+  validateSearch: zodValidator(eventEditorSearchSchema),
   head: () => ({
     meta: [{ title: pageTitle('Tournament') }],
   }),
@@ -59,7 +69,10 @@ export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
 
 function TournamentDetailRoute() {
   const { tournamentId } = Route.useParams()
+  const { event: openEditorFor } = Route.useSearch()
   const navigate = useNavigate()
+  const editorNavigate = Route.useNavigate()
+  const router = useRouter()
   const { data: tournament, isPending } = useTournament(tournamentId)
   const allTables = useTables(tournamentId)
   const updateTournament = useUpdateTournament()
@@ -69,6 +82,58 @@ function TournamentDetailRoute() {
   const deleteEvent = useDeleteEvent(tournamentId)
 
   const back = () => navigate({ to: '/tournaments' })
+
+  /**
+   * **Did WE push the entry the open editor is sitting on?**
+   *
+   * It decides how the editor closes, and only this component knows the answer.
+   * Opening an editor pushes one entry, so closing it must *consume* that entry —
+   * otherwise the sheet vanishes and the director is left with a Back press that
+   * takes them to an editor they just closed. But an editor reached by a deep link or
+   * a reload sits on an entry we never pushed, and there is nothing of ours behind
+   * it: popping that one would take them out of the site altogether. That one is
+   * replaced instead.
+   *
+   * A ref, not state: nothing renders from it, and it must be readable by the close
+   * handler in the same tick it is written.
+   */
+  const pushedEditorEntry = useRef(false)
+
+  // The param going away is the entry being consumed, however it happened — our own
+  // `history.back()`, or the director's Back press, which never reaches
+  // `closeEditor` at all because the pop has already done the work.
+  useEffect(() => {
+    if (openEditorFor === undefined) pushedEditorEntry.current = false
+  }, [openEditorFor])
+
+  /** Open an event's editor: one pushed history entry, so one Back press closes it. */
+  const openEditor = (eventKey: string) => {
+    pushedEditorEntry.current = true
+    void editorNavigate({ search: { event: eventKey } })
+  }
+
+  /**
+   * Close it — and this is the ONE navigation every close path funnels through
+   * (Escape, an overlay click, the sheet's close control, Cancel, a save, a delete),
+   * which is what lets a single `useBlocker` in the editor guard all of them.
+   *
+   * `force` is for the closes that are not a discard: a save has just persisted the
+   * work, and a delete is about to raise a confirmation of its own, so neither may
+   * stack "Discard changes?" on top. It rides `ignoreBlocker`, which both the pop and
+   * the replace path honour.
+   */
+  const closeEditor = ({ force = false }: { force?: boolean } = {}) => {
+    if (pushedEditorEntry.current) {
+      pushedEditorEntry.current = false
+      router.history.back({ ignoreBlocker: force })
+      return
+    }
+    void editorNavigate({
+      search: { event: undefined },
+      replace: true,
+      ignoreBlocker: force,
+    })
+  }
 
   // First load: the query is pending and `tournament` is still undefined — show a
   // loading state. A resolved 404 no longer lands here at all: the detail query
@@ -88,6 +153,11 @@ function TournamentDetailRoute() {
     <TournamentDetailPage
       tournament={tournament}
       allTables={allTables}
+      // The open editor, as three facts the page does not have to own: which one the
+      // URL names, and the two navigations that change it (#1503).
+      openEditorFor={openEditorFor}
+      onOpenEditor={openEditor}
+      onCloseEditor={closeEditor}
       onUpdate={(next) =>
         updateTournament.mutate({
           id: next.id,

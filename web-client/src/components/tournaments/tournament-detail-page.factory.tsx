@@ -16,6 +16,13 @@ export function buildTournamentDetailPageProps(
     onDeleteEvent: () => {},
     savingEvent: false,
     onBack: () => {},
+    // No editor open, and the two navigations stubbed: a component test drives the
+    // page's props, and which editor is open is the ROUTE's fact (#1503). The
+    // URL-driven behaviour is proved where a real router lives —
+    // `routes/_app/tournaments.$tournamentId.test.tsx`.
+    openEditorFor: undefined,
+    onOpenEditor: () => {},
+    onCloseEditor: () => {},
     ...overrides,
   }
 }

@@ -81,9 +81,12 @@ test.describe('Tournaments · the event editor is a URL, and Back dismisses it',
 
     await pressBack(page)
 
-    // Nothing has closed yet, and nothing has navigated.
+    // Nothing has closed yet, and nothing has navigated. The sheet is read by TEST
+    // ID rather than by role: the confirmation on top is modal, so Radix
+    // `aria-hidden`s the rest of the document and a role query cannot see the sheet
+    // underneath — which would read as "the editor closed".
     await expect(page.getByRole('alertdialog')).toContainText(DISCARD.title)
-    await expect(pom.eventEditor).toBeVisible()
+    await expect(page.getByTestId('event-editor-body')).toBeAttached()
 
     await page.getByRole('button', { name: DISCARD.stay }).click()
 
@@ -114,6 +117,7 @@ test.describe('Tournaments · the event editor is a URL, and Back dismisses it',
     await expect(page.getByRole('alertdialog')).toContainText(DISCARD.title)
     await page.getByRole('button', { name: DISCARD.stay }).click()
     await expect(pom.eventEditor).toBeVisible()
+
 
     await page.getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('alertdialog')).toContainText(DISCARD.title)
