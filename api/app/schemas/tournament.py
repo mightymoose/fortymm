@@ -1889,9 +1889,11 @@ class TournamentEventRead(BaseModel):
     # overwriting the whole editable surface, which is what a PATCH of this event does:
     # the body always carries every editable field, ``reservations`` included.
     #
-    # ``updated_at`` above cannot be used for this. A reservations-only edit writes
-    # child rows and never dirties the event row, so ``updated_at`` does not move on
-    # precisely the edit the lost update was found on.
+    # ``updated_at`` above could not be used for this. Before this field existed, a
+    # reservations-only edit wrote child rows and never dirtied the event row, so
+    # ``updated_at`` did not move on precisely the edit the lost update was found on.
+    # It moves now — because the verb writes this column — which is a consequence of
+    # the fix, not an alternative to it.
     lock_version: int
     created_at: datetime
     updated_at: datetime

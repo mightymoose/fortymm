@@ -313,12 +313,18 @@ class TournamentEvent(Base):
     # writes anything — so a director's second tab, holding a read from before some
     # other write, can no longer clobber the whole editable surface silently.
     #
-    # It exists because ``updated_at`` **cannot** serve as the token. The write path
-    # assigns ``event.reservations``, a relationship: SQLAlchemy writes the child rows
-    # and never marks this parent row dirty, so ``onupdate`` above does not fire and
-    # ``updated_at`` does not move on exactly the edit the conflict was found on. This
-    # column is a plain scalar the verb assigns explicitly, so the parent is dirtied
-    # every time and the number always moves.
+    # It exists because ``updated_at`` **could not** serve as the token. A
+    # reservations-only edit assigns ``event.reservations``, a relationship: SQLAlchemy
+    # writes the child rows and never marks this parent row dirty, so ``onupdate``
+    # above did not fire and ``updated_at`` did not move on exactly the edit the lost
+    # update was found on.
+    #
+    # Note the tense. That is a statement about the world BEFORE this column existed,
+    # and it is the reason the column is here — not a claim you can still observe. The
+    # verb now assigns this scalar on every accepted PATCH, which dirties the parent
+    # row, so ``updated_at`` moves on a reservations-only edit too. Do not read that as
+    # permission to go back to ``updated_at``: it moves because of this column, and it
+    # would stop moving the moment this one went away.
     #
     # ``default=1`` as well as ``server_default``: the read schema types it ``int``
     # and NOT optional, so an unrefreshed instance whose attribute was still ``None``

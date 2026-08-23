@@ -57,6 +57,7 @@ from tests._helpers import (
     grant_permissions,
     make_user,
     opponent_session,
+    patch_event,
     start_session,
 )
 
@@ -364,10 +365,7 @@ async def test_patching_a_round_count_without_its_draw_type_is_422(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"rounds": 5},
-    )
+    response = await patch_event(client, tournament_id, event_id, {"rounds": 5})
 
     assert response.status_code == 422, response.text
     assert "draw_type" in response.text
@@ -383,9 +381,8 @@ async def test_patching_away_from_swiss_clears_the_round_count(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": "round-robin"},
+    response = await patch_event(
+        client, tournament_id, event_id, {"draw_type": "round-robin"}
     )
 
     assert response.status_code == 200, response.text
@@ -544,9 +541,8 @@ async def test_the_round_count_is_frozen_once_the_draw_is_cut(
     tournament_id, event_id, _ = await _field(client, db_session, 8)
     assert (await _cut(client, tournament_id, event_id)).status_code == 201
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": SWISS, "rounds": 5},
+    response = await patch_event(
+        client, tournament_id, event_id, {"draw_type": SWISS, "rounds": 5}
     )
 
     assert response.status_code == 409, response.text
@@ -565,9 +561,8 @@ async def test_the_round_count_is_editable_while_no_draw_exists(
     tournament_id = await _tournament(client)
     event_id = (await _create_event(client, tournament_id)).json()["id"]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": SWISS, "rounds": 6},
+    response = await patch_event(
+        client, tournament_id, event_id, {"draw_type": SWISS, "rounds": 6}
     )
 
     assert response.status_code == 200, response.text

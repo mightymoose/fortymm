@@ -462,10 +462,10 @@ def upgrade() -> None:
         # The event's optimistic-concurrency token (#1499). NOT NULL, server default
         # 1, and bumped by one on every accepted PATCH of this event; a PATCH stating
         # a stale number is refused with a 409 before anything is written. It exists
-        # instead of leaning on ``updated_at`` because a reservations-only edit writes
-        # only child rows, never dirtying this one, so ``updated_at`` does not move on
-        # exactly the edit the lost update was found on. Added here in place per the
-        # pre-deploy convention, not as a chained ALTER.
+        # instead of leaning on ``updated_at`` because, before it, a reservations-only
+        # edit wrote only child rows and never dirtied this one — so ``updated_at`` did
+        # not move on exactly the edit the lost update was found on. Added here in
+        # place per the pre-deploy convention, not as a chained ALTER.
         sa.Column(
             "lock_version", sa.Integer(), nullable=False, server_default=sa.text("1")
         ),

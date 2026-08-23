@@ -386,6 +386,7 @@ async def test_update_event_remint_grows_one_stage_to_two_preserving_stage_zero(
                         "table_ids": [],
                     }
                 ],
+                "lock_version": event.lock_version,
             }
         ),
     )
@@ -431,7 +432,9 @@ async def test_update_event_remint_shrinks_two_stages_to_one_preserving_stage_ze
         tournament_id=tournament.id,
         event_id=event.id,
         actor=owner,
-        updates=TournamentEventUpdate.model_validate({"draw_type": "single-elim"}),
+        updates=TournamentEventUpdate.model_validate(
+            {"draw_type": "single-elim", "lock_version": event.lock_version}
+        ),
     )
 
     after = await _stages(db_session, event.id)
@@ -535,7 +538,7 @@ async def test_update_event_remint_mints_fresh_when_no_stage_rows_exist(
         event_id=event.id,
         actor=owner,
         updates=TournamentEventUpdate.model_validate(
-            {"draw_type": "swiss", "rounds": 4}
+            {"draw_type": "swiss", "rounds": 4, "lock_version": event.lock_version}
         ),
     )
 
@@ -586,7 +589,11 @@ async def test_stages_freeze_once_a_draw_exists_even_on_a_no_op_patch(
         event_id=event.id,
         actor=owner,
         updates=TournamentEventUpdate.model_validate(
-            {"name": "Renamed Under Draw", "draw_type": "single-elim"}
+            {
+                "name": "Renamed Under Draw",
+                "draw_type": "single-elim",
+                "lock_version": event.lock_version,
+            }
         ),
     )
     assert updated.name == "Renamed Under Draw"
@@ -618,7 +625,9 @@ async def test_stages_freeze_blocks_remint_when_the_draw_type_change_itself_is_r
             tournament_id=tournament.id,
             event_id=event.id,
             actor=owner,
-            updates=TournamentEventUpdate.model_validate({"draw_type": "round-robin"}),
+            updates=TournamentEventUpdate.model_validate(
+                {"draw_type": "round-robin", "lock_version": event.lock_version}
+            ),
         )
 
     after = await _stages(db_session, event.id)

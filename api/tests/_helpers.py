@@ -12,7 +12,7 @@ from datetime import date, time
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient, Request
+from httpx import ASGITransport, AsyncClient, Request, Response
 from rq import Queue
 from sqlalchemy import Select, event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -631,6 +631,40 @@ def make_raw_client() -> AsyncClient:
     return AsyncClient(
         transport=ASGITransport(app=fastapi_app),
         base_url="https://testserver",
+    )
+
+
+async def patch_event(
+    client: AsyncClient,
+    tournament_id: str | uuid.UUID,
+    event_id: str | uuid.UUID,
+    payload: Mapping[str, Any],
+) -> Response:
+    """PATCH ``/v1/tournaments/{tournament_id}/events/{event_id}`` with ``payload``,
+    merging in the event's CURRENT ``lock_version`` first (#1499's required field on
+    every edit) — unless ``payload`` already states one, which is how the tests that
+    are specifically ABOUT the version (a stale write, an explicit wrong one on a
+    404/403 probe) keep their number visible rather than have this helper paper over
+    it.
+
+    A fresh **GET**, not a value the caller carried from an earlier response: the point
+    of this helper is that a caller composing an ordinary edit should not have to think
+    about the token at all, and re-reading is what makes that true even when something
+    else in the test already wrote the event since the caller's last read. A test
+    asserting the version-conflict 409 itself passes its own (stale) number explicitly
+    instead, and never reaches this GET.
+
+    There is no standalone ``GET .../events/{event_id}`` route (events are a BFF field
+    of the tournament detail, root ``CLAUDE.md`` "BFF endpoints") — so this reads the
+    **tournament** and picks the matching entry out of its ``events`` list, the same
+    place every other test reads an event's current state from.
+    """
+    if "lock_version" not in payload:
+        detail = await client.get(f"/v1/tournaments/{tournament_id}")
+        current = next(e for e in detail.json()["events"] if e["id"] == str(event_id))
+        payload = {**payload, "lock_version": current["lock_version"]}
+    return await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}", json=payload
     )
 
 

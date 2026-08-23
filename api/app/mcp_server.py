@@ -1421,12 +1421,13 @@ async def update_event(
     event's ``lock_version`` on by one.
 
     ``updates`` is otherwise a PARTIAL patch: an OMITTED field is left unchanged;
-    ``predicates`` replaces wholesale when sent. ``reservations`` is an ID-KEYED DIFF sent in full and
-    in order: an entry carrying an ``id`` keeps that reservation (re-worded, re-timed,
-    re-tabled, re-positioned), an entry omitting one adds a reservation the server
-    mints an id for, and a reservation no entry names is removed — so send back the
-    reservations you read, edited. ``groups`` is server-owned and read-only: the
-    server materialises the group rows on every write (for an ``rr-then-ko`` event,
+    ``predicates`` replaces wholesale when sent. ``reservations`` is an ID-KEYED DIFF
+    sent in full and in order: an entry carrying an ``id`` keeps that reservation
+    (re-worded, re-timed, re-tabled, re-positioned), an entry omitting one adds a
+    reservation the server mints an id for, and a reservation no entry names is
+    removed — so send back the reservations you read, edited. ``groups`` is
+    server-owned and read-only: the server materialises the group rows on every
+    write (for an ``rr-then-ko`` event,
     ``ceil(field / 5)`` against the player cap, or 16 when uncapped; one group per
     reservation for every other draw type) and maps each group to the reservation at
     ``position % reservation count``, or to none when the event has no reservation.

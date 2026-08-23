@@ -77,6 +77,7 @@ from app.schemas.tournament import (
 )
 from app.tournament_draws import DrawCurrency, draw_currency_by_event, uncut_draw
 from app.tournament_entry_refusals import EntryRefusal
+from app.tournament_errors import EVENT_VERSION_CONFLICT_CODE
 from app.tournament_materialization import materialize_event, materialize_live_draw
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import (
@@ -99,6 +100,7 @@ from tests._helpers import (
     make_client,
     make_user,
     opponent_session,
+    patch_event,
     rate_player,
     stage_id_at,
     start_session,
@@ -761,9 +763,8 @@ async def test_patch_event_updates_the_timezone(
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"timezone": "America/Denver"},
+    response = await patch_event(
+        client, created["id"], event["id"], {"timezone": "America/Denver"}
     )
     assert response.status_code == 200
     assert response.json()["timezone"] == "America/Denver"
@@ -815,9 +816,8 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
     before_pin_instant = datetime.fromisoformat(before_pin["instant"])
     assert before_pin["tz_abbrev"] == "CDT"
 
-    change = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"timezone": "America/Denver"},
+    change = await patch_event(
+        client, tournament_id, event_id, {"timezone": "America/Denver"}
     )
     assert change.status_code == 200, change.text
 
@@ -848,9 +848,8 @@ async def test_a_timezone_change_preserves_a_placement_wall_clock(
 
     # A same-timezone PATCH is a no-op: the stored instant is byte-identical, not
     # needlessly rewritten.
-    noop = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"timezone": "America/Denver"},
+    noop = await patch_event(
+        client, tournament_id, event_id, {"timezone": "America/Denver"}
     )
     assert noop.status_code == 200, noop.text
     unchanged = await _fixture_in_detail(client, tournament_id, str(fixture.id))
@@ -870,9 +869,8 @@ async def test_patch_event_with_an_unknown_timezone_is_422_and_stores_nothing(
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"timezone": "Not/AZone"},
+    response = await patch_event(
+        client, created["id"], event["id"], {"timezone": "Not/AZone"}
     )
     assert response.status_code == 422
 
@@ -895,10 +893,7 @@ async def test_patch_event_explicit_null_timezone_returns_422(
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"timezone": None},
-    )
+    response = await patch_event(client, created["id"], event["id"], {"timezone": None})
     assert response.status_code == 422
 
 
@@ -990,11 +985,11 @@ async def test_patch_event_with_an_unevaluatable_predicate_is_422_and_stores_not
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={
-            "predicates": [{"id": "pr-x", "field": field, "op": "<", "value": value}]
-        },
+    response = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {"predicates": [{"id": "pr-x", "field": field, "op": "<", "value": value}]},
     )
 
     assert response.status_code == 422, response.text
@@ -1120,11 +1115,11 @@ async def test_patch_event_with_an_undecidable_rule_is_422_and_stores_nothing(
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={
-            "predicates": [{"id": "pr-x", "field": "rating", "op": "~=", "value": 1500}]
-        },
+    response = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {"predicates": [{"id": "pr-x", "field": "rating", "op": "~=", "value": 1500}]},
     )
 
     assert response.status_code == 422, response.text
@@ -1247,9 +1242,11 @@ async def test_patch_event_by_creator_updates_jsonb(
         }
     ]
     new_predicates = [{"id": "pr-9", "field": "rating", "op": ">=", "value": 1800}]
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={
+    response = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {
             "draw_type": "single-elim",
             "reservations": new_reservations,
             "predicates": new_predicates,
@@ -1275,10 +1272,7 @@ async def test_patch_event_explicit_null_name_returns_422(
             f"/v1/tournaments/{created['id']}/events", json=_event_payload()
         )
     ).json()
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"name": None},
-    )
+    response = await patch_event(client, created["id"], event["id"], {"name": None})
     assert response.status_code == 422
 
 
@@ -1293,9 +1287,8 @@ async def test_patch_event_explicit_null_predicates_returns_422(
             f"/v1/tournaments/{created['id']}/events", json=_event_payload()
         )
     ).json()
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"predicates": None},
+    response = await patch_event(
+        client, created["id"], event["id"], {"predicates": None}
     )
     assert response.status_code == 422
 
@@ -1310,9 +1303,8 @@ async def test_patch_event_explicit_null_reservations_returns_422(
             f"/v1/tournaments/{created['id']}/events", json=_event_payload()
         )
     ).json()
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"reservations": None},
+    response = await patch_event(
+        client, created["id"], event["id"], {"reservations": None}
     )
     assert response.status_code == 422
 
@@ -1329,10 +1321,7 @@ async def test_patch_event_rejects_server_managed_entered(
             f"/v1/tournaments/{created['id']}/events", json=_event_payload()
         )
     ).json()
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"entered": 99},
-    )
+    response = await patch_event(client, created["id"], event["id"], {"entered": 99})
     assert response.status_code == 422
 
 
@@ -1456,9 +1445,11 @@ async def test_patch_event_flipping_draw_type_and_reservations_over_cap_together
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"draw_type": "round-robin", "reservations": _TWO_RESERVATIONS},
+    response = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {"draw_type": "round-robin", "reservations": _TWO_RESERVATIONS},
     )
     assert response.status_code == 422, response.text
     body = response.json()
@@ -1483,11 +1474,13 @@ async def test_patch_event_reservations_only_over_cap_against_stored_draw_type_i
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"reservations": _TWO_RESERVATIONS},
+    response = await patch_event(
+        client, created["id"], event["id"], {"reservations": _TWO_RESERVATIONS}
     )
     assert response.status_code == 422, response.text
+    # The cap's own ``loc`` (see ``_event_reservation_cap_exceeded``) — not a
+    # missing-``lock_version`` 422, which this PATCH does carry a valid one against.
+    assert ["body", "reservations"] in _error_locs(response), response.text
 
 
 async def test_patch_event_draw_type_only_flip_over_cap_on_an_uncut_event_is_422(
@@ -1512,11 +1505,11 @@ async def test_patch_event_draw_type_only_flip_over_cap_on_an_uncut_event_is_422
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"draw_type": "round-robin"},
+    response = await patch_event(
+        client, created["id"], event["id"], {"draw_type": "round-robin"}
     )
     assert response.status_code == 422, response.text
+    assert ["body", "reservations"] in _error_locs(response), response.text
 
 
 async def test_patch_event_flipping_round_robin_to_rr_then_ko_is_accepted(
@@ -1536,9 +1529,11 @@ async def test_patch_event_flipping_round_robin_to_rr_then_ko_is_accepted(
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"draw_type": "rr-then-ko", "qualifiers_per_group": 2},
+    response = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {"draw_type": "rr-then-ko", "qualifiers_per_group": 2},
     )
     assert response.status_code == 200, response.text
 
@@ -1627,9 +1622,8 @@ async def test_patch_event_with_an_unstorable_player_limit_is_422_and_stores_not
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"max_players": max_players},
+    response = await patch_event(
+        client, created["id"], event["id"], {"max_players": max_players}
     )
 
     assert response.status_code == 422, response.text
@@ -1689,9 +1683,8 @@ async def test_patch_event_with_an_unstorable_entry_fee_is_422_and_stores_nothin
         )
     ).json()
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"entry_fee": entry_fee},
+    response = await patch_event(
+        client, created["id"], event["id"], {"entry_fee": entry_fee}
     )
 
     assert response.status_code == 422, response.text
@@ -1809,9 +1802,7 @@ async def test_event_ops_on_missing_tournament_return_404(
         await client.post(f"/v1/tournaments/{missing}/events", json=_event_payload())
     ).status_code == 404
     assert (
-        await client.patch(
-            f"/v1/tournaments/{missing}/events/{missing}", json={"name": "x"}
-        )
+        await patch_event(client, missing, missing, {"lock_version": 1, "name": "x"})
     ).status_code == 404
     assert (
         await client.delete(f"/v1/tournaments/{missing}/events/{missing}")
@@ -1825,9 +1816,8 @@ async def test_event_ops_on_missing_event_return_404(
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
     missing = "00000000-0000-0000-0000-000000000000"
     assert (
-        await client.patch(
-            f"/v1/tournaments/{created['id']}/events/{missing}",
-            json={"name": "x"},
+        await patch_event(
+            client, created["id"], missing, {"lock_version": 1, "name": "x"}
         )
     ).status_code == 404
     assert (
@@ -2112,9 +2102,8 @@ async def test_patch_event_answers_with_its_existing_entrants(
     ada = await make_user(db_session, "ada-patched")
     await _enter(db_session, event["id"], ada)
 
-    response = await client.patch(
-        f"/v1/tournaments/{created['id']}/events/{event['id']}",
-        json={"name": "Renamed Singles"},
+    response = await patch_event(
+        client, created["id"], event["id"], {"name": "Renamed Singles"}
     )
     assert response.status_code == 200
     body = response.json()
@@ -2571,9 +2560,14 @@ async def test_permission_gate_blocks_user_without_permission(
             )
         ).status_code == 403
         assert (
-            await client.patch(
-                f"/v1/tournaments/{target['id']}/events/{target_event['id']}",
-                json={"name": "Hijack"},
+            # No view permission at all, so `patch_event`'s own GET (used to look up
+            # the current version) would 403 too — an explicit version sidesteps it
+            # and still proves the 403 fires before any version is even considered.
+            await patch_event(
+                client,
+                target["id"],
+                target_event["id"],
+                {"name": "Hijack", "lock_version": 1},
             )
         ).status_code == 403
         assert (
@@ -2663,9 +2657,8 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
             )
         ).status_code == 403
         assert (
-            await other_client.patch(
-                f"/v1/tournaments/{target['id']}/events/{target_event['id']}",
-                json={"name": "Hijack"},
+            await patch_event(
+                other_client, target["id"], target_event["id"], {"name": "Hijack"}
             )
         ).status_code == 403
         assert (
@@ -5218,9 +5211,8 @@ async def test_patching_an_event_answers_with_the_draw_it_still_has(
     tournament_id, (event,) = await _tournament_with_events(client, _event_payload())
     await _cut(db_session, event["id"], group_id="g-a", round=1, position=1)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"name": "Renamed Singles"},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"name": "Renamed Singles"}
     )
 
     assert response.status_code == 200, response.text
@@ -6760,9 +6752,11 @@ async def test_reservations_carrying_a_position_are_refused_and_write_nothing(
     )
     await _ensure_group(db_session, uuid.UUID(event["id"]), RESERVATION_B["name"])
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": _positioned(RESERVATION_B, RESERVATION_A)},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"reservations": _positioned(RESERVATION_B, RESERVATION_A)},
     )
 
     assert response.status_code == 422, response.text
@@ -6807,12 +6801,14 @@ async def test_a_draw_of_one_fixture_still_freezes_the_group_set(
     fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
     assert len(fixtures_before) == 1
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": [RESERVATION_B]},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"reservations": [RESERVATION_B]}
     )
 
     assert response.status_code == 409, response.text
+    assert isinstance(response.json()["detail"], str), (
+        "the group-set freeze, not the (structurally identical) version conflict"
+    )
     assert _anonymous(await _reservations_of(db_session, event["id"])) == _positioned(
         RESERVATION_A
     )
@@ -6928,9 +6924,8 @@ async def test_a_cut_draw_still_lets_a_reservations_venue_attributes_be_edited(
         {**reservation_a, **edit(await _catalogue_table_ids(client, tournament_id))},
     ]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": edited},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"reservations": edited}
     )
 
     assert response.status_code == 200, response.text
@@ -7015,9 +7010,11 @@ async def test_a_cut_draw_refuses_a_reservations_patch_that_changes_which_groups
     reservations_before = await _reservations_of(db_session, event["id"])
     assert _anonymous(reservations_before) == _positioned(RESERVATION_A, RESERVATION_B)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": payload(_kept(reservations_before))},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"reservations": payload(_kept(reservations_before))},
     )
 
     assert response.status_code == 409, response.text
@@ -7056,12 +7053,17 @@ async def test_a_refused_reservations_patch_writes_none_of_the_payload_either(
     tournament_id, event = await _cut_two_group_event(client, db_session)
     kept = _kept(await _reservations_of(db_session, event["id"]))
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"name": "Renamed Event", "reservations": kept[:1]},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"name": "Renamed Event", "reservations": kept[:1]},
     )
 
     assert response.status_code == 409, response.text
+    assert isinstance(response.json()["detail"], str), (
+        "the group-set freeze, not the (structurally identical) version conflict"
+    )
     (name,) = (
         (
             await db_session.execute(
@@ -7097,9 +7099,8 @@ async def test_an_event_with_no_draw_replaces_its_reservations_wholesale(
         client, _rr_payload(RESERVATION_A)
     )
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": [RESERVATION_C]},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"reservations": [RESERVATION_C]}
     )
 
     assert response.status_code == 200, response.text
@@ -7122,20 +7123,30 @@ async def test_removing_the_draw_un_freezes_the_group_set(
     """
     client, _ = authed_client
     tournament_id, event = await _cut_two_group_event(client, db_session)
-    url = f"/v1/tournaments/{tournament_id}/events/{event['id']}"
     # A single, different reservation (#1482 caps a round-robin event at one): the
     # claim under test is that regrouping — the very payload the freeze just refused —
     # succeeds once the draw is gone, and one new reservation demonstrates that as
     # well as three.
     regrouped = [RESERVATION_C]
 
-    refused = await client.patch(url, json={"reservations": regrouped})
+    refused = await patch_event(
+        client, tournament_id, event["id"], {"reservations": regrouped}
+    )
     assert refused.status_code == 409, refused.text
+    assert isinstance(refused.json()["detail"], str), (
+        "a plain-string detail is the freeze; a dict with a `code` would be the "
+        "version conflict this PATCH does not carry"
+    )
 
     uncut = await client.delete(_draw_url(tournament_id, event["id"]))
     assert uncut.status_code == 204, uncut.text
 
-    accepted = await client.patch(url, json={"reservations": regrouped})
+    # The refusal above wrote nothing, so the event's ``lock_version`` is unmoved —
+    # re-reading it (rather than reusing a captured number) is what proves that,
+    # instead of merely assuming it.
+    accepted = await patch_event(
+        client, tournament_id, event["id"], {"reservations": regrouped}
+    )
 
     assert accepted.status_code == 200, accepted.text
     assert _anonymous(await _reservations_of(db_session, event["id"])) == _positioned(
@@ -7159,9 +7170,8 @@ async def test_a_patch_that_does_not_send_reservations_is_untouched_by_the_freez
     tournament_id, event = await _cut_two_group_event(client, db_session)
     before = _snapshot(await _fixture_rows(db_session, event["id"]))
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"name": "Open Singles (redrawn)"},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"name": "Open Singles (redrawn)"}
     )
 
     assert response.status_code == 200, response.text
@@ -7194,15 +7204,19 @@ async def test_the_group_freeze_is_scoped_to_the_event_being_patched(
     await client.post(_draw_url(tournament_id, drawn["id"]))
 
     # The drawn event's group set is frozen…
-    sealed = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{drawn['id']}",
-        json={"reservations": [RESERVATION_A, RESERVATION_B, RESERVATION_C]},
+    sealed = await patch_event(
+        client,
+        tournament_id,
+        drawn["id"],
+        {"reservations": [RESERVATION_A, RESERVATION_B, RESERVATION_C]},
     )
     assert sealed.status_code == 409, sealed.text
+    assert isinstance(sealed.json()["detail"], str), (
+        "the group-set freeze, not the (structurally identical) version conflict"
+    )
     # …and its neighbour's, which has no draw, is not.
-    free = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{undrawn['id']}",
-        json={"reservations": [RESERVATION_C]},
+    free = await patch_event(
+        client, tournament_id, undrawn["id"], {"reservations": [RESERVATION_C]}
     )
     assert free.status_code == 200, free.text
     assert _anonymous(await _reservations_of(db_session, undrawn["id"])) == _positioned(
@@ -7239,7 +7253,9 @@ async def test_the_event_patch_takes_the_tournaments_row_lock(
         await update_event(
             tournament_id=uuid.UUID(tournament_id),
             event_id=uuid.UUID(event["id"]),
-            payload=TournamentEventUpdate(name="Open Singles (moved)"),
+            payload=TournamentEventUpdate(
+                name="Open Singles (moved)", lock_version=event["lock_version"]
+            ),
             db=session,
             current_user=User(id=owner_id),
         )
@@ -7375,13 +7391,15 @@ async def test_a_reservations_patch_keeps_the_cited_one_and_mints_the_rest(
     )
     kept_a, dropped_b = _kept(await _reservations_of(db_session, event["id"]))
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        # Reservation A cited, Reservation B not cited (removed), Reservation C sent
-        # with an explicit null id (added). ``null`` and "omitted" are the same
-        # statement; both are exercised — the omitted form is every other create in
-        # this module.
-        json={"reservations": [kept_a, {**RESERVATION_C, "id": None}]},
+    # Reservation A cited, Reservation B not cited (removed), Reservation C sent
+    # with an explicit null id (added). ``null`` and "omitted" are the same
+    # statement; both are exercised — the omitted form is every other create in
+    # this module.
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"reservations": [kept_a, {**RESERVATION_C, "id": None}]},
     )
 
     assert response.status_code == 200, response.text
@@ -7428,9 +7446,8 @@ async def test_a_reservations_patch_citing_an_id_this_event_does_not_have_is_a_4
     (elsewhere,) = _kept(await _reservations_of(db_session, other["id"]))
     before = await _reservations_of(db_session, event["id"])
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": [kept_a, elsewhere]},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"reservations": [kept_a, elsewhere]}
     )
 
     assert response.status_code == 422, response.text
@@ -7467,9 +7484,11 @@ async def test_a_reservations_patch_citing_one_twice_never_reaches_the_cut_draw(
     reservations_before = await _reservations_of(db_session, event["id"])
     reservation_a, reservation_b = _kept(reservations_before)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": [reservation_a, reservation_a, reservation_b]},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"reservations": [reservation_a, reservation_a, reservation_b]},
     )
 
     assert response.status_code == 422, response.text
@@ -7502,9 +7521,11 @@ async def test_an_undrawn_event_also_refuses_a_reservations_patch_citing_one_twi
     before = await _reservations_of(db_session, event["id"])
     (reservation_a,) = _kept(before)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": [reservation_a, reservation_a]},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"reservations": [reservation_a, reservation_a]},
     )
 
     assert response.status_code == 422, response.text
@@ -7567,9 +7588,11 @@ async def test_a_reservations_patch_that_empties_a_reservation_name_is_refused(
     )
     before = await _reservations_of(db_session, event["id"])
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"reservations": [{**RESERVATION_C, "name": ""}]},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"reservations": [{**RESERVATION_C, "name": ""}]},
     )
 
     assert response.status_code == 422, response.text
@@ -8146,9 +8169,8 @@ async def test_a_cut_draw_freezes_the_draw_type(
     tournament_id, event = await _cut_two_group_event(client, db_session)
     fixtures_before = _snapshot(await _fixture_rows(db_session, event["id"]))
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"draw_type": "single-elim"},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"draw_type": "single-elim"}
     )
 
     assert response.status_code == 409, response.text
@@ -8173,12 +8195,17 @@ async def test_a_refused_draw_type_patch_writes_none_of_the_rest_of_the_payload_
     client, _ = authed_client
     tournament_id, event = await _cut_two_group_event(client, db_session)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"name": "Renamed Event", "draw_type": "single-elim"},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"name": "Renamed Event", "draw_type": "single-elim"},
     )
 
     assert response.status_code == 409, response.text
+    assert isinstance(response.json()["detail"], str), (
+        "the draw-type freeze, not the (structurally identical) version conflict"
+    )
     stored_name = (
         await db_session.execute(
             select(TournamentEvent.name).where(
@@ -8206,9 +8233,8 @@ async def test_an_undrawn_event_still_changes_its_draw_type(
         client, _rr_payload(RESERVATION_A)
     )
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"draw_type": "single-elim"},
+    response = await patch_event(
+        client, tournament_id, event["id"], {"draw_type": "single-elim"}
     )
 
     assert response.status_code == 200, response.text
@@ -8247,9 +8273,11 @@ async def test_re_sending_the_same_draw_type_with_a_venue_edit_still_succeeds(
     (reservation_a,) = _kept(await _reservations_of(db_session, event["id"]))
     moved = [{**reservation_a, "table_ids": [table_1]}]
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
-        json={"draw_type": "round-robin", "reservations": moved},
+    response = await patch_event(
+        client,
+        tournament_id,
+        event["id"],
+        {"draw_type": "round-robin", "reservations": moved},
     )
 
     assert response.status_code == 200, response.text
@@ -8275,15 +8303,24 @@ async def test_removing_the_draw_un_freezes_the_draw_type(
     # DRAW TYPE freeze and its un-freeze, not the group-set freeze, which has its own
     # coverage (``_cut_two_group_event``'s dependents).
     tournament_id, event = await _cut_one_group_event(client, db_session)
-    url = f"/v1/tournaments/{tournament_id}/events/{event['id']}"
 
-    refused = await client.patch(url, json={"draw_type": "single-elim"})
+    refused = await patch_event(
+        client, tournament_id, event["id"], {"draw_type": "single-elim"}
+    )
     assert refused.status_code == 409, refused.text
+    assert isinstance(refused.json()["detail"], str), (
+        "a plain-string detail is the freeze; a dict with a `code` would be the "
+        "version conflict this PATCH does not carry"
+    )
 
     uncut = await client.delete(_draw_url(tournament_id, event["id"]))
     assert uncut.status_code == 204, uncut.text
 
-    accepted = await client.patch(url, json={"draw_type": "single-elim"})
+    # The refusal above wrote nothing, so re-reading the version (rather than reusing
+    # a captured number) is what proves the token did not move on a refused write.
+    accepted = await patch_event(
+        client, tournament_id, event["id"], {"draw_type": "single-elim"}
+    )
 
     assert accepted.status_code == 200, accepted.text
     assert await _draw_type_of(db_session, event["id"]) is DrawType.single_elim
@@ -8309,15 +8346,16 @@ async def test_the_draw_type_freeze_is_scoped_to_the_event_being_patched(
     await _seed_field(db_session, drawn["id"], 4, prefix="u13-")
     await _cut_the_draw(client, tournament_id, drawn["id"])
 
-    sealed = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{drawn['id']}",
-        json={"draw_type": "single-elim"},
+    sealed = await patch_event(
+        client, tournament_id, drawn["id"], {"draw_type": "single-elim"}
     )
     assert sealed.status_code == 409, sealed.text
+    assert isinstance(sealed.json()["detail"], str), (
+        "the draw-type freeze, not the (structurally identical) version conflict"
+    )
 
-    free = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{undrawn['id']}",
-        json={"draw_type": "single-elim"},
+    free = await patch_event(
+        client, tournament_id, undrawn["id"], {"draw_type": "single-elim"}
     )
 
     assert free.status_code == 200, free.text
@@ -10119,9 +10157,8 @@ async def test_a_timezone_only_event_patch_on_a_drawn_event_requeues_a_solve(
     # queued row is attributable to the timezone PATCH under test.
     await _clear_solve_ledger(db_session)
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"timezone": "America/Denver"},
+    response = await patch_event(
+        client, tournament_id, event_id, {"timezone": "America/Denver"}
     )
     assert response.status_code == 200, response.text
     assert response.json()["timezone"] == "America/Denver"
@@ -10333,3 +10370,348 @@ async def test_a_tbd_side_fixture_placement_saves_without_pinning(
 
     (solve,) = await _queued_solves(db_session, tournament_id)
     assert solve.trigger is ScheduleSolveTrigger.settings_changed
+
+
+# ----- optimistic concurrency: the event's lock_version (#1499) --------------------
+#
+# A PATCH of an event now states the version it read, and the write is refused (409)
+# when that number is not the one the event currently holds. These tests pin the wire
+# contract end to end: the token appears on every read, a missing one is a 422 at the
+# schema boundary, an accepted write always moves it by exactly one (even a no-op
+# resend or a reservations-only edit that touches no scalar column), a stale one is a
+# 409 with a coded body and writes nothing, and the version gate is judged before the
+# freezes/cap/reservation-citation checks it would otherwise be confused with — and
+# after the 404/403/404 identity gates, never before them.
+
+
+async def test_a_created_event_reads_lock_version_one(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    assert event["lock_version"] == 1
+
+
+async def test_lock_version_rides_every_read_surface(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The list, the detail, and an update's own response all carry the same token —
+    the one a client composing its NEXT edit has to read off *some* response, and it
+    must not matter which."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    assert event["lock_version"] == 1
+
+    detail = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert detail.status_code == 200, detail.text
+    (detail_event,) = detail.json()["events"]
+    assert detail_event["lock_version"] == 1
+
+    listed = await client.get("/v1/tournaments")
+    assert listed.status_code == 200, listed.text
+    (listed_tournament,) = [t for t in listed.json() if t["id"] == tournament_id]
+    (listed_event,) = listed_tournament["events"]
+    assert listed_event["lock_version"] == 1
+
+    patched = await patch_event(client, tournament_id, event["id"], {"name": "Renamed"})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["lock_version"] == 2
+
+
+async def test_a_patch_missing_lock_version_is_a_422_naming_it(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"name": "x"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert ["body", "lock_version"] in _error_locs(response), response.text
+
+
+async def test_every_accepted_patch_increments_the_version_by_exactly_one(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+
+    first = await patch_event(client, tournament_id, event["id"], {"name": "A"})
+    assert first.status_code == 200, first.text
+    assert first.json()["lock_version"] == 2
+
+    second = await patch_event(client, tournament_id, event["id"], {"name": "B"})
+    assert second.status_code == 200, second.text
+    assert second.json()["lock_version"] == 3
+
+
+async def test_a_reservations_only_patch_increments_the_version(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The case ``updated_at`` used to be unable to catch on its own (the model's own
+    comment on ``lock_version``): a ``reservations`` edit writes only child rows and
+    never used to dirty the event row. It does now — the version write is an explicit
+    scalar assignment on the event itself, so it dirties the parent unconditionally,
+    and this is asserted here rather than assumed: whatever ``updated_at`` does, the
+    version is the number a client can rely on, because it is the one the write path
+    guarantees rather than one merely observed to move today."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    before_updated_at = (
+        await db_session.execute(
+            select(TournamentEvent.updated_at).where(
+                TournamentEvent.id == uuid.UUID(event["id"])
+            )
+        )
+    ).scalar_one()
+
+    response = await patch_event(
+        client, tournament_id, event["id"], {"reservations": [RESERVATION_B]}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["lock_version"] == 2
+    after_updated_at = (
+        await db_session.execute(
+            select(TournamentEvent.updated_at).where(
+                TournamentEvent.id == uuid.UUID(event["id"])
+            )
+        )
+    ).scalar_one()
+    # The version write dirties the parent row, so ``updated_at``'s ``onupdate`` now
+    # DOES fire on a reservations-only edit too — the opposite of the pre-#1499 world
+    # the model's docstring describes. Asserted, not assumed: the version is what a
+    # client should key on regardless of which way this goes.
+    assert after_updated_at > before_updated_at
+
+
+async def test_a_draw_settings_only_patch_increments_the_version(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+
+    response = await patch_event(
+        client, tournament_id, event["id"], {"draw_type": "single-elim"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["lock_version"] == 2
+
+
+async def test_a_no_op_patch_still_increments_the_version(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """A payload equal to what the event already holds is still an ACCEPTED write —
+    the freeze tests elsewhere pin that it is not refused — so the version moves even
+    though nothing about the stored state changed (see ``update_event``'s own comment
+    on why: a per-field "did this really change" comparison would need four different
+    answers across scalars, JSONB and child-row diffs, on the one number every refusal
+    depends on)."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+
+    response = await patch_event(
+        client, tournament_id, event["id"], {"name": event["name"]}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["lock_version"] == 2
+
+
+async def test_a_stale_lock_version_is_a_409_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    bumped = await patch_event(client, tournament_id, event["id"], {"name": "Bumped"})
+    assert bumped.status_code == 200, bumped.text
+    assert bumped.json()["lock_version"] == 2
+    before = bumped.json()
+
+    stale = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"name": "Should Not Apply", "lock_version": 1},
+    )
+
+    assert stale.status_code == 409, stale.text
+    body = stale.json()
+    assert set(body.keys()) == {"detail"}
+    assert set(body["detail"].keys()) == {"code", "message"}
+    assert body["detail"]["code"] == EVENT_VERSION_CONFLICT_CODE
+    assert body["detail"]["message"]
+
+    # Nothing written: every field, reservations included, reads exactly as the last
+    # successful write left it, and the version itself did not move.
+    after = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert after.status_code == 200, after.text
+    (after_event,) = [e for e in after.json()["events"] if e["id"] == event["id"]]
+    assert after_event == before
+
+
+async def test_a_stale_patch_that_would_trip_the_group_freeze_reports_the_conflict(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    tournament_id, event = await _cut_two_group_event(client, db_session)
+    assert event["lock_version"] == 1
+
+    stale = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"reservations": [RESERVATION_C], "lock_version": 999},
+    )
+
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == EVENT_VERSION_CONFLICT_CODE
+
+
+async def test_a_stale_patch_that_would_trip_the_draw_type_freeze_reports_the_conflict(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    tournament_id, event = await _cut_one_group_event(client, db_session)
+    assert event["lock_version"] == 1
+
+    stale = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"draw_type": "single-elim", "lock_version": 999},
+    )
+
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == EVENT_VERSION_CONFLICT_CODE
+
+
+async def test_a_stale_patch_that_would_trip_the_reservation_cap_reports_the_conflict(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """The same payload shape as
+    ``test_patch_event_flipping_draw_type_and_reservations_over_cap_together_is_422``
+    — a draw-type flip away from ``rr-then-ko`` carrying two reservations, over the cap
+    (#1482) — but with a STALE version: the conflict is reported, not the cap's 422."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(
+                draw_type="rr-then-ko",
+                qualifiers_per_group=2,
+                reservations=[_TWO_RESERVATIONS[0]],
+            ),
+        )
+    ).json()
+    assert event["lock_version"] == 1
+
+    stale = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={
+            "draw_type": "round-robin",
+            "reservations": _TWO_RESERVATIONS,
+            "lock_version": 999,
+        },
+    )
+
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == EVENT_VERSION_CONFLICT_CODE
+
+
+async def test_a_stale_patch_citing_a_removed_reservation_reports_the_conflict(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Without the version gate this would be ``ReservationNotInEventError`` (a 422
+    naming the entry): the id it cites was real when this draft was composed, and
+    something else's write removed it since. The honest answer is the conflict, not a
+    422 that sends the director hunting for a field they never touched."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(
+            RESERVATION_A,
+            RESERVATION_B,
+            draw_type="rr-then-ko",
+            qualifiers_per_group=2,
+            max_players=10,
+        ),
+    )
+    kept_a, kept_b = _kept(await _reservations_of(db_session, event["id"]))
+
+    # Another write removes Reservation B — the real, current version moves to 2.
+    removed = await patch_event(
+        client, tournament_id, event["id"], {"reservations": [kept_a]}
+    )
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["lock_version"] == 2
+
+    # A stale draft, still holding version 1, cites B's now-gone id.
+    stale = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+        json={"reservations": [kept_a, kept_b], "lock_version": 1},
+    )
+
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == EVENT_VERSION_CONFLICT_CODE
+
+
+async def test_the_version_check_runs_after_the_404_403_404_identity_gates(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A stranger, and a bad tournament/event id, get their OWN status even with a
+    version that names nothing this event ever held — the identity gates are judged
+    first, and the version gate never gets a say. A WRONG version is used throughout,
+    not a missing one: a missing ``lock_version`` is a 422 at the Pydantic boundary,
+    which would prove nothing about this ordering."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    missing = "00000000-0000-0000-0000-000000000000"
+
+    bad_tournament = await client.patch(
+        f"/v1/tournaments/{missing}/events/{event['id']}",
+        json={"name": "x", "lock_version": 999},
+    )
+    assert bad_tournament.status_code == 404, bad_tournament.text
+
+    bad_event = await client.patch(
+        f"/v1/tournaments/{tournament_id}/events/{missing}",
+        json={"name": "x", "lock_version": 999},
+    )
+    assert bad_event.status_code == 404, bad_event.text
+
+    async with make_client() as stranger_client:
+        stranger = await start_session(stranger_client, db_session)
+        await _grant_tournament_perms(db_session, stranger)
+        stranger_response = await stranger_client.patch(
+            f"/v1/tournaments/{tournament_id}/events/{event['id']}",
+            json={"name": "x", "lock_version": 999},
+        )
+        assert stranger_response.status_code == 403, stranger_response.text
+
+    # None of the three probes wrote anything or moved the version.
+    unchanged = await client.get(f"/v1/tournaments/{tournament_id}")
+    (unchanged_event,) = unchanged.json()["events"]
+    assert unchanged_event["lock_version"] == 1

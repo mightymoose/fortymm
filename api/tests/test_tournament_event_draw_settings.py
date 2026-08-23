@@ -65,7 +65,7 @@ from app.schemas.tournament import (
 )
 from app.tournament_draw_settings import draw_settings_of, draw_settings_row
 from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
-from tests._helpers import grant_permissions, start_session
+from tests._helpers import grant_permissions, patch_event, start_session
 
 
 @pytest_asyncio.fixture
@@ -237,9 +237,8 @@ async def test_changing_an_events_draw_type_moves_its_settings_row_with_it(
     client, _ = authed_client
     tournament_id, event_id = await _create_event(client, draw_type="round-robin")
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"draw_type": "single-elim"},
+    response = await patch_event(
+        client, tournament_id, event_id, {"draw_type": "single-elim"}
     )
     assert response.status_code == 200, response.text
     assert response.json()["draw_type"] == "single-elim", response.text
@@ -265,9 +264,8 @@ async def test_a_patch_that_leaves_the_draw_type_alone_leaves_the_row_alone(
     client, _ = authed_client
     tournament_id, event_id = await _create_event(client, draw_type="single-elim")
 
-    response = await client.patch(
-        f"/v1/tournaments/{tournament_id}/events/{event_id}",
-        json={"name": "Renamed Singles"},
+    response = await patch_event(
+        client, tournament_id, event_id, {"name": "Renamed Singles"}
     )
     assert response.status_code == 200, response.text
 
