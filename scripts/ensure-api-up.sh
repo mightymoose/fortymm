@@ -29,6 +29,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 API_HOST="${API_HOST:-127.0.0.1}"
+# Keyed by this invocation's own PID ($$), not a fixed name -- two concurrent
+# callers must not truncate each other's log, or the failure-path `tail`
+# below can show an unrelated run's output instead of the one that failed.
+API_LOG="/tmp/fortymm-api.$$.log"
 
 pick_python() {
   if command -v python3 >/dev/null 2>&1; then
@@ -74,13 +78,17 @@ import os, socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 try:
     s.bind((os.environ["API_HOST"], int(os.environ["API_PORT"])))
-except OSError as e:
+except (OSError, ValueError) as e:
     print(e, file=sys.stderr)
     sys.exit(1)
 finally:
     s.close()
 ' 2>&1)"; then
-    echo "API_PORT=$API_PORT is already bound on $API_HOST:" >&2
+    # Could be a genuinely-bound port (the common case) or an invalid
+    # API_PORT value (e.g. non-numeric) -- $bind_err carries the specific
+    # reason either way, so the framing here stays deliberately generic
+    # rather than asserting "already bound" for both.
+    echo "Cannot bind API_PORT=$API_PORT on $API_HOST:" >&2
     echo "$bind_err" >&2
     exit 1
   fi
@@ -94,7 +102,7 @@ if command -v uvicorn >/dev/null 2>&1; then
   UVICORN=uvicorn
 else
   if [ ! -x "$ROOT/api/.venv/bin/uvicorn" ]; then
-    python -m venv "$ROOT/api/.venv"
+    "$PY" -m venv "$ROOT/api/.venv"
     "$ROOT/api/.venv/bin/pip" install -q -e "$ROOT/api[dev]"
   fi
   UVICORN="$ROOT/api/.venv/bin/uvicorn"
@@ -107,7 +115,7 @@ fi
 # routine `mise run regen-api-types` fail on a config guard.
 GEOCODER="${GEOCODER:-fake}" \
 "$UVICORN" app.main:app --host "$API_HOST" --port "$API_PORT" \
-  --app-dir "$ROOT/api" >/tmp/fortymm-api.log 2>&1 &
+  --app-dir "$ROOT/api" >"$API_LOG" 2>&1 &
 API_PID=$!
 
 for _ in $(seq 1 60); do
@@ -129,7 +137,7 @@ done
 # be alive, not just a response, before calling the start a success.
 if ! probe || ! kill -0 "$API_PID" 2>/dev/null; then
   echo "API failed to start. Last log:" >&2
-  tail -n 40 /tmp/fortymm-api.log >&2 || true
+  tail -n 40 "$API_LOG" >&2 || true
   kill "$API_PID" 2>/dev/null || true
   exit 1
 fi

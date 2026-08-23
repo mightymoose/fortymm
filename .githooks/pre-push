@@ -159,13 +159,15 @@ echo "pre-push: this push touches api/ or ios/openapi/ — checking generated Op
 # --- Refuse to judge drift against code the push does not carry -----------
 #
 # The check below boots the API from the WORKING TREE (ensure-api-up.sh runs
-# uvicorn with --app-dir pointed at api/ on disk) but compares the result
-# against HEAD (has_drift, below). Those match only when api/ is clean. A
-# dirty api/ would make the regenerated files reflect uncommitted edits, so a
-# passing push could carry code that doesn't match what was just verified —
-# and a failing one could block on drift the push doesn't actually contain.
-# Skip instead of guessing: CI's `verify` / `verify-ios` jobs are the
-# backstop, and they check out the committed tree.
+# uvicorn with --app-dir pointed at api/ on disk) and, on the iOS half, runs
+# fix_openapi_nullable.py and swift-openapi-generator against ios/openapi/ on
+# disk too — but compares the result against HEAD (has_drift, below). Those
+# match only when both api/ and ios/openapi/ are clean. Dirty files there
+# would make the regenerated output reflect uncommitted edits, so a passing
+# push could carry code that doesn't match what was just verified — and a
+# failing one could block on drift the push doesn't actually contain. Skip
+# instead of guessing: CI's `verify` / `verify-ios` jobs are the backstop,
+# and they check out the committed tree.
 #
 # Same diff-against-HEAD shape as `has_drift` below ("what the push actually
 # sends"), and the same `is_relevant` filter as the push-diff check above (via
@@ -173,22 +175,23 @@ echo "pre-push: this push touches api/ or ios/openapi/ — checking generated Op
 # `api/` prefix test, is what keeps an unrelated dirty `api/tests/*` or
 # `api/CLAUDE.md` edit from disabling a check that should still run.
 #
-# Gated behind a plain `--quiet` check first: a clean api/ is the overwhelming
+# Gated behind a plain `--quiet` check first: a clean tree is the overwhelming
 # common case on every push this hook runs for, and `--quiet` skips building
 # and filtering a file list to find that out.
 # Plain string, not an array — see the note on `drifted_files` below for why.
 dirty_relevant_files=""
-if ! git diff --quiet HEAD -- api/ 2>/dev/null; then
-  dirty_files="$(git diff --name-only HEAD -- api/ 2>/dev/null || true)"
+if ! git diff --quiet HEAD -- api/ ios/openapi/ 2>/dev/null; then
+  dirty_files="$(git diff --name-only HEAD -- api/ ios/openapi/ 2>/dev/null || true)"
   dirty_relevant_files="$(relevant_files_from "$dirty_files")"
 fi
 
 if [ -n "$dirty_relevant_files" ]; then
-  echo "pre-push: WARNING — api/ has uncommitted changes that can move the" >&2
-  echo "          generated OpenAPI spec, so a regen right now would reflect" >&2
-  echo "          code this push does not carry. Skipping the drift check;" >&2
-  echo "          CI's 'verify' / 'verify-ios' jobs check the committed tree." >&2
-  echo "          Commit or stash the following and push again to check locally:" >&2
+  echo "pre-push: WARNING — api/ or ios/openapi/ has uncommitted changes that" >&2
+  echo "          can move the generated OpenAPI spec, so a regen right now" >&2
+  echo "          would reflect code this push does not carry. Skipping the" >&2
+  echo "          drift check; CI's 'verify' / 'verify-ios' jobs check the" >&2
+  echo "          committed tree. Commit or stash the following and push" >&2
+  echo "          again to check locally:" >&2
   echo "$dirty_relevant_files" | sed '/^$/d; s/^/            - /' >&2
   exit 0
 fi
@@ -219,11 +222,12 @@ fi
 
 # --- Regenerate, reusing the same machinery as the mise tasks / CI ---------
 #
-# scripts/ensure-api-up.sh boots the API only if one isn't already listening and
-# hands back $API_URL plus $API_STARTED_PID (empty when it reused a running
-# server). Assign-then-eval through `tail -n1`: only the final stdout line is
-# the machine-readable handoff, and a bare `eval "$(cmd)"` would hide a failure
-# from `set -e`. Same convention as mise.toml's regen-api-types.
+# scripts/ensure-api-up.sh always starts its own server on its own port and
+# hands back $API_URL plus $API_STARTED_PID (always set — it never reuses a
+# listener already running). Assign-then-eval through `tail -n1`: only the
+# final stdout line is the machine-readable handoff, and a bare `eval "$(cmd)"`
+# would hide a failure from `set -e`. Same convention as mise.toml's
+# regen-api-types.
 API_STATUS="$(mise_run "$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
 eval "$API_STATUS"
 TMP_SPEC=""

@@ -60,7 +60,7 @@ mise exec -- bundle exec fastlane beta
 """
 
 [tasks.regen-api-types]
-description = "Start API (if not running) and regenerate OpenAPI types for web-client"
+description = "Start a fresh API and regenerate OpenAPI types for web-client"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -84,7 +84,7 @@ echo "Wrote web-client/src/api/schema.d.ts"
 """
 
 [tasks.regen-ios-api-types]
-description = "Start API (if not running) and regenerate OpenAPI types for the iOS app"
+description = "Start a fresh API and regenerate OpenAPI types for the iOS app"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
