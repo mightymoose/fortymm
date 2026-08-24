@@ -28,7 +28,15 @@
 # `lsof` is a hard dependency, used to positively confirm which PID owns the
 # port's LISTEN socket before reporting success (see owns_listen_socket()
 # below) -- present by default on macOS and on GitHub's ubuntu-latest runners,
-# and already relied on unguarded by scripts/qa-up.sh's port_free().
+# and already relied on unguarded by scripts/qa-up.sh's port_free(). This is a
+# deliberate fail-closed choice, not an oversight: unlike the optional-tool
+# checks in .githooks/pre-push (mise, swift), which degrade to a warning
+# because CI's own verify job re-checks the same thing, ownership has no
+# downstream backstop -- degrading here would mean accepting an unverified
+# "success" for the exact false-provenance hazard this script exists to
+# close. A missing lsof is expected to be rare (see runners above); if it
+# turns out not to be, fix it by getting lsof onto that machine, not by
+# loosening this check.
 
 set -euo pipefail
 
@@ -137,7 +145,8 @@ probe() { curl -fs -o /dev/null --max-time 1 "$API_URL/openapi.json"; }
 owns_listen_socket() {
   local listeners
   if ! command -v lsof >/dev/null 2>&1; then
-    echo "lsof not found -- cannot verify socket ownership, refusing to assume it" >&2
+    echo "lsof not found -- cannot verify socket ownership, refusing to assume it." >&2
+    echo "Install lsof (present by default on macOS; on Debian/Ubuntu: apt-get install lsof) and retry." >&2
     return 1
   fi
   listeners="$(lsof -nP -iTCP@"$API_HOST":"$API_PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
