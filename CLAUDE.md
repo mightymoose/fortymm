@@ -138,7 +138,7 @@ Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on *
 | QA | up: `scripts/qa-up.sh [id]` · **down: `scripts/qa-down.sh [id]`** | :8085 | captured in **Mailpit** :8087 — never sends real mail |
 | UAT | `mise run redeploy-uat` — Helm + **k3d**, *not* compose, chart at `deploy/fortymm/` | :8084, `uat.fortymm.com`, and `https://fortymm-uat.<tailnet>.ts.net` | **real Postmark** — lands in real inboxes |
 
-The QA stack seeds three sign-in-able identities with known roles (`api/scripts/seed_qa_identities.py`); `scripts/qa-up.sh`'s own output lists their emails and roles on every boot.
+The QA stack seeds three sign-in-able identities with known roles (`api/scripts/seed_qa_identities.py`). `scripts/qa-up.sh`'s own output lists their emails and roles on every boot.
 
 **CI publishes both Helm charts to GHCR**, alongside the api and web images, so a deploy needs `helm` and no checkout. See `deploy/CLAUDE.md` for the registry paths, the version scheme, the pull command, and why the stack chart carries its own image digests.
 

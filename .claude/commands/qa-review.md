@@ -133,8 +133,12 @@ by hand:
 | Email | Roles | Reach |
 | --- | --- | --- |
 | `qa-admin@example.com` | `Administrator` | The admin area, so a role can be granted to a fourth identity through the product |
-| `qa-director@example.com` | `Beta tester` | Tournament create, edit, schedule, and draw |
+| `qa-director@example.com` | `Beta tester` | Tournament create, plus edit, schedule, and draw on tournaments it created |
 | `qa-player@example.com` | default `User` only | The "ask an administrator" no-permission path |
+
+Editing, publishing, and deleting a tournament is gated on creatorship, not
+role. If Quinn signs in as `qa-director` and gets a 403 editing a tournament
+someone else created, that is the documented restriction, not a bug.
 
 Sign in as any of them through Mailpit the same as any user. Brief Quinn on
 which identity to drive for the surface under test.
@@ -144,8 +148,9 @@ gating**: it is the one identity with no opt-in role, so it is what keeps the
 "no permission" path testable.
 
 Need a role granted to a fourth identity (an entrant Quinn created, say)? Sign
-in as `qa-admin@example.com` and use the admin area's role-assignment UI — no
-SQL.
+in as `qa-admin@example.com` and use the admin area's role-assignment UI. It
+needs no SQL. The admin Users page searches by username, not email, so look
+the target up by username, not the address Quinn signed them in with.
 
 The launched Chrome is **headless** — Quinn drives it blind and reads the page
 via `snapshot` (the a11y tree), screenshotting only as bug evidence.

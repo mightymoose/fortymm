@@ -31,6 +31,10 @@ async def _role_names_for(db: AsyncSession, user_id: uuid.UUID) -> set[str]:
     return set(names)
 
 
+async def _user_by_email(db: AsyncSession, email: str) -> User:
+    return (await db.execute(select(User).where(User.email == email))).scalar_one()
+
+
 async def _seed_rbac_prereqs(db: AsyncSession) -> None:
     """Everything `upsert_qa_identities` depends on existing already: the
     opt-in roles it grants. The default role/league come from autouse
@@ -52,9 +56,7 @@ async def test_seed_creates_the_exact_roster_role_sets(
         ("qa-director@example.com", {"Beta tester", "User"}),
         ("qa-player@example.com", {"User"}),
     ]:
-        user = (
-            await db_session.execute(select(User).where(User.email == email))
-        ).scalar_one()
+        user = await _user_by_email(db_session, email)
         assert await _role_names_for(db_session, user.id) == expected_roles
         assert user.confirmed_at is not None
         assert user.username
@@ -101,11 +103,7 @@ async def test_seed_is_idempotent(db_session: AsyncSession):
     )
     assert len(users) == 3
 
-    admin = (
-        await db_session.execute(
-            select(User).where(User.email == "qa-admin@example.com")
-        )
-    ).scalar_one()
+    admin = await _user_by_email(db_session, "qa-admin@example.com")
     admin_role_rows = (
         (await db_session.execute(select(UserRole).where(UserRole.user_id == admin.id)))
         .scalars()
@@ -121,11 +119,7 @@ async def test_seed_converges_a_drifted_role_grant_back_to_the_roster(
     await seed_qa_identities.upsert_qa_identities(db_session)
     await db_session.commit()
 
-    admin = (
-        await db_session.execute(
-            select(User).where(User.email == "qa-admin@example.com")
-        )
-    ).scalar_one()
+    admin = await _user_by_email(db_session, "qa-admin@example.com")
 
     # Simulate a QA pass drifting the grant: hand-add Beta tester on top of
     # Administrator.
@@ -151,16 +145,8 @@ async def test_seed_excludes_a_tombstoned_identity(db_session: AsyncSession):
     await seed_qa_identities.upsert_qa_identities(db_session)
     await db_session.commit()
 
-    admin = (
-        await db_session.execute(
-            select(User).where(User.email == "qa-admin@example.com")
-        )
-    ).scalar_one()
-    other_user = (
-        await db_session.execute(
-            select(User).where(User.email == "qa-director@example.com")
-        )
-    ).scalar_one()
+    admin = await _user_by_email(db_session, "qa-admin@example.com")
+    other_user = await _user_by_email(db_session, "qa-director@example.com")
 
     # Tombstone qa-admin the way account_merge.merge_user would, without
     # calling the real merge function.

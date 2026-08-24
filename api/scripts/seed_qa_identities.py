@@ -160,10 +160,10 @@ async def upsert_qa_identities(db: AsyncSession) -> SeedCounts:
             await grant_default_role(db, user.id)
 
         target_role_ids = {roles_by_name[name].id for name in opt_in_role_names}
-        existing_non_default_roles = (
+        existing_role_ids = set(
             (
                 await db.execute(
-                    select(UserRole).where(
+                    select(UserRole.role_id).where(
                         UserRole.user_id == user.id,
                         UserRole.role_id != default_role.id,
                     )
@@ -172,7 +172,6 @@ async def upsert_qa_identities(db: AsyncSession) -> SeedCounts:
             .scalars()
             .all()
         )
-        existing_role_ids = {ur.role_id for ur in existing_non_default_roles}
 
         stale_role_ids = existing_role_ids - target_role_ids
         if stale_role_ids:
