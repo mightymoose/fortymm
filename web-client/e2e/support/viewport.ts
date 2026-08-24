@@ -131,6 +131,40 @@ export async function expectOnScreen(
  * control is where the user is, this one proves there is nowhere else for anything to
  * be.
  */
+/**
+ * Assert `locator`'s own box stays inside the viewport's WIDTH only — never off the
+ * left or right edge. The X-axis half of `expectOnScreen`, split out for a caller
+ * whose element is allowed to sit below the fold: a grid that legitimately stacks
+ * its items into multiple rows on a narrow viewport puts later items below the
+ * viewport's bottom edge as ordinary vertical scrolling, not a bug, so
+ * `expectOnScreen`'s Y-axis and `toBeInViewport({ ratio: 1 })` checks would fail
+ * them for a reason unrelated to whatever this caller is proving (`tournament-mobile-header.spec.ts`'s
+ * hero-stat-tile checks, #1536).
+ *
+ * Deliberately does not call `expectOnScreen` with a narrowed axis, and does not
+ * settle/retry via `settledBox`: the callers of this helper measure a grid that has
+ * already finished laying out (no slide-in entrance to wait through), so a single
+ * `getBoundingClientRect()` is enough.
+ */
+export async function expectWithinViewportWidth(
+  page: Page,
+  locator: Locator,
+  what: string,
+): Promise<void> {
+  const viewport = page.viewportSize()
+  expect(viewport, 'the test must set a viewport size').not.toBeNull()
+  if (!viewport) return
+  const box = await locator.evaluate((el) => el.getBoundingClientRect())
+  expect(
+    box.x,
+    `${what} starts ${Math.round(box.x)}px from the left — off the left edge`,
+  ).toBeGreaterThanOrEqual(0)
+  expect(
+    Math.round(box.x + box.width),
+    `${what} ends ${Math.round(box.x + box.width)}px from the left, past the ${viewport.width}px viewport`,
+  ).toBeLessThanOrEqual(viewport.width)
+}
+
 export async function expectNoHorizontalScroll(
   locator: Locator,
   what: string,

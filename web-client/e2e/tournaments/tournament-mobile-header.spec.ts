@@ -103,7 +103,11 @@ import {
   TournamentDetailPage,
   type LifecycleLabel,
 } from '../page-objects/tournaments/tournament-detail.page'
-import { expectNoHorizontalScroll, expectOnScreen } from '../support/viewport'
+import {
+  expectNoHorizontalScroll,
+  expectOnScreen,
+  expectWithinViewportWidth,
+} from '../support/viewport'
 import type { TournamentsStoreOptions } from '../page-objects/tournaments/tournaments-store'
 
 /**
@@ -129,36 +133,6 @@ async function navigate(page: Page, options: TournamentsStoreOptions) {
   const { pom } = await TournamentDetailPage.navigateTo(page, options)
   await page.evaluate(() => document.fonts.ready)
   return pom
-}
-
-/**
- * Assert `locator`'s own box stays inside the viewport's WIDTH — never off the
- * left or right edge. Deliberately not `expectOnScreen` for this claim: below
- * `sm` the fix (#1536) stacks the five tiles one per row, so the later tiles
- * legitimately land below the fold on a 375x667 phone — the same "a long page
- * scrolls vertically, and that is the design" fact `scrollVerticallyIntoView`'s
- * docstring states elsewhere in this suite. `expectOnScreen`'s
- * `toBeInViewport({ ratio: 1 })` fails a below-the-fold tile for a reason that has
- * nothing to do with #1536's clipping bug, so this checks the X axis alone —
- * which is the axis the bug (and #1044's own bug) is ever about.
- */
-async function expectWithinViewportWidth(
-  page: Page,
-  locator: Locator,
-  what: string,
-): Promise<void> {
-  const viewport = page.viewportSize()
-  expect(viewport, 'the test must set a viewport size').not.toBeNull()
-  if (!viewport) return
-  const box = await locator.evaluate((el) => el.getBoundingClientRect())
-  expect(
-    box.x,
-    `${what} starts ${Math.round(box.x)}px from the left — off the left edge`,
-  ).toBeGreaterThanOrEqual(0)
-  expect(
-    Math.round(box.x + box.width),
-    `${what} ends ${Math.round(box.x + box.width)}px from the left, past the ${viewport.width}px viewport`,
-  ).toBeLessThanOrEqual(viewport.width)
 }
 
 /** The repo's established phone viewport — `app-shell.spec.ts`,
@@ -633,19 +607,23 @@ interface HeroStatBox {
 }
 type HeroStatBoxes = Record<string, { value: HeroStatBox; label: HeroStatBox }>
 
+/** The width/height of one locator's box — the one measurement `measureHeroStats`
+ * takes twice per tile (value, then label), factored so the two calls can't drift
+ * out of step with each other. */
+async function measureBox(locator: Locator): Promise<HeroStatBox> {
+  return locator.evaluate((el) => {
+    const box = el.getBoundingClientRect()
+    return { width: box.width, height: box.height }
+  })
+}
+
 /** Every tile's value/label box, measured at the page's CURRENT viewport. */
 async function measureHeroStats(pom: TournamentDetailPage): Promise<HeroStatBoxes> {
   const boxes: HeroStatBoxes = {}
   for (const { slug } of HERO_STATS) {
     boxes[slug] = {
-      value: await pom.heroStatValue(slug).evaluate((el) => {
-        const box = el.getBoundingClientRect()
-        return { width: box.width, height: box.height }
-      }),
-      label: await pom.heroStatLabel(slug).evaluate((el) => {
-        const box = el.getBoundingClientRect()
-        return { width: box.width, height: box.height }
-      }),
+      value: await measureBox(pom.heroStatValue(slug)),
+      label: await measureBox(pom.heroStatLabel(slug)),
     }
   }
   return boxes
