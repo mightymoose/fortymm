@@ -5482,6 +5482,41 @@ export interface components {
          *       (e.g. a bar's width) and a pre-rendered venue-local label — so a client juggles
          *       no timezones itself, even though ``Match.completed_at`` is stored as an ordinary
          *       UTC timestamp and the two placement columns are venue-anchored instants.
+         *     * ``table_off_reservation`` — ``true`` when this fixture's placed ``table_id``
+         *       is **not** one of the tables of the reservation it is scheduled against
+         *       (ADR-0790's soft "the table belongs to the group's reservation" claim, made
+         *       *visible* — never enforced, ADR-0790 stands). Judged against the fixture's
+         *       group's **mapped** reservation when one exists, or the event-wide reservation
+         *       (the event's own window, the tournament's whole table catalogue — ADR
+         *       20260807) when it does not (``app.schedule_solves.restricting_reservation_key``
+         *       is the one rule this reads through, same as the solver). A director may edit a
+         *       booked reservation's own tables after the draw is cut — the *set* of
+         *       reservations freezes at the cut (ADR-0786/#1387), each reservation's own
+         *       fields do not — which can silently strand an already-placed or already-called
+         *       match; the solver deliberately never repairs it (reservation membership does
+         *       not break a pin, ``app.schedule_solves`` module docstring), so this flag is
+         *       what makes the stranding visible. ``null`` — never ``false`` — when the
+         *       question does not apply: no ``table_id`` is placed, or the linked match is
+         *       ``completed``/``voided`` (its placement is history; the flag stops mattering
+         *       once the match is decided).
+         *     * ``start_outside_reservation_window`` — the same idea, on the *time* half of
+         *       the placement: ``true`` when ``scheduled_start`` falls outside that same
+         *       reservation's window. The window is a **closed interval**,
+         *       ``[window_start, window_end]`` — a start landing exactly on either edge
+         *       counts as *inside* — matching the solver's own ``<=`` treatment of a
+         *       window's end (``app.scheduling``'s ``PastWindow`` check). ``null`` — never
+         *       ``false`` — under the same two conditions as ``table_off_reservation``: no
+         *       ``scheduled_start`` is placed, or the linked match is
+         *       ``completed``/``voided``. The two flags are independent — a half-placement
+         *       (only a table, or only a start) can flag its one placed half while the
+         *       other stays ``null``.
+         *
+         *     Both flags are **computed on read, never stored** (ADR-0790, "flags derived on
+         *     read, not invariants") — the two of the ADR's three deferred facts this ticket
+         *     (#1537) implements; double-booking, the third, stays deferred. Before the draw
+         *     is cut an event has no fixtures at all, so neither flag is ever raised on an
+         *     undrawn event — that falls out of "no fixtures to flag", not a special case
+         *     here.
          *
          *     The entries are carried as **ids only**. The name and username behind
          *     ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -5521,6 +5556,10 @@ export interface components {
             /** Table Id */
             table_id: string | null;
             scheduled_start: components["schemas"]["FixtureTimeRead"] | null;
+            /** Table Off Reservation */
+            table_off_reservation: boolean | null;
+            /** Start Outside Reservation Window */
+            start_outside_reservation_window: boolean | null;
             pinned_at: components["schemas"]["FixtureTimeRead"] | null;
             /** Call Notified Count */
             call_notified_count: number;
