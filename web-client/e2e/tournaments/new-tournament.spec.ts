@@ -147,6 +147,25 @@ test.describe('Tournaments · the "New tournament" dialog', () => {
     await expect(pom.postalInput).toHaveValue('94703')
     await expect(page).toHaveURL(/\/tournaments\/?$/)
 
+    // #1538 — the banner is `document.activeElement`, stays out of the tab order
+    // (a container, not a control), and shows a visible focus indicator. jsdom
+    // cannot prove any of these three; only a real browser can.
+    await expect(pom.errorBanner).toBeFocused()
+    await expect(pom.errorBanner).toHaveAttribute('tabindex', '-1')
+    expect(
+      await pom.errorBanner.evaluate((el) => getComputedStyle(el).boxShadow),
+    ).not.toBe('none')
+
+    // A second refused create moves focus to the banner AGAIN — React Hook Form
+    // clears `errors.root` at the start of every submit and `submit` re-sets it in
+    // the catch, so the banner appears twice, not just once per open.
+    await pom.nameInput.focus()
+    await expect(pom.errorBanner).not.toBeFocused()
+    await pom.createButton.click()
+    await expect(pom.errorBanner).toBeVisible()
+    await expect(pom.errorBanner).toBeFocused()
+    expect(store.countOf('POST')).toBe(2)
+
     // New red markup, in a portalled dialog, whose contrast jsdom cannot see.
     await expectAxeClean(page, 'new tournament — the server faulted', {
       exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,

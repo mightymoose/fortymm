@@ -399,6 +399,83 @@ describe('NewTournamentModal', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  /**
+   * Keyboard focus on a refused create (#1538) — the dialog's half of the same
+   * defect as the event editor's. jsdom cannot prove the visible-focus-indicator
+   * or true-Tab-order criteria; the Playwright suite covers those.
+   */
+  describe('focus moves to the failure banner on a refusal (#1538)', () => {
+    it('focuses the banner when the server refuses a create, and keeps it out of the tab order (`tabindex="-1"`)', async () => {
+      const onCreate = vi
+        .fn()
+        .mockRejectedValue(new ApiError(500, null, 'create tournament'))
+      newTournamentModalPage.render({ onCreate })
+
+      await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+      await userEvent.click(newTournamentModalPage.getCreateButton())
+
+      await waitFor(() =>
+        expect(newTournamentModalPage.queryErrorBanner()).toHaveFocus(),
+      )
+      expect(newTournamentModalPage.queryErrorBanner()).toHaveAttribute(
+        'tabindex',
+        '-1',
+      )
+    })
+
+    it('moves focus to the banner again on a second refused create', async () => {
+      // React Hook Form clears `errors.root` when the next submit starts and
+      // `submit` re-sets it in the catch, so the banner unmounts and remounts on
+      // every refusal (mirrors event-editor's `performSave`) — focus must move
+      // again, not just once per open.
+      const onCreate = vi
+        .fn()
+        .mockRejectedValue(new ApiError(500, null, 'create tournament'))
+      newTournamentModalPage.render({ onCreate })
+
+      await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+      await userEvent.click(newTournamentModalPage.getCreateButton())
+      await waitFor(() =>
+        expect(newTournamentModalPage.queryErrorBanner()).toHaveFocus(),
+      )
+
+      newTournamentModalPage.getNameInput().focus()
+      expect(newTournamentModalPage.queryErrorBanner()).not.toHaveFocus()
+
+      await userEvent.click(newTournamentModalPage.getCreateButton())
+      await waitFor(() =>
+        expect(newTournamentModalPage.queryErrorBanner()).toHaveFocus(),
+      )
+    })
+
+    it('does not steal focus back to the banner while the organizer keeps typing after a refusal', async () => {
+      // The open question the planning note flagged: `mode: 'onChange'` revalidates
+      // the touched field on every keystroke, but the resolver never assigns
+      // `errors.root` — so a fresh reference must not arrive mid-sentence and pull
+      // focus off the field the organizer is back in.
+      const onCreate = vi
+        .fn()
+        .mockRejectedValue(new ApiError(500, null, 'create tournament'))
+      newTournamentModalPage.render({ onCreate })
+
+      await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+      await userEvent.click(newTournamentModalPage.getCreateButton())
+      await waitFor(() =>
+        expect(newTournamentModalPage.queryErrorBanner()).toHaveFocus(),
+      )
+
+      await userEvent.type(newTournamentModalPage.getNameInput(), ' 2026')
+
+      expect(newTournamentModalPage.getNameInput()).toHaveFocus()
+    })
+
+    it('moves no focus on a fresh open with no failure', () => {
+      newTournamentModalPage.render({})
+
+      expect(newTournamentModalPage.queryErrorBanner()).toBeNull()
+    })
+  })
+
   it('closes via cancel', async () => {
     const onOpenChange = vi.fn()
     newTournamentModalPage.render({ onOpenChange })
