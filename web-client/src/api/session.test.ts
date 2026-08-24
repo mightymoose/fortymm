@@ -11,6 +11,7 @@ import {
   readStorageLock,
   useConfirmEmail,
   useConsumeLoginToken,
+  useLoginSender,
   useLogout,
 } from './session'
 
@@ -229,5 +230,46 @@ describe('readStorageLock', () => {
   it('rejects a record missing fields as null', () => {
     localStorage.setItem(LOCK_KEY, JSON.stringify({ owner: 'tab-1' }))
     expect(readStorageLock()).toBeNull()
+  })
+})
+
+describe('useLoginSender (#1466 defect 1)', () => {
+  it('parses the bare address off GET /v1/login/sender', async () => {
+    server.use(
+      http.get('*/v1/login/sender', () =>
+        HttpResponse.json({ address: 'noreply@fortymm.com' }),
+      ),
+    )
+    const { result } = renderHook(() => useLoginSender(), {
+      wrapper: wrapperFor(queryClient),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toBe('noreply@fortymm.com')
+  })
+
+  it('resolves to null, not an error, when the API has no address', async () => {
+    server.use(
+      http.get('*/v1/login/sender', () => HttpResponse.json({ address: null })),
+    )
+    const { result } = renderHook(() => useLoginSender(), {
+      wrapper: wrapperFor(queryClient),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toBeNull()
+  })
+
+  it('surfaces a malformed response as a query error rather than a thrown boundary error', async () => {
+    server.use(
+      http.get('*/v1/login/sender', () =>
+        HttpResponse.json({ address: 42 }),
+      ),
+    )
+    const { result } = renderHook(() => useLoginSender(), {
+      wrapper: wrapperFor(queryClient),
+    })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
   })
 })

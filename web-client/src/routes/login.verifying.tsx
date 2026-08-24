@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import {
@@ -8,13 +9,63 @@ import {
   useConsumeLoginToken,
   useMergePreview,
 } from '@/api/session'
-import { btnPrimary } from '@/components/login/styles'
+import { btnGhost, btnPrimary, fineprint } from '@/components/login/styles'
 import { LinkCheckPage } from '@/components/login/link-check-page/link-check-page'
 import { ScreenVerifyNetError } from '@/components/login/login-screens'
 import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
-type VerifyError = 'expired' | 'net'
+// The screens this route can be sent to by `?error=`. The tuple is the single
+// source of the type AND of the URL parse, so the two cannot drift.
+const VERIFY_ERRORS = ['expired', 'net', 'replaced', 'email_changed'] as const
+type VerifyError = (typeof VERIFY_ERRORS)[number]
+// `.catch(undefined)` so a hand-typed `?error=garbage` falls through to the
+// normal verifying flow instead of throwing at the route boundary.
+const verifyErrorSchema = z.enum(VERIFY_ERRORS).optional().catch(undefined)
+
+// `POST /v1/login/consume`'s 400 body, `{ detail: { code, message } }` —
+// `consume_login_token`'s three coded reasons (#1466 defect 3). NOT declared
+// on the route's OpenAPI `responses=` (matches the existing
+// `session_merged`/`session_ended` precedent in client.ts), so it never
+// reaches `schema.d.ts` — read off `ApiError.body`, never off the typed
+// `ApiError.detail` (a bare `string | null`), and parse it here.
+//
+// Shaped after `components/tournaments/data/entry-refusal.ts` (ADR-0968): the
+// tuple is the single source of the code type, and `message` is deliberately
+// not read — a code we recognise is a code we already have a screen for, so
+// the server's sentence never reaches the UI.
+const LOGIN_CONSUME_ERROR_CODES = [
+  'invalid_or_expired',
+  'email_changed',
+  'replaced',
+] as const
+type LoginConsumeErrorCode = (typeof LOGIN_CONSUME_ERROR_CODES)[number]
+
+const loginConsumeErrorSchema = z.object({
+  detail: z.object({ code: z.enum(LOGIN_CONSUME_ERROR_CODES) }),
+})
+
+/** The structured `code` a 4xx from `/login/consume` carries, or `null` when
+ * the body doesn't parse as the coded shape (a plain-string detail, no body,
+ * or a code this client has no screen for). `null` maps to the safe
+ * `'expired'` fallback — today's behaviour for every other 4xx. */
+function loginConsumeErrorCode(err: unknown): LoginConsumeErrorCode | null {
+  if (!(err instanceof ApiError)) return null
+  const parsed = loginConsumeErrorSchema.safeParse(err.body)
+  return parsed.success ? parsed.data.detail.code : null
+}
+
+/** Which screen each server code reaches. Two types with a table between them,
+ * on purpose: `VerifyError` also carries `'net'`, which no API code produces,
+ * and the API's `invalid_or_expired` is this client's `'expired'`. Exhaustive
+ * over `LoginConsumeErrorCode`, so a fourth code added to `sessions.py` is a
+ * compile error here rather than a silent mis-route back to `'expired'` — the
+ * exact collapse #1466 defect 3 exists to undo. */
+const CODE_TO_VERIFY_ERROR: Record<LoginConsumeErrorCode, VerifyError> = {
+  invalid_or_expired: 'expired',
+  email_changed: 'email_changed',
+  replaced: 'replaced',
+}
 
 export const Route = createFileRoute('/login/verifying')({
   head: () => ({
@@ -28,7 +79,7 @@ export const Route = createFileRoute('/login/verifying')({
     const raw = Array.isArray(search.token) ? search.token[0] : search.token
     return {
       token: typeof raw === 'string' ? raw : '',
-      error: e === 'expired' || e === 'net' ? (e as VerifyError) : undefined,
+      error: verifyErrorSchema.parse(e),
     }
   },
   component: LoginVerifyingPage,
@@ -62,9 +113,12 @@ function LoginVerifyingPage() {
         },
         onError: (err) => {
           if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+            const code = loginConsumeErrorCode(err)
+            const nextError: VerifyError =
+              code === null ? 'expired' : CODE_TO_VERIFY_ERROR[code]
             navigate({
               to: '/login/verifying',
-              search: { token: '', error: 'expired' },
+              search: { token: '', error: nextError },
             })
           } else {
             navigate({ to: '/login/verifying', search: { token, error: 'net' } })
@@ -106,12 +160,40 @@ function LoginVerifyingPage() {
     </button>
   )
 
+  // The `replaced` state's screen must NOT offer "Send a new link" as its
+  // main action — that would kill the newer link the copy just told the user
+  // to open (#1466 defect 3, acceptance criteria). Guidance text plus a
+  // demoted secondary action instead of the primary CTA every other error
+  // state uses.
+  const replacedFooter = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
+        Look for the most recent sign-in email — that link is still live.
+      </p>
+      <button
+        type="button"
+        style={{ ...btnGhost, width: '100%' }}
+        onClick={sendNewLink}
+      >
+        Send a new link instead
+      </button>
+    </div>
+  )
+
   if (!token && !error) {
     return <LinkCheckPage state="missing" footer={sendNewLinkButton} />
   }
 
   if (error === 'expired') {
     return <LinkCheckPage state="expired" footer={sendNewLinkButton} />
+  }
+
+  if (error === 'email_changed') {
+    return <LinkCheckPage state="email_changed" footer={sendNewLinkButton} />
+  }
+
+  if (error === 'replaced') {
+    return <LinkCheckPage state="replaced" footer={replacedFooter} />
   }
 
   if (error === 'net') {

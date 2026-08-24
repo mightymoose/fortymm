@@ -29,5 +29,13 @@ class UserToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Set when a newer login request supersedes this row (login-context tokens
+    # only — see ``_issue_and_send_login_email``). Lets ``consume_login_token``
+    # tell "a newer link was requested" apart from every other invalid/expired
+    # cause, without stacking a second bit onto the already-overloaded
+    # ``context`` string. NULL means live, or not a login token at all.
+    replaced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     user: Mapped[User] = relationship(User)

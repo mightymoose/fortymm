@@ -3,6 +3,7 @@ import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -175,6 +176,10 @@ async def test_request_for_emailed_account_always_issues_login_link(
 async def test_request_replaces_prior_login_token_for_same_user(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
+    """A resend stamps the previous live row as replaced rather than deleting
+    it outright (#1466) — exactly one live (``replaced_at IS NULL``) row
+    survives, and the superseded one sticks around long enough to report
+    "replaced" rather than vanishing."""
     await _make_confirmed_user(db_session, "rita@example.com")
 
     first = await api_client.post("/v1/login/request", json=REQUEST_BODY)
@@ -185,13 +190,17 @@ async def test_request_replaces_prior_login_token_for_same_user(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(UserToken)
+                .where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                .order_by(UserToken.created_at)
             )
         )
         .scalars()
         .all()
     )
-    assert len(tokens) == 1
+    assert len(tokens) == 2
+    assert tokens[0].replaced_at is not None
+    assert tokens[1].replaced_at is None
 
 
 async def test_request_honeypot_silently_succeeds(
@@ -443,6 +452,7 @@ async def test_consume_rejects_link_after_user_changed_email(
 
     response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "email_changed"
 
     leftover = (
         (
@@ -545,7 +555,7 @@ async def test_consume_returns_400_when_merge_raises_integrity_error(
 
     response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 400
-    assert response.json()["detail"] == "That sign-in link is invalid or expired."
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
 
 
 async def test_consume_omits_merge_when_no_prior_session(
@@ -810,6 +820,41 @@ async def test_merge_preview_bare_login_is_not_a_merge(
 
 async def test_merge_preview_unknown_token_is_not_a_merge(api_client: AsyncClient):
     response = await api_client.post("/v1/merge/preview", json={"token": "nope"})
+    assert response.status_code == 200
+    assert response.json()["is_merge"] is False
+
+
+async def test_merge_preview_excludes_a_replaced_login_token(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Once a replaced row survives as a live row (rather than being deleted
+    outright), ``preview_merge`` must not treat it as a live merge gate for a
+    dead link (#1466)."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-replaced-preview"
+    token = await _issue_login_token(db_session, rita, raw)
+    token.replaced_at = datetime.now(UTC)
+    await db_session.commit()
+
+    response = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert response.status_code == 200
+    assert response.json()["is_merge"] is False
+
+
+async def test_merge_preview_excludes_an_expired_login_token(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Mirrors the replaced case: an aged-out row that a request hasn't swept
+    yet must not be treated as a live merge gate either."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-expired-preview"
+    token = await _issue_login_token(db_session, rita, raw)
+    token.created_at = (
+        datetime.now(UTC) - sessions.LOGIN_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+
+    response = await api_client.post("/v1/merge/preview", json={"token": raw})
     assert response.status_code == 200
     assert response.json()["is_merge"] is False
 
@@ -1090,29 +1135,31 @@ async def test_first_sign_in_link_uses_the_ordinary_15_minute_lifetime(
     async with make_client() as cookieless:
         response = await cookieless.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 400
-    assert response.json()["detail"] == "That sign-in link is invalid or expired."
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
 
 
 async def test_repeat_request_for_the_same_unknown_email_reuses_the_pending_user(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    """Resend replaces the token instead of minting a second account, so one
-    live link exists per address at a time."""
+    """Resend stamps the prior token as replaced and mints a fresh one against
+    the same pending account, rather than minting a second account."""
     await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
     await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
 
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.sent_to == "brand.new.quinn@example.com"
-                )
+                select(UserToken)
+                .where(UserToken.sent_to == "brand.new.quinn@example.com")
+                .order_by(UserToken.created_at)
             )
         )
         .scalars()
         .all()
     )
-    assert len(tokens) == 1
+    assert len(tokens) == 2
+    assert tokens[0].replaced_at is not None
+    assert tokens[1].replaced_at is None
 
     pending = (
         (await db_session.execute(select(User).where(User.email.is_(None))))
@@ -1120,15 +1167,15 @@ async def test_repeat_request_for_the_same_unknown_email_reuses_the_pending_user
         .all()
     )
     assert len(pending) == 1
-    assert tokens[0].user_id == pending[0].id
+    assert {t.user_id for t in tokens} == {pending[0].id}
 
     raws = _login_email_tokens(fake_email_queue)
     assert len(raws) == 2
-    # The newest link wins; the first is dead.
+    # The newest link wins; the first reports it was replaced.
     async with make_client() as stale:
-        assert (
-            await stale.post("/v1/login/consume", json={"token": raws[0]})
-        ).status_code == 400
+        stale_response = await stale.post("/v1/login/consume", json={"token": raws[0]})
+    assert stale_response.status_code == 400
+    assert stale_response.json()["detail"]["code"] == "replaced"
     async with make_client() as fresh:
         assert (
             await fresh.post("/v1/login/consume", json={"token": raws[-1]})
@@ -1148,7 +1195,7 @@ async def test_first_sign_in_rejected_when_the_address_was_claimed_meanwhile(
     async with make_client() as cookieless:
         response = await cookieless.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 400
-    assert response.json()["detail"] == "That sign-in link is invalid or expired."
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
 
     burned = (
         await db_session.execute(
@@ -1444,3 +1491,260 @@ async def test_confirming_an_email_change_revokes_the_users_other_sessions(
         .all()
     )
     assert surviving == []
+
+
+# ---- structured codes on a dead sign-in link (#1466) ----------------------
+
+
+async def test_consume_reports_invalid_or_expired_code_for_a_never_valid_token(
+    api_client: AsyncClient,
+):
+    response = await api_client.post(
+        "/v1/login/consume", json={"token": "never-issued"}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
+
+
+async def test_consume_reports_invalid_or_expired_code_for_a_timed_out_token(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    user = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-plain-expired"
+    token = await _issue_login_token(db_session, user, raw)
+    token.created_at = (
+        datetime.now(UTC) - sessions.LOGIN_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
+
+
+async def test_consume_reports_replaced_code_for_a_superseded_token(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Requesting a second link for the same account stamps the first as
+    replaced; opening it must say so, not report the generic expired copy."""
+    await _make_confirmed_user(db_session, "rita@example.com")
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    raw_first = _login_email_tokens(fake_email_queue)[-1]
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+
+    async with make_client() as stale:
+        response = await stale.post("/v1/login/consume", json={"token": raw_first})
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "replaced"
+
+
+async def test_consume_reports_replaced_code_for_both_dead_links_after_two_resends(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Edge case from the ticket body: two resends in a row leaves links one
+    and two both dead and link three live. Both dead links must report
+    ``replaced``, not ``invalid_or_expired`` — the sweep in
+    ``_issue_and_send_login_email`` must not delete an already-replaced row
+    just because a *third* request came in; it only prunes rows old enough to
+    have genuinely expired by their own ``created_at``."""
+    await _make_confirmed_user(db_session, "rita@example.com")
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)  # link 1
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)  # link 2
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)  # link 3 (live)
+
+    raw_1, raw_2, raw_3 = _login_email_tokens(fake_email_queue)
+
+    async with make_client() as opener_1:
+        response_1 = await opener_1.post("/v1/login/consume", json={"token": raw_1})
+    async with make_client() as opener_2:
+        response_2 = await opener_2.post("/v1/login/consume", json={"token": raw_2})
+    assert response_1.status_code == 400
+    assert response_1.json()["detail"]["code"] == "replaced"
+    assert response_2.status_code == 400
+    assert response_2.json()["detail"]["code"] == "replaced"
+
+    async with make_client() as opener_3:
+        response_3 = await opener_3.post("/v1/login/consume", json={"token": raw_3})
+    assert response_3.status_code == 200
+
+
+async def test_consume_reports_invalid_not_replaced_once_the_newer_link_was_used(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """``replaced`` sends the user off to open the most recent email, and the
+    screen it reaches says that link is still live. Once the newer link has
+    itself been signed in with, ``consume_login_token`` has deleted its row and
+    that sentence is false — the exact class of untruth this ticket exists to
+    remove. With no live successor left, the older link is simply dead, so it
+    must report ``invalid_or_expired``."""
+    await _make_confirmed_user(db_session, "rita@example.com")
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)  # link 1
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)  # link 2
+
+    raw_1, raw_2 = _login_email_tokens(fake_email_queue)
+
+    async with make_client() as opener_2:
+        signed_in = await opener_2.post("/v1/login/consume", json={"token": raw_2})
+    assert signed_in.status_code == 200
+
+    async with make_client() as opener_1:
+        response = await opener_1.post("/v1/login/consume", json={"token": raw_1})
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
+
+
+async def test_consume_reports_expired_not_replaced_when_a_link_is_both(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Falsification target: expiry must be checked *before* replacement.
+    A token that is both replaced and past its own 15-minute lifetime must
+    report expired, because that is the true — and more specific — reason.
+
+    This directly exercises the ordering acceptance criterion: swapping the
+    order of the two checks in ``consume_login_token`` must turn this test
+    red for exactly this reason (asserting ``replaced`` where the fixed code
+    asserts ``invalid_or_expired``), not for an unrelated one."""
+    user = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-replaced-and-expired"
+    token = await _issue_login_token(db_session, user, raw)
+    token.replaced_at = datetime.now(UTC)
+    token.created_at = (
+        datetime.now(UTC) - sessions.LOGIN_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
+
+
+async def test_sweep_does_not_delete_a_replaced_row_still_within_its_lifetime(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """A row that's already replaced but well within LOGIN_TOKEN_LIFETIME of
+    its own ``created_at`` must survive a further resend's sweep — the sweep
+    keys on age, not on ``replaced_at``, so a resend chain doesn't erase a
+    still-reportable "replaced" row out from under a person who is mid-click
+    on an earlier link."""
+    await _make_confirmed_user(db_session, "rita@example.com")
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+
+    tokens = (
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # All three requests' rows are still present: two replaced, one live.
+    assert len(tokens) == 3
+    assert sum(1 for t in tokens if t.replaced_at is not None) == 2
+    assert sum(1 for t in tokens if t.replaced_at is None) == 1
+
+
+async def test_sweep_deletes_a_login_row_once_it_genuinely_expires(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The bound on a replaced row's lifetime: once a row (replaced or not)
+    is older than LOGIN_TOKEN_LIFETIME, the next request for this user sweeps
+    it away. This is the only cleanup a replaced row ever gets — no
+    background job runs it."""
+    user = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-about-to-be-swept"
+    token = await _issue_login_token(db_session, user, raw)
+    token.created_at = (
+        datetime.now(UTC) - sessions.LOGIN_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+
+    leftover = (
+        await db_session.execute(select(UserToken).where(UserToken.id == token.id))
+    ).scalar_one_or_none()
+    assert leftover is None
+
+
+# ---- GET /v1/login/sender (#1466) -----------------------------------------
+
+
+async def test_login_sender_returns_the_bare_address(
+    api_client: AsyncClient, monkeypatch
+):
+    """``get_settings()`` is constructed fresh per call (no caching), so a
+    ``monkeypatch.setenv`` here takes effect immediately."""
+    monkeypatch.setenv("EMAIL_FROM", "FortyMM <noreply@fortymm.com>")
+
+    response = await api_client.get("/v1/login/sender")
+    assert response.status_code == 200
+    assert response.json() == {"address": "noreply@fortymm.com"}
+
+
+async def test_login_sender_uses_the_default_when_unset(
+    api_client: AsyncClient, monkeypatch
+):
+    monkeypatch.delenv("EMAIL_FROM", raising=False)
+
+    response = await api_client.get("/v1/login/sender")
+    assert response.status_code == 200
+    assert response.json() == {"address": "noreply@fortymm.local"}
+
+
+@pytest.mark.parametrize(
+    "email_from",
+    [
+        "",
+        "   ",
+        "garbage",
+        "FortyMM <not-an-email>",
+        "FortyMM <>",
+        "noreply@fortymm.com, second@fortymm.com",
+    ],
+    ids=[
+        "empty",
+        "whitespace-only",
+        "no-at-sign",
+        "display-name-wrapping-a-non-address",
+        "display-name-with-empty-address",
+        "two-addresses",
+    ],
+)
+async def test_login_sender_reports_no_address_for_a_broken_email_from(
+    api_client: AsyncClient, monkeypatch, email_from: str
+):
+    """A missing, empty or malformed ``EMAIL_FROM`` must yield ``null``, never a
+    non-address string. The web client omits the receipt's From row entirely on
+    ``null``, which is the ticket's edge case: the screen must not print a
+    broken address or an empty row. ``parseaddr`` alone does not give this —
+    it echoes ``garbage`` straight back."""
+    monkeypatch.setenv("EMAIL_FROM", email_from)
+
+    response = await api_client.get("/v1/login/sender")
+    assert response.status_code == 200
+    assert response.json() == {"address": None}
+
+
+async def test_login_sender_takes_no_cookie_and_sets_none(api_client: AsyncClient):
+    """A dedicated, side-effect-free readback — unlike GET /v1/session, it must
+    not mint a guest user or set a session cookie."""
+    response = await api_client.get("/v1/login/sender")
+    assert response.status_code == 200
+    assert "set-cookie" not in response.headers
+    assert response.cookies.get(SESSION_COOKIE_NAME) is None
+
+
+async def test_login_sender_response_is_identical_across_calls(
+    api_client: AsyncClient,
+):
+    """Static, deployment-wide constant — not request- or user-specific."""
+    first = await api_client.get("/v1/login/sender")
+    second = await api_client.get("/v1/login/sender")
+    assert first.json() == second.json()

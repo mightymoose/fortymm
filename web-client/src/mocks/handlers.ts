@@ -978,6 +978,28 @@ type MatchScoreBody = components['schemas']['MatchGameScoreWrite']
 type MatchScoreUpdateBody = components['schemas']['MatchGameScoreUpdate']
 type MatchResultsBody = components['schemas']['MatchResultsWrite']
 
+/**
+ * The dev-mode magic sign-in tokens, one per refusal `consume_login_token` can
+ * answer with (#1466 defect 3). Keyed by the token a designer types; the value
+ * is the exact `detail` object the API sends, so `/login/verifying` routes to
+ * the same screen it would in production.
+ */
+const LOGIN_CONSUME_REFUSALS: Record<string, { code: string; message: string }> =
+  {
+    expired: {
+      code: 'invalid_or_expired',
+      message: 'That sign-in link is invalid or expired.',
+    },
+    replaced: {
+      code: 'replaced',
+      message: 'A newer sign-in link was requested. Use the most recent email.',
+    },
+    'email-changed': {
+      code: 'email_changed',
+      message: 'That sign-in link no longer matches your email.',
+    },
+  }
+
 function detail(message: string, status = 422) {
   return HttpResponse.json({ detail: message }, { status })
 }
@@ -1469,6 +1491,11 @@ export const handlers = [
     }
     return HttpResponse.json(mockSession)
   }),
+  // Static, deployment-wide sender address for the /login/sent receipt row
+  // (#1466 defect 1) — no input, no cookie.
+  http.get('*/v1/login/sender', () =>
+    HttpResponse.json({ address: 'noreply@fortymm.com' }),
+  ),
   http.post('*/v1/login/request', async ({ request }) => {
     const body =
       ((await readJson(request)) as {
@@ -1491,11 +1518,17 @@ export const handlers = [
     const body =
       ((await readJson(request)) as { token?: string } | undefined) ?? {}
     if (!body.token) return detail('Missing token.', 400)
-    // The dev-mode magic token "expired" is a deliberate hook for letting
-    // designers test the failure screen end-to-end without rewriting
-    // handlers — anything else succeeds.
-    if (body.token === 'expired')
-      return detail('That sign-in link is invalid or expired.', 400)
+    // The dev-mode magic tokens are a deliberate hook for letting designers
+    // reach each failure screen end-to-end without rewriting handlers —
+    // anything else succeeds. They must answer in the API's own structured
+    // `{ detail: { code, message } }` shape (`consume_login_token`'s three
+    // codes, #1466 defect 3): the route reads `detail.code` and a bare-string
+    // body falls back to the generic expired screen, so a mock that kept the
+    // old shape would leave the `replaced` and `email_changed` screens
+    // unreachable in dev — a mock quietly narrower than the server.
+    const consumeRefusal = LOGIN_CONSUME_REFUSALS[body.token]
+    if (consumeRefusal)
+      return HttpResponse.json({ detail: consumeRefusal }, { status: 400 })
     // Return a *fresh* confirmed session rather than mutating the shared
     // `mockSession` singleton in place. The old in-place write leaked
     // `email`/`confirmed_at` into whichever test ran next in file order, so a

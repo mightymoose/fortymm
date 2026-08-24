@@ -116,6 +116,18 @@ class LoginRequestAccepted(BaseModel):
     email: EmailStr
 
 
+class LoginSenderResponse(BaseModel):
+    """Body for ``GET /v1/login/sender`` — the bare address auth mail really
+    sends from, parsed out of ``Settings.email_from``'s RFC 5322 display form
+    (``FortyMM <noreply@fortymm.com>`` -> ``noreply@fortymm.com``). A static,
+    deployment-wide constant, not user- or request-specific, so it is safe to
+    serve with no cookie and no captcha. ``None`` only when the configured
+    value doesn't parse to an address at all — the client renders without a
+    sender row rather than a broken one."""
+
+    address: str | None
+
+
 class ConsumeLoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
     # See ConfirmEmailRequest.skip_merge — sign in without folding the recorded

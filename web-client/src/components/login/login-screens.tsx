@@ -327,7 +327,17 @@ function EmailField({
   )
 }
 
-function EmailReceipt({ email }: { email: string }) {
+function EmailReceipt({
+  email,
+  sender,
+}: {
+  email: string
+  /** The bare address auth mail really sends from (`GET /v1/login/sender`),
+   *  e.g. `noreply@fortymm.com` — undefined while loading, and `null` when
+   *  the API has no address to give. Either way the From row is simply
+   *  omitted rather than rendered broken or empty (#1466 defect 1). */
+  sender?: string | null
+}) {
   return (
     <div style={receiptCard}>
       <div style={receiptRow}>
@@ -339,13 +349,15 @@ function EmailReceipt({ email }: { email: string }) {
         <span style={receiptK}>Subject</span>
         <span style={receiptV}>Your FortyMM sign-in link</span>
       </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>From</span>
-        <span style={{ ...receiptV, color: 'var(--fg-3)' }}>
-          no-reply@fortymm.com
-        </span>
-      </div>
+      {sender && (
+        <>
+          <div style={receiptDiv} />
+          <div style={receiptRow}>
+            <span style={receiptK}>From</span>
+            <span style={{ ...receiptV, color: 'var(--fg-3)' }}>{sender}</span>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -499,27 +511,48 @@ function useResendCooldown(sentAt: number) {
   return Math.max(0, Math.ceil((readyAt - now) / 1000))
 }
 
-/** Live countdown to a sign-in link's expiry. `sentAt` is the epoch-ms send
- *  time; this owns the link lifetime (matches the API's LOGIN_TOKEN_LIFETIME),
- *  ticks once a second, and at zero flips to a spent "Link expired" treatment
- *  (the Resend control on the screen is the recovery path). */
-function ExpiresCountdown({ sentAt }: { sentAt: number }) {
+/** Single source of truth for a sign-in link's remaining lifetime. `sentAt` is
+ *  the epoch-ms send time; this owns the link lifetime (matches the API's
+ *  LOGIN_TOKEN_LIFETIME) and ticks once a second. Both the subtitle copy and
+ *  `ExpiresCountdown` read the `expired` flag this returns, rather than each
+ *  computing its own "is it expired" from `sentAt` — that's what keeps the
+ *  body copy and the countdown from silently disagreeing. */
+function useLinkExpiry(sentAt: number, enabled = true) {
   const expiresAt = sentAt + LOGIN_LINK_TTL_MS
   // Track "now" and derive the remaining time during render — that way a new
   // send time reflects immediately, and there's no setState in the effect body.
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
+    // Nothing reads these values when the send time is unknown, and the
+    // fallback timestamp they'd tick against is meaningless anyway — don't
+    // re-render the whole screen once a second for 15 minutes to compute them.
+    if (!enabled) return
     const id = setInterval(() => {
       const t = Date.now()
       setNow(t)
       if (t >= expiresAt) clearInterval(id)
     }, 1000)
     return () => clearInterval(id)
-  }, [expiresAt])
+  }, [expiresAt, enabled])
 
   const remaining = Math.max(0, expiresAt - now)
   const expired = remaining <= 0
+  return { remaining, expired }
+}
+
+/** Live countdown to a sign-in link's expiry, driven by `useLinkExpiry`'s
+ *  output — at zero it flips to a spent "Link expired" treatment (the Resend
+ *  control on the screen is the recovery path). Takes the computed
+ *  remaining/expired values as props (not `sentAt`) so it always shows the
+ *  exact same state as any other copy reading the same link's expiry. */
+function ExpiresCountdown({
+  remaining,
+  expired,
+}: {
+  remaining: number
+  expired: boolean
+}) {
   const totalSeconds = Math.ceil(remaining / 1000)
   const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0')
   const ss = String(totalSeconds % 60).padStart(2, '0')
@@ -915,6 +948,8 @@ export interface ScreenSentProps {
   /** Epoch-ms time the sign-in link was sent; drives the live expiry
    *  countdown. Defaults to first render when the caller doesn't know it. */
   sentAt?: number
+  /** The bare address auth mail really sends from — see `EmailReceipt`. */
+  sender?: string | null
   onResend?: () => void
   onStartOver?: () => void
   resending?: boolean
@@ -925,19 +960,31 @@ export interface ScreenSentProps {
 export function ScreenSent({
   email,
   sentAt,
+  sender,
   onResend,
   onStartOver,
   resending = false,
   resendMessage = null,
   resendError = null,
 }: ScreenSentProps) {
-  // Stable fallback so the countdown doesn't reset every render when no
-  // send time was threaded in.
+  // Whether we actually know when the link was sent (false when this screen
+  // is opened cold, e.g. from a bookmark). This must NOT be conflated with
+  // the fallback timestamp below: knowing "some" time isn't the same as
+  // knowing the link is fresh, and the body copy has to tell them apart.
+  const knowsSentAt = sentAt !== undefined
+  // Stable fallback so the countdown/cooldown don't reset every render when
+  // no send time was threaded in. This exists only so those two timers have
+  // SOME timestamp to compute against — it must never feed a claim in the
+  // visible copy that the link is fresh, since it could be arbitrarily old.
   const [fallbackSentAt] = useState(() => Date.now())
+  const effectiveSentAt = sentAt ?? fallbackSentAt
   // Throttle Resend right after a send so rapid clicks can't bounce the user
   // off this screen (the request endpoint is rate-limited); show the wait.
-  const cooldown = useResendCooldown(sentAt ?? fallbackSentAt)
+  const cooldown = useResendCooldown(effectiveSentAt)
   const resendDisabled = resending || !onResend || cooldown > 0
+  // Single source of truth for the link's remaining lifetime — the subtitle
+  // and ExpiresCountdown both read `expired` from here so they can't drift.
+  const { remaining, expired } = useLinkExpiry(effectiveSentAt, knowsSentAt)
   return (
     <Shell
       left={
@@ -953,14 +1000,28 @@ export function ScreenSent({
           stepLabel="Check inbox"
           title={`Link sent to ${email}`}
           subtitle={
-            <>
-              A sign-in link is flying toward <span style={mono}>{email}</span>{' '}
-              right now. Open it on this device. Expires in 15 — like a real
-              rally.
-            </>
+            !knowsSentAt ? (
+              <>
+                If you requested a sign-in link, check{' '}
+                <span style={mono}>{email}</span> for it. Open the most
+                recent message on this device — links last 15 minutes and
+                work once.
+              </>
+            ) : expired ? (
+              <>
+                That link to <span style={mono}>{email}</span> may have
+                expired. Hit resend below for a fresh one.
+              </>
+            ) : (
+              <>
+                A sign-in link is flying toward{' '}
+                <span style={mono}>{email}</span> right now. Open it on this
+                device. Expires in 15 — like a real rally.
+              </>
+            )
           }
         >
-          <EmailReceipt email={email} />
+          <EmailReceipt email={email} sender={sender} />
 
           <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
             <button
@@ -1023,7 +1084,9 @@ export function ScreenSent({
             </span>
           </div>
 
-          <ExpiresCountdown sentAt={sentAt ?? fallbackSentAt} />
+          {knowsSentAt && (
+            <ExpiresCountdown remaining={remaining} expired={expired} />
+          )}
         </FormCol>
       }
     />

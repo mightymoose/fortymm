@@ -14,7 +14,7 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { http, HttpResponse } from 'msw'
+import { HttpResponse, delay, http } from 'msw'
 import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
@@ -409,6 +409,53 @@ describe('/login/sent flow', () => {
     expect(router.state.location.search).toMatchObject({
       email: 'rita@example.com',
     })
+  })
+
+  // #1466 defect 1: the From row is sourced from `GET /v1/login/sender` — a
+  // fetch this screen must NEVER block or break on. These are route-level
+  // (not component-level) checks: they render the real page through the
+  // router, with the sender endpoint actually failing/hanging, rather than
+  // asserting on `ScreenSent`/`EmailReceipt` in isolation.
+  it('renders the real sent screen (heading, Resend, receipt) once the sender address resolves', async () => {
+    server.use(
+      http.get('*/v1/login/sender', () =>
+        HttpResponse.json({ address: 'noreply@fortymm.com' }),
+      ),
+    )
+    renderAt('/login/sent?email=rita@example.com&sentAt=1000')
+
+    expect(
+      await screen.findByRole('heading', { name: /link sent to rita@example.com/i }),
+    ).toBeInTheDocument()
+    expect(await screen.findByText('noreply@fortymm.com')).toBeInTheDocument()
+  })
+
+  it('still renders fully — no blank page, no error boundary — when the sender fetch fails', async () => {
+    server.use(http.get('*/v1/login/sender', () => HttpResponse.error()))
+    renderAt('/login/sent?email=rita@example.com&sentAt=1000')
+
+    expect(
+      await screen.findByRole('heading', { name: /link sent to rita@example.com/i }),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: /^resend$/i }),
+    ).toBeInTheDocument()
+    // No From row rather than a broken/empty one.
+    expect(screen.queryByText('From')).not.toBeInTheDocument()
+  })
+
+  it('still renders fully while the sender fetch never resolves', async () => {
+    server.use(
+      http.get('*/v1/login/sender', async () => {
+        await delay('infinite')
+      }),
+    )
+    renderAt('/login/sent?email=rita@example.com&sentAt=1000')
+
+    expect(
+      await screen.findByRole('heading', { name: /link sent to rita@example.com/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('From')).not.toBeInTheDocument()
   })
 })
 

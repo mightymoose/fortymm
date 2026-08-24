@@ -73,6 +73,38 @@ describe('LinkCheckPage', () => {
     expect(linkCheckPage.text()).not.toMatch(TOKEN_PATTERN)
   })
 
+  it('replaced: distinct copy from expired, no token, support escape hatch (#1466 defect 3)', () => {
+    linkCheckPage.render({
+      state: 'replaced',
+      footer: <button type="button">Send a new link instead</button>,
+    })
+
+    expect(linkCheckPage.state()).toBe('replaced')
+    expect(linkCheckPage.heading()).toHaveTextContent(/newer link/i)
+    expect(linkCheckPage.text()).toMatch(/most recent email|newer sign-in link/i)
+    // Must not say "expired" — this link is dead for a different, true reason.
+    expect(linkCheckPage.text()).not.toMatch(/15 minutes|already used/i)
+    expect(
+      linkCheckPage
+        .within()
+        .root()
+        ?.querySelector('a[href="mailto:support@fortymm.com"]'),
+    ).toBeTruthy()
+    expect(linkCheckPage.text()).not.toMatch(TOKEN_PATTERN)
+  })
+
+  it('email_changed: distinct copy from expired, no token (#1466 defect 3)', () => {
+    linkCheckPage.render({
+      state: 'email_changed',
+      footer: <a href="/login">Send a new link</a>,
+    })
+
+    expect(linkCheckPage.state()).toBe('email_changed')
+    expect(linkCheckPage.text()).toMatch(/email.*changed|no longer matches/i)
+    expect(linkCheckPage.text()).not.toMatch(/15 minutes|already used/i)
+    expect(linkCheckPage.text()).not.toMatch(TOKEN_PATTERN)
+  })
+
   it('lets the route override the default copy', () => {
     linkCheckPage.render({
       state: 'checking',

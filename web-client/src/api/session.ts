@@ -340,3 +340,36 @@ export function useConsumeLoginToken() {
     },
   })
 }
+
+// The bare address auth mail really sends from (`GET /v1/login/sender`), for
+// the `/login/sent` receipt row (#1466 defect 1). Static, deployment-wide,
+// takes no input and reads no cookie — so unlike `useSession` it's safe to
+// call from a bookmarked `/login/sent` without minting a guest.
+export const LOGIN_SENDER_QUERY_KEY = ['login-sender'] as const
+
+const loginSenderResponseSchema = z.object({ address: z.string().nullable() })
+
+export function loginSenderQueryOptions() {
+  return queryOptions({
+    queryKey: LOGIN_SENDER_QUERY_KEY,
+    // The Zod parse is still the runtime boundary guarantee
+    // (`.claude/rules/parse-at-boundaries.md`) even though `api.GET` now
+    // types this path from the regenerated `schema.d.ts` — a type
+    // annotation is a compile-time claim, not a runtime check.
+    queryFn: async (): Promise<string | null> => {
+      const body = unwrap('load sign-in sender', await api.GET('/v1/login/sender'))
+      return loginSenderResponseSchema.parse(body).address
+    },
+    // A single constant for the whole deployment (Settings.email_from) — it
+    // cannot change mid-session, so there's nothing to ever refetch for.
+    staleTime: Infinity,
+    retry: false,
+  })
+}
+
+/** The bare sender address, or `undefined` while loading/on failure — callers
+ * must render fine either way (see `EmailReceipt`'s optional `sender` prop):
+ * this is receipt trivia, never something worth blocking `/login/sent` on. */
+export function useLoginSender() {
+  return useQuery(loginSenderQueryOptions())
+}

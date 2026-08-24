@@ -147,6 +147,14 @@ class Settings(BaseSettings):
     #: reconnects in the same millisecond and the pod is stampeded awake.
     realtime_retry_spread_ms: int = 5000
 
+    #: The ``From`` header on outbound auth mail (``app.email._deliver``), e.g.
+    #: ``FortyMM <noreply@fortymm.com>``. Environment-specific and hand-copied
+    #: into each deploy's ``.env`` — no repo file can safely hardcode the real
+    #: value. ``GET /v1/login/sender`` reads this (via ``email.utils.parseaddr``,
+    #: to strip the RFC 5322 display name) so the web client's sender-address
+    #: copy can never drift from what actually sends the mail.
+    email_from: str = "noreply@fortymm.local"
+
     @model_validator(mode="after")
     def _require_google_key(self) -> "Settings":
         """Refuse to construct a ``google`` configuration with no API key.

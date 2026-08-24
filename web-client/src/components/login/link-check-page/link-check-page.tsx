@@ -4,13 +4,21 @@ import { Wordmark } from '@/components/wordmark'
 import { Eyebrow } from '../atoms'
 import { fineprint, linkInline } from '../styles'
 
-export type LinkCheckState = 'checking' | 'success' | 'expired' | 'missing'
+export type LinkCheckState =
+  | 'checking'
+  | 'success'
+  | 'expired'
+  | 'missing'
+  | 'replaced'
+  | 'email_changed'
 
 const ACCENT: Record<LinkCheckState, string> = {
   checking: 'var(--ball-500)',
   success: 'var(--serve-500)',
   expired: 'var(--loss)',
   missing: 'var(--loss)',
+  replaced: 'var(--warn)',
+  email_changed: 'var(--loss)',
 }
 
 const HALO: Record<LinkCheckState, string> = {
@@ -18,6 +26,8 @@ const HALO: Record<LinkCheckState, string> = {
   success: 'rgba(0,226,154,0.16)',
   expired: 'rgba(255,77,109,0.14)',
   missing: 'rgba(255,77,109,0.14)',
+  replaced: 'rgba(255,196,0,0.16)',
+  email_changed: 'rgba(255,77,109,0.14)',
 }
 
 // The short code shown in the header pill. Distinct per failure so a missing
@@ -27,6 +37,8 @@ const PILL_CODE: Record<LinkCheckState, string> = {
   success: '03',
   expired: '!!',
   missing: '??',
+  replaced: '>>',
+  email_changed: '!!',
 }
 
 const DEFAULT_COPY: Record<
@@ -59,6 +71,26 @@ const DEFAULT_COPY: Record<
     title: 'This link is incomplete',
     subtitle:
       'This sign-in link is missing its token — it may have been cut off when it was copied. Open the most recent link in full, or send yourself a fresh one.',
+  },
+  replaced: {
+    eyebrow: '● Newer link sent',
+    // Distinct from `expired`: this link is dead because a LATER request
+    // replaced it, not because time ran out — sending yet another new link
+    // isn't the fix, opening the one already sent is (#1466 defect 3). The
+    // route deliberately does not offer "Send a new link" as this state's
+    // main action; see login.verifying.tsx.
+    title: 'A newer link was sent',
+    subtitle:
+      'A newer sign-in link was requested for this address. That makes this one no longer live — open the most recent email instead.',
+  },
+  email_changed: {
+    eyebrow: '● Email changed',
+    // Distinct from `expired`: the link is dead because the account's
+    // address changed after it was sent, not because it timed out or was
+    // already used (#1466 defect 3).
+    title: "This link doesn't match anymore",
+    subtitle:
+      'The email address on this account changed since this link was sent, so it no longer matches. Send yourself a fresh one.',
   },
 }
 
@@ -138,7 +170,10 @@ export function LinkCheckPage({
             Keep this tab open while we verify.
           </p>
         )}
-        {(state === 'expired' || state === 'missing') && (
+        {(state === 'expired' ||
+          state === 'missing' ||
+          state === 'replaced' ||
+          state === 'email_changed') && (
           <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
             Still stuck?{' '}
             <a href="mailto:support@fortymm.com" style={linkInline}>
