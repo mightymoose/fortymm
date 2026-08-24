@@ -33,6 +33,7 @@ error, just stale output.
 | **Playwright reporter** | "N passed" can under-report — a whole project (e.g. mobile) never ran | Check "N passed" against `--list`'s collected total |
 | **Worktree tooling** | An untrusted `mise.toml` makes `npx` exit 127; the step "passes" having run nothing | Run `mise exec -- node_modules/.bin/<tool>` and **check the exit code**. The bare path is not enough — `node` itself is off `PATH`, so it exits 127 too. `mise trust` once per worktree |
 | **A pipe** | zsh reports the **last** element's status, so `npm install … \| tail` prints `command not found` and still exits 0 | Never pipe a command whose exit code matters. Capture to a file and read it, or check `${PIPESTATUS[0]}` |
+| **A shared dev port** | A listener already answering on a well-known port (e.g. `:8000`) is not proof it came from your working tree — another checkout's compose stack or a stale hand-run server answers identically | Bind fresh and never reuse: `scripts/ensure-api-up.sh` starts its own server on its own port every invocation instead of probing for one already up |
 
 ## Corollaries
 
