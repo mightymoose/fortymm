@@ -5,19 +5,11 @@
  * now, and nothing in the hero uses `--font-display` any more. */
 
 .player-profile {
-  /* The radius/shadow scale is declared per *surface* in this codebase — the
-   * shared `.fortymm-theme` block (index.css) carries the colour ramps and
-   * `--shadow-lg`/`--shadow-glow`, but not these. `.match-details`,
-   * `.fortymm-landing` and the settings page each declare the same
-   * scale over themselves; the profile is the surface that was consuming
-   * `var(--r-lg)` and `var(--shadow-sm)` without ever declaring them, so every
-   * card below computed to `radius: 0` and inherited Tailwind's much weaker
-   * `--shadow-sm` instead of the house one. (Worth hoisting all four copies into
-   * `.fortymm-theme` one day — the login and RBAC surfaces have the same latent
-   * hole — but that restyles pages this branch has no business touching.) */
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
+  /* The radius scale lives once on `.fortymm-theme` (index.css) and inherits
+   * onto every surface from <body>. Before #1512 hoisted it there, each
+   * surface declared its own copy and this profile — which declares none of
+   * the radii — computed `radius: 0` on every card. Only `--shadow-sm` is
+   * still declared per-surface below. */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
 
   /* The specular highlight on the hero ball — a tint above `--ball-400` that the

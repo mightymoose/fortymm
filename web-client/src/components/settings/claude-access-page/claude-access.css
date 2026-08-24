@@ -2,19 +2,14 @@
    Claude access — /settings/claude
 
    Scoped to `.fmm-claude`, which renders inside AppShell's `.fortymm-theme`.
-   Colour, type and the `.ball-dot` motif are inherited from there byte-for-byte
-   — only the radii/motion tokens the theme root doesn't carry are (re)declared
-   here, the same way `.match-details` does it.
+   Colour, type, radii and the `.ball-dot` motif are inherited from there
+   byte-for-byte — only the motion tokens the theme root doesn't carry are
+   (re)declared here.
 
    No sidebar and no tab bar live in this file on purpose: the app shell owns
    navigation, and a second one would be a bug, not a port of the design.
    ========================================================================= */
 .fmm-claude {
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
-  --r-pill: 999px;
-
   --dur-fast: 120ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 

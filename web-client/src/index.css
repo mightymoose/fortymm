@@ -323,6 +323,16 @@ code {
   --shadow-live-glow: 0 0 0 1px rgba(0, 226, 154, 0.4),
     0 0 24px rgba(0, 226, 154, 0.3);
 
+  /* Radius scale — declared once here on .fortymm-theme so every surface,
+   * including ones with no stylesheet of their own (login flow), resolves
+   * var(--r-*). Do not re-declare these per scope (#1512). */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
   --font-ui: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Bebas Neue', 'Space Grotesk', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
@@ -2352,13 +2362,6 @@ body.dark.fortymm-theme {
    Match Details Page (route: /matches/:matchId)
    ========================================================================= */
 .fortymm-theme .match-details {
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
-  --r-xl: 20px;
-  --r-pill: 999px;
-
   --dur-fast: 120ms;
   --dur-base: 200ms;
   --dur-slow: 360ms;
