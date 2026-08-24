@@ -192,6 +192,23 @@ describe('SettingsPage email section', () => {
     ])
   })
 
+  it('takes the honeypot out of the focus order behind an inert wrapper (#1463)', async () => {
+    await renderSettings()
+
+    const section = (await screen.findByLabelText(/^email$/i)).closest(
+      'section',
+    ) as HTMLElement
+
+    const wrapper = within(section)
+      .getByTestId('email-honeypot')
+      .closest('div')
+
+    // A focusable input inside an aria-hidden wrapper is an ARIA violation;
+    // `inert` removes it from the tab order and the a11y tree together.
+    expect(wrapper).toHaveAttribute('inert')
+    expect(wrapper).toHaveAttribute('aria-hidden', 'true')
+  })
+
   it('focuses the email input when a guest is deep-linked via #sec-email', async () => {
     await renderSettings('/settings#sec-email')
     const emailInput = await screen.findByLabelText(/^email$/i)

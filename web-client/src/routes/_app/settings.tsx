@@ -38,6 +38,7 @@ import {
   useUpdateUsername,
   type EmailStatus,
 } from '@/api/session'
+import { Honeypot } from '@/components/honeypot'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import {
   Tooltip,
@@ -46,11 +47,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { UserAvatar } from '@/components/ui/user-avatar'
-import {
-  HONEYPOT_STYLE,
-  validateEmail,
-  type Validation,
-} from '@/lib/form-helpers'
+import { validateEmail, type Validation } from '@/lib/form-helpers'
 import {
   USERNAME_HINT,
   USERNAME_MAX,
@@ -838,23 +835,7 @@ function EmailSection({
         </div>
       </Field>
 
-      {/* Honeypot. The field name deliberately avoids identity-profile
-          names ("website", "address") because Chrome / 1Password / Bitwarden
-          ignore autoComplete="off" for those and would splash real users'
-          saved data into the trap. */}
-      <div style={HONEYPOT_STYLE} aria-hidden="true">
-        <label htmlFor="email-fmm-hp">Leave this empty</label>
-        <input
-          id="email-fmm-hp"
-          type="text"
-          name="fmm_hp_token"
-          tabIndex={-1}
-          autoComplete="off"
-          value={honeypot}
-          onChange={(e) => setHoneypot(e.target.value)}
-          data-testid="email-honeypot"
-        />
-      </div>
+      <Honeypot value={honeypot} onChange={setHoneypot} testId="email-honeypot" />
 
       <div style={{ marginTop: 16 }}>
         <Turnstile

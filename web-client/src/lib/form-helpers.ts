@@ -1,12 +1,13 @@
 import type { CSSProperties } from 'react'
 
-// Positions the bot-trap field off-screen. Call sites must also wrap it in
-// `aria-hidden="true"` with `tabIndex={-1}`, so it stays out of view, out of
-// the tab order and out of the accessibility tree — a human (sighted or on a
-// screen reader) can never reach it, so anything typed into it is a bot. It
-// must stay in the DOM and parseable, though: never `display: none` or the
-// `hidden` attribute, because bots fill every field they can parse and that's
-// the whole trap.
+// Positions the bot-trap field off-screen. The shared `Honeypot` component
+// (`src/components/honeypot.tsx`) owns every call site and pairs this style
+// with `aria-hidden="true"`, `inert` and `tabIndex={-1}` on its wrapper, so
+// the trap stays out of view, out of the tab order and out of the
+// accessibility tree — a human (sighted or on a screen reader) can never
+// reach it, so anything typed into it is a bot. It must stay in the DOM and
+// parseable, though: never `display: none` or the `hidden` attribute, because
+// bots fill every field they can parse and that's the whole trap.
 export const HONEYPOT_STYLE: CSSProperties = {
   position: 'absolute',
   left: '-9999px',
