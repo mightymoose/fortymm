@@ -519,9 +519,9 @@ _TWO_RESERVATIONS: list[dict[str, object]] = [
 #: gives 4 qualifiers → a 4-slot bracket → 3 knockout fixtures, none of them
 #: scheduled.
 _KNOCKOUT_NOTE = (
-    "Only the reservation stage of Championship is scheduled here: its knockout "
-    "bracket (3 further matches) is played after the reservations finish and is "
-    "not in this estimate."
+    "Only the group stage of Championship is scheduled here: its knockout "
+    "bracket (3 further matches) is played after the group stage finishes and "
+    "is not in this estimate."
 )
 
 
