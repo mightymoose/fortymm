@@ -117,29 +117,14 @@ export async function expectOnScreen(
 }
 
 /**
- * Assert a scroll container does not scroll **sideways** — the mechanism behind every
- * off-screen field this suite has now met twice (#783 QA, rounds three and four).
- *
- * `overflow-y: auto` computes `overflow-x: auto` as well. So a row too wide for a phone
- * does not clip, and does not visibly break: the container quietly grows a horizontal
- * scroll, the fields sail off to `x=467`, and everything still reports itself present
- * and `toBeVisible()`. Vertical scrolling is the design (a long form on a short screen
- * must scroll); horizontal scrolling in the same box is the defect — so this asserts the
- * one without forbidding the other.
- *
- * It complements `expectOnScreen` rather than replacing it: that one proves a *named*
- * control is where the user is, this one proves there is nowhere else for anything to
- * be.
- */
-/**
  * Assert `locator`'s own box stays inside the viewport's WIDTH only — never off the
  * left or right edge. The X-axis half of `expectOnScreen`, split out for a caller
  * whose element is allowed to sit below the fold: a grid that legitimately stacks
  * its items into multiple rows on a narrow viewport puts later items below the
  * viewport's bottom edge as ordinary vertical scrolling, not a bug, so
  * `expectOnScreen`'s Y-axis and `toBeInViewport({ ratio: 1 })` checks would fail
- * them for a reason unrelated to whatever this caller is proving (`tournament-mobile-header.spec.ts`'s
- * hero-stat-tile checks, #1536).
+ * them for a reason unrelated to whatever this caller is proving
+ * (`tournament-mobile-header.spec.ts`'s hero-stat-tile checks, #1536).
  *
  * Deliberately does not call `expectOnScreen` with a narrowed axis, and does not
  * settle/retry via `settledBox`: the callers of this helper measure a grid that has
@@ -165,6 +150,21 @@ export async function expectWithinViewportWidth(
   ).toBeLessThanOrEqual(viewport.width)
 }
 
+/**
+ * Assert a scroll container does not scroll **sideways** — the mechanism behind every
+ * off-screen field this suite has now met twice (#783 QA, rounds three and four).
+ *
+ * `overflow-y: auto` computes `overflow-x: auto` as well. So a row too wide for a phone
+ * does not clip, and does not visibly break: the container quietly grows a horizontal
+ * scroll, the fields sail off to `x=467`, and everything still reports itself present
+ * and `toBeVisible()`. Vertical scrolling is the design (a long form on a short screen
+ * must scroll); horizontal scrolling in the same box is the defect — so this asserts the
+ * one without forbidding the other.
+ *
+ * It complements `expectOnScreen` rather than replacing it: that one proves a *named*
+ * control is where the user is, this one proves there is nowhere else for anything to
+ * be.
+ */
 export async function expectNoHorizontalScroll(
   locator: Locator,
   what: string,

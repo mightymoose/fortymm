@@ -551,8 +551,9 @@ test.describe('a tournament name with no break opportunity in it', () => {
  * damn it — `expectOnScreen`'s own docstring above states why, and the reasoning is
  * identical here. The tile's own outer box (never clipped by the bug — it shrinks
  * to fit its grid track exactly, it does not vanish) is checked against the
- * viewport's WIDTH only, by `expectWithinViewportWidth` below, and deliberately
- * NOT with `expectOnScreen`: below `sm` the fix stacks the five tiles one per row,
+ * viewport's WIDTH only, by `expectWithinViewportWidth` (imported from
+ * `../support/viewport`, alongside `expectOnScreen`), and deliberately NOT with
+ * `expectOnScreen`: below `sm` the fix stacks the five tiles one per row,
  * so a later tile legitimately sits below the fold on a 375x667 phone, and
  * `expectOnScreen`'s vertical + intersection checks would fail it for a reason
  * that has nothing to do with #1536.
