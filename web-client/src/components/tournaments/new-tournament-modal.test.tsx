@@ -405,7 +405,7 @@ describe('NewTournamentModal', () => {
    * or true-Tab-order criteria; the Playwright suite covers those.
    */
   describe('focus moves to the failure banner on a refusal (#1538)', () => {
-    it('focuses the banner when the server refuses a create', async () => {
+    it('focuses the banner when the server refuses a create, and keeps it out of the tab order (`tabindex="-1"`)', async () => {
       const onCreate = vi
         .fn()
         .mockRejectedValue(new ApiError(500, null, 'create tournament'))
@@ -417,22 +417,9 @@ describe('NewTournamentModal', () => {
       await waitFor(() =>
         expect(newTournamentModalPage.queryErrorBanner()).toHaveFocus(),
       )
-    })
-
-    it('stays out of the tab order — `tabindex="-1"` — while it holds focus', async () => {
-      const onCreate = vi
-        .fn()
-        .mockRejectedValue(new ApiError(500, null, 'create tournament'))
-      newTournamentModalPage.render({ onCreate })
-
-      await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
-      await userEvent.click(newTournamentModalPage.getCreateButton())
-
-      await waitFor(() =>
-        expect(newTournamentModalPage.queryErrorBanner()).toHaveAttribute(
-          'tabindex',
-          '-1',
-        ),
+      expect(newTournamentModalPage.queryErrorBanner()).toHaveAttribute(
+        'tabindex',
+        '-1',
       )
     })
 

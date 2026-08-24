@@ -1487,24 +1487,14 @@ describe('EventEditor', () => {
       },
     })
 
-    it('focuses the banner when the server refuses a save', async () => {
+    it('focuses the banner when the server refuses a save, and keeps it out of the tab order (`tabindex="-1"`)', async () => {
       const onSave = vi.fn().mockRejectedValue(new ApiError(500, null, 'update event'))
       eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
 
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
-    })
-
-    it('stays out of the tab order — `tabindex="-1"` — while it holds focus', async () => {
-      const onSave = vi.fn().mockRejectedValue(new ApiError(500, null, 'update event'))
-      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
-
-      await userEvent.click(eventEditorPage.getSaveButton())
-
-      await waitFor(() =>
-        expect(eventEditorPage.queryFailure()).toHaveAttribute('tabindex', '-1'),
-      )
+      expect(eventEditorPage.queryFailure()).toHaveAttribute('tabindex', '-1')
     })
 
     it('moves focus to the banner again on a second refused save', async () => {
