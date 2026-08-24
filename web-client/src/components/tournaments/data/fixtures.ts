@@ -121,12 +121,12 @@ const fixtureWireSchema = z.object({
   /** The same idea, on the *time* half of the placement: `true` when
    * `scheduled_start` falls outside that same reservation's window. The window is a
    * **closed interval** `[window_start, window_end]` — a start landing exactly on
-   * either edge counts as *inside* (matching the solver's own `<=` treatment of a
-   * window's end). `null` — never `false` — under the same two conditions as
-   * `table_off_reservation`: no `scheduled_start` is placed, or the linked match is
-   * `completed`/`voided`. The two flags are independent — a half-placement (only a
-   * table, or only a start) can flag its one placed half while the other stays
-   * `null`. #1537. */
+   * either edge counts as *inside*, a deliberate booking-semantics choice (NOT a
+   * mirror of the solver-grid `Window`, which is half-open for a different purpose).
+   * `null` — never `false` — under the same two conditions as `table_off_reservation`:
+   * no `scheduled_start` is placed, or the linked match is `completed`/`voided`. The
+   * two flags are independent — a half-placement (only a table, or only a start) can
+   * flag its one placed half while the other stays `null`. #1537. */
   start_outside_reservation_window: z.boolean().nullable(),
   /** When the fixture was **called** (ADR "the schedule is solved, the call is
    * pinned"): `null` = an estimate the solver may still move; set = a promise the

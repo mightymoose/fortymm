@@ -1512,13 +1512,21 @@ class TournamentFixtureRead(BaseModel):
       the placement: ``true`` when ``scheduled_start`` falls outside that same
       reservation's window. The window is a **closed interval**,
       ``[window_start, window_end]`` — a start landing exactly on either edge
-      counts as *inside* — matching the solver's own ``<=`` treatment of a
-      window's end (``app.scheduling``'s ``PastWindow`` check). ``null`` — never
-      ``false`` — under the same two conditions as ``table_off_reservation``: no
-      ``scheduled_start`` is placed, or the linked match is
-      ``completed``/``voided``. The two flags are independent — a half-placement
-      (only a table, or only a start) can flag its one placed half while the
-      other stays ``null``.
+      counts as *inside*. This is a deliberate, standalone booking-semantics
+      choice — a reservation booked through 12:30 naturally includes a match
+      starting AT 12:30 as still within the booked slot — and it does **not**
+      mirror ``app.scheduling``'s solver-grid ``Window``, which is a *different*
+      thing for a *different* purpose: that type is documented half-open,
+      ``[start_min, end_min)``, and ``PastWindow`` fires (treats the window as
+      already unschedulable) the instant ``now`` **reaches** ``end_min`` — the
+      opposite edge convention from this flag's. The two need not agree: one
+      judges whether a whole day still has any solver capacity left, the other
+      whether an already-placed instant falls inside a director-facing booked
+      slot. ``null`` — never ``false`` — under the same two conditions as
+      ``table_off_reservation``: no ``scheduled_start`` is placed, or the linked
+      match is ``completed``/``voided``. The two flags are independent — a
+      half-placement (only a table, or only a start) can flag its one placed
+      half while the other stays ``null``.
 
     Both flags are **computed on read, never stored** (ADR-0790, "flags derived on
     read, not invariants") — the two of the ADR's three deferred facts this ticket

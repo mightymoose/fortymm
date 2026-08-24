@@ -382,6 +382,11 @@ export const EventEditor = ({
 
   const performSave = async (formValues: EventFormValues, lockVersion?: number) => {
     if (!event) return
+    // Cleared HERE, not just in `doSave`: the #1537 stranding check below can
+    // return early (opening the confirmation) without ever reaching `doSave`, and
+    // a failure banner from a PRIOR attempt must not sit on screen behind that
+    // confirmation implying this attempt has already failed too.
+    setFailure(null)
     // The event that was opened, with every editable field taken from the form —
     // `reservations` included, which is why this is an `EditedEvent` and not a
     // `TournamentEvent`: the form holds entries, and an entry is not a reservation.

@@ -10759,6 +10759,52 @@ async def test_a_group_with_no_mapped_reservation_is_judged_event_wide(
     assert placed["start_outside_reservation_window"] is True
 
 
+async def test_a_malformed_legacy_event_slot_degrades_the_window_flag_not_a_500(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The event-wide branch of ``_placement_flags`` parses raw ``TournamentEvent.slot``
+    JSONB (``schema.d.ts``'s docstring: "no environment holds a malformed row today,
+    but a read boundary should not depend on that staying true", the SAME contract
+    ``TournamentEventRead.slot`` and ``app.tournament_events._stored_event_window``
+    state for this identical column). A row that predates #1501's write-time
+    validation must degrade the window flag to ``None`` — unjudgeable — rather than
+    500ing the whole tournament read, matching ``_stored_event_window``'s own
+    established pattern for the same risk."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+    await _seed_field(db_session, event["id"], 4)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixture, *_ = await _fixture_rows(db_session, event["id"])
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    placed = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+    )
+    assert placed.status_code == 200, placed.text
+
+    # Past the write boundary, which now refuses this — a row that predates #1501
+    # (the same corruption `test_...` at the top of this file uses for the identical
+    # column, on the containment-guard side rather than the read-flag side).
+    event_id = uuid.UUID(event["id"])
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    row.slot = {"date": "next Tuesday", "start": "09:00", "end": "18:00"}
+    await db_session.commit()
+
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200, response.text
+    (detail_event,) = response.json()["events"]
+    (detail_fixture,) = [
+        f for f in detail_event["fixtures"] if f["table_id"] is not None
+    ]
+    assert detail_fixture["table_off_reservation"] is False
+    assert detail_fixture["start_outside_reservation_window"] is None
+
+
 @pytest.mark.parametrize("event_count", [1, 4])
 async def test_detail_statement_count_with_placed_fixtures_costs_exactly_one_more(
     authed_client: tuple[AsyncClient, User],

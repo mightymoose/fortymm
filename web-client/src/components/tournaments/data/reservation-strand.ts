@@ -10,10 +10,11 @@
 //
 // "Newly stranded, not still stranded" (the ticket's own phrase): a repeat save of an
 // already-stranded match must not reopen the confirmation on every subsequent save. So
-// a match counts only when the DRAFT flags it AND the SAVED state does not — computed
-// with the SAME closed-interval boundary rule the server uses, over the SAME two facts
-// (`placementFlags` below), so the two arms can only ever disagree about the DATA, never
-// about the RULE.
+// a match counts only when the DRAFT flags it (`placementFlags` below, the SAME
+// closed-interval boundary rule the server uses) AND the SAVED state does not — read
+// directly off the fixture's own server-computed flags, the ground truth for "is this
+// stranded right now" (see `newlyStrandedFixtures`'s own doc for why that arm is not a
+// second client-side derivation of the same fact).
 //
 // Pure, so it is unit-tested (`./reservation-strand.test.ts`) rather than asserted
 // through a DOM — the `./schedule.ts` stance.
@@ -74,10 +75,11 @@ function naiveBound(window: Slot, bound: 'start' | 'end'): string {
 
 /** Is `naive` inside the reservation's window — a **closed interval**
  * `[window_start, window_end]`, a start landing exactly on either edge counting as
- * *inside* (the server's own rule — matching `app.scheduling`'s `<=` treatment of a
- * window's end, `schema.d.ts`'s `start_outside_reservation_window` doc). `YYYY-MM-
- * DDTHH:MM` strings compare correctly with plain `<=`/`>=`: ISO 8601's field order is
- * also lexicographic order. */
+ * *inside* (the server's own rule, `schema.d.ts`'s `start_outside_reservation_window`
+ * doc — a deliberate booking-semantics choice, NOT a mirror of `app.scheduling`'s
+ * solver-grid window, which is a different, half-open thing for a different purpose).
+ * `YYYY-MM-DDTHH:MM` strings compare correctly with plain `<=`/`>=`: ISO 8601's field
+ * order is also lexicographic order. */
 function isWithinWindow(naive: string, window: Slot): boolean {
   return naive >= naiveBound(window, 'start') && naive <= naiveBound(window, 'end')
 }

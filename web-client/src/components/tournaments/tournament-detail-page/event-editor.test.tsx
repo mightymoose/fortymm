@@ -2228,5 +2228,28 @@ describe('EventEditor', () => {
       )
       expect(eventEditorPage.getOverrideButton()).toBeInTheDocument()
     })
+
+    // Review repair: `performSave` used to clear `failure` only inside `doSave`,
+    // which the stranding branch never reaches — so a banner from an EARLIER,
+    // unrelated refusal stayed on screen underneath the new confirmation,
+    // wrongly implying THIS attempt had already failed too.
+    it('clears a stale failure banner from an earlier refusal before opening the strand confirmation', async () => {
+      const onSave = vi.fn().mockRejectedValueOnce(new ApiError(500, null, 'update event'))
+      eventEditorPage.render({ event: drawnWithPlacement(), onSave })
+
+      // First attempt: an ordinary save, nothing about reservations touched,
+      // that fails — the failure banner renders.
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toBeInTheDocument())
+
+      // Now edit the reservation to newly strand `fx-1`, and save again.
+      await dropT1FromReservationA()
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      // The confirmation opens, and the STALE banner from the first attempt is
+      // gone: this attempt has not failed, it is merely paused on a question.
+      await waitFor(() => expect(eventEditorPage.queryStrandConfirm()).toBeInTheDocument())
+      expect(eventEditorPage.queryFailure()).not.toBeInTheDocument()
+    })
   })
 })

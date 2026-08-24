@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
 from sqlalchemy import ColumnElement, Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager
@@ -500,12 +501,12 @@ class _GroupReservationWindow:
     per-fixture from the main statement and applies at use (``_placement_flags``),
     not here.
 
-    ``reservation_id`` rides along so ``_placement_flags`` can hand it to
-    ``app.schedule_solves.reservation_key`` — the same one-rule resolution the
-    solver uses — rather than re-deriving "booked vs. event-wide" from this dict's
-    own membership by hand."""
+    Carries no ``reservation_id``: ``_placement_flags`` only ever needs to know
+    "does this group have a mapped reservation" (this dict's own membership),
+    never which one — see that function's own docstring for why a round-trip
+    through ``app.schedule_solves.restricting_reservation_key`` would be
+    redundant with that membership test."""
 
-    reservation_id: uuid.UUID
     table_ids: frozenset[str]
     slot_date: date
     slot_start: time
@@ -538,7 +539,6 @@ async def _reservation_windows_by_group(
         await db.execute(
             select(
                 TournamentEventGroupReservation.group_id,
-                TournamentEventGroupReservation.reservation_id,
                 TournamentEventReservation.slot_date,
                 TournamentEventReservation.slot_start,
                 TournamentEventReservation.slot_end,
@@ -570,28 +570,21 @@ async def _reservation_windows_by_group(
             .where(TournamentEventGroupReservation.group_id.in_(group_ids))
         )
     ).all()
-    windows: dict[uuid.UUID, tuple[uuid.UUID, date, time, time, set[str]]] = {}
-    for group_id, reservation_id, slot_date, slot_start, slot_end, table_id in rows:
-        _, _, _, _, table_ids = windows.setdefault(
-            group_id, (reservation_id, slot_date, slot_start, slot_end, set())
+    windows: dict[uuid.UUID, tuple[date, time, time, set[str]]] = {}
+    for group_id, slot_date, slot_start, slot_end, table_id in rows:
+        _, _, _, table_ids = windows.setdefault(
+            group_id, (slot_date, slot_start, slot_end, set())
         )
         if table_id is not None:
             table_ids.add(table_id)
     return {
         group_id: _GroupReservationWindow(
-            reservation_id=reservation_id,
             table_ids=frozenset(table_ids),
             slot_date=slot_date,
             slot_start=slot_start,
             slot_end=slot_end,
         )
-        for group_id, (
-            reservation_id,
-            slot_date,
-            slot_start,
-            slot_end,
-            table_ids,
-        ) in windows.items()
+        for group_id, (slot_date, slot_start, slot_end, table_ids) in windows.items()
     }
 
 
@@ -636,6 +629,23 @@ def _placement_flags(
     way there is on the event's own *window* (``event_slot``), which a director may
     freely re-edit after the cut (``app.tournament_events``) — only the window
     check is a real lookup in the event-wide branch.
+
+    The window is judged a **closed interval**, a start landing exactly on either
+    edge counting as *inside* — see ``TournamentFixtureRead``'s own
+    ``start_outside_reservation_window`` docstring for the rule and its rationale
+    (a deliberate booking-semantics choice, deliberately divergent from
+    ``app.scheduling``'s solver-grid ``Window``, which is a different, half-open
+    thing for a different purpose).
+
+    ``event_slot`` is raw ``TournamentEvent.slot`` JSONB, read through the SAME
+    "no environment holds a malformed row today, but a read boundary should not
+    depend on that staying true" contract ``TournamentEventRead.slot`` and
+    :class:`~app.tournament_events._stored_event_window` state explicitly for this
+    identical column — so a value that fails to parse degrades the window flag to
+    ``None`` (unjudgeable) rather than 500ing the whole read. This risk is
+    EVENT-WIDE-branch only: the mapped-reservation branch builds its ``Slot`` from
+    typed ``date``/``time`` DB columns (:class:`_GroupReservationWindow`), which
+    cannot fail to format.
     """
     if match_status in _DECIDED_MATCH_STATUSES:
         return None, None
@@ -654,7 +664,7 @@ def _placement_flags(
             if fixture.table_id is None
             else fixture.table_id not in resolved.table_ids
         )
-        slot = Slot(
+        slot: Slot | None = Slot(
             date=resolved.slot_date.isoformat(),
             start=resolved.slot_start.strftime("%H:%M"),
             end=resolved.slot_end.strftime("%H:%M"),
@@ -665,19 +675,33 @@ def _placement_flags(
         # catalogue. The table half is always satisfied — see the docstring
         # above — only the window can actually drift.
         table_off_reservation = None if fixture.table_id is None else False
-        slot = Slot.model_validate(event_slot)
+        try:
+            slot = Slot.model_validate(event_slot)
+        except ValidationError:
+            # See the docstring above: a legacy-shaped row means this axis
+            # cannot be judged, not a 500 out of a flag whose whole job is to
+            # inform.
+            slot = None
 
     start_outside_window = None
-    if fixture.scheduled_start is not None:
-        window_start, window_end = _slot_bounds(slot, ZoneInfo(event_timezone))
-        # Closed interval: a start landing exactly on either edge counts as
-        # INSIDE the window (see ``TournamentFixtureRead``'s own
-        # ``start_outside_reservation_window`` docstring for the rule and why this
-        # edge was picked — it mirrors the solver's own ``<=`` treatment of a
-        # window's end, ``app.scheduling``'s ``PastWindow`` check).
-        start_outside_window = not (
-            window_start <= fixture.scheduled_start <= window_end
-        )
+    if fixture.scheduled_start is not None and slot is not None:
+        window_bounds: tuple[datetime, datetime] | None
+        try:
+            window_bounds = _slot_bounds(slot, ZoneInfo(event_timezone))
+        except ValueError:
+            # `Slot.model_validate` above only checks SHAPE (three strings); a
+            # value that parses as a `Slot` can still fail `_slot_bounds`'
+            # `strptime` if its strings aren't real dates/times — same
+            # unjudgeable-window contract as the `ValidationError` case.
+            window_bounds = None
+        if window_bounds is not None:
+            window_start, window_end = window_bounds
+            # Closed interval — see the docstring above for the rule and why
+            # it does not (and need not) mirror the solver's own half-open
+            # grid window.
+            start_outside_window = not (
+                window_start <= fixture.scheduled_start <= window_end
+            )
 
     return table_off_reservation, start_outside_window
 
