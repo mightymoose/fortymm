@@ -1471,6 +1471,99 @@ describe('EventEditor', () => {
   })
 
   /**
+   * Keyboard focus on a refused save (#1538). Before this, pressing Save disabled
+   * the element that held focus, the browser dropped focus to `<body>`, and
+   * nothing moved it back — so a keyboard user reached the banner's action only by
+   * tabbing past the whole form from the sheet's Close button. jsdom cannot prove
+   * the visible-focus-indicator or true-Tab-order criteria (`getComputedStyle`
+   * ignores `box-shadow`, and `userEvent.tab()` does not model Radix's
+   * `FocusScope`); the Playwright suite covers those.
+   */
+  describe('focus moves to the failure banner on a refusal (#1538)', () => {
+    const conflictError = new ApiError(409, null, 'update event', {
+      detail: {
+        code: 'event_version_conflict',
+        message: 'server sentence — never shown, see save-failure.test.ts',
+      },
+    })
+
+    it('focuses the banner when the server refuses a save', async () => {
+      const onSave = vi.fn().mockRejectedValue(new ApiError(500, null, 'update event'))
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
+    })
+
+    it('stays out of the tab order — `tabindex="-1"` — while it holds focus', async () => {
+      const onSave = vi.fn().mockRejectedValue(new ApiError(500, null, 'update event'))
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() =>
+        expect(eventEditorPage.queryFailure()).toHaveAttribute('tabindex', '-1'),
+      )
+    })
+
+    it('moves focus to the banner again on a second refused save', async () => {
+      const onSave = vi.fn().mockRejectedValue(new ApiError(500, null, 'update event'))
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
+
+      // The director tabs away before trying again — the second refusal must pull
+      // focus back, not just keep it wherever the first one left it.
+      eventEditorPage.getNameInput().focus()
+      expect(eventEditorPage.queryFailure()).not.toHaveFocus()
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
+    })
+
+    it('moves focus to the banner on a refused override — the conflict arm', async () => {
+      const onSave = vi.fn().mockRejectedValue(conflictError)
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
+        currentLockVersion: 5,
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() =>
+        expect(eventEditorPage.getOverrideButton()).toBeInTheDocument(),
+      )
+      eventEditorPage.getNameInput().focus()
+
+      await userEvent.click(eventEditorPage.getOverrideButton())
+
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
+    })
+
+    it('moves focus to the banner for the deleted-elsewhere arm, which carries a sentence and no button', async () => {
+      const onSave = vi.fn().mockRejectedValue(conflictError)
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
+        currentLockVersion: null,
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
+      expect(eventEditorPage.queryConflictDeletedNotice()).toBeInTheDocument()
+    })
+
+    it('moves no focus on a fresh open with no failure', () => {
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }) })
+
+      expect(eventEditorPage.queryFailure()).toBeNull()
+    })
+  })
+
+  /**
    * **Who owns a reservation id, from the card to the request body** (ADR 20260801).
    *
    * The section's own tests prove the form holds the right *entries*; these prove the

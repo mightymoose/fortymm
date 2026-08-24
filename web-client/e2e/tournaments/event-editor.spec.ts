@@ -452,11 +452,28 @@ test.describe('Tournaments · a save the server refuses', () => {
     await expect(pom.eventEditor).toBeVisible()
     await expect(pom.eventNameInput).toHaveValue('Open Singles B')
 
+    // #1538 — the banner is `document.activeElement`, stays out of the tab order
+    // (a container, not a control), and shows a visible focus indicator. jsdom
+    // cannot prove any of these three; only a real browser can.
+    await expect(pom.saveFailure).toBeFocused()
+    await expect(pom.saveFailure).toHaveAttribute('tabindex', '-1')
+    expect(
+      await pom.saveFailure.evaluate((el) => getComputedStyle(el).boxShadow),
+    ).not.toBe('none')
+
+    // A second refused save moves focus to the banner AGAIN, not just once per
+    // open — `performSave` sets a fresh `failure` object in the catch every time.
+    await pom.saveEventButton.focus()
+    await expect(pom.saveFailure).not.toBeFocused()
+    await pom.saveEventButton.click()
+    await expect(pom.saveFailure).toBeVisible()
+    await expect(pom.saveFailure).toBeFocused()
+
     // Recoverable: when our end stops faulting, the same button saves.
     stopFaulting()
     await pom.saveEventButton.click()
     await expect(pom.eventEditor).toBeHidden()
-    expect(store.countOf('PATCH')).toBe(2)
+    expect(store.countOf('PATCH')).toBe(3)
   })
 
   test('a request that gets NO ANSWER is the one that blames the connection', async ({
@@ -558,6 +575,13 @@ test.describe('Tournaments · a stale save and its deliberate override (#1499)',
     // card underneath the (still-open) sheet: it now reads the OTHER writer's name.
     await expect(pom.eventCard('Renamed By Someone Else')).toBeVisible()
     await expect(pom.overrideButton).toBeVisible()
+
+    // #1538 — the banner holds focus, and ONE Tab press reaches the override: the
+    // whole reason this ticket exists is that it used to take a tab-through of the
+    // entire form to get here.
+    await expect(pom.saveFailure).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(pom.overrideButton).toBeFocused()
 
     // WRITE 3 — the override. Never automatic: the director presses it on purpose.
     await pom.overrideButton.click()
