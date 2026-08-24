@@ -811,10 +811,10 @@ def _honest_notes(inputs: PreviewJobInputs) -> list[str]:
             case _:
                 assert_never(reason)
     notes.extend(
-        f"Only the reservation stage of {meta.name} is scheduled here: its knockout "
+        f"Only the group stage of {meta.name} is scheduled here: its knockout "
         f"bracket ({meta.knockout_fixtures} further "
         f"{'match' if meta.knockout_fixtures == 1 else 'matches'}) is played "
-        "after the reservations finish and is not in this estimate."
+        "after the group stage finishes and is not in this estimate."
         for meta in inputs.events
         if meta.knockout_fixtures > 0
     )
