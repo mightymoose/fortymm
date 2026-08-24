@@ -138,6 +138,8 @@ Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on *
 | QA | up: `scripts/qa-up.sh [id]` · **down: `scripts/qa-down.sh [id]`** | :8085 | captured in **Mailpit** :8087 — never sends real mail |
 | UAT | `mise run redeploy-uat` — Helm + **k3d**, *not* compose, chart at `deploy/fortymm/` | :8084, `uat.fortymm.com`, and `https://fortymm-uat.<tailnet>.ts.net` | **real Postmark** — lands in real inboxes |
 
+The QA stack seeds three sign-in-able identities with known roles (`api/scripts/seed_qa_identities.py`); `scripts/qa-up.sh`'s own output lists their emails and roles on every boot.
+
 **CI publishes both Helm charts to GHCR**, alongside the api and web images, so a deploy needs `helm` and no checkout. See `deploy/CLAUDE.md` for the registry paths, the version scheme, the pull command, and why the stack chart carries its own image digests.
 
 **Always reap a QA stack once its branch merges** (`land-the-plane` Step 7, "Collect the garbage", which runs it once at the end of a stack walk — and `test-next-ticket` after its own merge, since whoever merges cleans up). `docker compose down -v` is *not* enough — it leaves the stack's locally-built images and buildx cache behind. Skipping this grew `Docker.raw` to 230 GB and wedged the daemon; with ~78 worktrees each able to spawn a `fortymm-qa-<id>` stack, it compounds fast. Use `scripts/qa-down.sh` (`--all` for every QA stack, `--dry-run` to preview, opt-in `--prune-cache` for the global build cache). **Never** blanket-`prune`: `fortymm-uat_postgres-data` is unattached and would be silently destroyed along with the k3d `tailscale-state` Secrets.

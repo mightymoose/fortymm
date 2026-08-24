@@ -116,16 +116,24 @@ services:
       # and MCP requests here still 401. This makes the settings PAGE show its
       # real populated state; it does not make a QA connector work.
       MCP_OAUTH_CLIENT_ID: qa-placeholder-client-id
+      # Refusal guard for scripts/seed_qa_identities.py (issue #1055): the
+      # script checks this env var and refuses to run anywhere it isn't set,
+      # so it can only ever run here — never on UAT's migrate-job or the dev
+      # compose file, where seeded known-password identities have no place.
+      QA_SEED_IDENTITIES: "1"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     # Same image as dev but no --reload and no source volume mount —
-    # the image's COPY'd /app is what runs. Both seed scripts are
+    # the image's COPY'd /app is what runs. All three seed scripts are
     # idempotent (seed_rbac.py: additive; seed_leagues.py: upserts the
-    # default league), so chaining them after migrations is safe on
-    # every boot.
+    # default league; seed_qa_identities.py: converges known QA identities
+    # onto known roles), so chaining them after migrations is safe on
+    # every boot. seed_qa_identities.py must run after seed_leagues.py: it
+    # calls add_user_to_default_league, which raises if the default league
+    # doesn't exist yet.
     #
     # --timeout-graceful-shutdown bounds the drain now that /v1/stream holds
     # long-lived SSE connections. On SIGTERM uvicorn stops accepting and waits
@@ -138,6 +146,7 @@ services:
       sh -c "alembic upgrade head &&
              python scripts/seed_rbac.py &&
              python scripts/seed_leagues.py &&
+             python scripts/seed_qa_identities.py &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5"
 
   worker:
