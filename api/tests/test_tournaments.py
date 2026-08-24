@@ -2797,6 +2797,61 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
         assert [(f.round, f.position) for f in e.fixtures] == [(1, 1), (1, 2)]
 
 
+@pytest.mark.parametrize("tournament_count", [1, 2])
+async def test_list_statement_count_with_placed_fixtures_costs_exactly_one_more(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    tournament_count: int,
+) -> None:
+    """The ADR-0790 read-flags (#1537, ``app.tournament_queries._placement_flags``)
+    cost ONE additional batched statement across the WHOLE list page, not one per
+    tournament that carries a placed fixture — the list endpoint's own twin of
+    ``test_detail_statement_count_with_placed_fixtures_costs_exactly_one_more``,
+    discriminating the same way: a per-tournament (or per-event) lookup would
+    measure ``EXPECTED_TOURNAMENT_LIST_STATEMENTS + 1`` at one tournament and grow
+    further at two, so it fails this pin at two even though the one-tournament case
+    would coincidentally match it. This is the list endpoint's own coverage —
+    the detail pin batches over one tournament's events and cannot see a failure
+    mode that only shows up across *several* tournaments on one page."""
+    client, user = authed_client
+    user_id = user.id
+    tournament_ids: list[str] = []
+    for t in range(tournament_count):
+        created = (
+            await client.post("/v1/tournaments", json=_create_payload(name=f"T{t}"))
+        ).json()
+        tournament_ids.append(created["id"])
+        event = (
+            await client.post(
+                f"/v1/tournaments/{created['id']}/events",
+                json=_rr_payload(RESERVATION_A, name="Only"),
+            )
+        ).json()
+        await _seed_field(db_session, event["id"], 3, prefix=f"lst{t}-")
+        await _cut_the_draw(client, created["id"], event["id"])
+        fixture, *_ = await _fixture_rows(db_session, event["id"])
+        table_1, _table_2 = await _catalogue_table_ids(client, created["id"])
+        placed = await client.patch(
+            _placement_url(created["id"], str(fixture.id)),
+            json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+        )
+        assert placed.status_code == 200, placed.text
+
+    async with counted_statements(engine) as (session, statements):
+        listed = await list_tournaments(db=session, current_user=User(id=user_id))
+
+    assert len(statements) == EXPECTED_TOURNAMENT_LIST_STATEMENTS + 1, statements
+    listed_by_id = {str(t.id): t for t in listed}
+    for tournament_id in tournament_ids:
+        (event,) = listed_by_id[tournament_id].events
+        placed_fixtures = [f for f in event.fixtures if f.table_id is not None]
+        assert len(placed_fixtures) == 1
+        # Reservation A reserves no tables, so the table axis is flagged ``true``.
+        assert placed_fixtures[0].table_off_reservation is True
+        assert placed_fixtures[0].start_outside_reservation_window is False
+
+
 # ----- near-me radius filter (ADR "Distance is a haversine expression") ------
 
 

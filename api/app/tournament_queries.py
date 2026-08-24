@@ -498,8 +498,14 @@ class _GroupReservationWindow:
     ``TournamentEventReservation`` stores them — not yet anchored to an instant,
     because that needs the event's own timezone, which the caller already holds
     per-fixture from the main statement and applies at use (``_placement_flags``),
-    not here."""
+    not here.
 
+    ``reservation_id`` rides along so ``_placement_flags`` can hand it to
+    ``app.schedule_solves.reservation_key`` — the same one-rule resolution the
+    solver uses — rather than re-deriving "booked vs. event-wide" from this dict's
+    own membership by hand."""
+
+    reservation_id: uuid.UUID
     table_ids: frozenset[str]
     slot_date: date
     slot_start: time
@@ -532,6 +538,7 @@ async def _reservation_windows_by_group(
         await db.execute(
             select(
                 TournamentEventGroupReservation.group_id,
+                TournamentEventGroupReservation.reservation_id,
                 TournamentEventReservation.slot_date,
                 TournamentEventReservation.slot_start,
                 TournamentEventReservation.slot_end,
@@ -563,21 +570,28 @@ async def _reservation_windows_by_group(
             .where(TournamentEventGroupReservation.group_id.in_(group_ids))
         )
     ).all()
-    windows: dict[uuid.UUID, tuple[date, time, time, set[str]]] = {}
-    for group_id, slot_date, slot_start, slot_end, table_id in rows:
-        _, _, _, table_ids = windows.setdefault(
-            group_id, (slot_date, slot_start, slot_end, set())
+    windows: dict[uuid.UUID, tuple[uuid.UUID, date, time, time, set[str]]] = {}
+    for group_id, reservation_id, slot_date, slot_start, slot_end, table_id in rows:
+        _, _, _, _, table_ids = windows.setdefault(
+            group_id, (reservation_id, slot_date, slot_start, slot_end, set())
         )
         if table_id is not None:
             table_ids.add(table_id)
     return {
         group_id: _GroupReservationWindow(
+            reservation_id=reservation_id,
             table_ids=frozenset(table_ids),
             slot_date=slot_date,
             slot_start=slot_start,
             slot_end=slot_end,
         )
-        for group_id, (slot_date, slot_start, slot_end, table_ids) in windows.items()
+        for group_id, (
+            reservation_id,
+            slot_date,
+            slot_start,
+            slot_end,
+            table_ids,
+        ) in windows.items()
     }
 
 
@@ -600,11 +614,15 @@ def _placement_flags(
 
     Judged against the fixture's group's **mapped** reservation
     (``reservation_windows``, see :func:`_reservation_windows_by_group`) when one
-    exists, the event-wide reservation otherwise — the same rule
-    ``app.schedule_solves.restricting_reservation_key`` names, applied here as "does
-    ``group_id`` have an entry in ``reservation_windows``", never "is ``group_id``
-    ``None``" (a stored fixture's ``group_id`` is NOT NULL, #1484 — exactly the
-    branch that function's own docstring warns against).
+    exists, the event-wide reservation otherwise — decided by calling
+    ``app.schedule_solves.restricting_reservation_key`` itself, the one rule every
+    reservation-resolution site goes through, rather than re-deriving its branch by
+    hand. It is handed a *total*, single-entry map (``{group_id: reservation_id |
+    None}``) so its own "``group_id is None``" arm — which a stored fixture's
+    NOT-NULL ``group_id`` never takes, #1484 — is provably not what decides this;
+    the branch that actually resolves this fixture is "does ``group_id`` have an
+    entry in ``reservation_windows``", exactly what that function's own docstring
+    names as the real rule.
 
     The event-wide **table** check is provably always satisfied, so it costs no
     lookup at all: a placement's ``table_id`` is a real foreign key (ADR 20260801)
@@ -622,8 +640,23 @@ def _placement_flags(
     if match_status in _DECIDED_MATCH_STATUSES:
         return None, None
 
+    # Imported lazily: ``app.schedule_solves`` imports ``stage_ids_for_events`` from
+    # THIS module at its top, so a module-level import here would be a cycle. By
+    # request time both modules are already fully loaded, so this costs a
+    # sys.modules lookup, not a fresh import.
+    from app.schedule_solves import (
+        _slot_bounds,
+        event_wide_reservation_key,
+        restricting_reservation_key,
+    )
+
     resolved = reservation_windows.get(fixture.group_id)
-    if resolved is not None:
+    total_map = {fixture.group_id: resolved.reservation_id if resolved else None}
+    is_event_wide = restricting_reservation_key(
+        fixture.event_id, fixture.group_id, total_map
+    ) == event_wide_reservation_key(fixture.event_id)
+
+    if not is_event_wide and resolved is not None:
         table_off_reservation = (
             None
             if fixture.table_id is None
@@ -644,12 +677,6 @@ def _placement_flags(
 
     start_outside_window = None
     if fixture.scheduled_start is not None:
-        # Imported lazily: ``app.schedule_solves`` imports ``stage_ids_for_events``
-        # from THIS module at its top, so a module-level import here would be a
-        # cycle. By request time both modules are already fully loaded, so this
-        # costs a sys.modules lookup, not a fresh import.
-        from app.schedule_solves import _slot_bounds
-
         window_start, window_end = _slot_bounds(slot, ZoneInfo(event_timezone))
         # Closed interval: a start landing exactly on either edge counts as
         # INSIDE the window (see ``TournamentFixtureRead``'s own
