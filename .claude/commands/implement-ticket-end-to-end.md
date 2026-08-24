@@ -58,7 +58,13 @@ Invoke `review-next-ticket` for the same ticket in a new fresh context. Success 
 
 **Recover the decision comment's timestamp from the stage report.** It is the watch anchor.
 
-**The coordinator writes the Waiting For Sign Off column, and only after Review is done.** The stage moves no columns: the ticket stays **In Review** through the whole review and repair loop. When the stage reports success and the decision comment's timestamp, move the ticket to **Waiting For Sign Off**, then enter the watch. Never move it earlier — a ticket parked in Waiting For Sign Off before the ask exists points at a pull request that carries no question, and a stage that did not finish has posted no ask.
+**The coordinator writes the Waiting For Sign Off column, and only after Review is done.** The stage moves no columns: the ticket stays **In Review** through the whole review and repair loop. When the stage reports success and the decision comment's timestamp, move the ticket to **Waiting For Sign Off**:
+
+```bash
+scripts/project-status.sh "Waiting For Sign Off" <issue-number>
+```
+
+then enter the watch. Never move it earlier — a ticket parked in Waiting For Sign Off before the ask exists points at a pull request that carries no question, and a stage that did not finish has posted no ask.
 
 ## The Human Gate
 
@@ -74,8 +80,16 @@ After Review stops, watch the pull request for **15 minutes**. Poll over REST, n
 
 The ticket sits in **Waiting For Sign Off** for the whole watch. Three outcomes:
 
-1. **The signal arrives.** Move the ticket to **In Testing** and invoke `test-next-ticket`.
-2. **Any other comment from `mightymoose` arrives**, newer than the anchor. Move the ticket to **In Progress** — the human asked for changes, so the work is being done again — then re-invoke `review-next-ticket` in **targeted mode**, naming exactly those comments. When that round reports its fresh decision comment, move the ticket back to **Waiting For Sign Off**, and **the 15-minute watch restarts, re-anchored to that round's new decision comment.** There is no limit on rounds; each one is a fresh context.
+1. **The signal arrives.** Move the ticket to **In Testing**:
+   ```bash
+   scripts/project-status.sh "In Testing" <issue-number>
+   ```
+   and invoke `test-next-ticket`.
+2. **Any other comment from `mightymoose` arrives**, newer than the anchor. Move the ticket to **In Progress** — the human asked for changes, so the work is being done again:
+   ```bash
+   scripts/project-status.sh "In Progress" <issue-number>
+   ```
+   then re-invoke `review-next-ticket` in **targeted mode**, naming exactly those comments. When that round reports its fresh decision comment, move the ticket back to **Waiting For Sign Off** (same script, `"Waiting For Sign Off"`), and **the 15-minute watch restarts, re-anchored to that round's new decision comment.** There is no limit on rounds; each one is a fresh context.
 3. **The budget expires with no comment.** Stop and report. Do not wait longer, do not proceed to Testing, and do not assume silence is consent. An agent must not park on a human for hours.
 
 On expiry the ticket **stays in Waiting For Sign Off**. The watcher went away; the ask did not. That column is what lets a human find the work later without the run's report in front of them.

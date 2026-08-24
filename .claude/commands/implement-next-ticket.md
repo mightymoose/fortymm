@@ -19,7 +19,11 @@ If `$ARGUMENTS` is empty, stop and report: this command does not select tickets.
 
 ## Claim the Ticket
 
-As soon as the ticket is selected, and before you read the ticket in full or touch any code, move it to **In Progress**.
+As soon as the ticket is selected, and before you read the ticket in full or touch any code, move it to **In Progress**:
+
+```bash
+scripts/project-status.sh "In Progress" <issue-number>
+```
 
 Move it first so the board shows the work is claimed. Many agent sessions run against this board at once. A ticket that stays in **Ready For Implementation** while an agent works it can be picked up a second time by another run.
 
@@ -111,7 +115,10 @@ Only after implementation and relevant verification succeed:
 
 1. Append Implementation Notes.
 2. Ensure the PR is linked.
-3. Move the ticket to **In Review**.
+3. Move the ticket to **In Review**:
+   ```bash
+   scripts/project-status.sh "In Review" <issue-number>
+   ```
 4. Stop, and report the next command: `review-next-ticket <ticket-number>`.
 
 `implement-ticket-end-to-end` is the orchestrator. It dispatches Review as its next stage, in a fresh context, and the fresh context is what makes the review a review: a reviewer that just wrote the code is not a reviewer. Do not review your own implementation, and do not invoke `review-next-ticket` yourself.

@@ -65,7 +65,7 @@ adversarial exploration — they are a floor, never a ceiling.
 ## Field rules
 
 - **Tickets** (header) — the GitHub issue number(s) on the FortyMM project board
-  (github.com/users/mightymoose/projects/8) this whole arc closes, comma-separated
+  (github.com/users/mightymoose/projects/9) this whole arc closes, comma-separated
   (`#933, #959`), or `—` when the work has no ticket. `/do-chores` moves each of
   these cards to **In Progress** when it starts driving; `/epic` moves them to
   **Done** once the arc's acceptance gate passes. Both call

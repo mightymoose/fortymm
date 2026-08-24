@@ -133,7 +133,10 @@ then:
 1. Append Testing Notes.
 2. Merge using the repository's normal merge strategy and protections.
 3. Verify the merge succeeded.
-4. Move the ticket to **Done**.
+4. Move the ticket to **Done**:
+   ```bash
+   scripts/project-status.sh "Done" <issue-number>
+   ```
 5. Close the issue if that is the repository's normal convention.
 6. Clean up, per the section below.
 7. Stop.
