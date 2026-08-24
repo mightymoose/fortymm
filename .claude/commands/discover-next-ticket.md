@@ -43,7 +43,10 @@ Never silently skip the selected ticket because it appears difficult, ambiguous,
 5. Work with the user until the ticket is sufficiently understood.
 6. Rewrite the GitHub issue body using the exact canonical template below.
 7. Verify every section has been completed.
-8. Move the ticket to **Ready For Planning**.
+8. Move the ticket to **Ready For Planning**:
+   ```bash
+   scripts/project-status.sh "Ready For Planning" <issue-number>
+   ```
 9. Stop.
 
 Do not select another ticket after completing this one.
@@ -252,7 +255,10 @@ Before completing Discovery, verify:
 When all applicable checks pass:
 
 1. Replace the GitHub issue body with the completed canonical template.
-2. Move the ticket to **Ready For Planning**.
+2. Move the ticket to **Ready For Planning**:
+   ```bash
+   scripts/project-status.sh "Ready For Planning" <issue-number>
+   ```
 3. Report which ticket was discovered.
 4. Stop.
 

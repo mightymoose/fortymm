@@ -100,7 +100,10 @@ If the ticket is executable as-is:
    - significant technical considerations or risks;
    - verification expectations.
 2. Do not rewrite or replace the Discovery specification.
-3. Move the ticket from **Ready For Planning** to **Ready For Implementation**.
+3. Move the ticket from **Ready For Planning** to **Ready For Implementation**:
+   ```bash
+   scripts/project-status.sh "Ready For Implementation" <issue-number>
+   ```
 4. Place the ticket at the **bottom of the Ready For Implementation column**.
 5. Stop.
 
@@ -285,7 +288,10 @@ Do not silently redefine the requirement.
 If Planning cannot proceed without changing the ticket's intended behavior or Acceptance Criteria:
 
 1. Clearly record the problem on the ticket.
-2. Move the ticket back to **To Do** for Discovery.
+2. Move the ticket back to **To Do** for Discovery:
+   ```bash
+   scripts/project-status.sh "To Do" <issue-number>
+   ```
 3. Place it according to the project's normal To Do prioritization unless there is an explicit reason to prioritize it.
 4. Preserve the existing specification and explain why rediscovery is required.
 5. Stop.
