@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
@@ -158,6 +158,18 @@ export const NewTournamentModal = ({
     control,
     formState: { errors },
   } = form
+
+  /** The refusal banner's own DOM node (#1538). `submit` does
+   * `form.clearErrors('root')` before every attempt and `form.setError('root', ...)`
+   * only in the catch, so a fresh `errors.root` arrives on every refusal, including
+   * a second back-to-back one — this effect moves focus every time, no
+   * mount/unmount tracking needed. `mode: 'onChange'` revalidates the touched field
+   * as the organizer retypes, but that resolver never assigns `root`, so typing
+   * after a refusal cannot re-trigger this effect and steal focus back. */
+  const failureRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (errors.root) failureRef.current?.focus()
+  }, [errors.root])
 
   // Live address values, so the "Preview location" pin geocodes exactly what the
   // organizer has typed at click time. This form has no country field (the edit
@@ -377,7 +389,9 @@ export const NewTournamentModal = ({
             <Alert
               variant="destructive"
               data-testid="new-tournament-error"
-              className="mt-4"
+              ref={failureRef}
+              tabIndex={-1}
+              className="mt-4 focus:ring-3 focus:ring-destructive/50"
             >
               <TriangleAlert size={16} />
               <AlertTitle>Couldn't create this tournament</AlertTitle>

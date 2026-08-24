@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useBlocker } from '@tanstack/react-router'
 import { useForm, useWatch } from 'react-hook-form'
@@ -190,6 +190,14 @@ export const EventEditor = ({
   /** How the last save was refused, or `null`. A classified failure — never a raw
    * server string (see `data/save-failure`). Never a reason to close. */
   const [failure, setFailure] = useState<SaveFailure | null>(null)
+  /** The failure banner's own DOM node (#1538). `performSave` sets a fresh `failure`
+   * object on every refusal, including a second back-to-back one and a refused
+   * override, so keying the effect below on `failure` moves focus every time — no
+   * mount/unmount tracking needed. */
+  const failureRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (failure) failureRef.current?.focus()
+  }, [failure])
   /** The #1537 stranding confirmation, held open over a save that would newly strand
    * at least one placed match — `null` = no confirmation on screen. Holds the EXACT
    * draft `performSave` built, so "Save anyway" sends it unmodified, never rebuilt. */
@@ -615,7 +623,13 @@ export const EventEditor = ({
             is reported is not a place that may itself be half off the screen. */}
         {failure && (
           <div className="px-6 pb-1">
-            <Alert variant="destructive" data-testid="event-editor-error">
+            <Alert
+              variant="destructive"
+              data-testid="event-editor-error"
+              ref={failureRef}
+              tabIndex={-1}
+              className="focus:ring-3 focus:ring-destructive/50"
+            >
               <TriangleAlert size={16} />
               <AlertTitle>
                 {isNew ? "Couldn't create this event" : "Couldn't save your changes"}
