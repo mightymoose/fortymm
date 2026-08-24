@@ -33,6 +33,13 @@ API_HOST="${API_HOST:-127.0.0.1}"
 # callers must not truncate each other's log, or the failure-path `tail`
 # below can show an unrelated run's output instead of the one that failed.
 API_LOG="/tmp/fortymm-api.$$.log"
+# Removed on any exit, success or failure -- the failure path already tails
+# it to stderr before this fires, and a running server keeps writing to the
+# unlinked inode until the caller kills it (fine; it's a throwaway server).
+# Without this, every invocation (mise tasks, pre-push, CI) leaves a new
+# PID-named file behind permanently -- an unbounded /tmp accumulation this
+# repo has been burned by before at the Docker-image layer.
+trap 'rm -f "$API_LOG"' EXIT
 
 pick_python() {
   if command -v python3 >/dev/null 2>&1; then
@@ -73,9 +80,18 @@ else
   # narrow race after this bind releases the port and before uvicorn's own
   # bind -- this preflight is a UX improvement layered on that guarantee, not
   # a second independent one.
+  # SO_REUSEADDR matters here: without it, a port left in TIME_WAIT by a
+  # server that already exited (e.g. an immediately-preceding run on the same
+  # explicit API_PORT) can make this bind fail even though nothing is
+  # actually listening -- uvicorn itself sets this flag, so skipping it here
+  # made this preflight stricter than the server it's standing in for. It
+  # does NOT let a bind succeed over another process's live LISTEN socket on
+  # the same port -- only TCP's own OS-level SO_REUSEADDR semantics apply,
+  # unrelated to SO_REUSEPORT.
   if ! bind_err="$(API_HOST="$API_HOST" API_PORT="$API_PORT" "$PY" -c '
 import os, socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
     s.bind((os.environ["API_HOST"], int(os.environ["API_PORT"])))
 except (OSError, ValueError) as e:
