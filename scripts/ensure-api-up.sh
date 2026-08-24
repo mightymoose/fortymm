@@ -24,6 +24,11 @@
 # If `uvicorn` is already resolvable (CI installs API deps globally with no
 # venv), that's used directly; otherwise falls back to a local api/.venv,
 # creating it on first use.
+#
+# `lsof` is a hard dependency, used to positively confirm which PID owns the
+# port's LISTEN socket before reporting success (see owns_listen_socket()
+# below) -- present by default on macOS and on GitHub's ubuntu-latest runners,
+# and already relied on unguarded by scripts/qa-up.sh's port_free().
 
 set -euo pipefail
 
@@ -57,9 +62,10 @@ if [ -z "${API_PORT:-}" ]; then
   # dependency here (the .venv fallback below shells out to it). This is a
   # probe, not a reservation -- something else could in principle grab the
   # same port before uvicorn binds it. That race is handled the same way an
-  # explicit API_PORT collision is handled below: the readiness loop notices
-  # uvicorn died and fails loudly, it never falls back to whatever is now
-  # listening.
+  # explicit API_PORT collision is handled below: the readiness loop's final
+  # check requires owns_listen_socket() to name our own PID as the port's
+  # owner, so a foreign process winning this race is never mistaken for
+  # success, regardless of whether it also answers /openapi.json.
   API_PORT="$(API_HOST="$API_HOST" "$PY" -c '
 import os, socket
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -113,6 +119,31 @@ API_URL="http://${API_HOST}:${API_PORT}"
 
 probe() { curl -fs -o /dev/null --max-time 1 "$API_URL/openapi.json"; }
 
+# A successful probe() only proves *something* answers /openapi.json on
+# $API_URL -- it cannot distinguish our own uvicorn from a foreign process
+# that grabbed the port in the race window between our preflight/ephemeral
+# bind releasing it and uvicorn's own bind (see the comment above the final
+# check below). Liveness of $API_PID doesn't close that gap either: uvicorn
+# can still be alive and simply not have reached its own bind_socket() call
+# yet. The only way to know who actually holds the port is to ask the kernel
+# which PID owns the LISTEN socket, and require that to be exactly ours.
+# `lsof -t` prints bare PIDs, one per line, of processes with a socket
+# matching the filter; scoping to `-sTCP:LISTEN` and this exact host:port,
+# and then requiring the output to equal $API_PID (not merely contain it),
+# is what makes this a positive ownership check rather than another liveness
+# probe -- only one process can hold a LISTEN socket on a given host:port at
+# a time (no SO_REUSEPORT is set anywhere in this script or by uvicorn's
+# default bind), so if the kernel says $API_PID owns it, nothing else does.
+owns_listen_socket() {
+  local listeners
+  if ! command -v lsof >/dev/null 2>&1; then
+    echo "lsof not found -- cannot verify socket ownership, refusing to assume it" >&2
+    return 1
+  fi
+  listeners="$(lsof -nP -iTCP@"$API_HOST":"$API_PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
+  [ "$listeners" = "$API_PID" ]
+}
+
 echo "Starting API server at $API_URL..." >&2
 if command -v uvicorn >/dev/null 2>&1; then
   UVICORN=uvicorn
@@ -149,11 +180,36 @@ done
 # ephemeral-port probe above) and uvicorn's own bind, a foreign process can
 # grab the port and might itself answer /openapi.json coherently -- the same
 # false-provenance hazard this script exists to close, just relocated to a
-# race window instead of a stale-listener reuse. Require our own PID to still
-# be alive, not just a response, before calling the start a success.
-if ! probe || ! kill -0 "$API_PID" 2>/dev/null; then
-  echo "API failed to start. Last log:" >&2
-  tail -n 40 "$API_LOG" >&2 || true
+# race window instead of a stale-listener reuse. Requiring our own PID to
+# still be alive does NOT close that window: uvicorn can be alive and simply
+# not have reached its own bind() yet, so "probe succeeds" + "our PID is
+# alive" can both hold while a foreign process, not us, is what answered.
+# owns_listen_socket() closes it for real, by asking the kernel who currently
+# holds the port's LISTEN socket rather than inferring it from process
+# liveness.
+#
+# Each condition is captured ONCE, here, rather than re-run inside the
+# diagnostic branch below. Re-running them there would reopen a small TOCTOU
+# in the diagnostic itself: a legitimately slow (not foreign-beaten) uvicorn
+# could finish binding in the gap between this check and a second probe/kill
+# -0, making the diagnostic wrongly claim "a foreign process answered" for a
+# server that was actually ours, just slow. Reusing the captured values keeps
+# the diagnostic's claim consistent with the reason the check actually failed.
+probe_ok=1; probe || probe_ok=0
+pid_alive=1; kill -0 "$API_PID" 2>/dev/null || pid_alive=0
+owns_ok=1; owns_listen_socket || owns_ok=0
+
+if [ "$probe_ok" -eq 0 ] || [ "$pid_alive" -eq 0 ] || [ "$owns_ok" -eq 0 ]; then
+  if [ "$probe_ok" -eq 1 ] && [ "$pid_alive" -eq 1 ]; then
+    # owns_ok is the only thing that failed. That's either a real foreign
+    # process holding the port, or ownership simply couldn't be verified
+    # (e.g. no lsof -- owns_listen_socket already printed that reason above).
+    # Don't overclaim which one it was; either way we refuse to report success.
+    echo "$API_URL answers and PID $API_PID is alive, but it could not be confirmed as the port's owner. Refusing to report success." >&2
+  else
+    echo "API failed to start. Last log:" >&2
+    tail -n 40 "$API_LOG" >&2 || true
+  fi
   kill "$API_PID" 2>/dev/null || true
   exit 1
 fi
