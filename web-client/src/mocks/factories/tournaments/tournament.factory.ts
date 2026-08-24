@@ -183,6 +183,11 @@ export function buildTournamentFixtureRead(
     match_id: null,
     match_status: null,
     table_id: null,
+    // Not applicable by default — no table placed (#1537). A fixture wanting the
+    // stranding flags overrides these directly; the mock never derives them from
+    // `table_id`/`scheduled_start`, mirroring the real server's computed-on-read flags.
+    table_off_reservation: null,
+    start_outside_reservation_window: null,
     call_notified_count: 0,
     ...rest,
     // The placement times last, so the naive-string coercion wins over a raw override.

@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { drawTypeFreeze, groupSetFreeze, type EditFreeze } from '../data/draw'
 import { reservationNameIssues } from '../data/event-validation'
 import { eligibilityIssues } from '../data/predicate-validation'
+import { newlyStrandedFixtures } from '../data/reservation-strand'
 import {
   EVENT_SAVE_TARGET,
   saveFailure as classifySaveFailure,
@@ -37,6 +38,7 @@ import { DrawStructureSection } from './event-editor/draw-structure-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
 import { MatchSection } from './event-editor/match-section'
 import { ReservationsSection } from './event-editor/reservations-section'
+import { StrandConfirmDialog } from './event-editor/strand-confirm-dialog'
 import {
   eventSchema,
   eventToFormValues,
@@ -188,6 +190,14 @@ export const EventEditor = ({
   /** How the last save was refused, or `null`. A classified failure — never a raw
    * server string (see `data/save-failure`). Never a reason to close. */
   const [failure, setFailure] = useState<SaveFailure | null>(null)
+  /** The #1537 stranding confirmation, held open over a save that would newly strand
+   * at least one placed match — `null` = no confirmation on screen. Holds the EXACT
+   * draft `performSave` built, so "Save anyway" sends it unmodified, never rebuilt. */
+  const [strandConfirm, setStrandConfirm] = useState<{
+    saved: EditedEvent
+    strandedCount: number
+    calledCount: number
+  } | null>(null)
 
   const form = useForm<EventFormValues>({
     resolver: zodResolver(eventSchema),
@@ -210,6 +220,7 @@ export const EventEditor = ({
     setSection('basics')
     // A fresh open starts clean: last time's red belongs to last time's draft.
     setFailure(null)
+    setStrandConfirm(null)
   }
 
   // Re-seed the form (and clear any prior errors). The sheet stays mounted, so
@@ -340,18 +351,9 @@ export const EventEditor = ({
   // which is `event`'s own, and only the override has a different number to name. A
   // caller-side `event?.lockVersion ?? 0` would put a `0` that can never reach the
   // wire in front of a reader grepping for where a version comes from.
-  const performSave = async (formValues: EventFormValues, lockVersion?: number) => {
-    if (!event) return
-    // The event that was opened, with every editable field taken from the form —
-    // `reservations` included, which is why this is an `EditedEvent` and not a
-    // `TournamentEvent`: the form holds entries, and an entry is not a reservation.
-    // Handing the read model's reservations back instead would re-send the ids on a
-    // create (a 422) and lose the added/kept distinction on a patch.
-    const saved: EditedEvent = {
-      ...event,
-      ...formValues,
-      lockVersion: lockVersion ?? event.lockVersion,
-    }
+  // The actual write, once nothing (or nothing NEW) stands in front of it — the tail
+  // both the ordinary path and the #1537 confirmation's "Save anyway" run.
+  const doSave = async (saved: EditedEvent) => {
     setFailure(null)
     try {
       await onSave(saved)
@@ -368,6 +370,44 @@ export const EventEditor = ({
     } catch (error) {
       setFailure(classifySaveFailure(error))
     }
+  }
+
+  const performSave = async (formValues: EventFormValues, lockVersion?: number) => {
+    if (!event) return
+    // The event that was opened, with every editable field taken from the form —
+    // `reservations` included, which is why this is an `EditedEvent` and not a
+    // `TournamentEvent`: the form holds entries, and an entry is not a reservation.
+    // Handing the read model's reservations back instead would re-send the ids on a
+    // create (a 422) and lose the added/kept distinction on a patch.
+    const saved: EditedEvent = {
+      ...event,
+      ...formValues,
+      lockVersion: lockVersion ?? event.lockVersion,
+    }
+
+    // #1537: would THIS save newly strand an already-placed match against its
+    // reservation? Judged against `event` — the reservations/slot this sheet was
+    // opened on — never the live/reconciled tournament: it is the only "currently
+    // saved" state this sheet holds, and matches what `saved` above is itself
+    // diffed from. Composes IN FRONT of the ordinary save; it never bypasses or
+    // replaces the 409 conflict path below (a stale-version save still 409s,
+    // whether the director confirmed this or not).
+    const tournamentTableIds = tables.map((t) => t.id)
+    const stranded = newlyStrandedFixtures(
+      event,
+      { slot: formValues.slot, reservations: formValues.reservations },
+      tournamentTableIds,
+    )
+    if (stranded.length > 0) {
+      setStrandConfirm({
+        saved,
+        strandedCount: stranded.length,
+        calledCount: stranded.filter((f) => f.called).length,
+      })
+      return
+    }
+
+    await doSave(saved)
   }
 
   // Refused HERE, so nothing was sent and nothing can be lost. Take them to the tab
@@ -666,6 +706,25 @@ export const EventEditor = ({
         onLeave={() => blocker.proceed?.()}
         onStay={() => blocker.reset?.()}
       />
+
+      {/* #1537: the newly-stranded-match confirmation. "Save anyway" sends the EXACT
+          draft `performSave` already built — held in `strandConfirm.saved` — never a
+          rebuilt or refused one. Dismissing any other way (Escape, overlay, Cancel)
+          sends nothing; the flags stay visible on the Schedule tab afterwards because
+          nothing was saved. */}
+      {strandConfirm && (
+        <StrandConfirmDialog
+          open
+          strandedCount={strandConfirm.strandedCount}
+          calledCount={strandConfirm.calledCount}
+          onConfirm={() => {
+            const { saved } = strandConfirm
+            setStrandConfirm(null)
+            void doSave(saved)
+          }}
+          onCancel={() => setStrandConfirm(null)}
+        />
+      )}
     </Sheet>
   )
 }

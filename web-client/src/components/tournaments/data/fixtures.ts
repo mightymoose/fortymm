@@ -106,6 +106,28 @@ const fixtureWireSchema = z.object({
    * label + tz abbrev for display plus a raw UTC instant for geometry — a prediction, not
    * a commitment. */
   scheduled_start: fixtureTimeSchema.nullable(),
+  /** `true` when this fixture's placed `table_id` is NOT one of the tables of the
+   * reservation it is scheduled against (ADR-0790's soft "the table belongs to the
+   * group's reservation" claim, made *visible* — never enforced). Judged against the
+   * fixture's group's mapped reservation when one exists, or the event-wide reservation
+   * (the event's own window, the tournament's whole table catalogue) when it does not —
+   * the same two-hop lookup `fixtureReservation` (`./draw`) already does for the
+   * placement picker's suggestions. A director may edit a booked reservation's tables
+   * after the draw is cut, which can silently strand an already-placed match; the
+   * solver never repairs it, so this is what makes the stranding visible. `null` —
+   * NEVER `false` — when the question does not apply: no `table_id` is placed, or the
+   * linked match is `completed`/`voided` (its placement is history). #1537. */
+  table_off_reservation: z.boolean().nullable(),
+  /** The same idea, on the *time* half of the placement: `true` when
+   * `scheduled_start` falls outside that same reservation's window. The window is a
+   * **closed interval** `[window_start, window_end]` — a start landing exactly on
+   * either edge counts as *inside* (matching the solver's own `<=` treatment of a
+   * window's end). `null` — never `false` — under the same two conditions as
+   * `table_off_reservation`: no `scheduled_start` is placed, or the linked match is
+   * `completed`/`voided`. The two flags are independent — a half-placement (only a
+   * table, or only a start) can flag its one placed half while the other stays
+   * `null`. #1537. */
+  start_outside_reservation_window: z.boolean().nullable(),
   /** When the fixture was **called** (ADR "the schedule is solved, the call is
    * pinned"): `null` = an estimate the solver may still move; set = a promise the
    * players were notified of. A `FixtureTimeRead`, like `scheduled_start`. */
@@ -139,6 +161,8 @@ export const fixtureSchema = fixtureWireSchema.transform(
     matchStatus: f.match_status,
     tableId: f.table_id,
     scheduledStart: f.scheduled_start,
+    tableOffReservation: f.table_off_reservation,
+    startOutsideReservationWindow: f.start_outside_reservation_window,
     pinnedAt: f.pinned_at,
     callNotifiedCount: f.call_notified_count,
     completedAt: f.completed_at,
