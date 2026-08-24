@@ -156,16 +156,17 @@ export interface StrandedFixture {
  * flagged `true` against the pending reservations/slot, and NOT already true against
  * the event's currently-saved ones.
  *
- * "Not already true" reads BOTH this module's own re-derivation of the saved state AND
- * the fixture's own server-computed flags (`fixture.tableOffReservation` /
- * `startOutsideReservationWindow`). The second is what covers the one case this
- * module's naive reconstruction (`resolvePlacedNaive`) cannot see on its own: a fixture
- * whose true stored date already drifted from its currently-effective window because of
- * an EARLIER edit that was never re-placed. Without that OR, such a fixture would read
- * as "still fine" under this module's own saved-arm derivation (which always pairs the
- * placement's time-of-day with the window's CURRENT date, by construction) and reopen
- * the confirmation on every subsequent save — exactly the repeat-save bug "newly, not
- * still" exists to prevent.
+ * "Not already true" reads the fixture's own server-computed flags
+ * (`fixture.tableOffReservation` / `startOutsideReservationWindow`) directly, rather
+ * than re-deriving the saved state client-side: those flags ARE the ground truth for
+ * "is this fixture stranded right now", computed by the server from the exact
+ * reservations `event` itself holds, so a second client-side derivation of the same
+ * fact could only ever agree with them (drop) or disagree with them (be wrong). This
+ * is also what keeps the one case this module's naive reconstruction
+ * (`resolvePlacedNaive`) cannot see on its own — a fixture whose true stored date
+ * already drifted from its currently-effective window because of an EARLIER edit that
+ * was never re-placed — from mattering here: that reconstruction is used only for
+ * `draftFlags` below, the one question with no server answer yet.
  *
  * `tournamentTableIds` is the tournament's whole table catalogue's ids — what an
  * un-grouped (event-wide) fixture may be placed on, the same fallback
@@ -205,14 +206,10 @@ export function newlyStrandedFixtures(
     const naive = resolvePlacedNaive(fixture.scheduledStart, savedContent.window.date)
     const placement = { tableId: fixture.tableId, scheduledStartNaive: naive }
 
-    const savedFlags = placementFlags(placement, false, savedContent)
     const draftFlags = placementFlags(placement, false, draftContent)
 
-    const tableWasStranded =
-      savedFlags.tableOffReservation === true || fixture.tableOffReservation === true
-    const windowWasStranded =
-      savedFlags.startOutsideReservationWindow === true ||
-      fixture.startOutsideReservationWindow === true
+    const tableWasStranded = fixture.tableOffReservation === true
+    const windowWasStranded = fixture.startOutsideReservationWindow === true
 
     const newlyStranded =
       (draftFlags.tableOffReservation === true && !tableWasStranded) ||

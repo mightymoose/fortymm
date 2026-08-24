@@ -614,15 +614,15 @@ def _placement_flags(
 
     Judged against the fixture's group's **mapped** reservation
     (``reservation_windows``, see :func:`_reservation_windows_by_group`) when one
-    exists, the event-wide reservation otherwise — decided by calling
-    ``app.schedule_solves.restricting_reservation_key`` itself, the one rule every
-    reservation-resolution site goes through, rather than re-deriving its branch by
-    hand. It is handed a *total*, single-entry map (``{group_id: reservation_id |
-    None}``) so its own "``group_id is None``" arm — which a stored fixture's
-    NOT-NULL ``group_id`` never takes, #1484 — is provably not what decides this;
-    the branch that actually resolves this fixture is "does ``group_id`` have an
-    entry in ``reservation_windows``", exactly what that function's own docstring
-    names as the real rule.
+    exists, the event-wide reservation otherwise. ``reservation_windows`` is total
+    over "has a mapped reservation" (that function's own docstring: a missing group
+    means "no reservation"), so ``resolved is None`` **is** the same branch
+    ``app.schedule_solves.restricting_reservation_key`` decides — its body reduces to
+    exactly this same "does ``group_id`` have an entry" test (#1484: a stored
+    fixture's ``group_id`` is NOT NULL, so its own separate ``group_id is None`` arm
+    never fires here either way). Calling it would add an import and a round-trip
+    through a single-entry map built to ask a question this function already holds
+    the direct fact for.
 
     The event-wide **table** check is provably always satisfied, so it costs no
     lookup at all: a placement's ``table_id`` is a real foreign key (ADR 20260801)
@@ -644,19 +644,11 @@ def _placement_flags(
     # THIS module at its top, so a module-level import here would be a cycle. By
     # request time both modules are already fully loaded, so this costs a
     # sys.modules lookup, not a fresh import.
-    from app.schedule_solves import (
-        _slot_bounds,
-        event_wide_reservation_key,
-        restricting_reservation_key,
-    )
+    from app.schedule_solves import _slot_bounds
 
     resolved = reservation_windows.get(fixture.group_id)
-    total_map = {fixture.group_id: resolved.reservation_id if resolved else None}
-    is_event_wide = restricting_reservation_key(
-        fixture.event_id, fixture.group_id, total_map
-    ) == event_wide_reservation_key(fixture.event_id)
 
-    if not is_event_wide and resolved is not None:
+    if resolved is not None:
         table_off_reservation = (
             None
             if fixture.table_id is None
