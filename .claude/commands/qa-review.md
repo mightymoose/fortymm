@@ -124,40 +124,33 @@ echo "poster=$(cat "$RUN_DIR/poster.port")  opponent=$(cat "$RUN_DIR/opponent.po
 Steps 3 and 4 read `.qa-review/$QA_SLUG/{poster,opponent}.port` and `.pid` — read
 them fresh in each step rather than carrying a variable across tool calls.
 
-## 2b. Grant the QA user a role that can actually do anything
+## 2b. Sign in as a seeded identity that can actually do something
 
-The QA stack seeds roles but assigns them to **nobody**, and the default `User`
-role carries no permissions (`api/scripts/seed_rbac.py`). So a guest or freshly
-minted user 403s on every tournament write, and Quinn reports "can't create a
-tournament" as a bug on every single run. There is no HTTP endpoint to
-self-assign a role, so the sanctioned seam is the database — the same one
-`e2e/support/rbac-grant.ts` uses for the composed suite.
+The QA stack seeds three sign-in-able identities with known roles
+(`api/scripts/seed_qa_identities.py`), so Quinn no longer needs a role granted
+by hand:
 
-After the stack is up, grant **"Beta tester"** (`tournament.view` / `.create` /
-`.enter`) to the user Quinn will drive. Substitute the username Quinn signs in as:
+| Email | Roles | Reach |
+| --- | --- | --- |
+| `qa-admin@example.com` | `Administrator` | The admin area, so a role can be granted to a fourth identity through the product |
+| `qa-director@example.com` | `Beta tester` | Tournament create, plus edit, schedule, and draw on tournaments it created |
+| `qa-player@example.com` | default `User` only | The "ask an administrator" no-permission path |
 
-`-v ON_ERROR_STOP=1` is not optional: without it `psql` does not reliably signal
-a SQL error in its exit status, so a renamed role or a reshaped `user_roles`
-would leave the grant silently unapplied — and Quinn would then report the
-resulting 403s as a product bug, which is the exact false positive this step
-exists to prevent. Check the exit code.
+Editing, publishing, and deleting a tournament is gated on creatorship, not
+role. If Quinn signs in as `qa-director` and gets a 403 editing a tournament
+someone else created, that is the documented restriction, not a bug.
 
-```bash
-docker compose -p "$QA_PROJECT" -f docker-compose.qa.yml exec -T postgres \
-  psql -v ON_ERROR_STOP=1 -U postgres -d fortymm -c "
-    INSERT INTO user_roles (user_id, role_id)
-    SELECT u.id, r.id FROM users u CROSS JOIN roles r
-    WHERE u.username = '<USERNAME>' AND r.name = 'Beta tester'
-      AND NOT EXISTS (SELECT 1 FROM user_roles ur
-                      WHERE ur.user_id = u.id AND ur.role_id = r.id);"
-```
+Sign in as any of them through Mailpit the same as any user. Brief Quinn on
+which identity to drive for the surface under test.
 
-Idempotent, so re-running is safe. The user must exist first — grant *after*
-Quinn has signed in, or after seeding the account.
+**Keep `qa-player@example.com` un-granted if the branch touches permission
+gating**: it is the one identity with no opt-in role, so it is what keeps the
+"no permission" path testable.
 
-**Keep one un-granted identity if the branch touches permission gating**: with
-every user granted, the "no permission" path becomes untestable. Say which
-identity holds which role when you brief Quinn.
+Need a role granted to a fourth identity (an entrant Quinn created, say)? Sign
+in as `qa-admin@example.com` and use the admin area's role-assignment UI. It
+needs no SQL. The admin Users page searches by username, not email, so look
+the target up by username, not the address Quinn signed them in with.
 
 The launched Chrome is **headless** — Quinn drives it blind and reads the page
 via `snapshot` (the a11y tree), screenshotting only as bug evidence.

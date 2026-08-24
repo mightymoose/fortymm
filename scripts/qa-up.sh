@@ -85,6 +85,12 @@ echo "QA stack up: $QA_URL  (Mailpit http://127.0.0.1:${QA_MAILPIT_PORT})"
 echo "Tear down  : scripts/qa-down.sh $QA_ID   (also drops its volumes + built images)"
 echo
 
+echo "Seeded identities (sign in via Mailpit, http://127.0.0.1:${QA_MAILPIT_PORT}):"
+echo "  qa-admin@example.com     Administrator"
+echo "  qa-director@example.com  Beta tester"
+echo "  qa-player@example.com    (default User only — the no-permission case)"
+echo
+
 # Machine-readable handoff — MUST be the last stdout line. Scripts/skills can
 # `eval "$(scripts/qa-up.sh <id> | tee /dev/stderr | tail -n1)"` to import
 # QA_URL / QA_MAILPIT_URL / QA_PROJECT while still streaming progress.
