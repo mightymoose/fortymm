@@ -9419,18 +9419,32 @@ internal enum Components {
         /// A reservation whose aggregate match-time (``required_min``) exceeds the
         /// table-minutes its window offers (``capacity_min`` = window span ×
         /// ``table_count``). Resolved: the reservation ``name``, which kind of
-        /// ``reservation`` it is, its ``HH:MM`` bounds, and ``group_count`` — how many
-        /// groups' fixtures the reservation holds (#1389). Two groups sharing one
-        /// reservation compete for one set of tables, so a count above one names a cause
-        /// the director can act on: add a reservation, and the groups re-spread across
-        /// them. It is the groups mapped to a booked reservation, or the groups with no
-        /// reservation for an event-wide one (0 when only a knockout stage sits in it).
-        /// The minutes stay integers.
+        /// ``reservation`` it is, its ``HH:MM`` bounds, ``group_count`` and
+        /// ``has_bracket``.
         ///
-        /// ``group_count`` defaults to ``0``: the solve ledger stores resolved reasons as
-        /// JSONB, so a row written before the field existed reads back as 0, and a client
-        /// renders no group clause for it — the same read-back default
-        /// :data:`ReservationKind` carries.
+        /// ``group_count`` is how many **group-stage** groups' fixtures the reservation
+        /// holds (#1389, re-scoped by #1535 to exclude the knockout stage's own group —
+        /// see below). Two group-stage groups sharing one reservation compete for one set
+        /// of tables, so a count above one names a cause the director can act on: add a
+        /// reservation, and the groups re-spread across them. It is the group-stage groups
+        /// mapped to a booked reservation, or the group-stage groups with no reservation
+        /// for an event-wide one (0 when only a knockout stage sits in it).
+        ///
+        /// ``has_bracket`` is whether the knockout stage's own group (#1484) also shares
+        /// this reservation. It never changes whether the clause fires — ``group_count``
+        /// alone still gates that — it only tells the client whether to name the bracket
+        /// alongside the count when the clause does fire. The API carries this rather than
+        /// the client inferring it from a draw type or a name. A single-elim or swiss
+        /// event's sole stage does not seat both sides of its fixtures at the cut either
+        /// (:func:`~app.tournament_draws.group_stage_ids` excludes it, same as an
+        /// rr-then-ko event's knockout stage), so ``group_count`` is always ``0`` there —
+        /// never above the one that would open the clause — whatever ``has_bracket``
+        /// reports for that reservation. The minutes stay integers.
+        ///
+        /// No read-back default on either field (#1535): unlike :data:`ReservationKind`,
+        /// which still defaults for pre-event-wide-reservation ledger rows, the operator
+        /// deletes any solve-ledger row written before this change rather than the API
+        /// growing a default whose only job is rendering one.
         ///
         /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead`.
         internal struct ReservationOverCapacityRead: Codable, Hashable, Sendable {
@@ -9460,7 +9474,9 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/table_count`.
             internal var tableCount: Swift.Int
             /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/group_count`.
-            internal var groupCount: Swift.Int?
+            internal var groupCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/has_bracket`.
+            internal var hasBracket: Swift.Bool
             /// Creates a new `ReservationOverCapacityRead`.
             ///
             /// - Parameters:
@@ -9473,6 +9489,7 @@ internal enum Components {
             ///   - capacityMin:
             ///   - tableCount:
             ///   - groupCount:
+            ///   - hasBracket:
             internal init(
                 kind: Components.Schemas.ReservationOverCapacityRead.KindPayload? = nil,
                 reservationName: Swift.String,
@@ -9482,7 +9499,8 @@ internal enum Components {
                 requiredMin: Swift.Int,
                 capacityMin: Swift.Int,
                 tableCount: Swift.Int,
-                groupCount: Swift.Int? = nil
+                groupCount: Swift.Int,
+                hasBracket: Swift.Bool
             ) {
                 self.kind = kind
                 self.reservationName = reservationName
@@ -9493,6 +9511,7 @@ internal enum Components {
                 self.capacityMin = capacityMin
                 self.tableCount = tableCount
                 self.groupCount = groupCount
+                self.hasBracket = hasBracket
             }
             internal enum CodingKeys: String, CodingKey {
                 case kind
@@ -9504,6 +9523,7 @@ internal enum Components {
                 case capacityMin = "capacity_min"
                 case tableCount = "table_count"
                 case groupCount = "group_count"
+                case hasBracket = "has_bracket"
             }
         }
         /// One reservation of an event a client **edits** (``PATCH …/events/{id}``):

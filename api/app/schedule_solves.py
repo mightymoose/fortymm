@@ -261,7 +261,7 @@ from app.schemas.schedule_solve import (
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.schemas.tournament import Reservation, Slot, TournamentTable
-from app.tournament_draws import event_groups, event_reservations
+from app.tournament_draws import event_groups, event_reservations, group_stage_ids
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_realtime import stage_event_entrant_hints
 
@@ -623,23 +623,38 @@ def event_wide_reservation_name(event_name: str) -> str:
     return f"{event_name} (whole venue)"
 
 
+@dataclass(frozen=True, slots=True)
+class GroupReservation:
+    """One group's reservation-relevant facts (#1535): the id of the reservation it
+    plays in (``None`` for a group with no join row, #1387) and the id of its own
+    stage. Carried as one value so :func:`group_counts_by_reservation` can test a
+    group's stage against :func:`~app.tournament_draws.group_stage_ids` — the one
+    predicate for "is this a group-stage group" — without a second walk of
+    ``event.groups`` alongside :func:`group_reservation_ids`'s own."""
+
+    reservation_id: uuid.UUID | None
+    stage_id: uuid.UUID
+
+
 def restricting_reservation_key(
     event_id: uuid.UUID,
     group_id: uuid.UUID | None,
-    group_reservation_ids: Mapping[uuid.UUID, uuid.UUID | None],
+    group_reservation_ids: Mapping[uuid.UUID, GroupReservation],
 ) -> ReservationId:
     """Which reservation restricts a fixture of ``event_id`` that names ``group_id``
     (ADR "a reservation restricts scheduling, it does not enable it") — the **one**
     rule every site that asks the question goes through (#1389).
 
     A fixture resolves to a reservation through its group: ``group_id`` names a
-    **group**, and ``group_reservation_ids`` maps each group of the event to the id of
-    the reservation it plays in, or ``None`` for a group that plays in none (#1387).
-    The fixture takes that reservation's key (:func:`reservation_key`) when the hop
-    lands on one, and the event-wide key (:func:`event_wide_reservation_key`)
-    otherwise — because its group has no reservation (every group of an event with
-    none booked, or a knockout stage's own group sharing the pool's un-mapped
-    position, #1484).
+    **group**, and ``group_reservation_ids`` maps each group of the event to a
+    :class:`GroupReservation` — its ``reservation_id`` (``None`` for a group that
+    plays in none, #1387) plus its ``stage_id`` (#1535). Only ``reservation_id`` is
+    read here; ``stage_id`` rides along for :func:`group_counts_by_reservation`,
+    which shares this same map. The fixture takes that reservation's key
+    (:func:`reservation_key`) when the hop lands on one, and the event-wide key
+    (:func:`event_wide_reservation_key`) otherwise — because its group has no
+    reservation (every group of an event with none booked, or a knockout stage's own
+    group sharing the pool's un-mapped position, #1484).
 
     ``group_id`` itself stays ``uuid.UUID | None`` here for one caller only: the
     schedule *preview* walks ``app.draws.PlannedFixture``s, which are plain,
@@ -664,29 +679,38 @@ def restricting_reservation_key(
     question was the defect: a fixture in a group with no reservation names a group,
     so a site asking it took the group arm and then asked for a key with no window.
     """
-    booked = group_reservation_ids[group_id] if group_id is not None else None
+    booked = (
+        group_reservation_ids[group_id].reservation_id if group_id is not None else None
+    )
     if booked is None:
         return event_wide_reservation_key(event_id)
     return reservation_key(event_id, booked)
 
 
-def group_reservation_ids(event: TournamentEvent) -> dict[uuid.UUID, uuid.UUID | None]:
-    """Group id → the id of the reservation that group plays in, ``None`` for a group
-    with no join row (#1387) — the one place the scheduler crosses from the draw's
-    vocabulary (a fixture names a **group**) into the venue's (the thing the solver
-    constrains is a **reservation**). Total over the event's groups, so "no
-    reservation" is a typed value a reader has to handle rather than a missing key.
+def group_reservation_ids(event: TournamentEvent) -> dict[uuid.UUID, GroupReservation]:
+    """Group id → :class:`GroupReservation` — the id of the reservation that group
+    plays in (``None`` for a group with no join row, #1387) and the id of its own
+    stage (#1535) — the one place the scheduler crosses from the draw's vocabulary (a
+    fixture names a **group**) into the venue's (the thing the solver constrains is a
+    **reservation**). Total over the event's groups, so "no reservation" is a typed
+    value a reader has to handle rather than a missing key.
 
     Read through the projection seam (:func:`~app.tournament_draws.event_groups`),
-    not off the ORM: ``GroupRead`` carries the mapped ``reservation_id`` outright, so
-    the hop has one spelling and #1370 has one place to change it. The live solve, the
-    preview builder and the preview's reason resolver all take the map from here."""
-    return {group.id: group.reservation_id for group in event_groups(event)}
+    not off the ORM: ``GroupRead`` carries both the mapped ``reservation_id`` and its
+    own ``stage_id`` outright, so the hop has one spelling and #1370 has one place to
+    change it. The live solve, the preview builder and the preview's reason resolver
+    all take the map from here."""
+    return {
+        group.id: GroupReservation(
+            reservation_id=group.reservation_id, stage_id=group.stage_id
+        )
+        for group in event_groups(event)
+    }
 
 
 def reservation_keys_by_group(
     event_id: uuid.UUID,
-    group_reservation_ids: Mapping[uuid.UUID, uuid.UUID | None],
+    group_reservation_ids: Mapping[uuid.UUID, GroupReservation],
 ) -> dict[uuid.UUID | None, ReservationId]:
     """Every answer :func:`restricting_reservation_key` can give for one event, keyed
     by the group a fixture names — one entry per group plus the ``None`` entry for a
@@ -696,8 +720,9 @@ def reservation_keys_by_group(
     Built through the rule, not beside it, so the map cannot disagree with a direct
     call. Total over the event's fixtures: a fixture's group is in
     ``group_reservation_ids`` by its own composite foreign key, and ``None`` is here.
-    The group count behind an over-capacity reason is a ``Counter`` over the non-None
-    values."""
+    The group and bracket facts behind an over-capacity reason
+    (:func:`group_counts_by_reservation`) walk this same map's non-``None``
+    entries."""
     keys: dict[uuid.UUID | None, ReservationId] = {
         group_id: restricting_reservation_key(event_id, group_id, group_reservation_ids)
         for group_id in group_reservation_ids
@@ -706,18 +731,66 @@ def reservation_keys_by_group(
     return keys
 
 
+@dataclass(frozen=True, slots=True)
+class ReservationGroupCounts:
+    """One reservation's group-facing facts behind the over-capacity clause (#1535):
+    ``group_count``, how many **group-stage** groups' fixtures it holds, and
+    ``has_bracket``, whether the knockout stage's own group (#1484) also shares it.
+    Carried as one value rather than two parallel dicts, so a reader cannot read one
+    without the other and have them drift out of step for the same reservation."""
+
+    group_count: int
+    has_bracket: bool
+
+
+#: The answer for a reservation ``group_counts_by_reservation`` never mapped: no
+#: group-stage group and no bracket. Shared so every ``.get(key, ...)`` read names
+#: the same default rather than each call site re-spelling
+#: ``ReservationGroupCounts(0, False)``.
+NO_GROUPS_SHARE_THE_RESERVATION = ReservationGroupCounts(
+    group_count=0, has_bracket=False
+)
+
+
 def group_counts_by_reservation(
+    group_reservation_ids: Mapping[uuid.UUID, GroupReservation],
     keys_by_group: Mapping[uuid.UUID | None, ReservationId],
-) -> Counter[ReservationId]:
-    """How many groups' fixtures each reservation holds (#1389): the groups mapped to
-    a booked reservation, or the groups with no reservation for the event-wide one.
-    The ``None`` entry is a fixture naming no group, not a group, so it is not
-    counted — an event-wide reservation holding only a knockout stage reports 0, via
-    ``.get(key, 0)`` at the reads. One rule for the live solve and the preview, so the
-    "holds N groups" clause reads the same number on both surfaces."""
-    return Counter(
-        key for group_id, key in keys_by_group.items() if group_id is not None
-    )
+    stage_ids: frozenset[uuid.UUID],
+) -> dict[ReservationId, ReservationGroupCounts]:
+    """Each reservation's :class:`ReservationGroupCounts` (#1535): how many
+    **group-stage** groups' fixtures it holds — the groups mapped to a booked
+    reservation, or the groups with no reservation for the event-wide one — and
+    whether the knockout stage's own group (#1484) also maps to it.
+
+    ``stage_ids`` is :func:`~app.tournament_draws.group_stage_ids`'s answer for the
+    event — the one predicate for "is this a group-stage stage", so this function
+    does not ask the question a second way. A group whose stage falls outside it
+    names the bracket, not a "group" the over-capacity clause should count: that was
+    the defect (#1484 added the knockout stage's own group to every reader's group
+    set, and this clause was the one surface that kept counting it as a plain
+    group).
+
+    The ``None`` entry of ``keys_by_group`` is a fixture naming no group, not a
+    group, so it is not counted either way. A reservation neither dict ever maps —
+    holding no group at all — is not a key of the result;
+    :data:`NO_GROUPS_SHARE_THE_RESERVATION` is the reads' shared default for it. One
+    rule for the live solve and the preview, so the "holds N groups[, and the
+    bracket]" clause reads the same on both surfaces."""
+    group_stage_counts: Counter[ReservationId] = Counter()
+    bracket_keys: set[ReservationId] = set()
+    for group_id, key in keys_by_group.items():
+        if group_id is None:
+            continue
+        if group_reservation_ids[group_id].stage_id in stage_ids:
+            group_stage_counts[key] += 1
+        else:
+            bracket_keys.add(key)
+    return {
+        key: ReservationGroupCounts(
+            group_count=group_stage_counts.get(key, 0), has_bracket=key in bracket_keys
+        )
+        for key in {*group_stage_counts, *bracket_keys}
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -738,11 +811,16 @@ class _ReservationResolution:
     window_start: str
     window_end: str
     reservation: ReservationKind = "booked"
-    #: How many groups' fixtures this reservation holds (#1389): the groups mapped to
-    #: a booked reservation, or the groups with no reservation for the event-wide one
-    #: — 0 when only a knockout stage sits in it. Carried onto the over-capacity read,
-    #: where a count above one points the director at "add a reservation".
+    #: How many **group-stage** groups' fixtures this reservation holds (#1389,
+    #: re-scoped by #1535): the group-stage groups mapped to a booked reservation, or
+    #: the group-stage groups with no reservation for the event-wide one — 0 when
+    #: only a knockout stage sits in it. Carried onto the over-capacity read, where a
+    #: count above one points the director at "add a reservation".
     group_count: int = 0
+    #: Whether the knockout stage's own group (#1484) also shares this reservation
+    #: (#1535). Carried onto the over-capacity read so the client can name the
+    #: bracket alongside the count without inferring it from a draw type.
+    has_bracket: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1076,15 +1154,18 @@ async def _load_solver_inputs(
         event_wide_key = event_wide_reservation_key(event.id)
         # Which reservation restricts each of this event's fixtures, by the group it
         # names — one lookup table built through the rule, used by the event-wide
-        # guard and the per-fixture resolution below. Its non-None entries are also
-        # the count behind an over-capacity reason's "holds N groups" clause;
-        # ``get(key, 0)`` at the reads, so a reservation no group maps to — an
-        # event-wide one holding only a knockout stage — reports 0, not a miss.
-        keys_by_group = reservation_keys_by_group(
-            event.id, group_reservation_ids(event)
-        )
+        # guard and the per-fixture resolution below. Its non-None entries also feed
+        # the over-capacity reason's group/bracket facts below
+        # (``group_counts_by_reservation``); ``.get(key,
+        # NO_GROUPS_SHARE_THE_RESERVATION)`` at the reads, so a reservation no group
+        # maps to — an event-wide one holding only a knockout stage — reports 0
+        # groups (and, there, ``has_bracket=True``), not a miss.
+        group_res_ids = group_reservation_ids(event)
+        keys_by_group = reservation_keys_by_group(event.id, group_res_ids)
         keys_by_event[event.id] = keys_by_group
-        group_counts = group_counts_by_reservation(keys_by_group)
+        group_counts = group_counts_by_reservation(
+            group_res_ids, keys_by_group, group_stage_ids(event)
+        )
         for reservation in reservations:
             # Keyed on the reservation's OWN id, now that the projection carries
             # one — no lookup needed here (``keys_by_group`` is for the per-fixture
@@ -1099,11 +1180,13 @@ async def _load_solver_inputs(
             )
             reservation_specs.append((key, tables, start, end))
             reservation_dates[key] = date.fromisoformat(reservation.slot.date)
+            counts = group_counts.get(key, NO_GROUPS_SHARE_THE_RESERVATION)
             reservation_resolutions[key] = _ReservationResolution(
                 name=reservation.name,
                 window_start=reservation.slot.start,
                 window_end=reservation.slot.end,
-                group_count=group_counts.get(key, 0),
+                group_count=counts.group_count,
+                has_bracket=counts.has_bracket,
             )
         if any(
             keys_by_group[fixture.group_id] == event_wide_key
@@ -1130,6 +1213,9 @@ async def _load_solver_inputs(
             start, end = _slot_bounds(event_slot, event_tz)
             reservation_specs.append((event_wide_key, catalogue, start, end))
             reservation_dates[event_wide_key] = date.fromisoformat(event_slot.date)
+            event_wide_counts = group_counts.get(
+                event_wide_key, NO_GROUPS_SHARE_THE_RESERVATION
+            )
             reservation_resolutions[event_wide_key] = _ReservationResolution(
                 name=event_wide_reservation_name(event.name),
                 window_start=event_slot.start,
@@ -1139,7 +1225,8 @@ async def _load_solver_inputs(
                 # window). Its controls are the event's window and the
                 # tournament's table catalogue.
                 reservation="event",
-                group_count=group_counts.get(event_wide_key, 0),
+                group_count=event_wide_counts.group_count,
+                has_bracket=event_wide_counts.has_bracket,
             )
 
     # The minute frame's origin: the earliest reservation window start — a
@@ -1459,6 +1546,7 @@ def _resolve_reason(reason: InfeasibilityReason, inputs: SolveInputs) -> Resolve
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
                 group_count=reservation.group_count,
+                has_bracket=reservation.has_bracket,
             )
         case PlayerOverSubscribed():
             # The one arm that names a *human*: resolved through the same
