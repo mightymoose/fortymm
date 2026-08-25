@@ -2931,15 +2931,15 @@ class TestGroupCountExcludesTheBracket:
         already suppressed" — the API never names a bracket for a draw type that
         has no group stage to name it beside.
 
-        ``has_bracket`` itself resolves ``True`` here — the one-predicate rule
-        (:func:`~app.tournament_draws.group_stage_ids`) says so, since this
-        stage seats neither side at the cut same as an rr-then-ko knockout's does
-        not, and Planning's note that it "should never be true there" does not
-        hold: ``group_stage_ids`` is *empty* for a standalone single-elim event,
-        not "the whole event", so nothing here is a group-stage group to compare
-        against. The value is inert — the gate above never opens to read it — and
-        pinned so a change to that gate is what has to touch this assertion, not
-        an accident."""
+        ``has_bracket`` itself also resolves ``False`` here: with
+        :func:`~app.tournament_draws.group_stage_ids` empty for a standalone
+        single-elim event, there is no group stage for this sole group to be the
+        *bracket* relative to, so
+        :func:`~app.schedule_solves.group_counts_by_reservation` never classifies
+        it as one (#1535 review — a non-group-stage group is only the bracket
+        when the event actually has a group stage). Pinned alongside the gated
+        ``group_count`` so the field stays honest even though the client-side
+        gate never reads it."""
         tournament_id, event_id = await _make_tournament(
             db_session,
             draw_type=DrawType.single_elim,
@@ -2962,7 +2962,7 @@ class TestGroupCountExcludesTheBracket:
         )
         assert isinstance(resolved, ReservationOverCapacityRead)
         assert resolved.group_count == 0
-        assert resolved.has_bracket is True
+        assert resolved.has_bracket is False
 
     async def test_a_swiss_events_sole_group_never_gates_the_clause(
         self, db_session: AsyncSession
@@ -2970,7 +2970,9 @@ class TestGroupCountExcludesTheBracket:
         """The swiss twin of the single-elim case above: one stage, one group,
         not a group-stage stage (``seats_both_sides_at_cut(swiss)`` is ``False``
         too), so ``group_count`` is ``0`` and the clause's gate cannot open here
-        either, whatever ``has_bracket`` reports."""
+        either. ``has_bracket`` is ``False`` too, for the same reason as the
+        single-elim case: no group stage exists for this sole group to be the
+        bracket relative to."""
         tournament_id, event_id = await _make_tournament(
             db_session,
             draw_type=DrawType.swiss,
@@ -2994,7 +2996,7 @@ class TestGroupCountExcludesTheBracket:
         )
         assert isinstance(resolved, ReservationOverCapacityRead)
         assert resolved.group_count == 0
-        assert resolved.has_bracket is True
+        assert resolved.has_bracket is False
 
 
 class TestUnGroupedDrawShapes:

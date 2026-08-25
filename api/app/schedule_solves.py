@@ -770,6 +770,18 @@ def group_counts_by_reservation(
     set, and this clause was the one surface that kept counting it as a plain
     group).
 
+    A non-group-stage group is only ever the bracket when the event *has* a group
+    stage to sit beside — ``stage_ids`` non-empty. A single-elim or swiss event's
+    sole stage also fails ``group_stage_ids``' predicate (it does not seat both
+    sides at the cut either), so with an empty ``stage_ids`` its sole group would
+    match the same "outside ``stage_ids``" test as an rr-then-ko knockout's group
+    does, with nothing to be the bracket relative to (Non-Goals: "Naming a bracket
+    on a single_elim or swiss event"). Gating on ``stage_ids`` being non-empty is
+    what tells the two cases apart, without asking ``group_stage_ids``' question a
+    second way for "is this event's knockout stage" — a group whose stage sits
+    outside an *empty* ``stage_ids`` is never counted either way, same as the
+    ``None`` case below.
+
     The ``None`` entry of ``keys_by_group`` is a fixture naming no group, not a
     group, so it is not counted either way. A reservation neither dict ever maps —
     holding no group at all — is not a key of the result;
@@ -783,7 +795,7 @@ def group_counts_by_reservation(
             continue
         if group_reservation_ids[group_id].stage_id in stage_ids:
             group_stage_counts[key] += 1
-        else:
+        elif stage_ids:
             bracket_keys.add(key)
     return {
         key: ReservationGroupCounts(

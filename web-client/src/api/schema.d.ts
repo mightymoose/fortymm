@@ -4520,8 +4520,11 @@ export interface components {
          *     event's sole stage does not seat both sides of its fixtures at the cut either
          *     (:func:`~app.tournament_draws.group_stage_ids` excludes it, same as an
          *     rr-then-ko event's knockout stage), so ``group_count`` is always ``0`` there —
-         *     never above the one that would open the clause — whatever ``has_bracket``
-         *     reports for that reservation. The minutes stay integers.
+         *     never above the one that would open the clause. ``has_bracket`` is ``False``
+         *     for that reservation too: with no group-stage group of its own, the event has
+         *     no group stage for a bracket to sit beside, so its sole group is never named
+         *     one (Non-Goals: "Naming a bracket on a single_elim or swiss event. Their sole
+         *     group is already suppressed"). The minutes stay integers.
          *
          *     No read-back default on either field (#1535): unlike :data:`ReservationKind`,
          *     which still defaults for pre-event-wide-reservation ledger rows, the operator
