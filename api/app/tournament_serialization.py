@@ -11,9 +11,11 @@ serializer"). It imports only domain/query/schema modules — never a router —
 it stays cycle-free, mirroring ``app/match_serialization.py``.
 """
 
+import logging
 import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any, assert_never, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +57,7 @@ from app.results import (
     results_for,
 )
 from app.schemas.tournament import (
+    DateRange,
     DrawTypeRead,
     EventEntryFull,
     EventEntryOpen,
@@ -112,6 +115,8 @@ __all__ = [
     "shape_event_read",
 ]
 
+log = logging.getLogger(__name__)
+
 
 def _tournament_fields(
     t: Tournament,
@@ -135,8 +140,6 @@ def _tournament_fields(
         "name": t.name,
         "description": t.description,
         "status": t.status,
-        "start_date": t.start_date,
-        "end_date": t.end_date,
         "address": t.address,
         "table_catalogue": t.tables,
         "league_id": t.league_id,
@@ -850,6 +853,44 @@ def serialize_event(
     )
 
 
+def _events_date_range(events: Sequence[TournamentEvent]) -> DateRange | None:
+    """The tournament's date span (#1511): the min/max of ``events[*].slot.date``,
+    or ``None`` for an event-less tournament — the only condition a WELL-FORMED
+    event set makes it ``None`` for.
+
+    Takes the caller's already-loaded ``events`` rather than ``t.events``: both
+    ``serialize_detail`` call sites (``app.tournament_list``) load a tournament's
+    full event set themselves and pass it in, and ``Tournament.events`` carries no
+    eager loading strategy of its own, so touching it here on a row loaded some
+    other way would risk the lazy-load-under-async ``MissingGreenlet`` every other
+    eager relationship on this model exists to avoid.
+
+    ``slot.date`` is validated ``YYYY-MM-DD`` by ``_slot_is_well_formed`` at the
+    write boundary (``app.schemas.tournament``) for every row written through it —
+    but a read must not assume every STORED row went through it. A legacy or
+    hand-written row can still hold something ``date.fromisoformat`` refuses
+    (mirrors why ``TournamentEventRead.slot`` is a bare ``Slot``, not
+    ``WellFormedSlot``: "tightening a read turns a legacy row's malformed ...
+    window into a 500 on GET — this ticket's own bug relocated one verb over").
+    An event whose stored date does not parse is excluded from the range and
+    logged, rather than 500ing the whole tournament read over one bad row."""
+    dates: list[date] = []
+    for e in events:
+        raw = cast(str, e.slot["date"])
+        try:
+            dates.append(date.fromisoformat(raw))
+        except ValueError:
+            log.error(
+                "Tournament event %s has a slot.date that does not parse (%r); "
+                "excluded from the tournament's derived date_range",
+                e.id,
+                raw,
+            )
+    if not dates:
+        return None
+    return DateRange(start=min(dates), end=max(dates))
+
+
 def serialize_detail(
     t: Tournament,
     *,
@@ -890,6 +931,8 @@ def serialize_detail(
             # The near-me distance in miles, or ``None`` on every read that was not
             # location-filtered (the detail read, the unfiltered/owner-scoped lists).
             "distance_miles": distance_miles,
+            # The tournament's derived date span (#1511) — see ``_events_date_range``.
+            "date_range": _events_date_range(events),
             # The selectable draw formats, already ordered by the query that read them
             # off the ``draw_types`` table — passed in rather than fetched here for the
             # same reason ``fixtures`` is, and taken from the table rather than the

@@ -91,7 +91,7 @@ describe('TournamentDetailPage', () => {
       expect(document.body).not.toHaveTextContent(/TBD/i)
       // …and the rest of the header is untouched — the dates are still there, so
       // this is a missing venue row and not a page that failed to render.
-      expect(document.body).toHaveTextContent('Jun 13, 2026')
+      expect(document.body).toHaveTextContent('Jun 13–14, 2026')
     })
 
     /**
@@ -214,8 +214,7 @@ describe('TournamentDetailPage', () => {
     it('reads "day" for a one-day tournament', () => {
       tournamentDetailPagePage.render({
         tournament: buildTournament({
-          startDate: '2026-08-22',
-          endDate: '2026-08-22',
+          dateRange: { start: '2026-08-22', end: '2026-08-22' },
           events: [],
         }),
       })
@@ -225,13 +224,31 @@ describe('TournamentDetailPage', () => {
     it('reads "days" for a multi-day tournament', () => {
       tournamentDetailPagePage.render({
         tournament: buildTournament({
-          startDate: '2026-08-22',
-          endDate: '2026-08-23',
+          dateRange: { start: '2026-08-22', end: '2026-08-23' },
           events: [],
         }),
       })
       expect(tournamentDetailPagePage.getDaysStat()).toBe('2days')
     })
+
+    // #1511: `dateRange` is `null` iff the tournament holds no events — the
+    // em-dash is the designed "no span yet" state, not a fallback to a stale
+    // client-computed value.
+    it('shows the em-dash, with no unit, for a tournament with no dateRange', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({ dateRange: null, events: [] }),
+      })
+      expect(tournamentDetailPagePage.getDaysStat()).toBe('—')
+    })
+  })
+
+  it('shows "Dates set by events" copy in the header for a tournament with no dateRange', () => {
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ dateRange: null, events: [] }),
+    })
+    expect(document.body).toHaveTextContent(
+      'Dates set by events — add one to begin.',
+    )
   })
 
   it('shows the lifecycle action matching the status', () => {

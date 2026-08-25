@@ -29,6 +29,7 @@ import {
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { mockUuid } from '../../../src/mocks/mock-uuid'
 import { groupIdFor, groupsFor } from '../../../src/mocks/factories/tournaments/solver-sim'
+import { dateRangeForEvents } from '../../../src/mocks/tournaments-store'
 import { groupLetter } from '../../../src/components/tournaments/data/draw-structure'
 import { inPositionOrder } from '../../../src/components/tournaments/data/helpers'
 import { sessionResponse } from '../../../src/test/factories'
@@ -1536,7 +1537,12 @@ export class TournamentsStore {
   }
 
   private readDetail(): TournamentDetailRead {
-    return { ...this.detail, events: this.detail.events.map((e) => this.read(e)) }
+    const events = this.detail.events.map((e) => this.read(e))
+    // #1511: derived from THIS read's own events, the same rule the real API and
+    // the vitest MSW store apply (`dateRangeForEvents`) — never the seed's static
+    // literal, which would drift the moment a spec added, removed, or re-dated an
+    // event.
+    return { ...this.detail, events, date_range: dateRangeForEvents(events) }
   }
 
   /** One row of the LIST, which is the detail shape with the **draw-type catalogue

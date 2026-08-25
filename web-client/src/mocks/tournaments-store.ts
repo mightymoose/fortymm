@@ -143,7 +143,8 @@ type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state' | 'groups
 }
 
 /** What the store holds for a tournament: the wire shape minus its events (which are
- * stored in their own reduced form above) and minus `draw_type_catalogue`.
+ * stored in their own reduced form above), minus `draw_type_catalogue`, and minus
+ * `date_range`.
  *
  * The catalogue is **global reference data, not a fact about a row** — the `draw_types`
  * table, which every tournament shares — and it is page data besides: the DETAIL payload
@@ -151,10 +152,17 @@ type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state' | 'groups
  * enum holds only what runs"). Seeding it per tournament would let two rows disagree
  * about what the server's table holds, and would leave each read shape's answer to
  * whoever wrote the seed. So it is not stored at all: `readDetail` and `readListRow`
- * below decide it, one place each. */
+ * below decide it, one place each.
+ *
+ * `date_range` is the same discipline applied to a tournament's date span (#1511): it
+ * is the min/max of the tournament's OWN events' `slot.date`, derived on every read
+ * (`dateRangeForEvents`) rather than a stored, independently-writable pair — there is
+ * no `start_date`/`end_date` anywhere in this store any more, exactly as there is none
+ * on the real API's write or read schemas. Storing it here as well as deriving it would
+ * let the two disagree the moment an event's slot moved and nobody re-derived the copy. */
 type StoredTournament = Omit<
   TournamentDetailRead,
-  'events' | 'draw_type_catalogue'
+  'events' | 'draw_type_catalogue' | 'date_range'
 > & {
   events: StoredEvent[]
 }
@@ -583,8 +591,6 @@ function seed(): StoredTournament[] {
       name: 'Bay Area Open 2026',
       description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
       status: 'published',
-      start_date: '2026-06-13',
-      end_date: '2026-06-14',
       league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'Berkeley TT Club',
@@ -890,8 +896,6 @@ function seed(): StoredTournament[] {
       name: 'Summer Slam 2026',
       description: null,
       status: 'draft',
-      start_date: '2026-08-22',
-      end_date: '2026-08-23',
       league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'Palo Alto Community Center',
@@ -963,8 +967,6 @@ function seed(): StoredTournament[] {
       // it `live` would lock its entries and hide that. The closed-window states
       // are still one click away: start (then end) the owned Bay Area Open.
       status: 'published',
-      start_date: '2026-07-01',
-      end_date: '2026-07-01',
       league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'San Jose Sports Hall',
@@ -1062,8 +1064,6 @@ function seed(): StoredTournament[] {
       name: 'Garage Invitational',
       description: 'Address shared with entrants after registration.',
       status: 'published',
-      start_date: '2026-09-12',
-      end_date: '2026-09-12',
       league_id: DEFAULT_LEAGUE_ID,
       address: null,
       table_catalogue: tables(2),
@@ -1116,8 +1116,6 @@ function seed(): StoredTournament[] {
       name: 'Golden State Classic 2026',
       description: 'Groups on the Saturday, knockout on the Sunday.',
       status: 'live',
-      start_date: '2026-06-06',
-      end_date: '2026-06-07',
       league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'Golden State TT Center',
@@ -1331,8 +1329,6 @@ function seed(): StoredTournament[] {
       name: 'League Office Draft 2027',
       description: 'Not announced yet — and not the dev user’s to see.',
       status: 'draft',
-      start_date: '2027-01-16',
-      end_date: '2027-01-17',
       address: {
         venue: 'San Jose Sports Hall',
         street: '1500 Senter Rd',
@@ -1394,6 +1390,26 @@ function readEvent(event: StoredEvent): TournamentEventRead {
   }
 }
 
+/** A tournament's date span (#1511): the min/max of its OWN events' `slot.date`,
+ * mirroring the real API's derivation exactly (never a stored, independently-writable
+ * pair — see `StoredTournament`'s comment). `YYYY-MM-DD` strings sort lexicographically
+ * the same as chronologically, so a plain string sort is the whole implementation.
+ * `null` iff there are no events — the one and only null case, and the state a
+ * brand-new tournament is born in and stays in until its first event exists.
+ *
+ * Takes just the `slot` an event carries — not the full `StoredEvent`/`TournamentEventRead`
+ * — so the **`web-client/e2e/` Playwright stub** (`e2e/page-objects/tournaments/tournaments-store.ts`)
+ * can import this ONE definition too, rather than re-deriving the same rule a second
+ * time against its own event shape. Two derivations of one server rule is exactly the
+ * kind of drift #1511 exists to remove. */
+export function dateRangeForEvents(
+  events: readonly { slot: { date: string } }[],
+): components['schemas']['DateRange'] | null {
+  if (events.length === 0) return null
+  const dates = events.map((e) => e.slot.date).sort()
+  return { start: dates[0], end: dates[dates.length - 1] }
+}
+
 function readDetail(t: StoredTournament): TournamentDetailRead {
   // `distance_miles` is a property of a *near-me* read, not of the tournament: the
   // default list and every detail read carry `null` (no location was asked about),
@@ -1407,6 +1423,7 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
     // the copy to render it by (ADR "a draw type is a seeded row"). Non-null on DETAIL,
     // because this is the page that picks one.
     draw_type_catalogue: DRAW_TYPE_CATALOGUE,
+    date_range: dateRangeForEvents(t.events),
   }
 }
 
@@ -1808,8 +1825,6 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     name: body.name,
     description: body.description ?? null,
     status: 'draft',
-    start_date: body.start_date ?? null,
-    end_date: body.end_date ?? null,
     // An omitted `league_id` resolves to the default league, exactly as on the
     // server (ADR-0783): the column is NOT NULL, so a created tournament always
     // names the ladder it will be judged on — the caller only says which when it
@@ -2003,9 +2018,6 @@ export function updateTournament(
     description:
       patch.description === undefined ? existing.description : patch.description,
     status: existing.status,
-    start_date:
-      patch.start_date === undefined ? existing.start_date : patch.start_date,
-    end_date: patch.end_date === undefined ? existing.end_date : patch.end_date,
     // OMITTED means unchanged; an explicit `null` — or an all-blank object, which
     // `submittedAddress` normalizes to `null` — means REMOVE the venue. The two are
     // different edits and the server tells them apart (`TournamentUpdate`), so the

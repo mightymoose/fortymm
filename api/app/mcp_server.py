@@ -1067,8 +1067,11 @@ async def edit_tournament(
     ``updates`` is a PARTIAL patch: an OMITTED field is left unchanged; a supplied
     field replaces the current value. ``name`` and ``league_id`` back NOT NULL columns
     and ``table_catalogue`` backs a whole child table, so an explicit ``null`` for any
-    of them is rejected (send them only to set a real value); ``description`` /
-    ``start_date`` / ``end_date`` are nullable and may be cleared with ``null``.
+    of them is rejected (send them only to set a real value); ``description`` is
+    nullable and may be cleared with ``null``. There is no ``start_date``/``end_date``
+    to send — a tournament's date range is derived from its events' own ``slot.date``
+    on every read, so sending either is refused; move an event's own date by editing
+    that event's ``slot`` instead.
 
     ``address`` (the venue) has THREE cases, so read this before sending one: OMIT it
     to leave the current venue and its coordinates untouched; send a real address to

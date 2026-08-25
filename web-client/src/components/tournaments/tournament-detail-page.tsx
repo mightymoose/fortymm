@@ -7,7 +7,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDeleteDialog } from './confirm-delete-dialog'
 import {
   daysBetween,
-  effectiveDateRange,
   EM_DASH,
   emptyEvent,
   fmtDateRange,
@@ -184,8 +183,10 @@ export const TournamentDetailPage = ({
   // offers no draw type instead of re-deciding the same thing. The Events tab is handed
   // the whole `tournament` and reads the catalogue off it — one fact, one prop.
   const drawTypes = tournament.drawTypes ?? []
-  const range = effectiveDateRange(tournament)
-  const days = daysBetween(range.start, range.end)
+  // Server-derived, never re-computed here (#1511) — `null` iff the tournament
+  // holds no events yet.
+  const range = tournament.dateRange
+  const days = daysBetween(range?.start, range?.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
   const reservations = tournament.events.reduce(
     (s, e) => s + e.reservations.length,
@@ -265,7 +266,7 @@ export const TournamentDetailPage = ({
         <div className="mb-5 flex flex-wrap items-center gap-6">
           <StatusBadge status={tournament.status} />
           <MetaItem icon={<Calendar size={14} />}>
-            {range.start ? (
+            {range ? (
               <span className="font-mono tabular-nums text-[color:var(--fg-1)]">
                 {fmtDateRange(range.start, range.end)}
               </span>
@@ -348,8 +349,8 @@ export const TournamentDetailPage = ({
           />
           <HeroStat
             label="Days"
-            value={range.start ? days : EM_DASH}
-            suffix={range.start ? (days === 1 ? 'day' : 'days') : undefined}
+            value={range ? days : EM_DASH}
+            suffix={range ? (days === 1 ? 'day' : 'days') : undefined}
             icon={<Calendar size={16} />}
           />
         </div>

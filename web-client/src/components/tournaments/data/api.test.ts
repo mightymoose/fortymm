@@ -411,14 +411,23 @@ describe('apiToTournament', () => {
   it('maps top-level fields and derives tableIds from the catalogue', () => {
     const tournament = apiToTournament(
       buildTournamentDetailRead({
-        start_date: '2026-06-13',
-        end_date: '2026-06-14',
+        date_range: { start: '2026-06-13', end: '2026-06-14' },
       }),
     )
 
-    expect(tournament.startDate).toBe('2026-06-13')
-    expect(tournament.endDate).toBe('2026-06-14')
+    expect(tournament.dateRange).toEqual({ start: '2026-06-13', end: '2026-06-14' })
     expect(tournament.tableIds).toEqual(['t1', 't2', 't3', 't4'])
+  })
+
+  // #1511: the server derives the span from the tournament's own events — `null`
+  // is the designed "no events yet" state, and the client carries it across
+  // unchanged rather than inventing a fallback.
+  it('carries a null dateRange through as null — the server’s own "no events" state', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({ date_range: null }),
+    )
+
+    expect(tournament.dateRange).toBeNull()
   })
 
   /** The draw-type catalogue rides in on the detail payload and is what the event
@@ -568,8 +577,7 @@ const draft: Omit<Tournament, 'id'> = {
   name: 'Autumn Cup',
   status: 'draft',
   canEdit: true,
-  startDate: '2026-09-01',
-  endDate: '2026-09-02',
+  dateRange: { start: '2026-09-01', end: '2026-09-02' },
   description: 'A new draft.',
   // A read `Address` carries the server-geocoded coordinates (NOT NULL). The
   // write builders below must STRIP them — the create/edit wire shape is the
@@ -593,14 +601,12 @@ const draft: Omit<Tournament, 'id'> = {
 }
 
 describe('draftToCreateBody', () => {
-  it('maps the draft to a TournamentCreate with snake_case dates', () => {
+  it('maps the draft to a TournamentCreate, with no dates', () => {
     const body = draftToCreateBody(draft)
 
     expect(body).toEqual({
       name: 'Autumn Cup',
       description: 'A new draft.',
-      start_date: '2026-09-01',
-      end_date: '2026-09-02',
       // The write shape is the coord-free `AddressInput`: the six text fields
       // and NOTHING else. The draft's `address` carries `latitude`/`longitude`
       // (it is a read `Address`), so this asserts the projector STRIPPED them —
@@ -634,6 +640,16 @@ describe('draftToCreateBody', () => {
 
     expect('status' in body).toBe(false)
   })
+
+  // #1511: the server derives a tournament's date span from its events, and the
+  // create body carries neither field at all — even though the draft it is built
+  // from still holds a `dateRange` (read-model data a create never propagates).
+  it('sends NO start_date/end_date — the server derives the span from events', () => {
+    const body = draftToCreateBody(draft)
+
+    expect('start_date' in body).toBe(false)
+    expect('end_date' in body).toBe(false)
+  })
 })
 
 describe('tournamentToUpdateBody', () => {
@@ -642,8 +658,10 @@ describe('tournamentToUpdateBody', () => {
     const body = tournamentToUpdateBody(tournament)
 
     expect(body.name).toBe('Renamed')
-    expect(body.start_date).toBe('2026-09-01')
-    expect(body.end_date).toBe('2026-09-02')
+    // #1511: no dates on the PATCH body either — `TournamentUpdate` has no
+    // `start_date`/`end_date` at all (a client-sent one is a 422 naming the field).
+    expect('start_date' in body).toBe(false)
+    expect('end_date' in body).toBe(false)
     // The edit wire shape is the coord-free `AddressInput` too: the tournament
     // is a read model carrying `latitude`/`longitude`, and the builder strips
     // them — the server geocodes on its own and 422s a client-sent coordinate.

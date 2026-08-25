@@ -1,7 +1,8 @@
 // Pure helpers for the tournament-admin UI: date-only formatting (the domain
 // uses `YYYY-MM-DD`, never wall-clock instants, so we parse to a local Date to
-// dodge timezone drift), derived date ranges, predicate labels, and table
-// double-booking detection.
+// dodge timezone drift; a tournament's date RANGE itself is server-derived —
+// #1511 — and simply read off `Tournament.dateRange`, never recomputed here),
+// predicate labels, and table double-booking detection.
 
 import { labelFor, PRED_FIELDS, PRED_OPS_BY_TYPE } from './options'
 import type { PredicateOp } from './options'
@@ -284,20 +285,6 @@ export function conjoinWithAnd(labels: string[]): string {
   return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
 }
 
-/** A tournament's real date span is the min/max of its events' slots; falls
- * back to the seeded `startDate`/`endDate` when there are no events. */
-export function effectiveDateRange(t: Tournament): {
-  start: string | null
-  end: string | null
-} {
-  const dates = t.events.map((e) => e.slot?.date).filter(Boolean) as string[]
-  if (dates.length === 0) {
-    return { start: t.startDate, end: t.endDate }
-  }
-  dates.sort()
-  return { start: dates[0], end: dates[dates.length - 1] }
-}
-
 /** A **compact** summary of one eligibility predicate, e.g. `Rating < 1500` — the
  * chip form, sized for an event card's badge row.
  *
@@ -448,8 +435,10 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     status: 'draft',
     // A brand-new tournament is created by, hence owned by, the current user.
     canEdit: true,
-    startDate: null,
-    endDate: null,
+    // No events yet, so no date span — the server derives `dateRange` from the
+    // events an org has not created, and this draft has never been fetched
+    // besides (ADR 20260726's "not yet fetched" rule, applied here too).
+    dateRange: null,
     description: '',
     // NO VENUE — `null`, not six empty strings. A tournament may have none at all
     // (CONTEXT.md, "Venue"), and a blank draft is the clearest case of it: nothing
@@ -472,10 +461,11 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
   }
 }
 
-/** A blank draft event, defaulting its date to the tournament's first day. */
+/** A blank draft event, defaulting its date to the tournament's first day — or
+ * to today, for a tournament with no `dateRange` yet (no events, so no span the
+ * server could derive one from). */
 export function emptyEvent(t: Tournament): TournamentEvent {
-  const range = effectiveDateRange(t)
-  const defaultDate = range.start ?? new Date().toISOString().slice(0, 10)
+  const defaultDate = t.dateRange?.start ?? new Date().toISOString().slice(0, 10)
   return {
     id: genId('new'),
     name: '',

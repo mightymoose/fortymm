@@ -514,8 +514,6 @@ describe('the tournament write boundary — the venue catalogue (ADR 20260801)',
       body: JSON.stringify({
         name: 'Minted Over The Wire',
         description: null,
-        start_date: null,
-        end_date: null,
         address: null,
         // `TournamentTableWrite` — no `id` is even sendable.
         table_catalogue: [{ label: 'T1', court: 'A' }],

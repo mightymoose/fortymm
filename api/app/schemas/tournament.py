@@ -2066,6 +2066,22 @@ class DrawTypeRead(BaseModel):
     display_order: int
 
 
+class DateRange(BaseModel):
+    """A tournament's date span, derived on every read from the min/max of its
+    events' own ``slot.date`` (#1511) — never a stored, independently-writable
+    pair. Both fields are required and non-optional **on this object**: a range
+    that exists at all always has both ends, because it is the min and the max
+    of one non-empty list, never two independently-typed facts that could
+    disagree or go half-set. See :attr:`TournamentDetailRead.date_range` for why
+    the object itself is nullable.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    start: date
+    end: date
+
+
 class TournamentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -2073,8 +2089,6 @@ class TournamentRead(BaseModel):
     name: str
     description: str | None
     status: TournamentStatus
-    start_date: date | None
-    end_date: date | None
     # ``null`` means **this tournament has no venue** — a first-class state, not
     # missing data (CONTEXT.md, "Venue"; the ADR's 2026-07-26 amendment). It covers
     # both the not-booked-yet and the deliberately-withheld cases, which nothing
@@ -2095,6 +2109,23 @@ class TournamentRead(BaseModel):
 
 class TournamentDetailRead(TournamentRead):
     events: list[TournamentEventRead]
+    # The tournament's date span, derived on every read from the min/max of
+    # ``events[*].slot.date`` (#1511) — a computed fact, never a stored pair a
+    # caller could write independently of the events that back it.
+    #
+    # ``null`` means **this tournament holds no events** — the only condition
+    # that makes it null: an announced tournament nobody has scheduled a single
+    # event for yet has nothing to derive a span from. Once it exists, ``start``
+    # and ``end`` are never null inside it (:class:`DateRange`), and a
+    # single-event (or same-day) tournament reports ``start == end`` rather than
+    # a range collapsing to one bound and hiding the other.
+    #
+    # Lives ONLY here, not on the bare :class:`TournamentRead` the create/update/
+    # transition routes and their MCP twins answer with: those don't load a
+    # tournament's events, so they cannot compute this honestly, and adding it
+    # there would mean either a silent extra query on every write or a field
+    # that is sometimes present and sometimes not on the identical shape.
+    date_range: DateRange | None
     # The tournament's distance from the caller's point, in **miles**, when the list
     # was queried with a ``lat``/``lng``/``radius_miles`` triple (the "near me" filter,
     # ADR "a venue's coordinates are geocoded server-side ... Distance is a haversine
@@ -2154,8 +2185,10 @@ class TournamentCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
-    start_date: date | None = None
-    end_date: date | None = None
+    # There is deliberately no ``start_date``/``end_date`` here (#1511). A
+    # tournament's date range is derived from its events' own ``slot.date`` on
+    # every read, never a typed input — sending either is a 422
+    # (``extra="forbid"`` below), naming the refused field.
     # The write shape: six free-text components, no coordinates. The verb geocodes
     # it into a stored ``Address`` (with coordinates) before persisting (ADR "a
     # venue's coordinates are geocoded server-side ... and are NOT NULL").
@@ -2177,8 +2210,14 @@ class TournamentUpdate(BaseModel):
     value replaces the current one. ``name`` maps to a NOT NULL column and
     ``table_catalogue`` to a whole child table, so for those an explicit ``null`` is
     rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
-    are different. ``description``/``start_date``/``end_date`` are nullable
-    columns and may be cleared.
+    are different. ``description`` is a nullable column and may be cleared.
+
+    There is deliberately no ``start_date``/``end_date`` here (#1511, "A
+    tournament's dates run backwards, and an event can sit outside them"). A
+    tournament's date range is derived from its events' own ``slot.date`` on
+    every read, never a typed, independently-writable input — sending either
+    field is a 422 (``extra="forbid"`` below), naming the refused field. Move an
+    event's own date by editing that event's ``slot`` instead.
 
     ``table_catalogue``, when present, is the catalogue **in full and in order**, and it
     is applied as an **id-keyed diff** (ADR 20260801): an entry that cites an ``id``
@@ -2220,8 +2259,6 @@ class TournamentUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
-    start_date: date | None = None
-    end_date: date | None = None
     # The write shape: six free-text components, no coordinates (see
     # ``TournamentCreate.address``). An omitted key leaves the stored address (and its
     # coordinates) unchanged; an explicit ``null`` (or an all-blank object) removes the

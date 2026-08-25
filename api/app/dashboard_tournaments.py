@@ -34,7 +34,7 @@ from datetime import UTC, date, datetime
 from typing import assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attention import list_attention_kind
@@ -187,11 +187,20 @@ async def build_tournament_panels(
                 stage_draw_types=stage_draw_types,
             )
         )
+    # ONE batched aggregate for every tournament shown, however many that is — the
+    # panel's own entries/events above are the caller's ENTERED events only (a
+    # tournament's date range spans ALL of its events, #1511), so this cannot reuse
+    # them and has to be its own query. Grouped by tournament id rather than one
+    # query per tournament in the loop below, which the statement-count tripwire in
+    # ``tests/test_dashboard_tournaments.py`` would catch.
+    date_ranges = await _date_ranges(db, list(tournaments.keys()))
     return [
         DashboardTournament(
             id=tournament_id,
             name=tournaments[tournament_id].name,
-            subtitle=_subtitle(tournaments[tournament_id]),
+            subtitle=_subtitle(
+                tournaments[tournament_id], date_ranges.get(tournament_id)
+            ),
             live_count=sum(1 for e in panel_events if e.is_live),
             events=panel_events,
         )
@@ -815,7 +824,7 @@ def _sorted_by_effective_time(
     return sorted(fixtures, key=key)
 
 
-def _subtitle(tournament: Tournament) -> str:
+def _subtitle(tournament: Tournament, date_range: tuple[date, date] | None) -> str:
     """The panel's second line: the venue and the dates, e.g.
     ``"Riverside TTC · Jul 24–25"``.
 
@@ -823,10 +832,15 @@ def _subtitle(tournament: Tournament) -> str:
     into one sentence, and every client that folded them itself would fold them
     slightly differently.
 
+    ``date_range`` is the tournament's derived span (#1511) — the caller's own batched
+    aggregate, since this tournament's row carries no dates of its own to read.
+
     Every part is optional, including the venue (:func:`_venue`), so this degrades all
     the way down: a dated tournament with no venue is ``"Jul 24–25"``, and one with
     neither is the empty string."""
-    parts = [part for part in (_venue(tournament), _date_range(tournament)) if part]
+    parts = [
+        part for part in (_venue(tournament), _format_date_range(date_range)) if part
+    ]
     return " · ".join(parts)
 
 
@@ -884,15 +898,74 @@ def _venue(tournament: Tournament) -> str | None:
         return None
 
 
-def _date_range(tournament: Tournament) -> str | None:
-    start, end = tournament.start_date, tournament.end_date
-    if start is None:
+def _format_date_range(date_range: tuple[date, date] | None) -> str | None:
+    """``date_range`` rendered as the subtitle's date segment, or ``None`` for an
+    event-less tournament (#1511) — ``date_range`` is ``None`` in that case, and only
+    that case, since :func:`_date_ranges` is a min/max over a tournament's events."""
+    if date_range is None:
         return None
-    if end is None or end == start:
+    start, end = date_range
+    if end == start:
         return _short_date(start)
     if (start.year, start.month) == (end.year, end.month):
         return f"{_short_date(start)}–{end.day}"
     return f"{_short_date(start)}–{_short_date(end)}"
+
+
+async def _date_ranges(
+    db: AsyncSession, tournament_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, tuple[date, date]]:
+    """Every one of ``tournament_ids``' derived date spans (#1511), in ONE statement
+    regardless of how many tournaments are asked for — the panel's own entries/events
+    are the caller's ENTERED events only, so they cannot stand in for "every event of
+    this tournament" the way the tournament-detail page's own event list can
+    (``app.tournament_serialization._events_date_range``); this is the panel's own
+    batched aggregate over ALL of a shown tournament's events.
+
+    A tournament with no events at all is simply absent from the returned dict — the
+    caller reads that as ``None`` via ``.get(tournament_id)``, matching
+    :func:`_format_date_range`'s reading of ``None``.
+
+    ``slot->>'date'`` is compared and aggregated as TEXT, which is safe and correct
+    for every row written through the current boundary, because the stored shape is
+    always the fixed-width, zero-padded ``YYYY-MM-DD`` (``_slot_is_well_formed`` at
+    the write boundary, ``app.schemas.tournament``): lexicographic and calendar
+    order agree on that shape, so ``MIN``/``MAX`` in SQL need no cast to answer the
+    same question ``date.fromisoformat`` would in Python.
+
+    A read must not assume every STORED row went through that boundary, though — a
+    legacy or hand-written row can still hold something ``date.fromisoformat``
+    refuses (the same reason ``app.tournament_serialization._events_date_range``
+    excludes rather than raises). A tournament whose aggregated MIN/MAX does not
+    parse is dropped from the returned dict and logged, degrading that one
+    tournament's subtitle to the venue alone rather than 500ing the whole
+    dashboard."""
+    if not tournament_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                TournamentEvent.tournament_id,
+                func.min(TournamentEvent.slot["date"].astext),
+                func.max(TournamentEvent.slot["date"].astext),
+            )
+            .where(TournamentEvent.tournament_id.in_(tournament_ids))
+            .group_by(TournamentEvent.tournament_id)
+        )
+    ).all()
+    result: dict[uuid.UUID, tuple[date, date]] = {}
+    for tournament_id, start, end in rows:
+        try:
+            result[tournament_id] = (date.fromisoformat(start), date.fromisoformat(end))
+        except ValueError:
+            log.error(
+                "Tournament %s has an event slot.date that does not parse "
+                "(start=%r, end=%r); its dashboard panel falls back to venue alone",
+                tournament_id,
+                start,
+                end,
+            )
+    return result
 
 
 def _short_date(value: date) -> str:
