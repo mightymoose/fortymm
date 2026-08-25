@@ -793,6 +793,17 @@ def group_counts_by_reservation(
     }
 
 
+def reservation_group_counts(
+    group_counts: Mapping[ReservationId, ReservationGroupCounts], key: ReservationId
+) -> ReservationGroupCounts:
+    """One reservation's :class:`ReservationGroupCounts`, defaulting to
+    :data:`NO_GROUPS_SHARE_THE_RESERVATION` for a reservation
+    :func:`group_counts_by_reservation` never mapped. The one spelling for the four
+    read sites this rides through (live solve + preview, booked + event-wide),
+    instead of each repeating ``.get(key, NO_GROUPS_SHARE_THE_RESERVATION)``."""
+    return group_counts.get(key, NO_GROUPS_SHARE_THE_RESERVATION)
+
+
 @dataclass(frozen=True, slots=True)
 class _ReservationResolution:
     """The DB-side facts an infeasibility reason needs to name a reservation a
@@ -1156,10 +1167,10 @@ async def _load_solver_inputs(
         # names — one lookup table built through the rule, used by the event-wide
         # guard and the per-fixture resolution below. Its non-None entries also feed
         # the over-capacity reason's group/bracket facts below
-        # (``group_counts_by_reservation``); ``.get(key,
-        # NO_GROUPS_SHARE_THE_RESERVATION)`` at the reads, so a reservation no group
-        # maps to — an event-wide one holding only a knockout stage — reports 0
-        # groups (and, there, ``has_bracket=True``), not a miss.
+        # (``group_counts_by_reservation``); ``reservation_group_counts`` at the
+        # reads defaults to ``NO_GROUPS_SHARE_THE_RESERVATION``, so a reservation no
+        # group maps to — an event-wide one holding only a knockout stage — reports
+        # 0 groups (and, there, ``has_bracket=True``), not a miss.
         group_res_ids = group_reservation_ids(event)
         keys_by_group = reservation_keys_by_group(event.id, group_res_ids)
         keys_by_event[event.id] = keys_by_group
@@ -1180,7 +1191,7 @@ async def _load_solver_inputs(
             )
             reservation_specs.append((key, tables, start, end))
             reservation_dates[key] = date.fromisoformat(reservation.slot.date)
-            counts = group_counts.get(key, NO_GROUPS_SHARE_THE_RESERVATION)
+            counts = reservation_group_counts(group_counts, key)
             reservation_resolutions[key] = _ReservationResolution(
                 name=reservation.name,
                 window_start=reservation.slot.start,
@@ -1213,9 +1224,7 @@ async def _load_solver_inputs(
             start, end = _slot_bounds(event_slot, event_tz)
             reservation_specs.append((event_wide_key, catalogue, start, end))
             reservation_dates[event_wide_key] = date.fromisoformat(event_slot.date)
-            event_wide_counts = group_counts.get(
-                event_wide_key, NO_GROUPS_SHARE_THE_RESERVATION
-            )
+            event_wide_counts = reservation_group_counts(group_counts, event_wide_key)
             reservation_resolutions[event_wide_key] = _ReservationResolution(
                 name=event_wide_reservation_name(event.name),
                 window_start=event_slot.start,

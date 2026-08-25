@@ -69,12 +69,12 @@ from app.schedule_preview import (
     placeholder_label,
 )
 from app.schedule_solves import (
-    NO_GROUPS_SHARE_THE_RESERVATION,
     _solve_num_workers,
     event_wide_reservation_key,
     event_wide_reservation_name,
     group_counts_by_reservation,
     group_reservation_ids,
+    reservation_group_counts,
     reservation_key,
     reservation_keys_by_group,
 )
@@ -330,7 +330,7 @@ def _reservation_resolutions(
         )
         for reservation in event_reservations(event):
             key = reservation_key(event.id, reservation.id)
-            counts = group_counts.get(key, NO_GROUPS_SHARE_THE_RESERVATION)
+            counts = reservation_group_counts(group_counts, key)
             resolutions[key] = _PreviewReservationResolution(
                 name=reservation.name,
                 window_start=reservation.slot.start,
@@ -345,9 +345,7 @@ def _reservation_resolutions(
         event_wide_key = event_wide_reservation_key(event.id)
         if event_wide_key in built:
             event_slot = Slot.model_validate(event.slot)
-            event_wide_counts = group_counts.get(
-                event_wide_key, NO_GROUPS_SHARE_THE_RESERVATION
-            )
+            event_wide_counts = reservation_group_counts(group_counts, event_wide_key)
             resolutions[event_wide_key] = _PreviewReservationResolution(
                 name=event_wide_reservation_name(event.name),
                 window_start=event_slot.start,
