@@ -1,7 +1,12 @@
+import { Component, createElement, type ReactNode } from "react";
 import { HttpResponse } from "msw";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { act, render, screen } from "@testing-library/react";
 
 import { ApiError } from "@/api/client";
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
+import { mockMatchDetailsEndpoint } from "@/mocks/endpoints/matches/match-details.endpoint";
+import { server } from "@/mocks/server";
 import { LIVE_NEGOTIATION } from "@/mocks/match-store";
 import { waitFor } from "@/test/utilities";
 
@@ -15,6 +20,43 @@ import {
 } from "./match-details-query";
 import { matchDetailsQueryPage } from "./match-details-query.page";
 
+/** Catches whatever `matchDetailsQuery`'s `throwOnError` throws during render
+ * so a test can assert on the boundary instead of an uncaught render throw. */
+class RenderBoundary extends Component<
+  { children: ReactNode },
+  { caught: boolean }
+> {
+  state = { caught: false };
+  static getDerivedStateFromError() {
+    return { caught: true };
+  }
+  render() {
+    return this.state.caught
+      ? createElement("div", null, "BOUNDARY")
+      : this.props.children;
+  }
+}
+
+/** Reads the real `matchDetailsQuery(...)` options (not the page object's
+ * `throwOnError: false` override) so the throw-vs-keep behavior under test is
+ * the one production callers actually see. */
+function MatchDetailsView({ matchId }: { matchId: string }) {
+  const { data } = useQuery(matchDetailsQuery(matchId));
+  return createElement(
+    "div",
+    null,
+    data ? `status:${data.data.scoreboard.status}` : "PENDING",
+  );
+}
+
+function matchDetailsTree(queryClient: QueryClient, matchId: string) {
+  return createElement(
+    QueryClientProvider,
+    { client: queryClient },
+    createElement(RenderBoundary, null, createElement(MatchDetailsView, { matchId })),
+  );
+}
+
 const queryWithStatusLabel = (
   status_label: string,
   overrides: Parameters<typeof buildMatchDetails>[0] = {},
@@ -27,8 +69,64 @@ const queryWithStatusLabel = (
 });
 
 describe("matchDetailsQuery", () => {
-  it("throws on error so route-level error boundaries catch failures", () => {
-    expect(matchDetailsQuery("m-1").throwOnError).toBe(true);
+  it("throws only when there is no cached data to fall back on", () => {
+    expect(typeof matchDetailsQuery("m-1").throwOnError).toBe("function");
+  });
+
+  /**
+   * Regression (#1468 — mirrors #843's fix in `matchQueryOptions`): a
+   * background refetch of an already-rendered match must not throw the
+   * scoreboard out to the route error boundary. `throwOnError` is
+   * re-evaluated on every render, so a bare `true` would eject the viewer the
+   * next time anything else re-renders the page after a failed background
+   * refetch.
+   */
+  it("keeps last-good data on screen when a background refetch fails (#1468)", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const matchId = "m-bg-refetch";
+    const seeded = buildMatchDetails({
+      id: matchId,
+      data: { scoreboard: { status: "live" } },
+    });
+    queryClient.setQueryData(
+      matchDetailsQuery(matchId).queryKey,
+      matchDetailsResultFromPayload(seeded),
+    );
+
+    const { rerender } = render(matchDetailsTree(queryClient, matchId));
+    expect(screen.getByText("status:live")).toBeTruthy();
+
+    mockMatchDetailsEndpoint(server, () => new HttpResponse(null, { status: 500 }));
+
+    await act(async () => {
+      await queryClient
+        .invalidateQueries({ queryKey: matchDetailsQuery(matchId).queryKey })
+        .catch(() => undefined);
+    });
+    // The errored refetch alone doesn't re-render this observer (data/isLoading
+    // are unchanged) — force the next render, where a bare `true` would throw.
+    rerender(matchDetailsTree(queryClient, matchId));
+
+    expect(screen.queryByText("BOUNDARY")).toBeNull();
+    expect(screen.getByText("status:live")).toBeTruthy();
+    queryClient.clear();
+  });
+
+  /** The other half: an initial load with no cached data to fall back on must
+   * still throw so the surrounding boundary can render a retry. */
+  it("throws to the boundary when the initial match load fails", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const matchId = "m-initial-fail";
+    mockMatchDetailsEndpoint(server, () => new HttpResponse(null, { status: 500 }));
+
+    render(matchDetailsTree(queryClient, matchId));
+
+    await waitFor(() => expect(screen.getByText("BOUNDARY")).toBeTruthy());
+    queryClient.clear();
   });
 
   it("polls while awaiting the opponent's acceptance (#493)", () => {

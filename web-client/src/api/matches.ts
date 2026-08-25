@@ -234,7 +234,11 @@ export function matchListQueryOptions(params: MatchListParams) {
         }),
       ),
     retry: false,
-    throwOnError: true,
+    // Throw only when there is no cached data to fall back on — see
+    // `matchQueryOptions` below (#843) for the background-refetch rationale;
+    // the list route's own success-path invalidations (`invalidateMatchViews`)
+    // can trigger a background refetch of this query too.
+    throwOnError: (_error, query) => query.state.data === undefined,
   })
 }
 

@@ -36,6 +36,12 @@ export function useDashboard(options: { enabled?: boolean } = {}) {
       unwrap('load dashboard', await api.GET('/v1/dashboard')),
     enabled: options.enabled ?? true,
     retry: false,
-    throwOnError: true,
+    // Throw only when there is no cached data to fall back on. An
+    // initial-load failure (no cached data) surfaces to the boundary for a
+    // retry; a background refetch failure over an already-rendered dashboard
+    // must not — see the "`throwOnError` also throws on a background
+    // refetch" section of web-client/CLAUDE.md (mirrors #843's fix in
+    // `matchQueryOptions`).
+    throwOnError: (_error, query) => query.state.data === undefined,
   })
 }

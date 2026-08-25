@@ -92,6 +92,14 @@ export function refetchWhileAwaitingAcceptance(
 export const matchDetailsQuery = (matchId: string) => ({
   queryKey: queryKey(matchId),
   queryFn: fetchMatchDetails,
-  throwOnError: true,
+  // Throw only when there is no cached data to fall back on. An initial-load
+  // failure surfaces to the boundary for a retry; a background refetch
+  // failure over already-rendered data must not — see the "`throwOnError`
+  // also throws on a background refetch" section of web-client/CLAUDE.md
+  // (#843's fix in `matchQueryOptions`, applied here for the same reason).
+  throwOnError: (
+    _error: unknown,
+    query: Pick<Query<MatchDetailsResult>, "state">,
+  ) => query.state.data === undefined,
   refetchInterval: refetchWhileAwaitingAcceptance,
 });

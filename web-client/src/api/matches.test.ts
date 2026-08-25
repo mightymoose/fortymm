@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { Component, createElement, type ReactNode } from 'react'
 
 import { server } from '@/mocks/server'
-import { matchDetails } from '@/test/factories'
+import { matchDetails, matchListResponse, matchListRow } from '@/test/factories'
 import {
   type MatchDetails,
+  type MatchListParams,
   fireScoreSave,
+  matchListQueryKey,
+  matchListQueryOptions,
   matchQueryKey,
   matchQueryOptions,
   scoreMutationKey,
@@ -872,6 +875,77 @@ describe('useCreateMatch', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: ['dashboard'],
     })
+  })
+})
+
+describe('matchListQueryOptions', () => {
+  /** Reads exactly what the matches list route reads off `useMatchList`
+   * (`data`), wrapped in a `RenderBoundary` so the throw-vs-keep behavior
+   * under test is the one the real list page sees. */
+  function MatchListView({ params }: { params: MatchListParams }) {
+    const { data } = useQuery(matchListQueryOptions(params))
+    return createElement(
+      'div',
+      null,
+      data ? `total:${data.total}` : 'PENDING',
+    )
+  }
+
+  const listTree = (params: MatchListParams) =>
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RenderBoundary, null, createElement(MatchListView, { params })),
+    )
+
+  const params: MatchListParams = { page: 1, page_size: 20 }
+
+  /**
+   * Regression (#1468 — mirrors #843's fix in `matchQueryOptions`): a
+   * background refetch of an already-rendered matches list must not throw the
+   * page out to the route error boundary.
+   */
+  it('keeps last-good data on screen when a background refetch fails (#1468)', async () => {
+    const seeded = matchListResponse({
+      items: [matchListRow()],
+      total: 1,
+    })
+    queryClient.setQueryData(matchListQueryKey(params), seeded)
+
+    const { rerender } = render(listTree(params))
+    expect(screen.getByText('total:1')).toBeTruthy()
+
+    server.use(
+      http.get('*/v1/matches', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+      ),
+    )
+
+    await act(async () => {
+      await queryClient
+        .invalidateQueries({ queryKey: matchListQueryKey(params) })
+        .catch(() => undefined)
+    })
+    // The errored refetch alone doesn't re-render this observer (data is
+    // unchanged) — force the next render, where a bare `true` would throw.
+    rerender(listTree(params))
+
+    expect(screen.queryByText('BOUNDARY')).toBeNull()
+    expect(screen.getByText('total:1')).toBeTruthy()
+  })
+
+  /** The other half: an initial load with no cached data to fall back on must
+   * still throw so the surrounding boundary can render a retry. */
+  it('throws to the boundary when the initial list load fails', async () => {
+    server.use(
+      http.get('*/v1/matches', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+      ),
+    )
+
+    render(listTree(params))
+
+    await waitFor(() => expect(screen.getByText('BOUNDARY')).toBeTruthy())
   })
 })
 
