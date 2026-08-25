@@ -90,8 +90,10 @@ describe('TournamentDetailPage', () => {
       // withheld) and implies a private address is merely missing (#1206).
       expect(document.body).not.toHaveTextContent(/TBD/i)
       // …and the rest of the header is untouched — the dates are still there, so
-      // this is a missing venue row and not a page that failed to render.
-      expect(document.body).toHaveTextContent('Jun 13–14, 2026')
+      // this is a missing venue row and not a page that failed to render. The
+      // default single event's own `slot.date` (2026-06-13) is both ends of the
+      // derived span, so the header prints a single day, not a range (#1511).
+      expect(document.body).toHaveTextContent('Jun 13, 2026')
     })
 
     /**

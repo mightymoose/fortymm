@@ -872,14 +872,19 @@ def _events_date_range(events: Sequence[TournamentEvent]) -> DateRange | None:
     (mirrors why ``TournamentEventRead.slot`` is a bare ``Slot``, not
     ``WellFormedSlot``: "tightening a read turns a legacy row's malformed ...
     window into a 500 on GET — this ticket's own bug relocated one verb over").
-    An event whose stored date does not parse is excluded from the range and
-    logged, rather than 500ing the whole tournament read over one bad row."""
+    An event whose stored date does not parse — or, the same "read must not trust
+    the write boundary" reasoning one key further, whose stored ``slot`` is missing
+    ``"date"`` entirely or holds something that isn't a string at all (``.get``
+    reads ``None`` rather than raising ``KeyError`` for the first case) — is
+    excluded from the range and logged, rather than 500ing the whole tournament
+    read over one bad row (``TypeError`` joins ``ValueError`` here for the same
+    reason ``app.dashboard_tournaments._date_ranges`` catches both)."""
     dates: list[date] = []
     for e in events:
-        raw = cast(str, e.slot["date"])
+        raw = e.slot.get("date")
         try:
-            dates.append(date.fromisoformat(raw))
-        except ValueError:
+            dates.append(date.fromisoformat(cast(str, raw)))
+        except (TypeError, ValueError):
             log.error(
                 "Tournament event %s has a slot.date that does not parse (%r); "
                 "excluded from the tournament's derived date_range",

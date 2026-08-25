@@ -1695,7 +1695,7 @@ export function buildTournament(
     // The min/max of the default `events` below's own `slot.date` (#1511) — the
     // server derives this from the tournament's events on every read; a fixture
     // that wants a different span (or `events: []`) overrides both together.
-    dateRange: { start: '2026-06-13', end: '2026-06-14' },
+    dateRange: { start: '2026-06-13', end: '2026-06-13' },
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
     // Venued by default. `buildTournament({ address: null })` is the venue-less
     // tournament — no venue line, no pin, no map anywhere it is rendered.

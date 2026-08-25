@@ -34,7 +34,7 @@ from datetime import UTC, date, datetime
 from typing import assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attention import list_attention_kind
@@ -920,52 +920,60 @@ async def _date_ranges(
     are the caller's ENTERED events only, so they cannot stand in for "every event of
     this tournament" the way the tournament-detail page's own event list can
     (``app.tournament_serialization._events_date_range``); this is the panel's own
-    batched aggregate over ALL of a shown tournament's events.
+    batched read of every SHOWN tournament's full event set.
 
     A tournament with no events at all is simply absent from the returned dict — the
     caller reads that as ``None`` via ``.get(tournament_id)``, matching
     :func:`_format_date_range`'s reading of ``None``.
 
-    ``slot->>'date'`` is compared and aggregated as TEXT, which is safe and correct
-    for every row written through the current boundary, because the stored shape is
-    always the fixed-width, zero-padded ``YYYY-MM-DD`` (``_slot_is_well_formed`` at
-    the write boundary, ``app.schemas.tournament``): lexicographic and calendar
-    order agree on that shape, so ``MIN``/``MAX`` in SQL need no cast to answer the
-    same question ``date.fromisoformat`` would in Python.
-
-    A read must not assume every STORED row went through that boundary, though — a
-    legacy or hand-written row can still hold something ``date.fromisoformat``
-    refuses (the same reason ``app.tournament_serialization._events_date_range``
-    excludes rather than raises). A tournament whose aggregated MIN/MAX does not
-    parse is dropped from the returned dict and logged, degrading that one
-    tournament's subtitle to the venue alone rather than 500ing the whole
-    dashboard."""
+    Reduced to a min/max in PYTHON, per tournament, rather than asked of Postgres as
+    ``MIN``/``MAX(slot->>'date')`` grouped by tournament id. Both read the same rows,
+    but only the Python reduction can apply the SAME per-row exclusion
+    ``app.tournament_serialization._events_date_range`` does: a stored ``slot.date``
+    that a legacy or hand-written row holds and ``date.fromisoformat`` refuses is
+    dropped and logged ONE EVENT AT A TIME, so the tournament's range still comes
+    from whichever of its other events parse. A SQL aggregate cannot do that —
+    comparing ``slot->>'date'`` as TEXT means one garbled value can become the
+    ``MIN`` or the ``MAX`` outright (an empty string sorts before every real date;
+    most letters sort after), which would silently drop the WHOLE tournament's range
+    over the one bad row rather than just that row — and whether it does depends on
+    where the garbage happens to sort, not on whether it parses."""
     if not tournament_ids:
         return {}
     rows = (
         await db.execute(
             select(
+                TournamentEvent.id,
                 TournamentEvent.tournament_id,
-                func.min(TournamentEvent.slot["date"].astext),
-                func.max(TournamentEvent.slot["date"].astext),
-            )
-            .where(TournamentEvent.tournament_id.in_(tournament_ids))
-            .group_by(TournamentEvent.tournament_id)
+                TournamentEvent.slot["date"].astext,
+            ).where(TournamentEvent.tournament_id.in_(tournament_ids))
         )
     ).all()
-    result: dict[uuid.UUID, tuple[date, date]] = {}
-    for tournament_id, start, end in rows:
+    dates_by_tournament: dict[uuid.UUID, list[date]] = defaultdict(list)
+    for event_id, tournament_id, raw in rows:
+        # Parsed BEFORE the defaultdict is touched: `dict[key].append(...)` would
+        # evaluate the subscript first, planting an EMPTY list for a tournament
+        # whose every event fails to parse — the closing `min()`/`max()` below
+        # would then 500 on that empty list instead of leaving the tournament
+        # absent, exactly the "only event has an unparseable date" corner the
+        # Implementation Notes named as unreachable through the write boundary
+        # but real once a row is corrupted directly.
         try:
-            result[tournament_id] = (date.fromisoformat(start), date.fromisoformat(end))
-        except ValueError:
+            parsed = date.fromisoformat(raw)
+        except (TypeError, ValueError):
             log.error(
-                "Tournament %s has an event slot.date that does not parse "
-                "(start=%r, end=%r); its dashboard panel falls back to venue alone",
+                "Tournament event %s has a slot.date that does not parse (%r); "
+                "excluded from tournament %s's dashboard date range",
+                event_id,
+                raw,
                 tournament_id,
-                start,
-                end,
             )
-    return result
+            continue
+        dates_by_tournament[tournament_id].append(parsed)
+    return {
+        tournament_id: (min(dates), max(dates))
+        for tournament_id, dates in dates_by_tournament.items()
+    }
 
 
 def _short_date(value: date) -> str:

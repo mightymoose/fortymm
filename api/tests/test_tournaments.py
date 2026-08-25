@@ -12,6 +12,7 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 
 import asyncio
 import json
+import logging
 import math
 import re
 import uuid
@@ -571,6 +572,60 @@ async def test_list_route_carries_the_same_derived_date_range_as_detail(
     assert listing.status_code == 200, listing.text
     row = next(r for r in listing.json() if r["id"] == created["id"])
     assert row["date_range"] == {"start": "2026-07-24", "end": "2026-07-24"}
+
+
+async def test_date_range_excludes_an_event_whose_stored_slot_date_does_not_parse(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A single corrupt ``slot.date`` — a pre-#1501 legacy row written directly, past
+    the write boundary that now refuses it (see
+    ``test_patch_reservations_against_a_malformed_stored_slot_is_not_a_500`` above) —
+    must not cost the tournament its WHOLE ``date_range``. Only the one bad event is
+    excluded from the min/max; the range still comes from the tournament's other,
+    parseable events, and the exclusion is logged so the corrupt row can be found and
+    fixed."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_dated_event_payload("2026-07-24", name="Open Singles"),
+    )
+    corrupt_event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_dated_event_payload("2026-07-26", name="U1500"),
+        )
+    ).json()
+
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.id == uuid.UUID(corrupt_event["id"])
+            )
+        )
+    ).scalar_one()
+    row.slot = {**row.slot, "date": "next Tuesday"}
+    await db_session.commit()
+
+    with caplog.at_level(logging.ERROR, logger="app.tournament_serialization"):
+        response = await client.get(f"/v1/tournaments/{created['id']}")
+    assert response.status_code == 200, response.text
+    assert response.json()["date_range"] == {
+        "start": "2026-07-24",
+        "end": "2026-07-24",
+    }
+
+    records = [r for r in caplog.records if r.name == "app.tournament_serialization"]
+    assert len(records) == 1, (
+        "one bad event must log exactly once — not silently: got "
+        f"{[r.getMessage() for r in records]}"
+    )
+    assert records[0].levelno == logging.ERROR
+    assert corrupt_event["id"] in records[0].getMessage(), (
+        "the log must name WHICH event is corrupt, or it cannot be acted on"
+    )
 
 
 def _errors_naming(detail: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
