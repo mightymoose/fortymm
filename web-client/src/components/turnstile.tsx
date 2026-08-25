@@ -98,7 +98,11 @@ export function Turnstile({
   onError?: () => void
   /** Fires when the script itself fails to load (the widget never mounts, so
    *  the widget-level error callback can't fire). Lets the host form stop
-   *  waiting on a token that will never arrive. */
+   *  waiting on a token that will never arrive. Supplying this prop also
+   *  takes over failure reporting: `Turnstile` suppresses its own internal
+   *  "Couldn't load CAPTCHA" alert, on the assumption the host renders one of
+   *  its own. A host that doesn't render one goes silent on script-load
+   *  failure — accepted tradeoff (#1498). */
   onLoadError?: () => void
   handleRef?: (handle: TurnstileHandle | null) => void
 }) {
@@ -167,7 +171,7 @@ export function Turnstile({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  if (failed) {
+  if (failed && !onLoadError) {
     return (
       <p
         className="fmm-help fmm-help--err"
