@@ -768,6 +768,36 @@ export class TournamentDetailPage {
       .filter({ hasNotText: 'Time slot' })
   }
 
+  // ----- the hero stat strip (#1536) ----------------------------------------
+  //
+  // Five tiles — Events, Entries, Tables, Reservations, Days — each `HeroStat`'s
+  // own `Card`. Keyed on the same lowercase-dash slug the component derives from
+  // its own `label` prop (`hero-stat.tsx`'s `slugify`), so a spec never hand-spells
+  // a testid the component could drift away from silently. `heroEntries` above is
+  // a coarser, pre-existing lookup for a different spec's assertions — these three
+  // are for the tile's OWN geometry, and split the tile's outer box from its two
+  // text boxes on purpose: a claim about the number or the label being clipped is
+  // a claim about the TEXT box, not the box that also holds the 36px icon chip.
+
+  /** One hero stat tile's outer box (the `Card`), by its label's slug — e.g.
+   * `heroStatTile('reservations')`. */
+  heroStatTile(slug: string): Locator {
+    return this.page.getByTestId(`hero-stat-${slug}`)
+  }
+
+  /** That tile's number (plus suffix, e.g. "2 days") — the box a clipping claim
+   * measures, not the tile around it. */
+  heroStatValue(slug: string): Locator {
+    return this.page.getByTestId(`hero-stat-value-${slug}`)
+  }
+
+  /** That tile's uppercase label — measured separately from the value because the
+   * two claims ("the number fits" / "the label fits on one line") are about two
+   * different boxes that can fail independently. */
+  heroStatLabel(slug: string): Locator {
+    return this.page.getByTestId(`hero-stat-label-${slug}`)
+  }
+
   /** Toasts — the app's error channel. The happy journey must raise none. */
   get toasts(): Locator {
     return this.page.locator('[data-sonner-toast]')

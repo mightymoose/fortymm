@@ -96,14 +96,18 @@
  * This spec pins the phone, which is where the defect was reported and where the
  * fix lives. It does not bless the width.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 import { UNBREAKABLE_TOURNAMENT_NAME } from '../../src/mocks/factories/tournaments/tournament.factory'
 import {
   TournamentDetailPage,
   type LifecycleLabel,
 } from '../page-objects/tournaments/tournament-detail.page'
-import { expectNoHorizontalScroll, expectOnScreen } from '../support/viewport'
+import {
+  expectNoHorizontalScroll,
+  expectOnScreen,
+  expectWithinViewportWidth,
+} from '../support/viewport'
 import type { TournamentsStoreOptions } from '../page-objects/tournaments/tournaments-store'
 
 /**
@@ -468,5 +472,447 @@ test.describe('a tournament name with no break opportunity in it', () => {
       title.scrollHeight - title.clientHeight,
       `${title.scrollHeight - title.clientHeight}px of the title is clipped out of view — that is a hidden line, not the display face's ~3px spill`,
     ).toBeLessThan(MAX_SPILL_PX)
+  })
+})
+
+/**
+ * The five **hero stat tiles** — Events, Entries, Tables, Reservations, Days — on a
+ * phone and on a tablet (#1536).
+ *
+ * `tournament-detail-page.tsx` rendered the strip as a bare `grid-cols-5`, with no
+ * responsive breakpoint. Tailwind's `grid-cols-N` compiles to
+ * `grid-template-columns: repeat(N, minmax(0, 1fr))` — the track's own floor is `0`,
+ * not the column's content — so below `xl` (1280px) the five tracks divide up
+ * whatever width the row has, however small. `HeroStat`'s outer `Card` carries
+ * `overflow-hidden`, and per the grid sizing algorithm an item's *automatic* minimum
+ * size collapses to `0` (rather than its content's) once the item's own overflow is
+ * anything but `visible` — so the `Card` willingly shrinks below what its icon chip,
+ * padding and text need, instead of forcing the row to scroll. Everything past that
+ * shrunk boundary — icon, number, label — is clipped by the same `overflow-hidden`.
+ * The text is still real DOM content throughout: `toBeVisible()` and a screen reader
+ * both find it. A sighted phone user finds an empty tile.
+ *
+ * The fix is the repo's established breakpoint ladder (`event-editor/basics-section.tsx`,
+ * `events-tab/event-card.tsx`):
+ *
+ *     -  <div className="grid grid-cols-5 gap-3">
+ *     +  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+ *
+ * Below `xl` the row now LOSES a column at a time — each remaining tile gets more
+ * room, not less — instead of shrinking every tile in place. The container caps at
+ * `max-w-[1320px]`, and `xl` (1280px) already renders five across below that cap, so
+ * no bespoke `min-[1320px]:` breakpoint is needed to hold the five-across row at
+ * 1320px and up.
+ *
+ * **The claim cannot be made in vitest.** jsdom performs no layout (the same
+ * constraint the file's own #1044 section above states), so every assertion below
+ * measures a real box in a real browser.
+ *
+ * ## Observed failing
+ *
+ * Reverting the grid class to a bare `grid-cols-5` and re-running reds four of the
+ * new tests — the ones comparing an actual width to its natural, unclipped
+ * reference — with a measured number, none of them a timeout. Measured for the
+ * first tile the loop reaches ("Events"; every other tile is clipped by at least
+ * as much — "Reservations", the widest label, measures 44.8px actual against a
+ * 91.8px natural width at 768px, the starkest of the five):
+ *
+ * | Test | 375px, under the revert | 375px, with the fix |
+ * | --- | --- | --- |
+ * | shows every tile's number at its full, unclipped width | "Events" value box **0px** wide (natural 47px) | 47px — matches natural |
+ * | shows every tile's label at its full, unclipped width | "Events" label box **0px** wide (natural 47px) | 47px — matches natural |
+ *
+ * | Test | 768px, under the revert | 768px, with the fix |
+ * | --- | --- | --- |
+ * | shows every tile's number at its full, unclipped width | "Events" value box **44.8px** wide (natural 47.3px — clipped by 2.5px) | 47px — matches natural |
+ * | shows every tile's label at its full, unclipped width | "Events" label box **44.8px** wide (natural 47.3px — clipped by 2.5px) | 47px — matches natural |
+ *
+ * The remaining new tests — the widest-label control, the "stays real text"
+ * control, the one-line-height checks, and the on-screen-horizontally check —
+ * stay GREEN under this revert, and correctly: none of the five labels here has
+ * a break opportunity (each is one unbroken word), so this bug can never wrap one
+ * onto a second line; `toContainText` reads DOM text regardless of layout; and
+ * the grid track keeps every tile's own box inside the row's total width whether
+ * the row is broken or not — the bug shrinks a tile's box, it does not push it off
+ * the page. Only the value/label WIDTH comparisons are sensitive to this
+ * particular failure, and both of them catch it, at both widths, with real
+ * numbers.
+ *
+ * ## Why the value/label boxes, and not `toBeVisible()`
+ *
+ * Exactly the #1044 lesson above, repeated for a different bug: `toBeVisible()`
+ * passed throughout, because Playwright's definition is a non-empty bounding box
+ * with no `visibility: hidden` — and an element that has shrunk to (or near) `0×0`
+ * still satisfies that the instant its content is empty of visible pixels but its
+ * *box* technically has some. The claim here is narrower and stronger: the VALUE
+ * and LABEL boxes each measure a real, positive width, and the label's box is short
+ * enough that it can only be holding one line. Gated behind `toBeVisible()` this
+ * would report a 5000ms timeout under the bug rather than the coordinates that
+ * damn it — `expectOnScreen`'s own docstring above states why, and the reasoning is
+ * identical here. The tile's own outer box (never clipped by the bug — it shrinks
+ * to fit its grid track exactly, it does not vanish) is checked against the
+ * viewport's WIDTH only, by `expectWithinViewportWidth` (imported from
+ * `../support/viewport`, alongside `expectOnScreen`), and deliberately NOT with
+ * `expectOnScreen`: below `sm` the fix stacks the five tiles one per row,
+ * so a later tile legitimately sits below the fold on a 375x667 phone, and
+ * `expectOnScreen`'s vertical + intersection checks would fail it for a reason
+ * that has nothing to do with #1536.
+ */
+
+/** The tournament this section seeds: the default entry-shaped tournament plus
+ * `crowded: true`, which adds a fourth event with twelve more entrants. Picked for
+ * two edge cases the ticket calls out by name rather than for convenience:
+ *
+ * - **Entries goes multi-digit** (2 default + 12 crowd = 14) — the easy case is a
+ *   lone digit, and a tile sized for "4" is not proof a tile sized for "14" fits.
+ * - **Days renders its suffix** — the seed's events all default to the same
+ *   `slot.date`, so the range is one day and the tile prints "1" beside a "day"
+ *   suffix span, exercising the two-node value box (`{value}` + `<span>{suffix}</span>`)
+ *   every other tile skips.
+ *
+ * `crowded` does not touch the Tables or Reservations counts (the crowd event
+ * explicitly seeds no reservations of its own), so all five tiles carry a different,
+ * genuinely-seeded number rather than four tiles quietly sharing one small default.
+ */
+const HERO_STATS_FIXTURE: TournamentsStoreOptions = { crowded: true }
+
+/** The five tiles, their testid slug (`hero-stat.tsx`'s `slugify`), and the number
+ * each renders under `HERO_STATS_FIXTURE` — spelled out here rather than derived,
+ * so a change to the seed that quietly moved one of these numbers is a mismatch
+ * this file catches at the `toContainText` checks below, not a silent drift. */
+const HERO_STATS: ReadonlyArray<{ slug: string; label: string; value: string }> = [
+  { slug: 'events', label: 'Events', value: '4' },
+  { slug: 'entries', label: 'Entries', value: '14' },
+  { slug: 'tables', label: 'Tables', value: '4' },
+  { slug: 'reservations', label: 'Reservations', value: '1' },
+  { slug: 'days', label: 'Days', value: '1' },
+]
+
+/** A viewport comfortably past `xl` (1280px) — five full columns, ~227px each per
+ * the ticket's own arithmetic, so every tile has far more room than any value or
+ * label needs. Used ONLY as a measurement reference (`naturalHeroStats` resizes
+ * here, measures, and resizes straight back) — never the viewport a test actually
+ * asserts geometry AT. */
+const UNCLIPPED_VIEWPORT = { width: 1400, height: 900 }
+
+/** Sub-pixel rounding slack between two measurements of the SAME text at two
+ * viewport widths — not a tolerance for "a little bit of clipping is fine". Font
+ * rendering depends on the glyphs and the font, not on an unrelated ancestor's
+ * width, so an unclipped box measures the same figure at 375px, at 768px and at
+ * `UNCLIPPED_VIEWPORT` give or take layout rounding. */
+const CLIP_TOLERANCE_PX = 2
+
+interface HeroStatBox {
+  width: number
+  height: number
+}
+type HeroStatBoxes = Record<string, { value: HeroStatBox; label: HeroStatBox }>
+
+/** The width/height of one locator's box — the one measurement `measureHeroStats`
+ * takes twice per tile (value, then label), factored so the two calls can't drift
+ * out of step with each other. */
+async function measureBox(locator: Locator): Promise<HeroStatBox> {
+  return locator.evaluate((el) => {
+    const box = el.getBoundingClientRect()
+    return { width: box.width, height: box.height }
+  })
+}
+
+/** Every tile's value/label box, measured at the page's CURRENT viewport. */
+async function measureHeroStats(pom: TournamentDetailPage): Promise<HeroStatBoxes> {
+  const boxes: HeroStatBoxes = {}
+  for (const { slug } of HERO_STATS) {
+    boxes[slug] = {
+      value: await measureBox(pom.heroStatValue(slug)),
+      label: await measureBox(pom.heroStatLabel(slug)),
+    }
+  }
+  return boxes
+}
+
+/**
+ * Every tile's value/label box, measured at `UNCLIPPED_VIEWPORT` — the reference
+ * size a correctly-laid-out tile owes its text at ANY width, per AC #5 and #6.
+ * Resizes the page, measures, and restores the caller's own viewport, so it can
+ * be called mid-test without disturbing what that test asserts geometry at.
+ *
+ * A reference measurement rather than a hard-coded pixel figure is deliberate,
+ * and not merely tidier: it is the only design that catches BOTH of #1536's
+ * failure shapes, which turned out to be two different mechanisms and not one.
+ * At 375px the bug drives a tile's text box to a genuine 0×0 — a bare `> 0`
+ * check would have caught that alone. At 768px there is just enough flex
+ * remainder left over for the box to report a small but strictly POSITIVE
+ * width (measured 44.8px for the "Reservations" label, which needs ~95px+) —
+ * the box itself is not empty, the *text inside it* overflows and is cropped by
+ * the tile's `overflow-hidden`, invisible to any bound stated as a bare
+ * lower-bound constant. Comparing against how much room the label actually
+ * needs is what catches both.
+ */
+async function naturalHeroStats(
+  page: Page,
+  pom: TournamentDetailPage,
+): Promise<HeroStatBoxes> {
+  const original = page.viewportSize()
+  await page.setViewportSize(UNCLIPPED_VIEWPORT)
+  const boxes = await measureHeroStats(pom)
+  if (original) await page.setViewportSize(original)
+  return boxes
+}
+
+test.describe('the hero stat tiles on a phone', () => {
+  /**
+   * Which label is widest, **measured** — the same discipline as
+   * `"${WIDEST_LABEL}" is the widest lifecycle label` above, and for the same
+   * reason: a test that took the ticket's ~105px estimate on faith would still
+   * pass after "Reservations" was renamed to something narrower, testing the easy
+   * case while claiming the hard one.
+   *
+   * Measured at `UNCLIPPED_VIEWPORT`, not at this file's 375px, so the answer
+   * does not depend on which breakpoint happens to be live in the viewport this
+   * test runs at.
+   */
+  test('"Reservations" is the widest hero stat label', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const measured = HERO_STATS.map(
+      ({ label, slug }) => `${label} ${Math.round(natural[slug].label.width)}px`,
+    ).join(', ')
+    for (const { slug, label } of HERO_STATS) {
+      if (label === 'Reservations') continue
+      expect(
+        natural.reservations.label.width,
+        `"Reservations" is not the widest hero stat label — measured ${measured}`,
+      ).toBeGreaterThan(natural[slug].label.width)
+    }
+  })
+
+  /**
+   * AC #6: a viewport at or above 1320px keeps the five-across row. Nothing else
+   * in this section checks ROW STRUCTURE — every width/height comparison above
+   * would stay green even if the row had silently dropped to four columns (a
+   * typo'd `xl:grid-cols-4`, say): a four-across tile is WIDER, not narrower, so
+   * every text box would still measure at least its natural width, and nothing
+   * above would notice the fifth tile had wrapped onto a second row. This is the
+   * test that would catch that.
+   *
+   * Measured at `UNCLIPPED_VIEWPORT` (1400px) rather than at exactly 1320px:
+   * the container caps at `max-w-[1320px]` (`tournament-detail-page.tsx`), so the
+   * row's own layout is identical from 1320px up — nothing between 1320px and
+   * 1400px can change which breakpoint is live or how many columns render.
+   */
+  test('keeps all five tiles on one row at 1320px and up', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const original = page.viewportSize()
+    await page.setViewportSize(UNCLIPPED_VIEWPORT)
+    const tops: Record<string, number> = {}
+    for (const { slug, label } of HERO_STATS) {
+      tops[label] = await pom
+        .heroStatTile(slug)
+        .evaluate((el) => el.getBoundingClientRect().top)
+    }
+    if (original) await page.setViewportSize(original)
+    const rows = new Set(Object.values(tops).map((top) => Math.round(top)))
+    const measured = Object.entries(tops)
+      .map(([label, top]) => `${label} y=${Math.round(top)}`)
+      .join(', ')
+    expect(rows.size, `the five tiles are not on one row — measured ${measured}`).toBe(1)
+  })
+
+  /** Every tile's number stays real DOM text throughout, whatever the layout does
+   * with it — a control, not a layout claim: `toContainText` reads `textContent`
+   * and does not require the element to be on screen, so this stays green under
+   * the bug as well as the fix, and is what rules out "the fix hid the clipping by
+   * deleting the text" as a way to pass the geometry assertions below. */
+  test('keeps every tile\'s number and label as real text', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    for (const { slug, label, value } of HERO_STATS) {
+      await expect(
+        pom.heroStatValue(slug),
+        `the "${label}" tile's value`,
+      ).toContainText(value)
+      await expect(
+        pom.heroStatLabel(slug),
+        `the "${label}" tile's label`,
+      ).toHaveText(label)
+    }
+  })
+
+  /** THE CLAIM, first half: every tile's number renders at its full,
+   * unclipped width — compared against `naturalHeroStats`, not against a bare
+   * lower bound (see that function's docstring for why: a bare bound cannot
+   * distinguish a genuinely 0px value box from one that reports a small,
+   * strictly positive width while most of its text is cropped by the tile's
+   * `overflow-hidden`). Measured with `evaluate`, not `expectOnScreen` — the
+   * value box shrinks under the bug rather than moving off screen, so a
+   * visibility-gated assertion would time out instead of reporting the widths
+   * that damn it (see the section docstring above). */
+  test('shows every tile\'s number at its full, unclipped width', async ({
+    page,
+  }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].value.width,
+        `the "${label}" tile's number is only ${Math.round(actual[slug].value.width)}px wide, short of its natural ${Math.round(natural[slug].value.width)}px — it is being clipped`,
+      ).toBeGreaterThanOrEqual(natural[slug].value.width - CLIP_TOLERANCE_PX)
+    }
+  })
+
+  /** Second half of the claim: every tile's label, likewise. */
+  test('shows every tile\'s label at its full, unclipped width', async ({
+    page,
+  }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].label.width,
+        `the "${label}" tile's label is only ${Math.round(actual[slug].label.width)}px wide, short of its natural ${Math.round(natural[slug].label.width)}px — it is being clipped`,
+      ).toBeGreaterThanOrEqual(natural[slug].label.width - CLIP_TOLERANCE_PX)
+    }
+  })
+
+  /** THE CLAIM's other axis: a label a width assertion alone cannot state. A label
+   * box could satisfy the width bound above and still be wrapping — narrow AND
+   * tall, two words stacked — which is not "on one line" even though it is not
+   * "clipped to nothing" either. Compared against the natural, one-line height
+   * for the same reason the width checks are: a fixed pixel bound would drift
+   * with a copy or font change, where the reference measurement does not. */
+  test('wraps no tile\'s label onto a second line', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].label.height,
+        `the "${label}" tile's label is ${Math.round(actual[slug].label.height)}px tall against a one-line ${Math.round(natural[slug].label.height)}px — it is wrapping onto a second line`,
+      ).toBeLessThanOrEqual(natural[slug].label.height + CLIP_TOLERANCE_PX)
+    }
+  })
+
+  /** And the value line's own one-line claim — "Days" is the one tile whose value
+   * carries a second DOM node (the suffix span), so this is the test that would
+   * catch a suffix forcing its own line. */
+  test('wraps no tile\'s number onto a second line', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].value.height,
+        `the "${label}" tile's number is ${Math.round(actual[slug].value.height)}px tall against a one-line ${Math.round(natural[slug].value.height)}px — it is wrapping onto a second line`,
+      ).toBeLessThanOrEqual(natural[slug].value.height + CLIP_TOLERANCE_PX)
+    }
+  })
+
+  /** THE OTHER CLAIM the ticket makes: every tile's own box — not merely its text —
+   * sits inside the phone's WIDTH, never off the left or right edge — the
+   * #1044-shaped failure mode this ticket's fix does not introduce but which
+   * nothing else here would notice. `expectWithinViewportWidth`, not
+   * `expectOnScreen`: below `sm` the fix stacks the tiles one per row, so a later
+   * tile legitimately sits below the fold on a 375x667 phone, which is normal
+   * vertical scrolling and not a claim this section makes. */
+  test('keeps every tile\'s own box within the viewport horizontally', async ({
+    page,
+  }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    for (const { slug, label } of HERO_STATS) {
+      await expectWithinViewportWidth(page, pom.heroStatTile(slug), `the "${label}" tile`)
+    }
+  })
+})
+
+/**
+ * The same claims, at a **768px-wide tablet** — the file's `md`/3-column step,
+ * which the ticket's own arithmetic names as the tightest margin in the ladder
+ * (tile ~216px, versus a widest-label minimum the tests above measure directly).
+ *
+ * Its own `test.use`, deliberately: the file sets its viewport at the top level, so
+ * without an explicit override here this describe block would silently inherit
+ * 375px and every assertion in it would prove nothing about 768px at all.
+ */
+test.describe('the hero stat tiles on a tablet', () => {
+  test.use({ viewport: { width: 768, height: 1024 } })
+
+  test('keeps every tile\'s number and label as real text', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    for (const { slug, label, value } of HERO_STATS) {
+      await expect(
+        pom.heroStatValue(slug),
+        `the "${label}" tile's value`,
+      ).toContainText(value)
+      await expect(
+        pom.heroStatLabel(slug),
+        `the "${label}" tile's label`,
+      ).toHaveText(label)
+    }
+  })
+
+  test('shows every tile\'s number at its full, unclipped width', async ({
+    page,
+  }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].value.width,
+        `the "${label}" tile's number is only ${Math.round(actual[slug].value.width)}px wide, short of its natural ${Math.round(natural[slug].value.width)}px — it is being clipped`,
+      ).toBeGreaterThanOrEqual(natural[slug].value.width - CLIP_TOLERANCE_PX)
+    }
+  })
+
+  test('shows every tile\'s label at its full, unclipped width', async ({
+    page,
+  }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].label.width,
+        `the "${label}" tile's label is only ${Math.round(actual[slug].label.width)}px wide, short of its natural ${Math.round(natural[slug].label.width)}px — it is being clipped`,
+      ).toBeGreaterThanOrEqual(natural[slug].label.width - CLIP_TOLERANCE_PX)
+    }
+  })
+
+  test('wraps no tile\'s label onto a second line', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].label.height,
+        `the "${label}" tile's label is ${Math.round(actual[slug].label.height)}px tall against a one-line ${Math.round(natural[slug].label.height)}px — it is wrapping onto a second line`,
+      ).toBeLessThanOrEqual(natural[slug].label.height + CLIP_TOLERANCE_PX)
+    }
+  })
+
+  test('wraps no tile\'s number onto a second line', async ({ page }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    const natural = await naturalHeroStats(page, pom)
+    const actual = await measureHeroStats(pom)
+    for (const { slug, label } of HERO_STATS) {
+      expect(
+        actual[slug].value.height,
+        `the "${label}" tile's number is ${Math.round(actual[slug].value.height)}px tall against a one-line ${Math.round(natural[slug].value.height)}px — it is wrapping onto a second line`,
+      ).toBeLessThanOrEqual(natural[slug].value.height + CLIP_TOLERANCE_PX)
+    }
+  })
+
+  /** Same claim, and same reason for `expectWithinViewportWidth` over
+   * `expectOnScreen`, as the phone block above: the `md` step renders three
+   * columns, so the strip wraps to two rows, and the second row's tiles are
+   * allowed to sit below the fold. */
+  test('keeps every tile\'s own box within the viewport horizontally', async ({
+    page,
+  }) => {
+    const pom = await navigate(page, HERO_STATS_FIXTURE)
+    for (const { slug, label } of HERO_STATS) {
+      await expectWithinViewportWidth(page, pom.heroStatTile(slug), `the "${label}" tile`)
+    }
   })
 })

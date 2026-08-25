@@ -326,7 +326,18 @@ export const TournamentDetailPage = ({
           />
         )}
 
-        <div className="grid grid-cols-5 gap-3">
+        {/* Below xl (1280px) the row loses a column at a time rather than shrinking
+            every tile in place — the established breakpoint-ladder pattern (see
+            `event-editor/basics-section.tsx`, `events-tab/event-card.tsx`). Without
+            it, `grid-cols-5` forces five columns down to a phone, and `HeroStat`'s
+            `Card` (`overflow-hidden`) computes an automatic minimum width of 0 for
+            an item whose own overflow is not `visible` — so the tile happily
+            shrinks past its content's minimum instead of forcing the row to scroll,
+            and the number/label are cropped to nothing while staying in the
+            accessibility tree (#1536). The container caps at `max-w-[1320px]`, and
+            `xl` (1280px) already renders five across below that cap, so no custom
+            breakpoint is needed to hold the five-across row at 1320px and up. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           <HeroStat label="Events" value={tournament.events.length} icon={<Trophy size={16} />} />
           <HeroStat label="Entries" value={entries} icon={<Users size={16} />} />
           <HeroStat label="Tables" value={tournament.tableIds.length} icon={<Table2 size={16} />} />
