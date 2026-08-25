@@ -27,7 +27,9 @@ export const DASHBOARD_QUERY_KEY = ['dashboard'] as const
  * The dashboard endpoint requires an established session (it never mints
  * one), so callers in components that mount before the session resolves
  * pass `enabled: session.isSuccess` to avoid a first-visit 401 race.
- * Throws on failure so the surrounding boundary can render a retry.
+ * Surfaces an initial-load failure (no cached data) to the surrounding
+ * boundary for a retry; a background-refetch failure over an already-rendered
+ * dashboard keeps the last-good view instead (#1468).
  */
 export function useDashboard(options: { enabled?: boolean } = {}) {
   return useQuery({

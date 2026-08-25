@@ -1,6 +1,11 @@
 import { createElement } from "react";
 import { HttpResponse } from "msw";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+  type Query,
+} from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 
 import { ApiError } from "@/api/client";
@@ -9,8 +14,6 @@ import { mockMatchDetailsEndpoint } from "@/mocks/endpoints/matches/match-detail
 import { server } from "@/mocks/server";
 import { LIVE_NEGOTIATION } from "@/mocks/match-store";
 import { RenderBoundary, waitFor } from "@/test/utilities";
-
-import type { Query } from "@tanstack/react-query";
 
 import {
   matchDetailsQuery,
