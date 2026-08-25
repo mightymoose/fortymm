@@ -1,4 +1,4 @@
-import { Component, createElement, type ReactNode } from "react";
+import { createElement } from "react";
 import { HttpResponse } from "msw";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
@@ -8,7 +8,7 @@ import { buildMatchDetails } from "@/mocks/factories/matches/match-details.facto
 import { mockMatchDetailsEndpoint } from "@/mocks/endpoints/matches/match-details.endpoint";
 import { server } from "@/mocks/server";
 import { LIVE_NEGOTIATION } from "@/mocks/match-store";
-import { waitFor } from "@/test/utilities";
+import { RenderBoundary, waitFor } from "@/test/utilities";
 
 import type { Query } from "@tanstack/react-query";
 
@@ -20,22 +20,22 @@ import {
 } from "./match-details-query";
 import { matchDetailsQueryPage } from "./match-details-query.page";
 
-/** Catches whatever `matchDetailsQuery`'s `throwOnError` throws during render
- * so a test can assert on the boundary instead of an uncaught render throw. */
-class RenderBoundary extends Component<
-  { children: ReactNode },
-  { caught: boolean }
-> {
-  state = { caught: false };
-  static getDerivedStateFromError() {
-    return { caught: true };
-  }
-  render() {
-    return this.state.caught
-      ? createElement("div", null, "BOUNDARY")
-      : this.props.children;
-  }
-}
+// A long staleTime means a re-read only refetches if something explicitly
+// invalidates the query, so the #1468 regression pair's background refetch is
+// the one that fires, not an incidental stale-by-default refetch. Only the
+// #1468 pair uses this client; the other tests below drive
+// `matchDetailsQueryPage`'s own harness instead.
+let queryClient: QueryClient;
+
+beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+});
+
+afterEach(() => {
+  queryClient.clear();
+});
 
 /** Reads the real `matchDetailsQuery(...)` options (not the page object's
  * `throwOnError: false` override) so the throw-vs-keep behavior under test is
@@ -49,7 +49,7 @@ function MatchDetailsView({ matchId }: { matchId: string }) {
   );
 }
 
-function matchDetailsTree(queryClient: QueryClient, matchId: string) {
+function matchDetailsTree(matchId: string) {
   return createElement(
     QueryClientProvider,
     { client: queryClient },
@@ -82,9 +82,6 @@ describe("matchDetailsQuery", () => {
    * refetch.
    */
   it("keeps last-good data on screen when a background refetch fails (#1468)", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
     const matchId = "m-bg-refetch";
     const seeded = buildMatchDetails({
       id: matchId,
@@ -95,7 +92,7 @@ describe("matchDetailsQuery", () => {
       matchDetailsResultFromPayload(seeded),
     );
 
-    const { rerender } = render(matchDetailsTree(queryClient, matchId));
+    const { rerender } = render(matchDetailsTree(matchId));
     expect(screen.getByText("status:live")).toBeTruthy();
 
     mockMatchDetailsEndpoint(server, () => new HttpResponse(null, { status: 500 }));
@@ -107,26 +104,21 @@ describe("matchDetailsQuery", () => {
     });
     // The errored refetch alone doesn't re-render this observer (data/isLoading
     // are unchanged) — force the next render, where a bare `true` would throw.
-    rerender(matchDetailsTree(queryClient, matchId));
+    rerender(matchDetailsTree(matchId));
 
     expect(screen.queryByText("BOUNDARY")).toBeNull();
     expect(screen.getByText("status:live")).toBeTruthy();
-    queryClient.clear();
   });
 
   /** The other half: an initial load with no cached data to fall back on must
    * still throw so the surrounding boundary can render a retry. */
   it("throws to the boundary when the initial match load fails", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
     const matchId = "m-initial-fail";
     mockMatchDetailsEndpoint(server, () => new HttpResponse(null, { status: 500 }));
 
-    render(matchDetailsTree(queryClient, matchId));
+    render(matchDetailsTree(matchId));
 
     await waitFor(() => expect(screen.getByText("BOUNDARY")).toBeTruthy());
-    queryClient.clear();
   });
 
   it("polls while awaiting the opponent's acceptance (#493)", () => {

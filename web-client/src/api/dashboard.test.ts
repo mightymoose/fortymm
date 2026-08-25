@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor } from '@testing-library/react'
-import { Component, createElement, type ReactNode } from 'react'
+import { createElement } from 'react'
 
 import { server } from '@/mocks/server'
 import { dashboardResponse } from '@/test/factories'
+import { RenderBoundary } from '@/test/utilities'
 import { DASHBOARD_QUERY_KEY, useDashboard } from './dashboard'
 
 let queryClient: QueryClient
@@ -22,23 +23,6 @@ beforeEach(() => {
 afterEach(() => {
   queryClient.clear()
 })
-
-/** Catches whatever `useDashboard` throws during render so a test can assert
- * on the boundary instead of an uncaught render throw. */
-class RenderBoundary extends Component<
-  { children: ReactNode },
-  { caught: boolean }
-> {
-  state = { caught: false }
-  static getDerivedStateFromError() {
-    return { caught: true }
-  }
-  render() {
-    return this.state.caught
-      ? createElement('div', null, 'BOUNDARY')
-      : this.props.children
-  }
-}
 
 /** Reads exactly what a dashboard-consuming component reads off `useDashboard`
  * (`data`), so the throw-vs-keep behavior under test is the one the real
