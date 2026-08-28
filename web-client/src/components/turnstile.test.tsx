@@ -19,7 +19,7 @@ async function mountTurnstile(props: {
 }
 
 describe('Turnstile', () => {
-  it('fires onLoadError when the script fails to load', async () => {
+  it('fires onLoadError when the script fails to load, and suppresses its own alert', async () => {
     const onLoadError = vi.fn()
     await mountTurnstile({ onToken: () => {}, onLoadError })
     expect(onLoadError).not.toHaveBeenCalled()
@@ -33,9 +33,23 @@ describe('Turnstile', () => {
     })
 
     expect(onLoadError).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId('turnstile-error')).toBeInTheDocument()
+    // The host took over failure reporting by supplying onLoadError, so
+    // Turnstile's own alert must not double up with the host's (#1498).
+    expect(screen.queryByTestId('turnstile-error')).not.toBeInTheDocument()
     // A failed tag must not wedge later mounts: the cached promise resets.
     expect(document.head.querySelector(SCRIPT_SELECTOR)).toBeNull()
+  })
+
+  it('renders its own alert on script-load failure when no onLoadError is supplied', async () => {
+    await mountTurnstile({ onToken: () => {} })
+
+    const script = document.head.querySelector(SCRIPT_SELECTOR)
+    expect(script).not.toBeNull()
+    await act(async () => {
+      script?.dispatchEvent(new Event('error'))
+    })
+
+    expect(screen.getByTestId('turnstile-error')).toBeInTheDocument()
   })
 
   it('does not fire onLoadError when the API loads', async () => {
