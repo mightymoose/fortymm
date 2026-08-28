@@ -112,23 +112,43 @@ export type SaveFailure =
 export interface SaveTarget {
   /** The noun the generic sentence uses: "Some of this **event**'s details…". */
   subject: string
-  /** Wire field name → the words the form puts above that row. */
-  labels: Record<string, string>
+  /** Wire field name → the label the form puts above that row. */
+  labels: Record<string, FieldLabel>
+}
+
+/**
+ * One row's label, and its grammatical number.
+ *
+ * `plural` is DATA, not something read off `text` (#1507). The verb used to come
+ * from the count of blamed fields, so a 422 naming the single wire field
+ * `reservations` said *"The Reservations **was** rejected"* — one field, a plural
+ * word. Four labels here read plural while naming one field apiece, and inferring
+ * that from the words (a trailing "s") would call "Eligibility rules" plural for
+ * the right reason and "Venue address" plural for no reason at all. So each label
+ * says which it is.
+ */
+export interface FieldLabel {
+  /** The words the form puts above that row. */
+  text: string
+  /** True when `text` takes a plural verb ("Reservations **were** rejected") — read
+   * only when this label is the ONLY one blamed; two or more fields are plural
+   * whatever each label's own number is. */
+  plural: boolean
 }
 
 /** The event editor's fields, in the words its form puts above them. */
 export const EVENT_SAVE_TARGET: SaveTarget = {
   subject: 'event',
   labels: {
-    name: 'Event name',
-    format: 'Format',
-    draw_type: 'Draw type',
-    max_players: 'Player limit',
-    entry_fee: 'Entry fee',
-    slot: 'Time slot',
-    match_settings: 'Match settings',
-    predicates: 'Eligibility rules',
-    reservations: 'Reservations',
+    name: { text: 'Event name', plural: false },
+    format: { text: 'Format', plural: false },
+    draw_type: { text: 'Draw type', plural: false },
+    max_players: { text: 'Player limit', plural: false },
+    entry_fee: { text: 'Entry fee', plural: false },
+    slot: { text: 'Time slot', plural: false },
+    match_settings: { text: 'Match settings', plural: true },
+    predicates: { text: 'Eligibility rules', plural: true },
+    reservations: { text: 'Reservations', plural: true },
   },
 }
 
@@ -153,10 +173,10 @@ export const EVENT_SAVE_TARGET: SaveTarget = {
 export const TOURNAMENT_SAVE_TARGET: SaveTarget = {
   subject: 'tournament',
   labels: {
-    name: 'Name',
-    address: 'Venue address',
-    description: 'Description',
-    table_catalogue: 'Tables',
+    name: { text: 'Name', plural: false },
+    address: { text: 'Venue address', plural: false },
+    description: { text: 'Description', plural: false },
+    table_catalogue: { text: 'Tables', plural: true },
   },
 }
 
@@ -258,11 +278,11 @@ export function saveFailure(error: unknown): SaveFailure {
 /** The blamed fields this form has a label for, in the words above its rows — dropping
  * the ones it has none for, since a field the form never shows cannot be pointed at.
  * Empty for every failure that is not a 422. */
-function refusedLabels(failure: SaveFailure, target: SaveTarget): string[] {
+function refusedLabels(failure: SaveFailure, target: SaveTarget): FieldLabel[] {
   if (failure.kind !== 'invalid') return []
   return failure.fields
     .map((field) => target.labels[field])
-    .filter((label): label is string => label !== undefined)
+    .filter((label): label is FieldLabel => label !== undefined)
 }
 
 /**
@@ -285,9 +305,13 @@ export function saveFailureMessage(
         // thing we know is that something in this draft is not acceptable.
         return `Some of this ${target.subject}'s details were rejected. Check the fields and try again.`
       }
-      return `The ${conjoinWithAnd(labels)} ${
-        labels.length === 1 ? 'was' : 'were'
-      } rejected. Check ${labels.length === 1 ? 'that field' : 'those fields'} and try again.`
+      // Both clauses off ONE boolean, so they can never disagree with each other.
+      // Two or more fields are plural whatever their labels say; a single field
+      // takes its label's own number (#1507).
+      const plural = labels.length > 1 || labels[0].plural
+      return `The ${conjoinWithAnd(labels.map((label) => label.text))} ${
+        plural ? 'were' : 'was'
+      } rejected. Check ${plural ? 'those fields' : 'that field'} and try again.`
     }
     case 'refused':
       return failure.message
