@@ -63,9 +63,12 @@ throwOnError: (_error, query) => query.state.data === undefined
 
 An initial load (no cached data) still throws, so the boundary renders its
 retry; a background failure leaves last-good data on screen and the next good
-refetch heals it. Live in `matchQueryOptions` (`src/api/matches.ts`) and
-`tournamentDetailQuery` (`src/components/tournaments/data/api.ts`, which also
-excludes an expected 404).
+refetch heals it. Live in `matchQueryOptions`, `matchListQueryOptions`, and
+`matchDetailsQuery` (`src/api/matches.ts` and
+`src/components/matches/match-details/match-details-query.ts`),
+`useDashboard` (`src/api/dashboard.ts`), and `tournamentDetailQuery`
+(`src/components/tournaments/data/api.ts`, which also excludes an expected
+404).
 
 **The test trap:** a background error changes neither `data` nor `isLoading`, so
 a tracked-props observer that reads only those never notifies — the component
