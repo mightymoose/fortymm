@@ -491,7 +491,7 @@ export function buildTimelineBoard(
   const originDate =
     originAnchor !== null
       ? venueDateOf(originAnchor)
-      : (tournament.startDate ?? '2000-01-01')
+      : (tournament.dateRange?.start ?? '2000-01-01')
 
   let min = Number.POSITIVE_INFINITY
   let max = Number.NEGATIVE_INFINITY

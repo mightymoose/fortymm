@@ -225,8 +225,11 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     status: t.status,
     canEdit: t.can_edit,
     description: t.description ?? '',
-    startDate: t.start_date,
-    endDate: t.end_date,
+    // Carried across UNCHANGED, `null` included: the server derives this from the
+    // tournament's own events on every read (#1511), and the client no longer
+    // computes a second opinion — `DateRange` (the wire) and this domain shape
+    // agree field-for-field, so there is nothing to reshape.
+    dateRange: t.date_range,
     // Carried across UNCHANGED, `null` included: a tournament may have no venue at
     // all (CONTEXT.md, "Venue"), and that is a state to render — as nothing — not a
     // hole to fill. Coalescing it to a blank `Address` here would erase the very
@@ -303,8 +306,6 @@ export function draftToCreateBody(
   return {
     name: draft.name,
     description: draft.description,
-    start_date: draft.startDate,
-    end_date: draft.endDate,
     address: toAddressInput(draft.address),
     table_catalogue: [],
   }
@@ -352,8 +353,6 @@ export function tournamentToUpdateBody(t: Tournament): TournamentUpdate {
   return {
     name: t.name,
     description: t.description,
-    start_date: t.startDate,
-    end_date: t.endDate,
     address: toAddressInput(t.address),
   }
 }

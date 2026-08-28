@@ -141,10 +141,14 @@ export const EVENT_SAVE_TARGET: SaveTarget = {
  * the form the organizer has to look at, and getting them there is all the sentence
  * has to do.
  *
- * `description` / the dates / `table_catalogue` are here although the dialog shows no
- * box for them: it *sends* them (`draftToCreateBody` fills them from the empty draft),
- * so the server can blame them — and a blamed field with no label falls through to the
- * generic sentence, which would be a worse answer than naming it.
+ * `description` / `table_catalogue` are here although the dialog shows no box for
+ * them: it *sends* them (`draftToCreateBody` fills them from the empty draft), so
+ * the server can blame them — and a blamed field with no label falls through to
+ * the generic sentence, which would be a worse answer than naming it.
+ *
+ * There is deliberately no `start_date`/`end_date` row (#1511): the create body no
+ * longer carries either field at all — a tournament's date span is derived from
+ * its events on every read — so there is nothing left for the server to blame.
  */
 export const TOURNAMENT_SAVE_TARGET: SaveTarget = {
   subject: 'tournament',
@@ -152,8 +156,6 @@ export const TOURNAMENT_SAVE_TARGET: SaveTarget = {
     name: 'Name',
     address: 'Venue address',
     description: 'Description',
-    start_date: 'Start date',
-    end_date: 'End date',
     table_catalogue: 'Tables',
   },
 }

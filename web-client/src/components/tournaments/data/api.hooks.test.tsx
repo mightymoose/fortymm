@@ -272,8 +272,6 @@ function setupClient() {
 const updatePatch: TournamentUpdate = {
   name: 'Renamed Open',
   description: 'Updated.',
-  start_date: '2026-06-13',
-  end_date: '2026-06-14',
   address: {
     venue: 'Berkeley TT Club',
     street: '2727 Milvia St',

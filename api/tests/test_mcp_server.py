@@ -1544,8 +1544,6 @@ def _tournament_payload() -> dict[str, object]:
     return {
         "name": "MCP Cup 2026",
         "description": "An MCP-visible open.",
-        "start_date": "2026-08-01",
-        "end_date": "2026-08-02",
         "address": {
             "venue": "Berkeley TT Club",
             "street": "2727 Milvia St",
@@ -2219,6 +2217,51 @@ async def test_edit_tournament_league_change_after_publish_raises_tool_error(
                 {
                     "tournament_id": str(published.id),
                     "updates": {"league_id": str(uuid.uuid4())},
+                },
+            )
+
+
+async def test_edit_tournament_naming_start_date_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """``start_date`` is not a field of ``TournamentUpdate`` any more (#1511): the
+    MCP tool validates through the same schema the HTTP route does, so naming it is
+    refused here too."""
+    owner = await make_user(db_session, "mcp-edit-start-date")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Editable Cup", TournamentStatus.draft
+    )
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="start_date"):
+            await client.call_tool(
+                "edit_tournament",
+                {
+                    "tournament_id": str(tournament.id),
+                    "updates": {"start_date": "2026-06-13"},
+                },
+            )
+
+
+async def test_edit_tournament_naming_end_date_raises_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    owner = await make_user(db_session, "mcp-edit-end-date")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Editable Cup", TournamentStatus.draft
+    )
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="end_date"):
+            await client.call_tool(
+                "edit_tournament",
+                {
+                    "tournament_id": str(tournament.id),
+                    "updates": {"end_date": "2026-06-14"},
                 },
             )
 
@@ -3192,6 +3235,51 @@ async def test_create_tournament_unresolvable_address_raises_tool_error(
             await client.call_tool("create_tournament", {"payload": payload})
 
     # Nothing was created — the geocode failed before the write.
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.created_by_user_id == me_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_create_tournament_naming_start_date_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    """``start_date`` is not a field of ``TournamentCreate`` any more (#1511): the MCP
+    tool validates through the same schema the HTTP route does, so naming it is
+    refused here too, and nothing is created."""
+    me = await make_user(db_session, "mcp-create-start-date")
+    me_id = me.id
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
+    raw = await _mint(db_session, me)
+    payload = {**_tournament_payload(), "start_date": "2026-06-13"}
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="start_date"):
+            await client.call_tool("create_tournament", {"payload": payload})
+
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(Tournament).where(Tournament.created_by_user_id == me_id)
+        )
+    ).scalar_one_or_none() is None
+
+
+async def test_create_tournament_naming_end_date_raises_tool_error(
+    db_session: AsyncSession,
+) -> None:
+    me = await make_user(db_session, "mcp-create-end-date")
+    me_id = me.id
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
+    raw = await _mint(db_session, me)
+    payload = {**_tournament_payload(), "end_date": "2026-06-14"}
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="end_date"):
+            await client.call_tool("create_tournament", {"payload": payload})
+
     db_session.expire_all()
     assert (
         await db_session.execute(

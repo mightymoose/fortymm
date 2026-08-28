@@ -1,11 +1,10 @@
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     CheckConstraint,
-    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -108,8 +107,16 @@ class Tournament(Base):
         nullable=False,
         server_default=TournamentStatus.draft.value,
     )
-    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # There is deliberately no ``start_date``/``end_date`` column pair any more
+    # (#1511, "A tournament's dates run backwards, and an event can sit outside
+    # them"). They used to be typed, independently-writable columns — nothing
+    # stopped a caller from sending a backwards range, or from creating an event
+    # dated outside the range the tournament claimed to span. The date range a
+    # tournament shows is now derived on every read from the min/max of its
+    # events' own ``slot.date`` (``app.tournament_serialization.serialize_detail``),
+    # never stored: a tournament with no events has no range, and a range with a
+    # backwards ``start``/``end`` is not a state anything can construct, because
+    # it is a min/max of one list rather than two independently-typed fields.
     # SQL NULL means "this tournament has no venue" — a real state at every status
     # (announced before the venue is booked, or deliberately withheld). When an
     # address *is* stored it is always fully geocoded, so no reader ever meets a

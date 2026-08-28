@@ -1692,8 +1692,10 @@ export function buildTournament(
     // Existing component factories/tests build the creator's own tournaments,
     // so default to editable; override `canEdit: false` for the read-only case.
     canEdit: true,
-    startDate: '2026-06-13',
-    endDate: '2026-06-14',
+    // The min/max of the default `events` below's own `slot.date` (#1511) — the
+    // server derives this from the tournament's events on every read; a fixture
+    // that wants a different span (or `events: []`) overrides both together.
+    dateRange: { start: '2026-06-13', end: '2026-06-13' },
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
     // Venued by default. `buildTournament({ address: null })` is the venue-less
     // tournament — no venue line, no pin, no map anywhere it is rendered.

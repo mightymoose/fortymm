@@ -275,8 +275,14 @@ def upgrade() -> None:
             nullable=False,
             server_default="draft",
         ),
-        sa.Column("start_date", sa.Date(), nullable=True),
-        sa.Column("end_date", sa.Date(), nullable=True),
+        # A tournament carries no typed date-range columns. Its date range is
+        # derived on read from the min/max of its events' `slot.date` (see
+        # #1511) rather than stored, so there is no second source of truth to
+        # keep in sync. Removed here in place per the pre-deploy convention,
+        # not as a chained ALTER (the columns lived here from this table's
+        # very first revision and no environment holds data worth
+        # preserving).
+        #
         # Nullable: a tournament may have no venue at all, at every status
         # (announced before the venue is booked; a private tournament whose
         # address is deliberately withheld). Per the 2026-07-26 amendment to

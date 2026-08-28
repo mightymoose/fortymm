@@ -2467,6 +2467,28 @@ export interface components {
             owed_action: ("review" | "score") | ("waiting_opponent" | "waiting_others") | null;
         };
         /**
+         * DateRange
+         * @description A tournament's date span, derived on every read from the min/max of its
+         *     events' own ``slot.date`` (#1511) — never a stored, independently-writable
+         *     pair. Both fields are required and non-optional **on this object**: a range
+         *     that exists at all always has both ends, because it is the min and the max
+         *     of one non-empty list, never two independently-typed facts that could
+         *     disagree or go half-set. See :attr:`TournamentDetailRead.date_range` for why
+         *     the object itself is nullable.
+         */
+        DateRange: {
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+        };
+        /**
          * DeviceTokenResponse
          * @description Confirmation that the device token is registered to the current user.
          */
@@ -5090,10 +5112,6 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /** Start Date */
-            start_date?: string | null;
-            /** End Date */
-            end_date?: string | null;
             address?: components["schemas"]["AddressInput"] | null;
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTableWrite"][];
@@ -5112,10 +5130,6 @@ export interface components {
             /** Description */
             description: string | null;
             status: components["schemas"]["TournamentStatus"];
-            /** Start Date */
-            start_date: string | null;
-            /** End Date */
-            end_date: string | null;
             address: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
@@ -5145,6 +5159,7 @@ export interface components {
             updated_at: string;
             /** Events */
             events: components["schemas"]["TournamentEventRead"][];
+            date_range: components["schemas"]["DateRange"] | null;
             /** Distance Miles */
             distance_miles?: number | null;
             latest_schedule_solve: components["schemas"]["ScheduleSolveRead"] | null;
@@ -5538,10 +5553,6 @@ export interface components {
             /** Description */
             description: string | null;
             status: components["schemas"]["TournamentStatus"];
-            /** Start Date */
-            start_date: string | null;
-            /** End Date */
-            end_date: string | null;
             address: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
@@ -5696,8 +5707,14 @@ export interface components {
          *     value replaces the current one. ``name`` maps to a NOT NULL column and
          *     ``table_catalogue`` to a whole child table, so for those an explicit ``null`` is
          *     rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
-         *     are different. ``description``/``start_date``/``end_date`` are nullable
-         *     columns and may be cleared.
+         *     are different. ``description`` is a nullable column and may be cleared.
+         *
+         *     There is deliberately no ``start_date``/``end_date`` here (#1511, "A
+         *     tournament's dates run backwards, and an event can sit outside them"). A
+         *     tournament's date range is derived from its events' own ``slot.date`` on
+         *     every read, never a typed, independently-writable input — sending either
+         *     field is a 422 (``extra="forbid"`` below), naming the refused field. Move an
+         *     event's own date by editing that event's ``slot`` instead.
          *
          *     ``table_catalogue``, when present, is the catalogue **in full and in order**, and it
          *     is applied as an **id-keyed diff** (ADR 20260801): an entry that cites an ``id``
@@ -5740,10 +5757,6 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
-            /** Start Date */
-            start_date?: string | null;
-            /** End Date */
-            end_date?: string | null;
             address?: components["schemas"]["AddressInput"] | null;
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTableUpsert"][] | null;

@@ -5,7 +5,6 @@ import {
   browserTimezone,
   conjoinWithAnd,
   daysBetween,
-  effectiveDateRange,
   emptyEvent,
   emptyTournament,
   fmtDateRange,
@@ -233,29 +232,6 @@ describe('daysBetween', () => {
   })
 })
 
-describe('effectiveDateRange', () => {
-  it('derives the span from event slots when events exist', () => {
-    const t = buildTournament({
-      startDate: '2030-01-01',
-      endDate: '2030-01-01',
-      events: [
-        buildEvent({ slot: { date: '2026-06-14', start: '09:00', end: '12:00' } }),
-        buildEvent({ slot: { date: '2026-06-13', start: '09:00', end: '12:00' } }),
-      ],
-    })
-    expect(effectiveDateRange(t)).toEqual({ start: '2026-06-13', end: '2026-06-14' })
-  })
-
-  it('falls back to the seeded dates with no events', () => {
-    const t = buildTournament({
-      startDate: '2026-08-22',
-      endDate: '2026-08-23',
-      events: [],
-    })
-    expect(effectiveDateRange(t)).toEqual({ start: '2026-08-22', end: '2026-08-23' })
-  })
-})
-
 describe('formatPredicate', () => {
   it('labels a numeric comparison rule', () => {
     const p: Predicate = { id: 'p', field: 'rating', op: '<', value: 1500 }
@@ -373,6 +349,21 @@ describe('emptyEvent', () => {
     const event = emptyEvent(buildTournament())
     expect(event.id.startsWith('new')).toBe(true)
     expect(event.fixtures).toEqual([])
+  })
+
+  // #1511: the server-derived `dateRange`, not a client re-derivation over the
+  // events array.
+  it("defaults a new event's date to the tournament's dateRange.start", () => {
+    const t = buildTournament({
+      dateRange: { start: '2026-08-22', end: '2026-08-23' },
+    })
+    expect(emptyEvent(t).slot.date).toBe('2026-08-22')
+  })
+
+  it("defaults a new event's date to today when the tournament has no dateRange (no events yet)", () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const t = buildTournament({ dateRange: null, events: [] })
+    expect(emptyEvent(t).slot.date).toBe(today)
   })
 })
 

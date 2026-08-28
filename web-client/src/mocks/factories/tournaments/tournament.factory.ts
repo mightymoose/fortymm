@@ -1544,8 +1544,10 @@ export function buildTournamentDetailRead(
     name: 'Bay Area Open 2026',
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
     status: 'published',
-    start_date: '2026-06-13',
-    end_date: '2026-06-14',
+    // The min/max of the default `events` below's own `slot.date` (#1511) — the
+    // server derives this from the tournament's events on every read, and a
+    // fixture that wants a different span overrides both together.
+    date_range: { start: '2026-06-13', end: '2026-06-13' },
     league_id: FORTYMM_LEAGUE_ID,
     address: {
       venue: 'Berkeley TT Club',
