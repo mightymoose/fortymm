@@ -23,6 +23,16 @@ class Notification(Base):
     than a Postgres enum, matching ``DeviceToken.platform`` — adding a category
     later needs no enum migration. It carries an FK to ``notification_types.key``
     so a value off the taxonomy can't be stored.
+
+    ``result_id`` binds a *hideable* prompt (e.g. "Accept your match result") to
+    the specific ``MatchResult`` it's asking about, so the feed/unread-count
+    queries (``NotificationService.list_feed`` / ``_unread_count``) can hide the
+    row once that result is no longer live — accepted, superseded by a counter,
+    or auto-accepted by the retirement sweep — without deleting it (issue
+    #1583). ``NULL`` for every other notification, including the FYI notices
+    that must never disappear ("Your result was accepted", "Match finalized").
+    ``SET NULL`` on delete: losing the ``MatchResult`` row (cascaded from its
+    match) just un-hides a stale row rather than orphaning the notification.
     """
 
     __tablename__ = "notifications"
@@ -55,6 +65,11 @@ class Notification(Base):
     link: Mapped[str | None] = mapped_column(String(512), nullable=True)
     action_label: Mapped[str | None] = mapped_column(String(40), nullable=True)
     delta: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    result_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("match_results.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     read_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
