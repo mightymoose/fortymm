@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
 from app.domain.match.models import Match as MatchModel
@@ -38,6 +39,9 @@ from app.models import (
     MatchResult,
     MatchSide,
     MatchStatus,
+    TournamentEvent,
+    TournamentEventStage,
+    TournamentFixture,
 )
 
 if TYPE_CHECKING:
@@ -58,12 +62,15 @@ from app.schemas.match import (
     MatchDetailsSide,
     MatchLeague,
     MatchNegotiation,
+    MatchNotScorableReason,
     MatchResultsGameWrite,
+    MatchTournamentContext,
     NegotiationDiffEntry,
     NegotiationGame,
     NegotiationResult,
 )
 from app.schemas.rating import RatingChange
+from app.tournament_queries import ANNOUNCED_STATUSES
 
 # Public shared surface: the serializer/board helpers that both the HTTP router
 # (``matches.py``) and the MCP adapter (``mcp_server.py``), plus the scoring /
@@ -81,6 +88,7 @@ __all__ = [
     "serialize_details",
     "side_schema",
     "status_label",
+    "tournament_context",
     "validate_finalize_games",
     "view_extras",
 ]
@@ -337,6 +345,27 @@ def is_scorable(match: Match) -> bool:
     )
 
 
+def _scorability_reason(match: Match) -> MatchNotScorableReason | None:
+    """Which of ``is_scorable``'s gates ``match`` fails, or ``None`` when it
+    passes all of them. Pure branch selection over the exact same checks
+    ``is_scorable`` runs, in the same order — the single source of truth both
+    ``ensure_scorable`` (``app/match_scoring.py``, picks its 422/409) and the
+    read-side ``MatchDetails.not_scorable_reason`` call, so a write-path
+    rejection and the reason a client sees before ever attempting the write
+    can never drift apart. A future gate added to ``is_scorable`` without a
+    branch of its own here falls through to the catch-all ``not_scorable``,
+    exactly like ``ensure_scorable``'s historical catch-all 409."""
+    if is_scorable(match):
+        return None
+    if len(match.sides) < 2:
+        return MatchNotScorableReason.no_opponent
+    if match.results:
+        return MatchNotScorableReason.result_posted
+    if match.status == MatchStatus.pending:
+        return MatchNotScorableReason.not_called
+    return MatchNotScorableReason.not_scorable
+
+
 def first_decider(
     games: list[MatchResultsGameWrite], target: int
 ) -> tuple[int, int] | None:
@@ -483,6 +512,7 @@ def serialize_details(
     current_user_id: uuid.UUID | None,
     extras: MatchDetailsExtras | None = None,
     domain_match: MatchModel | None = None,
+    tournament: MatchTournamentContext | None = None,
 ) -> MatchDetails:
     extras = extras or empty_extras()
     # The ``data`` view is built from the domain model. The match-details
@@ -520,6 +550,7 @@ def serialize_details(
         status=match.status,
         status_label=status_label(match),
         league=MatchLeague(id=match.league.id, name=match.league.name),
+        tournament=tournament,
         best_of=match.match_settings.best_of,
         games_to_win=_games_to_win(match.match_settings.best_of),
         team_size=match.match_settings.team_size,
@@ -538,6 +569,7 @@ def serialize_details(
         # None. Spectators get the read-only view — writes
         # 404 for non-participants in the score endpoints regardless.
         can_score=(viewer_is_participant and is_scorable(match)),
+        not_scorable_reason=_scorability_reason(match),
         # True iff the saved games already form a decided, validly-ordered
         # match AND no result is currently posted — the FE flips the scoring
         # page's submit button label to "Post result" when this is true.
@@ -597,6 +629,73 @@ async def view_extras(
             as_played=as_played_instant(match),
             user_ids=singles_user_ids(match),
         )
+    )
+
+
+async def tournament_context(
+    db: AsyncSession, match: Match, current_user_id: uuid.UUID | None
+) -> MatchTournamentContext | None:
+    """The tournament/fixture context for ``match``, or ``None`` when there
+    isn't one to show.
+
+    ``None`` covers two different cases: a casual match has no fixture at
+    all, and a tournament match whose tournament the caller must not see yet
+    (a draft is owner-only, mirroring ``app.tournament_queries.visible_to``'s
+    rule, inlined here for an optional/anonymous caller rather than called
+    directly — ``visible_to`` takes a non-optional ``user_id`` and pushes into
+    a WHERE clause; here we already hold the loaded ``tournament`` row and
+    need no second query).
+
+    Reverse-looks-up the fixture the way ``tournament_advancement.py`` does
+    (``TournamentFixture.match_id == match.id``) and eager-loads the whole
+    ``stage -> event -> tournament`` chain in that one query so the async
+    session never lazy-loads across it (``TournamentFixture.stage`` is
+    already ``lazy="joined"`` on the model; ``event`` and ``tournament``
+    are not, so they're loaded explicitly here). ``Tournament.tables`` then
+    loads via its own model-declared ``lazy="selectin"`` — one more query,
+    not one per row — so ``table_label`` is a plain in-memory lookup, no
+    second explicit query for the ``VenueTable``. Bounded to a fixed few
+    queries regardless of caller: there is at most one fixture per match, so
+    this never becomes N+1."""
+    fixture = (
+        await db.execute(
+            select(TournamentFixture)
+            .where(TournamentFixture.match_id == match.id)
+            .options(
+                selectinload(TournamentFixture.stage)
+                .selectinload(TournamentEventStage.event)
+                .selectinload(TournamentEvent.tournament)
+            )
+        )
+    ).scalar_one_or_none()
+    if fixture is None:
+        return None
+
+    event = fixture.stage.event
+    tournament = event.tournament
+    is_owner = (
+        current_user_id is not None and tournament.created_by_user_id == current_user_id
+    )
+    if tournament.status not in ANNOUNCED_STATUSES and not is_owner:
+        return None
+
+    table_label = (
+        next(
+            (t.label for t in tournament.tables if str(t.id) == fixture.table_id),
+            None,
+        )
+        if fixture.table_id is not None
+        else None
+    )
+
+    return MatchTournamentContext(
+        tournament_id=tournament.id,
+        tournament_name=tournament.name,
+        tournament_status=tournament.status,
+        event_id=event.id,
+        event_name=event.name,
+        table_label=table_label,
+        can_edit=is_owner,
     )
 
 

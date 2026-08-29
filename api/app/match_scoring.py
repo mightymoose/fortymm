@@ -44,15 +44,19 @@ from app.match_errors import (
 from app.match_queries import match_eager_options
 from app.match_realtime import stage_match_participant_hints
 from app.match_serialization import (
+    _scorability_reason,
     first_decider,
     games_payload_from_match,
     is_participant,
-    is_scorable,
     score_view,
 )
-from app.models import Match, MatchGame, MatchGameScore, MatchStatus
+from app.models import Match, MatchGame, MatchGameScore
 from app.result_acceptance import _games_to_win
-from app.schemas.match import MatchDetailsScore, MatchResultsGameWrite
+from app.schemas.match import (
+    MatchDetailsScore,
+    MatchNotScorableReason,
+    MatchResultsGameWrite,
+)
 
 # ----- load + lock ---------------------------------------------------------
 
@@ -171,37 +175,41 @@ class _MatchWriteLoader(Protocol):
 
 def ensure_scorable(match: Match) -> None:
     """Raise :class:`MatchNotScorableError` when ``match`` can't be scored.
-    ``is_scorable`` owns the *decision*; this only picks the reason-specific
-    status/message for a rejection, so the write guard can't drift from the
-    ``can_score`` flag — a future gate added to ``is_scorable`` falls through to
-    the catch-all 409 rather than being silently accepted. The carried
+    ``is_scorable`` owns the *decision*; ``_scorability_reason`` (shared with
+    the read-side ``MatchDetails.not_scorable_reason``) picks *which* gate
+    failed, and this only maps that reason to its status/message — so the
+    write guard can't drift from either the ``can_score`` flag or the reason a
+    client already saw before attempting the write. The carried
     status+message reproduce each historical ``_enforce_scorable`` response."""
-    if is_scorable(match):
+    reason = _scorability_reason(match)
+    if reason is None:
         return
-    if len(match.sides) < 2:
-        raise MatchNotScorableError(
-            http_status=422,
-            message="This match has no opponent and can't be scored.",
-        )
-    # Any posted result freezes the scratchpad (#715); the board now only
-    # changes through propose/accept, not the score endpoints.
-    if match.results:
-        raise MatchNotScorableError(
-            http_status=409,
-            message="This match has a posted result; scores are frozen.",
-        )
-    # Scheduled but not yet called to a table (#1073): the schedule is
-    # authoritative, so an uncalled match can't be played out-of-band.
-    if match.status == MatchStatus.pending:
-        raise MatchNotScorableError(
-            http_status=409,
-            message="This match hasn't been called to a table yet.",
-        )
-    # Terminal status (``completed``/``voided``) — or any future
-    # ``is_scorable`` gate without a message of its own.
-    raise MatchNotScorableError(
-        http_status=409, message="This match is no longer scorable."
-    )
+    match reason:
+        case MatchNotScorableReason.no_opponent:
+            raise MatchNotScorableError(
+                http_status=422,
+                message="This match has no opponent and can't be scored.",
+            )
+        case MatchNotScorableReason.result_posted:
+            # Any posted result freezes the scratchpad (#715); the board now
+            # only changes through propose/accept, not the score endpoints.
+            raise MatchNotScorableError(
+                http_status=409,
+                message="This match has a posted result; scores are frozen.",
+            )
+        case MatchNotScorableReason.not_called:
+            # Scheduled but not yet called to a table (#1073): the schedule is
+            # authoritative, so an uncalled match can't be played out-of-band.
+            raise MatchNotScorableError(
+                http_status=409,
+                message="This match hasn't been called to a table yet.",
+            )
+        case MatchNotScorableReason.not_scorable:
+            # Terminal status (``completed``/``voided``) — or any future
+            # ``is_scorable`` gate without a reason branch of its own.
+            raise MatchNotScorableError(
+                http_status=409, message="This match is no longer scorable."
+            )
 
 
 def ensure_game_in_range(match: Match, game_number: int) -> None:

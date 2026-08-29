@@ -74,6 +74,7 @@ from app.match_serialization import (
     serialize_details,
     side_schema,
     status_label,
+    tournament_context,
     view_extras,
 )
 from app.models import (
@@ -207,7 +208,11 @@ async def create_match(
             status_code=422,
             detail="A rated match needs a registered opponent.",
         ) from err
-    return serialize_details(created, current_user.id)
+    return serialize_details(
+        created,
+        current_user.id,
+        tournament=await tournament_context(db, created, current_user.id),
+    )
 
 
 def _apply_list_filter[SelectT: Select[Any]](
@@ -550,11 +555,13 @@ async def get_match(
         if viewer_is_participant
         else empty_extras()
     )
+    viewer_id = current_user.id if current_user else None
     return serialize_details(
         match,
-        current_user.id if current_user else None,
+        viewer_id,
         extras,
         domain_match,
+        tournament=await tournament_context(db, match, viewer_id),
     )
 
 
@@ -669,7 +676,12 @@ async def create_game_score(
         raise _map_score_write_error(exc) from exc
 
     extras = await view_extras(match_service, reloaded)
-    return serialize_details(reloaded, current_user.id, extras)
+    return serialize_details(
+        reloaded,
+        current_user.id,
+        extras,
+        tournament=await tournament_context(db, reloaded, current_user.id),
+    )
 
 
 @router.put(
@@ -704,7 +716,12 @@ async def update_game_score(
         raise _map_score_write_error(exc) from exc
 
     extras = await view_extras(match_service, reloaded)
-    return serialize_details(reloaded, current_user.id, extras)
+    return serialize_details(
+        reloaded,
+        current_user.id,
+        extras,
+        tournament=await tournament_context(db, reloaded, current_user.id),
+    )
 
 
 @router.delete(
@@ -735,7 +752,12 @@ async def delete_game_score(
         raise _map_score_write_error(exc) from exc
 
     extras = await view_extras(match_service, reloaded)
-    return serialize_details(reloaded, current_user.id, extras)
+    return serialize_details(
+        reloaded,
+        current_user.id,
+        extras,
+        tournament=await tournament_context(db, reloaded, current_user.id),
+    )
 
 
 def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPException:
@@ -828,7 +850,12 @@ async def post_match_result(
 
     reloaded = outcome.match
     extras = await view_extras(match_service, reloaded)
-    details = serialize_details(reloaded, current_user.id, extras)
+    details = serialize_details(
+        reloaded,
+        current_user.id,
+        extras,
+        tournament=await tournament_context(db, reloaded, current_user.id),
+    )
     # Record + notify the side that now owes an acceptance. Built after the
     # response and best-effort: the result is already committed, so *nothing*
     # here may turn the 201 into a 500 — not a DB error, and not a delivery-side
@@ -905,7 +932,12 @@ async def accept_match_result(
         ) from exc
 
     extras = await view_extras(match_service, reloaded)
-    details = serialize_details(reloaded, current_user.id, extras)
+    details = serialize_details(
+        reloaded,
+        current_user.id,
+        extras,
+        tournament=await tournament_context(db, reloaded, current_user.id),
+    )
     # Close the loop for the poster. The propose side told the *opponent* to
     # review; now that they've accepted, tell the *poster* their result is
     # final — otherwise their inbox stays empty on a completed match. The poster

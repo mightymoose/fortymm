@@ -216,6 +216,10 @@ export function matchDetails(
     games: [],
     current_game: { game_number: 1 },
     can_score: true,
+    // `can_score: true` above stands alone by default — no reason to explain.
+    // Override both together (with `tournament`, as needed) to build a
+    // non-scorable fixture for #1288's banner/guard scenarios.
+    not_scorable_reason: null,
     can_finalize: false,
     negotiation: LIVE_NEGOTIATION,
     recent_form: [mySide, opponentSide]
