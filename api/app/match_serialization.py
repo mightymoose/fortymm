@@ -28,6 +28,7 @@ from app.mappers.match_extras_mapper import (
 )
 from app.match_queries import (
     current_game_number,
+    is_tournament_director,
     match_eager_options,
     my_side,
     singles_user_ids,
@@ -78,6 +79,7 @@ __all__ = [
     "is_scorable",
     "load_match_eager",
     "negotiation",
+    "resolve_viewer_is_director",
     "score_view",
     "serialize_details",
     "side_schema",
@@ -244,11 +246,12 @@ def negotiation(
     ``corrected`` is unreachable for them.
 
     ``viewer_is_director`` is resolved by the caller (a query — see
-    :func:`app.match_queries.is_tournament_director`) and defaults to False.
-    Only the two read paths that already compute it pass it: the HTTP
-    ``GET /v1/matches/{id}`` handler and the MCP ``get_match`` tool. The write
-    responses, the 409 conflict bodies (``matches._negotiation_conflict``) and
-    the list rows (``matches._list_row``) stay participant-only, matching
+    :func:`resolve_viewer_is_director`) and defaults to False. Every handler
+    that returns a whole ``MatchDetails`` passes it: the two read paths (the
+    HTTP ``GET /v1/matches/{id}`` handler and the MCP ``get_match`` tool) and
+    every write response on both surfaces. The 409 conflict bodies
+    (``matches._negotiation_conflict``) and the list rows
+    (``matches._list_row``) stay participant-only, matching
     :func:`serialize_details`' own call-site decision — a director who loses an
     accept race re-reads the match rather than re-rendering off the 409."""
     accepted = accepted_result(match)
@@ -374,9 +377,9 @@ def is_scorable(match: Match) -> bool:
 
 def director_flag_is_material(match: Match) -> bool:
     """Whether ``viewer_is_director`` can change anything in ``match``'s view —
-    the predicate the two read call sites (the HTTP ``GET /v1/matches/{id}``
-    handler and the MCP ``get_match`` tool) gate the director query on, so
-    neither pays an extra join for an answer the serializer would discard.
+    the predicate :func:`resolve_viewer_is_director` gates the director query
+    on, so no call site pays an extra join for an answer the serializer would
+    discard.
 
     Two disjoint windows, one per affordance the flag drives:
 
@@ -392,10 +395,53 @@ def director_flag_is_material(match: Match) -> bool:
     Every other match (completed, voided, pending) throws the answer away. Those
     are exactly the matches people share links to, so the skip is the hot path.
 
-    One predicate, both call sites: the two read surfaces must widen together or
-    the MCP tool and the web BFF disagree about who may act on the same match."""
+    One predicate, every call site: the read and write surfaces must widen
+    together or two responses about the same match disagree about who may act
+    on it."""
     return is_scorable(match) or (
         match.status == MatchStatus.in_progress and standing_result(match) is not None
+    )
+
+
+async def resolve_viewer_is_director(
+    db: AsyncSession,
+    match: Match,
+    current_user_id: uuid.UUID | None,
+) -> bool:
+    """Resolve the ``viewer_is_director`` input :func:`serialize_details` takes —
+    the single answer every ``MatchDetails`` response is built from.
+
+    One function, because a response that reports ``can_score: false`` on a
+    write the API just authorized is a contradiction a client acts on: an
+    API/MCP caller that treats the mutation response as its next state
+    concludes the director's scoring run is over, while a GET on the same
+    still-scorable match says the opposite. So the read handlers (HTTP
+    ``GET /v1/matches/{id}``, the MCP ``get_match`` tool) and every write
+    handler that returns ``MatchDetails`` (the three score verbs, propose and
+    accept, on both surfaces) resolve it here rather than each deciding.
+
+    Three short-circuits before the join, in cost order: an anonymous caller
+    has no director identity; a participant already holds every flag the
+    director bit could add (and is the common case); and
+    :func:`director_flag_is_material` throws out the matches where the answer
+    changes nothing. Only a signed-in non-participant reading or writing a
+    live, unsettled match pays :func:`app.match_queries.is_tournament_director`.
+
+    A write handler could infer the bit for free — ``load_match_for_write``
+    turns away everyone who is neither a participant nor the director, so a
+    non-participant who got a response *is* one. That inference is deliberately
+    not taken: it silently produces a wrong flag the day the write gate widens
+    again, and the join it saves only ever runs on the director's own writes.
+
+    ``matches._negotiation_conflict``'s 409 bodies and ``matches._list_row``
+    stay participant-only, by decision — a caller who lost a race re-reads the
+    match rather than re-rendering off the conflict, and the list rows carry no
+    scoring affordance to widen."""
+    return (
+        current_user_id is not None
+        and not is_participant(match, current_user_id)
+        and director_flag_is_material(match)
+        and await is_tournament_director(db, match.id, current_user_id)
     )
 
 
@@ -555,16 +601,19 @@ def serialize_details(
     read flag is a second change, not a consequence of the [write-gate] one") —
     whether ``current_user_id`` created the tournament that materialized
     ``match``, resolved by the caller (a query, so it can't be computed here
-    without a session). It defaults to ``False`` for every call site that
-    doesn't pass it explicitly, which is deliberate: only the HTTP detail route
-    and the MCP ``get_match`` tool compute and pass it. ``_list_row``
-    (``app.matches``) and every write-response call site stay participant-only,
-    by decision — see those call sites for why.
+    without a session — :func:`resolve_viewer_is_director` is that one
+    resolver). Every handler returning a whole ``MatchDetails`` passes it: the
+    HTTP detail route, the MCP ``get_match`` tool, and every write response on
+    both surfaces, so a response can never deny a write the same request just
+    authorized. It defaults to ``False`` for the call sites that don't —
+    ``_list_row`` and the 409 conflict bodies (``app.matches``) — by decision;
+    see those call sites for why.
 
     Which of the three flags it can move depends on where the match is in its
     life: the scoring pair before any result exists, ``your_turn`` once a
     player's proposal is standing. :func:`director_flag_is_material` is the
-    single predicate both callers use to skip the query when neither applies."""
+    single predicate the resolver uses to skip the query when neither
+    applies."""
     extras = extras or empty_extras()
     # The ``data`` view is built from the domain model. The match-details
     # endpoint loads it through MatchService/MatchRepository and passes it in;

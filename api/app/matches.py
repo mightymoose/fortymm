@@ -47,7 +47,6 @@ from app.match_queries import (
     _attention_matches_query,
     _player_username_filter,
     current_game_number,
-    is_tournament_director,
     match_eager_options,
     participant_filter,
 )
@@ -68,11 +67,11 @@ from app.match_scoring import (
 )
 from app.match_serialization import (
     compact_games,
-    director_flag_is_material,
     is_participant,
     is_scorable,
     load_match_eager,
     negotiation,
+    resolve_viewer_is_director,
     serialize_details,
     side_schema,
     status_label,
@@ -558,20 +557,12 @@ async def get_match(
     )
     # The director read flags are a second, independent widening from the write
     # gate (#1523 constraint 10) — a signed-in, non-participant viewer may still
-    # be the tournament's director. Skip the query for an anonymous caller or
-    # one who's already a participant (the fast, common-case paths), and for a
-    # match where the answer changes nothing —
-    # ``director_flag_is_material`` names the two windows where it does: a
-    # scorable board (``can_score`` / ``can_finalize``) and a live match with a
-    # standing proposal (``negotiation.your_turn``). A completed, voided or
-    # pending match throws the answer away, and those are exactly the matches
-    # people share links to. Only a signed-in non-participant reading a live,
-    # unsettled match pays the extra join.
-    viewer_is_director = (
-        current_user is not None
-        and not viewer_is_participant
-        and director_flag_is_material(match)
-        and await is_tournament_director(db, match_id, current_user.id)
+    # be the tournament's director. ``resolve_viewer_is_director`` owns the
+    # decision and its short-circuits (anonymous, participant, or a match where
+    # the flag changes nothing), shared with every other handler that returns a
+    # whole ``MatchDetails`` so no two responses about this match can disagree.
+    viewer_is_director = await resolve_viewer_is_director(
+        db, match, current_user.id if current_user else None
     )
     return serialize_details(
         match,
@@ -616,6 +607,34 @@ async def _load_match_for_scoring(
         )
     except MatchNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Match not found.") from exc
+
+
+async def _serialize_written_match(
+    db: AsyncSession,
+    match_service: MatchService,
+    match: Match,
+    current_user_id: uuid.UUID,
+) -> MatchDetails:
+    """Serialize a just-written match from the acting caller's perspective — the
+    one response builder every write handler on this router shares (the three
+    score verbs, propose, accept).
+
+    Two viewer-relative inputs, and the director is a live case in both. The
+    extras stay participant-gated (``view_extras_if_participant``), so a
+    director who doesn't play in this match never sees the players'
+    form/H2H/rating data (#515). The flags do the opposite and widen to them:
+    ``resolve_viewer_is_director`` answers the same question the GET answers, so
+    a write the request just authorized can't come back reporting
+    ``can_score: false``. Its short-circuits make this free for a participant.
+
+    The mirror of ``mcp_server._serialize_written_match``. Both exist because
+    each surface holds its own service/session handles; the decision they share
+    lives in ``resolve_viewer_is_director``, not in either copy."""
+    extras = await view_extras_if_participant(match_service, match, current_user_id)
+    viewer_is_director = await resolve_viewer_is_director(db, match, current_user_id)
+    return serialize_details(
+        match, current_user_id, extras, viewer_is_director=viewer_is_director
+    )
 
 
 # Per-game endpoints are addressed by ``game_number``: a game row may not
@@ -693,8 +712,7 @@ async def create_game_score(
     except _SCORE_WRITE_ERRORS as exc:
         raise _map_score_write_error(exc) from exc
 
-    extras = await view_extras_if_participant(match_service, reloaded, current_user.id)
-    return serialize_details(reloaded, current_user.id, extras)
+    return await _serialize_written_match(db, match_service, reloaded, current_user.id)
 
 
 @router.put(
@@ -728,8 +746,7 @@ async def update_game_score(
     except _SCORE_WRITE_ERRORS as exc:
         raise _map_score_write_error(exc) from exc
 
-    extras = await view_extras_if_participant(match_service, reloaded, current_user.id)
-    return serialize_details(reloaded, current_user.id, extras)
+    return await _serialize_written_match(db, match_service, reloaded, current_user.id)
 
 
 @router.delete(
@@ -759,8 +776,7 @@ async def delete_game_score(
     except _SCORE_WRITE_ERRORS as exc:
         raise _map_score_write_error(exc) from exc
 
-    extras = await view_extras_if_participant(match_service, reloaded, current_user.id)
-    return serialize_details(reloaded, current_user.id, extras)
+    return await _serialize_written_match(db, match_service, reloaded, current_user.id)
 
 
 def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPException:
@@ -857,8 +873,9 @@ async def post_match_result(
         raise HTTPException(status_code=404, detail="Match not found.") from exc
 
     reloaded = outcome.match
-    extras = await view_extras_if_participant(match_service, reloaded, current_user.id)
-    details = serialize_details(reloaded, current_user.id, extras)
+    details = await _serialize_written_match(
+        db, match_service, reloaded, current_user.id
+    )
     # Record + notify the side that now owes an acceptance. Built after the
     # response and best-effort: the result is already committed, so *nothing*
     # here may turn the 201 into a 500 — not a DB error, and not a delivery-side
@@ -939,8 +956,9 @@ async def accept_match_result(
             status_code=409, detail="The posted games no longer decide this match."
         ) from exc
 
-    extras = await view_extras_if_participant(match_service, reloaded, current_user.id)
-    details = serialize_details(reloaded, current_user.id, extras)
+    details = await _serialize_written_match(
+        db, match_service, reloaded, current_user.id
+    )
     # Close the loop for the poster. The propose side told the *opponent* to
     # review; now that they've accepted, tell the *poster* their result is
     # final — otherwise their inbox stays empty on a completed match. The poster

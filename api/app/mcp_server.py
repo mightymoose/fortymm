@@ -85,16 +85,15 @@ from app.match_errors import (
     SelfMatchError,
     UndecidedBoardError,
 )
-from app.match_queries import is_tournament_director
 from app.match_result_notifications import notify_result_posted
 from app.match_scoring import MatchLockUnavailable
 from app.match_scoring import delete_game_score as delete_game_score_core
 from app.match_scoring import enter_game_score as enter_game_score_core
 from app.match_scoring import update_game_score as update_game_score_core
 from app.match_serialization import (
-    director_flag_is_material,
     is_participant,
     load_match_eager,
+    resolve_viewer_is_director,
     serialize_details,
     view_extras,
     view_extras_if_participant,
@@ -611,18 +610,11 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
             else empty_extras()
         )
         # The director read flags are a second, independent widening from the
-        # write gate (#1523 constraint 10). Skip the query when the caller is
-        # already a participant (the fast, common-case path), and for a match
-        # where the answer changes nothing — ``director_flag_is_material`` names
-        # the two windows where it does (a scorable board for ``can_score`` /
-        # ``can_finalize``, a standing proposal for ``negotiation.your_turn``).
-        # Mirrors the HTTP ``get_match`` above, off the same predicate so the
-        # two surfaces can't drift on who may act.
-        viewer_is_director = (
-            not viewer_is_participant
-            and director_flag_is_material(match)
-            and await is_tournament_director(db, match_id, user_id)
-        )
+        # write gate (#1523 constraint 10). ``resolve_viewer_is_director`` owns
+        # the decision and its short-circuits, shared with the HTTP handlers and
+        # with the write tools below, so no two responses about this match can
+        # disagree about who may act on it.
+        viewer_is_director = await resolve_viewer_is_director(db, match, user_id)
         return serialize_details(
             match, user_id, extras, domain_match, viewer_is_director=viewer_is_director
         )
@@ -741,10 +733,20 @@ async def _serialize_written_match(
     ``view_extras_if_participant`` re-checks and returns ``empty_extras()`` for
     a director who isn't also a participant, mirroring the HTTP write handlers'
     identical gate (``app.matches``) and the read path's own participant gate
-    (``get_match`` above)."""
+    (``get_match`` above).
+
+    The scoring flags go the other way. ``resolve_viewer_is_director`` answers
+    the same question ``get_match`` answers, so a tool call that just succeeded
+    can't return ``can_score: false`` and tell the agent its scoring run is
+    over — the agent drives its next call off this return value. All five write
+    tools (the three score verbs, ``propose_result``, ``accept_result``) come
+    through here, so the decision is made once."""
     service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
     extras = await view_extras_if_participant(service, match, user_id)
-    return serialize_details(match, user_id, extras)
+    viewer_is_director = await resolve_viewer_is_director(db, match, user_id)
+    return serialize_details(
+        match, user_id, extras, viewer_is_director=viewer_is_director
+    )
 
 
 @mcp.tool

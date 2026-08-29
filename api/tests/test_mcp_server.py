@@ -1174,6 +1174,101 @@ async def test_director_can_enter_game_score_via_mcp(
     assert (score["side_1_points"], score["side_2_points"]) == (11, 5)
 
 
+async def test_score_write_tools_keep_the_directors_scoring_flags_via_mcp(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """An agent drives the next call off the tool's own return value.
+
+    ``can_score: false`` on a write the tool just accepted tells the agent to
+    stop scoring a match it may still score — the MCP half of the HTTP
+    contradiction, and the reason the three write tools share one serializer
+    (``_serialize_written_match``) rather than three copies of the decision."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-write-flags-p2")
+    director = await make_user(db_session, "mcp-dir-write-flags-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-write-flags",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    async with _mcp_client(director_token) as client, client:
+        entered = await client.call_tool_mcp(
+            "enter_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 5,
+            },
+        )
+        updated = await client.call_tool_mcp(
+            "update_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 7,
+                "expected_version": 1,
+            },
+        )
+        cleared = await client.call_tool_mcp(
+            "delete_game_score",
+            {"match_id": match_id, "game_number": 1},
+        )
+
+    for written in (entered, updated, cleared):
+        assert written.isError is False
+        assert written.structuredContent is not None
+        assert written.structuredContent["can_score"] is True
+
+
+async def test_the_mcp_write_that_decides_the_board_reports_can_finalize(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """The clinching write is where an agent learns it may call
+    ``propose_result``. A decided board reports no ``current_game``, so
+    ``can_finalize`` is the only flag left saying the run has somewhere to
+    go."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-write-finalize-p2")
+    director = await make_user(db_session, "mcp-dir-write-finalize-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-write-finalize",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    async with _mcp_client(director_token) as client, client:
+        for game_number in (1, 2):
+            written = await client.call_tool_mcp(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": game_number,
+                    "side_1_points": 11,
+                    "side_2_points": 5,
+                },
+            )
+
+    assert written.isError is False
+    assert written.structuredContent is not None
+    assert written.structuredContent["current_game"] is None
+    assert written.structuredContent["can_finalize"] is True
+
+
 async def test_get_match_can_score_true_for_director_via_mcp(
     api_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
