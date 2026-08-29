@@ -74,6 +74,7 @@ from app.match_serialization import (
     serialize_details,
     side_schema,
     status_label,
+    tournament_context,
     view_extras,
 )
 from app.models import (
@@ -207,7 +208,12 @@ async def create_match(
             status_code=422,
             detail="A rated match needs a registered opponent.",
         ) from err
-    return serialize_details(created, current_user.id)
+    # No `tournament_context` lookup here: this endpoint only ever creates a
+    # casual match (`MatchCreate` carries no fixture/tournament field), and a
+    # `TournamentFixture` links to a match only through the draw-materialization
+    # path (`tournament_materialization.py`), never through this handler — so a
+    # match this call just created cannot yet be referenced by any fixture.
+    return serialize_details(created, current_user.id, tournament=None)
 
 
 def _apply_list_filter[SelectT: Select[Any]](
@@ -550,11 +556,13 @@ async def get_match(
         if viewer_is_participant
         else empty_extras()
     )
+    viewer_id = current_user.id if current_user else None
     return serialize_details(
         match,
-        current_user.id if current_user else None,
+        viewer_id,
         extras,
         domain_match,
+        tournament=await tournament_context(db, match, viewer_id),
     )
 
 
@@ -635,6 +643,28 @@ def _map_score_write_error(exc: _ScoreWriteError) -> HTTPException:
     return _score_conflict(exc.committed_score)
 
 
+async def _reloaded_match_details(
+    db: AsyncSession,
+    match_service: MatchService,
+    match_service_result: Match,
+    current_user_id: uuid.UUID,
+) -> MatchDetails:
+    """The response shape shared by every scoring/negotiation write endpoint
+    below: reload the acting user's extras and tournament context for the
+    just-mutated match, then serialize. The five call sites (score entry x3,
+    propose/accept result x2) all reload a pre-existing match after a write and
+    build the same response from the acting participant's perspective — unlike
+    ``get_match`` (optional/anonymous viewer, conditional extras) and
+    ``create_match`` (never has a fixture yet), which don't fit this shape."""
+    extras = await view_extras(match_service, match_service_result)
+    return serialize_details(
+        match_service_result,
+        current_user_id,
+        extras,
+        tournament=await tournament_context(db, match_service_result, current_user_id),
+    )
+
+
 @router.post(
     "/matches/{match_id}/games/{game_number}/scores/new",
     response_model=MatchDetails,
@@ -668,8 +698,7 @@ async def create_game_score(
     except _SCORE_WRITE_ERRORS as exc:
         raise _map_score_write_error(exc) from exc
 
-    extras = await view_extras(match_service, reloaded)
-    return serialize_details(reloaded, current_user.id, extras)
+    return await _reloaded_match_details(db, match_service, reloaded, current_user.id)
 
 
 @router.put(
@@ -703,8 +732,7 @@ async def update_game_score(
     except _SCORE_WRITE_ERRORS as exc:
         raise _map_score_write_error(exc) from exc
 
-    extras = await view_extras(match_service, reloaded)
-    return serialize_details(reloaded, current_user.id, extras)
+    return await _reloaded_match_details(db, match_service, reloaded, current_user.id)
 
 
 @router.delete(
@@ -734,8 +762,7 @@ async def delete_game_score(
     except _SCORE_WRITE_ERRORS as exc:
         raise _map_score_write_error(exc) from exc
 
-    extras = await view_extras(match_service, reloaded)
-    return serialize_details(reloaded, current_user.id, extras)
+    return await _reloaded_match_details(db, match_service, reloaded, current_user.id)
 
 
 def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPException:
@@ -827,8 +854,9 @@ async def post_match_result(
         raise HTTPException(status_code=404, detail="Match not found.") from exc
 
     reloaded = outcome.match
-    extras = await view_extras(match_service, reloaded)
-    details = serialize_details(reloaded, current_user.id, extras)
+    details = await _reloaded_match_details(
+        db, match_service, reloaded, current_user.id
+    )
     # Record + notify the side that now owes an acceptance. Built after the
     # response and best-effort: the result is already committed, so *nothing*
     # here may turn the 201 into a 500 — not a DB error, and not a delivery-side
@@ -904,8 +932,9 @@ async def accept_match_result(
             status_code=409, detail="The posted games no longer decide this match."
         ) from exc
 
-    extras = await view_extras(match_service, reloaded)
-    details = serialize_details(reloaded, current_user.id, extras)
+    details = await _reloaded_match_details(
+        db, match_service, reloaded, current_user.id
+    )
     # Close the loop for the poster. The propose side told the *opponent* to
     # review; now that they've accepted, tell the *poster* their result is
     # final — otherwise their inbox stays empty on a completed match. The poster

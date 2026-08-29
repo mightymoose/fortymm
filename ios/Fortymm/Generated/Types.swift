@@ -6331,6 +6331,21 @@ internal enum Components {
                 case retirementDeadline = "retirement_deadline"
             }
         }
+        /// Why ``is_scorable(match)`` is ``False``, in the same order
+        /// ``ensure_scorable`` (``app/match_scoring.py``) checks its branches. The
+        /// read-side twin of that write-path guard's reason-specific 422/409s: it
+        /// powers ``MatchDetails.not_scorable_reason`` so a client can explain — or
+        /// refuse to render a score form for — a non-scorable match *before* the
+        /// write path ever rejects it (#1288). ``_scorability_reason`` is the single
+        /// pure function both sides call, so the two can never disagree on why.
+        ///
+        /// - Remark: Generated from `#/components/schemas/MatchNotScorableReason`.
+        internal enum MatchNotScorableReason: String, Codable, Hashable, Sendable, CaseIterable {
+            case noOpponent = "no_opponent"
+            case resultPosted = "result_posted"
+            case notCalled = "not_called"
+            case notScorable = "not_scorable"
+        }
         /// One game inside a finalize-the-match payload. Per-game point legality
         /// is checked here; cross-game checks (contiguous numbering, decided result,
         /// no scores past the decider) live in the handler against the full list.
@@ -6479,6 +6494,67 @@ internal enum Components {
             case inProgress = "in_progress"
             case completed = "completed"
             case voided = "voided"
+        }
+        /// Tournament/fixture context for a match born from a draw. ``None`` on
+        /// ``MatchDetails`` for a casual match (no fixture references it), or when
+        /// the viewer must not see this tournament yet — an unannounced (draft)
+        /// tournament is owner-only, mirroring ``app.tournament_queries.visible_to``.
+        ///
+        /// Perspective-neutral apart from that visibility gate and ``can_edit`` —
+        /// same "ignoring who's asking" contract as ``is_scorable`` itself.
+        ///
+        /// - Remark: Generated from `#/components/schemas/MatchTournamentContext`.
+        internal struct MatchTournamentContext: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MatchTournamentContext/tournament_id`.
+            internal var tournamentId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MatchTournamentContext/tournament_name`.
+            internal var tournamentName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MatchTournamentContext/tournament_status`.
+            internal var tournamentStatus: Components.Schemas.TournamentStatus
+            /// - Remark: Generated from `#/components/schemas/MatchTournamentContext/event_id`.
+            internal var eventId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MatchTournamentContext/event_name`.
+            internal var eventName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MatchTournamentContext/table_label`.
+            internal var tableLabel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/MatchTournamentContext/can_edit`.
+            internal var canEdit: Swift.Bool
+            /// Creates a new `MatchTournamentContext`.
+            ///
+            /// - Parameters:
+            ///   - tournamentId:
+            ///   - tournamentName:
+            ///   - tournamentStatus:
+            ///   - eventId:
+            ///   - eventName:
+            ///   - tableLabel:
+            ///   - canEdit:
+            internal init(
+                tournamentId: Swift.String,
+                tournamentName: Swift.String,
+                tournamentStatus: Components.Schemas.TournamentStatus,
+                eventId: Swift.String,
+                eventName: Swift.String,
+                tableLabel: Swift.String? = nil,
+                canEdit: Swift.Bool
+            ) {
+                self.tournamentId = tournamentId
+                self.tournamentName = tournamentName
+                self.tournamentStatus = tournamentStatus
+                self.eventId = eventId
+                self.eventName = eventName
+                self.tableLabel = tableLabel
+                self.canEdit = canEdit
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case tournamentId = "tournament_id"
+                case tournamentName = "tournament_name"
+                case tournamentStatus = "tournament_status"
+                case eventId = "event_id"
+                case eventName = "event_name"
+                case tableLabel = "table_label"
+                case canEdit = "can_edit"
+            }
         }
         /// Side-effect-free look at an emailed link before it's consumed, so the
         /// client can decide whether to show a "bring N matches over?" confirmation.
@@ -12952,6 +13028,26 @@ internal enum Components {
             internal var statusLabel: Swift.String
             /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/league`.
             internal var league: Components.Schemas.MatchLeague
+            /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/tournament`.
+            internal struct TournamentPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/tournament/value1`.
+                internal var value1: Components.Schemas.MatchTournamentContext
+                /// Creates a new `TournamentPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.MatchTournamentContext) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/tournament`.
+            internal var tournament: Components.Schemas.AppSchemasMatchMatchDetails.TournamentPayload?
             /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/best_of`.
             internal var bestOf: Swift.Int
             /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/games_to_win`.
@@ -12988,6 +13084,26 @@ internal enum Components {
             internal var currentGame: Components.Schemas.AppSchemasMatchMatchDetails.CurrentGamePayload?
             /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/can_score`.
             internal var canScore: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/not_scorable_reason`.
+            internal struct NotScorableReasonPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/not_scorable_reason/value1`.
+                internal var value1: Components.Schemas.MatchNotScorableReason
+                /// Creates a new `NotScorableReasonPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.MatchNotScorableReason) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/not_scorable_reason`.
+            internal var notScorableReason: Components.Schemas.AppSchemasMatchMatchDetails.NotScorableReasonPayload?
             /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/can_finalize`.
             internal var canFinalize: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails/negotiation`.
@@ -13023,6 +13139,7 @@ internal enum Components {
             ///   - status:
             ///   - statusLabel:
             ///   - league:
+            ///   - tournament:
             ///   - bestOf:
             ///   - gamesToWin:
             ///   - teamSize:
@@ -13032,6 +13149,7 @@ internal enum Components {
             ///   - games:
             ///   - currentGame:
             ///   - canScore:
+            ///   - notScorableReason:
             ///   - canFinalize:
             ///   - negotiation:
             ///   - recentForm:
@@ -13042,6 +13160,7 @@ internal enum Components {
                 status: Components.Schemas.MatchStatus,
                 statusLabel: Swift.String,
                 league: Components.Schemas.MatchLeague,
+                tournament: Components.Schemas.AppSchemasMatchMatchDetails.TournamentPayload? = nil,
                 bestOf: Swift.Int,
                 gamesToWin: Swift.Int,
                 teamSize: Swift.Int,
@@ -13051,6 +13170,7 @@ internal enum Components {
                 games: [Components.Schemas.MatchDetailsGame],
                 currentGame: Components.Schemas.AppSchemasMatchMatchDetails.CurrentGamePayload? = nil,
                 canScore: Swift.Bool,
+                notScorableReason: Components.Schemas.AppSchemasMatchMatchDetails.NotScorableReasonPayload? = nil,
                 canFinalize: Swift.Bool,
                 negotiation: Components.Schemas.MatchNegotiation,
                 recentForm: [Components.Schemas.MatchDetailsPlayerForm]? = nil,
@@ -13061,6 +13181,7 @@ internal enum Components {
                 self.status = status
                 self.statusLabel = statusLabel
                 self.league = league
+                self.tournament = tournament
                 self.bestOf = bestOf
                 self.gamesToWin = gamesToWin
                 self.teamSize = teamSize
@@ -13070,6 +13191,7 @@ internal enum Components {
                 self.games = games
                 self.currentGame = currentGame
                 self.canScore = canScore
+                self.notScorableReason = notScorableReason
                 self.canFinalize = canFinalize
                 self.negotiation = negotiation
                 self.recentForm = recentForm
@@ -13081,6 +13203,7 @@ internal enum Components {
                 case status
                 case statusLabel = "status_label"
                 case league
+                case tournament
                 case bestOf = "best_of"
                 case gamesToWin = "games_to_win"
                 case teamSize = "team_size"
@@ -13090,6 +13213,7 @@ internal enum Components {
                 case games
                 case currentGame = "current_game"
                 case canScore = "can_score"
+                case notScorableReason = "not_scorable_reason"
                 case canFinalize = "can_finalize"
                 case negotiation
                 case recentForm = "recent_form"

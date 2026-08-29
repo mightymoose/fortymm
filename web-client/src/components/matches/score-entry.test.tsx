@@ -970,9 +970,12 @@ describe('ScoreEntry — create', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('redirects to the match page when the match is already finalized', async () => {
-    // Per-game endpoints 409 on completed matches — the FE bounces the user
-    // back to the read-only detail page instead of rendering scoring UI.
+  it('explains that scores are no longer accepted instead of rendering the form, once the match is finalized (#1288)', async () => {
+    // Per-game endpoints 409 on completed matches. Since #1288 the FE
+    // refuses at the boundary with an inline explanation (mirroring
+    // `ensure_scorable`'s message) instead of silently bouncing to the
+    // read-only detail page — the old bounce-away behavior this test used to
+    // pin.
     server.use(
       http.get('*/v1/matches/m-1', () =>
         HttpResponse.json(
@@ -989,6 +992,7 @@ describe('ScoreEntry — create', () => {
             ],
             current_game: null,
             can_score: false,
+            not_scorable_reason: 'not_scorable',
             can_finalize: false,
           }),
         ),
@@ -997,12 +1001,15 @@ describe('ScoreEntry — create', () => {
 
     renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
 
-    await waitFor(() =>
-      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This match is no longer scorable.',
     )
     expect(
       screen.queryByRole('button', { name: /save/i }),
     ).not.toBeInTheDocument()
+    // No silent bounce — the explanation is the whole point (#1288).
+    expect(screen.queryByText('match-page m-1')).not.toBeInTheDocument()
   })
 
   it('surfaces a server 422 inline when finalize fails validation', async () => {
@@ -1513,6 +1520,9 @@ function completedMatch() {
     sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
     current_game: null,
     can_score: false,
+    // Mirrors the server's `_scorability_reason`: a terminal status with no
+    // posted result falls through to the generic reason (#1288).
+    not_scorable_reason: 'not_scorable',
     can_finalize: false,
   })
 }
@@ -2672,14 +2682,20 @@ describe('ScoreEntry — unsaved-input guard', () => {
     expect(screen.queryByText('scoring-edit')).not.toBeInTheDocument()
   })
 
-  it('regression: a match completed underneath a dirty form bounces to match detail without warning (#818)', async () => {
-    // The declarative-redirect arm of #818. The user is typing a score when the
-    // match completes on the server (opponent finalized, a late refetch, etc.).
-    // The next `useMatch` refetch returns `completed`, so score-entry's
-    // `<Navigate>` guard bounces to the read-only match page. That redirect is
-    // app-initiated (computed from server data, no user gesture), so it must
-    // bypass the dirty-form guard via `ignoreBlocker`; omitting it doesn't just
-    // prompt — a blocked `<Navigate>` re-fires and wedges the screen (ADR 0014).
+  it('regression: a match completed underneath a dirty form explains why, without a leave-without-saving prompt (#818, superseded by #1288)', async () => {
+    // #818's original declarative-redirect arm bounced to the read-only match
+    // page via `<Navigate>` once a refetch returned `completed`. Since #1288
+    // the `can_score` guard renders first for this scenario and intercepts a
+    // completed match with an inline explanation instead of navigating — the
+    // ticket's edge cases are explicit that one guard covers every
+    // non-scorable state reached this way, including "completed... reached
+    // through the score URL". What #818 actually protects against — the
+    // dirty-form leave-prompt firing (or wedging the screen) on an
+    // app-initiated transition — still holds: no navigation is attempted
+    // here, so there's nothing for the blocker to block, and no prompt
+    // appears. (The negotiation-conflict redirect below is the one case that
+    // still navigates instead — it's gated on the viewer's own finalize
+    // attempt, not on bare match state, so it doesn't regress here.)
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
@@ -2708,25 +2724,19 @@ describe('ScoreEntry — unsaved-input guard', () => {
       http.get('*/v1/matches/m-1', () => HttpResponse.json(completedMatch())),
     )
 
-    // fireEvent (not user.click): against the pre-fix component the completed
-    // `<Navigate>` is blocked and busy-loops, which would leave user-event's
-    // `act()` waiting forever and hang the test. fireEvent returns synchronously,
-    // so the `waitFor` below governs the bound and surfaces the regression.
     fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
 
-    // The redirect lands us on the read-only match page — no leave prompt.
-    // Explicit timeout: setup.ts sets `asyncUtilTimeout: 5000`, which equals
-    // vitest's default `testTimeout: 5000`, so a bare waitFor here shares the
-    // test's whole budget. `fireEvent` returns synchronously, so the async
-    // invalidate → refetch → <Navigate> chain runs inside this window; when it
-    // flushes slowly the two timers fire at the same boundary and the test dies
-    // with an opaque "Test timed out" instead of a diagnosable "match-page m-1".
     await waitFor(
-      () => expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+      () =>
+        expect(screen.getByRole('alert')).toHaveTextContent(
+          'This match is no longer scorable.',
+        ),
       { timeout: 2000 },
     )
+    // No navigation attempted, so no leave prompt and no bounce.
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('match-page m-1')).not.toBeInTheDocument()
   })
 })
 
@@ -3662,6 +3672,117 @@ describe('ScoreEntry — submit-gated validation (ADR-0018)', () => {
       expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
     )
     expect(resultsBody).not.toBeNull()
+  })
+})
+
+describe('ScoreEntry — not-scorable guard (#1288)', () => {
+  it('explains a match with no opponent, mirroring the API 422 message, and renders no form', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({ can_score: false, not_scorable_reason: 'no_opponent' }),
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "This match has no opponent and can't be scored.",
+    )
+    // Falsification target: removing the guard renders the ScorePad's score
+    // inputs instead — assert their absence, not just the alert's presence,
+    // so a broken guard reds here for the right reason (an undiscriminated
+    // timeout proves nothing — web-client/CLAUDE.md).
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /save|post result|finalize/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('explains a match with a posted result, mirroring the API 409 message', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            can_score: false,
+            not_scorable_reason: 'result_posted',
+          }),
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This match has a posted result; scores are frozen.',
+    )
+  })
+
+  it('explains an uncalled tournament fixture, mirroring the API 409 message', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            status: 'pending',
+            status_label: 'Scheduled',
+            can_score: false,
+            not_scorable_reason: 'not_called',
+          }),
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "This match hasn't been called to a table yet.",
+    )
+  })
+
+  it("explains a spectator's view with plain participant copy — not one of the server's four reasons, since not_scorable_reason is match-relative, not viewer-relative", async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            can_score: false,
+            not_scorable_reason: null,
+            sides: [
+              {
+                side_number: 1,
+                players: [
+                  { user_id: 'u-a', username: 'ada.l', is_current_user: false },
+                ],
+                games_won: 0,
+                won: null,
+                is_current_user_side: false,
+              },
+              {
+                side_number: 2,
+                players: [
+                  { user_id: 'u-b', username: 'bo.k', is_current_user: false },
+                ],
+                games_won: 0,
+                won: null,
+                is_current_user_side: false,
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Only participants in this match can enter scores.',
+    )
   })
 })
 

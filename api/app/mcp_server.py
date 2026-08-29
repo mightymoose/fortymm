@@ -94,6 +94,7 @@ from app.match_serialization import (
     is_participant,
     load_match_eager,
     serialize_details,
+    tournament_context,
     view_extras,
 )
 from app.models import Match, Tournament, TournamentEvent, TournamentStatus, User
@@ -585,7 +586,13 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
             if viewer_is_participant
             else empty_extras()
         )
-        return serialize_details(match, user_id, extras, domain_match)
+        return serialize_details(
+            match,
+            user_id,
+            extras,
+            domain_match,
+            tournament=await tournament_context(db, match, user_id),
+        )
 
 
 @mcp.tool
@@ -687,7 +694,12 @@ async def _serialize_written_match(
     score handlers return for the acting user."""
     service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
     extras = await view_extras(service, match)
-    return serialize_details(match, user_id, extras)
+    return serialize_details(
+        match,
+        user_id,
+        extras,
+        tournament=await tournament_context(db, match, user_id),
+    )
 
 
 @mcp.tool

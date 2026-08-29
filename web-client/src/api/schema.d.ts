@@ -3242,6 +3242,18 @@ export interface components {
             retirement_deadline?: string | null;
         };
         /**
+         * MatchNotScorableReason
+         * @description Why ``is_scorable(match)`` is ``False``, in the same order
+         *     ``ensure_scorable`` (``app/match_scoring.py``) checks its branches. The
+         *     read-side twin of that write-path guard's reason-specific 422/409s: it
+         *     powers ``MatchDetails.not_scorable_reason`` so a client can explain — or
+         *     refuse to render a score form for — a non-scorable match *before* the
+         *     write path ever rejects it (#1288). ``_scorability_reason`` is the single
+         *     pure function both sides call, so the two can never disagree on why.
+         * @enum {string}
+         */
+        MatchNotScorableReason: "no_opponent" | "result_posted" | "not_called" | "not_scorable";
+        /**
          * MatchResultsGameWrite
          * @description One game inside a finalize-the-match payload. Per-game point legality
          *     is checked here; cross-game checks (contiguous numbering, decided result,
@@ -3285,6 +3297,37 @@ export interface components {
          * @enum {string}
          */
         MatchStatus: "pending" | "in_progress" | "completed" | "voided";
+        /**
+         * MatchTournamentContext
+         * @description Tournament/fixture context for a match born from a draw. ``None`` on
+         *     ``MatchDetails`` for a casual match (no fixture references it), or when
+         *     the viewer must not see this tournament yet — an unannounced (draft)
+         *     tournament is owner-only, mirroring ``app.tournament_queries.visible_to``.
+         *
+         *     Perspective-neutral apart from that visibility gate and ``can_edit`` —
+         *     same "ignoring who's asking" contract as ``is_scorable`` itself.
+         */
+        MatchTournamentContext: {
+            /**
+             * Tournament Id
+             * Format: uuid
+             */
+            tournament_id: string;
+            /** Tournament Name */
+            tournament_name: string;
+            tournament_status: components["schemas"]["TournamentStatus"];
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Event Name */
+            event_name: string;
+            /** Table Label */
+            table_label: string | null;
+            /** Can Edit */
+            can_edit: boolean;
+        };
         /**
          * MergePreview
          * @description Side-effect-free look at an emailed link before it's consumed, so the
@@ -5941,6 +5984,7 @@ export interface components {
             /** Status Label */
             status_label: string;
             league: components["schemas"]["MatchLeague"];
+            tournament?: components["schemas"]["MatchTournamentContext"] | null;
             /** Best Of */
             best_of: number;
             /** Games To Win */
@@ -5961,6 +6005,7 @@ export interface components {
             current_game: components["schemas"]["MatchDetailsCurrentGame"] | null;
             /** Can Score */
             can_score: boolean;
+            not_scorable_reason: components["schemas"]["MatchNotScorableReason"] | null;
             /** Can Finalize */
             can_finalize: boolean;
             negotiation: components["schemas"]["MatchNegotiation"];

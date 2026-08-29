@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 import {
   RouterProvider,
@@ -14,44 +15,50 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { breadcrumbDisplayPage } from "./breadcrumb/breadcrumb-fetcher/breadcrumb-display.page";
-import { Breadcrumb, type BreadcrumbProps } from "./breadcrumb";
-import { buildBreadcrumbProps } from "./breadcrumb.factory";
+import { breadcrumbDisplayPage } from "./breadcrumb-fetcher/breadcrumb-display.page";
+import {
+  BreadcrumbFetcher,
+  type BreadcrumbFetcherProps,
+} from "./breadcrumb-fetcher";
+
+const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  /** The fallback rendered by the *ancestor* error boundary. `Breadcrumb`
-   * owns no boundary of its own — a failed query is meant to propagate
-   * upward — so this models the boundary the match-details page supplies in
-   * production. */
+  /** The Suspense fallback shown while the match-details query is pending. */
+  queryLoading() {
+    return container.queryByTestId("breadcrumb-loading");
+  },
+  /** The fallback rendered by the *ancestor* error boundary — the fetcher
+   * owns no boundary of its own. */
   queryError() {
     return container.queryByRole("alert");
   },
-  /** The crumb `BreadcrumbDisplay` renders — both while the Suspense
-   * fallback is showing (the plain, tournament-less crumb) and once the
-   * query resolves. */
+  /** The crumb `BreadcrumbDisplay` renders once data arrives. */
   ...breadcrumbDisplayPage.within(container),
 });
 
 /**
- * Test page-object for the public `Breadcrumb` wrapper. `Breadcrumb` adds
- * only a `<Suspense>` boundary around `BreadcrumbFetcher` — its fallback is
- * the plain crumb, so there's no visible loading state to distinguish —  and
- * forwards `matchId` through. It deliberately has *no* error boundary,
- * delegating failures upward; this renders it beneath an `ErrorBoundary`
- * standing in for that ancestor, and stubs the same `GET
- * /v1/matches/:matchId` endpoint the query reads.
+ * Test page-object for `BreadcrumbFetcher`. The fetcher reads via
+ * `useSuspenseQuery` and the display renders typed `<Link>`s, so this mirrors
+ * the real `Breadcrumb` wrapper — a `<Suspense>` plus an `ErrorBoundary` —
+ * and mounts it under a minimal router that registers both crumb targets.
+ * Stubs the same `GET /v1/matches/:matchId` endpoint the query reads.
  */
-export const breadcrumbPage = {
+export const breadcrumbFetcherPage = {
   /**
    * Stub `GET /v1/matches/:matchId` — `HttpResponse.json(buildMatchDetails())`
-   * for the happy path, a non-2xx to drive the ancestor boundary.
+   * for the happy path, a non-2xx to drive the error boundary.
    */
   mockEndpoint(resolver: MatchDetailsResolver) {
     mockMatchDetailsEndpoint(server, resolver);
   },
 
-  render(overrides: Partial<BreadcrumbProps> = {}) {
-    const props = buildBreadcrumbProps(overrides);
+  render(overrides: Partial<BreadcrumbFetcherProps> = {}) {
+    const props: BreadcrumbFetcherProps = {
+      matchId: DEFAULT_MATCH_ID,
+      ...overrides,
+    };
+
     const rootRoute = createRootRoute();
     const indexRoute = createRoute({
       getParentRoute: () => rootRoute,
@@ -60,7 +67,11 @@ export const breadcrumbPage = {
         <ErrorBoundary
           fallbackRender={() => <div role="alert">Couldn’t load</div>}
         >
-          <Breadcrumb {...props} />
+          <Suspense
+            fallback={<div data-testid="breadcrumb-loading">Loading…</div>}
+          >
+            <BreadcrumbFetcher {...props} />
+          </Suspense>
         </ErrorBoundary>
       ),
     });
@@ -89,9 +100,7 @@ export const breadcrumbPage = {
 
   /**
    * Scope the accessors to a container — the whole `screen` (default) or a
-   * `within(node)` subtree. A page object that embeds a `Breadcrumb` (e.g.
-   * the match-details page) spreads this to expose the same queries as its
-   * own.
+   * `within(node)` subtree.
    */
   within(container: Container = screen) {
     return scoped(container);

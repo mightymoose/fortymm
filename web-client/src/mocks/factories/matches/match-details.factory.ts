@@ -181,6 +181,11 @@ export function buildMatchDetails(
     games: [],
     current_game: currentGame,
     can_score: false,
+    // No default reason: `can_score: false` above stands alone (many tests
+    // build off this factory without caring about #1288's banner/guard), and
+    // `null` (nothing to explain) is the safer default than guessing one.
+    // Override both together to build a genuinely non-scorable fixture.
+    not_scorable_reason: null,
     can_finalize: false,
     negotiation: LIVE_NEGOTIATION,
     recent_form: [],
