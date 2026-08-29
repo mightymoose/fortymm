@@ -26,8 +26,8 @@ export function CallStatusBannerDisplay({
           <AlertTitle>Not yet scorable</AlertTitle>
           <AlertDescription>
             {callStatus.tableLabel
-              ? `This fixture is placed on ${callStatus.tableLabel} in ${callStatus.tournamentName}, but the tournament hasn't gone live yet.`
-              : `This match is part of ${callStatus.tournamentName}, which hasn't gone live yet.`}
+              ? `This ${callStatus.eventName} fixture is placed on ${callStatus.tableLabel} in ${callStatus.tournamentName}, but the tournament hasn't gone live yet.`
+              : `This match is part of ${callStatus.eventName} in ${callStatus.tournamentName}, which hasn't gone live yet.`}
           </AlertDescription>
         </Alert>
       );
@@ -38,7 +38,8 @@ export function CallStatusBannerDisplay({
           <AlertDescription>
             {callStatus.canEdit ? (
               <>
-                This fixture is waiting to be called to a table.{" "}
+                This {callStatus.eventName} fixture is waiting to be called to
+                a table.{" "}
                 <Link
                   to="/tournaments/$tournamentId"
                   params={{ tournamentId: callStatus.tournamentId }}
@@ -48,7 +49,7 @@ export function CallStatusBannerDisplay({
                 to call it from the Schedule tab.
               </>
             ) : (
-              "This fixture is waiting for the tournament director to call it to a table."
+              `This ${callStatus.eventName} fixture is waiting for the tournament director to call it to a table.`
             )}
           </AlertDescription>
         </Alert>

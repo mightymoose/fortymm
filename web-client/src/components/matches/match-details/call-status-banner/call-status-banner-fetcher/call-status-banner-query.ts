@@ -23,6 +23,9 @@ export type CallStatusView =
        * imminent call. */
       kind: "awaiting_placement";
       tournamentName: string;
+      /** The event this fixture belongs to within the tournament (#1288 AC
+       * #2 — the match page must name the event, not just the tournament). */
+      eventName: string;
       /** The table the director placed this fixture on, or `null` until
        * placed. Naming it is a statement of fact, never a "you'll be called
        * soon" promise — the copy at the display layer must keep that
@@ -37,6 +40,9 @@ export type CallStatusView =
       kind: "awaiting_call";
       tournamentId: string;
       tournamentName: string;
+      /** The event this fixture belongs to within the tournament (#1288 AC
+       * #2 — the match page must name the event, not just the tournament). */
+      eventName: string;
       canEdit: boolean;
     }
   | {
@@ -71,6 +77,7 @@ const selectCallStatus = (match: MatchDetailsResult): CallStatusView => {
     return {
       kind: "awaiting_placement",
       tournamentName: tournament.tournament_name,
+      eventName: tournament.event_name,
       tableLabel: tournament.table_label,
     };
   }
@@ -78,6 +85,7 @@ const selectCallStatus = (match: MatchDetailsResult): CallStatusView => {
     kind: "awaiting_call",
     tournamentId: tournament.tournament_id,
     tournamentName: tournament.tournament_name,
+    eventName: tournament.event_name,
     canEdit: tournament.can_edit,
   };
 };

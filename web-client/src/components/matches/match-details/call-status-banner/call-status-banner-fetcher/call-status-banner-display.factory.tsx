@@ -10,6 +10,7 @@ export function buildCallStatusView(
     kind: "awaiting_call",
     tournamentId: "t-1",
     tournamentName: "Summer Smash",
+    eventName: "Open Singles",
     canEdit: true,
     ...overrides,
   };

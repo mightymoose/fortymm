@@ -67,6 +67,7 @@ describe("callStatusQuery", () => {
     expect(result.current.data).toEqual({
       kind: "awaiting_placement",
       tournamentName: "Summer Smash",
+      eventName: "Open Singles",
       tableLabel: "Table 3",
     });
   });
@@ -87,6 +88,7 @@ describe("callStatusQuery", () => {
     expect(result.current.data).toEqual({
       kind: "awaiting_placement",
       tournamentName: "Summer Smash",
+      eventName: "Open Singles",
       tableLabel: null,
     });
   });
@@ -108,6 +110,7 @@ describe("callStatusQuery", () => {
       kind: "awaiting_call",
       tournamentId: "t-1",
       tournamentName: "Summer Smash",
+      eventName: "Open Singles",
       canEdit: true,
     });
   });
@@ -129,6 +132,7 @@ describe("callStatusQuery", () => {
       kind: "awaiting_call",
       tournamentId: "t-1",
       tournamentName: "Summer Smash",
+      eventName: "Open Singles",
       canEdit: false,
     });
   });

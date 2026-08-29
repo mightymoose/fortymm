@@ -8,11 +8,12 @@ describe("CallStatusBannerDisplay", () => {
     expect(callStatusBannerDisplayPage.queryBanner()).not.toBeInTheDocument();
   });
 
-  it("names the placed table when the tournament hasn't gone live yet, without promising a call", async () => {
+  it("names the event and the placed table when the tournament hasn't gone live yet, without promising a call", async () => {
     callStatusBannerDisplayPage.render({
       callStatus: {
         kind: "awaiting_placement",
         tournamentName: "Summer Smash",
+        eventName: "Open Singles",
         tableLabel: "Table 3",
       },
     });
@@ -20,16 +21,17 @@ describe("CallStatusBannerDisplay", () => {
     await callStatusBannerDisplayPage.findHarness();
     const banner = callStatusBannerDisplayPage.getBanner();
     expect(banner).toHaveTextContent(
-      "This fixture is placed on Table 3 in Summer Smash, but the tournament hasn't gone live yet.",
+      "This Open Singles fixture is placed on Table 3 in Summer Smash, but the tournament hasn't gone live yet.",
     );
     expect(banner).not.toHaveTextContent(/waiting to be called/i);
   });
 
-  it("stays silent about any table when nothing has been placed yet", async () => {
+  it("stays silent about any table when nothing has been placed yet, but still names the event", async () => {
     callStatusBannerDisplayPage.render({
       callStatus: {
         kind: "awaiting_placement",
         tournamentName: "Summer Smash",
+        eventName: "Open Singles",
         tableLabel: null,
       },
     });
@@ -37,37 +39,42 @@ describe("CallStatusBannerDisplay", () => {
     await callStatusBannerDisplayPage.findHarness();
     const banner = callStatusBannerDisplayPage.getBanner();
     expect(banner).toHaveTextContent(
-      "This match is part of Summer Smash, which hasn't gone live yet.",
+      "This match is part of Open Singles in Summer Smash, which hasn't gone live yet.",
     );
   });
 
-  it("gives the tournament owner a link into the tournament once it's live", async () => {
+  it("gives the tournament owner a link into the tournament once it's live, naming the event (AC #2)", async () => {
     callStatusBannerDisplayPage.render({
       callStatus: {
         kind: "awaiting_call",
         tournamentId: "t-1",
         tournamentName: "Summer Smash",
+        eventName: "Open Singles",
         canEdit: true,
       },
     });
 
     const link = await callStatusBannerDisplayPage.findTournamentLink();
     expect(link).toHaveAttribute("href", "/tournaments/t-1");
+    expect(callStatusBannerDisplayPage.getBanner()).toHaveTextContent(
+      /Open Singles fixture/,
+    );
   });
 
-  it("gives a non-owner plain text naming the director — no control they can't use (ADR-0015)", async () => {
+  it("gives a non-owner plain text naming the event and the director — no control they can't use (ADR-0015)", async () => {
     callStatusBannerDisplayPage.render({
       callStatus: {
         kind: "awaiting_call",
         tournamentId: "t-1",
         tournamentName: "Summer Smash",
+        eventName: "Open Singles",
         canEdit: false,
       },
     });
 
     await callStatusBannerDisplayPage.findHarness();
     expect(callStatusBannerDisplayPage.getBanner()).toHaveTextContent(
-      "This fixture is waiting for the tournament director to call it to a table.",
+      "This Open Singles fixture is waiting for the tournament director to call it to a table.",
     );
     expect(
       callStatusBannerDisplayPage.queryTournamentLink(),
