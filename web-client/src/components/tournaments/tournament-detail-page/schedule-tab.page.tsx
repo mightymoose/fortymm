@@ -67,6 +67,17 @@ const scoped = (container: Container) => ({
     return container.getByTestId(`schedule-status-${fixtureId}`)
   },
 
+  /** The #1537 reservation-stranding notes — informational, shown to every
+   * viewer. Absent when the axis isn't flagged (or, for the table note, when the
+   * table left the catalogue entirely and the "Removed from the catalogue" label
+   * already says so). */
+  queryOffReservationNote(fixtureId: string) {
+    return container.queryByTestId(`schedule-off-reservation-${fixtureId}`)
+  },
+  queryOutsideWindowNote(fixtureId: string) {
+    return container.queryByTestId(`schedule-outside-window-${fixtureId}`)
+  },
+
   /** The list row's tier markers (ADR "the schedule is solved; the call is
    * pinned"): the `est` mark on a scheduled estimate, the called-at badge on a
    * call, and the `notified n×` counter once a correction has gone out. */

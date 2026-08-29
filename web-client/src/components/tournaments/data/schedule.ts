@@ -77,6 +77,20 @@ export interface ScheduleMatch {
   /** The placement's predicted start, a `FixtureTime` (`null` = unscheduled) — a
    * venue-local label + tz abbrev for display, plus a UTC instant for ordering. */
   scheduledStart: FixtureTime | null
+  /** `true` when the placed table is NOT one of this match's reservation's tables —
+   * server-computed (#1537, `fixtures.ts`'s doc has the full rule), threaded through
+   * unchanged. `null` when not applicable (no table placed, or the match is
+   * decided). Read by the Schedule tab's per-row note (`schedule-tab.tsx`'s
+   * `MatchRow`) — informational, not accusatory: a director's deliberate
+   * off-reservation placement reads identically to an accidental strand. */
+  tableOffReservation: boolean | null
+  /** The same idea for the *time* half of the placement: `true` when
+   * `scheduledStart` falls outside the reservation's window. `null` under the same
+   * two conditions as `tableOffReservation`. */
+  startOutsideReservationWindow: boolean | null
+  /** The reservation's director-typed name, for the note above — `null` for an
+   * event-wide match (`reservation: 'event'`), which has no reservation to name. */
+  reservationName: string | null
   /** The window whose **date** the placement is fixed to: the fixture's group's
    * reservation Slot, or the event Slot when the fixture is un-grouped (ADR-0790). The
    * time picker chooses within it. */
@@ -191,6 +205,9 @@ function toScheduleMatch(
     match: matchOf(fixture),
     tableId: fixture.tableId,
     scheduledStart: fixture.scheduledStart,
+    tableOffReservation: fixture.tableOffReservation,
+    startOutsideReservationWindow: fixture.startOutsideReservationWindow,
+    reservationName: reservation?.name ?? null,
     // The reservation fixes the date the placement falls on; an un-grouped fixture
     // inherits the event's own Slot (ADR-0790).
     window: reservation?.slot ?? event.slot,

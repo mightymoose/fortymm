@@ -327,6 +327,18 @@ export interface Fixture {
    * instants"): a `FixtureTime`, or `null` when **unscheduled**. A prediction, not a
    * commitment. */
   scheduledStart: FixtureTime | null
+  /** `true` when this fixture's placed `tableId` is NOT one of the tables of the
+   * reservation it is scheduled against — a director's deliberate off-reservation
+   * placement, or the accidental strand a reservation edit can leave (#1537,
+   * `schema.d.ts`'s `table_off_reservation` doc has the full rule). `null` — never
+   * `false` — when there is no `tableId` placed, or the match is
+   * `completed`/`voided`. Server-computed; the client only threads it through. */
+  tableOffReservation: boolean | null
+  /** The same idea, on the *time* half of the placement: `true` when
+   * `scheduledStart` falls outside its reservation's window (a **closed interval**,
+   * a start on either edge counting as inside). `null` under the same two
+   * conditions as `tableOffReservation`. The two flags are independent. */
+  startOutsideReservationWindow: boolean | null
   /** When this fixture was **called** — pinned and its players notified — or `null`
    * while the placement is still an estimate (ADR "the schedule is solved, the call
    * is pinned"). A `FixtureTime` when set. */

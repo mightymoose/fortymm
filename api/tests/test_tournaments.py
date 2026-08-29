@@ -3062,6 +3062,61 @@ async def test_list_tournaments_statement_count_does_not_grow_with_events(
         assert [(f.round, f.position) for f in e.fixtures] == [(1, 1), (1, 2)]
 
 
+@pytest.mark.parametrize("tournament_count", [1, 2])
+async def test_list_statement_count_with_placed_fixtures_costs_exactly_one_more(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    tournament_count: int,
+) -> None:
+    """The ADR-0790 read-flags (#1537, ``app.tournament_queries._placement_flags``)
+    cost ONE additional batched statement across the WHOLE list page, not one per
+    tournament that carries a placed fixture — the list endpoint's own twin of
+    ``test_detail_statement_count_with_placed_fixtures_costs_exactly_one_more``,
+    discriminating the same way: a per-tournament (or per-event) lookup would
+    measure ``EXPECTED_TOURNAMENT_LIST_STATEMENTS + 1`` at one tournament and grow
+    further at two, so it fails this pin at two even though the one-tournament case
+    would coincidentally match it. This is the list endpoint's own coverage —
+    the detail pin batches over one tournament's events and cannot see a failure
+    mode that only shows up across *several* tournaments on one page."""
+    client, user = authed_client
+    user_id = user.id
+    tournament_ids: list[str] = []
+    for t in range(tournament_count):
+        created = (
+            await client.post("/v1/tournaments", json=_create_payload(name=f"T{t}"))
+        ).json()
+        tournament_ids.append(created["id"])
+        event = (
+            await client.post(
+                f"/v1/tournaments/{created['id']}/events",
+                json=_rr_payload(RESERVATION_A, name="Only"),
+            )
+        ).json()
+        await _seed_field(db_session, event["id"], 3, prefix=f"lst{t}-")
+        await _cut_the_draw(client, created["id"], event["id"])
+        fixture, *_ = await _fixture_rows(db_session, event["id"])
+        table_1, _table_2 = await _catalogue_table_ids(client, created["id"])
+        placed = await client.patch(
+            _placement_url(created["id"], str(fixture.id)),
+            json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+        )
+        assert placed.status_code == 200, placed.text
+
+    async with counted_statements(engine) as (session, statements):
+        listed = await list_tournaments(db=session, current_user=User(id=user_id))
+
+    assert len(statements) == EXPECTED_TOURNAMENT_LIST_STATEMENTS + 1, statements
+    listed_by_id = {str(t.id): t for t in listed}
+    for tournament_id in tournament_ids:
+        (event,) = listed_by_id[tournament_id].events
+        placed_fixtures = [f for f in event.fixtures if f.table_id is not None]
+        assert len(placed_fixtures) == 1
+        # Reservation A reserves no tables, so the table axis is flagged ``true``.
+        assert placed_fixtures[0].table_off_reservation is True
+        assert placed_fixtures[0].start_outside_reservation_window is False
+
+
 # ----- near-me radius filter (ADR "Distance is a haversine expression") ------
 
 
@@ -5947,6 +6002,8 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
         "match_status",
         "table_id",
         "scheduled_start",
+        "table_off_reservation",
+        "start_outside_reservation_window",
         "pinned_at",
         "call_notified_count",
         "completed_at",
@@ -5960,6 +6017,9 @@ async def test_a_tbd_side_comes_back_as_null_rather_than_a_missing_key(
     # A freshly-cut draw carries an unassigned placement: no table, no predicted start.
     assert fixture["table_id"] is None
     assert fixture["scheduled_start"] is None
+    # ... so neither ADR-0790 read-flag applies — not applicable, not false (#1537).
+    assert fixture["table_off_reservation"] is None
+    assert fixture["start_outside_reservation_window"] is None
     # ... and it is unpinned: an estimate the solver may move, told to nobody.
     assert fixture["pinned_at"] is None
     assert fixture["call_notified_count"] == 0
@@ -10741,6 +10801,325 @@ async def test_an_out_of_window_or_off_group_placement_still_saves(
     body = response.json()
     assert body["table_id"] == table_2
     assert _is_venue_instant(body["scheduled_start"], "2026-06-13T23:00:00")
+
+
+# ----- ADR-0790's two deferred read-side flags (#1537) -----------------------
+#
+# ``table_off_reservation`` / ``start_outside_reservation_window`` make visible what
+# the write path deliberately never rejects (the test above) and what the solver
+# deliberately never repairs (``app.schedule_solves`` module docstring —
+# "reservation membership does not break a pin"): a placement whose reservation
+# moved out from under it. Both are computed on read; nothing here changes the
+# write path.
+
+
+async def test_a_zero_table_reservation_flags_every_placement_off_it(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Reservation A (``_drawn_fixture``'s own reservation) reserves NO tables — the
+    server's own ``ReservationHasNoTables`` state (``app.scheduling``). Any real
+    catalogue table a director places on is therefore, by construction, off it: the
+    table flag comes back ``true``. The start is inside the reservation's own
+    09:00–12:30 window, so the window flag comes back ``false`` — proving the two
+    flags are independent."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+    )
+    assert response.status_code == 200, response.text
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_off_reservation"] is True
+    assert placed["start_outside_reservation_window"] is False
+
+
+async def test_a_placement_on_its_reservations_own_table_is_not_flagged(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The mirror of the zero-table case: a reservation that DOES hold the placed
+    table flags nothing on the table axis."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="ontable")
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_id"] == table_1
+    assert placed["table_off_reservation"] is False
+    assert placed["start_outside_reservation_window"] is False
+
+
+async def test_a_start_outside_its_reservations_window_is_flagged(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A placement that stays ON its reservation's table but drifts outside its
+    09:00–12:30 window — the same real-world stranding the ticket names (a director
+    edits a reservation's window after the cut), demonstrated the direct way, since
+    this route never re-derives it: the window flag alone fires."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="outwindow")
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T23:00:00"},
+    )
+    assert response.status_code == 200, response.text
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_off_reservation"] is False
+    assert placed["start_outside_reservation_window"] is True
+
+
+@pytest.mark.parametrize(
+    ("start", "expected_outside"),
+    [
+        pytest.param("2026-06-13T09:00:00", False, id="on-the-opening-edge"),
+        pytest.param("2026-06-13T12:30:00", False, id="on-the-closing-edge"),
+        pytest.param("2026-06-13T08:59:00", True, id="one-minute-before-open"),
+        pytest.param("2026-06-13T12:31:00", True, id="one-minute-past-close"),
+    ],
+)
+async def test_the_reservation_window_boundary_is_a_closed_interval(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    start: str,
+    expected_outside: bool,
+) -> None:
+    """The documented rule
+    (``TournamentFixtureRead.start_outside_reservation_window``'s own docstring):
+    ``[window_start, window_end]`` is a CLOSED interval — a start landing exactly on
+    either edge counts as INSIDE, and only a start strictly past an edge counts as
+    outside. Reservation A's window is 09:00–12:30. Both edges and both one-minute
+    misses are exercised, so the rule is falsifiable in either direction — an
+    always-``false`` or always-``true`` implementation reds half of these."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="edge")
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": start},
+    )
+    assert response.status_code == 200, response.text
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["start_outside_reservation_window"] is expected_outside
+
+
+async def test_a_half_placement_flags_only_its_own_placed_half(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A table-only placement carries a real table flag and a ``null`` window flag;
+    a start-only placement is the mirror. Neither half's flag leaks onto the
+    other's — a fixture that names no table cannot be judged "off" a table it does
+    not have."""
+    client, _ = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    url = _placement_url(tournament_id, str(fixture.id))
+
+    table_only = await client.patch(
+        url, json={"table_id": table_1, "scheduled_start": None}
+    )
+    assert table_only.status_code == 200, table_only.text
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_off_reservation"] is True  # Reservation A reserves nothing
+    assert placed["start_outside_reservation_window"] is None
+
+    start_only = await client.patch(
+        url, json={"table_id": None, "scheduled_start": "2026-06-13T10:00:00"}
+    )
+    assert start_only.status_code == 200, start_only.text
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_off_reservation"] is None
+    assert placed["start_outside_reservation_window"] is False
+
+
+@pytest.mark.parametrize("frozen_status", [MatchStatus.completed, MatchStatus.voided])
+async def test_a_decided_matchs_placement_flags_neither_axis(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    frozen_status: MatchStatus,
+) -> None:
+    """A fixture whose linked match is ``completed``/``voided`` is history
+    (ADR-0790's write-side freeze, ``tournament_placement._enforce_fixture_placeable``):
+    its placement no longer matters, so neither flag fires — even though the
+    placement itself is (still) off-reservation AND out-of-window, the worst case on
+    both axes at once."""
+    client, owner = authed_client
+    tournament_id, _event_id, fixture = await _drawn_fixture(client, db_session)
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    placed_response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T23:00:00"},
+    )
+    assert placed_response.status_code == 200, placed_response.text
+
+    match = await _make_match(db_session, owner, default_league)
+    match.status = frozen_status
+    fixture.match_id = match.id
+    await db_session.commit()
+
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_off_reservation"] is None
+    assert placed["start_outside_reservation_window"] is None
+
+
+async def test_a_group_with_no_mapped_reservation_is_judged_event_wide(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A single-elim bracket's sole group maps to NO reservation (ADR 20260807) — its
+    fixtures are judged against the EVENT's own window and the tournament's whole
+    table catalogue instead. The table half is always satisfied — a placed table is,
+    by construction, a table of this tournament (see
+    ``app.tournament_queries._placement_flags``'s own docstring for why) — so only
+    the window can actually drift. The event's own slot defaults to 09:00–18:00."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+    await _seed_field(db_session, event["id"], 4)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixture, *_ = await _fixture_rows(db_session, event["id"])
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    url = _placement_url(tournament_id, str(fixture.id))
+
+    inside = await client.patch(
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"}
+    )
+    assert inside.status_code == 200, inside.text
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_off_reservation"] is False
+    assert placed["start_outside_reservation_window"] is False
+
+    outside = await client.patch(
+        url, json={"table_id": table_1, "scheduled_start": "2026-06-13T20:00:00"}
+    )
+    assert outside.status_code == 200, outside.text
+    placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
+    assert placed["table_off_reservation"] is False
+    assert placed["start_outside_reservation_window"] is True
+
+
+async def test_a_malformed_legacy_event_slot_degrades_the_window_flag_not_a_500(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The event-wide branch of ``_placement_flags`` parses raw ``TournamentEvent.slot``
+    JSONB (``schema.d.ts``'s docstring: "no environment holds a malformed row today,
+    but a read boundary should not depend on that staying true", the SAME contract
+    ``TournamentEventRead.slot`` and ``app.tournament_events._stored_event_window``
+    state for this identical column). A row that predates #1501's write-time
+    validation must degrade the window flag to ``None`` — unjudgeable — rather than
+    500ing the whole tournament read, matching ``_stored_event_window``'s own
+    established pattern for the same risk."""
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+    await _seed_field(db_session, event["id"], 4)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixture, *_ = await _fixture_rows(db_session, event["id"])
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    placed = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+    )
+    assert placed.status_code == 200, placed.text
+
+    # Past the write boundary, which now refuses this — a row that predates #1501
+    # (the same corruption `test_...` at the top of this file uses for the identical
+    # column, on the containment-guard side rather than the read-flag side).
+    event_id = uuid.UUID(event["id"])
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    row.slot = {"date": "next Tuesday", "start": "09:00", "end": "18:00"}
+    await db_session.commit()
+
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200, response.text
+    (detail_event,) = response.json()["events"]
+    (detail_fixture,) = [
+        f for f in detail_event["fixtures"] if f["table_id"] is not None
+    ]
+    assert detail_fixture["table_off_reservation"] is False
+    assert detail_fixture["start_outside_reservation_window"] is None
+
+
+@pytest.mark.parametrize("event_count", [1, 4])
+async def test_detail_statement_count_with_placed_fixtures_costs_exactly_one_more(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event_count: int,
+) -> None:
+    """The ADR-0790 read-flags (#1537) cost ONE additional batched statement over the
+    existing pin — never one per event or per fixture. The discriminating shape is
+    the same as ``test_detail_statement_count_does_not_grow_with_drawn_events``: a
+    per-event (or per-fixture) lookup would measure
+    ``EXPECTED_TOURNAMENT_DETAIL_STATEMENTS + 1`` at one event and grow further at
+    four, so it fails this pin at four even though the one-event case would
+    coincidentally match it. Every event here carries
+    a PLACED fixture — not merely a cut one — which is what makes the pin cover the
+    new query at all (an unplaced page pays nothing, see ``fixtures_by_event``'s own
+    docstring)."""
+    client, user = authed_client
+    user_id = user.id
+    tournament_id, events = await _tournament_with_events(
+        client,
+        *(_rr_payload(RESERVATION_A, name=f"Event {n}") for n in range(event_count)),
+    )
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    for n, event in enumerate(events):
+        await _seed_field(db_session, event["id"], 3, prefix=f"cost{n}-")
+        await _cut_the_draw(client, tournament_id, event["id"])
+        fixture, *_ = await _fixture_rows(db_session, event["id"])
+        placed = await client.patch(
+            _placement_url(tournament_id, str(fixture.id)),
+            json={"table_id": table_1, "scheduled_start": "2026-06-13T10:00:00"},
+        )
+        assert placed.status_code == 200, placed.text
+
+    async with counted_statements(engine) as (session, statements):
+        detail = await get_tournament(
+            tournament_id=uuid.UUID(tournament_id),
+            db=session,
+            current_user=User(id=user_id),
+        )
+
+    assert len(statements) == EXPECTED_TOURNAMENT_DETAIL_STATEMENTS + 1, statements
+    # And the block it counted really did the work: every event's placed fixture
+    # carries a real (non-``None``) flag pair, not a silently-dropped computation —
+    # Reservation A reserves no tables, so the table axis is flagged ``true``.
+    for e in detail.events:
+        placed_fixtures = [f for f in e.fixtures if f.table_id is not None]
+        assert len(placed_fixtures) == 1
+        assert placed_fixtures[0].table_off_reservation is True
+        assert placed_fixtures[0].start_outside_reservation_window is False
 
 
 @pytest.mark.parametrize(

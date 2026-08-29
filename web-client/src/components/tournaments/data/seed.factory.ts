@@ -552,6 +552,11 @@ export function buildFixture(overrides: FixtureOverrides = {}): Fixture {
     matchId: null,
     matchStatus: null,
     tableId: null,
+    // Not applicable by default — no table placed (#1537). A fixture that wants the
+    // stranding note overrides these directly; they are never derived here from
+    // `tableId`/`scheduledStart`, because the SERVER computes them, not the client.
+    tableOffReservation: null,
+    startOutsideReservationWindow: null,
     callNotifiedCount: 0,
     ...rest,
     // The placement times last, after `rest`, so the naive-string coercion always
