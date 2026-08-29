@@ -173,10 +173,16 @@ export type InfeasibilityReason =
       requiredMin: number
       capacityMin: number
       tableCount: number
-      /** How many groups' fixtures the reservation holds (ticket #1389). Above 1 it
+      /** How many GROUP-STAGE groups' fixtures the reservation holds (ticket #1389;
+       * re-scoped by #1535 to exclude the knockout stage's own group). Above 1 it
        * names a cause the director can act on — add a reservation, and the groups
        * re-spread — so the copy appends a group clause; at 0 or 1 it says nothing. */
       groupCount: number
+      /** Whether the knockout stage's own group (#1484) also shares this reservation
+       * (ticket #1535). Never opens or closes the group clause on its own —
+       * `groupCount` alone still gates it — it only names the bracket alongside the
+       * count when the clause fires. */
+      hasBracket: boolean
     }
   | {
       kind: 'player_over_subscribed'
@@ -222,11 +228,16 @@ const reservationOverCapacityWireSchema = z.object({
   required_min: z.number().int(),
   capacity_min: z.number().int(),
   table_count: z.number().int(),
-  // Defensive `.default(0)`: the API always emits the field (its own JSONB read-back
-  // default turns a ledger row written before #1389 into 0), so this only guards a
-  // payload the generated type says cannot arrive — the same stance `reservation`
-  // takes.
-  group_count: z.number().int().nonnegative().default(0),
+  // Required, no default (#1535): the API no longer carries a JSONB read-back
+  // default for pre-#1389 ledger rows — the operator deletes those instead — so
+  // an absent `group_count` must fail the parse here, the same stance
+  // `reservation` takes.
+  group_count: z.number().int().nonnegative(),
+  // Required, no default: whether the knockout stage's own group (#1484) also
+  // shares this reservation. There is no back-compat case to guard — `has_bracket`
+  // did not exist before this field was added, so every payload the generated
+  // type allows already carries it.
+  has_bracket: z.boolean(),
 }) satisfies z.ZodType<ReservationOverCapacityWire>
 
 const playerOverSubscribedWireSchema = z.object({
@@ -296,6 +307,7 @@ export function infeasibilityReasonFromWire(
         capacityMin: r.capacity_min,
         tableCount: r.table_count,
         groupCount: r.group_count,
+        hasBracket: r.has_bracket,
       }
     case 'player_over_subscribed':
       return {
@@ -781,11 +793,18 @@ export function infeasibilityReasonCopy(
       // over an rr-then-ko event with no reservation reports `event` AND a count
       // above 1 — and a second branch would give four copies of each sentence.
       // Suppressed below 2: "holds 1 group" points at nothing to re-spread, and the
-      // event-wide reservation of an event whose groups are all booked holds only
-      // the knockout stage, which belongs to no group (count 0).
+      // event-wide reservation of an event whose group-stage groups are all booked
+      // holds no group-stage groups of its own (count 0) — it may still hold the
+      // bracket, but `hasBracket` never opens this gate by itself.
+      //
+      // `groupCount` counts GROUP-STAGE groups only (#1535): the knockout stage has
+      // its own group (#1484), it is just excluded from this count by construction,
+      // not because it "belongs to no group". `hasBracket` says separately whether
+      // that bracket group shares this reservation, and — only inside this same
+      // `groupCount > 1` gate — gets named alongside the count.
       const groupClause =
         reason.groupCount > 1
-          ? ` It holds ${reason.groupCount} groups, all competing for the same tables.`
+          ? ` It holds ${reason.groupCount} groups${reason.hasBracket ? ' and the bracket' : ''}, all competing for the same tables.`
           : ''
       // The remedy's number follows the kind: groups map round-robin onto the
       // reservations the event has, so a booked reservation gains a peer to spread

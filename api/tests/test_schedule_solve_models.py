@@ -42,7 +42,6 @@ from app.models import (
 )
 from app.schemas.schedule_solve import (
     ReservationHasNoTablesRead,
-    ReservationOverCapacityRead,
     parse_infeasibility_reasons,
 )
 from app.schemas.tournament import ScheduleSolveRead
@@ -345,24 +344,33 @@ def test_a_reason_stored_before_the_discriminator_reads_as_booked() -> None:
     assert reason.reservation == "booked"
 
 
-def test_an_over_capacity_reason_stored_before_group_count_reads_as_zero() -> None:
-    """Same JSONB ledger, same read-back rule (#1389 decision 6): a
-    ``reservation_over_capacity`` row written before the reason carried
-    ``group_count`` reads back as ``0``, which a client renders as no group clause —
-    today's sentence, unchanged. No backfill is owed."""
-    (reason,) = parse_infeasibility_reasons(
-        [
-            {
-                "kind": "reservation_over_capacity",
-                "reservation_name": "Reservation A",
-                "window_start": "09:00",
-                "window_end": "17:00",
-                "required_min": 600,
-                "capacity_min": 480,
-                "table_count": 2,
-            }
-        ]
-    )
-    assert isinstance(reason, ReservationOverCapacityRead)
-    assert reason.group_count == 0
-    assert reason.reservation == "booked"
+# `test_an_over_capacity_reason_stored_before_group_count_reads_as_zero` is deleted,
+# not fixed (#1535): it pinned a read-back default (#1389 decision 6) for a
+# ``reservation_over_capacity`` row written before the reason carried
+# ``group_count``. #1535 splits that field into ``group_count`` (re-scoped to
+# group-stage groups) and ``has_bracket``, and the ticket's own Non-Goals rules out
+# a read-back default for either — "the operator will delete those rows... Do not
+# add a read-back default whose only job is to render an old row." A pre-#1535
+# ledger row is exactly the case that default existed for, so the scenario this test
+# named no longer has a supported answer; see
+# `test_a_pre_1535_over_capacity_reason_fails_to_parse` below for the replacement
+# behaviour.
+def test_a_pre_1535_over_capacity_reason_fails_to_parse() -> None:
+    """Same JSONB ledger the read-back tests above exercise, but ``group_count`` and
+    ``has_bracket`` carry no default (#1535, Non-Goals: "the operator will delete
+    those rows" — no backfill is owed for a solve-ledger row written before this
+    change). A row missing either field is not a row this parses."""
+    with pytest.raises(ValidationError):
+        parse_infeasibility_reasons(
+            [
+                {
+                    "kind": "reservation_over_capacity",
+                    "reservation_name": "Reservation A",
+                    "window_start": "09:00",
+                    "window_end": "17:00",
+                    "required_min": 600,
+                    "capacity_min": 480,
+                    "table_count": 2,
+                }
+            ]
+        )

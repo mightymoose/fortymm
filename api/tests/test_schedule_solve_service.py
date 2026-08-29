@@ -2704,9 +2704,11 @@ class TestFixturesKeyOnTheReservation:
         # a group that maps to this same key (below).
         assert all(f.id in group_stage_ids for f in inputs.snapshot.fixtures)
 
-        # The over-capacity reason names how many groups share the reservation —
-        # the two pool groups plus the knockout's own — the cause a director acts
-        # on by adding a reservation.
+        # The over-capacity reason names how many GROUP-STAGE groups share the
+        # reservation — the two pool groups, not the knockout's own (#1535: the
+        # knockout stage is never a "group" in this clause) — plus ``has_bracket``
+        # naming that the bracket shares it too, the cause a director acts on by
+        # adding a reservation.
         resolved = schedule_solves._resolve_reason(
             ReservationOverCapacity(
                 reservation_id=reservation_key,
@@ -2717,7 +2719,8 @@ class TestFixturesKeyOnTheReservation:
             inputs,
         )
         assert isinstance(resolved, ReservationOverCapacityRead)
-        assert resolved.group_count == 3
+        assert resolved.group_count == 2
+        assert resolved.has_bracket is True
         assert resolved.reservation == "booked"
 
     async def test_a_group_with_no_reservation_takes_the_event_wide_reservation(
@@ -2766,10 +2769,11 @@ class TestFixturesKeyOnTheReservation:
         result = scheduling.solve(inputs.snapshot)
         assert result.verdict in (Verdict.feasible, Verdict.optimal)
 
-        # The event-wide reservation counts the groups with no reservation — the
-        # groups whose fixtures it holds: the group stage's two, plus the knockout
-        # stage's own (#1484 — the knockout now names a real group too, mapped here
-        # to no reservation same as the pool's).
+        # The event-wide reservation counts the GROUP-STAGE groups with no
+        # reservation — the group stage's two, not the knockout stage's own (#1535:
+        # the knockout now names a real group too, mapped here to no reservation
+        # same as the pool's, but it is the bracket, not a "group" this clause
+        # counts) — and ``has_bracket`` names that the bracket shares it too.
         resolved = schedule_solves._resolve_reason(
             ReservationOverCapacity(
                 reservation_id=event_wide_key,
@@ -2780,7 +2784,8 @@ class TestFixturesKeyOnTheReservation:
             inputs,
         )
         assert isinstance(resolved, ReservationOverCapacityRead)
-        assert resolved.group_count == 3
+        assert resolved.group_count == 2
+        assert resolved.has_bracket is True
         assert resolved.reservation == "event"
 
     # `test_an_event_wide_reservation_holding_only_a_knockout_counts_no_group` is
@@ -2793,6 +2798,205 @@ class TestFixturesKeyOnTheReservation:
     # (`test_a_group_with_no_reservation_takes_the_event_wide_reservation`, above).
     # Per the ticket's own Non-Goals: "This ticket removes their [the event-wide
     # reservation's / `TournamentEvent.slot`'s] last caller for drawn events."
+
+
+class TestGroupCountExcludesTheBracket:
+    """#1535: the over-capacity clause's ``group_count`` counts only GROUP-STAGE
+    groups, never the knockout stage's own (#1484's one missed surface), and
+    ``has_bracket`` names that group separately so the client can say "and the
+    bracket" without inferring a draw type."""
+
+    async def test_one_pool_group_plus_the_bracket_reports_group_count_one(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Five or fewer entrants derive one pool group (``group_count_for``'s
+        floor, at least one), which always shares reservation 0 with the knockout
+        stage's own group (``position % reservation_count`` puts both at
+        ``0 % 1``). The API reports the true facts — ``group_count=1``,
+        ``has_bracket=True`` — even though the client renders no clause either way
+        once ``group_count`` is at most one (the edge case the ticket names:
+        "today it renders 'It holds 2 groups'; after the fix it renders no
+        clause")."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            entrants=5,
+            draw_type=DrawType.rr_then_ko,
+            qualifiers_per_group=2,
+        )
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        reservation_key = await _solver_reservation_id(db_session, event_id)
+
+        resolved = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=reservation_key,
+                required_min=600,
+                capacity_min=480,
+                table_count=2,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved, ReservationOverCapacityRead)
+        assert resolved.group_count == 1
+        assert resolved.has_bracket is True
+
+    async def test_two_reservations_split_the_groups_and_only_one_carries_the_bracket(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Three pool groups over two reservations map ``position % 2``: groups 0
+        and 2 to reservation A, group 1 to reservation B. The knockout's own group
+        sits at position 0 too (``app.tournament_events`` :534), so it always lands
+        with reservation A — the ticket's own "Multi-reservation events" edge case.
+        Reservation A reports ``group_count=2, has_bracket=True``; reservation B,
+        which never shares a position with the bracket, reports
+        ``group_count=1, has_bracket=False``."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            entrants=13,
+            draw_type=DrawType.rr_then_ko,
+            qualifiers_per_group=2,
+            reservations=[
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": ["t1"],
+                },
+                {
+                    "name": "Reservation B",
+                    "slot": {"date": DATE, "start": "09:00", "end": "17:00"},
+                    "table_ids": ["t2"],
+                },
+            ],
+        )
+        fixtures = await _fixtures_of(db_session, event_id)
+        group_ids = {f.group_id for f in fixtures if not _is_knockout(f)}
+        assert len(group_ids) == 3, "13 entrants derive three groups (ceil(13/5))"
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+
+        reservation_rows = (
+            await db_session.execute(
+                select(
+                    TournamentEventReservation.name, TournamentEventReservation.id
+                ).where(TournamentEventReservation.event_id == event_id)
+            )
+        ).all()
+        by_name = {
+            name: ReservationId(f"{event_id}:{rid}") for name, rid in reservation_rows
+        }
+
+        resolved_a = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=by_name["Reservation A"],
+                required_min=600,
+                capacity_min=480,
+                table_count=1,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved_a, ReservationOverCapacityRead)
+        assert resolved_a.group_count == 2
+        assert resolved_a.has_bracket is True
+
+        resolved_b = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=by_name["Reservation B"],
+                required_min=600,
+                capacity_min=480,
+                table_count=1,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved_b, ReservationOverCapacityRead)
+        assert resolved_b.group_count == 1
+        assert resolved_b.has_bracket is False
+
+    async def test_a_single_elim_events_sole_group_never_gates_the_clause(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A single-elim event's whole draw is one stage, one group
+        (``GroupCountSource.one``), and — unlike an ``rr-then-ko`` event's own
+        group stage — that stage does not seat both sides at the cut
+        (``seats_both_sides_at_cut``), so it is not a group-stage stage either
+        (:func:`~app.tournament_draws.group_stage_ids`). ``group_count`` is
+        therefore ``0`` here, never ``1``: there is no *other* group-stage group
+        for this one to be counted alongside. The clause's gate
+        (``group_count > 1``) cannot open on a single-elim event regardless of
+        ``has_bracket``, which is what Non-Goals means by "their sole group is
+        already suppressed" — the API never names a bracket for a draw type that
+        has no group stage to name it beside.
+
+        ``has_bracket`` itself also resolves ``False`` here: with
+        :func:`~app.tournament_draws.group_stage_ids` empty for a standalone
+        single-elim event, there is no group stage for this sole group to be the
+        *bracket* relative to, so
+        :func:`~app.schedule_solves.group_counts_by_reservation` never classifies
+        it as one (#1535 review — a non-group-stage group is only the bracket
+        when the event actually has a group stage). Pinned alongside the gated
+        ``group_count`` so the field stays honest even though the client-side
+        gate never reads it."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            draw_type=DrawType.single_elim,
+            entrants=4,
+        )
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        reservation_key = await _solver_reservation_id(db_session, event_id)
+
+        resolved = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=reservation_key,
+                required_min=600,
+                capacity_min=480,
+                table_count=2,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved, ReservationOverCapacityRead)
+        assert resolved.group_count == 0
+        assert resolved.has_bracket is False
+
+    async def test_a_swiss_events_sole_group_never_gates_the_clause(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The swiss twin of the single-elim case above: one stage, one group,
+        not a group-stage stage (``seats_both_sides_at_cut(swiss)`` is ``False``
+        too), so ``group_count`` is ``0`` and the clause's gate cannot open here
+        either. ``has_bracket`` is ``False`` too, for the same reason as the
+        single-elim case: no group stage exists for this sole group to be the
+        bracket relative to."""
+        tournament_id, event_id = await _make_tournament(
+            db_session,
+            draw_type=DrawType.swiss,
+            entrants=4,
+            rounds=2,
+        )
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+        assert inputs is not None
+        reservation_key = await _solver_reservation_id(db_session, event_id)
+
+        resolved = schedule_solves._resolve_reason(
+            ReservationOverCapacity(
+                reservation_id=reservation_key,
+                required_min=600,
+                capacity_min=480,
+                table_count=2,
+            ),
+            inputs,
+        )
+        assert isinstance(resolved, ReservationOverCapacityRead)
+        assert resolved.group_count == 0
+        assert resolved.has_bracket is False
 
 
 class TestUnGroupedDrawShapes:
