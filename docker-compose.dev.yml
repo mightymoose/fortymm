@@ -35,6 +35,18 @@ services:
       SESSION_COOKIE_SECURE: "false"
       # Real client IP for IP-keyed rate limiters behind the proxy — see docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
       FORWARDED_ALLOW_IPS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8
+      # The five authentication rate-limit ceilings (issue #1590), on the api
+      # service only — the worker never constructs these route dependencies.
+      # Dev raises them to a finite 1,000/hour so ordinary development and
+      # browser automation never exhaust the production-shaped tiers the app
+      # still defaults to (5/20/3/10/60) when the variables are unset.
+      # docker-compose.e2e.yml inherits these from this base file; production
+      # and UAT deliberately get no such default.
+      EMAIL_SEND_SESSION_LIMIT_PER_HOUR: ${EMAIL_SEND_SESSION_LIMIT_PER_HOUR:-1000}
+      EMAIL_SEND_IP_LIMIT_PER_HOUR: ${EMAIL_SEND_IP_LIMIT_PER_HOUR:-1000}
+      EMAIL_RESEND_SESSION_LIMIT_PER_HOUR: ${EMAIL_RESEND_SESSION_LIMIT_PER_HOUR:-1000}
+      EMAIL_RESEND_IP_LIMIT_PER_HOUR: ${EMAIL_RESEND_IP_LIMIT_PER_HOUR:-1000}
+      LOGIN_CONSUME_IP_LIMIT_PER_HOUR: ${LOGIN_CONSUME_IP_LIMIT_PER_HOUR:-1000}
       # Wall-clock cap (seconds) on the CP-SAT tournament solve (issue #1103).
       # request_solve() reads this to size the RQ job_timeout, so the api
       # service needs it too, not just the worker that runs the solve itself.
