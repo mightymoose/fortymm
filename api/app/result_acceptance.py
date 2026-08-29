@@ -505,6 +505,22 @@ async def accept_result(
     # themselves) can't accept their own proposal. Only meaningful while the
     # targeted result is still standing — a superseded/absent one falls through
     # to the core's conflict signal below.
+    #
+    # ``submitter_side is None`` also covers a tournament director's proposal
+    # (#1523: a director is never on either side) — this guard alone would let
+    # ANYONE, including the submitting director themselves, accept it. That is
+    # safe today only because a director-submitted proposal never reaches this
+    # function standing at all: ``_requires_confirmation``
+    # (``app.result_proposal``) now requires the submitter to be a participant
+    # before it ever leaves a result unaccepted, so a director's own proposal
+    # always self-finalizes at ``propose_result`` and is already ``completed``
+    # (a terminal status ``load_match_for_write`` still gates elsewhere) by the
+    # time anyone could reach ``accept_result``. If that invariant is ever
+    # broken — a future call path that mints a standing ``MatchResult`` without
+    # going through ``propose_result`` — this guard would silently do nothing
+    # for a director-submitted proposal; it is not a second line of defense for
+    # that case, and this comment is what makes the gap explicit rather than
+    # invisible.
     standing = standing_result(match)
     if standing is not None and standing.id == result_id:
         submitter_side = my_side(match, standing.submitted_by_user_id)

@@ -13,6 +13,7 @@ from sqlalchemy.sql.base import ExecutableOption
 
 from app import matches as matches_mod
 from app.domain.match.extras import CareerRecord, PreMatchRating
+from app.match_creation import create_match
 from app.match_voiding import void_match
 from app.matches import (
     _compact_games,
@@ -54,6 +55,7 @@ from app.services.dependencies import get_match_service
 from tests._helpers import (
     FakeSender,
     accept_standing_result,
+    attach_match_to_director_tournament,
     counted_statements,
     enqueued_notification_jobs,
     make_client,
@@ -1814,6 +1816,255 @@ async def test_can_score_match_without_opponent(
     body = response.json()
     sides = sorted(body["sides"], key=lambda s: s["side_number"])
     assert [s["games_won"] for s in sides] == [1, 0]
+
+
+# ----- director authorization (#1523) ---------------------------------------
+
+
+async def test_director_can_score_a_called_tournament_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: 'The director can write per-game scores on a called match between
+    two other players in their own tournament, through POST/PUT/DELETE
+    .../scores.'"""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-score",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 201
+        sides = sorted(response.json()["sides"], key=lambda s: s["side_number"])
+        assert [s["games_won"] for s in sides] == [1, 0]
+
+
+async def test_director_can_finalize_a_result_via_post_results(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: 'The director can propose a result... the match completes at once,
+    side.won is set, the rating update runs, and the draw advances.' Also
+    pins: 'A director-submitted result is never left standing.'"""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=1)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-finalize",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=1,
+        )
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["status"] == "completed"
+        sides = sorted(body["sides"], key=lambda s: s["side_number"])
+        assert sides[0]["won"] is True
+        assert sides[1]["won"] is False
+
+
+async def test_a_stranger_who_is_neither_participant_nor_director_gets_404(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        stranger = await start_session(stranger_client, db_session)
+        del stranger
+        created = await _create_match(api_client, p2.id)
+        director = await make_user(db_session, "http-dir-stranger-director")
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-stranger",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await stranger_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 404
+
+
+async def test_the_director_of_a_different_tournament_still_gets_404(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: 'A match in a tournament the caller did not create stays a 404 for
+    that caller.' This is the case that catches a broken join — the caller
+    genuinely directs A tournament, just not this one."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as other_director_client:
+        p2 = await start_session(p2_client, db_session)
+        other_director = await start_session(other_director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        real_director = await make_user(db_session, "http-dir-real")
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-real",
+            director=real_director,
+            p1=p1,
+            p2=p2,
+        )
+        # ``other_director`` directs a genuinely different tournament — no
+        # fixture of theirs references this match.
+        other_p1 = await make_user(db_session, "http-dir-other-p1")
+        other_p2 = await make_user(db_session, "http-dir-other-p2")
+        other_match = await create_match(
+            db_session,
+            creator=other_p1,
+            opponent_user_id=other_p2.id,
+            league_id=None,
+            best_of=5,
+            rated=True,
+        )
+        await attach_match_to_director_tournament(
+            db_session,
+            other_match.id,
+            tag="http-dir-other",
+            director=other_director,
+            p1=other_p1,
+            p2=other_p2,
+        )
+
+        response = await other_director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 404
+
+
+async def test_can_score_flag_is_true_for_the_director_on_the_detail_route(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-canscore",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await director_client.get(f"/v1/matches/{created['id']}")
+        assert response.status_code == 200
+        assert response.json()["can_score"] is True
+
+
+async def test_can_score_flag_stays_false_for_a_signed_in_stranger(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        stranger = await start_session(stranger_client, db_session)
+        del stranger
+        created = await _create_match(api_client, p2.id)
+        director = await make_user(db_session, "http-dir-canscore-false")
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-canscore-false",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await stranger_client.get(f"/v1/matches/{created['id']}")
+        assert response.status_code == 200
+        assert response.json()["can_score"] is False
+
+
+async def test_a_completed_tournament_match_stays_closed_to_the_director(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: unchanged refusals — a completed/voided match stays closed to the
+    director, with the existing copy."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        match = await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-completed",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+        match.status = MatchStatus.completed
+        await db_session.commit()
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "This match is no longer scorable."
+
+
+async def test_an_uncalled_tournament_match_stays_refused_for_the_director(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: unchanged refusals — a match nobody has called to a table stays
+    refused for the director, with the existing 409 copy."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        match = await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-uncalled",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+        match.status = MatchStatus.pending
+        await db_session.commit()
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 409
+        assert (
+            response.json()["detail"] == "This match hasn't been called to a table yet."
+        )
 
 
 # ----- finalize (POST /v1/matches/{id}/results) ---------------------------

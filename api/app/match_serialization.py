@@ -83,6 +83,7 @@ __all__ = [
     "status_label",
     "validate_finalize_games",
     "view_extras",
+    "view_extras_if_participant",
 ]
 
 
@@ -483,7 +484,20 @@ def serialize_details(
     current_user_id: uuid.UUID | None,
     extras: MatchDetailsExtras | None = None,
     domain_match: MatchModel | None = None,
+    *,
+    viewer_is_director: bool = False,
 ) -> MatchDetails:
+    """Build the viewer-relative ``MatchDetails`` view for ``current_user_id``.
+
+    ``viewer_is_director`` is a second, independent input to ``can_score``
+    (#1523 constraint 10: "the read flag is a second change, not a consequence
+    of the [write-gate] one") — whether ``current_user_id`` created the
+    tournament that materialized ``match``, resolved by the caller (a query,
+    so it can't be computed here without a session). It defaults to ``False``
+    for every call site that doesn't pass it explicitly, which is deliberate:
+    only the HTTP detail route and the MCP ``get_match`` tool compute and pass
+    it. ``_list_row`` (``app.matches``) and every write-response call site stay
+    participant-only, by decision — see those call sites for why."""
     extras = extras or empty_extras()
     # The ``data`` view is built from the domain model. The match-details
     # endpoint loads it through MatchService/MatchRepository and passes it in;
@@ -531,16 +545,28 @@ def serialize_details(
         ],
         games=games,
         current_game=current_game,
-        # "This participant may edit scores" — true whenever the match is
-        # scorable (no result posted yet; see ``is_scorable``), *independent*
-        # of whether there's a next un-played game. A decided-but-unposted
-        # board is still editable, so this is True while ``current_game`` is
-        # None. Spectators get the read-only view — writes
-        # 404 for non-participants in the score endpoints regardless.
-        can_score=(viewer_is_participant and is_scorable(match)),
+        # "This viewer may edit scores" — true whenever the match is scorable
+        # (no result posted yet; see ``is_scorable``), *independent* of whether
+        # there's a next un-played game. A decided-but-unposted board is still
+        # editable, so this is True while ``current_game`` is None. True for a
+        # participant OR the tournament's director (#1523) — matching
+        # ``load_match_for_write``'s widened write gate, per constraint 7
+        # ("can_score and the write guard must not drift"). Everyone else gets
+        # the read-only view — writes 404 in the score endpoints regardless.
+        can_score=(
+            (viewer_is_participant or viewer_is_director) and is_scorable(match)
+        ),
         # True iff the saved games already form a decided, validly-ordered
         # match AND no result is currently posted — the FE flips the scoring
         # page's submit button label to "Post result" when this is true.
+        #
+        # Deliberately NOT widened to the director (#1523): this flag is
+        # solely about the FIRST-proposal submit button's label on the
+        # participant scoring page — a decision the ticket's ACs don't touch
+        # (the director's propose-result path works regardless of what this
+        # flag says; the HTTP/MCP write gate is ``load_match_for_write``, not
+        # this read-only label predicate). Widening it would be an
+        # unrequested web-client-facing UX call, out of this ticket's scope.
         can_finalize=(
             viewer_is_participant and len(match.sides) >= 2 and _can_finalize(match)
         ),
@@ -598,6 +624,28 @@ async def view_extras(
             user_ids=singles_user_ids(match),
         )
     )
+
+
+async def view_extras_if_participant(
+    match_service: "MatchService", match: Match, current_user_id: uuid.UUID
+) -> MatchDetailsExtras:
+    """Participant-gated wrapper over :func:`view_extras`, for the score-write
+    and negotiation-write response paths (``app.matches``'s score/results
+    handlers, the MCP write tools' ``_serialize_written_match``).
+
+    Before #1523 those write handlers could call :func:`view_extras`
+    unconditionally: the only way to reach them at all was
+    ``load_match_for_write`` finding the caller a participant, so "reached this
+    point" already implied "gate on participation before calling this" (see
+    :func:`view_extras`'s own docstring). Now that the same write gate also
+    authorizes a tournament director who is NOT a participant, that implication
+    is gone — an ungated call would hand a director the players' rating/form/
+    head-to-head data #515 reserves for participants. This re-checks
+    participation and returns ``empty_extras()`` for anyone who fails it,
+    mirroring the read path's (``serialize_details`` callers') existing gate."""
+    if not is_participant(match, current_user_id):
+        return empty_extras()
+    return await view_extras(match_service, match)
 
 
 def as_played_instant(match: Match) -> datetime:

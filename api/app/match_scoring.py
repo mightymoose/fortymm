@@ -9,16 +9,16 @@ This module owns the **entire FastAPI-free write path**, in two layers:
 
 - The high-level entry points (:func:`enter_game_score`, :func:`update_game_score`,
   :func:`delete_game_score`) take a ``match_id`` + ``user_id`` and drive the full
-  flow — load+lock+participant (:func:`load_match_for_write`), scorability
+  flow — load+lock+authorize (:func:`load_match_for_write`), scorability
   (:func:`ensure_scorable`), best-of range and no-overrun guards, then the
   mutation — raising a family of domain exceptions instead of ``HTTPException``.
   Both the HTTP handlers in ``app.matches`` and the MCP tools call these; each
   adapts the domain exceptions to its transport (the HTTP adapter reproduces the
   exact status + body it produced before, so the wire contract is unchanged).
 - The low-level ``_*_locked`` helpers take an already-loaded, row-locked,
-  participation-checked, guard-passed :class:`Match`, mutate the board, and
+  authorization-checked, guard-passed :class:`Match`, mutate the board, and
   return the reloaded :class:`Match` ready to serialise. They own the one race
-  the guards can't pre-empt: the concurrent-participant score conflict, signalled
+  the guards can't pre-empt: the concurrent-writer score conflict, signalled
   with the domain :class:`ScoreConflictError` (carrying the committed score).
 
 Following ``api/CLAUDE.md``'s rule of thumb, each is a plain module-level async
@@ -41,7 +41,7 @@ from app.match_errors import (
     ScoreConflictError,
     ScoreNotAllowedError,
 )
-from app.match_queries import match_eager_options
+from app.match_queries import is_tournament_director, match_eager_options
 from app.match_realtime import stage_match_participant_hints
 from app.match_serialization import (
     first_decider,
@@ -127,11 +127,21 @@ async def load_match_for_write(
     hook can read ``league.rating_strategy`` without a mid-request lazy load; the
     scratchpad score endpoints take the default read chain.
 
-    Raises :class:`MatchNotFoundError` when the match is absent *or* ``user_id``
-    isn't a participant — today's score endpoints collapse both into one opaque
-    404 so a non-participant can't probe existence. May raise
-    :class:`MatchLockUnavailable` when ``lock`` + ``nowait`` and the row is held.
-    Never an ``HTTPException`` — the caller adapts it to its transport."""
+    Raises :class:`MatchNotFoundError` when the match is absent, or ``user_id``
+    is neither a participant nor the director of the tournament that
+    materialized this match (#1523, ADR-0784) — today's score endpoints
+    collapse all three into one opaque 404 so a caller who is none of them
+    can't probe existence. May raise :class:`MatchLockUnavailable` when
+    ``lock`` + ``nowait`` and the row is held. Never an ``HTTPException`` — the
+    caller adapts it to its transport.
+
+    Checks participation first — a query-free in-memory check, and the common
+    case — and only falls back to the director query
+    (:func:`app.match_queries.is_tournament_director`) when that fails, so a
+    match a participant is writing never pays the extra join. A director who is
+    ALSO a participant in this match (constraint 9) is authorized here on the
+    fast, participant path — director authority is never even consulted for a
+    match the director plays in."""
     if lock:
         await _lock_match_row(db, match_id, nowait=nowait)
     result = await db.execute(
@@ -140,9 +150,13 @@ async def load_match_for_write(
         .options(*(options if options is not None else match_eager_options()))
     )
     match = result.scalar_one_or_none()
-    if match is None or not is_participant(match, user_id):
+    if match is None:
         raise MatchNotFoundError()
-    return match
+    if is_participant(match, user_id):
+        return match
+    if await is_tournament_director(db, match_id, user_id):
+        return match
+    raise MatchNotFoundError()
 
 
 class _MatchWriteLoader(Protocol):
@@ -299,7 +313,7 @@ async def _enter_game_score_locked(
     reloaded. Lazily inserts the ``MatchGame`` row (the FE deeplinks straight
     into ``/games/N/scores/new`` before the game exists).
 
-    Raises :class:`ScoreConflictError` when a concurrent participant already
+    Raises :class:`ScoreConflictError` when a concurrent writer already
     saved this game — either the in-memory board already carries a committed
     score (the common case under the router's blocking lock), or the commit
     trips ``uq_match_games_match_id_game_number`` / ``uq_match_game_scores`` as
@@ -313,7 +327,7 @@ async def _enter_game_score_locked(
         game = MatchGame(game_number=game_number)
         match.games.append(game)
     elif game.score is not None:
-        # A concurrent participant already created this game's score — the same
+        # A concurrent writer already created this game's score — the same
         # conflict the update path guards against, just on first write. Hand
         # back the committed score so the client surfaces it for review instead
         # of overwriting it.
@@ -368,7 +382,7 @@ async def _update_game_score_locked(
     optimistic concurrency and return it reloaded.
 
     The ``WHERE version = expected_version`` clause is the whole guard: if a
-    concurrent participant has saved this game since the caller last read it,
+    a concurrent writer has saved this game since the caller last read it,
     zero rows match and we raise :class:`ScoreConflictError` (carrying the score
     as it actually stands now) rather than overwrite their save. Never touches
     ``match.status``, ``side.won``, or ratings.
@@ -400,7 +414,7 @@ async def _update_game_score_locked(
         )
     )
     if cast(CursorResult[Any], result).rowcount == 0:
-        # Lost the race: a concurrent participant saved this game since the
+        # Lost the race: a concurrent writer saved this game since the
         # caller last read it, so the conditional UPDATE matched no row. The
         # update changed nothing, so there's nothing to undo — refresh the score
         # to the value as it actually stands now and signal the conflict (the
@@ -453,7 +467,7 @@ async def _delete_game_score_locked(
 # ----- high-level entry points ---------------------------------------------
 #
 # The full FastAPI-free write path both the HTTP handlers and the MCP tools
-# drive: load+lock+participant, scorability, best-of range, no-overrun, then the
+# drive: load+lock+authorize, scorability, best-of range, no-overrun, then the
 # mutation — raising the domain exceptions the caller adapts to its transport.
 # ``load_match`` defaults to the FastAPI-free ``load_match_for_write``; the HTTP
 # handlers inject ``matches._load_match_for_scoring`` so the router's
@@ -479,9 +493,10 @@ async def enter_game_score(
     overrun, preserving the historical conflict-before-overrun ordering). The
     prospective board is the currently-scored games plus this write.
 
-    Raises :class:`MatchNotFoundError` (absent match / non-participant),
+    Raises :class:`MatchNotFoundError` (absent match, or a caller who is
+    neither a participant nor the tournament's director),
     :class:`MatchNotScorableError`, :class:`ScoreNotAllowedError` (range or
-    overrun), or :class:`ScoreConflictError` (a concurrent participant already
+    overrun), or :class:`ScoreConflictError` (a concurrent writer already
     scored this game)."""
     match = await load_match(db, match_id, user_id, lock=True)
     ensure_scorable(match)
@@ -529,8 +544,9 @@ async def update_game_score(
     SQL, so in-memory ``match.games`` still holds the OLD score).
 
     Raises :class:`MatchNotFoundError` — ``"Match not found."`` for an absent
-    match / non-participant, ``"Score not found."`` for a missing game score —
-    plus :class:`MatchNotScorableError`, :class:`ScoreNotAllowedError`, or
+    match or an unauthorized caller (neither a participant nor the tournament's
+    director), ``"Score not found."`` for a missing game score — plus
+    :class:`MatchNotScorableError`, :class:`ScoreNotAllowedError`, or
     :class:`ScoreConflictError` (a stale ``expected_version``)."""
     match = await load_match(db, match_id, user_id, lock=True)
     ensure_scorable(match)
@@ -574,8 +590,9 @@ async def delete_game_score(
     the score's existence.
 
     Raises :class:`MatchNotFoundError` — ``"Match not found."`` for an absent
-    match / non-participant, ``"Score not found."`` for a missing game score —
-    or :class:`MatchNotScorableError`."""
+    match or an unauthorized caller (neither a participant nor the tournament's
+    director), ``"Score not found."`` for a missing game score — or
+    :class:`MatchNotScorableError`."""
     match = await load_match(db, match_id, user_id, lock=True)
     ensure_scorable(match)
 

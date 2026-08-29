@@ -85,6 +85,7 @@ from app.match_errors import (
     SelfMatchError,
     UndecidedBoardError,
 )
+from app.match_queries import is_tournament_director
 from app.match_result_notifications import notify_result_posted
 from app.match_scoring import MatchLockUnavailable
 from app.match_scoring import delete_game_score as delete_game_score_core
@@ -95,6 +96,7 @@ from app.match_serialization import (
     load_match_eager,
     serialize_details,
     view_extras,
+    view_extras_if_participant,
 )
 from app.models import Match, Tournament, TournamentEvent, TournamentStatus, User
 from app.notifications.dependencies import get_push_sender
@@ -583,7 +585,9 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
     (``is_current_user_side``, ``can_score``, ``can_finalize``, the negotiation
     block) plus — only when the caller is a participant on the match — the
     history/rivalry/rating extras (recent form, head-to-head, per-side rating
-    changes; a non-participant gets those empty, per #515).
+    changes; a non-participant gets those empty, per #515). ``can_score`` is
+    also true for a caller who is the director of the tournament this match
+    belongs to, even when they aren't a participant (#1523).
 
     Raises a ``ToolError`` when no match has that id.
     """
@@ -605,7 +609,15 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
             if viewer_is_participant
             else empty_extras()
         )
-        return serialize_details(match, user_id, extras, domain_match)
+        # ``can_score`` is a second, independent widening from the write gate
+        # (#1523 constraint 10). Skip the query when the caller is already a
+        # participant (the fast, common-case path).
+        viewer_is_director = not viewer_is_participant and await is_tournament_director(
+            db, match_id, user_id
+        )
+        return serialize_details(
+            match, user_id, extras, domain_match, viewer_is_director=viewer_is_director
+        )
 
 
 @mcp.tool
@@ -679,12 +691,15 @@ def _map_score_write_tool_error(exc: Exception) -> ToolError:
     race names ``get_match`` as the recovery path (re-read the committed score,
     then retry with the current version), and a held lock asks for a retry."""
     if isinstance(exc, MatchNotFoundError):
-        # "Match not found." collapses absent-match and non-participant into one
-        # opaque reason (a non-participant can't probe existence); "Score not
-        # found." is the update/delete missing-score case — surface each as-is,
-        # naming participation for the former.
+        # "Match not found." collapses absent-match and unauthorized-caller into
+        # one opaque reason (an unauthorized caller can't probe existence);
+        # "Score not found." is the update/delete missing-score case — surface
+        # each as-is, naming both ways to be authorized for the former.
         if exc.message == "Match not found.":
-            return ToolError("Match not found, or you are not a participant.")
+            return ToolError(
+                "Match not found, or you are not a participant or the "
+                "tournament's director."
+            )
         return ToolError(exc.message)
     if isinstance(exc, ScoreConflictError):
         return ToolError(
@@ -699,14 +714,21 @@ def _map_score_write_tool_error(exc: Exception) -> ToolError:
 async def _serialize_written_match(
     db: AsyncSession, match: Match, user_id: uuid.UUID
 ) -> MatchDetails:
-    """Serialize a just-written match from the participant caller's perspective.
+    """Serialize a just-written match from the acting caller's perspective.
 
-    The ``match_scoring`` entry points only return to a participant (a
-    non-participant is rejected at load with ``MatchNotFoundError``), so the
-    history/rivalry/rating extras are always assembled — the same view the HTTP
-    score handlers return for the acting user."""
+    The ``match_scoring`` / negotiation entry points only return to an
+    authorized caller — a participant OR the tournament's director (#1523) — a
+    caller who is neither is rejected at load with ``MatchNotFoundError``. Since
+    #1523 that authorized caller is no longer guaranteed to be a participant,
+    so the history/rivalry/rating extras can no longer be assembled
+    unconditionally (that would leak the players' rating/form/head-to-head data
+    to a non-participant director, contradicting #515) —
+    ``view_extras_if_participant`` re-checks and returns ``empty_extras()`` for
+    a director who isn't also a participant, mirroring the HTTP write handlers'
+    identical gate (``app.matches``) and the read path's own participant gate
+    (``get_match`` above)."""
     service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
-    extras = await view_extras(service, match)
+    extras = await view_extras_if_participant(service, match, user_id)
     return serialize_details(match, user_id, extras)
 
 
@@ -728,10 +750,11 @@ async def enter_game_score(
     view ``get_match`` reads back).
 
     Raises a ``ToolError`` when the match doesn't exist or you're not a
-    participant, when the match isn't scorable (no opponent, a posted result, not
-    yet called to a table, or terminal), when the game is out of the ``best_of``
-    range or would overrun a decided match, or when a concurrent participant
-    already scored this game (call ``get_match``, then retry)."""
+    participant or the tournament's director, when the match isn't scorable (no
+    opponent, a posted result, not yet called to a table, or terminal), when
+    the game is out of the ``best_of`` range or would overrun a decided match,
+    or when a concurrent writer already scored this game (call ``get_match``,
+    then retry)."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         try:
@@ -2381,11 +2404,11 @@ async def update_game_score(
     the write only commits while the committed row is still at that version.
 
     Raises a ``ToolError`` when the match doesn't exist or you're not a
-    participant, when the game score doesn't exist, when the match isn't
-    scorable, when the write would overrun a decided match, or when
-    ``expected_version`` is stale — a concurrent participant saved this game since
-    you read it (call ``get_match`` for the committed score, then retry with the
-    current version)."""
+    participant or the tournament's director, when the game score doesn't
+    exist, when the match isn't scorable, when the write would overrun a
+    decided match, or when ``expected_version`` is stale — a concurrent writer
+    saved this game since you read it (call ``get_match`` for the committed
+    score, then retry with the current version)."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         try:
@@ -2453,17 +2476,21 @@ async def propose_result(
     (each game's per-point legality is validated); this one tool serves both the
     FIRST proposal (omit ``supersedes_result_id``) and a COUNTER/correction (set
     ``supersedes_result_id`` to the current standing result's id). A solo/unrated
-    match self-accepts and finalizes immediately; a rated two-human match leaves
-    the result *standing* for the opponent to ``accept_result``, and — only then —
+    match self-accepts and finalizes immediately — as does ANY proposal from the
+    tournament's director, even a counter to a player's standing proposal
+    (#1523: a director's result is authoritative and is never left standing). A
+    rated two-human match proposed by one of its own participants leaves the
+    result *standing* for the opponent to ``accept_result``, and — only then —
     fires a best-effort accept/counter notification to the opponent (a notify
     failure never fails this tool). Returns the ``MatchDetails`` from the
     proposer's perspective (the same view ``get_match`` reads back).
 
     Raises a ``ToolError`` when the match doesn't exist or you're not a
-    participant, when the match is closed to new results (completed/voided), when
-    the board is undecided/invalid, when another proposal is mid-flight (retry),
-    or when the standing result moved on under you — the last names ``get_match``
-    as the recovery path (re-read the standing result, then accept or counter)."""
+    participant or the tournament's director, when the match is closed to new
+    results (completed/voided), when the board is undecided/invalid, when
+    another proposal is mid-flight (retry), or when the standing result moved
+    on under you — the last names ``get_match`` as the recovery path (re-read
+    the standing result, then accept or counter)."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         try:
@@ -2475,7 +2502,10 @@ async def propose_result(
                 supersedes_result_id=supersedes_result_id,
             )
         except MatchNotFoundError as exc:
-            raise ToolError("Match not found, or you are not a participant.") from exc
+            raise ToolError(
+                "Match not found, or you are not a participant or the "
+                "tournament's director."
+            ) from exc
         except MatchClosedError as exc:
             raise ToolError(str(exc)) from exc
         except UndecidedBoardError as exc:
@@ -2512,14 +2542,19 @@ async def accept_result(
     ``side.won``, apply ratings, advance any tournament draw) so the MCP and HTTP
     surfaces can never drift. ``result_id`` is the concurrency token: it must be
     the current standing proposal's id (from ``get_match``). Returns the finalized
-    ``MatchDetails`` from the accepting caller's perspective.
+    ``MatchDetails`` from the accepting caller's perspective. The tournament's
+    director may also accept a player's standing proposal on a match they
+    didn't play in (#1523) — they share this same authorization gate and have
+    no "submitter's side" to be blocked by; a director's own proposals never
+    reach this tool, since they always self-finalize at ``propose_result``.
 
     Raises a ``ToolError`` when no result with that id exists on the match, when
-    the match doesn't exist or you're not a participant, when you try to accept
-    your own proposal (only the opposing side may accept), when the agreed board
-    no longer decides a winner, or when the standing result moved on under you
-    (superseded by a counter or already accepted) — the last names ``get_match``
-    as the recovery path (re-read the standing result, then accept or counter)."""
+    the match doesn't exist or you're not a participant or the tournament's
+    director, when you try to accept your own proposal (only the opposing side
+    may accept), when the agreed board no longer decides a winner, or when the
+    standing result moved on under you (superseded by a counter or already
+    accepted) — the last names ``get_match`` as the recovery path (re-read the
+    standing result, then accept or counter)."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         try:
@@ -2530,7 +2565,10 @@ async def accept_result(
                 result_id=result_id,
             )
         except MatchNotFoundError as exc:
-            raise ToolError("Match not found, or you are not a participant.") from exc
+            raise ToolError(
+                "Match not found, or you are not a participant or the "
+                "tournament's director."
+            ) from exc
         except ResultNotFoundError as exc:
             raise ToolError("No result with that id exists on this match.") from exc
         except CannotAcceptOwnProposalError as exc:
@@ -2558,8 +2596,8 @@ async def delete_game_score(
     reloaded ``MatchDetails`` from the caller's perspective.
 
     Raises a ``ToolError`` when the match doesn't exist or you're not a
-    participant, when the game score doesn't exist, or when the match isn't
-    scorable."""
+    participant or the tournament's director, when the game score doesn't
+    exist, or when the match isn't scorable."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         try:

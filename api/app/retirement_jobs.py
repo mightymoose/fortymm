@@ -140,7 +140,23 @@ async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
 def _owing_side(match: Match, submitter_id: uuid.UUID) -> MatchSide | None:
     """The side that owes acceptance: the one whose players do **not** include
     the standing result's submitter. Returns ``None`` if no such side has a
-    player (defensive against a solo / player-less sentinel side)."""
+    player (defensive against a solo / player-less sentinel side).
+
+    NOTE (#1523): when ``submitter_id`` is on NEITHER side — the tournament-
+    director case — every side's players exclude the submitter, so this
+    resolves the FIRST side with players as "owing" (side 1, by ``match.sides``
+    order), arbitrarily and regardless of which side actually played. That
+    never fires via the retirement sweep today: a director-submitted proposal
+    never lapses standing to be swept in the first place —
+    ``_requires_confirmation`` (``app.result_proposal``) now requires the
+    submitter to be a participant before it ever leaves a result unaccepted, so
+    a director's own proposal always self-finalizes immediately at
+    ``propose_result`` and is never a candidate row this sweep's SQL filter
+    would even select. This function is unchanged rather than hardened,
+    because there is no correct non-arbitrary side to pick for a submitter
+    who is a director — the fix belongs upstream, at the source that would
+    otherwise create such a standing result, which is exactly what
+    ``_requires_confirmation``'s conjunct does."""
     for side in match.sides:
         if not side.players:
             continue
