@@ -506,23 +506,19 @@ async def accept_result(
     # targeted result is still standing — a superseded/absent one falls through
     # to the core's conflict signal below.
     #
-    # ``submitter_side is None`` also covers a tournament director's proposal
-    # (#1523: a director is never on either side) — this guard alone would let
-    # ANYONE, including the submitting director themselves, accept it. That is
-    # safe today only because a director-submitted proposal never reaches this
-    # function standing at all: ``_requires_confirmation``
-    # (``app.result_proposal``) now requires the submitter to be a participant
-    # before it ever leaves a result unaccepted, so a director's own proposal
-    # always self-finalizes at ``propose_result`` and is already ``completed``
-    # (a terminal status ``load_match_for_write`` still gates elsewhere) by the
-    # time anyone could reach ``accept_result``. If that invariant is ever
-    # broken — a future call path that mints a standing ``MatchResult`` without
-    # going through ``propose_result`` — this guard would silently do nothing
-    # for a director-submitted proposal; it is not a second line of defense for
-    # that case, and this comment is what makes the gap explicit rather than
-    # invisible.
+    # The side check alone is not enough since #1523. A tournament director is
+    # on neither side, so ``my_side`` returns ``None`` for a director-submitted
+    # proposal and the side check does nothing — the submitting director could
+    # accept their own result. ``_requires_confirmation``
+    # (``app.result_proposal``) is what stops such a proposal ever standing, but
+    # that is a mint-site invariant in another module, and a future path that
+    # mints a standing ``MatchResult`` without going through ``propose_result``
+    # would silently reopen the hole. So check the submitter's identity too:
+    # nobody accepts their own proposal, side or no side.
     standing = standing_result(match)
     if standing is not None and standing.id == result_id:
+        if standing.submitted_by_user_id == user_id:
+            raise CannotAcceptOwnProposalError
         submitter_side = my_side(match, standing.submitted_by_user_id)
         if submitter_side is not None and any(
             p.user_id == user_id for p in submitter_side.players

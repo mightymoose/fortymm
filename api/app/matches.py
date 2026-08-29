@@ -558,11 +558,15 @@ async def get_match(
     # ``can_score`` is a second, independent widening from the write gate
     # (#1523 constraint 10) — a signed-in, non-participant viewer may still be
     # the tournament's director. Skip the query for an anonymous caller or one
-    # who's already a participant (the fast, common-case paths); only a
-    # signed-in non-participant pays the extra join.
+    # who's already a participant (the fast, common-case paths), and for a match
+    # nobody can score anyway — ``can_score`` ANDs this with ``is_scorable``, so
+    # a completed, voided, pending or result-posted match throws the answer away.
+    # Those are exactly the matches people share links to. Only a signed-in
+    # non-participant reading a live, unresolved match pays the extra join.
     viewer_is_director = (
         current_user is not None
         and not viewer_is_participant
+        and is_scorable(match)
         and await is_tournament_director(db, match_id, current_user.id)
     )
     return serialize_details(

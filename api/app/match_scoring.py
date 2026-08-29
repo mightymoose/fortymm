@@ -382,7 +382,7 @@ async def _update_game_score_locked(
     optimistic concurrency and return it reloaded.
 
     The ``WHERE version = expected_version`` clause is the whole guard: if a
-    a concurrent writer has saved this game since the caller last read it,
+    concurrent writer has saved this game since the caller last read it,
     zero rows match and we raise :class:`ScoreConflictError` (carrying the score
     as it actually stands now) rather than overwrite their save. Never touches
     ``match.status``, ``side.won``, or ratings.

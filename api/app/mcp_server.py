@@ -93,6 +93,7 @@ from app.match_scoring import enter_game_score as enter_game_score_core
 from app.match_scoring import update_game_score as update_game_score_core
 from app.match_serialization import (
     is_participant,
+    is_scorable,
     load_match_eager,
     serialize_details,
     view_extras,
@@ -611,9 +612,13 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
         )
         # ``can_score`` is a second, independent widening from the write gate
         # (#1523 constraint 10). Skip the query when the caller is already a
-        # participant (the fast, common-case path).
-        viewer_is_director = not viewer_is_participant and await is_tournament_director(
-            db, match_id, user_id
+        # participant (the fast, common-case path), and for a match nobody can
+        # score anyway — ``can_score`` ANDs this with ``is_scorable``, so the
+        # answer would be thrown away. Mirrors the HTTP ``get_match`` above.
+        viewer_is_director = (
+            not viewer_is_participant
+            and is_scorable(match)
+            and await is_tournament_director(db, match_id, user_id)
         )
         return serialize_details(
             match, user_id, extras, domain_match, viewer_is_director=viewer_is_director
@@ -683,6 +688,16 @@ _SCORE_WRITE_ERRORS = (
 )
 
 
+# The one opaque refusal every match-write tool gives a caller the shared write
+# gate (``match_scoring.load_match_for_write``) turned away — an absent match and
+# an unauthorized caller collapse into it so neither can probe the other (#1523).
+# One constant because three tools raise it and #1523 had to edit all three in
+# lockstep to name the director.
+_UNAUTHORIZED_MATCH_WRITE_MESSAGE = (
+    "Match not found, or you are not a participant or the tournament's director."
+)
+
+
 def _map_score_write_tool_error(exc: Exception) -> ToolError:
     """Adapt a score-write domain exception to an actionable ``ToolError``.
 
@@ -696,10 +711,7 @@ def _map_score_write_tool_error(exc: Exception) -> ToolError:
         # "Score not found." is the update/delete missing-score case — surface
         # each as-is, naming both ways to be authorized for the former.
         if exc.message == "Match not found.":
-            return ToolError(
-                "Match not found, or you are not a participant or the "
-                "tournament's director."
-            )
+            return ToolError(_UNAUTHORIZED_MATCH_WRITE_MESSAGE)
         return ToolError(exc.message)
     if isinstance(exc, ScoreConflictError):
         return ToolError(
@@ -2502,10 +2514,7 @@ async def propose_result(
                 supersedes_result_id=supersedes_result_id,
             )
         except MatchNotFoundError as exc:
-            raise ToolError(
-                "Match not found, or you are not a participant or the "
-                "tournament's director."
-            ) from exc
+            raise ToolError(_UNAUTHORIZED_MATCH_WRITE_MESSAGE) from exc
         except MatchClosedError as exc:
             raise ToolError(str(exc)) from exc
         except UndecidedBoardError as exc:
@@ -2565,10 +2574,7 @@ async def accept_result(
                 result_id=result_id,
             )
         except MatchNotFoundError as exc:
-            raise ToolError(
-                "Match not found, or you are not a participant or the "
-                "tournament's director."
-            ) from exc
+            raise ToolError(_UNAUTHORIZED_MATCH_WRITE_MESSAGE) from exc
         except ResultNotFoundError as exc:
             raise ToolError("No result with that id exists on this match.") from exc
         except CannotAcceptOwnProposalError as exc:

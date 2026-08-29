@@ -2067,6 +2067,57 @@ async def test_an_uncalled_tournament_match_stays_refused_for_the_director(
         )
 
 
+async def test_a_directors_write_response_withholds_the_players_history_extras(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """#515's participant-only extras survive #1523's widened write gate.
+
+    Before #1523 a score-write handler could assemble the rich extras block
+    unconditionally, because ``load_match_for_write`` only ever admitted a
+    participant. A director is not one, so the write response must carry the
+    same empty block a spectator's read gets — this pins
+    ``view_extras_if_participant``."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        # A prior completed meeting is what gives these two players recent form
+        # and a head-to-head. Without it both branches below read empty and the
+        # assertions could not tell a gated response from an ungated one.
+        await _play_match_to_completion(
+            api_client, p2_client, p2.id, best_of=3, side_1_wins=True
+        )
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-extras",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        director_write = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert director_write.status_code == 201
+        director_body = director_write.json()
+        assert director_body["recent_form"] == []
+        assert director_body["head_to_head"] is None
+
+        # The participant's own write response is unchanged. This is what makes
+        # the two assertions above discriminating rather than vacuous.
+        participant_write = await api_client.post(
+            f"/v1/matches/{created['id']}/games/2/scores/new",
+            json={"side_1_points": 11, "side_2_points": 6},
+        )
+        assert participant_write.status_code == 201
+        participant_body = participant_write.json()
+        assert participant_body["recent_form"]
+        assert participant_body["head_to_head"]["total_meetings"] == 1
+
+
 # ----- finalize (POST /v1/matches/{id}/results) ---------------------------
 
 
