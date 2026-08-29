@@ -40,7 +40,9 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
+    op.create_index("ix_notifications_result_id", "notifications", ["result_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_notifications_result_id", table_name="notifications")
     op.drop_column("notifications", "result_id")

@@ -36,10 +36,16 @@ class Notification(Base):
     """
 
     __tablename__ = "notifications"
-    # The feed query is ``WHERE user_id = ? ORDER BY created_at DESC``; the
-    # composite index serves both the filter and the ordering.
     __table_args__ = (
+        # The feed query is ``WHERE user_id = ? ORDER BY created_at DESC``; the
+        # composite index serves both the filter and the ordering.
         Index("ix_notifications_user_id_created_at", "user_id", "created_at"),
+        # Postgres does not auto-index a FK column (unlike its referenced PK
+        # side). Without this, every ``match_results`` delete (including one
+        # cascaded from a ``matches`` delete) would force a sequential scan of
+        # ``notifications`` to find the rows its ``ON DELETE SET NULL`` must
+        # touch.
+        Index("ix_notifications_result_id", "result_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
