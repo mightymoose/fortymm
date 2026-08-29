@@ -101,6 +101,35 @@ class NotAllowedToEnterError(Exception):
     prose. Never an ``HTTPException``."""
 
 
+class EntryRateLimitedError(Exception):
+    """Raised by the ``enter_event`` verb on the **self-registration** arm when the
+    caller's client IP has exhausted its per-hour self-entry ceiling (#1092).
+
+    Self-registration needs no permission any more — ``tournament.enter`` was
+    deleted — so this is the one bound the entry verb judges itself, and only on
+    the self path: the attack it bounds is one host minting guest sessions and
+    entering once per session, and a director entering somebody else is gated by
+    ownership instead (:class:`NotTournamentOwnerError`). The ceiling is read from
+    the ``TOURNAMENT_ENTRY_IP_PER_HOUR`` environment variable (30/hour default) and
+    enforced through the shared ``RedisRateLimiter`` core. A transient refusal: one
+    venue on one wifi network can legitimately share an IP and reach the ceiling,
+    so the message tells the player to retry shortly rather than reading as a
+    product failure. The HTTP adapter maps this to a 429 with that sentence; the
+    MCP tool to ``ToolError`` prose. Never an ``HTTPException``.
+
+    The message is authored here, in the domain, so the HTTP 429 and the MCP
+    ``ToolError`` carry the same sentence by construction."""
+
+    def __init__(
+        self,
+        message: str = (
+            "You've entered a lot of tournaments in a short time from this network. "
+            "Please retry shortly."
+        ),
+    ) -> None:
+        super().__init__(message)
+
+
 class PlayerNotFoundError(Exception):
     """Raised by the ``enter_event`` verb on the **director** arm when the named
     ``user_id`` resolves to no enterable player — an absent id, or a tombstoned

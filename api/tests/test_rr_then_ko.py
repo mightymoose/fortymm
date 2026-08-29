@@ -48,7 +48,7 @@ from app.models import (
 from app.schemas.tournament import MAX_QUALIFIERS_PER_GROUP
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_queries import stage_ids_for_events
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
+from app.tournaments import TOURNAMENT_CREATE
 from tests._helpers import (
     grant_permissions,
     joined_to_reservation,
@@ -79,7 +79,7 @@ async def authed_client(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> AsyncIterator[tuple[AsyncClient, User]]:
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_CREATE))
+    await grant_permissions(db_session, user, (TOURNAMENT_CREATE,))
     yield api_client, user
 
 

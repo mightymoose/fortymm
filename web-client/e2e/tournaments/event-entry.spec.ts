@@ -28,7 +28,6 @@ import {
   ME,
   MY_RATING_ROUNDED,
 } from '../page-objects/tournaments/tournaments-store'
-import { PERM } from '../../src/lib/permissions'
 import { expectAxeClean } from '../support/axe'
 
 /** Roster copy, hard-coded test-side on purpose: importing the strings from the
@@ -313,11 +312,13 @@ test.describe('Tournaments · entering an event', () => {
     await expect(pom.eventEditor).toBeVisible()
   })
 
-  test('a player without tournament.enter sees no Enter control anywhere', async ({
+  test('a zero-permission player still gets the Enter control (#1092)', async ({
     page,
   }) => {
+    // Entering needs no permission any more — the default session's empty
+    // permission list is exactly what a real default user holds.
     const { pom } = await TournamentDetailPage.navigateTo(page, {
-      permissions: [PERM.TOURNAMENT_VIEW],
+      permissions: [],
     })
 
     // The page is fully there — cards, rosters, counts…
@@ -325,11 +326,14 @@ test.describe('Tournaments · entering an event', () => {
     await expect(pom.entrantsList(EVENT.JOURNEY)).toContainText('player.1')
     await pom.expectEntryCount(EVENT.JOURNEY, 2, 64)
 
-    // …it just offers nothing to click. Every event, both directions.
-    for (const name of [EVENT.JOURNEY, EVENT.EMPTY, EVENT.DOUBLES]) {
-      await expect(pom.enterButton(name)).toHaveCount(0)
+    // …and the singles events offer Enter.
+    for (const name of [EVENT.JOURNEY, EVENT.EMPTY]) {
+      await expect(pom.enterButton(name)).toBeVisible()
       await expect(pom.withdrawButton(name)).toHaveCount(0)
     }
+    // Doubles still offers nothing to click.
+    await expect(pom.enterButton(EVENT.DOUBLES)).toHaveCount(0)
+    await expect(pom.withdrawButton(EVENT.DOUBLES)).toHaveCount(0)
   })
 })
 

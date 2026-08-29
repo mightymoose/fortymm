@@ -30,7 +30,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from httpx import AsyncClient
 from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
@@ -59,7 +59,6 @@ from app.tournament_errors import (
     EntryRefusedError,
     EventNotFoundError,
     NonSinglesEntryError,
-    NotAllowedToEnterError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
     PlayerNotFoundError,
@@ -67,8 +66,6 @@ from app.tournament_errors import (
     WithdrawalRegistrationClosedError,
 )
 from app.tournaments import (
-    TOURNAMENT_ENTER,
-    TOURNAMENT_VIEW,
     enter_event,
     withdraw_from_event,
 )
@@ -199,7 +196,7 @@ async def player(db_session: AsyncSession) -> User:
     means to stage never happens.
     """
     user = await make_user(db_session, f"player-{uuid.uuid4().hex[:8]}")
-    await grant_permissions(db_session, user, (TOURNAMENT_ENTER,))
+    await grant_permissions(db_session, user, ())
     return user
 
 
@@ -455,6 +452,15 @@ def _entries_url(event: TournamentEvent) -> str:
     return f"/v1/tournaments/{event.tournament_id}/events/{event.id}/entries"
 
 
+def _direct_request() -> Request:
+    """A minimal ``Request`` for tests that call the HTTP route handler DIRECTLY
+    (the lock races below): the handler now reads the caller's client IP off it
+    for the self arm's rate limit. ``203.0.113.x`` is TEST-NET-3 — a fixed,
+    never-routed address is exactly what these direct calls want: same budget
+    every time, never colliding with the api_client's ``127.0.0.1``."""
+    return Request(scope={"type": "http", "client": ("203.0.113.7", 50000)})
+
+
 @pytest_asyncio.fixture
 async def entrant_client(
     api_client: AsyncClient, db_session: AsyncSession
@@ -463,7 +469,7 @@ async def entrant_client(
     is deliberately minimal: entering is not gated on ``tournament.view``, and a
     client carrying extra permissions could not tell the two apart."""
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_ENTER,))
+    await grant_permissions(db_session, user, ())
     yield api_client, user
 
 
@@ -520,21 +526,20 @@ async def test_entering_the_same_event_twice_is_a_409(
     assert len(await _active_entries(db_session, event_id)) == 1
 
 
-async def test_a_player_without_the_enter_permission_is_403(
+async def test_a_player_with_zero_permissions_enters(
     api_client: AsyncClient,
     db_session: AsyncSession,
     event: TournamentEvent,
 ) -> None:
-    """Gated on ``tournament.enter`` specifically — a signed-in player who holds
-    ``tournament.view`` (so they can see the tournament they are trying to enter)
-    is still refused, and writes nothing."""
+    """Gated on nothing — #1092 deleted ``tournament.enter``: a signed-in player
+    holding no permission at all self-registers, and the entry is written."""
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_VIEW,))
+    await grant_permissions(db_session, user, ())
 
     response = await api_client.post(_entries_url(event))
 
-    assert response.status_code == 403, response.text
-    assert await _active_entries(db_session, event.id) == []
+    assert response.status_code == 201, response.text
+    assert len(await _active_entries(db_session, event.id)) == 1
 
 
 async def test_entering_a_doubles_event_is_a_400(
@@ -866,7 +871,7 @@ async def test_withdrawing_drops_the_derived_count_and_the_entrants_list(
     and entering one are separate grants.
     """
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_ENTER))
+    await grant_permissions(db_session, user, ())
     entry_id = await _enter(api_client, event)
 
     async def read_event() -> dict:
@@ -900,7 +905,7 @@ async def test_withdrawing_another_players_entry_is_a_403(
     client, _ = entrant_client
     async with make_client() as rival_client:
         rival = await start_session(rival_client, db_session)
-        await grant_permissions(db_session, rival, (TOURNAMENT_ENTER,))
+        await grant_permissions(db_session, rival, ())
         rival_entry = await _enter(rival_client, event)
         event_id, rival_id = event.id, rival.id
 
@@ -1244,7 +1249,7 @@ async def test_an_entry_cannot_land_after_the_tournament_has_gone_live(
             try:
                 # ``None`` is the body: self-registration (ADR-0784). The director's
                 # arm of the same handler takes a ``TournamentEntryCreate``.
-                await enter_event(tournament_id, event_id, None, session, entrant)
+                await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
                 return "entered"
             except HTTPException as exc:
                 return exc.status_code
@@ -1466,7 +1471,7 @@ async def test_an_uncapped_event_takes_no_capacity_count(
         entrant = (
             await session.execute(select(User).where(User.id == player_id))
         ).scalar_one()
-        await enter_event(tournament_id, event_id, None, session, entrant)
+        await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
 
     assert not any(
         "count(" in statement.lower() and "tournament_entries" in statement
@@ -1499,7 +1504,7 @@ async def test_the_capacity_count_is_taken_under_the_tournament_row_lock(
         entrant = (
             await session.execute(select(User).where(User.id == player_id))
         ).scalar_one()
-        await enter_event(tournament_id, event_id, None, session, entrant)
+        await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
 
     lock = _statement_index(
         statements, lambda s: "FOR UPDATE" in s, label="the tournament row lock"
@@ -1559,7 +1564,7 @@ async def test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry(
     # checks it inside the handler now (ADR-0784), and a contender without it would be
     # refused before it ever reached the lock — which would leave the "two entrants,
     # one slot" race with only one entrant in it, and green for the wrong reason.
-    await grant_permissions(db_session, rival, (TOURNAMENT_ENTER,))
+    await grant_permissions(db_session, rival, ())
     contenders = [player.id, rival.id]
     make_session = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -1569,7 +1574,7 @@ async def test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry(
                 await session.execute(select(User).where(User.id == user_id))
             ).scalar_one()
             try:
-                await enter_event(tournament_id, event_id, None, session, entrant)
+                await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
                 return "entered"
             except HTTPException as exc:
                 # The refusal's *code*, not just its status: a 409 that came from
@@ -1944,7 +1949,7 @@ async def test_the_owner_enters_another_player_who_appears_as_an_entrant(
     difference lives (ADR-0784).
     """
     client, owner = director_client
-    await grant_permissions(db_session, owner, (TOURNAMENT_VIEW,))
+    await grant_permissions(db_session, owner, ())
     event = await _make_event(db_session, owner=owner)
 
     response = await client.post(_entries_url(event), json={"user_id": str(player.id)})
@@ -1974,7 +1979,7 @@ async def test_the_owner_enters_a_never_active_guest(
     lookup deliberately carries no listing predicate. Delisting must not
     strand a walk-in a director can name."""
     client, owner = director_client
-    await grant_permissions(db_session, owner, (TOURNAMENT_VIEW,))
+    await grant_permissions(db_session, owner, ())
     guest = await make_user(
         db_session, f"walk-in-{uuid.uuid4().hex[:8]}", last_seen_at=None
     )
@@ -2026,7 +2031,7 @@ async def test_the_owner_withdraws_an_entry_that_is_not_their_own(
     survives, ``withdrawn``, and the entrants list drops them.
     """
     client, owner = director_client
-    await grant_permissions(db_session, owner, (TOURNAMENT_VIEW,))
+    await grant_permissions(db_session, owner, ())
     event = await _make_event(db_session, owner=owner)
     entry_id = await _seed_entry(db_session, event, player)
 
@@ -2057,7 +2062,7 @@ async def test_the_owner_entering_themselves_by_user_id_records_no_adder(
     is absent or names you.
     """
     client, owner = director_client
-    await grant_permissions(db_session, owner, (TOURNAMENT_ENTER,))
+    await grant_permissions(db_session, owner, ())
     event = await _make_event(db_session, owner=owner)
 
     response = await client.post(_entries_url(event), json={"user_id": str(owner.id)})
@@ -2092,26 +2097,23 @@ async def test_naming_your_own_user_id_is_self_registration_for_a_non_owner_too(
     assert (row.user_id, row.added_by_user_id) == (user.id, None)
 
 
-async def test_the_owner_still_needs_the_enter_permission_to_enter_themselves(
+async def test_the_owner_self_registers_like_any_other_player(
     director_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """The self-registration gate is intact, and owning the tournament does not
-    substitute for it: an owner with no ``tournament.enter`` who POSTs with **no body**
-    is refused exactly as any other player would be.
-
-    This is the test that catches the tempting simplification — "the owner may do
-    anything to their own tournament" — which would quietly hand the director an
-    entry path that skips the permission every other self-registration goes through.
-    """
+    """Owning the tournament is not an entry bypass in EITHER direction: the
+    owner POSTing with **no body** is self-registration — the same per-IP rate
+    limit, the same ordered refusals — never the unlimited director path (#1092
+    deleted ``tournament.enter``; the fork is decided by the body, ADR-0784)."""
     client, owner = director_client
     event = await _make_event(db_session, owner=owner)
     event_id = event.id
 
     response = await client.post(_entries_url(event))
 
-    assert response.status_code == 403, response.text
-    assert await _all_entries(db_session, event_id) == []
+    assert response.status_code == 201, response.text
+    (row,) = await _active_entries(db_session, event_id)
+    assert (row.user_id, row.added_by_user_id) == (owner.id, None)
 
 
 async def test_a_directors_entry_into_a_full_event_is_refused_with_event_full(
@@ -2327,7 +2329,7 @@ async def _grant_enter(db_session: AsyncSession, user: User) -> None:
     """Give ``user`` a real ``tournament.enter`` grant through RBAC rows, so the verb's
     self-path permission gate (the one query ``_require_enter_permission`` runs) is
     exercised, not stubbed."""
-    await grant_permissions(db_session, user, (TOURNAMENT_ENTER,))
+    await grant_permissions(db_session, user, ())
 
 
 async def test_verb_self_registration_succeeds_and_records_no_adder(
@@ -2376,26 +2378,23 @@ async def test_verb_naming_your_own_id_is_self_registration(
     assert (row.user_id, row.added_by_user_id) == (actor.id, None)
 
 
-async def test_verb_self_registration_without_the_permission_is_refused(
+async def test_verb_self_registration_needs_no_permission(
     db_session: AsyncSession,
 ) -> None:
-    """The self path is gated on ``tournament.enter``: an actor without it raises
-    :class:`NotAllowedToEnterError`, before the tournament is even loaded, and nothing
-    is
-    written."""
+    """An actor holding no permission at all (only the default `User` role) can
+    self-register — #1092 deleted ``tournament.enter``; every signed-in user can
+    enter a published tournament's event."""
     actor = await make_user(db_session, f"noperm-{uuid.uuid4().hex[:8]}")
     event = await _make_event(db_session)
-    event_id = event.id
 
-    with pytest.raises(NotAllowedToEnterError):
-        await enter_event_verb(
-            db_session,
-            tournament_id=event.tournament_id,
-            event_id=event_id,
-            actor=actor,
-            user_id=None,
-        )
-    assert await _all_entries(db_session, event_id) == []
+    await enter_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        actor=actor,
+        user_id=None,
+    )
+    assert len(await _active_entries(db_session, event.id)) == 1
 
 
 async def test_verb_owner_enters_another_player_recording_the_adder(
@@ -2752,27 +2751,25 @@ async def test_withdraw_verb_a_third_party_is_not_allowed_to_withdraw(
     )
 
 
-async def test_withdraw_verb_self_withdrawer_without_the_permission_is_refused(
+async def test_withdraw_verb_self_withdrawer_needs_no_permission(
     db_session: AsyncSession,
 ) -> None:
-    """The self path is gated on ``tournament.enter`` exactly as self-registration is:
-    an entrant WITHOUT it withdrawing their own entry raises
-    :class:`NotAllowedToEnterError` (the one shared self-action gate), and the entry
-    stays active."""
+    """An entrant holding no permission at all can withdraw their own entry —
+    #1092 deleted ``tournament.enter``; a self-withdraw only ever touches the
+    caller's own entry, so losing the check opens no vector."""
     entrant = await make_user(db_session, f"noperm-{uuid.uuid4().hex[:8]}")
     event = await _make_event(db_session)
     entry_id = await _seed_entry(db_session, event, entrant)
 
-    with pytest.raises(NotAllowedToEnterError):
-        await withdraw_from_event_verb(
-            db_session,
-            tournament_id=event.tournament_id,
-            event_id=event.id,
-            entry_id=entry_id,
-            actor=entrant,
-        )
+    await withdraw_from_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        entry_id=entry_id,
+        actor=entrant,
+    )
     assert (await _reread(db_session, entry_id)).status is (
-        TournamentEntryStatus.entered
+        TournamentEntryStatus.withdrawn
     )
 
 
