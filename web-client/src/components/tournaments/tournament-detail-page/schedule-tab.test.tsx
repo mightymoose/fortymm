@@ -30,6 +30,8 @@ import {
   buildTournament,
   groupIdFor,
 } from '../data/seed.factory'
+import type { ScheduleSolve, ScheduleSolveTrigger } from '../data/solve'
+import type { Tournament } from '../data/types'
 import { scheduleTabPage as page } from './schedule-tab.page'
 
 /** A drawn event with one match PLACED on table `t1` (in progress) and one still
@@ -1134,5 +1136,229 @@ describe('ScheduleTab', () => {
     })
     expect(page.queryStripState('solving')).toBeInTheDocument()
     expect(page.getRunScheduler()).toBeDisabled()
+  })
+
+  // ----- the provisional-placement contract (#1614): while the latest solve is
+  // `queued`/`running`, the placements on screen are the server's LAST ACCEPTED
+  // plan — the go-live transition commits matches and enqueues the solve before
+  // the worker applies its placements, and every other trigger shares the same
+  // asynchronous window. The tab must render that data as an update in progress
+  // (never as a finalized schedule) and withhold Place/Move, until a terminal
+  // payload — which the poll carries in without a reload — restores them. -----
+
+  /** A LIVE tournament with one placed fixture (on `t1`) and one awaiting — the
+   * go-live shape: materialized matches, placements possibly still in flight. */
+  const buildLivePartlyPlaced = (
+    solve: ScheduleSolve,
+    overrides: Partial<Tournament> = {},
+  ) =>
+    buildTournament({
+      status: 'live',
+      latestScheduleSolve: solve,
+      events: [
+        buildDrawnEvent({
+          fixtures: [
+            buildFixture({
+              id: 'fx-placed',
+              entryAId: 'entry-1',
+              entryBId: 'entry-4',
+              matchId: 'm-placed',
+              matchStatus: 'in_progress',
+              tableId: 't1',
+              scheduledStart: '2026-06-13T09:00:00',
+            }),
+            buildFixture({
+              id: 'fx-unplaced',
+              round: 2,
+              entryAId: 'entry-1',
+              entryBId: 'entry-5',
+            }),
+          ],
+        }),
+      ],
+      ...overrides,
+    })
+
+  /** An in-flight solve — `queued` or `running` — with the stage fields a run
+   * that has not finished has not reached, and the trigger naming what caused
+   * it (every trigger shares the provisional window). */
+  const buildInFlightSolve = (
+    status: 'queued' | 'running',
+    trigger: ScheduleSolveTrigger = 'go_live',
+  ) =>
+    buildScheduleSolve({
+      trigger,
+      status,
+      verdict: null,
+      startedAt: status === 'running' ? '2026-06-13T09:00:01Z' : null,
+      finishedAt: null,
+      wallTimeMs: null,
+      fixturesPlaced: null,
+      fixturesPinned: null,
+    })
+
+  it.each(['queued', 'running'] as const)(
+    'treats the rendered placements as an update in progress while the solve is %s — notice up, last-good schedule kept, Place/Move withheld',
+    (status) => {
+      page.render({
+        tournament: buildLivePartlyPlaced(buildInFlightSolve(status)),
+        tables: buildTables(),
+      })
+
+      // The visible provisional treatment, for owner and viewer alike.
+      expect(page.getPlacementUpdating()).toHaveTextContent(
+        'Placement updates in progress',
+      )
+      // The last-good schedule is still on screen — provisional, not hidden.
+      expect(page.matchIdsIn(page.getTableColumn('t1'))).toEqual(['fx-placed'])
+      expect(page.matchIdsIn(page.getAwaiting())).toEqual(['fx-unplaced'])
+      // And it is NOT actionable: no Place on the awaiting row, no Move on the
+      // placed one — acting on either would act on data a landing solve may
+      // replace.
+      expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+      expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
+    },
+  )
+
+  it.each([
+    'go_live',
+    'match_completed',
+    'settings_changed',
+    'manual',
+    'pin_tick',
+    'rerun',
+  ] as const)(
+    'withholds placement actions for a %s solve too — every trigger shares the provisional window',
+    (trigger) => {
+      page.render({
+        tournament: buildLivePartlyPlaced(buildInFlightSolve('queued', trigger)),
+        tables: buildTables(),
+      })
+      expect(page.getPlacementUpdating()).toBeInTheDocument()
+      expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+      expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
+    },
+  )
+
+  it('shows a non-owner the in-progress notice and no editing controls — the provisional state is a view too (ADR-0015)', () => {
+    page.render({
+      tournament: buildLivePartlyPlaced(buildInFlightSolve('running'), {
+        canEdit: false,
+      }),
+      tables: buildTables(),
+    })
+    // The in-progress state is visible to a viewer…
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    // …and the sweep proves the notice introduced no control of its own.
+    expect(page.getEditingControls()).toHaveLength(0)
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+  })
+
+  it.each(['succeeded', 'infeasible', 'failed'] as const)(
+    'restores placement actions once the solve lands %s — and takes the notice down',
+    (status) => {
+      page.render({
+        tournament: buildLivePartlyPlaced(buildInFlightSolve('queued')),
+        tables: buildTables(),
+      })
+      expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+
+      // The poll lands the terminal row: one fresh detail payload, the tab
+      // re-renders, and the director can place again (an `infeasible`/`failed`
+      // outcome leaves the fixtures genuinely unplaced — manual placement is
+      // exactly the recovery).
+      page.rerender({
+        tournament: buildLivePartlyPlaced(
+          buildScheduleSolve({ trigger: 'go_live', status }),
+        ),
+      })
+      expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+      expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+      expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+    },
+  )
+
+  it('reconciles the open tab to the fresh placements when the go-live solve lands — the race, without a reload', () => {
+    // The reported race, in data: the go-live transition commits the live
+    // status and materializes the matches BEFORE the worker applies its
+    // placements, so the tab's pre-apply snapshot holds a live tournament whose
+    // match is `in_progress` but whose fixture is still unplaced — solve queued.
+    const raceEvent = (autoPlaced: boolean) =>
+      buildDrawnEvent({
+        fixtures: [
+          buildFixture({
+            id: 'fx-auto',
+            entryAId: 'entry-1',
+            entryBId: 'entry-4',
+            matchId: 'm-auto',
+            matchStatus: 'in_progress',
+            tableId: autoPlaced ? 't1' : null,
+            scheduledStart: autoPlaced ? '2026-06-13T09:00:00' : null,
+            pinnedAt: autoPlaced ? '2026-06-13T08:50:00' : null,
+            callNotifiedCount: autoPlaced ? 1 : 0,
+          }),
+          buildFixture({
+            id: 'fx-manual',
+            round: 2,
+            entryAId: 'entry-1',
+            entryBId: 'entry-5',
+          }),
+        ],
+      })
+    const race = (autoPlaced: boolean, solve: ScheduleSolve) =>
+      buildTournament({
+        status: 'live',
+        latestScheduleSolve: solve,
+        events: [raceEvent(autoPlaced)],
+      })
+
+    page.render({
+      tournament: race(false, buildInFlightSolve('queued')),
+      tables: buildTables(),
+    })
+    // The provisional snapshot: the auto-called match reads as its fixture's
+    // last-known placement — still awaiting, still offered (to the owner) the
+    // very action this ticket withholds.
+    expect(page.matchIdsIn(page.getAwaiting())).toEqual(['fx-auto', 'fx-manual'])
+    expect(page.queryTableColumn('t1')).not.toBeInTheDocument()
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-auto')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-manual')).not.toBeInTheDocument()
+
+    // The worker commits; the next poll lands ONE fresh detail payload carrying
+    // both the terminal solve and the fixtures it placed. The same open tab
+    // recomputes — no reload, no tab change, no navigation.
+    page.rerender({
+      tournament: race(
+        true,
+        buildScheduleSolve({ trigger: 'go_live', status: 'succeeded', verdict: 'optimal' }),
+      ),
+    })
+
+    // The auto-called fixture is under its table — never "Awaiting placement" —
+    // and is not offered a Place action (it is placed; its affordance, if read,
+    // is Move).
+    expect(page.matchIdsIn(page.getTableColumn('t1'))).toEqual(['fx-auto'])
+    expect(page.matchIdsIn(page.getAwaiting())).toEqual(['fx-manual'])
+    expect(page.getPlaceTrigger('fx-auto')).toHaveTextContent('Move')
+    // The genuinely unplaced fixture's manual action is back, and the
+    // provisional treatment is gone.
+    expect(page.getPlaceTrigger('fx-manual')).toHaveTextContent('Place')
+    expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+  })
+
+  it('keeps placement actions withheld when a background refetch fails after an in-flight snapshot', () => {
+    // A failed refetch leaves the LAST-GOOD payload in the cache — the tab
+    // re-renders with the same queued solve, and the suppression must hold:
+    // stale actions must not become available merely because a newer response
+    // could not be obtained.
+    page.render({
+      tournament: buildLivePartlyPlaced(buildInFlightSolve('queued')),
+      tables: buildTables(),
+    })
+    page.rerender({})
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
   })
 })

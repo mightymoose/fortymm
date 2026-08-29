@@ -1,5 +1,12 @@
 import { interactiveElementsIn } from '@/test/read-only'
-import { fireEvent, render, screen, within, type Container } from '@/test/utilities'
+import {
+  fireEvent,
+  render,
+  screen,
+  within,
+  type Container,
+  type RenderResult,
+} from '@/test/utilities'
 
 import { confirmCallDialogPage } from './confirm-call-dialog.page'
 import { ScheduleTab, type ScheduleTabProps } from './schedule-tab'
@@ -181,6 +188,16 @@ const scoped = (container: Container) => ({
     return container.queryByTestId('run-scheduler-notice')
   },
 
+  /** The **Placement updates in progress** notice — on while the latest solve
+   * is queued/running and the placements on screen are provisional (owner and
+   * viewer alike), gone once a terminal solve lands. */
+  getPlacementUpdating() {
+    return container.getByTestId('schedule-placement-updating')
+  },
+  queryPlacementUpdating() {
+    return container.queryByTestId('schedule-placement-updating')
+  },
+
   /** EVERY interactive control in the tab — the sweep a "a non-owner is offered nothing"
    * guard needs (ADR-0015: no control at all, not a disabled one). */
   getControls() {
@@ -244,9 +261,27 @@ const scoped = (container: Container) => ({
  * (`@/mocks/endpoints/tournaments/tournaments.endpoint`). Rendering alone fetches
  * nothing: the schedule is derived from the tournament it is handed.
  */
+/** The last render's view and props, so `rerender` can deliver a fresh payload
+ * the way the poll does — same mounted component, new `tournament`. */
+let currentView: RenderResult | null = null
+let currentProps: Partial<ScheduleTabProps> | null = null
+
 export const scheduleTabPage = {
   render(overrides: Partial<ScheduleTabProps> = {}) {
-    render(<ScheduleTab {...buildScheduleTabProps(overrides)} />)
+    currentProps = overrides
+    currentView = render(<ScheduleTab {...buildScheduleTabProps(overrides)} />)
+    return currentView
+  },
+
+  /** Re-render with fresh props — the poll delivering a fresh tournament-detail
+   * payload to the already-open tab, no remount. Overrides merge onto the last
+   * render's, so a test states only what changed. */
+  rerender(overrides: Partial<ScheduleTabProps> = {}) {
+    if (currentView === null || currentProps === null) {
+      throw new Error('scheduleTabPage.render must run before rerender')
+    }
+    currentProps = { ...currentProps, ...overrides }
+    currentView.rerender(<ScheduleTab {...buildScheduleTabProps(currentProps)} />)
   },
 
   ...scoped(screen),
