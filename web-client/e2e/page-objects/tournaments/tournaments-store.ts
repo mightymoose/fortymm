@@ -1,7 +1,6 @@
 import type { Page, Route } from '@playwright/test'
 
 import type { components } from '../../../src/api/schema'
-import { PERM } from '../../../src/lib/permissions'
 import {
   manualPlacementPin,
   NO_DRAWN_EVENTS_MESSAGE,
@@ -808,8 +807,8 @@ function gatedEvents(): TournamentEventRead[] {
 }
 
 export interface TournamentsStoreOptions {
-  /** The signed-in player's permissions. Defaults to a beta tester (can enter).
-   * Pass `[PERM.TOURNAMENT_VIEW]` for the "no Enter control" case. */
+  /** The signed-in player's permissions. Defaults to a real default user —
+   * none at all (entering needs no permission, #1092). */
   permissions?: string[]
   /** Add `EVENT.CROWDED` — a singles event already holding more entrants than a
    * card can list, so entering it puts me past the truncation cut-off. */
@@ -1753,10 +1752,7 @@ export class TournamentsStore {
     return sessionResponse({
       user: {
         username: ME.username,
-        permissions: this.options.permissions ?? [
-          PERM.TOURNAMENT_VIEW,
-          PERM.TOURNAMENT_ENTER,
-        ],
+        permissions: this.options.permissions ?? [],
       },
     })
   }

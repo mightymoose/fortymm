@@ -26,7 +26,7 @@ export class TournamentsListPage {
    * this page object exists to press. */
   static async navigateTo(page: Page, options: TournamentsStoreOptions = {}) {
     const store = new TournamentsStore({
-      permissions: [PERM.TOURNAMENT_VIEW, PERM.TOURNAMENT_CREATE],
+      permissions: [PERM.TOURNAMENT_CREATE],
       ...options,
     })
     await store.install(page)

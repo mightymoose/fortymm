@@ -100,10 +100,10 @@ const NAV_SECTIONS: NavSection[] = [
       },
       {
         // Top-level (not nested under Administration, which requires
-        // ADMIN_VIEW) so a Beta tester with `tournament.view` sees it.
+        // ADMIN_VIEW) and ungated: viewing tournaments needs no permission
+        // (#1092), so the item renders for every signed-in user.
         label: 'Tournaments',
         to: '/tournaments',
-        requires: PERM.TOURNAMENT_VIEW,
         icon: <Trophy size={18} strokeWidth={2} />,
       },
       {

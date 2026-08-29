@@ -52,7 +52,7 @@ from app.models import (
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
+from app.tournaments import TOURNAMENT_CREATE
 from tests._helpers import (
     event_groups,
     grant_permissions,
@@ -74,7 +74,7 @@ async def authed_client(
     ``tournament.view`` + ``tournament.create`` — the tournaments-router
     convention (the transitions route itself is owner-gated)."""
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_CREATE))
+    await grant_permissions(db_session, user, (TOURNAMENT_CREATE,))
     yield api_client, user
 
 

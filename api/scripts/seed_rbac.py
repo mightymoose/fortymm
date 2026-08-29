@@ -18,9 +18,7 @@ from app.roles import converge_default_role
 PERMISSIONS = [
     ("administration.view", "Open the Administration area and see the overview."),
     ("authorization.manage", "Manage roles, permissions, and user role assignments."),
-    ("tournament.view", "See the tournament list and tournament details."),
     ("tournament.create", "Create a new tournament."),
-    ("tournament.enter", "Enter a tournament event as a player."),
     ("notifications.broadcast", "Send broadcast notifications to players."),
     ("scheduling.view", "See the schedule-solve ledger in the Administration area."),
     ("mcp.access", "Connect an agent to the MCP server over Auth0 OAuth."),
@@ -42,9 +40,11 @@ ROLES = [
     ),
     (
         "Beta tester",
-        "Early-access testers who can view, create, and enter tournaments. Editing,"
-        " publishing, and deleting a tournament is reserved for its creator.",
-        ["tournament.view", "tournament.create", "tournament.enter", "mcp.access"],
+        "Early-access testers who can create tournaments. Viewing a published"
+        " tournament and entering one of its events needs no grant — every"
+        " signed-in user can. Editing, publishing, and deleting a tournament is"
+        " reserved for its creator.",
+        ["tournament.create", "mcp.access"],
     ),
 ]
 

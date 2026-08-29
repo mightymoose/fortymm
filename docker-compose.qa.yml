@@ -99,6 +99,11 @@ services:
       # request_solve() reads this to size the RQ job_timeout, so the api
       # service needs it too, not just the worker that runs the solve itself.
       SOLVER_TIME_CAP_S: ${SOLVER_TIME_CAP_S:-10}
+      # A QA pass runs from one host (one IP), and seeds players that enter
+      # events, so the per-IP self-entry ceiling must never fire mid-pass
+      # (#1092, the #1552 lesson — a limiter that fires in test reads as a
+      # product bug).
+      TOURNAMENT_ENTRY_IP_PER_HOUR: "1000000"
       # Venue geocoding provider. QA asks for the deterministic, network-free
       # FakeGeocoder BY NAME: selecting it by the absence of a Google key fails
       # silently open, so an environment meant to geocode for real quietly

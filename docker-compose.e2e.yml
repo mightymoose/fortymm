@@ -19,6 +19,9 @@ services:
     ports: !reset []
     environment:
       GEOCODER: fake
+      # The whole e2e suite is one host from the api's point of view, so the
+      # per-IP self-entry ceiling must never fire mid-suite (the #1552 lesson).
+      TOURNAMENT_ENTRY_IP_PER_HOUR: "1000000"
   worker:
     environment:
       GEOCODER: fake

@@ -6,18 +6,14 @@
 export const PERM = {
   ADMIN_VIEW: 'administration.view',
   AUTH_MANAGE: 'authorization.manage',
-  // Tournaments split: viewing the area, creating tournaments, and entering an
-  // event as a player are the permission grants. Editing, deleting, and
-  // publishing a tournament are owner-only on the server (the creator), driven
-  // by the `canEdit` flag on the tournament payload — there is intentionally no
-  // edit/delete/publish perm.
-  //
-  // TOURNAMENT_ENTER is the odd one out: it gates a *non-owner* mutation (a
-  // player self-registering into someone else's tournament), so it can't ride on
-  // `canEdit`. See ADR-0016.
-  TOURNAMENT_VIEW: 'tournament.view',
+  // Tournament creation is the one permission-gated tournament capability.
+  // Viewing a published tournament and entering one of its events need no
+  // permission (#1092 deleted `tournament.view`/`tournament.enter`) — every
+  // signed-in user can, and self-entry is bounded server-side by a per-IP rate
+  // limit instead. Editing, deleting, and publishing a tournament are owner-only
+  // on the server (the creator), driven by the `canEdit` flag on the tournament
+  // payload — there is intentionally no edit/delete/publish perm.
   TOURNAMENT_CREATE: 'tournament.create',
-  TOURNAMENT_ENTER: 'tournament.enter',
   NOTIFICATIONS_BROADCAST: 'notifications.broadcast',
   // Gates the Administration area's schedule-solve ledger page — its own grant
   // (like notifications.broadcast) so an operator can hand out ledger read

@@ -48,9 +48,10 @@ const EVENT_NAME = 'Open Singles'
  * ## RBAC
  *
  * A minted user holds only the default `User` role, which carries no permissions.
- * `grantBetaTester` hands the director the `tournament.view`/`create`/`enter`
- * bundle over the stack's own `postgres` container before any tournament write —
- * without it every one of them 403s. On an external `E2E_BASE_URL` stack the grant
+ * `grantBetaTester` hands the director the `tournament.create` grant (the Beta
+ * tester role) over the stack's own `postgres` container before any tournament
+ * write — without it the create 403s (viewing a published tournament and entering
+ * one need no grant, #1092). On an external `E2E_BASE_URL` stack the grant
  * is skipped (the caller must arrange it), and the API seed's 403 is the honest
  * signal if they did not.
  */

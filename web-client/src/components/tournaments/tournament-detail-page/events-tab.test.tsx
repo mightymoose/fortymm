@@ -55,8 +55,9 @@ describe('EventsTab', () => {
     expect(eventsTabPage.queryNewEventButtons()).toHaveLength(0)
   })
 
-  // The default MSW session is `rita.kovac`, a beta tester holding
-  // `tournament.enter` — and she is not among the seeded entrants.
+  // The default MSW session is `rita.kovac`, a default user holding no
+  // permissions (entering needs none, #1092) — and she is not among the seeded
+  // entrants.
   describe('the self-registration control on each card', () => {
     it('offers Enter on a singles event', async () => {
       eventsTabPage.render({
@@ -117,7 +118,7 @@ describe('EventsTab', () => {
     // The seam this merge creates. ADR 0015 says a non-owner gets a *rendering,
     // not controls* — and its guards assert zero interactive controls in the
     // editor panels. Entering is not one of those controls: it is a PLAYER
-    // affordance gated on `tournament.enter`, not an OWNER one gated on
+    // affordance, not an OWNER one gated on
     // `canEdit`, and self-registration is by definition something you do to
     // someone else's tournament. So the non-owner who gets the read-only view
     // must still get Enter. (`EnterEventControl` never reads `canEdit`; this

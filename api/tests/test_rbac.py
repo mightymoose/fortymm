@@ -21,7 +21,7 @@ from app.models import (
 from app.rbac import _require_rbac
 from app.roles import DEFAULT_ROLE_NAME, converge_default_role
 from app.sessions import get_current_user
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
+from app.tournaments import TOURNAMENT_CREATE
 from scripts import seed_rbac
 from tests._helpers import CSRF_EVENT_HOOKS
 
@@ -860,23 +860,25 @@ async def _role_permission_names(db: AsyncSession, role_name: str) -> list[str]:
     return sorted(names)
 
 
-async def test_seed_grants_beta_tester_the_tournament_permissions(
+async def test_seed_grants_beta_tester_the_tournament_create_permission(
     db_session: AsyncSession,
 ):
-    """A freshly seeded database lets a Beta tester enter a tournament as well
-    as view and create one — self-registration is gated on its own permission
-    (#781), since a player entering themselves is not the tournament's owner.
-    The bundle also carries `mcp.access` so early-access testers can connect an
-    agent to the MCP server."""
+    """A freshly seeded database lets a Beta tester create tournaments — the one
+    tournament capability still permission-gated (#1092 deleted
+    ``tournament.view`` and ``tournament.enter``; viewing a published tournament
+    and entering one is open to every signed-in user). The bundle also carries
+    `mcp.access` so early-access testers can connect an agent to the MCP server."""
     counts = await seed_rbac.upsert_rbac(db_session)
     await db_session.commit()
     assert counts.permissions == len(seed_rbac.PERMISSIONS)
     assert counts.roles == len(seed_rbac.ROLES)
 
     granted = await _role_permission_names(db_session, BETA_TESTER)
-    assert granted == sorted(
-        [TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER, MCP_ACCESS]
-    )
+    assert granted == sorted([TOURNAMENT_CREATE, MCP_ACCESS])
+
+    seeded_names = {name for name, _ in seed_rbac.PERMISSIONS}
+    assert "tournament.view" not in seeded_names
+    assert "tournament.enter" not in seeded_names
 
 
 async def test_seed_is_idempotent(db_session: AsyncSession):
@@ -891,7 +893,7 @@ async def test_seed_is_idempotent(db_session: AsyncSession):
     perms = (
         (
             await db_session.execute(
-                select(Permission).where(Permission.name == TOURNAMENT_ENTER)
+                select(Permission).where(Permission.name == TOURNAMENT_CREATE)
             )
         )
         .scalars()
@@ -912,7 +914,7 @@ async def test_seed_is_idempotent(db_session: AsyncSession):
     )
     assert len(links) == 1
     assert await _role_permission_names(db_session, BETA_TESTER) == sorted(
-        [TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER, MCP_ACCESS]
+        [TOURNAMENT_CREATE, MCP_ACCESS]
     )
 
 
@@ -920,8 +922,9 @@ async def test_seed_does_not_grant_tournament_permissions_to_the_default_role(
     db_session: AsyncSession,
 ):
     """Every user holds the default `User` role (ADR-0016), so it must stay a
-    zero-permission lever — seeding `tournament.enter` must not hand tournament
-    access to the entire population. Beta tester is the opt-in bundle."""
+    zero-permission lever — no seeded grant may hand a capability to the entire
+    population (which is why #1092 deleted `tournament.view`/`tournament.enter`
+    outright rather than granting them here). Beta tester is the opt-in bundle."""
     await seed_rbac.upsert_rbac(db_session)
     await converge_default_role(db_session)
     await db_session.commit()
