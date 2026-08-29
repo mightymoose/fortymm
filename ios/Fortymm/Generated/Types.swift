@@ -4661,6 +4661,37 @@ internal enum Components {
                 case owedAction = "owed_action"
             }
         }
+        /// A tournament's date span, derived on every read from the min/max of its
+        /// events' own ``slot.date`` (#1511) — never a stored, independently-writable
+        /// pair. Both fields are required and non-optional **on this object**: a range
+        /// that exists at all always has both ends, because it is the min and the max
+        /// of one non-empty list, never two independently-typed facts that could
+        /// disagree or go half-set. See :attr:`TournamentDetailRead.date_range` for why
+        /// the object itself is nullable.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DateRange`.
+        internal struct DateRange: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DateRange/start`.
+            internal var start: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DateRange/end`.
+            internal var end: Swift.String
+            /// Creates a new `DateRange`.
+            ///
+            /// - Parameters:
+            ///   - start:
+            ///   - end:
+            internal init(
+                start: Swift.String,
+                end: Swift.String
+            ) {
+                self.start = start
+                self.end = end
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case start
+                case end
+            }
+        }
         /// Confirmation that the device token is registered to the current user.
         ///
         /// - Remark: Generated from `#/components/schemas/DeviceTokenResponse`.
@@ -10727,10 +10758,6 @@ internal enum Components {
             internal var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/description`.
             internal var description: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentCreate/start_date`.
-            internal var startDate: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentCreate/end_date`.
-            internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentCreate/address/value1`.
@@ -10760,24 +10787,18 @@ internal enum Components {
             /// - Parameters:
             ///   - name:
             ///   - description:
-            ///   - startDate:
-            ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
             ///   - leagueId:
             internal init(
                 name: Swift.String,
                 description: Swift.String? = nil,
-                startDate: Swift.String? = nil,
-                endDate: Swift.String? = nil,
                 address: Components.Schemas.TournamentCreate.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTableWrite]? = nil,
                 leagueId: Swift.String? = nil
             ) {
                 self.name = name
                 self.description = description
-                self.startDate = startDate
-                self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
                 self.leagueId = leagueId
@@ -10785,8 +10806,6 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case name
                 case description
-                case startDate = "start_date"
-                case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
                 case leagueId = "league_id"
@@ -10800,14 +10819,6 @@ internal enum Components {
                 self.description = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .description
-                )
-                self.startDate = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .startDate
-                )
-                self.endDate = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .endDate
                 )
                 self.address = try container.decodeIfPresent(
                     Components.Schemas.TournamentCreate.AddressPayload.self,
@@ -10824,8 +10835,6 @@ internal enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "description",
-                    "start_date",
-                    "end_date",
                     "address",
                     "table_catalogue",
                     "league_id"
@@ -10842,10 +10851,6 @@ internal enum Components {
             internal var description: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/status`.
             internal var status: Components.Schemas.TournamentStatus
-            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/start_date`.
-            internal var startDate: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/end_date`.
-            internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address/value1`.
@@ -10882,6 +10887,26 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/events`.
             internal var events: [Components.Schemas.TournamentEventRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/date_range`.
+            internal struct DateRangePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/date_range/value1`.
+                internal var value1: Components.Schemas.DateRange
+                /// Creates a new `DateRangePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.DateRange) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/date_range`.
+            internal var dateRange: Components.Schemas.TournamentDetailRead.DateRangePayload?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/distance_miles`.
             internal var distanceMiles: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/latest_schedule_solve`.
@@ -10913,8 +10938,6 @@ internal enum Components {
             ///   - name:
             ///   - description:
             ///   - status:
-            ///   - startDate:
-            ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
             ///   - leagueId:
@@ -10924,6 +10947,7 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - events:
+            ///   - dateRange:
             ///   - distanceMiles:
             ///   - latestScheduleSolve:
             ///   - drawTypeCatalogue:
@@ -10932,8 +10956,6 @@ internal enum Components {
                 name: Swift.String,
                 description: Swift.String? = nil,
                 status: Components.Schemas.TournamentStatus,
-                startDate: Swift.String? = nil,
-                endDate: Swift.String? = nil,
                 address: Components.Schemas.TournamentDetailRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,
@@ -10943,6 +10965,7 @@ internal enum Components {
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 events: [Components.Schemas.TournamentEventRead],
+                dateRange: Components.Schemas.TournamentDetailRead.DateRangePayload? = nil,
                 distanceMiles: Swift.Double? = nil,
                 latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload? = nil,
                 drawTypeCatalogue: [Components.Schemas.DrawTypeRead]? = nil
@@ -10951,8 +10974,6 @@ internal enum Components {
                 self.name = name
                 self.description = description
                 self.status = status
-                self.startDate = startDate
-                self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
                 self.leagueId = leagueId
@@ -10962,6 +10983,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.events = events
+                self.dateRange = dateRange
                 self.distanceMiles = distanceMiles
                 self.latestScheduleSolve = latestScheduleSolve
                 self.drawTypeCatalogue = drawTypeCatalogue
@@ -10971,8 +10993,6 @@ internal enum Components {
                 case name
                 case description
                 case status
-                case startDate = "start_date"
-                case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
                 case leagueId = "league_id"
@@ -10982,6 +11002,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case events
+                case dateRange = "date_range"
                 case distanceMiles = "distance_miles"
                 case latestScheduleSolve = "latest_schedule_solve"
                 case drawTypeCatalogue = "draw_type_catalogue"
@@ -12144,10 +12165,6 @@ internal enum Components {
             internal var description: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentRead/status`.
             internal var status: Components.Schemas.TournamentStatus
-            /// - Remark: Generated from `#/components/schemas/TournamentRead/start_date`.
-            internal var startDate: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentRead/end_date`.
-            internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentRead/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentRead/address/value1`.
@@ -12189,8 +12206,6 @@ internal enum Components {
             ///   - name:
             ///   - description:
             ///   - status:
-            ///   - startDate:
-            ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
             ///   - leagueId:
@@ -12204,8 +12219,6 @@ internal enum Components {
                 name: Swift.String,
                 description: Swift.String? = nil,
                 status: Components.Schemas.TournamentStatus,
-                startDate: Swift.String? = nil,
-                endDate: Swift.String? = nil,
                 address: Components.Schemas.TournamentRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,
@@ -12219,8 +12232,6 @@ internal enum Components {
                 self.name = name
                 self.description = description
                 self.status = status
-                self.startDate = startDate
-                self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
                 self.leagueId = leagueId
@@ -12235,8 +12246,6 @@ internal enum Components {
                 case name
                 case description
                 case status
-                case startDate = "start_date"
-                case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
                 case leagueId = "league_id"
@@ -12498,8 +12507,14 @@ internal enum Components {
         /// value replaces the current one. ``name`` maps to a NOT NULL column and
         /// ``table_catalogue`` to a whole child table, so for those an explicit ``null`` is
         /// rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
-        /// are different. ``description``/``start_date``/``end_date`` are nullable
-        /// columns and may be cleared.
+        /// are different. ``description`` is a nullable column and may be cleared.
+        ///
+        /// There is deliberately no ``start_date``/``end_date`` here (#1511, "A
+        /// tournament's dates run backwards, and an event can sit outside them"). A
+        /// tournament's date range is derived from its events' own ``slot.date`` on
+        /// every read, never a typed, independently-writable input — sending either
+        /// field is a 422 (``extra="forbid"`` below), naming the refused field. Move an
+        /// event's own date by editing that event's ``slot`` instead.
         ///
         /// ``table_catalogue``, when present, is the catalogue **in full and in order**, and it
         /// is applied as an **id-keyed diff** (ADR 20260801): an entry that cites an ``id``
@@ -12543,10 +12558,6 @@ internal enum Components {
             internal var name: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/description`.
             internal var description: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentUpdate/start_date`.
-            internal var startDate: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentUpdate/end_date`.
-            internal var endDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentUpdate/address/value1`.
@@ -12578,8 +12589,6 @@ internal enum Components {
             /// - Parameters:
             ///   - name:
             ///   - description:
-            ///   - startDate:
-            ///   - endDate:
             ///   - address:
             ///   - tableCatalogue:
             ///   - leagueId:
@@ -12587,8 +12596,6 @@ internal enum Components {
             internal init(
                 name: Swift.String? = nil,
                 description: Swift.String? = nil,
-                startDate: Swift.String? = nil,
-                endDate: Swift.String? = nil,
                 address: Components.Schemas.TournamentUpdate.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTableUpsert]? = nil,
                 leagueId: Swift.String? = nil,
@@ -12596,8 +12603,6 @@ internal enum Components {
             ) {
                 self.name = name
                 self.description = description
-                self.startDate = startDate
-                self.endDate = endDate
                 self.address = address
                 self.tableCatalogue = tableCatalogue
                 self.leagueId = leagueId
@@ -12606,8 +12611,6 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case name
                 case description
-                case startDate = "start_date"
-                case endDate = "end_date"
                 case address
                 case tableCatalogue = "table_catalogue"
                 case leagueId = "league_id"
@@ -12622,14 +12625,6 @@ internal enum Components {
                 self.description = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .description
-                )
-                self.startDate = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .startDate
-                )
-                self.endDate = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .endDate
                 )
                 self.address = try container.decodeIfPresent(
                     Components.Schemas.TournamentUpdate.AddressPayload.self,
@@ -12650,8 +12645,6 @@ internal enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "description",
-                    "start_date",
-                    "end_date",
                     "address",
                     "table_catalogue",
                     "league_id",

@@ -27,7 +27,9 @@ export const DASHBOARD_QUERY_KEY = ['dashboard'] as const
  * The dashboard endpoint requires an established session (it never mints
  * one), so callers in components that mount before the session resolves
  * pass `enabled: session.isSuccess` to avoid a first-visit 401 race.
- * Throws on failure so the surrounding boundary can render a retry.
+ * Surfaces an initial-load failure (no cached data) to the surrounding
+ * boundary for a retry; a background-refetch failure over an already-rendered
+ * dashboard keeps the last-good view instead (#1468).
  */
 export function useDashboard(options: { enabled?: boolean } = {}) {
   return useQuery({
@@ -36,6 +38,12 @@ export function useDashboard(options: { enabled?: boolean } = {}) {
       unwrap('load dashboard', await api.GET('/v1/dashboard')),
     enabled: options.enabled ?? true,
     retry: false,
-    throwOnError: true,
+    // Throw only when there is no cached data to fall back on. An
+    // initial-load failure (no cached data) surfaces to the boundary for a
+    // retry; a background refetch failure over an already-rendered dashboard
+    // must not — see the "`throwOnError` also throws on a background
+    // refetch" section of web-client/CLAUDE.md (mirrors #843's fix in
+    // `matchQueryOptions`).
+    throwOnError: (_error, query) => query.state.data === undefined,
   })
 }

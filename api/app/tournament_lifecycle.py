@@ -174,8 +174,6 @@ async def create_tournament(
     tournament = Tournament(
         name=payload.name,
         description=payload.description,
-        start_date=payload.start_date,
-        end_date=payload.end_date,
         address=address.model_dump() if address is not None else None,
         # The catalogue is child ROWS now (ADR 20260801), not a JSONB column, and the
         # ids on them are the database's — ``stored_tables`` sets no id, only the

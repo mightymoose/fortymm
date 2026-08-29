@@ -187,11 +187,20 @@ async def build_tournament_panels(
                 stage_draw_types=stage_draw_types,
             )
         )
+    # ONE batched aggregate for every tournament shown, however many that is — the
+    # panel's own entries/events above are the caller's ENTERED events only (a
+    # tournament's date range spans ALL of its events, #1511), so this cannot reuse
+    # them and has to be its own query. Grouped by tournament id rather than one
+    # query per tournament in the loop below, which the statement-count tripwire in
+    # ``tests/test_dashboard_tournaments.py`` would catch.
+    date_ranges = await _date_ranges(db, list(tournaments.keys()))
     return [
         DashboardTournament(
             id=tournament_id,
             name=tournaments[tournament_id].name,
-            subtitle=_subtitle(tournaments[tournament_id]),
+            subtitle=_subtitle(
+                tournaments[tournament_id], date_ranges.get(tournament_id)
+            ),
             live_count=sum(1 for e in panel_events if e.is_live),
             events=panel_events,
         )
@@ -815,7 +824,7 @@ def _sorted_by_effective_time(
     return sorted(fixtures, key=key)
 
 
-def _subtitle(tournament: Tournament) -> str:
+def _subtitle(tournament: Tournament, date_range: tuple[date, date] | None) -> str:
     """The panel's second line: the venue and the dates, e.g.
     ``"Riverside TTC · Jul 24–25"``.
 
@@ -823,10 +832,15 @@ def _subtitle(tournament: Tournament) -> str:
     into one sentence, and every client that folded them itself would fold them
     slightly differently.
 
+    ``date_range`` is the tournament's derived span (#1511) — the caller's own batched
+    aggregate, since this tournament's row carries no dates of its own to read.
+
     Every part is optional, including the venue (:func:`_venue`), so this degrades all
     the way down: a dated tournament with no venue is ``"Jul 24–25"``, and one with
     neither is the empty string."""
-    parts = [part for part in (_venue(tournament), _date_range(tournament)) if part]
+    parts = [
+        part for part in (_venue(tournament), _format_date_range(date_range)) if part
+    ]
     return " · ".join(parts)
 
 
@@ -884,15 +898,82 @@ def _venue(tournament: Tournament) -> str | None:
         return None
 
 
-def _date_range(tournament: Tournament) -> str | None:
-    start, end = tournament.start_date, tournament.end_date
-    if start is None:
+def _format_date_range(date_range: tuple[date, date] | None) -> str | None:
+    """``date_range`` rendered as the subtitle's date segment, or ``None`` for an
+    event-less tournament (#1511) — ``date_range`` is ``None`` in that case, and only
+    that case, since :func:`_date_ranges` is a min/max over a tournament's events."""
+    if date_range is None:
         return None
-    if end is None or end == start:
+    start, end = date_range
+    if end == start:
         return _short_date(start)
     if (start.year, start.month) == (end.year, end.month):
         return f"{_short_date(start)}–{end.day}"
     return f"{_short_date(start)}–{_short_date(end)}"
+
+
+async def _date_ranges(
+    db: AsyncSession, tournament_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, tuple[date, date]]:
+    """Every one of ``tournament_ids``' derived date spans (#1511), in ONE statement
+    regardless of how many tournaments are asked for — the panel's own entries/events
+    are the caller's ENTERED events only, so they cannot stand in for "every event of
+    this tournament" the way the tournament-detail page's own event list can
+    (``app.tournament_serialization._events_date_range``); this is the panel's own
+    batched read of every SHOWN tournament's full event set.
+
+    A tournament with no events at all is simply absent from the returned dict — the
+    caller reads that as ``None`` via ``.get(tournament_id)``, matching
+    :func:`_format_date_range`'s reading of ``None``.
+
+    Reduced to a min/max in PYTHON, per tournament, rather than asked of Postgres as
+    ``MIN``/``MAX(slot->>'date')`` grouped by tournament id. Both read the same rows,
+    but only the Python reduction can apply the SAME per-row exclusion
+    ``app.tournament_serialization._events_date_range`` does: a stored ``slot.date``
+    that a legacy or hand-written row holds and ``date.fromisoformat`` refuses is
+    dropped and logged ONE EVENT AT A TIME, so the tournament's range still comes
+    from whichever of its other events parse. A SQL aggregate cannot do that —
+    comparing ``slot->>'date'`` as TEXT means one garbled value can become the
+    ``MIN`` or the ``MAX`` outright (an empty string sorts before every real date;
+    most letters sort after), which would silently drop the WHOLE tournament's range
+    over the one bad row rather than just that row — and whether it does depends on
+    where the garbage happens to sort, not on whether it parses."""
+    if not tournament_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                TournamentEvent.id,
+                TournamentEvent.tournament_id,
+                TournamentEvent.slot["date"].astext,
+            ).where(TournamentEvent.tournament_id.in_(tournament_ids))
+        )
+    ).all()
+    dates_by_tournament: dict[uuid.UUID, list[date]] = defaultdict(list)
+    for event_id, tournament_id, raw in rows:
+        # Parsed BEFORE the defaultdict is touched: `dict[key].append(...)` would
+        # evaluate the subscript first, planting an EMPTY list for a tournament
+        # whose every event fails to parse — the closing `min()`/`max()` below
+        # would then 500 on that empty list instead of leaving the tournament
+        # absent, exactly the "only event has an unparseable date" corner the
+        # Implementation Notes named as unreachable through the write boundary
+        # but real once a row is corrupted directly.
+        try:
+            parsed = date.fromisoformat(raw)
+        except (TypeError, ValueError):
+            log.error(
+                "Tournament event %s has a slot.date that does not parse (%r); "
+                "excluded from tournament %s's dashboard date range",
+                event_id,
+                raw,
+                tournament_id,
+            )
+            continue
+        dates_by_tournament[tournament_id].append(parsed)
+    return {
+        tournament_id: (min(dates), max(dates))
+        for tournament_id, dates in dates_by_tournament.items()
+    }
 
 
 def _short_date(value: date) -> str:

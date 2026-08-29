@@ -32,6 +32,29 @@ describe('TournamentCard', () => {
     )
   })
 
+  // #1511: `dateRange` is `null` iff the tournament holds no events — a
+  // server-derived state, never a client re-derivation over the events array.
+  describe('the date range', () => {
+    it('renders "Dates TBD" for a tournament with no dateRange', () => {
+      tournamentCardPage.render({
+        tournament: buildTournament({ dateRange: null, events: [] }),
+      })
+
+      expect(document.body).toHaveTextContent('Dates TBD')
+    })
+
+    it('renders the formatted span when the tournament has a dateRange', () => {
+      tournamentCardPage.render({
+        tournament: buildTournament({
+          dateRange: { start: '2026-06-13', end: '2026-06-14' },
+        }),
+      })
+
+      expect(document.body).not.toHaveTextContent('Dates TBD')
+      expect(document.body).toHaveTextContent('Jun 13–14, 2026')
+    })
+  })
+
   // The address parts are all optional, and the separators are joins between
   // the parts that are there — never literals in a template. The template form
   // printed a bare "· ," for a venue-less tournament (#994).

@@ -234,14 +234,21 @@ export function matchListQueryOptions(params: MatchListParams) {
         }),
       ),
     retry: false,
-    throwOnError: true,
+    // Throw only when there is no cached data to fall back on — see
+    // `matchQueryOptions` below (#843) for the background-refetch rationale;
+    // the list route's own success-path invalidations (`invalidateMatchViews`)
+    // can trigger a background refetch of this query too.
+    throwOnError: (_error, query) => query.state.data === undefined,
   })
 }
 
 /**
  * Paginated /matches list. `placeholderData: keepPreviousData` keeps the
  * current page rendered while the next page or filter resolves, so the table
- * doesn't flash empty between requests. Throws to the surrounding boundary.
+ * doesn't flash empty between requests. Surfaces an initial-load failure (no
+ * cached data) to the surrounding boundary for a retry; a background-refetch
+ * failure over an already-rendered page keeps the last-good list instead
+ * (#1468 — `invalidateMatchViews` refetches this query on the success path).
  */
 export function useMatchList(
   params: MatchListParams,

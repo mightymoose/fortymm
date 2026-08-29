@@ -4,12 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
-import {
-  effectiveDateRange,
-  fmtDateRange,
-  fmtDistance,
-  fmtVenueLine,
-} from './data/helpers'
+import { fmtDateRange, fmtDistance, fmtVenueLine } from './data/helpers'
 import type { Tournament } from './data/types'
 import { StatusBadge } from './status-badge'
 
@@ -42,7 +37,9 @@ export const TournamentCard = ({
   onOpen,
   onDelete,
 }: TournamentCardProps) => {
-  const range = effectiveDateRange(t)
+  // Server-derived, never re-computed here (#1511) — `null` iff the tournament
+  // holds no events yet.
+  const range = t.dateRange
   const entries = t.events.reduce((sum, e) => sum + (e.entered || 0), 0)
   // Empty when the tournament has no venue, city, or region — and then the
   // whole line goes, pin and all. A row holding only its own punctuation is not
@@ -60,7 +57,7 @@ export const TournamentCard = ({
         <div className="flex flex-wrap items-center gap-2.5">
           <StatusBadge status={t.status} />
           <span className="font-mono text-[11px] tracking-[0.04em] text-[color:var(--fg-3)]">
-            {range.start ? fmtDateRange(range.start, range.end) : 'Dates TBD'}
+            {range ? fmtDateRange(range.start, range.end) : 'Dates TBD'}
           </span>
         </div>
 

@@ -834,10 +834,17 @@ export interface Tournament {
    * `can_edit`. Gates every mutation affordance — a non-creator sees the
    * read-only view. */
   canEdit: boolean
-  /** Authoritative dates are derived from the event schedule; these are the
-   * seeded fall-backs shown before any event exists. */
-  startDate: string | null
-  endDate: string | null
+  /** This tournament's real date span — the min/max of its events' own
+   * `slot.date` — **derived by the server on every read** (#1511, "A tournament's
+   * dates run backwards, and an event can sit outside them"), never a stored,
+   * independently-typed pair the client could compute a different answer for.
+   *
+   * `null` **iff the tournament holds no events** — the state a brand-new
+   * tournament (and every draft before its first event) is born in — and it is
+   * the one and only null case: whenever the object itself is present, both
+   * `start` and `end` are, because they are the min and the max of one
+   * non-empty list, never two facts that could disagree or go half-set. */
+  dateRange: { start: string; end: string } | null
   description: string
   /** This tournament's **venue**, or `null` when it has none (CONTEXT.md, "Venue").
    *

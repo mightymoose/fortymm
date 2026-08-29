@@ -260,8 +260,6 @@ describe('every tournament id is uuid-shaped (#1229)', () => {
     const created = createTournament({
       name: 'Newly Minted',
       description: null,
-      start_date: null,
-      end_date: null,
       address: null,
       table_catalogue: [],
     })
@@ -997,8 +995,6 @@ describe('transitionTournament', () => {
     const created = createTournament({
       name: 'Announced, Empty',
       description: null,
-      start_date: '2026-09-01',
-      end_date: '2026-09-02',
       address: {
         venue: 'TBC',
         street: '',
@@ -2915,8 +2911,6 @@ describe('the venue on a create/update', () => {
     createTournament({
       name: 'Written Cup',
       description: null,
-      start_date: null,
-      end_date: null,
       address,
       table_catalogue: [],
     })
@@ -3390,8 +3384,6 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
     const created = createTournament({
       name: 'Minted On Create',
       description: null,
-      start_date: null,
-      end_date: null,
       address: null,
       // `TournamentTableWrite`: label and court, and no `id` to send.
       table_catalogue: [

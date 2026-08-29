@@ -12,6 +12,7 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 
 import asyncio
 import json
+import logging
 import math
 import re
 import uuid
@@ -152,11 +153,12 @@ async def _geocoded_address(address: dict[str, str]) -> dict[str, object]:
 
 
 def _create_payload(**overrides: Any) -> dict[str, Any]:
+    # No ``start_date``/``end_date`` (#1511): a tournament's date range is derived
+    # from its events' own ``slot.date`` on every read, not a typed input — sending
+    # either is a 422 (see the dedicated tests for that refusal).
     payload: dict[str, Any] = {
         "name": "Bay Area Open 2026",
         "description": "Two-day open. USATT-sanctioned.",
-        "start_date": "2026-06-13",
-        "end_date": "2026-06-14",
         "address": _address(),
         # No ``id`` on a submitted table: a table is a row whose id the server mints
         # (ADR 20260801), so sending one is a 422 (see the two tests at
@@ -210,8 +212,11 @@ async def test_create_tournament_returns_201(
     assert body["name"] == "Bay Area Open 2026"
     assert body["description"] == "Two-day open. USATT-sanctioned."
     assert body["status"] == "draft"
-    assert body["start_date"] == "2026-06-13"
-    assert body["end_date"] == "2026-06-14"
+    # No ``date_range`` here (#1511): the create route answers bare ``TournamentRead``,
+    # which does not load events and so cannot compute one — see
+    # ``test_get_existing_returns_detail_with_empty_events`` and the date-range tests
+    # below for the detail/list routes that do.
+    assert "date_range" not in body
     # The venue address is geocoded on write: the read carries the six text fields the
     # client sent PLUS the server-resolved coordinates (NOT NULL).
     assert body["address"] == await _geocoded_address(_address())
@@ -394,6 +399,9 @@ async def test_get_existing_returns_detail_with_empty_events(
     assert body["created_by_username"] == user.username
     assert body["can_edit"] is True
     assert body["events"] == []
+    # No events, no range (#1511) — the only condition that makes ``date_range``
+    # ``null``.
+    assert body["date_range"] is None
 
 
 async def test_get_missing_returns_404(
@@ -415,21 +423,278 @@ async def test_patch_by_creator_updates_fields(
         f"/v1/tournaments/{created['id']}",
         json={
             "name": "Bay Area Major",
-            "start_date": "2026-08-01",
-            "end_date": "2026-08-02",
             "address": new_address,
         },
     )
     assert response.status_code == 200
     body = response.json()
     assert body["name"] == "Bay Area Major"
-    assert body["start_date"] == "2026-08-01"
-    assert body["end_date"] == "2026-08-02"
     # The changed address is re-geocoded on write, so the read carries the new venue's
     # server-resolved coordinates alongside the six text fields.
     assert body["address"] == await _geocoded_address(new_address)
     # Editing the tournament does not touch where it is in its lifecycle.
     assert body["status"] == "draft"
+
+
+# ----- date_range: derived from events' own slot.date, never a typed input (#1511) --
+
+
+def _dated_event_payload(iso_date: str, **overrides: Any) -> dict[str, Any]:
+    """A single-elim event dated ``iso_date`` with no reservations, so a later PATCH
+    that moves its ``slot`` to a different date never trips the reservation
+    containment refusal (#1501) — there is nothing stored to contain against."""
+    return _event_payload(
+        slot={"date": iso_date, "start": "09:00", "end": "18:00"},
+        reservations=[],
+        **overrides,
+    )
+
+
+async def test_date_range_is_the_min_max_of_the_events_slot_dates(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The LATER date is created FIRST on purpose: a wrong implementation that reads
+    ``(first_event.date, last_event.date)`` in creation order rather than a true
+    min/max would report a backwards range here (start after end) instead of
+    reproducing this assertion — creation order and date order deliberately
+    disagree, so only a real min/max passes."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_dated_event_payload("2026-07-26", name="U1500"),
+    )
+    await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_dated_event_payload("2026-07-24", name="Open Singles"),
+    )
+
+    response = await client.get(f"/v1/tournaments/{created['id']}")
+    assert response.status_code == 200, response.text
+    assert response.json()["date_range"] == {
+        "start": "2026-07-24",
+        "end": "2026-07-26",
+    }
+
+
+async def test_date_range_start_equals_end_when_every_event_shares_one_date(
+    authed_client: tuple[AsyncClient, User],
+):
+    """Two events on the SAME date report ``start == end`` — a range collapsing to
+    one bound rather than staying a range that happens to have zero width."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_dated_event_payload("2026-07-24", name="Open Singles"),
+    )
+    await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_dated_event_payload("2026-07-24", name="U1500"),
+    )
+
+    response = await client.get(f"/v1/tournaments/{created['id']}")
+    assert response.status_code == 200, response.text
+    assert response.json()["date_range"] == {
+        "start": "2026-07-24",
+        "end": "2026-07-24",
+    }
+
+
+async def test_editing_an_events_slot_date_changes_the_tournament_date_range(
+    authed_client: tuple[AsyncClient, User],
+):
+    """Derived on every READ, not stored: moving the one event's date changes the
+    tournament's ``date_range`` on the very next read, with no second write to the
+    tournament itself."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_dated_event_payload("2026-07-24"),
+        )
+    ).json()
+
+    before = await client.get(f"/v1/tournaments/{created['id']}")
+    assert before.json()["date_range"] == {"start": "2026-07-24", "end": "2026-07-24"}
+
+    patched = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {"slot": {"date": "2026-08-01", "start": "09:00", "end": "18:00"}},
+    )
+    assert patched.status_code == 200, patched.text
+
+    after = await client.get(f"/v1/tournaments/{created['id']}")
+    assert after.json()["date_range"] == {"start": "2026-08-01", "end": "2026-08-01"}
+
+
+async def test_deleting_the_tournaments_last_event_returns_date_range_to_null(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_dated_event_payload("2026-07-24"),
+        )
+    ).json()
+    before = await client.get(f"/v1/tournaments/{created['id']}")
+    assert before.json()["date_range"] is not None
+
+    deleted = await client.delete(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}"
+    )
+    assert deleted.status_code == 204, deleted.text
+
+    after = await client.get(f"/v1/tournaments/{created['id']}")
+    assert after.json()["date_range"] is None
+
+
+async def test_list_route_carries_the_same_derived_date_range_as_detail(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The list route answers ``TournamentDetailRead`` too (it already loads every
+    tournament's events, ADR "one page, one BFF endpoint"), so it carries the exact
+    same ``date_range`` shape as the single-tournament detail read — decision 6:
+    only routes that load events get this field, and the list is one of them."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_dated_event_payload("2026-07-24"),
+    )
+
+    listing = await client.get("/v1/tournaments")
+    assert listing.status_code == 200, listing.text
+    row = next(r for r in listing.json() if r["id"] == created["id"])
+    assert row["date_range"] == {"start": "2026-07-24", "end": "2026-07-24"}
+
+
+async def test_date_range_excludes_an_event_whose_stored_slot_date_does_not_parse(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A single corrupt ``slot.date`` — a pre-#1501 legacy row written directly, past
+    the write boundary that now refuses it (see
+    ``test_patch_reservations_against_a_malformed_stored_slot_is_not_a_500`` above) —
+    must not cost the tournament its WHOLE ``date_range``. Only the one bad event is
+    excluded from the min/max; the range still comes from the tournament's other,
+    parseable events, and the exclusion is logged so the corrupt row can be found and
+    fixed."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_dated_event_payload("2026-07-24", name="Open Singles"),
+    )
+    corrupt_event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_dated_event_payload("2026-07-26", name="U1500"),
+        )
+    ).json()
+
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.id == uuid.UUID(corrupt_event["id"])
+            )
+        )
+    ).scalar_one()
+    row.slot = {**row.slot, "date": "next Tuesday"}
+    await db_session.commit()
+
+    with caplog.at_level(logging.ERROR, logger="app.tournament_serialization"):
+        response = await client.get(f"/v1/tournaments/{created['id']}")
+    assert response.status_code == 200, response.text
+    assert response.json()["date_range"] == {
+        "start": "2026-07-24",
+        "end": "2026-07-24",
+    }
+
+    records = [r for r in caplog.records if r.name == "app.tournament_serialization"]
+    assert len(records) == 1, (
+        "one bad event must log exactly once — not silently: got "
+        f"{[r.getMessage() for r in records]}"
+    )
+    assert records[0].levelno == logging.ERROR
+    assert corrupt_event["id"] in records[0].getMessage(), (
+        "the log must name WHICH event is corrupt, or it cannot be acted on"
+    )
+
+
+def _errors_naming(detail: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
+    """The ``detail`` entries whose ``loc`` names ``field`` — searched across the
+    WHOLE array rather than assuming ``detail[0]``, since a payload with more than
+    one refused field does not guarantee ``extra="forbid"`` reports them in the
+    order they were typed (#1499/#1501 both found position-dependent asserts here)."""
+    return [e for e in detail if field in e["loc"]]
+
+
+async def test_create_naming_start_date_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """``start_date`` is not a field of ``TournamentCreate`` any more (#1511):
+    naming it is a 422 from ``extra="forbid"``, naming the refused field, and
+    nothing is created."""
+    client, _ = authed_client
+    response = await client.post(
+        "/v1/tournaments", json={**_create_payload(), "start_date": "2026-06-13"}
+    )
+    assert response.status_code == 422, response.text
+    assert _errors_naming(response.json()["detail"], "start_date")
+    count = (
+        await db_session.execute(select(func.count()).select_from(Tournament))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_create_naming_end_date_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    client, _ = authed_client
+    response = await client.post(
+        "/v1/tournaments", json={**_create_payload(), "end_date": "2026-06-14"}
+    )
+    assert response.status_code == 422, response.text
+    assert _errors_naming(response.json()["detail"], "end_date")
+    count = (
+        await db_session.execute(select(func.count()).select_from(Tournament))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_patch_naming_start_date_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"start_date": "2026-06-13"}
+    )
+    assert response.status_code == 422, response.text
+    assert _errors_naming(response.json()["detail"], "start_date")
+
+
+async def test_patch_naming_end_date_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"end_date": "2026-06-14"}
+    )
+    assert response.status_code == 422, response.text
+    assert _errors_naming(response.json()["detail"], "end_date")
 
 
 async def test_patch_with_unresolvable_address_is_409_and_leaves_the_address(

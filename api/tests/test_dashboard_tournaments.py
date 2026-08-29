@@ -15,10 +15,14 @@ from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.dashboard_tournaments import build_tournament_panels
+from app.dashboard_tournaments import (
+    _format_date_range,
+    _subtitle,
+    build_tournament_panels,
+)
 from app.draws import seats_both_sides_at_cut
 from app.match_voiding import void_match
 from app.models import (
@@ -26,6 +30,7 @@ from app.models import (
     MatchStatus,
     Tournament,
     TournamentEntryStatus,
+    TournamentEvent,
     TournamentFixture,
     TournamentStatus,
     User,
@@ -570,20 +575,43 @@ async def test_every_event_the_caller_entered_becomes_a_tab_of_one_panel(
     )
 
 
+def _dated_rr_payload(iso_date: str, **overrides: Any) -> dict[str, Any]:
+    """A round-robin event dated ``iso_date`` — its own ``slot`` AND its
+    reservation's ``slot`` share the date, since a reservation dated off its
+    event's own date is refused (#1501, see ``test_tournaments.py``'s
+    ``test_patch_event_by_creator_updates_jsonb``)."""
+    return _rr_payload(
+        {
+            "name": "Reservation",
+            "slot": {"date": iso_date, "start": "09:00", "end": "12:30"},
+            "table_ids": [],
+        },
+        slot={"date": iso_date, "start": "09:00", "end": "18:00"},
+        **overrides,
+    )
+
+
 async def test_the_panel_names_the_tournament_and_its_venue(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
     """The header's two lines. The subtitle folds venue and dates into one sentence
     server-side, because three optional facts assembled on each client would be
-    assembled slightly differently on each."""
+    assembled slightly differently on each.
+
+    The range spans BOTH of the tournament's events (#1511), not just the one the
+    caller entered — the panel's own entries/events are entered-only, so a range that
+    reused them would silently narrow to the caller's own path. The caller's own
+    event is dated a day EARLIER than the other, and is created SECOND: reusing the
+    entered-events join would report "Jul 24" alone, and a wrong implementation that
+    read creation order instead of a true min/max would report "Jul 25–24" — a
+    backwards range — instead of reproducing this assertion."""
     client, owner = authed_client
-    tournament_id, (event,) = await _tournament_with_events(
+    tournament_id, (_other_event, event) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A),
+        _dated_rr_payload("2026-07-25", name="U1500"),
+        _dated_rr_payload("2026-07-24", name="Open Singles"),
         name="Riverside Summer Slam",
-        start_date="2026-07-24",
-        end_date="2026-07-25",
     )
     await _enter(db_session, event["id"], owner, seed=1)
     await _set_status(db_session, tournament_id, TournamentStatus.live)
@@ -623,11 +651,9 @@ async def test_a_tournament_with_no_venue_is_a_panel_of_dates_alone(
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A),
+        _dated_rr_payload("2026-07-24"),
         name="Unbooked Open",
         address=None,
-        start_date="2026-07-24",
-        end_date="2026-07-25",
     )
     await _enter(db_session, event["id"], owner, seed=1)
     await _set_status(db_session, tournament_id, TournamentStatus.live)
@@ -636,8 +662,8 @@ async def test_a_tournament_with_no_venue_is_a_panel_of_dates_alone(
         (panel,) = await _panels(client)
 
     assert panel["name"] == "Unbooked Open"
-    assert panel["subtitle"] == "Jul 24–25", (
-        "no venue means the dates alone — not a leading separator, an empty segment, "
+    assert panel["subtitle"] == "Jul 24", (
+        "no venue means the date alone — not a leading separator, an empty segment, "
         "or a 'venue TBD' placeholder"
     )
     assert _panel_logs(caplog) == [], (
@@ -670,10 +696,8 @@ async def test_a_tournament_whose_stored_venue_is_corrupt_degrades_and_says_so(
     client, owner = authed_client
     tournament_id, (event,) = await _tournament_with_events(
         client,
-        _rr_payload(RESERVATION_A),
+        _dated_rr_payload("2026-07-24"),
         name="Corrupted Venue Open",
-        start_date="2026-07-24",
-        end_date="2026-07-25",
     )
     await _enter(db_session, event["id"], owner, seed=1)
     await _set_status(db_session, tournament_id, TournamentStatus.live)
@@ -696,8 +720,8 @@ async def test_a_tournament_whose_stored_venue_is_corrupt_degrades_and_says_so(
     assert "rating" in body and "recent_results" in body
 
     (panel,) = body["tournaments"]
-    assert panel["subtitle"] == "Jul 24–25", (
-        "an unreadable venue degrades to the dates, exactly like having no venue"
+    assert panel["subtitle"] == "Jul 24", (
+        "an unreadable venue degrades to the date, exactly like having no venue"
     )
 
     records = _panel_logs(caplog)
@@ -710,6 +734,140 @@ async def test_a_tournament_whose_stored_venue_is_corrupt_degrades_and_says_so(
     assert tournament_id in record.getMessage(), (
         "the log must name WHICH tournament is corrupt, or it cannot be acted on"
     )
+
+
+async def test_a_tournament_with_one_malformed_event_date_still_shows_the_others(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A single corrupt ``slot.date`` — the same kind of pre-#1501 legacy row
+    ``test_patch_reservations_against_a_malformed_stored_slot_is_not_a_500``
+    (``test_tournaments.py``) writes directly, past the write boundary that now
+    refuses it — must not cost the tournament its WHOLE date range on the dashboard
+    (#1511). Only the one bad event drops out of ``_date_ranges``; the panel's
+    subtitle still shows the span of the tournament's other, parseable events.
+
+    This is exactly the case a SQL ``MIN``/``MAX(slot->>'date')`` aggregate gets
+    wrong: comparing the stored strings as TEXT, ``"next Tuesday"`` sorts AFTER
+    every real ``YYYY-MM-DD`` value, so it would become the aggregate's own MAX and
+    poison the whole tournament's range — dropping BOTH dates — rather than being
+    excluded as the one bad row it is."""
+    client, owner = authed_client
+    tournament_id, (event, corrupt_event) = await _tournament_with_events(
+        client,
+        _dated_rr_payload("2026-07-24", name="Open Singles"),
+        _dated_rr_payload("2026-07-26", name="U1500"),
+        name="Mostly Fine Open",
+    )
+    await _enter(db_session, event["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.id == uuid.UUID(corrupt_event["id"])
+            )
+        )
+    ).scalar_one()
+    row.slot = {**row.slot, "date": "next Tuesday"}
+    await db_session.commit()
+
+    with caplog.at_level(logging.ERROR, logger=_PANEL_LOGGER):
+        (panel,) = await _panels(client)
+
+    assert panel["subtitle"] == "Berkeley TT Club · Jul 24", panel["subtitle"]
+
+    records = _panel_logs(caplog)
+    assert len(records) == 1, (
+        "one bad event must log exactly once — not once per tournament, and not "
+        f"silently: got {records}"
+    )
+    (record,) = records
+    assert record.levelno == logging.ERROR
+    message = record.getMessage()
+    assert corrupt_event["id"] in message, (
+        "the log must name WHICH event is corrupt, or it cannot be acted on"
+    )
+    assert tournament_id in message
+
+
+async def test_a_tournament_whose_only_event_has_a_malformed_date_is_not_a_500(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The discriminating case the sibling test above cannot reach: when EVERY one
+    of a tournament's events fails to parse (here, its only one — the one the
+    caller entered, which is what makes the tournament panel-eligible at all), the
+    tournament must be simply ABSENT from ``_date_ranges``' returned dict — exactly
+    matching how an event-less tournament is absent (#1511, ``_format_date_range``
+    reads a missing key the same way it reads ``None``) — not present with an empty
+    list that ``min()``/``max()`` then explode on.
+
+    A naive accumulator that plants an empty list in a ``defaultdict`` before
+    ``date.fromisoformat`` runs (rather than after it succeeds) passes the sibling
+    test above — which always has at least one OTHER, good-dated event to survive
+    on — and 500s only here, where there is no other event to save it."""
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _dated_rr_payload("2026-07-24", name="Open Singles"),
+        name="Entirely Corrupt Open",
+    )
+    await _enter(db_session, event["id"], owner, seed=1)
+    await _set_status(db_session, tournament_id, TournamentStatus.live)
+
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    row.slot = {**row.slot, "date": "next Tuesday"}
+    await db_session.commit()
+
+    with caplog.at_level(logging.ERROR, logger=_PANEL_LOGGER):
+        (panel,) = await _panels(client)
+
+    assert panel["subtitle"] == "Berkeley TT Club", panel["subtitle"]
+    records = _panel_logs(caplog)
+    assert len(records) == 1, records
+    assert event["id"] in records[0].getMessage()
+
+
+def test_no_events_means_no_date_segment_in_the_subtitle() -> None:
+    """The dashboard panel itself can never show a tournament with zero events —
+    an active entry, the panel's own membership test, requires an event to enter —
+    so this branch is unreachable through the product. The pure formatting
+    functions still have to answer it honestly, since ``_date_ranges`` (#1511)
+    leaves an event-less tournament out of its returned dict entirely, and the
+    caller reads that absence as ``None`` via ``.get(...)``: it composes to the
+    venue alone, not a stray separator or an empty date segment."""
+    tournament = Tournament(
+        id=uuid.uuid4(),
+        name="Ghost Open",
+        status=TournamentStatus.live,
+        address={
+            "venue": "Riverside TTC",
+            "street": "1 Main St",
+            "city": "Chicago",
+            "region": "IL",
+            "postal": "60625",
+            "country": "US",
+            "latitude": 41.9,
+            "longitude": -87.7,
+        },
+        league_id=uuid.uuid4(),
+        created_by_user_id=uuid.uuid4(),
+    )
+
+    assert _format_date_range(None) is None
+    assert _subtitle(tournament, None) == "Riverside TTC"
+
+    # Neither venue nor dates composes to the empty string — not a lone separator
+    # and not a "TBD" placeholder for either half.
+    tournament.address = None
+    assert _subtitle(tournament, None) == ""
 
 
 async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
@@ -760,9 +918,18 @@ async def test_a_withdrawn_entry_that_was_never_entered_is_not_a_uuid_lookup(
 # inferring a fixture's stage from the event's overall draw type plus
 # ``group_id IS NULL``, ADR 20260815), ONE of the handful of focus matches, and that
 # load's own eager options (the match's league, results, sides, settings, side
-# players and those players' users — one batched ``selectin`` each). Seventeen,
-# whatever the number of events.
-EXPECTED_DASHBOARD_PANEL_STATEMENTS = 17
+# players and those players' users — one batched ``selectin`` each), plus ONE more
+# (#1511) — ONE batched read of every SHOWN tournament's full event set
+# (``_date_ranges``), reduced to a min/max PER TOURNAMENT in Python (not a SQL
+# ``GROUP BY`` aggregate — see the function's own docstring for why a per-row
+# reduction is the one that can exclude a single malformed ``slot.date`` without
+# risking the whole tournament's range). Still a single statement regardless of how
+# many tournaments the panel shows. It has to be its own query rather than reusing
+# the entries/events already loaded above: those are the caller's ENTERED events
+# only, and a tournament's date range spans ALL of its events.
+# Eighteen, whatever the number of events (or tournaments — see
+# ``test_panel_statement_count_does_not_grow_with_two_live_tournaments`` below).
+EXPECTED_DASHBOARD_PANEL_STATEMENTS = 18
 
 
 @pytest.mark.parametrize("event_count", [1, 3])
@@ -860,6 +1027,56 @@ async def test_panel_statement_count_does_not_grow_with_events(
             event.name,
             event.group_label,
         )
+
+
+async def test_panel_statement_count_does_not_grow_with_two_live_tournaments(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """The #1511 date-range aggregate is grouped by tournament id in ONE statement,
+    not queried per tournament in a loop. That is exactly the shape a single
+    tournament with several events (the parametrized case above) cannot discriminate:
+    a per-tournament query in a loop still measures the pinned total at one
+    tournament and would only fail once a second is added — which is what this test
+    adds.
+
+    Counted around the builder rather than the HTTP request, and on a fresh session,
+    for the reasons ``counted_statements`` documents.
+    """
+    client, owner = authed_client
+    user_id = owner.id  # read outside the counted block; see counted_statements
+    async with opponent_session(db_session, "panel-2t-opp") as (_opp_client, opp):
+        base = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+        tournament_ids = []
+        for label in ("First Open", "Second Open"):
+            tournament_id, (event,) = await _tournament_with_events(
+                client, _rr_payload(RESERVATION_A, name="Open Singles"), name=label
+            )
+            await _enter(
+                db_session,
+                event["id"],
+                owner,
+                seed=1,
+                created_at=base + timedelta(minutes=1),
+            )
+            await _enter(
+                db_session,
+                event["id"],
+                opp,
+                seed=2,
+                created_at=base + timedelta(minutes=2),
+            )
+            await _cut_the_draw(client, tournament_id, event["id"])
+            await _set_status(db_session, tournament_id, TournamentStatus.published)
+            assert (await _go_live(client, tournament_id)).status_code == 201
+            tournament_ids.append(tournament_id)
+
+        async with counted_statements(engine) as (session, statements):
+            panels = await build_tournament_panels(session, user_id)
+
+    assert len(statements) == EXPECTED_DASHBOARD_PANEL_STATEMENTS, statements
+    assert {panel.id for panel in panels} == {uuid.UUID(t) for t in tournament_ids}
 
 
 async def test_a_swiss_panel_reads_the_callers_rank_off_the_group_less_table(
