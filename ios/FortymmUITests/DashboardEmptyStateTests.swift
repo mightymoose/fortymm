@@ -48,6 +48,13 @@ final class DashboardEmptyStateTests: XCTestCase {
     /// title: "“FortyMM” Would Like to Send You Notifications". Matching this
     /// phrase (plus the display name above) is what keeps the interruption
     /// monitor from touching any other alert.
+    ///
+    /// iOS localizes system-alert text, so this phrase — and the `Allow`
+    /// button lookup in the handler — assume an English-locale simulator.
+    /// That is what CI provisions (`ios.yml`'s fresh runner + simulator). On
+    /// a non-English simulator the prompt is left unhandled and the test
+    /// fails visibly; there is no locale-stable identifier for system
+    /// alerts to match instead.
     private static let notificationPromptPhrase = "Would Like to Send You Notifications"
 
     private var app: XCUIApplication!
@@ -154,8 +161,12 @@ final class DashboardEmptyStateTests: XCTestCase {
         )
 
         // The session has resolved by now, so the notification prompt — if
-        // this simulator had no recorded permission decision — is up. XCTest
-        // invokes interruption monitors only while the app performs an
+        // this simulator had no recorded permission decision — is up or about
+        // to be. `requestAuthorizationAndRegister` and the dashboard load
+        // start at the same instant (`RootView` fires both once the session
+        // gate renders the signed-in shell), so `ratingEmpty` existing proves
+        // the dashboard resolved, not that the alert has finished presenting.
+        // XCTest invokes interruption monitors only while the app performs an
         // interaction, and this tap is that interaction: with the prompt up
         // it never reaches the app; it triggers the monitor, which taps
         // **Allow** and hands control back. With the decision already
@@ -169,6 +180,15 @@ final class DashboardEmptyStateTests: XCTestCase {
             "Expected the recent-results card's empty-state copy "
                 + "(\"No completed matches yet.\") to appear"
         )
+
+        // Second trigger, for a prompt that finished presenting just after
+        // the first tap reached the app: that tap was then consumed by the
+        // app inertly instead of dispatching the monitor, and the alert
+        // would otherwise sit unhandled over the hittability assertions
+        // below. Monitors are consulted on every interaction while an alert
+        // is up, so this tap dispatches it; with no alert pending — prompt
+        // already handled, or never shown — it is as inert as the first.
+        app.tap()
 
         XCTAssertTrue(dashboard.ratingEmpty.isHittable, "Rating empty state should be visible on screen")
         XCTAssertTrue(
