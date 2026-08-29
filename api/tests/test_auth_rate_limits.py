@@ -23,7 +23,7 @@ from pyrate_limiter import Duration
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import sessions as sessions_module
-from app.config import GeocoderChoice, Settings
+from app.config import GeocoderChoice, Settings, get_settings
 from app.main import app as fastapi_app
 from app.rate_limiting import RedisRateLimiter
 from app.sessions import (
@@ -67,14 +67,18 @@ LIMITER_FIELDS: list[tuple[str, str]] = [
     ("login_consume_ip", "login_consume_ip_limit_per_hour"),
 ]
 
-#: The module-level dependencies, paired with the production ceiling each
-#: must carry when the environment says nothing.
-MODULE_CEILINGS: list[tuple[str, int]] = [
-    ("email_send_rate_limit", 5),
-    ("email_send_ip_rate_limit", 20),
-    ("email_resend_rate_limit", 3),
-    ("email_resend_ip_rate_limit", 10),
-    ("login_consume_ip_rate_limit", 60),
+#: The module-level dependencies, paired with the ``Settings`` field each is
+#: built from. The pairing is what this module pins; that an unset environment
+#: makes those fields 5/20/3/10/60 is pinned by ``test_config.py``, which can
+#: clear the variables before reading them. This module cannot: ``app.sessions``
+#: builds these instances at import, before any test runs, so whatever the
+#: process environment said at import is already baked in.
+MODULE_LIMITER_SETTINGS: list[tuple[str, str]] = [
+    ("email_send_rate_limit", "email_send_session_limit_per_hour"),
+    ("email_send_ip_rate_limit", "email_send_ip_limit_per_hour"),
+    ("email_resend_rate_limit", "email_resend_session_limit_per_hour"),
+    ("email_resend_ip_rate_limit", "email_resend_ip_limit_per_hour"),
+    ("login_consume_ip_rate_limit", "login_consume_ip_limit_per_hour"),
 ]
 
 
@@ -120,13 +124,23 @@ def test_each_limiter_is_built_from_its_matching_setting(
         assert limiter._rates[0].limit == expected, (field, name)
 
 
-def test_module_limiters_keep_the_production_ceilings_and_one_hour_windows():
+def test_module_limiters_are_built_from_the_ambient_settings_over_one_hour():
     """The process's own dependencies are built once at import from one
-    Settings snapshot: with no environment override they carry the tight
-    production tiers 5/20/3/10/60, each over a one-hour window."""
-    for attr, limit in MODULE_CEILINGS:
+    Settings snapshot: each carries its own matching ceiling, over a one-hour
+    window that no configuration can change.
+
+    Read against the ambient settings rather than a hardcoded 5/20/3/10/60.
+    ``app.sessions`` constructs these instances at import, which ``conftest``
+    triggers before any test runs, so a developer who exports one of the five
+    variables gets a process whose module limiters legitimately carry that
+    value. Asserting the production numbers here would red the suite for that
+    developer while testing nothing this module owns — the unset-environment
+    defaults are ``test_config.py``'s job, and it clears the variables first.
+    """
+    settings = get_settings()
+    for attr, settings_field in MODULE_LIMITER_SETTINGS:
         limiter: RedisRateLimiter = getattr(sessions_module, attr)
-        assert limiter._rates[0].limit == limit, attr
+        assert limiter._rates[0].limit == getattr(settings, settings_field), attr
         assert limiter._rates[0].interval == Duration.HOUR, attr
 
 
