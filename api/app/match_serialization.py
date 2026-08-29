@@ -345,7 +345,9 @@ def is_scorable(match: Match) -> bool:
     )
 
 
-def _scorability_reason(match: Match) -> MatchNotScorableReason | None:
+def _scorability_reason(
+    match: Match, *, scorable: bool | None = None
+) -> MatchNotScorableReason | None:
     """Which of ``is_scorable``'s gates ``match`` fails, or ``None`` when it
     passes all of them. Pure branch selection over the exact same checks
     ``is_scorable`` runs, in the same order — the single source of truth both
@@ -354,8 +356,15 @@ def _scorability_reason(match: Match) -> MatchNotScorableReason | None:
     rejection and the reason a client sees before ever attempting the write
     can never drift apart. A future gate added to ``is_scorable`` without a
     branch of its own here falls through to the catch-all ``not_scorable``,
-    exactly like ``ensure_scorable``'s historical catch-all 409."""
-    if is_scorable(match):
+    exactly like ``ensure_scorable``'s historical catch-all 409.
+
+    ``scorable`` lets a caller that already computed ``is_scorable(match)``
+    (``serialize_details`` needs the bool for ``can_score`` regardless) pass
+    it straight through instead of running the same pure, in-memory check
+    twice."""
+    if scorable is None:
+        scorable = is_scorable(match)
+    if scorable:
         return None
     if len(match.sides) < 2:
         return MatchNotScorableReason.no_opponent
@@ -544,6 +553,9 @@ def serialize_details(
     viewer_is_participant = current_user_id is not None and is_participant(
         match, current_user_id
     )
+    # Computed once and reused below for both ``can_score`` and
+    # ``not_scorable_reason`` — the same pure, in-memory check, not asked twice.
+    scorable = is_scorable(match)
 
     return MatchDetails(
         id=match.id,
@@ -568,8 +580,8 @@ def serialize_details(
         # board is still editable, so this is True while ``current_game`` is
         # None. Spectators get the read-only view — writes
         # 404 for non-participants in the score endpoints regardless.
-        can_score=(viewer_is_participant and is_scorable(match)),
-        not_scorable_reason=_scorability_reason(match),
+        can_score=(viewer_is_participant and scorable),
+        not_scorable_reason=_scorability_reason(match, scorable=scorable),
         # True iff the saved games already form a decided, validly-ordered
         # match AND no result is currently posted — the FE flips the scoring
         # page's submit button label to "Post result" when this is true.

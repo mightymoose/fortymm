@@ -44,6 +44,7 @@ import {
   isDecidedMatch,
   overrunDecider,
 } from '@/lib/scoring'
+import { NOT_SCORABLE_REASON_COPY } from './not-scorable-reason-copy'
 import { reconstructBoard, scoredGamePoints } from './reconstruct-board'
 import {
   isScoreConflict,
@@ -124,36 +125,29 @@ function seedScoreValues(
 const NO_OPPONENT_LABEL = 'No opponent'
 
 /**
- * The client-side mirror of `ensure_scorable`'s messages
- * (api/app/match_scoring.py) — word-for-word, so what the user reads here
- * before ever submitting matches what the write path would have said in its
- * 409/422 (#1288). `not_scorable_reason` is match-relative, not
- * viewer-relative, so it's `null` even for a spectator on an otherwise
- * scorable match — that's the one case with no server reason to mirror, and
- * gets its own plain participant-only explanation instead.
+ * `not_scorable_reason` is match-relative, not viewer-relative, so it's
+ * `null` even for a spectator on an otherwise scorable match — that's the
+ * one case with no server reason to mirror, and gets its own plain
+ * participant-only explanation instead. The four real reasons' copy lives in
+ * `NOT_SCORABLE_REASON_COPY` (`./not-scorable-reason-copy`), shared with the
+ * call-status banner (#1288) so a copy edit can't drift the two apart.
  */
 function scoreEntryRefusalMessage(
   notScorableReason: MatchDetails['not_scorable_reason'],
 ): string {
-  switch (notScorableReason) {
-    case 'no_opponent':
-      return "This match has no opponent and can't be scored."
-    case 'result_posted':
-      return 'This match has a posted result; scores are frozen.'
-    case 'not_called':
-      return "This match hasn't been called to a table yet."
-    case 'not_scorable':
-      return 'This match is no longer scorable.'
-    case null:
-      return 'Only participants in this match can enter scores.'
-    default:
-      // Runtime-total fallback: `useMatch`/`matchQueryOptions` casts its
-      // payload without a Zod parse (unlike the `matchDetailsQuery` boundary
-      // point 1 hardens), so an unexpected value here is only a type-checked
-      // impossibility for callers inside `src/`, not a runtime guarantee.
-      // Same copy as the no-participation case — a safe, honest default.
-      return 'Only participants in this match can enter scores.'
+  if (notScorableReason === null) {
+    return 'Only participants in this match can enter scores.'
   }
+  // Runtime-total fallback: `useMatch`/`matchQueryOptions` casts its payload
+  // without a Zod parse (unlike the `matchDetailsQuery` boundary point 1
+  // hardens), so a value outside `NOT_SCORABLE_REASON_COPY`'s keys is only a
+  // type-checked impossibility for callers inside `src/`, not a runtime
+  // guarantee. Same copy as the no-participation case — a safe, honest
+  // default.
+  return (
+    NOT_SCORABLE_REASON_COPY[notScorableReason] ??
+    'Only participants in this match can enter scores.'
+  )
 }
 
 export type ScoreEntryMode = { kind: 'create' } | { kind: 'edit' }
