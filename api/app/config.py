@@ -155,6 +155,18 @@ class Settings(BaseSettings):
     #: copy can never drift from what actually sends the mail.
     email_from: str = "noreply@fortymm.local"
 
+    #: Per-IP ceiling on tournament **self-entry** (``POST
+    #: /v1/tournaments/{id}/events/{event_id}/entries`` with no body), per hour
+    #: (#1092). Self-entry carries no permission any more, so this per-IP cap is
+    #: the bound on a host minting guest sessions and entering once per session.
+    #: Read at ask-time from the environment, never hardcoded — the lesson of
+    #: #1552 (the hardcoded sign-in cap starved every QA pass, and the failure
+    #: read as a product bug): the QA and e2e compose files raise this so a whole
+    #: automated pass from one shared host never reaches it. One venue on one
+    #: wifi network can legitimately share an IP, so the 429 tells the player to
+    #: retry shortly. The director entry arm carries no rate limit.
+    tournament_entry_ip_per_hour: int = 30
+
     @model_validator(mode="after")
     def _require_google_key(self) -> "Settings":
         """Refuse to construct a ``google`` configuration with no API key.

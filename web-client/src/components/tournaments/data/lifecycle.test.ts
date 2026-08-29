@@ -82,19 +82,19 @@ describe('entryControlState', () => {
   const state = (over: {
     status?: TournamentStatus
     event?: ReturnType<typeof buildEvent>
-    canEnter?: boolean
+    sessionLoaded?: boolean
     username?: string | null
   }) =>
     entryControlState({
       status: 'published',
       event: emptyEvent,
-      canEnter: true,
+      sessionLoaded: true,
       username: ENTERED,
       ...over,
     })
 
   // The open window, which is the only one that has controls in it at all.
-  it('offers enter to a permitted player who is not in the event', () => {
+  it('offers enter to a signed-in player who is not in the event', () => {
     expect(state({ event: emptyEvent })).toEqual({ kind: 'enter' })
   })
 
@@ -106,14 +106,15 @@ describe('entryControlState', () => {
   })
 
   // Facts about the CALLER, decided before the window: they render nothing, and
-  // they do so in every status — an unpermitted viewer of a draft is told nothing
-  // about a registration window they could never have used. The missing permission
-  // and the un-enterable format are ONE case (`hidden`), because nothing
-  // downstream can tell them apart: both are silence.
+  // they do so in every status — a viewer whose session is still in flight is
+  // told nothing about a registration window it cannot yet judge (and an
+  // entered player must not briefly see Enter: the guard is load-bearing). The
+  // unresolved session and the un-enterable format are ONE case (`hidden`),
+  // because nothing downstream can tell them apart: both are silence.
   it.each(['draft', 'published', 'live', 'archived'] as const)(
-    'is hidden on a %s tournament for a player without tournament.enter',
+    'is hidden on a %s tournament while the session is still in flight',
     (status) => {
-      expect(state({ status, canEnter: false })).toEqual({ kind: 'hidden' })
+      expect(state({ status, sessionLoaded: false })).toEqual({ kind: 'hidden' })
     },
   )
 
@@ -267,13 +268,13 @@ describe('entryControlState', () => {
     },
   )
 
-  // …and the caller-level facts still outrank everything: a viewer without
-  // `tournament.enter` is told nothing about a full event they could never enter.
+  // …and the caller-level facts still outrank everything: a viewer whose session
+  // is still in flight is told nothing about a full event it cannot yet judge.
   it.each([
     { kind: 'full', event: buildFullEvent() },
     { kind: 'ineligible', event: buildIneligibleEvent() },
-  ] as const)('stays hidden for an unpermitted viewer of a $kind event', ({ event }) => {
-    expect(state({ event, canEnter: false })).toEqual({ kind: 'hidden' })
+  ] as const)('stays hidden for an in-flight viewer of a $kind event', ({ event }) => {
+    expect(state({ event, sessionLoaded: false })).toEqual({ kind: 'hidden' })
   })
 })
 

@@ -754,14 +754,17 @@ internal protocol APIProtocol: Sendable {
     ///
     /// **The body is optional, and its presence chooses the actor** (ADR-0784):
     ///
-    /// * **no body** → you are entering *yourself*. Requires the `tournament.enter`
-    ///   permission. This is the request every player already sends, and it is unchanged.
-    /// * **`user_id`** → you are the **director** entering that player. Requires that you
-    ///   **own** the tournament; anyone else naming a `user_id` that is not their own is a
-    ///   `403`. An id that names no (live) player is a `404`.
+    /// * **no body** → you are entering *yourself*. Open to every signed-in user —
+    ///   no permission is asked — but rate limited **per client IP** (30 per hour by
+    ///   default, configurable via `TOURNAMENT_ENTRY_IP_PER_HOUR`); past the ceiling
+    ///   the request is a `429` telling you to retry shortly.
+    /// * **`user_id`** → you are the **director** entering that player. Requires that
+    ///   you **own** the tournament; anyone else naming a `user_id` that is not their
+    ///   own is a `403`. An id that names no (live) player is a `404`. The director
+    ///   path carries no rate limit.
     ///
     /// Naming *your own* `user_id` is self-registration, not a director entry: same
-    /// permission, and the entry records no adder.
+    /// rules as no body, and the entry records no adder.
     ///
     /// Registration is open only while the tournament is **`published`** — its status
     /// *is* its registration window (ADR-0017). Entering an event of a `draft`
@@ -803,8 +806,8 @@ internal protocol APIProtocol: Sendable {
     /// free to enter the same event again afterwards.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
-    /// themselves (with the `tournament.enter` permission), or the tournament's **owner**,
-    /// for any entry in it. Anybody else is a `403`.
+    /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
+    /// is a `403`.
     ///
     /// Withdrawal, like entry, is open only while the tournament is **`published`** —
     /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -2336,14 +2339,17 @@ extension APIProtocol {
     ///
     /// **The body is optional, and its presence chooses the actor** (ADR-0784):
     ///
-    /// * **no body** → you are entering *yourself*. Requires the `tournament.enter`
-    ///   permission. This is the request every player already sends, and it is unchanged.
-    /// * **`user_id`** → you are the **director** entering that player. Requires that you
-    ///   **own** the tournament; anyone else naming a `user_id` that is not their own is a
-    ///   `403`. An id that names no (live) player is a `404`.
+    /// * **no body** → you are entering *yourself*. Open to every signed-in user —
+    ///   no permission is asked — but rate limited **per client IP** (30 per hour by
+    ///   default, configurable via `TOURNAMENT_ENTRY_IP_PER_HOUR`); past the ceiling
+    ///   the request is a `429` telling you to retry shortly.
+    /// * **`user_id`** → you are the **director** entering that player. Requires that
+    ///   you **own** the tournament; anyone else naming a `user_id` that is not their
+    ///   own is a `403`. An id that names no (live) player is a `404`. The director
+    ///   path carries no rate limit.
     ///
     /// Naming *your own* `user_id` is self-registration, not a director entry: same
-    /// permission, and the entry records no adder.
+    /// rules as no body, and the entry records no adder.
     ///
     /// Registration is open only while the tournament is **`published`** — its status
     /// *is* its registration window (ADR-0017). Entering an event of a `draft`
@@ -2395,8 +2401,8 @@ extension APIProtocol {
     /// free to enter the same event again afterwards.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
-    /// themselves (with the `tournament.enter` permission), or the tournament's **owner**,
-    /// for any entry in it. Anybody else is a `403`.
+    /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
+    /// is a `403`.
     ///
     /// Withdrawal, like entry, is open only while the tournament is **`published`** —
     /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -11083,8 +11089,9 @@ internal enum Components {
         ///
         /// **The body is optional, and its presence selects the actor** (ADR-0784):
         ///
-        /// * **omitted** → you are entering *yourself*. Self-registration, gated on the
-        ///   ``tournament.enter`` permission — the request every player already sends, which
+        /// * **omitted** → you are entering *yourself*. Self-registration, open to every
+        ///   signed-in user but bounded by a per-IP rate limit (`TOURNAMENT_ENTRY_IP_PER_HOUR`,
+        ///   30 per hour by default) — the request every player already sends, which
         ///   carries no body at all and must keep working unchanged.
         /// * **``user_id`` present** → a *director* is entering somebody, which only the
         ///   tournament's **owner** may do.
@@ -24899,14 +24906,17 @@ internal enum Operations {
     ///
     /// **The body is optional, and its presence chooses the actor** (ADR-0784):
     ///
-    /// * **no body** → you are entering *yourself*. Requires the `tournament.enter`
-    ///   permission. This is the request every player already sends, and it is unchanged.
-    /// * **`user_id`** → you are the **director** entering that player. Requires that you
-    ///   **own** the tournament; anyone else naming a `user_id` that is not their own is a
-    ///   `403`. An id that names no (live) player is a `404`.
+    /// * **no body** → you are entering *yourself*. Open to every signed-in user —
+    ///   no permission is asked — but rate limited **per client IP** (30 per hour by
+    ///   default, configurable via `TOURNAMENT_ENTRY_IP_PER_HOUR`); past the ceiling
+    ///   the request is a `429` telling you to retry shortly.
+    /// * **`user_id`** → you are the **director** entering that player. Requires that
+    ///   you **own** the tournament; anyone else naming a `user_id` that is not their
+    ///   own is a `403`. An id that names no (live) player is a `404`. The director
+    ///   path carries no rate limit.
     ///
     /// Naming *your own* `user_id` is self-registration, not a director entry: same
-    /// permission, and the entry records no adder.
+    /// rules as no body, and the entry records no adder.
     ///
     /// Registration is open only while the tournament is **`published`** — its status
     /// *is* its registration window (ADR-0017). Entering an event of a `draft`
@@ -25156,8 +25166,8 @@ internal enum Operations {
     /// free to enter the same event again afterwards.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
-    /// themselves (with the `tournament.enter` permission), or the tournament's **owner**,
-    /// for any entry in it. Anybody else is a `403`.
+    /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
+    /// is a `403`.
     ///
     /// Withdrawal, like entry, is open only while the tournament is **`published`** —
     /// its status *is* its registration window (ADR-0017). Withdrawing an *active*

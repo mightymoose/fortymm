@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event'
-import { delay, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 
 import {
   mockEventEnterEndpoint,
@@ -7,7 +7,6 @@ import {
 } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentEntrantRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
-import { PERM } from '@/lib/permissions'
 import { waitFor } from '@/test/utilities'
 
 import {
@@ -53,18 +52,28 @@ describe('EnterEventControl', () => {
     expect(page.queryEnterButton('Open Singles')).toBeNull()
   })
 
-  it('offers nothing to a player without tournament.enter — absent, not disabled', async () => {
+  it('offers Enter to a player whose session carries zero permissions', async () => {
+    // #1092: entering needs no permission. A real default user holds none, so
+    // the control must appear for a session with an empty permission list.
     page.render(
       { event: buildEvent({ name: 'Open Singles' }) },
-      { permissions: [PERM.TOURNAMENT_VIEW] },
+      { permissions: [] },
     )
 
-    // The session must have LANDED before "there is no button" means anything:
-    // permissions read as absent while it is still in flight.
-    await page.findSessionReady()
+    expect(await page.findEnterButton('Open Singles')).toBeInTheDocument()
+    expect(page.queryWithdrawButton('Open Singles')).toBeNull()
+  })
+
+  it('renders nothing while the session request is still in flight', async () => {
+    // The load-bearing guard: `username` is undefined until the session lands,
+    // so membership cannot be judged — and an ENTERED player must not briefly
+    // see Enter (a click in that window would double-submit into a 409).
+    server.use(http.get('*/v1/session', () => new Promise(() => {})))
+    page.render({ event: enteredEvent })
 
     expect(page.queryEnterButton('Open Singles')).toBeNull()
     expect(page.queryWithdrawButton('Open Singles')).toBeNull()
+    expect(page.getButtons()).toHaveLength(0)
   })
 
   it('offers nothing on a doubles event, even to a permitted player', async () => {
@@ -145,22 +154,20 @@ describe('EnterEventControl', () => {
       },
     )
 
-    // A closed window is a fact about the TOURNAMENT; an absent permission is a
-    // fact about YOU. The first is worth reporting, the second is not — so an
-    // unpermitted viewer of a draft gets silence, not a notice about a door they
-    // could never have opened.
-    it('says nothing at all to an unpermitted player, even on a draft', async () => {
+    it('tells a zero-permission player the same thing any player hears on a draft', async () => {
+      // #1092: entering needs no permission, so a default user on a draft gets
+      // the ordinary closed-window copy, not silence.
       page.render(
         {
           tournament: buildTournament({ status: 'draft' }),
           event: buildEvent({ name: 'Open Singles' }),
         },
-        { permissions: [PERM.TOURNAMENT_VIEW] },
+        { permissions: [] },
       )
 
       await page.findSessionReady()
 
-      expect(page.queryRegistrationNotice()).toBeNull()
+      expect(await page.findRegistrationNotice()).toBeInTheDocument()
       expect(page.queryEnterButton('Open Singles')).toBeNull()
     })
 
@@ -275,15 +282,13 @@ describe('EnterEventControl', () => {
       expect(page.queryFullNotice()).toBeNull()
     })
 
-    it('says nothing at all about a full event to an unpermitted viewer', async () => {
+    it('tells a zero-permission viewer the same thing about a full event', async () => {
       page.render(
         { event: buildFullEvent({ name: 'Championship Singles' }) },
-        { permissions: [PERM.TOURNAMENT_VIEW] },
+        { permissions: [] },
       )
 
-      await page.findSessionReady()
-
-      expect(page.queryFullNotice()).toBeNull()
+      expect(await page.findFullNotice()).toBeInTheDocument()
       expect(page.getButtons()).toHaveLength(0)
     })
   })

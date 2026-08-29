@@ -83,7 +83,6 @@ from app.tournament_materialization import materialize_event, materialize_live_d
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import (
     TOURNAMENT_CREATE,
-    TOURNAMENT_VIEW,
     create_tournament_transition,
     cut_event_draw,
     get_tournament,
@@ -111,10 +110,11 @@ from tests._helpers import (
 async def _grant_tournament_perms(
     db_session: AsyncSession,
     user: User,
-    names: Sequence[str] = (TOURNAMENT_VIEW, TOURNAMENT_CREATE),
+    names: Sequence[str] = (TOURNAMENT_CREATE,),
 ) -> None:
-    """Grant ``names`` to ``user`` via real RBAC rows, defaulting to the pair the
-    tournament read/create routes gate on."""
+    """Grant ``names`` to ``user`` via real RBAC rows, defaulting to the create
+    grant the tournament create route gates on (reads carry no permission —
+    #1092)."""
     await grant_permissions(db_session, user, names)
 
 
@@ -3406,14 +3406,15 @@ async def test_permission_gate_blocks_user_without_permission(
     db_session: AsyncSession,
     authed_client: tuple[AsyncClient, User],
 ):
-    """A user with NO tournament permissions is 403 on every route, including the
-    event routes. Reads/create are blocked by the ``tournament.view`` /
-    ``tournament.create`` gates; the owner-only mutations are blocked by the
-    ownership check (the caller has a session but didn't create the target). The
-    ``authed_client`` fixture supplies a tournament + event owned by someone else
-    so the routes have a real target."""
+    """A user with NO tournament permissions is 403 on every OWNER route. Reads
+    are open to everyone now (#1092 deleted ``tournament.view``) and create is
+    blocked by the ``tournament.create`` gate; the owner-only mutations are
+    blocked by the ownership check (the caller has a session but didn't create
+    the target). The ``authed_client`` fixture supplies a tournament + event
+    owned by someone else so the routes have a real target."""
     owner_client, _ = authed_client
     target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, target["id"], TournamentStatus.published)
     target_event = (
         await owner_client.post(
             f"/v1/tournaments/{target['id']}/events", json=_event_payload()
@@ -3424,11 +3425,15 @@ async def test_permission_gate_blocks_user_without_permission(
         # A bare guest session — no tournament permissions granted.
         await start_session(client, db_session)
 
-        assert (await client.get("/v1/tournaments")).status_code == 403
+        # Reads are open to every signed-in user (#1092); create and the
+        # owner-only mutations still refuse. The target is PUBLISHED so the
+        # detail read answers 200 for a guest (a draft would 404 — its
+        # invisibility, tested below — for a reason unrelated to permissions).
+        assert (await client.get("/v1/tournaments")).status_code == 200
         assert (
             await client.post("/v1/tournaments", json=_create_payload())
         ).status_code == 403
-        assert (await client.get(f"/v1/tournaments/{target['id']}")).status_code == 403
+        assert (await client.get(f"/v1/tournaments/{target['id']}")).status_code == 200
         assert (
             await client.patch(
                 f"/v1/tournaments/{target['id']}", json={"name": "Hijack"}
@@ -3460,13 +3465,12 @@ async def test_permission_gate_blocks_user_without_permission(
         ).status_code == 403
 
 
-async def test_view_permission_alone_reads_but_cannot_create(
+async def test_zero_permissions_read_but_cannot_create(
     db_session: AsyncSession,
     authed_client: tuple[AsyncClient, User],
 ):
-    """``tournament.view`` is its own grant, separate from create: a viewer can
-    list and read tournaments but POST /v1/tournaments is 403 without
-    ``tournament.create``.
+    """A zero-permission user can list and read tournaments but
+    POST /v1/tournaments is 403 without ``tournament.create``.
 
     The target is **published** first. What this test is about is the *permission*
     axis — read is granted, create is not — and a draft would answer 404 on the
@@ -3479,7 +3483,7 @@ async def test_view_permission_alone_reads_but_cannot_create(
 
     async with make_client() as viewer_client:
         viewer = await start_session(viewer_client, db_session)
-        await _grant_tournament_perms(db_session, viewer, names=(TOURNAMENT_VIEW,))
+        await _grant_tournament_perms(db_session, viewer, names=())
 
         assert (await viewer_client.get("/v1/tournaments")).status_code == 200
         assert (
@@ -3672,21 +3676,17 @@ async def test_a_published_tournament_is_visible_to_a_non_owner(
         ).status_code == 200
 
 
-async def test_missing_permission_is_403_on_a_draft_even_though_it_is_invisible(
+async def test_a_draft_is_404_not_403_for_a_user_who_cannot_see_it(
     db_session: AsyncSession,
     authed_client: tuple[AsyncClient, User],
 ):
-    """The gate still fires FIRST: no ``tournament.view`` means 403, not the 404 the
-    draft's invisibility would otherwise produce.
+    """Visibility is the whole read gate now (#1092 deleted
+    ``tournament.view``): a draft the caller does not own answers the SAME 404 an
+    absent id would — never a 403, which would confirm the tournament exists.
 
-    The two refusals answer different questions and must not be collapsed. 403 says
-    "you may not read tournaments"; 404 says "there is no such tournament for you".
-    A user with no grant at all learns nothing either way — which is why the
-    ordering is safe — but if visibility ever ran *before* the permission gate, a
-    permission-less caller poking at ids would start getting 404s for drafts and
-    403s for published tournaments, and could sit there enumerating which ids exist
-    in which state. The gate is a route dependency precisely so it cannot get out of
-    order.
+    ``_visible_to`` rides in the same WHERE as the id lookup, so a hidden draft
+    cannot leak its existence through a permission error there is no longer any
+    permission to raise.
     """
     owner_client, _ = authed_client
     target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
@@ -3694,8 +3694,11 @@ async def test_missing_permission_is_403_on_a_draft_even_though_it_is_invisible(
     async with make_client() as client:
         await start_session(client, db_session)  # a session, but no permissions
 
-        assert (await client.get(f"/v1/tournaments/{target['id']}")).status_code == 403
-        assert (await client.get("/v1/tournaments")).status_code == 403
+        assert (await client.get(f"/v1/tournaments/{target['id']}")).status_code == 404
+        # The list still answers — it just doesn't include the draft.
+        listed = await client.get("/v1/tournaments")
+        assert listed.status_code == 200
+        assert target["id"] not in [t["id"] for t in listed.json()]
 
 
 # ----- lifecycle transitions ------------------------------------------------
@@ -5142,7 +5145,7 @@ async def test_a_full_event_reads_event_full_to_every_eligible_caller(
     stranger = make_client()
     try:
         other = await start_session(stranger, db_session)
-        await _grant_tournament_perms(db_session, other, (TOURNAMENT_VIEW,))
+        await _grant_tournament_perms(db_session, other, ())
         for reader in (client, stranger):
             filled_read, freed_read = await _events_of(reader, tournament_id)
             assert filled_read["entry_state"] == EVENT_FULL, reader

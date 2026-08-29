@@ -1,7 +1,7 @@
 import type { SeedSpec } from './rbac-engine'
 
 const ALL = [
-  'p_tv', 'p_tc', 'p_te', 'p_td', 'p_tp', 'p_tn',
+  'p_tc', 'p_te', 'p_td', 'p_tp',
   'p_dv', 'p_dg', 'p_de', 'p_dp', 'p_dl',
   'p_cv', 'p_ca', 'p_cs', 'p_co',
   'p_pv', 'p_pc', 'p_pe', 'p_pd', 'p_pm',
@@ -9,16 +9,14 @@ const ALL = [
   'p_mv', 'p_ma', 'p_mr', 'p_rm', 'p_pa',
   'p_sv', 'p_sc', 'p_sx',
 ]
-const VIEW = ['p_tv', 'p_dv', 'p_cv', 'p_pv', 'p_rv', 'p_mv', 'p_sv']
+const VIEW = ['p_dv', 'p_cv', 'p_pv', 'p_rv', 'p_mv', 'p_sv']
 
 export const DEMO_SEED: SeedSpec = {
   permissions: [
-    { id: 'p_tv', name: 'tournament.view', description: 'See tournament list and details.' },
     { id: 'p_tc', name: 'tournament.create', description: 'Spin up a new tournament event.' },
     { id: 'p_te', name: 'tournament.edit', description: 'Rename, reschedule, change format.' },
     { id: 'p_td', name: 'tournament.delete', description: 'Permanently remove a tournament.' },
     { id: 'p_tp', name: 'tournament.publish', description: 'Publish a tournament to the spectator view.' },
-    { id: 'p_tn', name: 'tournament.enter', description: 'Enter yourself into a singles event, and withdraw again.' },
     { id: 'p_dv', name: 'draws.view', description: 'View brackets and seeds.' },
     { id: 'p_dg', name: 'draws.generate', description: 'Run the SMT solver to build a draw.' },
     { id: 'p_de', name: 'draws.edit', description: 'Re-seed or manually swap matchups.' },
@@ -63,7 +61,7 @@ export const DEMO_SEED: SeedSpec = {
       name: 'Tournament Director',
       description: 'Runs events end-to-end. Cannot edit org-wide settings.',
       permission_ids: [
-        'p_tv', 'p_tc', 'p_te', 'p_tp', 'p_tn',
+        'p_tc', 'p_te', 'p_tp',
         'p_dv', 'p_dg', 'p_de', 'p_dp', 'p_dl',
         'p_cv', 'p_ca', 'p_cs', 'p_co',
         'p_pv', 'p_pc', 'p_pe', 'p_pm',
@@ -71,11 +69,11 @@ export const DEMO_SEED: SeedSpec = {
         'p_mv', 'p_sx',
       ],
     },
-    { id: 'r_score', name: 'Scorekeeper', description: 'Taps in points at courtside. Read-only everywhere else.', permission_ids: ['p_tv', 'p_dv', 'p_cv', 'p_cs', 'p_pv'] },
-    { id: 'r_umpire', name: 'Umpire', description: 'Calls matches. Can override scores after the fact.', permission_ids: ['p_tv', 'p_dv', 'p_cv', 'p_cs', 'p_co', 'p_pv'] },
-    { id: 'r_club', name: 'Club Admin', description: 'Manages the player roster. No live scoring.', permission_ids: ['p_tv', 'p_dv', 'p_pv', 'p_pc', 'p_pe', 'p_pm', 'p_rv', 'p_mv'] },
+    { id: 'r_score', name: 'Scorekeeper', description: 'Taps in points at courtside. Read-only everywhere else.', permission_ids: ['p_dv', 'p_cv', 'p_cs', 'p_pv'] },
+    { id: 'r_umpire', name: 'Umpire', description: 'Calls matches. Can override scores after the fact.', permission_ids: ['p_dv', 'p_cv', 'p_cs', 'p_co', 'p_pv'] },
+    { id: 'r_club', name: 'Club Admin', description: 'Manages the player roster. No live scoring.', permission_ids: ['p_dv', 'p_pv', 'p_pc', 'p_pe', 'p_pm', 'p_rv', 'p_mv'] },
     { id: 'r_read', name: 'Read-only', description: 'Sees everything, changes nothing.', permission_ids: VIEW },
-    { id: 'r_weekend', name: 'Weekend Volunteer', description: 'One-off scorer role for weekend tournaments.', permission_ids: ['p_tv', 'p_dv', 'p_cv', 'p_cs', 'p_pv'] },
+    { id: 'r_weekend', name: 'Weekend Volunteer', description: 'One-off scorer role for weekend tournaments.', permission_ids: ['p_dv', 'p_cv', 'p_cs', 'p_pv'] },
   ],
   // Everyone holds `r_user` — that is what "default role" means (ADR-0016).
   users: [

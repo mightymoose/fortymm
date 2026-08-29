@@ -85,20 +85,33 @@ class EntryRefusedError(Exception):
         self.refusal = refusal
 
 
-class NotAllowedToEnterError(Exception):
+class EntryRateLimitedError(Exception):
     """Raised by the ``enter_event`` verb on the **self-registration** arm when the
-    caller does not hold the ``tournament.enter`` permission (ADR-0784).
+    caller's client IP has exhausted its per-hour self-entry ceiling (#1092).
 
-    This is the one authorization the entry verb judges itself, and only on the self
-    path: a player entering *themselves* is not the tournament's owner, so it cannot go
-    through the owner gate — it is a data-authz permission, asked (as the HTTP route
-    asked it inline) once the fork has decided this is a self-registration. A director
-    entering somebody else is gated by ownership instead
-    (:class:`NotTournamentOwnerError`)
-    and is never refused for lacking a permission about entering themselves. The HTTP
-    adapter maps this to the existing 403 ``"Forbidden."``; the MCP tool to
-    ``ToolError``
-    prose. Never an ``HTTPException``."""
+    Self-registration needs no permission any more — ``tournament.enter`` was
+    deleted — so this is the one bound the entry verb judges itself, and only on
+    the self path: the attack it bounds is one host minting guest sessions and
+    entering once per session, and a director entering somebody else is gated by
+    ownership instead (:class:`NotTournamentOwnerError`). The ceiling is read from
+    the ``TOURNAMENT_ENTRY_IP_PER_HOUR`` environment variable (30/hour default) and
+    enforced through the shared ``RedisRateLimiter`` core. A transient refusal: one
+    venue on one wifi network can legitimately share an IP and reach the ceiling,
+    so the message tells the player to retry shortly rather than reading as a
+    product failure. The HTTP adapter maps this to a 429 with that sentence; the
+    MCP tool to ``ToolError`` prose. Never an ``HTTPException``.
+
+    The message is authored here, in the domain, so the HTTP 429 and the MCP
+    ``ToolError`` carry the same sentence by construction."""
+
+    def __init__(
+        self,
+        message: str = (
+            "You've entered a lot of tournaments in a short time from this network. "
+            "Please retry shortly."
+        ),
+    ) -> None:
+        super().__init__(message)
 
 
 class PlayerNotFoundError(Exception):
@@ -147,13 +160,13 @@ class EntryNotFoundError(Exception):
 class NotAllowedToWithdrawError(Exception):
     """Raised by the ``withdraw_from_event`` verb when the caller is **neither the
     entry's own player nor the tournament's owner** (ADR-0784). Withdrawal mirrors
-    entry: the player themselves (with ``tournament.enter``) may take back their own
-    entry, and the owner may withdraw any entry in their tournament — anybody else is
-    refused.
+    entry: the entry's own player may take back their own entry — needing no
+    permission any more than self-entry does (#1092) — and the owner may withdraw any
+    entry in their tournament. Anybody else is refused.
 
-    This is the director-arm mirror of :class:`NotAllowedToEnterError`: where entering
-    somebody else is owner-gated, withdrawing somebody else's entry is too, and a
-    non-owner reaching for an entry that is not theirs is refused. Judged **after** the
+    Entering somebody else is owner-gated, and withdrawing somebody else's entry is
+    too, so a non-owner reaching for an entry that is not theirs is refused. Judged
+    **after** the
     tournament/event/entry 404s (the row must be loaded before the fork can be read off
     it) and **before** the registration-window 409, because "not yours" is the fact
     that will not change where "not now" invites a pointless retry. The HTTP adapter

@@ -26,7 +26,6 @@ import {
   UNBREAKABLE_VENUE_NAME,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
-import { PERM } from '@/lib/permissions'
 import { sessionResponse } from '@/test/factories'
 import { waitFor } from '@/test/utilities'
 
@@ -544,15 +543,17 @@ describe('TournamentDetailPage', () => {
   })
 
   /**
-   * Slice 3 (#791): a **permissioned non-owner viewer** — a beta user who holds
-   * `tournament.view` but is neither the creator nor entitled to enter — opening a
-   * published tournament gets it **fully read-only on every tab** (ADR-0015). This
+   * Slice 3 (#791): a **non-owner viewer** — a plain default user who is neither
+   * the creator nor an entrant — opening a published tournament gets it
+   * **read-only on every owner surface** (ADR-0015). This
    * is the page-level integration proof that `can_edit === false` reaches every tab:
    * the per-tab quartets each guard their own surface, but only this walks all four
    * of one page and sweeps each for the controls that must have leaked nowhere —
-   * the edit forms, the cut/re-cut/delete draw verbs, the lifecycle transitions, the
-   * table-catalogue editor, the placement control, and any Enter/Withdraw the viewer
-   * was never granted.
+   * the edit forms, the cut/re-cut/delete draw verbs, the lifecycle transitions,
+   * the table-catalogue editor, and the placement control. Enter is NOT one of
+   * the controls swept away: entering needs no permission (#1092), so the
+   * non-owner spectator legitimately gets it — it is a PLAYER affordance, not
+   * an owner one.
    *
    * The tournament carries a **cut, partly-scheduled draw** so every tab has real
    * content to be read-only *about*: the Events tab shows the draw, the Schedule tab
@@ -588,13 +589,13 @@ describe('TournamentDetailPage', () => {
       })
 
     /** A published tournament (a non-owner can see it — a draft would 404, #967)
-     * with the scheduled draw, seen by a spectator who holds `tournament.view` only
-     * (no `tournament.enter`, and `can_edit: false`). */
+     * with the scheduled draw, seen by a zero-permission spectator who holds no
+     * role but the default `User` one (`can_edit: false`). */
     const renderAsSpectator = () => {
       mockSessionEndpoint(server, () =>
         HttpResponse.json(
           sessionResponse({
-            user: { username: 'spectator', permissions: [PERM.TOURNAMENT_VIEW] },
+            user: { username: 'spectator', permissions: [] },
           }),
         ),
       )
@@ -656,13 +657,17 @@ describe('TournamentDetailPage', () => {
       await userEvent.click(tournamentDetailPagePage.getTab(/^Events/))
 
       const controls = tournamentDetailPagePage.getActiveTabControls()
-      // The card is openable — into a read-only view (ADR 0015). That open target is
-      // the ONLY interactive control the tab offers a viewer: no "New event", no
-      // Generate/Re-cut/Delete draw verbs, and no Enter/Withdraw (the spectator holds
-      // no `tournament.enter`).
+      // The card is openable — into a read-only view (ADR 0015) — and the
+      // spectator gets the Enter affordance a default user is owed (#1092).
+      // Those are the ONLY interactive controls the tab offers a viewer: no
+      // "New event", no Generate/Re-cut/Delete draw verbs, and no Withdraw (the
+      // spectator is not among the entrants).
       expect(controls.length).toBeGreaterThan(0)
       expect(
-        controls.every((el) => /^View /.test(el.getAttribute('aria-label') ?? '')),
+        controls.every((el) => {
+          const label = el.getAttribute('aria-label') ?? ''
+          return /^View /.test(label) || /^Enter /.test(label)
+        }),
       ).toBe(true)
       expect(tournamentDetailPagePage.queryNewEventButtons()).toHaveLength(0)
     })
