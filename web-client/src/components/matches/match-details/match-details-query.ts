@@ -79,7 +79,14 @@ const AWAITING_ACCEPTANCE_POLL_MS = 5_000;
  * still-rendered Accept finalizes a correction they never re-reviewed (#726).
  * Freezing the rendered result means accepting a now-superseded one 409s, and
  * the callout surfaces that as a "reload to re-review" prompt. Spectators and
- * the waiting proposer have `your_turn=false`, so they keep polling. */
+ * the waiting proposer have `your_turn=false`, so they keep polling.
+ *
+ * The tournament's director reviewing a match they don't play in also holds
+ * `your_turn` (#1523), so they freeze too — deliberately. The #726 hazard is
+ * about the reviewer's rendered result going stale under an Accept they're
+ * about to press, and that is exactly as true of a director's Accept as of a
+ * player's. This predicate reads the flag, not the viewer's side, so it needed
+ * no change to cover them. */
 export function refetchWhileAwaitingAcceptance(
   query: Pick<Query<MatchDetailsResult>, "state">,
 ): number | false {

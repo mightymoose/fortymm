@@ -71,6 +71,7 @@ from app.schemas.rating import RatingChange
 # module-internal helper (leading underscore) and stays private.
 __all__ = [
     "compact_games",
+    "director_flag_is_material",
     "first_decider",
     "games_payload_from_match",
     "is_participant",
@@ -215,7 +216,12 @@ def _submitted_on_side(match: Match, result: MatchResult, side: MatchSide) -> bo
     return any(p.user_id == result.submitted_by_user_id for p in side.players)
 
 
-def negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotiation:
+def negotiation(
+    match: Match,
+    current_user_id: uuid.UUID | None,
+    *,
+    viewer_is_director: bool = False,
+) -> MatchNegotiation:
     """Viewer-relative negotiation state for the BFF (#713).
 
     The viewer's "side" is the side the current user is on; the opponent side is
@@ -226,7 +232,25 @@ def negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotia
     they did. ``final`` once a result is accepted; ``live`` before any result.
 
     Non-participants / anonymous callers get a neutral spectator mapping
-    (``your_turn=False``, no diff/prior)."""
+    (``your_turn=False``, no diff/prior) — unless ``viewer_is_director``, in
+    which case a standing proposal IS the director's to act on and
+    ``your_turn`` is True. The director is authorized to accept a player's
+    standing proposal (``accept_result``, #1523), and ``can_finalize`` is False
+    the moment any result exists, so without this the director has no read flag
+    at all that the clients could hang an Accept affordance off — the
+    scorers'-table recovery this ticket exists for would stop at the exact
+    point a player posts a result. ``viewer_state`` stays ``review``: the
+    director never proposed, so there is no baseline to diff against and
+    ``corrected`` is unreachable for them.
+
+    ``viewer_is_director`` is resolved by the caller (a query — see
+    :func:`app.match_queries.is_tournament_director`) and defaults to False.
+    Only the two read paths that already compute it pass it: the HTTP
+    ``GET /v1/matches/{id}`` handler and the MCP ``get_match`` tool. The write
+    responses, the 409 conflict bodies (``matches._negotiation_conflict``) and
+    the list rows (``matches._list_row``) stay participant-only, matching
+    :func:`serialize_details`' own call-site decision — a director who loses an
+    accept race re-reads the match rather than re-rendering off the 409."""
     accepted = accepted_result(match)
     if accepted is not None:
         return MatchNegotiation(
@@ -254,11 +278,21 @@ def negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotia
         my_side(match, current_user_id) if current_user_id is not None else None
     )
     # Spectators / anonymous: neutral mapping — there is a standing proposal but
-    # the viewer has no side, so treat as a read-only "review" view.
+    # the viewer has no side, so treat as a read-only "review" view. The
+    # tournament's director is the one sideless viewer who may act on it.
     if viewer_side is None:
         return MatchNegotiation(
             viewer_state="review",
-            your_turn=False,
+            # A director never accepts their own proposal. Today that is
+            # unreachable — ``_requires_confirmation`` (``app.result_proposal``)
+            # self-finalizes every non-participant's proposal, so a standing
+            # result's submitter is always a player — but that is a mint-site
+            # invariant in another module. This mirrors the identity guard in
+            # ``accept_result``: the read flag never offers an Accept the write
+            # path would 409, whatever a future mint path does.
+            your_turn=(
+                viewer_is_director and standing.submitted_by_user_id != current_user_id
+            ),
             standing_result=standing_view,
             prior_result=None,
             diff=None,
@@ -335,6 +369,33 @@ def is_scorable(match: Match) -> bool:
         len(match.sides) >= 2
         and match.status == MatchStatus.in_progress
         and not match.results
+    )
+
+
+def director_flag_is_material(match: Match) -> bool:
+    """Whether ``viewer_is_director`` can change anything in ``match``'s view —
+    the predicate the two read call sites (the HTTP ``GET /v1/matches/{id}``
+    handler and the MCP ``get_match`` tool) gate the director query on, so
+    neither pays an extra join for an answer the serializer would discard.
+
+    Two disjoint windows, one per affordance the flag drives:
+
+    - **A scorable match** (``is_scorable`` — live, two sides, no result yet):
+      the flag feeds ``can_score`` / ``can_finalize``, the scratchpad and the
+      "Post result" callout.
+    - **A live match carrying a standing proposal**: the flag feeds
+      ``negotiation.your_turn``, the Accept affordance. Both ``can_score`` and
+      ``can_finalize`` are already False here (each requires no result), and
+      there is no standing proposal in the first window, so the two windows
+      never overlap — together they are "live, and somebody could still act".
+
+    Every other match (completed, voided, pending) throws the answer away. Those
+    are exactly the matches people share links to, so the skip is the hot path.
+
+    One predicate, both call sites: the two read surfaces must widen together or
+    the MCP tool and the web BFF disagree about who may act on the same match."""
+    return is_scorable(match) or (
+        match.status == MatchStatus.in_progress and standing_result(match) is not None
     )
 
 
@@ -489,15 +550,21 @@ def serialize_details(
 ) -> MatchDetails:
     """Build the viewer-relative ``MatchDetails`` view for ``current_user_id``.
 
-    ``viewer_is_director`` is a second, independent input to ``can_score``
-    (#1523 constraint 10: "the read flag is a second change, not a consequence
-    of the [write-gate] one") — whether ``current_user_id`` created the
-    tournament that materialized ``match``, resolved by the caller (a query,
-    so it can't be computed here without a session). It defaults to ``False``
-    for every call site that doesn't pass it explicitly, which is deliberate:
-    only the HTTP detail route and the MCP ``get_match`` tool compute and pass
-    it. ``_list_row`` (``app.matches``) and every write-response call site stay
-    participant-only, by decision — see those call sites for why."""
+    ``viewer_is_director`` is a second, independent input to ``can_score``,
+    ``can_finalize`` and ``negotiation.your_turn`` (#1523 constraint 10: "the
+    read flag is a second change, not a consequence of the [write-gate] one") —
+    whether ``current_user_id`` created the tournament that materialized
+    ``match``, resolved by the caller (a query, so it can't be computed here
+    without a session). It defaults to ``False`` for every call site that
+    doesn't pass it explicitly, which is deliberate: only the HTTP detail route
+    and the MCP ``get_match`` tool compute and pass it. ``_list_row``
+    (``app.matches``) and every write-response call site stay participant-only,
+    by decision — see those call sites for why.
+
+    Which of the three flags it can move depends on where the match is in its
+    life: the scoring pair before any result exists, ``your_turn`` once a
+    player's proposal is standing. :func:`director_flag_is_material` is the
+    single predicate both callers use to skip the query when neither applies."""
     extras = extras or empty_extras()
     # The ``data`` view is built from the domain model. The match-details
     # endpoint loads it through MatchService/MatchRepository and passes it in;
@@ -577,7 +644,12 @@ def serialize_details(
         # Viewer-relative negotiation state — the standing proposal, whose turn
         # it is, and (when the opponent corrected the viewer's own proposal) the
         # diff. Drives the accept CTA + the negotiation callouts (#713).
-        negotiation=negotiation(match, current_user_id),
+        # ``viewer_is_director`` reaches it for the same reason it reaches
+        # ``can_finalize``: once a player's result stands, ``your_turn`` is the
+        # only flag left that can surface the director's authorized accept.
+        negotiation=negotiation(
+            match, current_user_id, viewer_is_director=viewer_is_director
+        ),
         # ``extras.recent_form`` is a read-only Sequence; the response model owns
         # its own list, so copy rather than alias it.
         recent_form=list(extras.recent_form),

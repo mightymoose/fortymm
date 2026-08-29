@@ -92,8 +92,8 @@ from app.match_scoring import delete_game_score as delete_game_score_core
 from app.match_scoring import enter_game_score as enter_game_score_core
 from app.match_scoring import update_game_score as update_game_score_core
 from app.match_serialization import (
+    director_flag_is_material,
     is_participant,
-    is_scorable,
     load_match_eager,
     serialize_details,
     view_extras,
@@ -610,14 +610,17 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
             if viewer_is_participant
             else empty_extras()
         )
-        # ``can_score`` is a second, independent widening from the write gate
-        # (#1523 constraint 10). Skip the query when the caller is already a
-        # participant (the fast, common-case path), and for a match nobody can
-        # score anyway — ``can_score`` ANDs this with ``is_scorable``, so the
-        # answer would be thrown away. Mirrors the HTTP ``get_match`` above.
+        # The director read flags are a second, independent widening from the
+        # write gate (#1523 constraint 10). Skip the query when the caller is
+        # already a participant (the fast, common-case path), and for a match
+        # where the answer changes nothing — ``director_flag_is_material`` names
+        # the two windows where it does (a scorable board for ``can_score`` /
+        # ``can_finalize``, a standing proposal for ``negotiation.your_turn``).
+        # Mirrors the HTTP ``get_match`` above, off the same predicate so the
+        # two surfaces can't drift on who may act.
         viewer_is_director = (
             not viewer_is_participant
-            and is_scorable(match)
+            and director_flag_is_material(match)
             and await is_tournament_director(db, match_id, user_id)
         )
         return serialize_details(

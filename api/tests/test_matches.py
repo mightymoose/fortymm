@@ -2066,6 +2066,93 @@ async def test_can_finalize_stays_false_for_a_signed_in_stranger_on_a_decided_bo
         assert body["can_score"] is False
 
 
+async def test_your_turn_is_true_for_the_director_on_a_players_standing_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player's posted result must not strand the director either.
+
+    ``can_finalize`` goes false the instant any result exists, so once a player
+    posts, the scoring pair the tests above cover is spent and
+    ``negotiation.your_turn`` is the only read flag left that can surface the
+    director's accept — which ``accept_result`` already authorizes. Asserted
+    together with the accept itself, because a true flag over a refused write
+    would be the same dead end in a different place."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=1)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-yourturn",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=1,
+        )
+        # A rated match between two real players, posted by one of them, leaves
+        # the result STANDING — the state the director has to be able to act on.
+        posted = await api_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 4}]
+            },
+        )
+        assert posted.status_code == 201
+        assert posted.json()["status"] == "in_progress"
+        result_id = posted.json()["negotiation"]["standing_result"]["id"]
+
+        body = (await director_client.get(f"/v1/matches/{created['id']}")).json()
+        # The scoring pair is spent, so this flag is carrying the affordance
+        # alone. Both are asserted so a future widening of `can_finalize` can't
+        # quietly make the `your_turn` assertion redundant.
+        assert body["can_finalize"] is False
+        assert body["can_score"] is False
+        assert body["negotiation"]["viewer_state"] == "review"
+        assert body["negotiation"]["your_turn"] is True
+
+        accepted = await director_client.post(
+            f"/v1/matches/{created['id']}/results/{result_id}/acceptance",
+        )
+        assert accepted.status_code == 201
+        assert accepted.json()["status"] == "completed"
+
+
+async def test_your_turn_stays_false_for_a_signed_in_stranger_on_a_standing_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The negotiation widening is the director's alone — a spectator on the
+    same standing result still gets the neutral read-only mapping, so no client
+    offers them an Accept the API would refuse."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await make_user(db_session, "yourturn-stranger-director")
+        await start_session(stranger_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=1)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-stranger-yourturn",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=1,
+        )
+        posted = await api_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 4}]
+            },
+        )
+        assert posted.status_code == 201
+
+        body = (await stranger_client.get(f"/v1/matches/{created['id']}")).json()
+        assert body["negotiation"]["viewer_state"] == "review"
+        assert body["negotiation"]["your_turn"] is False
+
+
 async def test_can_score_flag_stays_false_for_a_signed_in_stranger(
     api_client: AsyncClient, db_session: AsyncSession
 ):

@@ -1568,6 +1568,48 @@ async def test_director_can_accept_a_players_standing_result_via_mcp(
     assert accepted.structuredContent["status"] == "completed"
 
 
+async def test_get_match_your_turn_true_for_director_on_standing_result_via_mcp(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """The read flag behind the accept above. ``get_match`` and the HTTP detail
+    route resolve the director bit off one shared predicate
+    (``director_flag_is_material``), so this pins the MCP half of it: a client
+    reading the match sees whose turn it is without having to try the write and
+    read the error."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-yourturn-p2")
+    director = await make_user(db_session, "mcp-dir-yourturn-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-yourturn",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    # p1 proposes — a rated two-human match, so it stays standing.
+    proposed = await api_client.post(
+        f"/v1/matches/{match_id}/results",
+        json={"games": _DECISIVE_BOARD},
+    )
+    assert proposed.status_code == 201, proposed.text
+
+    async with _mcp_client(director_token) as client, client:
+        seen = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    assert seen.isError is False
+    assert seen.structuredContent is not None
+    # The scoring flags are spent once a result exists, so `your_turn` is the
+    # only one left that can say the director has something to do here.
+    assert seen.structuredContent["can_finalize"] is False
+    assert seen.structuredContent["negotiation"]["viewer_state"] == "review"
+    assert seen.structuredContent["negotiation"]["your_turn"] is True
+
+
 # ----- search_players / list_my_matches read tools -------------------------
 
 
