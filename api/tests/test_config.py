@@ -7,6 +7,7 @@ per test and see it take effect immediately — mirroring
 """
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import McpConnectorConfig, get_settings
 
@@ -175,3 +176,76 @@ def test_mcp_connector_strips_surrounding_whitespace_from_both_settings(
     assert get_settings().mcp_connector == McpConnectorConfig(
         url="https://uat.fortymm.com/api/mcp/", client_id="client-abc"
     )
+
+
+#: The five authentication rate-limit ceilings (issue #1590), each paired
+#: with the env var pydantic-settings maps it from and the production default
+#: it keeps when the variable is unset. Development/QA Compose raise these to
+#: 1,000; production and UAT deliberately supply no override.
+AUTH_RATE_LIMIT_SETTINGS: list[tuple[str, str, int]] = [
+    ("email_send_session_limit_per_hour", "EMAIL_SEND_SESSION_LIMIT_PER_HOUR", 5),
+    ("email_send_ip_limit_per_hour", "EMAIL_SEND_IP_LIMIT_PER_HOUR", 20),
+    ("email_resend_session_limit_per_hour", "EMAIL_RESEND_SESSION_LIMIT_PER_HOUR", 3),
+    ("email_resend_ip_limit_per_hour", "EMAIL_RESEND_IP_LIMIT_PER_HOUR", 10),
+    ("login_consume_ip_limit_per_hour", "LOGIN_CONSUME_IP_LIMIT_PER_HOUR", 60),
+]
+
+#: Environment values that are NOT a usable ceiling. Zero/negative violate
+#: the ``gt=0`` constraint; a fractional or non-numeric string is not an
+#: integer at all. Each must fail Settings construction rather than be
+#: coerced to some other ceiling or replaced with a fallback.
+INVALID_AUTH_RATE_LIMIT_VALUES = ["0", "-1", "5.5", "abc"]
+
+
+@pytest.mark.parametrize("attr, env_var, default", AUTH_RATE_LIMIT_SETTINGS)
+def test_auth_rate_limit_defaults_are_the_production_ceilings(
+    monkeypatch: pytest.MonkeyPatch, attr: str, env_var: str, default: int
+) -> None:
+    """With every ceiling variable unset, the app keeps 5/20/3/10/60 — the
+    tight production abuse tiers."""
+    for _, other_env_var, _ in AUTH_RATE_LIMIT_SETTINGS:
+        monkeypatch.delenv(other_env_var, raising=False)
+    assert getattr(get_settings(), attr) == default
+
+
+@pytest.mark.parametrize("attr, env_var, default", AUTH_RATE_LIMIT_SETTINGS)
+def test_auth_rate_limit_reads_from_env(
+    monkeypatch: pytest.MonkeyPatch, attr: str, env_var: str, default: int
+) -> None:
+    monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv(env_var, "42")
+    assert getattr(get_settings(), attr) == 42
+
+
+@pytest.mark.parametrize("selected_attr, selected_env_var, _", AUTH_RATE_LIMIT_SETTINGS)
+def test_auth_rate_limit_partial_override_changes_only_the_selected_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    selected_attr: str,
+    selected_env_var: str,
+    _: int,
+) -> None:
+    """The five ceilings stay independent under a partial override: the named
+    setting changes, the other four retain their production defaults."""
+    for attr, env_var, default in AUTH_RATE_LIMIT_SETTINGS:
+        expected = 7 if attr == selected_attr else default
+        if attr == selected_attr:
+            monkeypatch.setenv(env_var, "7")
+        else:
+            monkeypatch.delenv(env_var, raising=False)
+        assert getattr(get_settings(), attr) == expected
+
+
+@pytest.mark.parametrize("attr, env_var, default", AUTH_RATE_LIMIT_SETTINGS)
+@pytest.mark.parametrize("bad_value", INVALID_AUTH_RATE_LIMIT_VALUES)
+def test_auth_rate_limit_rejects_invalid_values(
+    monkeypatch: pytest.MonkeyPatch,
+    attr: str,
+    env_var: str,
+    default: int,
+    bad_value: str,
+) -> None:
+    """Invalid configuration must fail during settings construction — the
+    process refuses to boot — never start with an unintended limit."""
+    monkeypatch.setenv(env_var, bad_value)
+    with pytest.raises(ValidationError):
+        get_settings()
