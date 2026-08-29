@@ -39,11 +39,43 @@ describe('parseFixtures — the happy path', () => {
         matchStatus: null,
         tableId: null,
         scheduledStart: null,
+        tableOffReservation: null,
+        startOutsideReservationWindow: null,
         pinnedAt: null,
         callNotifiedCount: 0,
         completedAt: null,
       },
     ])
+  })
+
+  // #1537: the two stranding flags carried straight through, snake_case wire →
+  // camelCase domain, with no re-derivation — the server already computed them.
+  it('carries the stranding flags through untouched — both true, one true, and both null', () => {
+    const [flaggedBoth] = parseFixtures([
+      wire({
+        table_id: 'table-3',
+        scheduled_start: buildFixtureTimeRead('2026-06-09T14:30:00'),
+        table_off_reservation: true,
+        start_outside_reservation_window: true,
+      }),
+    ])
+    expect(flaggedBoth.tableOffReservation).toBe(true)
+    expect(flaggedBoth.startOutsideReservationWindow).toBe(true)
+
+    const [flaggedTable] = parseFixtures([
+      wire({
+        table_id: 'table-3',
+        table_off_reservation: true,
+        start_outside_reservation_window: null,
+      }),
+    ])
+    expect(flaggedTable.tableOffReservation).toBe(true)
+    expect(flaggedTable.startOutsideReservationWindow).toBeNull()
+
+    // Not applicable — the designed default (`wire()`'s own): no placement at all.
+    const [unplaced] = parseFixtures([wire()])
+    expect(unplaced.tableOffReservation).toBeNull()
+    expect(unplaced.startOutsideReservationWindow).toBeNull()
   })
 
   // `[]` is the DESIGNED state of an event whose draw has not been cut (ADR-0786) — not

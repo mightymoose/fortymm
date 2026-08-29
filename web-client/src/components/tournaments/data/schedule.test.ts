@@ -114,6 +114,40 @@ describe('buildSchedule', () => {
     expect(byId.get('fx-est')!.callNotifiedCount).toBe(0)
   })
 
+  // #1537: the server's two stranding flags, and the reservation name the Schedule
+  // tab's note needs to speak — carried straight through `toScheduleMatch`, never
+  // re-derived (the server already computed them).
+  it('carries the stranding flags and the reservation’s name through untouched', () => {
+    const tournament = buildTournament({
+      events: [
+        buildDrawnEvent({
+          reservations: [buildReservation({ id: 'res-a', name: 'Morning Reservation' })],
+          fixtures: [
+            buildFixture({
+              id: 'fx-flagged',
+              groupId: groupIdFor('res-a'),
+              tableId: 't9',
+              scheduledStart: at('09:00'),
+              tableOffReservation: true,
+              startOutsideReservationWindow: true,
+            }),
+          ],
+        }),
+      ],
+    })
+    const [match] = buildSchedule(tournament, buildTables()).tables[0].matches
+    expect(match.tableOffReservation).toBe(true)
+    expect(match.startOutsideReservationWindow).toBe(true)
+    expect(match.reservationName).toBe('Morning Reservation')
+  })
+
+  it('names no reservation for an event-wide match — nothing to name', () => {
+    const tournament = buildTournament({ events: [buildBracketDrawnEvent()] })
+    const [match] = buildSchedule(tournament, buildTables()).awaiting
+    expect(match.reservation).toBe('event')
+    expect(match.reservationName).toBeNull()
+  })
+
   it('resolves a table from the catalogue, and shows a dangling ref rather than dropping it', () => {
     const tournament = buildTournament({
       events: [

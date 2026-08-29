@@ -290,6 +290,10 @@ async def test_an_rr_then_ko_event_with_no_reservation_previews_over_the_venue(
     assert resolved.reservation == "event"
     assert resolved.reservation_name == "Championship (whole venue)"
     assert resolved.group_count == 2
+    # This helper's ``derive_groups`` materialises only the group stage's own
+    # groups (#1484's knockout-stage group is a separate template entry it does not
+    # mint), so there is no bracket group here to share the reservation.
+    assert resolved.has_bracket is False
 
 
 async def test_an_over_capacity_reason_counts_the_groups_sharing_the_reservation(
@@ -327,6 +331,9 @@ async def test_an_over_capacity_reason_counts_the_groups_sharing_the_reservation
     assert reason.reservation_name == "Reservation A"
     assert reason.reservation == "booked"
     assert reason.group_count == 2
+    # Same reasoning as the event-wide case above: this helper's ``derive_groups``
+    # never mints the knockout stage's own group, so no bracket shares it.
+    assert reason.has_bracket is False
 
 
 def _run_recorded_preview_job(queue: Queue) -> None:

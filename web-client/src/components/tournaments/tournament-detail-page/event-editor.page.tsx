@@ -172,6 +172,21 @@ const scoped = (container: Container) => ({
   queryDeleteButton() {
     return container.queryByRole('button', { name: 'Delete event' })
   },
+  /** The #1537 newly-stranded-match confirmation — portals to the body like every
+   * other `AlertDialog` here, so these resolve fine against a scoped container too
+   * (`within` always falls through to `screen` for a portal in practice). */
+  queryStrandConfirm() {
+    return container.queryByTestId('strand-confirm-dialog')
+  },
+  getStrandConfirm() {
+    return container.getByTestId('strand-confirm-dialog')
+  },
+  getStrandConfirmSave() {
+    return container.getByTestId('strand-confirm-save')
+  },
+  getStrandConfirmCancel() {
+    return container.getByTestId('strand-confirm-cancel')
+  },
 })
 
 /**

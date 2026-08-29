@@ -361,6 +361,19 @@ const MatchRow = ({
   // time that is still the solver's plan says `est`; a called fixture wears its
   // called-at badge (and, past the first call, what the corrections cost).
   const notified = notifiedLabel(match.callNotifiedCount)
+  // #1537: the table left the venue catalogue entirely (a dangling `tableId`) — the
+  // SAME derivation `TableColumn` uses for its own "Removed from the catalogue"
+  // label (`column.table === null`, computed there from this same `tables`
+  // catalogue). That label already says the table is gone; a second note here
+  // saying the table isn't part of the reservation would be true but redundant —
+  // of course a table that no longer exists in the tournament isn't part of any
+  // reservation's slice of it. The WINDOW note is unaffected: it is about the time,
+  // not the table, so it stays independent.
+  const tableRemovedFromCatalogue =
+    match.tableId !== null && !tables.some((t) => t.id === match.tableId)
+  const showOffReservationNote =
+    match.tableOffReservation === true && !tableRemovedFromCatalogue
+  const showOutsideWindowNote = match.startOutsideReservationWindow === true
   return (
     <div
       data-testid={`schedule-match-${match.fixtureId}`}
@@ -425,6 +438,32 @@ const MatchRow = ({
           {scheduleStatusLabel(match.match)}
         </span>
       </div>
+      {/* #1537: the reservation-stranding notes — a plainly-worded fact, never an
+          accusation (a director's deliberate off-reservation placement reads the
+          same as an accidental strand left by a reservation edit). Unconditional —
+          shown to every viewer, not gated on `canEdit` like the control below —
+          because anyone reading the schedule benefits from knowing a placement no
+          longer matches its reservation. Both notes can fire on the same row (a
+          half-placement can only ever trip one; a full one can trip both), and
+          neither hides the other. */}
+      {(showOffReservationNote || showOutsideWindowNote) && (
+        <div className="flex flex-col gap-0.5 text-[11px] text-[color:var(--fg-3)]">
+          {showOffReservationNote && (
+            <span data-testid={`schedule-off-reservation-${match.fixtureId}`}>
+              {match.reservationName
+                ? `This table isn't part of ${match.reservationName}'s reservation.`
+                : "This table isn't part of the event's reserved tables."}
+            </span>
+          )}
+          {showOutsideWindowNote && (
+            <span data-testid={`schedule-outside-window-${match.fixtureId}`}>
+              {match.reservationName
+                ? `This time is outside ${match.reservationName}'s reservation window.`
+                : "This time is outside the event's own window."}
+            </span>
+          )}
+        </div>
+      )}
       {/* The control, for the director alone. A finished match (`!placeable`) is frozen
           server-side, so it gets no control — not a disabled one (ADR-0015). A non-owner
           gets none either way. */}

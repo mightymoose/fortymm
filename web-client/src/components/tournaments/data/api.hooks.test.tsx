@@ -1299,6 +1299,8 @@ describe('useCutDraw', () => {
         matchStatus: null,
         tableId: null,
         scheduledStart: null,
+        tableOffReservation: null,
+        startOutsideReservationWindow: null,
         pinnedAt: null,
         callNotifiedCount: 0,
         completedAt: null,

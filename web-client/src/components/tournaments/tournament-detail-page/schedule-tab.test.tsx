@@ -28,6 +28,7 @@ import {
   buildScheduleSolve,
   buildTables,
   buildTournament,
+  groupIdFor,
 } from '../data/seed.factory'
 import { scheduleTabPage as page } from './schedule-tab.page'
 
@@ -84,6 +85,123 @@ describe('ScheduleTab', () => {
       tables: buildTables(),
     })
     expect(page.queryWindows()).toBeInTheDocument()
+  })
+
+  // #1537: the two server-computed stranding flags, surfaced as a plain, neutral note
+  // on the match's own row — informational, never an accusation, and shown to every
+  // viewer (unlike the placement control just below it, which is `canEdit`-gated).
+  describe('the reservation-stranding notes', () => {
+    /** A placed, in-progress match under `Reservation A` (`buildDrawnEvent`'s own
+     * default name) — the row both notes render on. */
+    const buildFlaggedEvent = (
+      overrides: Partial<Parameters<typeof buildFixture>[0]> = {},
+    ) =>
+      buildDrawnEvent({
+        fixtures: [
+          buildFixture({
+            id: 'fx-a-1',
+            groupId: groupIdFor('res-a'),
+            tableId: 't1',
+            scheduledStart: '2026-06-13T09:00:00',
+            matchId: 'm-a-1',
+            matchStatus: 'in_progress',
+            ...overrides,
+          }),
+        ],
+      })
+
+    it('names the table off its reservation', () => {
+      page.render({
+        tournament: buildTournament({
+          events: [buildFlaggedEvent({ tableOffReservation: true })],
+        }),
+        tables: buildTables(),
+      })
+      expect(page.queryOffReservationNote('fx-a-1')).toHaveTextContent(
+        "This table isn't part of Reservation A's reservation.",
+      )
+      expect(page.queryOutsideWindowNote('fx-a-1')).not.toBeInTheDocument()
+    })
+
+    it('names the time outside its reservation window', () => {
+      page.render({
+        tournament: buildTournament({
+          events: [buildFlaggedEvent({ startOutsideReservationWindow: true })],
+        }),
+        tables: buildTables(),
+      })
+      expect(page.queryOutsideWindowNote('fx-a-1')).toHaveTextContent(
+        "This time is outside Reservation A's reservation window.",
+      )
+      expect(page.queryOffReservationNote('fx-a-1')).not.toBeInTheDocument()
+    })
+
+    it('shows BOTH notes on one row, legibly, when both axes are flagged', () => {
+      page.render({
+        tournament: buildTournament({
+          events: [
+            buildFlaggedEvent({
+              tableOffReservation: true,
+              startOutsideReservationWindow: true,
+            }),
+          ],
+        }),
+        tables: buildTables(),
+      })
+      // Neither note hides the other — both render, each its own node.
+      expect(page.queryOffReservationNote('fx-a-1')).toBeInTheDocument()
+      expect(page.queryOutsideWindowNote('fx-a-1')).toBeInTheDocument()
+    })
+
+    it('shows neither note when the flags are not applicable (the ordinary case)', () => {
+      page.render({
+        tournament: buildTournament({ events: [buildFlaggedEvent()] }),
+        tables: buildTables(),
+      })
+      expect(page.queryOffReservationNote('fx-a-1')).not.toBeInTheDocument()
+      expect(page.queryOutsideWindowNote('fx-a-1')).not.toBeInTheDocument()
+    })
+
+    it('renders the notes for a NON-OWNER too — unlike the placement control, this is not canEdit-gated', () => {
+      page.render({
+        tournament: buildTournament({
+          events: [buildFlaggedEvent({ tableOffReservation: true })],
+          canEdit: false,
+        }),
+        tables: buildTables(),
+      })
+      expect(page.queryOffReservationNote('fx-a-1')).toBeInTheDocument()
+      // The control really is gone for this viewer — proves the note isn't riding
+      // along inside it.
+      expect(page.queryPlaceTrigger('fx-a-1')).not.toBeInTheDocument()
+    })
+
+    // A table can be off its reservation for TWO different reasons that must not be
+    // conflated: (1) it is a real table, just not part of this reservation's slice of
+    // the venue, or (2) it left the tournament's table catalogue entirely — a dangling
+    // ref, which already gets its own "Removed from the catalogue" label
+    // (`TableColumn`). Only case 2 is suppressed here; the window note is unaffected.
+    it('suppresses the off-reservation note for a table removed from the catalogue — "Removed from the catalogue" already says so', () => {
+      page.render({
+        tournament: buildTournament({
+          events: [
+            buildFlaggedEvent({
+              tableId: 't-removed',
+              tableOffReservation: true,
+              startOutsideReservationWindow: true,
+            }),
+          ],
+        }),
+        // The catalogue this tournament actually holds — `t-removed` is not in it.
+        tables: buildTables(),
+      })
+      expect(page.getTableColumn('t-removed')).toHaveTextContent(
+        'Removed from the catalogue',
+      )
+      expect(page.queryOffReservationNote('fx-a-1')).not.toBeInTheDocument()
+      // The window note is a fact about the TIME, not the table — it still shows.
+      expect(page.queryOutsideWindowNote('fx-a-1')).toBeInTheDocument()
+    })
   })
 
   it('shows the designed empty state when no draw has been cut anywhere', () => {

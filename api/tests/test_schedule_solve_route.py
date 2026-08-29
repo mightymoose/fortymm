@@ -442,6 +442,8 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
                 "required_min": 600,
                 "capacity_min": 480,
                 "table_count": 1,
+                "group_count": 2,
+                "has_bracket": True,
             },
         ],
     )
@@ -468,6 +470,8 @@ async def test_solve_strip_carries_resolved_infeasibility_reasons(
     assert over_capacity["required_min"] == 600
     assert over_capacity["capacity_min"] == 480
     assert over_capacity["table_count"] == 1
+    assert over_capacity["group_count"] == 2
+    assert over_capacity["has_bracket"] is True
 
 
 async def test_solve_strip_carries_resolved_placement_conflicts(

@@ -9456,18 +9456,35 @@ internal enum Components {
         /// A reservation whose aggregate match-time (``required_min``) exceeds the
         /// table-minutes its window offers (``capacity_min`` = window span ×
         /// ``table_count``). Resolved: the reservation ``name``, which kind of
-        /// ``reservation`` it is, its ``HH:MM`` bounds, and ``group_count`` — how many
-        /// groups' fixtures the reservation holds (#1389). Two groups sharing one
-        /// reservation compete for one set of tables, so a count above one names a cause
-        /// the director can act on: add a reservation, and the groups re-spread across
-        /// them. It is the groups mapped to a booked reservation, or the groups with no
-        /// reservation for an event-wide one (0 when only a knockout stage sits in it).
-        /// The minutes stay integers.
+        /// ``reservation`` it is, its ``HH:MM`` bounds, ``group_count`` and
+        /// ``has_bracket``.
         ///
-        /// ``group_count`` defaults to ``0``: the solve ledger stores resolved reasons as
-        /// JSONB, so a row written before the field existed reads back as 0, and a client
-        /// renders no group clause for it — the same read-back default
-        /// :data:`ReservationKind` carries.
+        /// ``group_count`` is how many **group-stage** groups' fixtures the reservation
+        /// holds (#1389, re-scoped by #1535 to exclude the knockout stage's own group —
+        /// see below). Two group-stage groups sharing one reservation compete for one set
+        /// of tables, so a count above one names a cause the director can act on: add a
+        /// reservation, and the groups re-spread across them. It is the group-stage groups
+        /// mapped to a booked reservation, or the group-stage groups with no reservation
+        /// for an event-wide one (0 when only a knockout stage sits in it).
+        ///
+        /// ``has_bracket`` is whether the knockout stage's own group (#1484) also shares
+        /// this reservation. It never changes whether the clause fires — ``group_count``
+        /// alone still gates that — it only tells the client whether to name the bracket
+        /// alongside the count when the clause does fire. The API carries this rather than
+        /// the client inferring it from a draw type or a name. A single-elim or swiss
+        /// event's sole stage does not seat both sides of its fixtures at the cut either
+        /// (:func:`~app.tournament_draws.group_stage_ids` excludes it, same as an
+        /// rr-then-ko event's knockout stage), so ``group_count`` is always ``0`` there —
+        /// never above the one that would open the clause. ``has_bracket`` is ``False``
+        /// for that reservation too: with no group-stage group of its own, the event has
+        /// no group stage for a bracket to sit beside, so its sole group is never named
+        /// one (Non-Goals: "Naming a bracket on a single_elim or swiss event. Their sole
+        /// group is already suppressed"). The minutes stay integers.
+        ///
+        /// No read-back default on either field (#1535): unlike :data:`ReservationKind`,
+        /// which still defaults for pre-event-wide-reservation ledger rows, the operator
+        /// deletes any solve-ledger row written before this change rather than the API
+        /// growing a default whose only job is rendering one.
         ///
         /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead`.
         internal struct ReservationOverCapacityRead: Codable, Hashable, Sendable {
@@ -9497,7 +9514,9 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/table_count`.
             internal var tableCount: Swift.Int
             /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/group_count`.
-            internal var groupCount: Swift.Int?
+            internal var groupCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReservationOverCapacityRead/has_bracket`.
+            internal var hasBracket: Swift.Bool
             /// Creates a new `ReservationOverCapacityRead`.
             ///
             /// - Parameters:
@@ -9510,6 +9529,7 @@ internal enum Components {
             ///   - capacityMin:
             ///   - tableCount:
             ///   - groupCount:
+            ///   - hasBracket:
             internal init(
                 kind: Components.Schemas.ReservationOverCapacityRead.KindPayload? = nil,
                 reservationName: Swift.String,
@@ -9519,7 +9539,8 @@ internal enum Components {
                 requiredMin: Swift.Int,
                 capacityMin: Swift.Int,
                 tableCount: Swift.Int,
-                groupCount: Swift.Int? = nil
+                groupCount: Swift.Int,
+                hasBracket: Swift.Bool
             ) {
                 self.kind = kind
                 self.reservationName = reservationName
@@ -9530,6 +9551,7 @@ internal enum Components {
                 self.capacityMin = capacityMin
                 self.tableCount = tableCount
                 self.groupCount = groupCount
+                self.hasBracket = hasBracket
             }
             internal enum CodingKeys: String, CodingKey {
                 case kind
@@ -9541,6 +9563,7 @@ internal enum Components {
                 case capacityMin = "capacity_min"
                 case tableCount = "table_count"
                 case groupCount = "group_count"
+                case hasBracket = "has_bracket"
             }
         }
         /// One reservation of an event a client **edits** (``PATCH …/events/{id}``):
@@ -11927,6 +11950,49 @@ internal enum Components {
         ///   (e.g. a bar's width) and a pre-rendered venue-local label — so a client juggles
         ///   no timezones itself, even though ``Match.completed_at`` is stored as an ordinary
         ///   UTC timestamp and the two placement columns are venue-anchored instants.
+        /// * ``table_off_reservation`` — ``true`` when this fixture's placed ``table_id``
+        ///   is **not** one of the tables of the reservation it is scheduled against
+        ///   (ADR-0790's soft "the table belongs to the group's reservation" claim, made
+        ///   *visible* — never enforced, ADR-0790 stands). Judged against the fixture's
+        ///   group's **mapped** reservation when one exists, or the event-wide reservation
+        ///   (the event's own window, the tournament's whole table catalogue — ADR
+        ///   20260807) when it does not (``app.schedule_solves.restricting_reservation_key``
+        ///   is the one rule this reads through, same as the solver). A director may edit a
+        ///   booked reservation's own tables after the draw is cut — the *set* of
+        ///   reservations freezes at the cut (ADR-0786/#1387), each reservation's own
+        ///   fields do not — which can silently strand an already-placed or already-called
+        ///   match; the solver deliberately never repairs it (reservation membership does
+        ///   not break a pin, ``app.schedule_solves`` module docstring), so this flag is
+        ///   what makes the stranding visible. ``null`` — never ``false`` — when the
+        ///   question does not apply: no ``table_id`` is placed, or the linked match is
+        ///   ``completed``/``voided`` (its placement is history; the flag stops mattering
+        ///   once the match is decided).
+        /// * ``start_outside_reservation_window`` — the same idea, on the *time* half of
+        ///   the placement: ``true`` when ``scheduled_start`` falls outside that same
+        ///   reservation's window. The window is a **closed interval**,
+        ///   ``[window_start, window_end]`` — a start landing exactly on either edge
+        ///   counts as *inside*. This is a deliberate, standalone booking-semantics
+        ///   choice — a reservation booked through 12:30 naturally includes a match
+        ///   starting AT 12:30 as still within the booked slot — and it does **not**
+        ///   mirror ``app.scheduling``'s solver-grid ``Window``, which is a *different*
+        ///   thing for a *different* purpose: that type is documented half-open,
+        ///   ``[start_min, end_min)``, and ``PastWindow`` fires (treats the window as
+        ///   already unschedulable) the instant ``now`` **reaches** ``end_min`` — the
+        ///   opposite edge convention from this flag's. The two need not agree: one
+        ///   judges whether a whole day still has any solver capacity left, the other
+        ///   whether an already-placed instant falls inside a director-facing booked
+        ///   slot. ``null`` — never ``false`` — under the same two conditions as
+        ///   ``table_off_reservation``: no ``scheduled_start`` is placed, or the linked
+        ///   match is ``completed``/``voided``. The two flags are independent — a
+        ///   half-placement (only a table, or only a start) can flag its one placed
+        ///   half while the other stays ``null``.
+        ///
+        /// Both flags are **computed on read, never stored** (ADR-0790, "flags derived on
+        /// read, not invariants") — the two of the ADR's three deferred facts this ticket
+        /// (#1537) implements; double-booking, the third, stays deferred. Before the draw
+        /// is cut an event has no fixtures at all, so neither flag is ever raised on an
+        /// undrawn event — that falls out of "no fixtures to flag", not a special case
+        /// here.
         ///
         /// The entries are carried as **ids only**. The name and username behind
         /// ``entry_a_id`` are already on this page — the event's ``entrants`` list carries
@@ -11996,6 +12062,10 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/scheduled_start`.
             internal var scheduledStart: Components.Schemas.TournamentFixtureRead.ScheduledStartPayload?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/table_off_reservation`.
+            internal var tableOffReservation: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/start_outside_reservation_window`.
+            internal var startOutsideReservationWindow: Swift.Bool?
             /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pinned_at`.
             internal struct PinnedAtPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentFixtureRead/pinned_at/value1`.
@@ -12053,6 +12123,8 @@ internal enum Components {
             ///   - matchStatus:
             ///   - tableId:
             ///   - scheduledStart:
+            ///   - tableOffReservation:
+            ///   - startOutsideReservationWindow:
             ///   - pinnedAt:
             ///   - callNotifiedCount:
             ///   - completedAt:
@@ -12069,6 +12141,8 @@ internal enum Components {
                 matchStatus: Components.Schemas.TournamentFixtureRead.MatchStatusPayload? = nil,
                 tableId: Swift.String? = nil,
                 scheduledStart: Components.Schemas.TournamentFixtureRead.ScheduledStartPayload? = nil,
+                tableOffReservation: Swift.Bool? = nil,
+                startOutsideReservationWindow: Swift.Bool? = nil,
                 pinnedAt: Components.Schemas.TournamentFixtureRead.PinnedAtPayload? = nil,
                 callNotifiedCount: Swift.Int,
                 completedAt: Components.Schemas.TournamentFixtureRead.CompletedAtPayload? = nil
@@ -12085,6 +12159,8 @@ internal enum Components {
                 self.matchStatus = matchStatus
                 self.tableId = tableId
                 self.scheduledStart = scheduledStart
+                self.tableOffReservation = tableOffReservation
+                self.startOutsideReservationWindow = startOutsideReservationWindow
                 self.pinnedAt = pinnedAt
                 self.callNotifiedCount = callNotifiedCount
                 self.completedAt = completedAt
@@ -12102,6 +12178,8 @@ internal enum Components {
                 case matchStatus = "match_status"
                 case tableId = "table_id"
                 case scheduledStart = "scheduled_start"
+                case tableOffReservation = "table_off_reservation"
+                case startOutsideReservationWindow = "start_outside_reservation_window"
                 case pinnedAt = "pinned_at"
                 case callNotifiedCount = "call_notified_count"
                 case completedAt = "completed_at"
