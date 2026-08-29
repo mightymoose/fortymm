@@ -557,18 +557,22 @@ def serialize_details(
             (viewer_is_participant or viewer_is_director) and is_scorable(match)
         ),
         # True iff the saved games already form a decided, validly-ordered
-        # match AND no result is currently posted — the FE flips the scoring
-        # page's submit button label to "Post result" when this is true.
+        # match AND no result is currently posted.
         #
-        # Deliberately NOT widened to the director (#1523): this flag is
-        # solely about the FIRST-proposal submit button's label on the
-        # participant scoring page — a decision the ticket's ACs don't touch
-        # (the director's propose-result path works regardless of what this
-        # flag says; the HTTP/MCP write gate is ``load_match_for_write``, not
-        # this read-only label predicate). Widening it would be an
-        # unrequested web-client-facing UX call, out of this ticket's scope.
+        # Widened to the director alongside ``can_score`` (#1523). It is the
+        # ONLY thing that renders the match page's "Post result" callout
+        # (``finalize-callout-query.ts``), and a decided board reports
+        # ``current_game: None``, which withdraws the Score CTA. Left
+        # participant-only, a director arriving at a board the two players
+        # scored and walked away from would see neither affordance and have no
+        # way to post the result — the exact scorers'-table recovery this
+        # ticket exists for. iOS ANDs this with its own participation check
+        # (``MatchService.common``), so no director scoring surface appears
+        # there.
         can_finalize=(
-            viewer_is_participant and len(match.sides) >= 2 and _can_finalize(match)
+            (viewer_is_participant or viewer_is_director)
+            and len(match.sides) >= 2
+            and _can_finalize(match)
         ),
         # Viewer-relative negotiation state — the standing proposal, whose turn
         # it is, and (when the opponent corrected the viewer's own proposal) the

@@ -1983,6 +1983,89 @@ async def test_can_score_flag_is_true_for_the_director_on_the_detail_route(
         assert response.json()["can_score"] is True
 
 
+async def test_the_director_can_still_post_a_board_the_players_left_decided(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A decided-but-unposted board must not strand the director.
+
+    `current_game` goes null once the board decides, which withdraws the Score
+    CTA, so `can_finalize` is the only thing left that renders the match page's
+    "Post result" callout. Both flags are asserted together because it is the
+    PAIR that decides whether the director has any affordance at all.
+    """
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-canfinalize",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+        # The two players score the match out and walk away without posting.
+        for game_number in (1, 2):
+            scored = await api_client.post(
+                f"/v1/matches/{created['id']}/games/{game_number}/scores/new",
+                json={"side_1_points": 11, "side_2_points": 4},
+            )
+            assert scored.status_code == 201
+
+        body = (await director_client.get(f"/v1/matches/{created['id']}")).json()
+        # The board decided, so there is no next game to deep-link to.
+        assert body["current_game"] is None
+        assert body["can_finalize"] is True
+
+        # And the callout's one-click post actually works for the director.
+        posted = await director_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert posted.status_code == 201
+        assert posted.json()["status"] == "completed"
+
+
+async def test_can_finalize_stays_false_for_a_signed_in_stranger_on_a_decided_board(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The widening is the director's alone — a spectator on the same decided
+    board gets no "Post result" callout."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await make_user(db_session, "canfinalize-stranger-director")
+        await start_session(stranger_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-stranger-canfinalize",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+        for game_number in (1, 2):
+            scored = await api_client.post(
+                f"/v1/matches/{created['id']}/games/{game_number}/scores/new",
+                json={"side_1_points": 11, "side_2_points": 4},
+            )
+            assert scored.status_code == 201
+
+        body = (await stranger_client.get(f"/v1/matches/{created['id']}")).json()
+        assert body["can_finalize"] is False
+        assert body["can_score"] is False
+
+
 async def test_can_score_flag_stays_false_for_a_signed_in_stranger(
     api_client: AsyncClient, db_session: AsyncSession
 ):
