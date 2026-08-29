@@ -53,8 +53,10 @@ const scoped = (container: Container) => ({
   getAddReservationButton() {
     return container.getByRole('button', { name: /Add (first )?reservation/ })
   },
+  /** Every Remove-reservation button on the Reservations tab, in card order — each
+   * names the card it removes (#1441): `Remove reservation 1: Reservation A`. */
   getRemoveReservationButtons() {
-    return container.queryAllByRole('button', { name: 'Remove reservation' })
+    return container.queryAllByRole('button', { name: /^Remove reservation/ })
   },
   /** #1482's cap notice on the Reservations tab — why Add is disabled. */
   queryReservationsCapNotice() {

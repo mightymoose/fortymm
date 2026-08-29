@@ -46,12 +46,16 @@ const scoped = (container: Container) => ({
   getSelectedTableToggle(label: string) {
     return container.getByRole('button', { name: label, pressed: true })
   },
+  /** The Remove control, matched on the prefix every target-specific accessible name
+   * shares (#1441). A test asserting the exact name reads it back with
+   * `toHaveAccessibleName` — the format itself is pinned in `reservation-card.test.tsx`,
+   * not re-derived here. */
   getRemoveButton() {
-    return container.getByRole('button', { name: 'Remove reservation' })
+    return container.getByRole('button', { name: /^Remove reservation/ })
   },
   /** Absent for a viewer: a mutating affordance is hidden, never disabled. */
   queryRemoveButton() {
-    return container.queryByRole('button', { name: 'Remove reservation' })
+    return container.queryByRole('button', { name: /^Remove reservation/ })
   },
   /** The reservation's name, read back as text (the read-only counterpart of the name
    * box). */
