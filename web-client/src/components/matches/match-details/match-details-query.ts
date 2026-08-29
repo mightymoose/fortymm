@@ -138,12 +138,18 @@ export function refetchWhileAwaitingAcceptance(
  *
  * Spectators never see the banner (a spectator on an already-callable match
  * has `not_scorable_reason: null`, not `'not_called'` — see the scorable/
- * spectator distinction in web-client/CLAUDE.md) and so never poll here. */
+ * spectator distinction in web-client/CLAUDE.md) and so never poll here.
+ *
+ * Also stops once the tournament is `archived`: an archived tournament has
+ * already concluded, so a fixture still `not_called` there will never be
+ * called — polling forever for a call that can't come would burn a request
+ * every 5s on an open tab with nothing left to wait for. */
 export function refetchWhileAwaitingCall(
   query: Pick<Query<MatchDetailsResult>, "state">,
 ): number | false {
   const result = query.state.data;
   if (result?.not_scorable_reason !== "not_called") return false;
+  if (result.tournament?.tournament_status === "archived") return false;
   const isParticipant = result.unmigrated.sides.some(
     (side) => side.is_current_user_side,
   );

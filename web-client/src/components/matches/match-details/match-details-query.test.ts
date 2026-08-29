@@ -243,6 +243,31 @@ describe("matchDetailsQuery", () => {
     ).toBe(false);
   });
 
+  it("does not poll a participant once the tournament is archived — a fixture there will never be called", () => {
+    expect(
+      refetchWhileAwaitingCall(
+        queryWithNotScorableReason("not_called", {
+          sides: [
+            buildMatchDetailsSide({ is_current_user_side: true }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              is_current_user_side: false,
+            }),
+          ],
+          tournament: {
+            tournament_id: "t-archived",
+            tournament_name: "Summer Smash",
+            tournament_status: "archived",
+            event_id: "e-1",
+            event_name: "Open Singles",
+            table_label: null,
+            can_edit: false,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it.each(["result_posted", "no_opponent", "not_scorable", null] as const)(
     "does not poll once the match is scorable or unscorable for a reason other than not_called (%s)",
     (reason) => {

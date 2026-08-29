@@ -153,6 +153,25 @@ describe("callStatusQuery", () => {
     expect(result.current.data).toEqual({ kind: "awaiting_call_hidden" });
   });
 
+  it("projects 'not_scorable' (not 'awaiting_placement') for an uncalled fixture whose tournament already archived — never says 'hasn't gone live yet' about one that's over", async () => {
+    callStatusQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          not_scorable_reason: "not_called",
+          tournament: { ...liveTournament, tournament_status: "archived" },
+        }),
+      ),
+    );
+
+    const { result } = callStatusQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({
+      kind: "not_scorable",
+      reason: "not_scorable",
+    });
+  });
+
   it("projects 'result_posted' distinctly from the not-called cases", async () => {
     callStatusQueryPage.mockEndpoint(() =>
       HttpResponse.json(

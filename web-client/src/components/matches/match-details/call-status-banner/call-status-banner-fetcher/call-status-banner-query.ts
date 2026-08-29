@@ -73,6 +73,12 @@ const selectCallStatus = (match: MatchDetailsResult): CallStatusView => {
   // reason === "not_called"
   const tournament = match.tournament;
   if (!tournament) return { kind: "awaiting_call_hidden" };
+  if (tournament.tournament_status === "archived") {
+    // The tournament already concluded — never say "hasn't gone live yet"
+    // about one that's over, and never imply a call is still coming. Falls
+    // into the same generic terminal copy as any other stuck-forever match.
+    return { kind: "not_scorable", reason: "not_scorable" };
+  }
   if (tournament.tournament_status !== "live") {
     return {
       kind: "awaiting_placement",

@@ -28,7 +28,7 @@ worth injecting.
 
 import uuid
 from collections.abc import Awaitable
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, assert_never, cast
 
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -180,7 +180,14 @@ def ensure_scorable(match: Match) -> None:
     failed, and this only maps that reason to its status/message — so the
     write guard can't drift from either the ``can_score`` flag or the reason a
     client already saw before attempting the write. The carried
-    status+message reproduce each historical ``_enforce_scorable`` response."""
+    status+message reproduce each historical ``_enforce_scorable`` response.
+
+    An exhaustive ``match`` with an ``assert_never`` floor, no catch-all: adding
+    a fifth ``MatchNotScorableReason`` member without a case here is a ``mypy
+    --strict`` error, not a silent fall-through to an implicit ``return None``
+    that would let the write through unrejected — this function's own return
+    type is ``None`` on the accepted path too, so a non-exhaustive match here
+    has no return-type signal of its own to catch the gap."""
     reason = _scorability_reason(match)
     if reason is None:
         return
@@ -210,6 +217,8 @@ def ensure_scorable(match: Match) -> None:
             raise MatchNotScorableError(
                 http_status=409, message="This match is no longer scorable."
             )
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def ensure_game_in_range(match: Match, game_number: int) -> None:

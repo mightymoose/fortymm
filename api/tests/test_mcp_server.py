@@ -789,6 +789,103 @@ async def test_get_match_returns_same_details_as_http_get(
     assert result.structuredContent["can_score"] is True
 
 
+async def _wire_fixture_to_match(
+    db_session: AsyncSession,
+    *,
+    owner: User,
+    league: League,
+    match_id: str,
+    tournament_name: str = "MCP Parity Open",
+) -> None:
+    """Attach an already-created (casual-shaped) match to a fresh fixture on a
+    live, ``owner``-owned tournament — committed. Lets a test build the match
+    through the ordinary HTTP/MCP path (real sides, real settings) and then
+    retrofit the tournament linkage `#1288`'s ``tournament_context`` reverse-
+    looks-up, without hand-rolling ``Match``/``MatchSide`` rows."""
+    tournament = Tournament(
+        name=tournament_name,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "1 Shattuck Ave",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94704",
+            "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
+        },
+        league_id=league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.live,
+    )
+    db_session.add(tournament)
+    await db_session.flush()
+
+    stages = mint_stages(DrawType.single_elim)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
+        max_players=8,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        stages=stages,
+    )
+    stages[0].groups = event_groups([], event=event, group_count=1)
+    db_session.add(event)
+    await db_session.flush()
+
+    fixture = TournamentFixture(
+        stage_id=stages[0].id,
+        group_id=stages[0].groups[0].id,
+        round=1,
+        position=1,
+        entry_a_id=None,
+        entry_b_id=None,
+        match_id=uuid.UUID(match_id),
+        table_id=None,
+    )
+    db_session.add(fixture)
+    await db_session.commit()
+
+
+async def test_get_match_tournament_context_matches_http_get(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Regression (#1288 review): the existing parity test above only exercises
+    a casual match, so it can't catch a tool that drops the new tournament/
+    fixture context the HTTP GET carries. Wire a real match to a fixture on a
+    live, caller-owned tournament and assert ``get_match`` returns it
+    identically — same full-body parity check, this time actually exercising
+    the field it's meant to cover."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-get-tourn-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent)
+    await _wire_fixture_to_match(
+        db_session, owner=me, league=default_league, match_id=match_id
+    )
+
+    http_body = (await api_client.get(f"/v1/matches/{match_id}")).json()
+    assert http_body["tournament"] is not None
+    assert http_body["tournament"]["tournament_name"] == "MCP Parity Open"
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    assert result.isError is False
+    assert result.structuredContent == http_body
+    assert result.structuredContent is not None
+    assert result.structuredContent["tournament"]["tournament_name"] == (
+        "MCP Parity Open"
+    )
+
+
 async def test_get_match_unknown_id_raises_tool_error(
     api_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -1052,6 +1149,56 @@ async def test_enter_update_delete_game_score_round_trip(
             g for g in deleted.structuredContent["games"] if g["game_number"] == 1
         )
         assert game["score"] is None
+
+
+async def test_enter_game_score_tournament_context_matches_http_write(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Regression (#1288 review): the write path (``_serialize_written_match``,
+    shared by all five MCP score/negotiation write tools) independently drops
+    ``tournament=`` the same way ``get_match`` did — verified separately since
+    it is a different function. A score write on a tournament-linked match must
+    return the same ``tournament`` context the equivalent HTTP write does."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-tourn-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=5)
+    await _wire_fixture_to_match(
+        db_session,
+        owner=me,
+        league=default_league,
+        match_id=match_id,
+        tournament_name="MCP Score Parity Open",
+    )
+
+    http_response = await api_client.post(
+        f"/v1/matches/{match_id}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 5},
+    )
+    assert http_response.status_code == 201, http_response.text
+    http_body = http_response.json()
+    assert http_body["tournament"] is not None
+    assert http_body["tournament"]["tournament_name"] == "MCP Score Parity Open"
+
+    async with _mcp_client(raw) as client, client:
+        entered = await client.call_tool_mcp(
+            "enter_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 2,
+                "side_1_points": 11,
+                "side_2_points": 7,
+            },
+        )
+
+    assert entered.isError is False
+    assert entered.structuredContent is not None
+    assert entered.structuredContent["tournament"] is not None
+    assert entered.structuredContent["tournament"]["tournament_name"] == (
+        "MCP Score Parity Open"
+    )
 
 
 async def test_enter_game_score_out_of_range_is_schema_error(
