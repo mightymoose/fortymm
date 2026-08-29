@@ -5202,8 +5202,9 @@ export interface components {
          *
          *     **The body is optional, and its presence selects the actor** (ADR-0784):
          *
-         *     * **omitted** → you are entering *yourself*. Self-registration, gated on the
-         *       ``tournament.enter`` permission — the request every player already sends, which
+         *     * **omitted** → you are entering *yourself*. Self-registration, open to every
+         *       signed-in user but bounded by a per-IP rate limit (`TOURNAMENT_ENTRY_IP_PER_HOUR`,
+         *       30 per hour by default) — the request every player already sends, which
          *       carries no body at all and must keep working unchanged.
          *     * **``user_id`` present** → a *director* is entering somebody, which only the
          *       tournament's **owner** may do.

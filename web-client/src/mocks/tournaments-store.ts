@@ -962,9 +962,10 @@ function seed(): StoredTournament[] {
       description: 'Run by the league office — view only.',
       // `published`, not `live`: registration is open only while a tournament is
       // published (ADR-0017), and this is the seed's ONLY row the dev user does
-      // not own — so it is the only place `npm run dev` can show that entering is
-      // gated on the `tournament.enter` permission and NOT on ownership. Seeding
-      // it `live` would lock its entries and hide that. The closed-window states
+      // not own — so it is the only place `npm run dev` shows a published
+      // tournament someone else owns, where Enter still shows because entering
+      // needs no permission (#1092). Seeding it `live` would lock its entries and
+      // hide that. The closed-window states
       // are still one click away: start (then end) the owned Bay Area Open.
       status: 'published',
       league_id: DEFAULT_LEAGUE_ID,
@@ -988,8 +989,8 @@ function seed(): StoredTournament[] {
       events: [
         {
           // On a tournament the dev user does NOT own (but which IS published):
-          // entering is gated on the `tournament.enter` permission, not on
-          // ownership, so Enter still shows.
+          // entering needs no permission (#1092), only a published status, so
+          // Enter still shows.
           id: mockUuid('ev-cc-open'),
           tournament_id: CLUB_CHAMPS_ID,
           name: "Women's Championship Singles",
@@ -1918,9 +1919,9 @@ export interface EntryRefusal {
 /** Entering can fail six ways, mirroring the API: 404 (no such tournament or
  * event), 400 (not a singles event), and a 409 for each of the four refusals —
  * registration closed, already entered, rating-ineligible, event full. Every 409
- * is a coded `EntryRefusal` (ADR-0968) — the shape the route really sends. A 403
- * for a missing `tournament.enter` permission is the session's business, not the
- * store's — the dev session always holds it. */
+ * is a coded `EntryRefusal` (ADR-0968) — the shape the route really sends. No
+ * permission 403 exists here: entering needs no permission (#1092 deleted
+ * `tournament.enter`), so the store models only the 400/404/409 refusals. */
 export type EnterResult =
   | { ok: true; entrant: TournamentEntrantRead }
   | { ok: false; status: 400 | 404 }

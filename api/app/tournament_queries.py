@@ -77,11 +77,9 @@ def visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
     admit. A draft the caller cannot see is indistinguishable from one that was
     never created.
 
-    ``tournament.view`` is a separate question, and it is asked first — the HTTP
-    route hangs it off a dependency and the MCP adapter checks it before this
-    predicate is ever built, so a caller without the permission is refused (403 /
-    a ``ToolError``) first. Permission says "may you read tournaments at all";
-    this says "which ones are there for you to read".
+    No permission precedes this predicate: #1092 deleted ``tournament.view``, so
+    every signed-in caller reaches it. It says only *which* tournaments are there
+    for you to read — never *whether* you may read tournaments at all.
 
     One predicate, shared by the list route, the detail route, and the MCP
     ``get_tournament`` tool, because two copies of this rule would eventually

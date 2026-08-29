@@ -1249,7 +1249,9 @@ async def test_an_entry_cannot_land_after_the_tournament_has_gone_live(
             try:
                 # ``None`` is the body: self-registration (ADR-0784). The director's
                 # arm of the same handler takes a ``TournamentEntryCreate``.
-                await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
+                await enter_event(
+                    tournament_id, event_id, _direct_request(), None, session, entrant
+                )
                 return "entered"
             except HTTPException as exc:
                 return exc.status_code
@@ -1471,7 +1473,9 @@ async def test_an_uncapped_event_takes_no_capacity_count(
         entrant = (
             await session.execute(select(User).where(User.id == player_id))
         ).scalar_one()
-        await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
+        await enter_event(
+            tournament_id, event_id, _direct_request(), None, session, entrant
+        )
 
     assert not any(
         "count(" in statement.lower() and "tournament_entries" in statement
@@ -1504,7 +1508,9 @@ async def test_the_capacity_count_is_taken_under_the_tournament_row_lock(
         entrant = (
             await session.execute(select(User).where(User.id == player_id))
         ).scalar_one()
-        await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
+        await enter_event(
+            tournament_id, event_id, _direct_request(), None, session, entrant
+        )
 
     lock = _statement_index(
         statements, lambda s: "FOR UPDATE" in s, label="the tournament row lock"
@@ -1574,7 +1580,9 @@ async def test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry(
                 await session.execute(select(User).where(User.id == user_id))
             ).scalar_one()
             try:
-                await enter_event(tournament_id, event_id, _direct_request(), None, session, entrant)
+                await enter_event(
+                    tournament_id, event_id, _direct_request(), None, session, entrant
+                )
                 return "entered"
             except HTTPException as exc:
                 # The refusal's *code*, not just its status: a 409 that came from

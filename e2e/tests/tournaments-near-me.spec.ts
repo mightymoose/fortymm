@@ -88,8 +88,8 @@ test.describe('tournament list — near-me distance filter', () => {
     expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
     const director = await mintGuest(baseURL!)
     // An ephemeral guest holds no tournament permissions; the "Beta tester" role
-    // is what grants `tournament.view`/`create`, so without it every seed and
-    // list 403s (see `rbac-grant.ts`).
+    // is what grants `tournament.create`, so without it every seed 403s (the
+    // list itself needs no grant, #1092 — see `rbac-grant.ts`).
     grantBetaTester(director.username)
 
     // Two tournaments at two distinct addresses → two distinct, stable
@@ -156,10 +156,9 @@ test.describe('tournament list — near-me distance filter', () => {
   test('a partial lat/lng/radius_miles triple is rejected (422)', async ({ baseURL }) => {
     expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
     const guest = await mintGuest(baseURL!)
-    // `tournament.view` is required to reach the handler's all-or-nothing check;
-    // without the grant the list 403s before it can 422 the partial triple.
-    grantBetaTester(guest.username)
 
+    // The list carries no permission gate (#1092), so a zero-grant guest reaches
+    // the handler's all-or-nothing check — the 422 is the route's own validation.
     // The three params describe ONE location filter, not three independent knobs
     // — supplying some but not all is a boundary rejection, not a silently
     // ignored param.
