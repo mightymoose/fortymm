@@ -353,22 +353,33 @@ export const DetailsTab = ({
     if (!isDirty) form.clearErrors('root')
   }, [isDirty, form])
 
-  /** Re-seed the form when its committed DETAILS fields change — the
-   * reconciliation a successful save rides home on. Events and Tables mutate
-   * other fields of this same shared Tournament query, and their refetches must
-   * not wipe a Details draft or abandon its pending attempt merely because the
-   * containing object changed identity (#1593 review).
+  /** Re-seed the form when its tournament ID or committed DETAILS fields change
+   * — the reconciliation a successful save rides home on. The ID is part of the
+   * snapshot even though it is not an editable field: this route can move to an
+   * already-cached tournament in the same component instance, and equal Details
+   * values do not make it the same entity. A draft from the old ID must never be
+   * left available to save against the new one (#1593 review).
+   *
+   * Events and Tables mutate other fields of this same shared Tournament query,
+   * and their refetches must not wipe a Details draft or abandon its pending
+   * attempt merely because the containing object changed identity.
    *
    * An effect, not the adjust-during-render dance the draft state used: `reset`
    * is a side effect on form state and the DOM, and does not belong in a render.
    *
    * A REF, not state, for the same reason nothing renders from it — it only
    * decides whether this effect resets. */
-  const committedValuesRef = useRef(valuesFrom(tournament))
+  const committedRef = useRef({
+    id: tournament.id,
+    values: valuesFrom(tournament),
+  })
   useEffect(() => {
     const committedValues = valuesFrom(tournament)
-    if (!sameValues(committedValues, committedValuesRef.current)) {
-      committedValuesRef.current = committedValues
+    if (
+      tournament.id !== committedRef.current.id ||
+      !sameValues(committedValues, committedRef.current.values)
+    ) {
+      committedRef.current = { id: tournament.id, values: committedValues }
       // The re-seed abandons the snapshot a pending save was sent, exactly as
       // the Revert button does — bump the generation with the reset (#1593
       // review).

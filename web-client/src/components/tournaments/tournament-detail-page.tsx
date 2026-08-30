@@ -44,6 +44,10 @@ export interface TournamentDetailPageProps {
    * a rejection, and reports every failure inline — so a rejection must reach it
    * rather than being swallowed by a toast. */
   onUpdate: (tournament: Tournament) => Promise<void>
+  /** While the Details write is pending, its form is the only failure reporter.
+   * The back breadcrumb is therefore withheld so it cannot unmount that form
+   * before the awaited refusal is rendered inline (#1593). */
+  savingDetails?: boolean
   /** Persist an edited table catalogue (add/remove from the Tables tab) as the
    * server's id-keyed diff (ADR 20260801). **The returned promise is load-bearing**:
    * `TablesTab` awaits it and turns the 409 on removing an in-use table into a
@@ -160,6 +164,7 @@ export const TournamentDetailPage = ({
   tournament,
   allTables,
   onUpdate,
+  savingDetails = false,
   onChangeCatalogue,
   onCreateEvent,
   onUpdateEvent,
@@ -248,7 +253,10 @@ export const TournamentDetailPage = ({
       <div className="mx-auto w-full max-w-[1320px] px-12 pt-11 pb-6">
         <PageHeading
           breadcrumb={[
-            { label: 'Tournaments', onClick: onBack },
+            {
+              label: 'Tournaments',
+              onClick: savingDetails ? undefined : onBack,
+            },
             { label: tournament.name },
           ]}
           title={tournament.name}

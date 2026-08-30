@@ -89,6 +89,34 @@ describe('DetailsTab', () => {
     expect(detailsTabPage.querySaveButton()).toBeNull()
   })
 
+  it('re-seeds when the tournament id changes despite identical committed Details values', async () => {
+    const onUpdate = vi.fn()
+    const first = buildTournament({ id: 'tournament-one' })
+    const second = buildTournament({ id: 'tournament-two' })
+    const view = detailsTabPage.render({ tournament: first, onUpdate })
+
+    await userEvent.type(detailsTabPage.getNameInput(), ' leaked draft')
+    expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+
+    // The router can reuse this component when a cached tournament replaces the
+    // current one. All eight committed Details values happen to match, so the id
+    // is the only fact that says this is a different form and its draft must go.
+    view.rerenderWith({ tournament: second })
+
+    expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+    expect(detailsTabPage.querySaveButton()).toBeNull()
+
+    await userEvent.type(detailsTabPage.getDescriptionInput(), ' For tournament two.')
+    await userEvent.click(detailsTabPage.querySaveButton()!)
+
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'tournament-two',
+        name: 'Bay Area Open 2026',
+      }),
+    )
+  })
+
   // Status is not an editable field (ADR-0017): it moves only across a guarded
   // edge, so this tab offers no way to set one. The four-way toggle that used to
   // live here could ask for `draft → archived`, an edge the server does not have

@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
+import { StrictMode } from 'react'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -96,9 +97,11 @@ function renderRoute(initialEntry: string) {
   })
   return {
     ...render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </StrictMode>,
     ),
     router,
     // Exposed so a test can force the background refetch every event mutation
@@ -632,5 +635,67 @@ describe('tournament detail route — a refused Details save is reported inline 
     // The form-level alert stays out of it: this refusal was attributed.
     expect(screen.queryByTestId('details-save-error')).not.toBeInTheDocument()
     expect(patches).toBe(1)
+  })
+
+  it('blocks route departure until a pending PATCH refusal is reported inline', async () => {
+    const user = userEvent.setup()
+    mockEditableTournament()
+    let patches = 0
+    let refuse!: () => void
+    server.use(
+      http.patch('*/v1/tournaments/:id', async () => {
+        patches += 1
+        await new Promise<void>((resolve) => {
+          refuse = resolve
+        })
+        return HttpResponse.json(
+          {
+            detail: [
+              { type: 'string_too_long', loc: ['body', 'name'], msg: PYDANTIC },
+            ],
+          },
+          { status: 422 },
+        )
+      }),
+    )
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}`)
+    await screen.findByRole('heading', { level: 1 })
+
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    await user.type(screen.getByLabelText(/Name/), '!')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(patches).toBe(1))
+
+    // The save remains pending. With no breadcrumb button there is no route
+    // departure to unmount the form that owns this mutation's one error channel.
+    expect(
+      screen.queryByRole('button', { name: 'Tournaments' }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Tournaments')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`/tournaments/${UNKNOWN_ID}`)
+
+    // The breadcrumb is not the only way out. A global AppShell link (or any
+    // other router navigation) is refused by the route-level pending blocker.
+    await act(async () => {
+      // A blocked router navigation deliberately leaves its promise pending;
+      // fire it as the AppShell link would, then let the blocker's predicate run.
+      void router.navigate({ to: '/tournaments' })
+      await Promise.resolve()
+    })
+    expect(router.state.location.pathname).toBe(`/tournaments/${UNKNOWN_ID}`)
+    expect(screen.queryByText('tournaments list')).not.toBeInTheDocument()
+
+    await act(async () => refuse())
+
+    expect(
+      await screen.findByText(
+        'The Name was rejected. Check that field and try again.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(PYDANTIC)).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Tournaments' }),
+    ).toBeInTheDocument()
   })
 })

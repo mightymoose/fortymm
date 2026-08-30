@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import {
   createFileRoute,
   notFound,
+  useBlocker,
   useNavigate,
   useRouter,
 } from '@tanstack/react-router'
@@ -80,6 +81,18 @@ function TournamentDetailRoute() {
   const createEvent = useCreateEvent(tournamentId)
   const updateEvent = useUpdateEvent(tournamentId)
   const deleteEvent = useDeleteEvent(tournamentId)
+
+  /** The Details form is the one durable owner of its mutation refusal while
+   * this route exists. Block every in-app departure while that write is pending
+   * so neither browser Back nor an AppShell navigation can unmount the form
+   * before the awaited rejection lands. Refresh/tab-close gets the browser's
+   * native prompt through the matching `enableBeforeUnload` predicate. No
+   * resolver is needed: there is no safe "leave anyway" action while this sole
+   * reporter is waiting for the server (#1593 review). */
+  useBlocker({
+    shouldBlockFn: () => updateTournament.isPending,
+    enableBeforeUnload: () => updateTournament.isPending,
+  })
 
   const back = () => navigate({ to: '/tournaments' })
 
@@ -180,6 +193,10 @@ function TournamentDetailRoute() {
           patch: tournamentToUpdateBody(next),
         })
       }}
+      // The route blocker above is the guarantee for every departure. Also
+      // remove this local breadcrumb's affordance while pending so it does not
+      // invite a click the blocker must refuse.
+      savingDetails={updateTournament.isPending}
       // `mutateAsync`, and the rejection is deliberately NOT caught here: the
       // `TablesTab` awaits it, turns the in-use 409 into a confirm carrying the
       // server's sentence, and re-sends the identical diff with the opt-in when the
