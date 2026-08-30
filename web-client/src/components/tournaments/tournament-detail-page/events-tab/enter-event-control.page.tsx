@@ -1,6 +1,5 @@
 import { http, HttpResponse } from 'msw'
 
-import { PERM } from '@/lib/permissions'
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
 import { SessionProbe } from '@/test/session-probe'
@@ -80,15 +79,16 @@ const scoped = (container: Container) => ({
 export const enterEventControlPage = {
   /**
    * Stub the session, then render the control (alongside the session probe).
-   * Defaults to a beta tester who holds `tournament.enter`; pass `permissions: []`
-   * for the unpermitted case, or a different `username` to change who you are.
+   * Defaults to a real default user — zero permissions (entering needs no
+   * permission, #1092); pass a `permissions` list, or a different `username` to
+   * change who you are.
    */
   render(
     overrides: Partial<EnterEventControlProps> = {},
     session: { permissions?: string[]; username?: string } = {},
   ) {
     const {
-      permissions = [PERM.TOURNAMENT_VIEW, PERM.TOURNAMENT_ENTER],
+      permissions = [] as string[],
       username = SIGNED_IN_USERNAME,
     } = session
     server.use(

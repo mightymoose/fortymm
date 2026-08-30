@@ -44,6 +44,7 @@ import {
   isDecidedMatch,
   overrunDecider,
 } from '@/lib/scoring'
+import { NOT_SCORABLE_REASON_COPY } from './not-scorable-reason-copy'
 import { reconstructBoard, scoredGamePoints } from './reconstruct-board'
 import {
   isScoreConflict,
@@ -122,6 +123,32 @@ function seedScoreValues(
 // details hero. Distinct from `initialsOf('Opponent')` so users can tell
 // "no opponent" apart from a real two-letter monogram.
 const NO_OPPONENT_LABEL = 'No opponent'
+
+/**
+ * `not_scorable_reason` is match-relative, not viewer-relative, so it's
+ * `null` even for a spectator on an otherwise scorable match — that's the
+ * one case with no server reason to mirror, and gets its own plain
+ * participant-only explanation instead. The four real reasons' copy lives in
+ * `NOT_SCORABLE_REASON_COPY` (`./not-scorable-reason-copy`), shared with the
+ * call-status banner (#1288) so a copy edit can't drift the two apart.
+ */
+function scoreEntryRefusalMessage(
+  notScorableReason: MatchDetails['not_scorable_reason'],
+): string {
+  if (notScorableReason === null) {
+    return 'Only participants in this match can enter scores.'
+  }
+  // Runtime-total fallback: `useMatch`/`matchQueryOptions` casts its payload
+  // without a Zod parse (unlike the `matchDetailsQuery` boundary point 1
+  // hardens), so a value outside `NOT_SCORABLE_REASON_COPY`'s keys is only a
+  // type-checked impossibility for callers inside `src/`, not a runtime
+  // guarantee. Same copy as the no-participation case — a safe, honest
+  // default.
+  return (
+    NOT_SCORABLE_REASON_COPY[notScorableReason] ??
+    'Only participants in this match can enter scores.'
+  )
+}
 
 export type ScoreEntryMode = { kind: 'create' } | { kind: 'edit' }
 
@@ -271,6 +298,45 @@ function ScoreEntryInner({
     withResolver: true,
   })
 
+  // Computed before the `isLoading`/`data` guard below because it only reads
+  // `finalizeMutation` (a hook value, already in scope) — needed early so the
+  // negotiation-conflict redirect guard right after that can run ahead of
+  // #1288's generic `can_score` refusal.
+  const finalizeApiError =
+    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
+  // A finalize error that ISN'T an `ApiError` is a transport-level drop:
+  // `useProposeResult` runs `networkMode: 'always'`, so a finalize whose
+  // connection dies mid-flight still fires the POST and `fetch` rejects with a
+  // plain `TypeError` — never an `ApiError` (#868). The at-submit offline guard
+  // below (`wouldFinalize && onlineManager.isOnline()`) diverts a *known*-offline
+  // deciding game to the scratchpad, but it can't catch a connection that dies
+  // AFTER it passes — that rejection lands here. Mutually exclusive with
+  // `finalizeApiError` by construction (the error is one or the other, never
+  // both). Mirrors correction-entry's `networkError` (#839): error-driven, not a
+  // `navigator.onLine` pre-check, on purpose — the pre-check races the actual
+  // request, so we branch on the rejection that really happened.
+  const finalizeNetworkError =
+    finalizeMutation.error !== null && finalizeApiError === null
+  // The NEGOTIATION-conflict 409 ("a result already exists") is not an error to
+  // fix here — the opponent already posted the standing result. `useProposeResult`
+  // refetches the match on this 409; once the fresh data lands, the
+  // early-return guard below navigates to match detail (where the poster can
+  // Accept). Until that one-round-trip refetch resolves we're in a transient
+  // redirect window: show CALM "taking you there" copy instead of the red
+  // "Failed" error, and don't paint the valid inputs red. This is the minimal
+  // Option A that replaces the #800 reconcile interstitial ADR-0005 (#827)
+  // removed.
+  //
+  // Only the negotiation-conflict 409 redirects. The other propose 409s carry a
+  // plain-STRING detail — the lock race ("a result is already being posted…") and
+  // the terminal guard ("no longer open to results") — and their concurrent post
+  // may not have committed, so a refetch could leave `standing_result` null and
+  // strand the screen on "Taking you there…" forever. Those fall through to the
+  // normal red-error path below (string detail rendered, submit live for retry),
+  // exactly as before this fix.
+  const finalizeRedirecting =
+    finalizeApiError !== null && isNegotiationConflict(finalizeApiError)
+
   if (isLoading || !data) {
     return (
       <>
@@ -279,30 +345,62 @@ function ScoreEntryInner({
     )
   }
 
-  // The five `<Navigate>` guard redirects below are all app-initiated: each is
+  // The `<Navigate>` guard redirects below are all app-initiated: each is
   // computed purely from server data with no user gesture, so each bypasses the
   // unsaved-input blocker via `ignoreBlocker`. Foot-gun: omitting it doesn't
   // merely prompt — a blocked `<Navigate>` re-fires and wedges the screen. See
   // ADR 0014 (#818) for the spin mechanism.
 
-  // The scoring screen is participant-only; spectators bounce back to the
-  // read-only details page. The opponent side is always present — a real
-  // player, or the player-less placeholder for solo matches.
+  // The negotiation-conflict redirect (#827/#800, see `finalizeRedirecting`
+  // above): the viewer's own propose/finalize just 409'd because the
+  // opponent's result won the race, and the refetch it triggers has now
+  // confirmed the standing result (or a completed match). This is narrower
+  // than, and takes priority over, #1288's generic `can_score` refusal below —
+  // it's gated on the viewer's OWN finalize attempt, not on bare match state,
+  // so a match that becomes non-scorable for any other reason (someone else's
+  // action, a stale link, an uncalled fixture) falls through to that guard
+  // and gets the inline explanation instead of this silent bounce.
+  if (
+    finalizeRedirecting &&
+    (data.status === 'completed' || data.negotiation.standing_result !== null)
+  ) {
+    return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
+  }
+
+  // Refuse at the boundary and explain why, rather than letting the user
+  // fill out a form the write path would 409/422 on (#1288's client-side
+  // mirror of `ensure_scorable`). Placed before the participant lookup below
+  // — not a `<Navigate>` — so it also catches a spectator (`can_score:
+  // false` with `not_scorable_reason: null`, since that reason is
+  // match-relative, not viewer-relative) with an explanation instead of a
+  // silent bounce. The completed/posted-result case above already returned,
+  // so what's left here is: not yet called, no opponent, or some other
+  // terminal state (e.g. voided) — plus a spectator on a match none of those
+  // apply to.
+  if (!data.can_score) {
+    return (
+      <div className="entry-wrap">
+        <Alert variant="destructive" className="mb-3">
+          <TriangleAlert aria-hidden />
+          <AlertTitle>Can't enter a score here</AlertTitle>
+          <AlertDescription>
+            {scoreEntryRefusalMessage(data.not_scorable_reason)}
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  // `can_score` above already guarantees the viewer is a participant on a
+  // two-sided match, so this is unreachable at runtime — it exists purely to
+  // narrow `mySide`/`oppSide` from `X | null` to `X` for TypeScript, which
+  // can't see that guarantee.
   const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
   const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null
   if (!mySide || !oppSide) {
     return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
   }
 
-  // Once a match is finalized every write path 409s — there's nothing to do
-  // here. Same goes once a result is posted — scores are frozen the instant the
-  // first proposal lands; accepting it lives on the match-details page.
-  if (
-    data.status === 'completed' ||
-    data.negotiation.standing_result !== null
-  ) {
-    return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
-  }
   // The game number past which no more games can be played: once a side has
   // clinched (gap-tolerant), the trailing games are unplayable. Drives the nav
   // bounce below and (passed down) the scoreline cell gating, mirroring the
@@ -444,40 +542,6 @@ function ScoreEntryInner({
   // posture. `inputsValid` above stays UNGATED — it feeds the finalize prediction
   // and the overrun block regardless of submit.
   const ui = submitted ? mapGameScoreValidation(parseResult) : null
-  const finalizeApiError =
-    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-  // A finalize error that ISN'T an `ApiError` is a transport-level drop:
-  // `useProposeResult` runs `networkMode: 'always'`, so a finalize whose
-  // connection dies mid-flight still fires the POST and `fetch` rejects with a
-  // plain `TypeError` — never an `ApiError` (#868). The at-submit offline guard
-  // below (`wouldFinalize && onlineManager.isOnline()`) diverts a *known*-offline
-  // deciding game to the scratchpad, but it can't catch a connection that dies
-  // AFTER it passes — that rejection lands here. Mutually exclusive with
-  // `finalizeApiError` by construction (the error is one or the other, never
-  // both). Mirrors correction-entry's `networkError` (#839): error-driven, not a
-  // `navigator.onLine` pre-check, on purpose — the pre-check races the actual
-  // request, so we branch on the rejection that really happened.
-  const finalizeNetworkError =
-    finalizeMutation.error !== null && finalizeApiError === null
-  // The NEGOTIATION-conflict 409 ("a result already exists") is not an error to
-  // fix here — the opponent already posted the standing result. `useProposeResult`
-  // refetches the match on this 409; once the fresh data lands, the
-  // `standing_result`/`completed` early-return above navigates to match detail
-  // (where the poster can Accept). Until that one-round-trip refetch resolves
-  // we're in a transient redirect window: show CALM "taking you there" copy
-  // instead of the red "Failed" error, and don't paint the valid inputs red. This
-  // is the minimal Option A that replaces the #800 reconcile interstitial ADR-0005
-  // (#827) removed.
-  //
-  // Only the negotiation-conflict 409 redirects. The other propose 409s carry a
-  // plain-STRING detail — the lock race ("a result is already being posted…") and
-  // the terminal guard ("no longer open to results") — and their concurrent post
-  // may not have committed, so a refetch could leave `standing_result` null and
-  // strand the screen on "Taking you there…" forever. Those fall through to the
-  // normal red-error path below (string detail rendered, submit live for retry),
-  // exactly as before this fix.
-  const finalizeRedirecting =
-    finalizeApiError !== null && isNegotiationConflict(finalizeApiError)
 
   // Build the hypothetical full-match games list including the current input,
   // so we can ask the scoring lib whether saving this entry would make the

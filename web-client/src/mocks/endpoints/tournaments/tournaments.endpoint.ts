@@ -157,7 +157,8 @@ export const mockEventDeleteEndpoint = (
 /** Resolver for the enter-event endpoint — the created `TournamentEntrantRead`
  * (201), or an error envelope: a **coded** 409 for every refusal (ADR-0968:
  * `already_entered`, `registration_closed`, …), a plain 400 (not a singles event)
- * / 403 (no `tournament.enter` permission) / 404. The request has **no body**: the
+ * / 403 (a non-owner naming another player, ADR-0784) / 404. The request has
+ * **no body**: the
  * caller is the entrant.
  *
  * The refusal 409 is a `CodedErrorBody`, so a test that drives one has to send the

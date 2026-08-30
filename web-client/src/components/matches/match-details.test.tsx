@@ -706,3 +706,68 @@ describe("MatchDetails — page wiring", () => {
     expect(container.querySelector(".md-rating-row")).toBeNull();
   });
 });
+
+describe("MatchDetails — call-status banner + breadcrumb seam (#1288)", () => {
+  it("shows the waiting-to-be-called banner beside Match info, and the tournament crumb in the breadcrumb, for a live uncalled fixture the viewer owns", async () => {
+    // Wiring only: the banner's exhaustive case coverage lives in
+    // call-status-banner-query.test.ts / call-status-banner-display.test.tsx;
+    // the breadcrumb's in breadcrumb-query.test.ts / breadcrumb-display.test.tsx.
+    const match = matchDetails({
+      id: "m-tournament",
+      status: "pending",
+      status_label: "Scheduled",
+      can_score: false,
+      current_game: null,
+      not_scorable_reason: "not_called",
+      tournament: {
+        tournament_id: "t-1",
+        tournament_name: "Summer Smash",
+        tournament_status: "live",
+        event_id: "e-1",
+        event_name: "Open Singles",
+        table_label: "Table 3",
+        can_edit: true,
+      },
+    });
+    matchDetailsPage.mockMatch("m-tournament", match);
+
+    matchDetailsPage.render("m-tournament");
+
+    // The "Status: Scheduled" row isn't the only signal any more (AC #1) —
+    // the banner sits alongside Match info, not in place of it.
+    await screen.findByRole("region", { name: "Match info" });
+    expect(matchDetailsPage.callStatusBanner.getBanner()).toHaveTextContent(
+      /waiting to be called/i,
+    );
+    const tournamentLink = await matchDetailsPage.breadcrumb.findTournamentLink(
+      "Summer Smash",
+    );
+    expect(tournamentLink).toHaveAttribute("href", "/tournaments/t-1");
+  });
+
+  it("renders no banner and an unchanged breadcrumb for a casual, scorable match — regression for AC #6/#8", async () => {
+    const match = matchDetails({
+      id: "m-casual",
+      status: "in_progress",
+      status_label: "Live",
+      can_score: true,
+      not_scorable_reason: null,
+      tournament: undefined,
+    });
+    matchDetailsPage.mockMatch("m-casual", match);
+
+    matchDetailsPage.render("m-casual");
+
+    await matchDetailsPage.breadcrumb.findCurrent("Match m-casu");
+    expect(matchDetailsPage.breadcrumb.queryMatchesLink()).toHaveAttribute(
+      "href",
+      "/matches",
+    );
+    expect(
+      matchDetailsPage.breadcrumb.queryTournamentLink("Summer Smash"),
+    ).not.toBeInTheDocument();
+    expect(
+      matchDetailsPage.callStatusBanner.queryBanner(),
+    ).not.toBeInTheDocument();
+  });
+});

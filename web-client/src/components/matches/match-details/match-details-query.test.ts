@@ -9,7 +9,10 @@ import {
 import { act, render, screen } from "@testing-library/react";
 
 import { ApiError } from "@/api/client";
-import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
+import {
+  buildMatchDetails,
+  buildMatchDetailsSide,
+} from "@/mocks/factories/matches/match-details.factory";
 import { mockMatchDetailsEndpoint } from "@/mocks/endpoints/matches/match-details.endpoint";
 import { server } from "@/mocks/server";
 import { LIVE_NEGOTIATION } from "@/mocks/match-store";
@@ -17,9 +20,12 @@ import { RenderBoundary, waitFor } from "@/test/utilities";
 
 import {
   matchDetailsQuery,
+  matchDetailsRefetchInterval,
   matchDetailsResultFromPayload,
   refetchWhileAwaitingAcceptance,
+  refetchWhileAwaitingCall,
   type MatchDetailsResult,
+  type MatchNotScorableReason,
 } from "./match-details-query";
 import { matchDetailsQueryPage } from "./match-details-query.page";
 
@@ -67,6 +73,17 @@ const queryWithStatusLabel = (
   state: {
     data: matchDetailsResultFromPayload(
       buildMatchDetails({ status_label, ...overrides }),
+    ),
+  } as Query<MatchDetailsResult>["state"],
+});
+
+const queryWithNotScorableReason = (
+  not_scorable_reason: MatchNotScorableReason | null,
+  overrides: Parameters<typeof buildMatchDetails>[0] = {},
+): Pick<Query<MatchDetailsResult>, "state"> => ({
+  state: {
+    data: matchDetailsResultFromPayload(
+      buildMatchDetails({ not_scorable_reason, ...overrides }),
     ),
   } as Query<MatchDetailsResult>["state"],
 });
@@ -129,7 +146,7 @@ describe("matchDetailsQuery", () => {
     // accepts in a different session, so nothing invalidates this cache.
     // Polling is the only thing that flips the page off "Awaiting acceptance".
     expect(matchDetailsQuery("m-1").refetchInterval).toBe(
-      refetchWhileAwaitingAcceptance,
+      matchDetailsRefetchInterval,
     );
     expect(
       refetchWhileAwaitingAcceptance(
@@ -189,6 +206,109 @@ describe("matchDetailsQuery", () => {
     ).toBe(false);
   });
 
+  /** #1288: a participant's match page shows the "waiting to be called"
+   * banner while `not_scorable_reason === 'not_called'`; nothing else
+   * invalidates their cache once the director calls the fixture in a
+   * different session, so this poll is what flips the Score CTA on without a
+   * manual reload. */
+  it("polls for a participant while the match hasn't been called (#1288)", () => {
+    expect(
+      refetchWhileAwaitingCall(
+        queryWithNotScorableReason("not_called", {
+          sides: [
+            buildMatchDetailsSide({ is_current_user_side: true }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              is_current_user_side: false,
+            }),
+          ],
+        }),
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not poll a spectator on an uncalled match — they see no banner to refresh", () => {
+    expect(
+      refetchWhileAwaitingCall(
+        queryWithNotScorableReason("not_called", {
+          sides: [
+            buildMatchDetailsSide({ is_current_user_side: false }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              is_current_user_side: false,
+            }),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not poll a participant once the tournament is archived — a fixture there will never be called", () => {
+    expect(
+      refetchWhileAwaitingCall(
+        queryWithNotScorableReason("not_called", {
+          sides: [
+            buildMatchDetailsSide({ is_current_user_side: true }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              is_current_user_side: false,
+            }),
+          ],
+          tournament: {
+            tournament_id: "t-archived",
+            tournament_name: "Summer Smash",
+            tournament_status: "archived",
+            event_id: "e-1",
+            event_name: "Open Singles",
+            table_label: null,
+            can_edit: false,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["result_posted", "no_opponent", "not_scorable", null] as const)(
+    "does not poll once the match is scorable or unscorable for a reason other than not_called (%s)",
+    (reason) => {
+      expect(
+        refetchWhileAwaitingCall(queryWithNotScorableReason(reason)),
+      ).toBe(false);
+    },
+  );
+
+  it("does not poll for a call before any data has loaded", () => {
+    expect(
+      refetchWhileAwaitingCall({
+        state: { data: undefined } as Query<MatchDetailsResult>["state"],
+      }),
+    ).toBe(false);
+  });
+
+  it("matchDetailsRefetchInterval polls when either predicate would", () => {
+    expect(
+      matchDetailsRefetchInterval(
+        queryWithNotScorableReason("not_called", {
+          sides: [
+            buildMatchDetailsSide({ is_current_user_side: true }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              is_current_user_side: false,
+            }),
+          ],
+        }),
+      ),
+    ).toBeGreaterThan(0);
+    expect(
+      matchDetailsRefetchInterval(
+        queryWithStatusLabel("Awaiting acceptance"),
+      ),
+    ).toBeGreaterThan(0);
+    expect(
+      matchDetailsRefetchInterval(queryWithStatusLabel("Live")),
+    ).toBe(false);
+  });
+
   it("returns the parsed scoreboard view", async () => {
     const match = buildMatchDetails();
     matchDetailsQueryPage.mockEndpoint(() => HttpResponse.json(match));
@@ -199,6 +319,52 @@ describe("matchDetailsQuery", () => {
     expect(result.current.data?.data).toEqual({
       scoreboard: { status: match.data.scoreboard.status },
     });
+  });
+
+  /** #1288: `tournament` and `not_scorable_reason` are parsed at the boundary
+   * (not read off `unmigrated`) so every selector built on them gets a
+   * runtime, not just compile-time, guarantee. */
+  it("parses tournament and not_scorable_reason onto the result", async () => {
+    const match = buildMatchDetails({
+      not_scorable_reason: "not_called",
+      tournament: {
+        tournament_id: "t-1",
+        tournament_name: "Summer Smash",
+        tournament_status: "live",
+        event_id: "e-1",
+        event_name: "Open Singles",
+        table_label: "Table 3",
+        can_edit: true,
+      },
+    });
+    matchDetailsQueryPage.mockEndpoint(() => HttpResponse.json(match));
+
+    const { result } = matchDetailsQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.not_scorable_reason).toBe("not_called");
+    expect(result.current.data?.tournament).toEqual({
+      tournament_id: "t-1",
+      tournament_name: "Summer Smash",
+      tournament_status: "live",
+      event_id: "e-1",
+      event_name: "Open Singles",
+      table_label: "Table 3",
+      can_edit: true,
+    });
+  });
+
+  it("normalizes an absent tournament to null rather than undefined", async () => {
+    const match = buildMatchDetails({ not_scorable_reason: null });
+    // `tournament` omitted entirely — the wire field is optional as well as
+    // nullable; a casual match's payload doesn't carry the key at all.
+    delete (match as { tournament?: unknown }).tournament;
+    matchDetailsQueryPage.mockEndpoint(() => HttpResponse.json(match));
+
+    const { result } = matchDetailsQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.tournament).toBeNull();
   });
 
   it("keeps the full raw response on `unmigrated`", async () => {

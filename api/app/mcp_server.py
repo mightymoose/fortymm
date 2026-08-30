@@ -94,6 +94,7 @@ from app.match_serialization import (
     is_participant,
     load_match_eager,
     serialize_details,
+    tournament_context,
     view_extras,
 )
 from app.models import Match, Tournament, TournamentEvent, TournamentStatus, User
@@ -151,6 +152,7 @@ from app.tournament_errors import (
     DrawTypeFrozenError,
     DrawUnderWayError,
     EntryNotFoundError,
+    EntryRateLimitedError,
     EntryRefusedError,
     EventNotFoundError,
     EventReservationCapExceededError,
@@ -164,7 +166,6 @@ from app.tournament_errors import (
     NoDefaultLeagueError,
     NoDrawnEventsError,
     NonSinglesEntryError,
-    NotAllowedToEnterError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
     PlacementTableNotFoundError,
@@ -224,13 +225,6 @@ MatchPageSize = Annotated[int, Field(ge=1, le=100)]
 # The default page size ``list_my_matches`` uses when the caller names none,
 # matching the HTTP per-player list default (``app.players.LIST_DEFAULT_PAGE_SIZE``).
 MY_MATCHES_DEFAULT_PAGE_SIZE = 25
-
-# The permission the tournament reads gate on — the same seeded RBAC name the HTTP
-# router's ``require_view`` dependency enforces (``app.tournaments.TOURNAMENT_VIEW``,
-# ``scripts/seed_rbac.py``). Held as a literal rather than imported from the router so
-# the MCP adapter stays router-free; ``get_tournament`` asks it through the one shared
-# ``user_has_permission`` (``app.rbac``), so the two surfaces gate on the same grant.
-TOURNAMENT_VIEW_PERMISSION = "tournament.view"
 
 # The permission tournament creation gates on — the same seeded RBAC name the HTTP
 # router's ``require_create`` dependency enforces
@@ -506,20 +500,6 @@ async def _load_user(db: AsyncSession, user_id: uuid.UUID) -> User | None:
     ).scalar_one_or_none()
 
 
-async def _require_tournament_view(db: AsyncSession, user_id: uuid.UUID) -> None:
-    """The tournament-read gate every read tool shares: refuse unless the caller
-    holds ``tournament.view``.
-
-    Byte-for-byte the ``ToolError`` the three read tools each raised inline, asked
-    through the one shared ``user_has_permission`` the HTTP ``require_view``
-    dependency asks — so the MCP and HTTP surfaces gate reads on the same grant, and
-    a fourth read tool cannot grow a different message or a different permission
-    name. Permission is checked first (before any visibility load), the order the
-    HTTP route keeps: ``require_view`` (403) runs before the handler."""
-    if not await user_has_permission(db, user_id, TOURNAMENT_VIEW_PERMISSION):
-        raise ToolError("You don't have permission to view tournaments.")
-
-
 async def _require_tournament_create(db: AsyncSession, user_id: uuid.UUID) -> None:
     """The tournament-create gate: refuse unless the caller holds ``tournament.create``.
 
@@ -527,7 +507,8 @@ async def _require_tournament_create(db: AsyncSession, user_id: uuid.UUID) -> No
     the one shared ``user_has_permission`` — so the MCP and HTTP surfaces gate creation
     on the same grant and a mounted tool grants an agent nothing its user lacks over
     HTTP (ADR: the MCP adapter must enforce the SAME auth as HTTP). Held at the ADAPTER,
-    not in the shared verb, exactly as ``_require_tournament_view`` keeps the read gate
+    not in the shared verb, exactly as the tournament-read gate used to be kept at
+    the adapter
     at the adapter. Checked first, before the verb runs, the order ``require_create``
     (403) keeps ahead of the HTTP handler."""
     if not await user_has_permission(db, user_id, TOURNAMENT_CREATE_PERMISSION):
@@ -605,7 +586,13 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
             if viewer_is_participant
             else empty_extras()
         )
-        return serialize_details(match, user_id, extras, domain_match)
+        return serialize_details(
+            match,
+            user_id,
+            extras,
+            domain_match,
+            tournament=await tournament_context(db, match, user_id),
+        )
 
 
 @mcp.tool
@@ -707,7 +694,12 @@ async def _serialize_written_match(
     score handlers return for the acting user."""
     service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
     extras = await view_extras(service, match)
-    return serialize_details(match, user_id, extras)
+    return serialize_details(
+        match,
+        user_id,
+        extras,
+        tournament=await tournament_context(db, match, user_id),
+    )
 
 
 @mcp.tool
@@ -802,20 +794,18 @@ async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
     ``tournament_detail`` reader the HTTP route composes, so the two surfaces can
     never drift.
 
-    Gated on the same ``tournament.view`` permission the HTTP route requires, and
-    scoped by the same visibility rule: a draft you do not own is not yours to see,
-    so it surfaces as a not-found ``ToolError`` — the same way the HTTP route hides
-    it behind a 404 rather than confirming it exists.
+    Scoped by the same visibility rule the HTTP route keeps: a draft you do not
+    own is not yours to see, so it surfaces as a not-found ``ToolError`` — the same
+    way the HTTP route hides it behind a 404 rather than confirming it exists.
 
-    Raises a ``ToolError`` when you lack ``tournament.view``, and when no tournament
-    with that id is visible to you (absent, or an unannounced draft you do not own).
+    Raises a ``ToolError`` when no tournament with that id is visible to you
+    (absent, or an unannounced draft you do not own).
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        # Permission first, then the visibility-scoped load — the order the HTTP
-        # route keeps (``require_view`` (403) runs before the handler, then
-        # ``_visible_to`` scopes the row so a hidden draft leaves by not-found).
-        await _require_tournament_view(db, user_id)
+        # The visibility-scoped load — ``_visible_to`` scopes the row so a hidden
+        # draft leaves by not-found. No permission gate: #1092 deleted
+        # ``tournament.view``; every signed-in user reads a published tournament.
         tournament = await _load_visible_tournament(db, user_id, tournament_id)
         # The creator's username the shared reader needs for the aggregate. The
         # RESTRICT FK guarantees the creator row exists, so ``scalar_one`` is total.
@@ -897,21 +887,18 @@ async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
     state, not an error), and a tournament for which no solve has ever been
     requested has ``latest_schedule_solve = null``.
 
-    Gated on the same ``tournament.view`` permission the HTTP detail read requires,
-    and scoped by the same visibility rule: a draft you do not own is not yours to
-    see, so it surfaces as a not-found ``ToolError`` — existence is never confirmed
-    for an unannounced draft you do not own.
+    Scoped by the same visibility rule the HTTP detail read keeps: a draft you do
+    not own is not yours to see, so it surfaces as a not-found ``ToolError`` —
+    existence is never confirmed for an unannounced draft you do not own.
 
-    Raises a ``ToolError`` when you lack ``tournament.view``, and when no tournament
-    with that id is visible to you (absent, or an unannounced draft you do not own).
+    Raises a ``ToolError`` when no tournament with that id is visible to you
+    (absent, or an unannounced draft you do not own).
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        # Permission first, then the visibility-scoped load — the same shared gate
-        # and loader ``get_tournament`` uses, keeping the order the HTTP detail
-        # route keeps (``require_view`` (403) before the handler, then ``visible_to``
-        # scoping the row so a hidden draft leaves by not-found).
-        await _require_tournament_view(db, user_id)
+        # The visibility-scoped load — the same loader ``get_tournament`` uses; a
+        # hidden draft leaves by not-found. No permission gate: #1092 deleted
+        # ``tournament.view``.
         tournament = await _load_visible_tournament(db, user_id, tournament_id)
         # Events in creation order (as the detail read lists them), then their
         # draws in one batched read (``fixtures_by_event`` — group → round →
@@ -967,18 +954,13 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
     agent a ``tournament_id`` to drive them (see the tournament-verbs ADR). A
     tournament you can merely *see* but do not own is excluded.
 
-    Gated on the same ``tournament.view`` permission the HTTP list requires.
-
-    Raises a ``ToolError`` when you lack ``tournament.view``.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        # Permission first, through the same shared gate the detail reads use
-        # (mirroring the HTTP list's ``require_view`` dependency); only then the
-        # owner-scoped read. Owner-scoping is by construction (the WHERE selects only
-        # the caller's own rows), so there is no separate visibility gate to run — an
-        # owner always sees their own tournaments.
-        await _require_tournament_view(db, user_id)
+        # Owner-scoping is by construction (the WHERE selects only the caller's own
+        # rows), so there is no separate visibility gate to run — an owner always
+        # sees their own tournaments. No permission gate: #1092 deleted
+        # ``tournament.view``.
         return await list_tournament_details(
             db,
             where=Tournament.created_by_user_id == user_id,
@@ -1612,7 +1594,8 @@ async def enter_event(
     HTTP surfaces can never drift.
 
     ``user_id`` chooses the actor (ADR-0784): **omit it** (or pass your OWN id) to enter
-    *yourself* — self-registration, gated on the ``tournament.enter`` permission,
+    *yourself* — self-registration, open to every signed-in caller but rate limited
+    per client IP,
     recording
     no adder. Pass a **different** ``user_id`` to enter that player as the **director**
     —
@@ -1633,15 +1616,13 @@ async def enter_event(
     the
     tournament's ladder (``null`` for an unrated player).
 
-    Raises a ``ToolError`` when you lack ``tournament.enter`` on a self-registration,
-    when
-    you name another player's id but do not own the tournament, when no tournament or
-    event
-    with those ids exists, when a named ``user_id`` matches no live player, when the
-    event
-    is not singles, and — naming which refusal fired — when registration is closed, the
-    player fails the event's rating rules, the event is full, or the player is already
-    entered.
+    Raises a ``ToolError`` when your IP has exhausted its self-entry ceiling
+    (``TOURNAMENT_ENTRY_IP_PER_HOUR``, 30/hour default), when you name another
+    player's id but do not own the tournament, when no tournament or event with
+    those ids exists, when a named ``user_id`` matches no live player, when the
+    event is not singles, and — naming which refusal fired — when registration is
+    closed, the player fails the event's rating rules, the event is full, or the
+    player is already entered.
     """
     caller_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1655,6 +1636,7 @@ async def enter_event(
                 event_id=event_id,
                 actor=actor,
                 user_id=user_id,
+                client_ip=_provision_client_ip(),
             )
         except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
             # The shared not-found arms, plus the director path's owner gate: naming
@@ -1665,12 +1647,10 @@ async def enter_event(
                 event_id=event_id,
                 owner_denial="enter other players into",
             ) from exc
-        except NotAllowedToEnterError as exc:
-            # The self-registration permission gate (``tournament.enter``) — asked only
-            # on the self path, the same grant the HTTP route requires there.
-            raise ToolError(
-                "You do not have permission to enter tournament events."
-            ) from exc
+        except EntryRateLimitedError as exc:
+            # The self-registration per-IP rate limit — asked only on the self path,
+            # the same ceiling the HTTP route enforces there.
+            raise ToolError(str(exc)) from exc
         except PlayerNotFoundError as exc:
             raise ToolError(f"No live player found with id {user_id}.") from exc
         except NonSinglesEntryError as exc:
@@ -1725,8 +1705,8 @@ async def withdraw_from_event(
     because the uniqueness guard is a *partial* index over active entries, the player is
     free to enter the same event again afterwards.
 
-    **Who may withdraw** mirrors who may enter: the entry's own player (with the
-    ``tournament.enter`` permission) or the tournament's OWNER, for any entry in it —
+    **Who may withdraw** mirrors who may enter: the entry's own player or the
+    tournament's OWNER, for any entry in it —
     anybody else is refused. Withdrawal, like entry, is open only while the tournament
     is ``published`` (its status *is* its registration window, ADR-0017), for the owner
     too: withdrawing an ACTIVE entry from a ``draft``, ``live`` or ``archived``
@@ -1735,8 +1715,8 @@ async def withdraw_from_event(
 
     Raises a ``ToolError`` when no tournament or event with those ids exists, when no
     entry with that id exists under the event, when the entry is neither yours nor in a
-    tournament you own, when you lack ``tournament.enter`` withdrawing your own entry,
-    and when an active entry cannot be withdrawn because registration is closed.
+    tournament you own, and when an active entry cannot be withdrawn because
+    registration is closed.
     """
     caller_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1760,12 +1740,6 @@ async def withdraw_from_event(
             ) from exc
         except EntryNotFoundError as exc:
             raise ToolError(f"No entry found with id {entry_id}.") from exc
-        except NotAllowedToEnterError as exc:
-            # The self path lacking ``tournament.enter`` — the same grant the enter tool
-            # requires on self-registration.
-            raise ToolError(
-                "You do not have permission to withdraw from tournament events."
-            ) from exc
         except NotAllowedToWithdrawError as exc:
             # Neither the entry's own player nor the tournament's owner.
             raise ToolError(

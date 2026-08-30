@@ -11,9 +11,49 @@ const matchDetailsDataSchema = z.object({
   scoreboard: scoreboardSchema,
 });
 
+/** Tournament/fixture context for a match born from a draw — mirrors
+ * `MatchTournamentContext` (api/app/schemas/match.py). Absent/null for a
+ * casual match, or when the viewer must not see this tournament yet (an
+ * unannounced draft is owner-only). */
+const matchTournamentContextSchema = z.object({
+  tournament_id: z.string(),
+  tournament_name: z.string(),
+  tournament_status: z.enum(["draft", "published", "live", "archived"]),
+  event_id: z.string(),
+  event_name: z.string(),
+  table_label: z.string().nullable(),
+  can_edit: z.boolean(),
+});
+
+/** Why `not_scorable_reason` is non-null — mirrors `MatchNotScorableReason`
+ * (api/app/match_serialization.py). Perspective-neutral: computed from the
+ * match alone, independent of `can_score` (which additionally requires the
+ * viewer to be a participant). */
+const matchNotScorableReasonSchema = z.enum([
+  "no_opponent",
+  "result_posted",
+  "not_called",
+  "not_scorable",
+]);
+
 const matchDetailsSchema = z.object({
   data: matchDetailsDataSchema,
+  // The wire field is `tournament?: X | null` (optional AND nullable) — fold
+  // "absent" into "null" so every downstream selector holds one total value
+  // instead of juggling `undefined` and `null` as two spellings of "no
+  // tournament" (#1288).
+  tournament: matchTournamentContextSchema
+    .nullish()
+    .transform((value) => value ?? null),
+  not_scorable_reason: matchNotScorableReasonSchema.nullable(),
 });
+
+export type MatchTournamentContext = z.infer<
+  typeof matchTournamentContextSchema
+>;
+export type MatchNotScorableReason = z.infer<
+  typeof matchNotScorableReasonSchema
+>;
 
 const queryKey = (matchId: string) =>
   [{ scope: "matches", version: "v1", entity: "details", matchId }] as const;
@@ -89,6 +129,43 @@ export function refetchWhileAwaitingAcceptance(
   return AWAITING_ACCEPTANCE_POLL_MS;
 }
 
+/** Poll while the match page is showing a participant the "waiting to be
+ * called" banner (#1288) — the tournament director calls the fixture in a
+ * different browser session, so nothing else invalidates this cache, exactly
+ * like `refetchWhileAwaitingAcceptance` above. `not_scorable_reason` is read
+ * off the parsed slice (point 1's Zod schema); participation still has to
+ * come from `unmigrated.sides`, which isn't parsed.
+ *
+ * Spectators never see the banner (a spectator on an already-callable match
+ * has `not_scorable_reason: null`, not `'not_called'` — see the scorable/
+ * spectator distinction in web-client/CLAUDE.md) and so never poll here.
+ *
+ * Also stops once the tournament is `archived`: an archived tournament has
+ * already concluded, so a fixture still `not_called` there will never be
+ * called — polling forever for a call that can't come would burn a request
+ * every 5s on an open tab with nothing left to wait for. */
+export function refetchWhileAwaitingCall(
+  query: Pick<Query<MatchDetailsResult>, "state">,
+): number | false {
+  const result = query.state.data;
+  if (result?.not_scorable_reason !== "not_called") return false;
+  if (result.tournament?.tournament_status === "archived") return false;
+  const isParticipant = result.unmigrated.sides.some(
+    (side) => side.is_current_user_side,
+  );
+  return isParticipant ? AWAITING_ACCEPTANCE_POLL_MS : false;
+}
+
+/** The match-details poll predicate: either wait-for-acceptance or
+ * wait-for-call keeps the page refreshing; neither means it goes quiet. */
+export function matchDetailsRefetchInterval(
+  query: Pick<Query<MatchDetailsResult>, "state">,
+): number | false {
+  return (
+    refetchWhileAwaitingAcceptance(query) || refetchWhileAwaitingCall(query)
+  );
+}
+
 export const matchDetailsQuery = (matchId: string) => ({
   queryKey: queryKey(matchId),
   queryFn: fetchMatchDetails,
@@ -101,5 +178,5 @@ export const matchDetailsQuery = (matchId: string) => ({
     _error: unknown,
     query: Pick<Query<MatchDetailsResult>, "state">,
   ) => query.state.data === undefined,
-  refetchInterval: refetchWhileAwaitingAcceptance,
+  refetchInterval: matchDetailsRefetchInterval,
 });

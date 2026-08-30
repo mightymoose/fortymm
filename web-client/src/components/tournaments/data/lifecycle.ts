@@ -380,12 +380,15 @@ export const REGISTRATION_WINDOW: Record<TournamentStatus, RegistrationWindow> =
  * one case per thing the card can *render*, and the ORDER they are decided in is
  * the whole rule:
  *
- * 1. `hidden` — the request could only ever fail *for this caller*: they lack
- *    `tournament.enter` (403), or the event is doubles/teams (400). No act of the
- *    director's will change that on this page, so there is **nothing to report**:
- *    a fact about you is not a state of the tournament. The two reasons are not
- *    two cases, because nothing downstream can tell them apart — both render
- *    silence, and neither carries anything to render.
+ * 1. `hidden` — the request could only ever fail *for this caller*: the session
+ *    request has not landed yet (we cannot even say who "we" are), or the event
+ *    is doubles/teams (400). No act of the director's will change that on this
+ *    page, so there is **nothing to report**: a fact about you is not a state of
+ *    the tournament. The two reasons are not two cases, because nothing
+ *    downstream can tell them apart — both render silence, and neither carries
+ *    anything to render. (Entering needs no permission any more — #1092 deleted
+ *    `tournament.enter` — so the old 403 case is gone; the in-flight guard it
+ *    shared a branch with stays, and is load-bearing.)
  * 2. `closed` — the registration *window* is shut. That is a fact about the
  *    **tournament**, and it changes: it opens when the director publishes and
  *    shuts again when they start play. So it renders as a state — not as silence,
@@ -462,19 +465,23 @@ function ineligibleReason(
 export function entryControlState({
   status,
   event,
-  canEnter,
+  sessionLoaded,
   username,
 }: {
   status: TournamentStatus
   event: TournamentEvent
-  /** Does the viewer hold `tournament.enter`? False while the session is still in
-   * flight, which is exactly right: we cannot tell Enter from Withdraw — nor even
-   * who "we" are — until it lands. */
-  canEnter: boolean
+  /** Has the session request settled? False while it is still in flight, which
+   * is exactly the load-bearing guard it replaced: we cannot tell Enter from
+   * Withdraw — nor even who "we" are — until it lands. Entering needs no
+   * permission any more (#1092), so there is nothing left to check membership
+   * of; what must stay is the in-flight gate, or an entered player would
+   * briefly see Enter instead of Withdraw and a click in that window would
+   * double-submit into a 409 for doing nothing wrong. */
+  sessionLoaded: boolean
   username: string | null | undefined
 }): EntryControlState {
   // 1. Facts about the CALLER — nothing to report, in any status.
-  if (!canEnter) return { kind: 'hidden' }
+  if (!sessionLoaded) return { kind: 'hidden' }
   if (event.format !== 'singles') return { kind: 'hidden' }
 
   // 2. The window, BEFORE membership — this is the ordering the whole type exists

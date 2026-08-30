@@ -1,8 +1,7 @@
 import { LogIn, LogOut } from 'lucide-react'
 
-import { useHasPermission, useSession } from '@/api/session'
+import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
-import { PERM } from '@/lib/permissions'
 
 import { useEnterEvent, useWithdrawEntry } from '../../data/api'
 import { entryControlState } from '../../data/lifecycle'
@@ -27,10 +26,11 @@ export interface EnterEventControlProps {
  * else; the two halves of that sum type deserve their difference stated, because
  * they look alike from here and are not:
  *
- * - It renders **nothing at all** — not a disabled button — when the player lacks
- *   `tournament.enter`, or when the event is doubles/teams. Both of those requests
- *   can only ever fail server-side (403 / 400), and both are facts about *the
- *   caller* that nothing on this page will change. There is no state to report.
+ * - It renders **nothing at all** — not a disabled button — while the session
+ *   request is still in flight, or when the event is doubles/teams. Both of
+ *   those silences are facts about *the caller* that nothing on this page will
+ *   change (entering needs no permission any more — #1092 deleted
+ *   `tournament.enter`). There is no state to report.
  * - It renders a **designed state** — muted copy, still not a disabled button —
  *   when the tournament is `draft` (registration has not opened), `live` or
  *   `archived` (entries are locked), when the event is **full**, and when the
@@ -55,17 +55,22 @@ export const EnterEventControl = ({
   tournament,
   event,
 }: EnterEventControlProps) => {
-  const canEnter = useHasPermission(PERM.TOURNAMENT_ENTER)
+  // Entering needs no permission (#1092) — what the control waits on is the
+  // session itself settling: `username` is undefined while it is in flight, so
+  // membership can't be judged, and rendering Enter before it lands would let an
+  // entered player double-submit into a 409.
+  const session = useSession()
+  const sessionLoaded = session.isSuccess
   // The session carries a username but NO user id, so membership is a join on
   // the username — see `myEntrant`.
-  const username = useSession().data?.data.user.username
+  const username = session.data?.data.user.username
   const enter = useEnterEvent(tournament.id)
   const withdraw = useWithdrawEntry(tournament.id)
 
   const state = entryControlState({
     status: tournament.status,
     event,
-    canEnter,
+    sessionLoaded,
     username,
   })
   // One in-flight request at a time: a double-click on Enter must not produce a

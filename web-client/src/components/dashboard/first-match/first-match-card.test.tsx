@@ -209,8 +209,10 @@ describe('FirstMatchCard', () => {
             results: [],
             // `useCreateMatch` seeds the match-details cache from this
             // response via `matchDetailsResultFromPayload`, which parses
-            // `data.scoreboard.status` — omitting it throws and the mutation
-            // rejects before navigation ever happens.
+            // `data.scoreboard.status` and `not_scorable_reason` — omitting
+            // either throws and the mutation rejects before navigation ever
+            // happens (#1288 made the latter a required parsed field).
+            not_scorable_reason: null,
             data: { scoreboard: { status: 'live' } },
           },
           { status: 201 },

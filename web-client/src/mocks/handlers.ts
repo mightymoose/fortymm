@@ -82,19 +82,17 @@ export const mockSession = sessionResponse({
     username: 'rita.kovac',
     // The Administration nav *section* is gated on ADMIN_VIEW (app-shell), and
     // its children on their own permission. Grant ADMIN_VIEW so the section
-    // expands, AUTH_MANAGE for the RBAC pages, TOURNAMENT_VIEW +
-    // TOURNAMENT_CREATE so the Tournaments item appears, its page loads, and the
-    // "New tournament" action shows, TOURNAMENT_ENTER so the dev user is a beta
-    // tester who can self-register into a singles event, and
-    // NOTIFICATIONS_BROADCAST so the Broadcast item appears and its (now
-    // permission-gated) tool renders under `npm run dev`, and SCHEDULING_VIEW
-    // so the Scheduling item appears and the solve-ledger page loads.
+    // expands, AUTH_MANAGE for the RBAC pages, and TOURNAMENT_CREATE so the
+    // "New tournament" action shows (viewing/entering tournaments needs no
+    // permission — #1092 — so the dev session mirrors what a real default user
+    // sees without any grant), NOTIFICATIONS_BROADCAST so the Broadcast item
+    // appears and its (now permission-gated) tool renders under `npm run dev`,
+    // and SCHEDULING_VIEW so the Scheduling item appears and the solve-ledger
+    // page loads.
     permissions: [
       PERM.ADMIN_VIEW,
       PERM.AUTH_MANAGE,
-      PERM.TOURNAMENT_VIEW,
       PERM.TOURNAMENT_CREATE,
-      PERM.TOURNAMENT_ENTER,
       PERM.NOTIFICATIONS_BROADCAST,
       PERM.SCHEDULING_VIEW,
     ],

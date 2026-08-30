@@ -9,26 +9,28 @@ constructed in a plain REPL with a raw session.
 This is the highest-nuance tournament verb, and every nuance is preserved exactly:
 
 * **The dual-actor fork (ADR-0784).** ``user_id`` absent (or equal to the actor's own
-  id) is **self-registration** — the actor enters themselves, gated on the
-  ``tournament.enter`` permission, and the entry records **no adder**
+  id) is **self-registration** — the actor enters themselves, bounded by the per-IP
+  rate limit below, and the entry records **no adder**
   (``added_by_user_id = NULL``). A **different** ``user_id`` is a **director entry** —
   gated on OWNERSHIP (a non-owner naming somebody else's id is refused), the named user
   must resolve to an enterable player, and the entry records the actor as the adder.
   Naming your OWN id is self-registration whoever you are, because "the player entered
   themselves" has exactly one encoding and ``added_by == user_id`` is not it.
 
-* **Where the** ``tournament.enter`` **gate lives.** In the verb, on the self path only,
-  asked through the shared ``app.rbac.user_has_permission`` — the same query the HTTP
-  ``require_permission(TOURNAMENT_ENTER)`` dependency runs. It is judged HERE, not at
-  each adapter, because the gate is *conditional on the fork* (only self-registration
-  needs it) and the fork is computed inside this verb from ``user_id``: keeping the
-  check here keeps ONE source of truth for the fork, so neither adapter re-derives who
-  is being entered. This mirrors how the HTTP route asked it — inline in the handler
-  body, never as a router dependency, because a dependency runs before the body that
-  says which arm of the fork this is. It is data-authz (a permission about a *row* the
-  caller is writing), which is why it may live in the verb where the read gates
-  (``tournament.view``) live at the adapter: those gate *reads* with no body-dependent
-  fork, this one cannot.
+* **The per-IP self-entry rate limit.** Self-registration needs no permission any
+  more (#1092 deleted ``tournament.enter`` — viewing and entering a published
+  tournament is open to every signed-in user), so the attack it bounded — one host
+  minting guest sessions and entering every event — is answered with a per-client-IP
+  ceiling, asked HERE, in the verb's self arm (never as a router dependency, which
+  runs before the body that says which arm of the fork this is — ADR-0784). The
+  caller's IP arrives as ``client_ip`` from each adapter (the HTTP route reads it
+  off the ``Request``; the MCP tool reuses the ``_provision_client_ip`` pattern).
+  The ceiling is 30 entries per hour per IP by default, configurable via the
+  ``TOURNAMENT_ENTRY_IP_PER_HOUR`` environment variable so QA/e2e environments on
+  one shared host can raise it (the lesson of #1552). Exhausted, the verb raises
+  :class:`EntryRateLimitedError`, which each adapter maps to a 429 telling the
+  player to retry shortly. The director's arm carries NO rate limit — it is
+  ownership-gated, and an unlimited director path cannot grief another organizer.
 
 * **Refusal ordering, judged under the tournament row lock.** The tournament is loaded
   **locked first** (the capacity lock — the row whose status decides this request must
@@ -53,11 +55,13 @@ to the exact response it produced before.
 import uuid
 from typing import assert_never
 
+from pyrate_limiter import Duration, Rate
 from sqlalchemy import exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import tournament_registration
+from app.config import get_settings
 from app.models import (
     EventFormat,
     ScheduleSolveTrigger,
@@ -68,7 +72,7 @@ from app.models import (
     TournamentFixture,
     User,
 )
-from app.rbac import user_has_permission
+from app.rate_limiting import RedisRateLimiter
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentEntrantRead
 from app.tournament_edit import _load_tournament_for_update
@@ -80,10 +84,10 @@ from app.tournament_eligibility import (
 )
 from app.tournament_errors import (
     EntryNotFoundError,
+    EntryRateLimitedError,
     EntryRefusal,
     EntryRefusedError,
     NonSinglesEntryError,
-    NotAllowedToEnterError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
     PlayerNotFoundError,
@@ -92,14 +96,42 @@ from app.tournament_errors import (
 from app.tournament_events import _load_event
 from app.tournament_queries import active_entry_count, entrant_rating
 
-# The permission the self-registration arm gates on — the same seeded RBAC name the
-# HTTP router's ``_require_enter_permission`` enforces
-# (``app.tournaments.TOURNAMENT_ENTER``,
-# ``scripts/seed_rbac.py``). Held as a literal rather than imported from the router so
-# this verb stays FastAPI-free (importing the router would pull in FastAPI and cycle);
-# it is asked through the one shared ``user_has_permission``, so the HTTP and MCP
-# surfaces gate self-registration on the same grant.
-TOURNAMENT_ENTER_PERMISSION = "tournament.enter"
+
+def _entry_ip_limiter(limit: int) -> RedisRateLimiter:
+    """The per-IP self-entry limiter for a ceiling of ``limit`` per hour.
+
+    Built from the ONE shared ``RedisRateLimiter`` core (``app.rate_limiting``) —
+    the same router-free ``check(key)`` the MCP provision limiter uses, never a
+    second mechanism. Cached per ceiling value so the environment variable is read
+    at ask-time (a test can raise or lower it mid-session) while each distinct
+    ceiling keeps its own ``Limiter`` instances — a limiter's rate spec is fixed at
+    construction, so reusing one across ceilings would silently enforce whichever
+    was built first."""
+    limiter = _entry_ip_limiters.get(limit)
+    if limiter is None:
+        limiter = RedisRateLimiter(
+            rates=[Rate(limit, Duration.HOUR)],
+            bucket_key="tournament-entry-ip",
+        )
+        _entry_ip_limiters[limit] = limiter
+    return limiter
+
+
+_entry_ip_limiters: dict[int, RedisRateLimiter] = {}
+
+
+async def _enforce_entry_rate_limit(client_ip: str) -> None:
+    """Consume one token from ``client_ip``'s self-entry bucket, or raise
+    :class:`EntryRateLimitedError`.
+
+    Asked ONLY on the self-registration arm — the attack it bounds is one host
+    minting guest sessions and entering once per session, and a director entering
+    somebody else is ownership-gated instead. The limiter falls open when Redis is
+    unpublished or unavailable (the shared ``RedisRateLimiter`` stance), so a Redis
+    outage never wedges the entry path."""
+    limit = get_settings().tournament_entry_ip_per_hour
+    if not await _entry_ip_limiter(limit).check(f"ip:{client_ip}"):
+        raise EntryRateLimitedError()
 
 
 async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> User:
@@ -243,23 +275,31 @@ async def enter_event(
     event_id: uuid.UUID,
     actor: User,
     user_id: uuid.UUID | None,
+    client_ip: str | None = None,
 ) -> TournamentEntrantRead:
     """Enter a player in a singles event — ``actor`` themselves, or (as the tournament's
     owner) the player ``user_id`` names — and return the created
     :class:`TournamentEntrantRead`.
+
+    ``client_ip`` carries the caller's client IP for the self arm's per-IP rate
+    limit (each adapter reads it off its own transport; omitting it — e.g. calling
+    the verb directly from a REPL or test — skips the limit, which is a test-only
+    convenience, never a production posture: both adapters always pass it).
 
     Runs the same orchestration the HTTP handler used to run inline, in the same order
     and under the same lock (see the module docstring for the full nuance):
 
     * **The fork (ADR-0784).** ``user_id is None`` or ``== actor.id`` →
     self-registration
-      (``added_by_user_id = NULL``), gated on ``tournament.enter``; a different
+      (``added_by_user_id = NULL``), rate limited per client IP; a different
       ``user_id``
       → a director entry (``added_by_user_id = actor.id``), gated on ownership.
-    * **The self-registration gate** is asked FIRST, before anything is loaded, on the
-      self path only: a caller lacking ``tournament.enter`` raises
-      :class:`NotAllowedToEnterError` before the verb learns anything about the
-      tournament.
+    * **The self-registration rate limit** is asked FIRST, before anything is loaded,
+      on the self path only: an IP past its ceiling raises
+      :class:`EntryRateLimitedError` before the verb learns anything about the
+      tournament. The director's arm is
+      gated by ownership instead, judged *after* the 404s below (you cannot own a
+      tournament that does not exist).
     * The tournament is loaded **locked** (:func:`_load_tournament_for_update`, raising
       :class:`TournamentNotFoundError`) and locked FIRST, then the event
       (:func:`_load_event`, raising :class:`EventNotFoundError`).
@@ -294,13 +334,15 @@ async def enter_event(
     entrant_id = actor.id if user_id is None else user_id
     self_registration = entrant_id == actor.id
     if self_registration:
-        # Asked here, at the top, exactly where the router handler asked it — the
-        # dependency's position, kept. A player without ``tournament.enter`` is refused
-        # before the verb learns anything about the tournament. The director's arm is
-        # gated by ownership instead, judged *after* the 404s below (you cannot own a
+        # Asked here, at the top, exactly where the router handler asked the old
+        # permission gate — the dependency's position, kept (ADR-0784: the fork is
+        # computed from the body, so nothing body-dependent can be a router
+        # dependency). An IP past its self-entry ceiling is refused before the verb
+        # learns anything about the tournament. The director's arm is gated by
+        # ownership instead, judged *after* the 404s below (you cannot own a
         # tournament that does not exist).
-        if not await user_has_permission(db, actor.id, TOURNAMENT_ENTER_PERMISSION):
-            raise NotAllowedToEnterError()
+        if client_ip is not None:
+            await _enforce_entry_rate_limit(client_ip)
 
     # Load first, then decide — the 404-before-anything-else ordering. The tournament is
     # loaded *locked*, and locked first (the row whose status decides this request must
@@ -496,13 +538,11 @@ async def withdraw_from_event(
       so a wrong ``(tournament, event, entry)`` triple is a 404, judged before any 403.
 
     * **The owner-or-self fork (ADR-0784),** read off the ENTRY rather than off a body:
-      withdrawing your **own** entry is the mirror of self-registering and is gated the
-      same way, on ``tournament.enter`` (asked HERE through the shared
-      ``user_has_permission``, exactly where 3a asks the enter verb's self gate — the
-      one source of truth for "this self action needs the grant"; a caller lacking it
-      raises :class:`NotAllowedToEnterError`). The **owner's** arm deliberately does NOT
-      require that permission — managing the field of a tournament you created is a
-      property of ownership, not a role grant. Anybody who is neither the entrant nor
+      withdrawing your **own** entry is the mirror of self-registering and needs no
+      permission (#1092 deleted ``tournament.enter`` — it only ever touched the
+      caller's own entry, so losing it opens no vector). The **owner's** arm manages
+      the field of a tournament they created — a property of ownership, not a role
+      grant. Anybody who is neither the entrant nor
       the owner raises :class:`NotAllowedToWithdrawError` — a permanent 403 answered
       before the transient 409 below, so withdrawing someone else's entry from a *live*
       tournament is "not yours", not "not now".
@@ -536,16 +576,10 @@ async def withdraw_from_event(
     # this is the caller's own entry, or it is somebody's the owner is removing
     # (ADR-0784). Two authorizations, disjoint, and neither could be a router dependency
     # — which entry it is cannot be known until the row is loaded.
-    if entry.user_id == actor.id:
-        # Withdrawing your own entry is the mirror of self-registering, gated the same
-        # way — ``tournament.enter`` — through the same shared ``user_has_permission``
-        # the enter verb's self gate asks, so the two share ONE source of truth. The
-        # owner's arm below deliberately does NOT require it.
-        if not await user_has_permission(db, actor.id, TOURNAMENT_ENTER_PERMISSION):
-            raise NotAllowedToEnterError()
-    elif tournament.created_by_user_id != actor.id:
-        # Not yours, and not your tournament. A permanent 403, answered before the
-        # transient status 409 below, so withdrawing someone else's entry from a live
+    if entry.user_id != actor.id and tournament.created_by_user_id != actor.id:
+        # Neither the entry's owner nor the tournament's owner — the only two
+        # arms the fork has. A permanent 403, answered before the transient
+        # status 409 below, so withdrawing someone else's entry from a live
         # tournament is "not yours", not "not now".
         raise NotAllowedToWithdrawError()
 

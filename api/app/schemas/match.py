@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.attention import ListAttentionKind
 from app.models.match import MatchStatus
+from app.models.tournament import TournamentStatus
 from app.schemas.rating import RatingChange
 from app.schemas.view.match_details import MatchDetails as MatchDetailsView
 
@@ -71,6 +72,49 @@ class MatchCreate(BaseModel):
 class MatchLeague(BaseModel):
     id: uuid.UUID
     name: str
+
+
+class MatchNotScorableReason(enum.StrEnum):
+    """Why ``is_scorable(match)`` is ``False``, in the same order
+    ``ensure_scorable`` (``app/match_scoring.py``) checks its branches. The
+    read-side twin of that write-path guard's reason-specific 422/409s: it
+    powers ``MatchDetails.not_scorable_reason`` so a client can explain — or
+    refuse to render a score form for — a non-scorable match *before* the
+    write path ever rejects it (#1288). ``_scorability_reason`` is the single
+    pure function both sides call, so the two can never disagree on why."""
+
+    # Fewer than two sides — the match has no opponent yet.
+    no_opponent = "no_opponent"
+    # A result has been posted; the scratchpad is frozen (#715).
+    result_posted = "result_posted"
+    # A tournament match hasn't been called to a table yet (#1073).
+    not_called = "not_called"
+    # Any other terminal/non-scorable state (e.g. completed, voided).
+    not_scorable = "not_scorable"
+
+
+class MatchTournamentContext(BaseModel):
+    """Tournament/fixture context for a match born from a draw. ``None`` on
+    ``MatchDetails`` for a casual match (no fixture references it), or when
+    the viewer must not see this tournament yet — an unannounced (draft)
+    tournament is owner-only, mirroring ``app.tournament_queries.visible_to``.
+
+    Perspective-neutral apart from that visibility gate and ``can_edit`` —
+    same "ignoring who's asking" contract as ``is_scorable`` itself."""
+
+    tournament_id: uuid.UUID
+    tournament_name: str
+    tournament_status: TournamentStatus
+    event_id: uuid.UUID
+    event_name: str
+    # The table the director placed this fixture on. ``None`` until placed —
+    # the FE tells "placed, not live" apart from "called" using this plus
+    # ``tournament_status`` / ``MatchDetails.not_scorable_reason``, not a raw
+    # ``pinned_at`` timestamp (not exposed on the wire).
+    table_label: str | None
+    # True iff the viewer created (owns) the tournament — mirrors
+    # ``tournament_serialization.py``'s ``can_edit`` derivation.
+    can_edit: bool
 
 
 class MatchDetailsPlayer(BaseModel):
@@ -245,6 +289,10 @@ class MatchDetails(BaseModel):
     status: MatchStatus
     status_label: str
     league: MatchLeague
+    # Tournament/fixture context — ``None`` for a casual match, or when the
+    # viewer must not see this tournament yet. Perspective-neutral apart from
+    # its own visibility gate (see ``MatchTournamentContext``).
+    tournament: MatchTournamentContext | None = None
     best_of: int
     games_to_win: int
     team_size: int
@@ -256,6 +304,12 @@ class MatchDetails(BaseModel):
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None
     can_score: bool
+    # Why this match can't be scored right now, or ``None`` when it can.
+    # Perspective-neutral — computed from ``match`` alone via the same
+    # ``_scorability_reason`` helper ``ensure_scorable`` picks its 422/409
+    # branch from, so this can never disagree with what the score endpoints
+    # actually accept.
+    not_scorable_reason: MatchNotScorableReason | None
     # True when the saved games form a decided, validly-ordered match, the
     # current user is a participant on an in-progress match, AND no proposed
     # result is currently awaiting acceptance. The FE uses this to swap

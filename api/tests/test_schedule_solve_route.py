@@ -53,7 +53,7 @@ from app.models import (
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
-from app.tournaments import NO_DRAWN_EVENTS_CODE, TOURNAMENT_CREATE, TOURNAMENT_VIEW
+from app.tournaments import NO_DRAWN_EVENTS_CODE, TOURNAMENT_CREATE
 from tests._helpers import (
     event_groups,
     grant_permissions,
@@ -103,7 +103,7 @@ async def authed_client(
     convention (the solve route itself is owner-gated, not permission-gated,
     but the detail read this file also exercises is gated on ``view``)."""
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_CREATE))
+    await grant_permissions(db_session, user, (TOURNAMENT_CREATE,))
     yield api_client, user
 
 
@@ -266,7 +266,7 @@ async def test_schedule_solve_is_owner_only_no_permission_grants_it(
 
     async with make_client() as stranger:
         user = await start_session(stranger, db_session)
-        await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_CREATE))
+        await grant_permissions(db_session, user, (TOURNAMENT_CREATE,))
 
         assert (await stranger.post(_solves_url(tournament_id))).status_code == 403
 

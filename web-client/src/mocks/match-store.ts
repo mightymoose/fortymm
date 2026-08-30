@@ -395,6 +395,22 @@ function scorableSeed(seed: SeedMatch): boolean {
   )
 }
 
+/** The mock's `not_scorable_reason` companion to `scorableSeed` (#1288).
+ * Mirrors `scorableSeed`'s own gates in the API's check order, with two
+ * reasons the mock's model can't reach: `no_opponent` (every seed always
+ * carries a second — possibly player-less — side row) and `not_called` (the
+ * mock has no tournament model, so nothing here is ever "pending, born from a
+ * draw"; `scorableSeed` doesn't gate on `status === 'pending'` at all, which
+ * is itself pre-existing drift from the server's #1073 change — not this
+ * ticket's to fix). */
+function notScorableReasonSeed(
+  seed: SeedMatch,
+): components['schemas']['MatchNotScorableReason'] | null {
+  if (scorableSeed(seed)) return null
+  if (seed.results.length > 0) return 'result_posted'
+  return 'not_scorable'
+}
+
 /** Whether the currently-saved scores form a complete, validly-ordered,
  * decided match — i.e. the FIRST ``POST /results`` would succeed against the
  * current scratchpad state. Mirrors the server's ``_can_finalize`` predicate,
@@ -524,6 +540,9 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     status: seed.status,
     status_label: seedStatusLabel(seed),
     league: MOCK_DEFAULT_LEAGUE,
+    // The mock's seeds are all casual matches — there's no tournament model
+    // in this dev store, so every match is explicitly a non-fixture (#1288).
+    tournament: null,
     best_of: seed.best_of,
     games_to_win: gamesToWin(seed.best_of),
     team_size: 1,
@@ -533,6 +552,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     games,
     current_game: nextNumber !== null ? { game_number: nextNumber } : null,
     can_score: scorableSeed(seed),
+    not_scorable_reason: notScorableReasonSeed(seed),
     can_finalize: canFinalizeSeed(seed),
     negotiation: negotiationOf(seed),
     recent_form: projectRecentForm(seed, priors),

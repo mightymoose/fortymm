@@ -206,10 +206,9 @@ def _entry_state(
 
     What is deliberately NOT decided here: the registration window (a fact about the
     tournament — its status, ADR-0017), whether the caller is already entered (a fact
-    on the entrants list), whether they hold ``tournament.enter``, and whether the
-    event is doubles. All four are already on the page or in the session, and
-    restating them would be carrying a field and its own derivation. ``open`` means
-    "the event admits you", not "click here".
+    on the entrants list), and whether the event is doubles. All three are already on
+    the page or in the session, and restating them would be carrying a field and its
+    own derivation. ``open`` means "the event admits you", not "click here".
 
     ``match`` with ``assert_never``, not ``isinstance``: a third eligibility outcome
     added tomorrow is a type error here until somebody says what the page should show

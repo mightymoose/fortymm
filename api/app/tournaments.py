@@ -62,6 +62,7 @@ from app.tournament_errors import (
     DrawTypeFrozenError,
     DrawUnderWayError,
     EntryNotFoundError,
+    EntryRateLimitedError,
     EntryRefusedError,
     EventNotFoundError,
     EventReservationCapExceededError,
@@ -75,7 +76,6 @@ from app.tournament_errors import (
     NoDefaultLeagueError,
     NoDrawnEventsError,
     NonSinglesEntryError,
-    NotAllowedToEnterError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
     PlacementTableNotFoundError,
@@ -117,34 +117,29 @@ from app.tournament_solve_service import (
     request_schedule_solve as _request_schedule_solve,
 )
 
-# Reads are gated on ``tournament.view``, creation on ``tournament.create``, and
-# entering an event as a player on ``tournament.enter`` (all three granted to the
-# Beta-tester role in ``scripts/seed_rbac.py``). The owner-facing mutating routes
+# Creation is gated on ``tournament.create`` (granted to the Beta-tester role in
+# ``scripts/seed_rbac.py``). The owner-facing mutating routes
 # — PATCH, DELETE, and every event mutation — carry NO permission gate: they're
 # owner-only, available solely to the user who created the tournament (the owner gate
 # the transport-neutral write verbs enforce). There is deliberately no
 # ``tournament.edit``/``tournament.delete``/``tournament.publish`` permission;
 # managing a tournament you created is a property of ownership, not a role grant.
-# Player self-registration is the exception that needs its own permission: a
-# player entering *themselves* is not the tournament's owner, so it cannot be an
-# ownership check.
+# Viewing a published tournament and entering an event carry no permission either
+# (#1092): every signed-in user — including a guest — can do both, so the
+# ``tournament.view`` / ``tournament.enter`` permissions were deleted outright
+# rather than granted to the default ``User`` role. Self-entry is bounded by the
+# per-IP rate limit the entry verb asks in its own self arm, not by a permission.
 #
-# The two ENTRY routes hold BOTH of those authorizations at once, because a single
-# endpoint serves both actors (ADR-0784): a player entering themselves is gated on
-# ``tournament.enter``, and a director entering somebody else — or withdrawing an
-# entry that is not their own — is gated on ownership. Which gate applies is decided
-# by the request, so neither can be a router dependency (a dependency runs before the
-# handler has seen the body, and would refuse an owner for lacking a grant that has
-# nothing to do with what they are doing). Both routes therefore take
-# ``get_current_user`` and the entry verbs ask the enter-permission / ownership gate in
-# the arm of the fork that owns them. The authorizations are disjoint — a stranger
-# self-registering is not the owner; an owner adding somebody else is not
-# self-registering — so this is a fork, not a tangle.
-TOURNAMENT_VIEW = "tournament.view"
+# The two ENTRY routes still hold a body-dependent authorization, because a single
+# endpoint serves both actors (ADR-0784): a director entering somebody else — or
+# withdrawing an entry that is not their own — is gated on ownership. Which gate
+# applies is decided by the request, so it cannot be a router dependency (a
+# dependency runs before the handler has seen the body, and would refuse an owner
+# for lacking a grant that has nothing to do with what they are doing). The routes
+# therefore take ``get_current_user`` and the entry verbs ask the ownership gate in
+# the arm of the fork that owns it.
 TOURNAMENT_CREATE = "tournament.create"
-TOURNAMENT_ENTER = "tournament.enter"
 
-require_view = require_permission(TOURNAMENT_VIEW)
 require_create = require_permission(TOURNAMENT_CREATE)
 
 # The tournament lifecycle (ADR-0017) — ``draft → published → live → archived`` — now
@@ -164,10 +159,11 @@ router = APIRouter(prefix="/v1")
 # owner-only write now loads its tournament through the transport-neutral verbs' shared
 # ``_load_owned_tournament_for_update`` (``app.tournament_edit``) — the row lock, then
 # the 404 → 403 owner gate — so the router keeps no bare/owner/for-update loader of its
-# own. The `tournament.enter` self-registration gate and the entry-by-event 404 that the
-# entry routes used to ask through router helpers likewise moved to the entry verbs
-# (``app.tournament_entries``): ``enter_event`` asks the permission through the shared
-# ``user_has_permission`` on its self arm, and both verbs load the entry themselves.
+# own. The entry-by-event 404 that the entry routes used to ask through router
+# helpers likewise moved to the entry verbs (``app.tournament_entries``): both verbs
+# load the entry themselves. The entry verb's self arm now carries the per-IP
+# self-entry rate limit (and no permission gate — #1092 deleted
+# ``tournament.enter``); the router hands it the caller's IP.
 
 
 # The league-editable-only-while-draft rule (ADR-0783) now lives on the
@@ -284,11 +280,7 @@ def _near_me_or_422(
     return NearMeFilter(lat=lat, lng=lng, radius_miles=radius_miles)
 
 
-@router.get(
-    "/tournaments",
-    response_model=list[TournamentDetailRead],
-    dependencies=[Depends(require_view)],
-)
+@router.get("/tournaments", response_model=list[TournamentDetailRead])
 async def list_tournaments(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
@@ -422,11 +414,7 @@ async def preview_geocode(
     )
 
 
-@router.get(
-    "/tournaments/{tournament_id}",
-    response_model=TournamentDetailRead,
-    dependencies=[Depends(require_view)],
-)
+@router.get("/tournaments/{tournament_id}", response_model=TournamentDetailRead)
 async def get_tournament(
     tournament_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),
@@ -1028,31 +1016,45 @@ async def delete_event(
 # transport copy lives here in the adapter: the self-path permission 403, the named-
 # player 404, the singles-only 400, and the four coded entry refusals (ADR-0968).
 _ENTRY_WRITE_ERRORS = (
-    NotAllowedToEnterError,
     PlayerNotFoundError,
     NonSinglesEntryError,
     EntryRefusedError,
+    EntryRateLimitedError,
 )
 
 
+def _client_ip(request: Request) -> str:
+    """The caller's client IP, for the entry verb's per-IP self-entry rate limit.
+
+    ``request.client.host`` is the true client IP given ``FORWARDED_ALLOW_IPS`` at
+    the uvicorn edge (ADR-0008) — the same assumption the schedule-preview per-IP
+    limiter and ``mcp_server._provision_client_ip`` make, so all three read the
+    same fact the same way. Falls back to a fixed ``"unknown"`` key when the
+    transport supplies no address, degrading to one shared bucket rather than
+    raising."""
+    client = request.client
+    return client.host if client else "unknown"
+
+
 def _map_entry_write_error(
-    exc: NotAllowedToEnterError
-    | PlayerNotFoundError
+    exc: PlayerNotFoundError
     | NonSinglesEntryError
-    | EntryRefusedError,
+    | EntryRefusedError
+    | EntryRateLimitedError,
 ) -> HTTPException:
     """Adapt an enter-verb-specific domain exception to the exact HTTP response the
-    handler produced inline: ``NotAllowedToEnterError`` → 403 ``"Forbidden."`` (the
-    self-registration permission gate), ``PlayerNotFoundError`` → 404 ``"Player not
-    found."``, ``NonSinglesEntryError`` → 400 with its carried sentence, and
-    ``EntryRefusedError`` → the coded 409 rebuilt verbatim by ``entry_refused`` (the
-    machine-readable ``{"detail": {"code": ..., "message": ...}}`` body, ADR-0968)."""
-    if isinstance(exc, NotAllowedToEnterError):
-        return HTTPException(status_code=403, detail="Forbidden.")
+    handler produced inline: ``PlayerNotFoundError`` → 404 ``"Player not found."``,
+    ``NonSinglesEntryError`` → 400 with its carried sentence, ``EntryRefusedError``
+    → the coded 409 rebuilt verbatim by ``entry_refused`` (the machine-readable
+    ``{"detail": {"code": ..., "message": ...}}`` body, ADR-0968), and
+    ``EntryRateLimitedError`` → 429 with its retry-shortly sentence (the per-IP
+    self-entry ceiling)."""
     if isinstance(exc, PlayerNotFoundError):
         return HTTPException(status_code=404, detail="Player not found.")
     if isinstance(exc, NonSinglesEntryError):
         return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, EntryRateLimitedError):
+        return HTTPException(status_code=429, detail=str(exc))
     # ``EntryRefusedError`` carries its ``EntryRefusal`` code and fallback message —
     # handed straight to the same factory the route used inline, so the 409 body is
     # byte-for-byte what it was.
@@ -1067,6 +1069,7 @@ def _map_entry_write_error(
 async def enter_event(
     tournament_id: uuid.UUID,
     event_id: uuid.UUID,
+    request: Request,
     payload: TournamentEntryCreate | None = None,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
@@ -1076,14 +1079,17 @@ async def enter_event(
 
     **The body is optional, and its presence chooses the actor** (ADR-0784):
 
-    * **no body** → you are entering *yourself*. Requires the `tournament.enter`
-      permission. This is the request every player already sends, and it is unchanged.
-    * **`user_id`** → you are the **director** entering that player. Requires that you
-      **own** the tournament; anyone else naming a `user_id` that is not their own is a
-      `403`. An id that names no (live) player is a `404`.
+    * **no body** → you are entering *yourself*. Open to every signed-in user —
+      no permission is asked — but rate limited **per client IP** (30 per hour by
+      default, configurable via `TOURNAMENT_ENTRY_IP_PER_HOUR`); past the ceiling
+      the request is a `429` telling you to retry shortly.
+    * **`user_id`** → you are the **director** entering that player. Requires that
+      you **own** the tournament; anyone else naming a `user_id` that is not their
+      own is a `403`. An id that names no (live) player is a `404`. The director
+      path carries no rate limit.
 
     Naming *your own* `user_id` is self-registration, not a director entry: same
-    permission, and the entry records no adder.
+    rules as no body, and the entry records no adder.
 
     Registration is open only while the tournament is **`published`** — its status
     *is* its registration window (ADR-0017). Entering an event of a `draft`
@@ -1111,14 +1117,14 @@ async def enter_event(
     full event, or one over the event's rating cap, is refused precisely as the player
     would be.
     """
-    # The whole dual-actor orchestration — the fork, the self-path permission gate, the
-    # locked load, the ownership gate, the ordered refusals and the INSERT — lives in
-    # the
-    # transport-neutral ``enter_event`` verb (``app.tournament_entries``), shared with
-    # the
-    # MCP ``enter_event`` tool. This adapter parses the actor out of the optional body
-    # (``user_id`` present → a director entry; absent → self-registration, ADR-0784) and
-    # maps each domain refusal to the exact status/body it produced inline.
+    # The whole dual-actor orchestration — the fork, the self-path per-IP rate
+    # limit, the locked load, the ownership gate, the ordered refusals and the
+    # INSERT — lives in the transport-neutral ``enter_event`` verb
+    # (``app.tournament_entries``), shared with the MCP ``enter_event`` tool. This
+    # adapter parses the actor out of the optional body (``user_id`` present → a
+    # director entry; absent → self-registration, ADR-0784), hands the verb the
+    # caller's client IP for the self arm's rate limit, and maps each domain
+    # refusal to the exact status/body it produced inline.
     try:
         return await enter_event_core(
             db,
@@ -1126,15 +1132,15 @@ async def enter_event(
             event_id=event_id,
             actor=current_user,
             user_id=payload.user_id if payload is not None else None,
+            client_ip=_client_ip(request),
         )
     except _TOURNAMENT_WRITE_ERRORS as exc:
         # The tournament/event 404s and the director-path ownership 403 map identically
         # to every other owner-only tournament write.
         raise _map_tournament_write_error(exc) from exc
     except _ENTRY_WRITE_ERRORS as exc:
-        # The enter route's own: self-path permission 403, named-player 404, singles
-        # 400,
-        # and the four coded entry-refusal 409s (ADR-0968).
+        # The enter route's own: named-player 404, singles 400, the four coded
+        # entry-refusal 409s (ADR-0968), and the per-IP rate limit 429.
         raise _map_entry_write_error(exc) from exc
 
 
@@ -1158,8 +1164,8 @@ async def withdraw_from_event(
     free to enter the same event again afterwards.
 
     **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
-    themselves (with the `tournament.enter` permission), or the tournament's **owner**,
-    for any entry in it. Anybody else is a `403`.
+    themselves, or the tournament's **owner**, for any entry in it. Anybody else
+    is a `403`.
 
     Withdrawal, like entry, is open only while the tournament is **`published`** —
     its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -1197,10 +1203,6 @@ async def withdraw_from_event(
     except EntryNotFoundError as exc:
         # The withdraw route's own 404: the entry does not resolve under this event.
         raise HTTPException(status_code=404, detail="Entry not found.") from exc
-    except NotAllowedToEnterError as exc:
-        # The self path lacking ``tournament.enter`` — the same 403 ``"Forbidden."`` the
-        # enter route's self gate produces (they share the one domain exception).
-        raise HTTPException(status_code=403, detail="Forbidden.") from exc
     except NotAllowedToWithdrawError as exc:
         # Neither the entry's owner nor the tournament's owner.
         raise HTTPException(
