@@ -53,8 +53,10 @@ const scoped = (container: Container) => ({
   getAddReservationButton() {
     return container.getByRole('button', { name: /Add (first )?reservation/ })
   },
+  /** Every Remove-reservation button on the Reservations tab, in card order — each
+   * names the card it removes (#1441): `Remove reservation 1: Reservation A`. */
   getRemoveReservationButtons() {
-    return container.queryAllByRole('button', { name: 'Remove reservation' })
+    return container.queryAllByRole('button', { name: /^Remove reservation/ })
   },
   /** #1482's cap notice on the Reservations tab — why Add is disabled. */
   queryReservationsCapNotice() {
@@ -171,6 +173,21 @@ const scoped = (container: Container) => ({
   },
   queryDeleteButton() {
     return container.queryByRole('button', { name: 'Delete event' })
+  },
+  /** The #1537 newly-stranded-match confirmation — portals to the body like every
+   * other `AlertDialog` here, so these resolve fine against a scoped container too
+   * (`within` always falls through to `screen` for a portal in practice). */
+  queryStrandConfirm() {
+    return container.queryByTestId('strand-confirm-dialog')
+  },
+  getStrandConfirm() {
+    return container.getByTestId('strand-confirm-dialog')
+  },
+  getStrandConfirmSave() {
+    return container.getByTestId('strand-confirm-save')
+  },
+  getStrandConfirmCancel() {
+    return container.getByTestId('strand-confirm-cancel')
   },
 })
 

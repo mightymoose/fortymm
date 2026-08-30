@@ -244,6 +244,93 @@ describe('saveFailureMessage · a reservation the server refused', () => {
     expect(message).not.toContain('String')
     expect(message).not.toContain('at least 1 character')
   })
+
+  /** THE #1507 regression, read off the #1482 QA screenshot: *"The Reservations was
+   * rejected."* The verb used to come from the COUNT of blamed fields, so one blamed
+   * field always said "was" — however the label above that row reads. "Reservations"
+   * is one field on the wire and a plural word on the form, and the sentence has to
+   * agree with the word it prints, not with the count behind it. */
+  it('agrees in number with the LABEL, not with the count of blamed fields', () => {
+    expect(say(reservationNameBlank)).toBe(
+      'The Reservations were rejected. Check those fields and try again.',
+    )
+  })
+})
+
+/**
+ * Number agreement, #1507. Each label carries its own grammatical number as data
+ * (`FieldLabel.plural`), so a sentence that names exactly one field still reads
+ * correctly when the words above that row are plural. The count only ever forces
+ * plural — it can never force singular back onto a plural label.
+ */
+describe('saveFailureMessage · number agreement (#1507)', () => {
+  /** A 422 blaming exactly the given wire fields, in FastAPI's real array shape. */
+  const blaming = (...fields: string[]): ApiError =>
+    new ApiError(422, null, 'x', {
+      detail: fields.map((field) => ({
+        loc: ['body', field],
+        msg: 'Input should be valid',
+      })),
+    })
+
+  const sayTournament = (error: unknown): string =>
+    saveFailureMessage(saveFailure(error), TOURNAMENT_SAVE_TARGET)
+
+  it.each([
+    ['match_settings', 'The Match settings were rejected. Check those fields and try again.'],
+    ['predicates', 'The Eligibility rules were rejected. Check those fields and try again.'],
+    ['reservations', 'The Reservations were rejected. Check those fields and try again.'],
+  ])('reads the event editor’s plural label %s as plural', (field, expected) => {
+    expect(say(blaming(field))).toBe(expected)
+  })
+
+  it('reads the tournament dialog’s plural label (Tables) as plural', () => {
+    expect(sayTournament(blaming('table_catalogue'))).toBe(
+      'The Tables were rejected. Check those fields and try again.',
+    )
+  })
+
+  /** The other direction, and the one that must NOT move: a singular label blamed on
+   * its own keeps the sentence it has always had. The e2e suite asserts these two
+   * strings byte for byte. */
+  it.each([
+    ['name', 'The Event name was rejected. Check that field and try again.'],
+    ['format', 'The Format was rejected. Check that field and try again.'],
+    ['slot', 'The Time slot was rejected. Check that field and try again.'],
+  ])('leaves the singular label %s exactly as it was', (field, expected) => {
+    expect(say(blaming(field))).toBe(expected)
+  })
+
+  /** Two or more fields are plural whatever each label's own number is — the count
+   * forces plural, and a singular label in the conjunction cannot pull it back. */
+  it('keeps the plural verb for a conjunction that MIXES the two numbers', () => {
+    expect(say(blaming('name', 'reservations'))).toBe(
+      'The Event name and Reservations were rejected. Check those fields and try again.',
+    )
+    // …and in the other order, since the first label is not privileged.
+    expect(say(blaming('reservations', 'name'))).toBe(
+      'The Reservations and Event name were rejected. Check those fields and try again.',
+    )
+  })
+
+  it('keeps the plural verb for two singular labels', () => {
+    expect(say(blaming('max_players', 'entry_fee'))).toBe(
+      'The Player limit and Entry fee were rejected. Check those fields and try again.',
+    )
+  })
+
+  /** A blamed field with no row in the table still falls through to the generic
+   * sentence — the plural data hangs off the LABEL, so a field with no label has
+   * none of it to read. */
+  it('still falls back generically for a field the form has no label for', () => {
+    expect(say(blaming('seeding_policy'))).toBe(
+      "Some of this event's details were rejected. Check the fields and try again.",
+    )
+    // …and drops only the unlabelled field when it is blamed alongside a labelled one.
+    expect(say(blaming('seeding_policy', 'reservations'))).toBe(
+      'The Reservations were rejected. Check those fields and try again.',
+    )
+  })
 })
 
 describe('saveFailureMessage · the tournament dialog', () => {

@@ -53,7 +53,7 @@ from app.tournament_event_stages import (
     stage_template,
 )
 from app.tournament_events import create_event, update_event
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
+from app.tournaments import TOURNAMENT_CREATE
 from tests._helpers import (
     event_draw_settings,
     grant_permissions,
@@ -668,7 +668,7 @@ async def authed_client(
     ``tournament.view`` + ``tournament.create`` — the same genuine RBAC rows
     ``test_tournaments`` grants, not a dependency override."""
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_CREATE))
+    await grant_permissions(db_session, user, (TOURNAMENT_CREATE,))
     yield api_client, user
 
 

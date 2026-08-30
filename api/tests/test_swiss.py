@@ -51,7 +51,7 @@ from app.tournament_draws import DrawCurrency, draw_currency_by_event, fixture_s
 from app.tournament_materialization import materialize_event
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_serialization import _field_input, _seated_pairings
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
+from app.tournaments import TOURNAMENT_CREATE
 from tests._helpers import (
     counted_statements,
     grant_permissions,
@@ -81,7 +81,7 @@ async def authed_client(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> AsyncIterator[tuple[AsyncClient, User]]:
     user = await start_session(api_client, db_session)
-    await grant_permissions(db_session, user, (TOURNAMENT_VIEW, TOURNAMENT_CREATE))
+    await grant_permissions(db_session, user, (TOURNAMENT_CREATE,))
     yield api_client, user
 
 
@@ -1177,6 +1177,8 @@ def test_the_draw_layer_and_the_read_layer_decide_a_pairing_alike() -> None:
                     match_status=match_status,
                     table_id=None,
                     scheduled_start=None,
+                    table_off_reservation=None,
+                    start_outside_reservation_window=None,
                     pinned_at=None,
                     call_notified_count=0,
                     completed_at=None,
@@ -1272,6 +1274,8 @@ def _row(
         match_status=status,
         table_id=None,
         scheduled_start=None,
+        table_off_reservation=None,
+        start_outside_reservation_window=None,
         pinned_at=None,
         call_notified_count=0,
         completed_at=None,

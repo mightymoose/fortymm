@@ -77,13 +77,13 @@ describe('dispatchRbac · default-role refusals', () => {
     const result = dispatchRbac(state, 'PATCH', '/v1/roles/r_user', {
       name: 'User',
       description: 'Everyone holds this.',
-      permission_ids: ['p_tv'],
+      permission_ids: ['p_tc'],
     })
 
     expect(result?.status).toBe(200)
     const updated = result?.body as Role
     expect(updated.description).toBe('Everyone holds this.')
-    expect(updated.permission_ids).toEqual(['p_tv'])
+    expect(updated.permission_ids).toEqual(['p_tc'])
   })
 })
 

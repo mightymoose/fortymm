@@ -5,12 +5,13 @@ import { resolve } from 'node:path'
 // `docker compose … exec` seam `global-setup` owns the stack through.
 //
 // Why this exists: a guest/ephemeral user holds only the default `User` role,
-// which carries NO permissions. Creating, viewing, or entering a tournament is
-// gated on `tournament.create` / `tournament.view` / `tournament.enter`, and the
-// only role that bundles those — **"Beta tester"** (`api/scripts/seed_rbac.py`)
-// — is granted to NOBODY by the seed. So a spec that drives the tournament flow
-// as a real director has to hand its test user that role first, or every write
-// 403s. There is no HTTP endpoint to self-assign a role (`authorization.manage`
+// which carries NO permissions. Creating a tournament is gated on
+// `tournament.create`, and the one role that carries it — **"Beta tester"**
+// (`api/scripts/seed_rbac.py`, which also carries `mcp.access`) — is granted to
+// NOBODY by the seed. So a spec that drives the tournament flow as a real
+// director has to hand its test user that role first, or the create 403s
+// (viewing a published tournament and entering one need no grant, #1092).
+// There is no HTTP endpoint to self-assign a role (`authorization.manage`
 // is itself an admin-only grant nobody holds), so the sanctioned seam is the
 // database, reached the way the suite reaches everything else it manages: the
 // composed stack's own `postgres` container.
@@ -32,7 +33,7 @@ const BETA_TESTER_ROLE = 'Beta tester'
 const SAFE_USERNAME = /^[A-Za-z0-9._-]+$/
 
 /**
- * Grant the **"Beta tester"** role (`tournament.view`/`create`/`enter`) to the
+ * Grant the **"Beta tester"** role (`tournament.create` + `mcp.access`) to the
  * user with `username`, so a spec can drive the tournament flow as that director.
  *
  * Idempotent — a `WHERE NOT EXISTS` guard means a re-grant inserts nothing, so a

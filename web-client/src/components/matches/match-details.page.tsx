@@ -16,6 +16,8 @@ import {
   MatchDetailsError,
 } from "@/components/matches/match-details";
 
+import { breadcrumbPage } from "./match-details/breadcrumb.page";
+import { callStatusBannerFetcherPage } from "./match-details/call-status-banner/call-status-banner-fetcher.page";
 import { confirmationCalloutPage } from "./match-details/confirmation-callout.page";
 import { finalizeCalloutPage } from "./match-details/finalize-callout.page";
 import { scoreboardPage } from "./match-details/scoreboard.page";
@@ -76,6 +78,13 @@ export const matchDetailsPage = {
       path: "/matches/$matchId/results/new",
       component: () => <div>correction-route</div>,
     });
+    // The breadcrumb's tournament crumb and the call-status banner's
+    // owner-only "Open the tournament" link both target this route (#1288).
+    const tournamentDetail = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/tournaments/$tournamentId",
+      component: () => <div>tournament-detail</div>,
+    });
     const router = createRouter({
       routeTree: rootRoute.addChildren([
         detailsRoute,
@@ -84,6 +93,7 @@ export const matchDetailsPage = {
         matchesList,
         matchPage,
         correctRoute,
+        tournamentDetail,
       ]),
       history: createMemoryHistory({ initialEntries: ["/details"] }),
     });
@@ -113,4 +123,17 @@ export const matchDetailsPage = {
    * `ConfirmationCallout` wrapper — reuse its page object's callout queries.
    */
   confirmationCallout: confirmationCalloutPage.within(screen),
+
+  /**
+   * The header breadcrumb is rendered through the self-fetching `Breadcrumb`
+   * wrapper — reuse its page object's crumb queries (#1288).
+   */
+  breadcrumb: breadcrumbPage.within(screen),
+
+  /**
+   * The "why can't I score this yet" banner is rendered through the
+   * self-fetching `CallStatusBanner` wrapper — reuse its display's queries
+   * (#1288).
+   */
+  callStatusBanner: callStatusBannerFetcherPage.within(screen),
 };

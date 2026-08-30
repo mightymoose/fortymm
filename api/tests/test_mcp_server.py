@@ -92,7 +92,7 @@ from app.rbac import user_has_permission
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
+from app.tournaments import TOURNAMENT_CREATE
 from tests._helpers import (
     attach_match_to_director_tournament,
     enqueued_notification_jobs,
@@ -790,6 +790,103 @@ async def test_get_match_returns_same_details_as_http_get(
     assert result.structuredContent["can_score"] is True
 
 
+async def _wire_fixture_to_match(
+    db_session: AsyncSession,
+    *,
+    owner: User,
+    league: League,
+    match_id: str,
+    tournament_name: str = "MCP Parity Open",
+) -> None:
+    """Attach an already-created (casual-shaped) match to a fresh fixture on a
+    live, ``owner``-owned tournament — committed. Lets a test build the match
+    through the ordinary HTTP/MCP path (real sides, real settings) and then
+    retrofit the tournament linkage `#1288`'s ``tournament_context`` reverse-
+    looks-up, without hand-rolling ``Match``/``MatchSide`` rows."""
+    tournament = Tournament(
+        name=tournament_name,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "1 Shattuck Ave",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94704",
+            "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
+        },
+        league_id=league.id,
+        created_by_user_id=owner.id,
+        status=TournamentStatus.live,
+    )
+    db_session.add(tournament)
+    await db_session.flush()
+
+    stages = mint_stages(DrawType.single_elim)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
+        max_players=8,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": False, "length_games": 3},
+        stages=stages,
+    )
+    stages[0].groups = event_groups([], event=event, group_count=1)
+    db_session.add(event)
+    await db_session.flush()
+
+    fixture = TournamentFixture(
+        stage_id=stages[0].id,
+        group_id=stages[0].groups[0].id,
+        round=1,
+        position=1,
+        entry_a_id=None,
+        entry_b_id=None,
+        match_id=uuid.UUID(match_id),
+        table_id=None,
+    )
+    db_session.add(fixture)
+    await db_session.commit()
+
+
+async def test_get_match_tournament_context_matches_http_get(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Regression (#1288 review): the existing parity test above only exercises
+    a casual match, so it can't catch a tool that drops the new tournament/
+    fixture context the HTTP GET carries. Wire a real match to a fixture on a
+    live, caller-owned tournament and assert ``get_match`` returns it
+    identically — same full-body parity check, this time actually exercising
+    the field it's meant to cover."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-get-tourn-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent)
+    await _wire_fixture_to_match(
+        db_session, owner=me, league=default_league, match_id=match_id
+    )
+
+    http_body = (await api_client.get(f"/v1/matches/{match_id}")).json()
+    assert http_body["tournament"] is not None
+    assert http_body["tournament"]["tournament_name"] == "MCP Parity Open"
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    assert result.isError is False
+    assert result.structuredContent == http_body
+    assert result.structuredContent is not None
+    assert result.structuredContent["tournament"]["tournament_name"] == (
+        "MCP Parity Open"
+    )
+
+
 async def test_get_match_unknown_id_raises_tool_error(
     api_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -1053,6 +1150,56 @@ async def test_enter_update_delete_game_score_round_trip(
             g for g in deleted.structuredContent["games"] if g["game_number"] == 1
         )
         assert game["score"] is None
+
+
+async def test_enter_game_score_tournament_context_matches_http_write(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Regression (#1288 review): the write path (``_serialize_written_match``,
+    shared by all five MCP score/negotiation write tools) independently drops
+    ``tournament=`` the same way ``get_match`` did — verified separately since
+    it is a different function. A score write on a tournament-linked match must
+    return the same ``tournament`` context the equivalent HTTP write does."""
+    me = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "mcp-score-tourn-rival")
+    raw = await _mint(db_session, me)
+    match_id = await _create_match(api_client, opponent, best_of=5)
+    await _wire_fixture_to_match(
+        db_session,
+        owner=me,
+        league=default_league,
+        match_id=match_id,
+        tournament_name="MCP Score Parity Open",
+    )
+
+    http_response = await api_client.post(
+        f"/v1/matches/{match_id}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 5},
+    )
+    assert http_response.status_code == 201, http_response.text
+    http_body = http_response.json()
+    assert http_body["tournament"] is not None
+    assert http_body["tournament"]["tournament_name"] == "MCP Score Parity Open"
+
+    async with _mcp_client(raw) as client, client:
+        entered = await client.call_tool_mcp(
+            "enter_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 2,
+                "side_1_points": 11,
+                "side_2_points": 7,
+            },
+        )
+
+    assert entered.isError is False
+    assert entered.structuredContent is not None
+    assert entered.structuredContent["tournament"] is not None
+    assert entered.structuredContent["tournament"]["tournament_name"] == (
+        "MCP Score Parity Open"
+    )
 
 
 async def test_enter_game_score_out_of_range_is_schema_error(
@@ -1921,7 +2068,7 @@ async def test_get_tournament_returns_same_detail_as_http_get(
     view the HTTP ``GET /v1/tournaments/{id}`` returns for the same authenticated
     user — same fields, events, and viewer-relative ``can_edit``."""
     me = await start_session(api_client, db_session)
-    await grant_permissions(db_session, me, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
     raw = await _mint(db_session, me)
     tournament_id = await _create_tournament(api_client)
 
@@ -1947,7 +2094,7 @@ async def test_get_tournament_unknown_id_raises_tool_error(
 ) -> None:
     """An id that matches no tournament surfaces as a ``ToolError`` at the caller."""
     me = await start_session(api_client, db_session)
-    await grant_permissions(db_session, me, [TOURNAMENT_VIEW])
+    await grant_permissions(db_session, me, [])
     raw = await _mint(db_session, me)
     unknown = str(uuid.uuid4())
 
@@ -1956,19 +2103,19 @@ async def test_get_tournament_unknown_id_raises_tool_error(
             await client.call_tool("get_tournament", {"tournament_id": unknown})
 
 
-async def test_get_tournament_without_view_permission_raises_tool_error(
+async def test_get_tournament_unknown_id_is_not_found_even_with_zero_permissions(
     db_session: AsyncSession,
 ) -> None:
-    """A caller who does not hold ``tournament.view`` is refused before any row is
-    loaded — the same gate the HTTP ``require_view`` dependency enforces."""
+    """No permission is asked any more (#1092 deleted ``tournament.view``): a
+    caller holding nothing at all reaches the visibility-scoped load, and an
+    unknown id surfaces as the ordinary not-found ``ToolError``."""
     me = await make_user(db_session, "mcp-tourn-noperm")
     raw = await _mint(db_session, me)
+    unknown = str(uuid.uuid4())
 
     async with _mcp_client(raw) as client, client:
-        with pytest.raises(ToolError, match="permission"):
-            await client.call_tool(
-                "get_tournament", {"tournament_id": str(uuid.uuid4())}
-            )
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool("get_tournament", {"tournament_id": unknown})
 
 
 async def test_get_tournament_hidden_draft_raises_tool_error_for_non_owner(
@@ -1979,11 +2126,11 @@ async def test_get_tournament_hidden_draft_raises_tool_error_for_non_owner(
     absent id would — existence is never confirmed for an unannounced draft,
     exactly as the HTTP route hides it behind a 404 (see visible_to)."""
     owner = await start_session(api_client, db_session)
-    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, owner, [TOURNAMENT_CREATE])
     tournament_id = await _create_tournament(api_client)  # born ``draft``
 
     outsider = await make_user(db_session, "mcp-tourn-outsider")
-    await grant_permissions(db_session, outsider, [TOURNAMENT_VIEW])
+    await grant_permissions(db_session, outsider, [])
     outsider_token = await _mint(db_session, outsider)
 
     async with _mcp_client(outsider_token) as client, client:
@@ -2040,7 +2187,7 @@ async def test_list_my_tournaments_returns_only_the_callers_own_newest_first(
     ``GET /v1/tournaments`` — proving the tool's exclusion is about ownership, not
     visibility."""
     me = await start_session(api_client, db_session)
-    await grant_permissions(db_session, me, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
     token_a = await _mint(db_session, me)
     # Two tournaments owned by A, created oldest → newest so the ordering is pinned.
     mine_first = await _create_tournament(api_client)
@@ -2049,7 +2196,7 @@ async def test_list_my_tournaments_returns_only_the_callers_own_newest_first(
     # A second user B owns a PUBLISHED (announced) tournament — A can *see* it via
     # the visibility-scoped HTTP list, but does not own it.
     other = await make_user(db_session, "mcp-list-tourn-other-owner")
-    await grant_permissions(db_session, other, [TOURNAMENT_VIEW])
+    await grant_permissions(db_session, other, [])
     token_b = await _mint(db_session, other)
     theirs = await _seed_owned_tournament(
         db_session, other, default_league, "Their Open", TournamentStatus.published
@@ -2081,17 +2228,18 @@ async def test_list_my_tournaments_returns_only_the_callers_own_newest_first(
     assert mine_second not in ids_b
 
 
-async def test_list_my_tournaments_without_view_permission_raises_tool_error(
+async def test_list_my_tournaments_needs_no_permission(
     db_session: AsyncSession,
 ) -> None:
-    """A caller who does not hold ``tournament.view`` is refused, mirroring the
-    ``tournament.view`` gate the HTTP list enforces via ``require_view``."""
+    """A caller holding no permission at all still lists their own tournaments —
+    #1092 deleted ``tournament.view``."""
     me = await make_user(db_session, "mcp-list-tourn-noperm")
     raw = await _mint(db_session, me)
 
     async with _mcp_client(raw) as client, client:
-        with pytest.raises(ToolError, match="permission"):
-            await client.call_tool("list_my_tournaments", {})
+        result = await client.call_tool("list_my_tournaments", {})
+        assert result.structured_content is not None
+        assert result.structured_content["result"] == []
 
 
 # ----- list_schedule_solves tool (admin ledger read) -----------------------
@@ -2282,7 +2430,7 @@ async def test_get_schedule_returns_placed_fixtures_and_latest_solve_verdict(
     latest solve's status/verdict — the same placement + solve facts the detail BFF
     reads, in the narrow schedule projection."""
     me = await start_session(api_client, db_session)
-    await grant_permissions(db_session, me, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
     raw = await _mint(db_session, me)
     tournament_id = await _create_tournament(api_client)
     event_id = await _first_event_id(db_session, tournament_id)
@@ -2348,7 +2496,7 @@ async def test_get_schedule_with_no_draw_and_no_solve_is_empty(
     the event group carries ``[]`` fixtures (the designed un-cut state, ADR-0786)
     and ``latest_schedule_solve`` is ``null``."""
     me = await start_session(api_client, db_session)
-    await grant_permissions(db_session, me, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
     raw = await _mint(db_session, me)
     tournament_id = await _create_tournament(api_client)
     event_id = await _first_event_id(db_session, tournament_id)
@@ -2373,7 +2521,7 @@ async def test_get_schedule_unknown_id_raises_tool_error(
 ) -> None:
     """An id that matches no tournament surfaces as a ``ToolError`` at the caller."""
     me = await start_session(api_client, db_session)
-    await grant_permissions(db_session, me, [TOURNAMENT_VIEW])
+    await grant_permissions(db_session, me, [])
     raw = await _mint(db_session, me)
     unknown = str(uuid.uuid4())
 
@@ -2390,11 +2538,11 @@ async def test_get_schedule_hidden_draft_raises_tool_error_for_non_owner(
     id would — the same visibility gate ``get_tournament`` and the HTTP detail read
     keep."""
     owner = await start_session(api_client, db_session)
-    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, owner, [TOURNAMENT_CREATE])
     tournament_id = await _create_tournament(api_client)  # born ``draft``
 
     outsider = await make_user(db_session, "mcp-sched-outsider")
-    await grant_permissions(db_session, outsider, [TOURNAMENT_VIEW])
+    await grant_permissions(db_session, outsider, [])
     outsider_token = await _mint(db_session, outsider)
 
     async with _mcp_client(outsider_token) as client, client:
@@ -2402,18 +2550,19 @@ async def test_get_schedule_hidden_draft_raises_tool_error_for_non_owner(
             await client.call_tool("get_schedule", {"tournament_id": tournament_id})
 
 
-async def test_get_schedule_without_view_permission_raises_tool_error(
+async def test_get_schedule_unknown_id_is_not_found_even_with_zero_permissions(
     db_session: AsyncSession,
 ) -> None:
-    """A caller who does not hold ``tournament.view`` is refused before any row is
-    loaded — the same gate the HTTP detail read's ``require_view`` dependency
-    enforces."""
+    """No permission is asked any more (#1092 deleted ``tournament.view``): a
+    caller holding nothing at all reaches the visibility-scoped load, and an
+    unknown id surfaces as the ordinary not-found ``ToolError``."""
     me = await make_user(db_session, "mcp-sched-noperm")
     raw = await _mint(db_session, me)
+    unknown = str(uuid.uuid4())
 
     async with _mcp_client(raw) as client, client:
-        with pytest.raises(ToolError, match="permission"):
-            await client.call_tool("get_schedule", {"tournament_id": str(uuid.uuid4())})
+        with pytest.raises(ToolError, match=unknown):
+            await client.call_tool("get_schedule", {"tournament_id": unknown})
 
 
 # ----- edit_tournament tool ------------------------------------------------
@@ -2436,7 +2585,7 @@ async def test_edit_tournament_owner_renames_and_it_persists(
     carries the new name (and leaves the other fields untouched — partial
     semantics), and the change is committed, readable back through the tool."""
     me = await start_session(api_client, db_session)
-    await grant_permissions(db_session, me, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, me, [TOURNAMENT_CREATE])
     raw = await _mint(db_session, me)
     tournament_id = await _create_tournament(api_client)
 
@@ -2478,7 +2627,7 @@ async def test_edit_tournament_non_owner_raises_tool_error_and_writes_nothing(
     """A caller who is not the tournament's creator gets a ``ToolError`` (owner-gated
     by construction in the shared verb), and nothing is written."""
     owner = await start_session(api_client, db_session)
-    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW, TOURNAMENT_CREATE])
+    await grant_permissions(db_session, owner, [TOURNAMENT_CREATE])
     tournament_id = await _create_tournament(api_client)
     original_name = _tournament_payload()["name"]
 
@@ -2705,7 +2854,7 @@ async def test_build_cut_returns_fixtures_visible_via_schedule_then_uncut_remove
     ``get_schedule``, and ``uncut`` then tears them down (``fixtures_remaining`` = 0 and
     the schedule shows ``[]``)."""
     owner = await make_user(db_session, "mcp-draw-owner")
-    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW])
+    await grant_permissions(db_session, owner, [])
     raw = await _mint(db_session, owner)
     tournament, event = await _seed_drawable_tournament(
         db_session, owner, default_league
@@ -3050,7 +3199,7 @@ async def test_request_schedule_solve_owner_queues_a_run(
     the solve is async, its verdict read back later via ``get_schedule``), and that
     row is durable on the tournament's solve ledger."""
     owner = await make_user(db_session, "mcp-solve-owner")
-    await grant_permissions(db_session, owner, [TOURNAMENT_VIEW])
+    await grant_permissions(db_session, owner, [])
     raw = await _mint(db_session, owner)
     tournament, event = await _seed_drawable_tournament(
         db_session, owner, default_league
@@ -4530,7 +4679,7 @@ async def test_enter_event_self_registration_round_trip(
     records no adder (self-registration, ADR-0784)."""
     owner = await make_user(db_session, "mcp-enter-owner")
     me = await make_user(db_session, "mcp-enter-self")
-    await grant_permissions(db_session, me, [TOURNAMENT_ENTER])
+    await grant_permissions(db_session, me, [])
     raw = await _mint(db_session, me)
     _, event = await _seed_published_singles_event(db_session, owner, default_league)
     # Read the ids up front: ``expire_all`` below expires every ORM object, and touching
@@ -4611,7 +4760,7 @@ async def test_enter_event_non_owner_naming_another_raises_tool_error(
     ``ToolError`` (the director arm is owner-gated), and nothing is written."""
     owner = await make_user(db_session, "mcp-enter-guard-owner")
     stranger = await make_user(db_session, "mcp-enter-stranger")
-    await grant_permissions(db_session, stranger, [TOURNAMENT_ENTER])
+    await grant_permissions(db_session, stranger, [])
     other = await make_user(db_session, "mcp-enter-other")
     stranger_token = await _mint(db_session, stranger)
     _, event = await _seed_published_singles_event(db_session, owner, default_league)
@@ -4645,7 +4794,7 @@ async def test_enter_event_full_event_raises_tool_error_naming_the_refusal(
     owner = await make_user(db_session, "mcp-enter-full-owner")
     first = await make_user(db_session, "mcp-enter-full-first")
     me = await make_user(db_session, "mcp-enter-full-me")
-    await grant_permissions(db_session, me, [TOURNAMENT_ENTER])
+    await grant_permissions(db_session, me, [])
     raw = await _mint(db_session, me)
     _, event = await _seed_published_singles_event(
         db_session, owner, default_league, max_players=1
@@ -4703,7 +4852,7 @@ async def test_withdraw_from_event_self_round_trip(
     ``withdrawn``, the row survives)."""
     owner = await make_user(db_session, "mcp-withdraw-owner")
     me = await make_user(db_session, "mcp-withdraw-self")
-    await grant_permissions(db_session, me, [TOURNAMENT_ENTER])
+    await grant_permissions(db_session, me, [])
     raw = await _mint(db_session, me)
     _, event = await _seed_published_singles_event(db_session, owner, default_league)
     entry_id = await _seed_active_entry(db_session, event, me)
@@ -4775,7 +4924,7 @@ async def test_withdraw_from_event_third_party_raises_tool_error(
     owner = await make_user(db_session, "mcp-withdraw-guard-owner")
     entrant = await make_user(db_session, "mcp-withdraw-entrant")
     stranger = await make_user(db_session, "mcp-withdraw-stranger")
-    await grant_permissions(db_session, stranger, [TOURNAMENT_ENTER])
+    await grant_permissions(db_session, stranger, [])
     stranger_token = await _mint(db_session, stranger)
     _, event = await _seed_published_singles_event(db_session, owner, default_league)
     entry_id = await _seed_active_entry(db_session, event, entrant)

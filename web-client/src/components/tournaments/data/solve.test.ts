@@ -125,6 +125,8 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
         required_min: 480,
         capacity_min: 450,
         table_count: 5,
+        group_count: 0,
+        has_bracket: false,
       }),
     ).toEqual({
       kind: 'reservation_over_capacity',
@@ -135,12 +137,12 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
       requiredMin: 480,
       capacityMin: 450,
       tableCount: 5,
-      // A ledger row written before #1389 arrives as 0: the API's read-back default.
       groupCount: 0,
+      hasBracket: false,
     })
   })
 
-  it('parses reservation_over_capacity with its group count (ticket #1389)', () => {
+  it('parses reservation_over_capacity with its group count and bracket flag (tickets #1389, #1535)', () => {
     expect(
       infeasibilityReasonSchema.parse({
         kind: 'reservation_over_capacity',
@@ -152,8 +154,41 @@ describe('infeasibilityReasonSchema (the parse boundary)', () => {
         capacity_min: 450,
         table_count: 5,
         group_count: 8,
+        has_bracket: true,
       }),
-    ).toMatchObject({ kind: 'reservation_over_capacity', groupCount: 8 })
+    ).toMatchObject({ kind: 'reservation_over_capacity', groupCount: 8, hasBracket: true })
+  })
+
+  it('refuses reservation_over_capacity missing group_count — no read-back default since #1535', () => {
+    expect(() =>
+      infeasibilityReasonSchema.parse({
+        kind: 'reservation_over_capacity',
+        reservation_name: 'Reservation C',
+        reservation: 'booked',
+        window_start: '09:00',
+        window_end: '13:00',
+        required_min: 480,
+        capacity_min: 450,
+        table_count: 5,
+        has_bracket: false,
+      }),
+    ).toThrow()
+  })
+
+  it('refuses reservation_over_capacity missing has_bracket — required, no default', () => {
+    expect(() =>
+      infeasibilityReasonSchema.parse({
+        kind: 'reservation_over_capacity',
+        reservation_name: 'Reservation C',
+        reservation: 'booked',
+        window_start: '09:00',
+        window_end: '13:00',
+        required_min: 480,
+        capacity_min: 450,
+        table_count: 5,
+        group_count: 0,
+      }),
+    ).toThrow()
   })
 
   it('parses player_over_subscribed — the one arm that names a human', () => {
@@ -444,6 +479,7 @@ describe('infeasibilityReasonCopy', () => {
         capacityMin: 450,
         tableCount: 5,
         groupCount: 0,
+        hasBracket: false,
       }),
     ).toEqual({
       sentence:
@@ -464,6 +500,7 @@ describe('infeasibilityReasonCopy', () => {
         capacityMin: 75,
         tableCount: 1,
         groupCount: 0,
+        hasBracket: false,
       }).sentence,
     ).toContain('on 1 table only')
   })
@@ -582,6 +619,7 @@ describe('infeasibilityReasonCopy', () => {
         capacityMin: 450,
         tableCount: 5,
         groupCount: 0,
+        hasBracket: false,
       },
       {
         kind: 'player_over_subscribed',
@@ -649,6 +687,7 @@ describe('infeasibilityReasonCopy — the reservation copy is unchanged', () => 
         capacityMin: 450,
         tableCount: 5,
         groupCount: 0,
+        hasBracket: false,
       }),
     ).toEqual({
       sentence:
@@ -736,6 +775,7 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
       capacityMin: 480,
       tableCount: 4,
       groupCount: 0,
+      hasBracket: false,
     })
     expect(copy).toEqual({
       sentence:
@@ -749,7 +789,7 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
     expect(copy.sentence).not.toContain('but its 09:00–17:00 window')
   })
 
-  describe('the group clause on reservation_over_capacity (ticket #1389)', () => {
+  describe('the group clause on reservation_over_capacity (tickets #1389, #1535)', () => {
     const booked = {
       kind: 'reservation_over_capacity' as const,
       reservationName: 'Reservation A',
@@ -759,6 +799,7 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
       requiredMin: 480,
       capacityMin: 450,
       tableCount: 5,
+      hasBracket: false,
     }
     const eventWide = {
       ...booked,
@@ -799,13 +840,55 @@ describe('infeasibilityReasonCopy — the event-wide reservation', () => {
       ['booked', booked],
       ['event', eventWide],
     ])('renders no group clause at 0 or 1 for a %s reservation', (_kind, base) => {
-      // 0: a stale ledger row, or an event-wide reservation holding only a knockout
-      // stage. 1: one group, nothing to re-spread. Both read as today's sentence.
+      // 0: a stale ledger row, or an event-wide reservation holding no group-stage
+      // groups of its own (it may still hold the bracket — irrelevant, see below).
+      // 1: one group, nothing to re-spread. Both read as today's sentence.
       const atZero = infeasibilityReasonCopy({ ...base, groupCount: 0 })
       expect(atZero.sentence).not.toContain('groups')
       expect(atZero.remedy).not.toContain('spreads the groups')
       expect(infeasibilityReasonCopy({ ...base, groupCount: 1 })).toEqual(atZero)
     })
+
+    it('names the bracket alongside the count when it shares an over-capacity reservation (ticket #1535)', () => {
+      const copy = infeasibilityReasonCopy({ ...booked, groupCount: 3, hasBracket: true })
+      expect(copy.sentence).toBe(
+        "Reservation A can't fit all its matches: they need about 8h of table-time, but its 09:00–13:00 window on 5 tables only holds about 7.5h. It holds 3 groups and the bracket, all competing for the same tables.",
+      )
+      // The remedy's wording is unchanged by `hasBracket` — same two variants,
+      // still gated only by `groupCount > 1` and `reservation`.
+      expect(copy.remedy).toBe(
+        'Add a table to Reservation A, widen its window, or trim the field. Adding a reservation spreads the groups across them.',
+      )
+    })
+
+    it('omits "and the bracket" when hasBracket is false, even with groupCount > 1', () => {
+      const copy = infeasibilityReasonCopy({ ...booked, groupCount: 3, hasBracket: false })
+      expect(copy.sentence).toContain('It holds 3 groups, all competing for the same tables.')
+      expect(copy.sentence).not.toContain('and the bracket')
+    })
+
+    it.each([
+      ['booked', booked],
+      ['event', eventWide],
+    ])(
+      'renders no group clause at exactly 1 group-stage group even when the bracket shares the reservation (%s)',
+      (_kind, base) => {
+        // The gate stays one-dimensional: groupCount > 1 is false at 1, whatever
+        // hasBracket says. Before #1535 this reservation would have reported
+        // groupCount 2 (the bracket counted as a group) and rendered "It holds 2
+        // groups" — this pins that it no longer does.
+        const withBracket = infeasibilityReasonCopy({ ...base, groupCount: 1, hasBracket: true })
+        const withoutBracket = infeasibilityReasonCopy({
+          ...base,
+          groupCount: 1,
+          hasBracket: false,
+        })
+        expect(withBracket.sentence).not.toContain('groups')
+        expect(withBracket.sentence).not.toContain('bracket')
+        expect(withBracket.remedy).not.toContain('spreads the groups')
+        expect(withBracket).toEqual(withoutBracket)
+      },
+    )
   })
 
   it('offers player_over_subscribed a smaller FIELD and the event\'s window — a "smaller reservation" is not a control here', () => {

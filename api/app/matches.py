@@ -75,6 +75,7 @@ from app.match_serialization import (
     serialize_details,
     side_schema,
     status_label,
+    tournament_context,
     view_extras,
     view_extras_if_participant,
 )
@@ -210,7 +211,12 @@ async def create_match(
             status_code=422,
             detail="A rated match needs a registered opponent.",
         ) from err
-    return serialize_details(created, current_user.id)
+    # No `tournament_context` lookup here: this endpoint only ever creates a
+    # casual match (`MatchCreate` carries no fixture/tournament field), and a
+    # `TournamentFixture` links to a match only through the draw-materialization
+    # path (`tournament_materialization.py`), never through this handler — so a
+    # match this call just created cannot yet be referenced by any fixture.
+    return serialize_details(created, current_user.id, tournament=None)
 
 
 def _apply_list_filter[SelectT: Select[Any]](
@@ -555,21 +561,21 @@ async def get_match(
         if viewer_is_participant
         else empty_extras()
     )
+    viewer_id = current_user.id if current_user else None
     # The director read flags are a second, independent widening from the write
     # gate (#1523 constraint 10) — a signed-in, non-participant viewer may still
     # be the tournament's director. ``resolve_viewer_is_director`` owns the
     # decision and its short-circuits (anonymous, participant, or a match where
     # the flag changes nothing), shared with every other handler that returns a
     # whole ``MatchDetails`` so no two responses about this match can disagree.
-    viewer_is_director = await resolve_viewer_is_director(
-        db, match, current_user.id if current_user else None
-    )
+    viewer_is_director = await resolve_viewer_is_director(db, match, viewer_id)
     return serialize_details(
         match,
-        current_user.id if current_user else None,
+        viewer_id,
         extras,
         domain_match,
         viewer_is_director=viewer_is_director,
+        tournament=await tournament_context(db, match, viewer_id),
     )
 
 
@@ -619,13 +625,15 @@ async def _serialize_written_match(
     one response builder every write handler on this router shares (the three
     score verbs, propose, accept).
 
-    Two viewer-relative inputs, and the director is a live case in both. The
-    extras stay participant-gated (``view_extras_if_participant``), so a
-    director who doesn't play in this match never sees the players'
+    Three viewer-relative inputs, and the director is a live case in two of
+    them. The extras stay participant-gated (``view_extras_if_participant``),
+    so a director who doesn't play in this match never sees the players'
     form/H2H/rating data (#515). The flags do the opposite and widen to them:
     ``resolve_viewer_is_director`` answers the same question the GET answers, so
     a write the request just authorized can't come back reporting
     ``can_score: false``. Its short-circuits make this free for a participant.
+    ``tournament_context`` is viewer-relative only in its ``can_edit`` bit and
+    carries no participation gate of its own.
 
     The mirror of ``mcp_server._serialize_written_match``. Both exist because
     each surface holds its own service/session handles; the decision they share
@@ -633,7 +641,11 @@ async def _serialize_written_match(
     extras = await view_extras_if_participant(match_service, match, current_user_id)
     viewer_is_director = await resolve_viewer_is_director(db, match, current_user_id)
     return serialize_details(
-        match, current_user_id, extras, viewer_is_director=viewer_is_director
+        match,
+        current_user_id,
+        extras,
+        viewer_is_director=viewer_is_director,
+        tournament=await tournament_context(db, match, current_user_id),
     )
 
 

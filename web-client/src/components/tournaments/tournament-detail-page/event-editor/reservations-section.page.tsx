@@ -56,13 +56,16 @@ const scoped = (container: Container) => ({
       .map((node: HTMLElement) => node.textContent)
   },
   /** Every Remove-reservation button, in render order — to remove a specific card.
+   * Each names the card it removes (#1441): `Remove reservation 1: Reservation A`,
+   * position first so blank (#1046 pending) or duplicated names cannot collide; assert
+   * the exact names with `toHaveAccessibleName` on the buttons this returns.
    *
    * `hidden: false` is NOT passed and must not be: a *disabled* button (the cut-draw
    * freeze, ADR-0786) is still in the accessibility tree with its name, and a query that
    * dropped it would report "no Remove button" for a state whose whole point is that the
    * button is there, visible, and dead. */
   getRemoveReservationButtons() {
-    return container.queryAllByRole('button', { name: 'Remove reservation' })
+    return container.queryAllByRole('button', { name: /^Remove reservation/ })
   },
   /** The notice that says the group SET is frozen because the draw is cut — and how to
    * get out of it. Absent when there is no draw, and absent for a viewer (who has no

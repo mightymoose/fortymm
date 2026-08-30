@@ -5,7 +5,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 import redis.exceptions
 from fastapi import (
@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import captcha as captcha_module
 from app import queue as queue_module
 from app.account_merge import merge_user
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import (
@@ -411,26 +411,6 @@ async def _email_ip_rate_limit_key(request: Request) -> str:
 #   - looser per-IP ceiling so an attacker can't trivially multiply their
 #     budget by rotating guest sessions (each `GET /v1/session` mints a new
 #     one for free).
-email_send_rate_limit = RedisRateLimiter(
-    rates=[Rate(5, Duration.HOUR)],
-    bucket_key="email-send",
-    identifier=_email_rate_limit_key,
-)
-email_send_ip_rate_limit = RedisRateLimiter(
-    rates=[Rate(20, Duration.HOUR)],
-    bucket_key="email-send-ip",
-    identifier=_email_ip_rate_limit_key,
-)
-email_resend_rate_limit = RedisRateLimiter(
-    rates=[Rate(3, Duration.HOUR)],
-    bucket_key="email-resend",
-    identifier=_email_rate_limit_key,
-)
-email_resend_ip_rate_limit = RedisRateLimiter(
-    rates=[Rate(10, Duration.HOUR)],
-    bucket_key="email-resend-ip",
-    identifier=_email_ip_rate_limit_key,
-)
 
 
 async def _login_consume_ip_rate_limit_key(request: Request) -> str:
@@ -440,14 +420,74 @@ async def _login_consume_ip_rate_limit_key(request: Request) -> str:
     return f"login-consume-ip:{_client_ip(request)}"
 
 
-# Permissive ceiling on /v1/login/consume — the bearer token is 256 bits
-# of entropy, so this is defense-in-depth against floods rather than a
-# realistic brute-force barrier.
-login_consume_ip_rate_limit = RedisRateLimiter(
-    rates=[Rate(60, Duration.HOUR)],
-    bucket_key="login-consume-ip",
-    identifier=_login_consume_ip_rate_limit_key,
-)
+class AuthRateLimiters(NamedTuple):
+    """The five authentication rate-limit dependencies, built as one set.
+
+    :func:`build_auth_rate_limiters` is the single construction site: tests
+    build a fresh set from a configured ``Settings`` through it rather than
+    reloading ``app.sessions`` (which would leak ``_instances``/cached-bucket
+    state into other cases) — the routes captured the module-level instances
+    below at import, so swapping in a fresh set is done with
+    ``app.dependency_overrides`` keyed on those.
+    """
+
+    send_session: RedisRateLimiter
+    send_ip: RedisRateLimiter
+    resend_session: RedisRateLimiter
+    resend_ip: RedisRateLimiter
+    login_consume_ip: RedisRateLimiter
+
+
+def build_auth_rate_limiters(settings: Settings) -> AuthRateLimiters:
+    """Build the five authentication limiter dependencies from ``settings``.
+
+    One settings snapshot, once per process: the ceilings are read here at
+    construction and never re-read per request — hot reconfiguration of a
+    running process is out of scope, so a changed environment variable needs
+    a restart. Bucket keys, identifier callbacks, and the one-hour windows
+    are fixed here regardless of configuration.
+    """
+    return AuthRateLimiters(
+        send_session=RedisRateLimiter(
+            rates=[Rate(settings.email_send_session_limit_per_hour, Duration.HOUR)],
+            bucket_key="email-send",
+            identifier=_email_rate_limit_key,
+        ),
+        send_ip=RedisRateLimiter(
+            rates=[Rate(settings.email_send_ip_limit_per_hour, Duration.HOUR)],
+            bucket_key="email-send-ip",
+            identifier=_email_ip_rate_limit_key,
+        ),
+        resend_session=RedisRateLimiter(
+            rates=[Rate(settings.email_resend_session_limit_per_hour, Duration.HOUR)],
+            bucket_key="email-resend",
+            identifier=_email_rate_limit_key,
+        ),
+        resend_ip=RedisRateLimiter(
+            rates=[Rate(settings.email_resend_ip_limit_per_hour, Duration.HOUR)],
+            bucket_key="email-resend-ip",
+            identifier=_email_ip_rate_limit_key,
+        ),
+        login_consume_ip=RedisRateLimiter(
+            rates=[Rate(settings.login_consume_ip_limit_per_hour, Duration.HOUR)],
+            bucket_key="login-consume-ip",
+            identifier=_login_consume_ip_rate_limit_key,
+        ),
+    )
+
+
+# The process's own dependencies, built once at import from one Settings
+# snapshot: 5/20/3/10/60 per hour unless the environment overrides a ceiling
+# (see app.config). The send and resend IP dependencies deliberately run
+# before their session counterparts on the routes below — that order is
+# behavior, not preference.
+(
+    email_send_rate_limit,
+    email_send_ip_rate_limit,
+    email_resend_rate_limit,
+    email_resend_ip_rate_limit,
+    login_consume_ip_rate_limit,
+) = build_auth_rate_limiters(get_settings())
 
 
 def _cookie_secure() -> bool:

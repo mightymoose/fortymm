@@ -28,6 +28,55 @@ describe('ReservationCard', () => {
     expect(onRemove).toHaveBeenCalledTimes(1)
   })
 
+  /**
+   * #1441: with more than one card on the tab, a fixed "Remove reservation" on every
+   * control left a keyboard or screen-reader user unable to tell which card the focused
+   * control would remove. The accessible name is target-specific — the card's 1-based
+   * rendered position plus the live name, the position being the part that survives
+   * blank and duplicated names (#1046). The exact format is pinned here, in literals,
+   * so it cannot drift silently; the page objects query only the shared prefix. The
+   * name is the card's `reservation.name` PROP, so "follows a rename before any save"
+   * is the section's test to prove — that is where the form state the rename flows
+   * through lives (`reservations-section.test.tsx`, #1441's rename test).
+   */
+  describe('a Remove control that names its card (#1441)', () => {
+    it('names the card it removes, by position and live name', () => {
+      reservationCardPage.render({
+        position: 2,
+        reservation: buildReservation({ name: 'Reservation B' }),
+      })
+      expect(reservationCardPage.getRemoveButton()).toHaveAccessibleName(
+        'Remove reservation 2: Reservation B',
+      )
+    })
+
+    // A blank or whitespace-only name falls back to the bare position — never an
+    // empty colon, never a whitespace-only target.
+    it('falls back to the bare position when the name is blank', () => {
+      reservationCardPage.render({ reservation: buildReservation({ name: '' }) })
+      expect(reservationCardPage.getRemoveButton()).toHaveAccessibleName(
+        'Remove reservation 1',
+      )
+    })
+
+    it('falls back to the bare position when the name is whitespace-only', () => {
+      reservationCardPage.render({ reservation: buildReservation({ name: '   ' }) })
+      expect(reservationCardPage.getRemoveButton()).toHaveAccessibleName(
+        'Remove reservation 1',
+      )
+    })
+
+    // The full live value is the identifying name — no truncation, no new validation
+    // (reservation names have no maximum length in the client/API contract).
+    it('keeps the full live name, punctuation and all', () => {
+      const name = 'Q&A, round #2 — morning (side table)'
+      reservationCardPage.render({ reservation: buildReservation({ name }) })
+      expect(reservationCardPage.getRemoveButton()).toHaveAccessibleName(
+        `Remove reservation 1: ${name}`,
+      )
+    })
+  })
+
   // The reservation window carries the event's timezone as a caption (ADR 20260719) — the
   // frame its wall-clock times are in. A reservation holds no zone of its own; the event's
   // is handed down.
@@ -184,6 +233,9 @@ describe('ReservationCard', () => {
 
       const button = reservationCardPage.getRemoveButton()
       expect(button).toBeDisabled()
+      // Disabled, and still named after the card it would remove (#1441) — the state
+      // is `disabled` and the reason is the description; the name stays the name.
+      expect(button).toHaveAccessibleName('Remove reservation 1: Reservation A')
       expect(button).toHaveAttribute('aria-describedby', 'freeze-notice')
       // Disabled means disabled: the click is refused by the DOM, not merely styled away.
       await userEvent.click(button)

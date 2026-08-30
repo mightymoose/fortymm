@@ -74,6 +74,7 @@ from app.schedule_solves import (
     event_wide_reservation_name,
     group_counts_by_reservation,
     group_reservation_ids,
+    reservation_group_counts,
     reservation_key,
     reservation_keys_by_group,
 )
@@ -112,7 +113,7 @@ from app.schemas.schedule_solve import (
     WindowTooShortForMatchRead,
 )
 from app.schemas.tournament import Slot
-from app.tournament_draws import event_reservations
+from app.tournament_draws import event_reservations, group_stage_ids
 from app.tournament_errors import (
     NotTournamentOwnerError,
     ScheduleQueueUnavailableError,
@@ -171,9 +172,14 @@ class _PreviewReservationResolution:
     #: default is for ledger rows written before the field existed; this object only
     #: rides the job payload through Redis for the life of one preview request.
     reservation: ReservationKind
-    #: How many groups' fixtures this reservation holds (#1389) — the groups mapped to
-    #: a booked reservation, or the groups with no reservation for the event-wide one.
+    #: How many **group-stage** groups' fixtures this reservation holds (#1389,
+    #: re-scoped by #1535) — the group-stage groups mapped to a booked reservation,
+    #: or the group-stage groups with no reservation for the event-wide one.
     group_count: int
+    #: Whether the knockout stage's own group (#1484) also shares this reservation
+    #: (#1535). No default, same reasoning as ``reservation`` above: a construction
+    #: site has to say.
+    has_bracket: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,19 +313,24 @@ def _reservation_resolutions(
     :class:`~app.schemas.tournament.Slot`, not indexed off raw JSONB (parse, don't
     validate).
 
-    ``group_count`` is resolved through the same rule a fixture resolves by
-    (:func:`app.schedule_solves.reservation_keys_by_group`): the groups whose
-    fixtures each reservation holds, which for the event-wide one is the groups with no
-    reservation."""
+    ``group_count`` and ``has_bracket`` are resolved through the same rule a
+    fixture resolves by (:func:`app.schedule_solves.group_counts_by_reservation`):
+    the group-stage groups whose fixtures each reservation holds (which for the
+    event-wide one is the group-stage groups with no reservation), and whether the
+    knockout stage's own group (#1484) also shares it — the same split the live
+    solve's twin makes (#1535), so a preview and a real solve read the same clause
+    for the same reservation."""
     resolutions: dict[str, _PreviewReservationResolution] = {}
     built = {reservation.id for reservation in preview.snapshot.reservations}
     for event in tournament.events:
-        keys_by_group = reservation_keys_by_group(
-            event.id, group_reservation_ids(event)
+        group_res_ids = group_reservation_ids(event)
+        keys_by_group = reservation_keys_by_group(event.id, group_res_ids)
+        group_counts = group_counts_by_reservation(
+            group_res_ids, keys_by_group, group_stage_ids(event)
         )
-        group_counts = group_counts_by_reservation(keys_by_group)
         for reservation in event_reservations(event):
             key = reservation_key(event.id, reservation.id)
+            counts = reservation_group_counts(group_counts, key)
             resolutions[key] = _PreviewReservationResolution(
                 name=reservation.name,
                 window_start=reservation.slot.start,
@@ -328,18 +339,21 @@ def _reservation_resolutions(
                 # the actionable "which day to move" fact a past_window reason names.
                 date=date.fromisoformat(reservation.slot.date),
                 reservation="booked",
-                group_count=group_counts.get(key, 0),
+                group_count=counts.group_count,
+                has_bracket=counts.has_bracket,
             )
         event_wide_key = event_wide_reservation_key(event.id)
         if event_wide_key in built:
             event_slot = Slot.model_validate(event.slot)
+            event_wide_counts = reservation_group_counts(group_counts, event_wide_key)
             resolutions[event_wide_key] = _PreviewReservationResolution(
                 name=event_wide_reservation_name(event.name),
                 window_start=event_slot.start,
                 window_end=event_slot.end,
                 date=date.fromisoformat(event_slot.date),
                 reservation="event",
-                group_count=group_counts.get(event_wide_key, 0),
+                group_count=event_wide_counts.group_count,
+                has_bracket=event_wide_counts.has_bracket,
             )
     return resolutions
 
@@ -670,8 +684,8 @@ def _resolve_reason(
     A preview can blame a booked reservation or, since #1389, the event-wide one the
     builder gives an event whose groups play in no reservation — so every
     reservation-naming arm reads ``reservation`` (the kind) off the resolution, and the
-    over-capacity arm carries its ``group_count``, exactly as the live solve's twin
-    does."""
+    over-capacity arm carries its ``group_count`` and ``has_bracket``, exactly as the
+    live solve's twin does."""
     match reason:
         case ReservationHasNoTables():
             return ReservationHasNoTablesRead(
@@ -700,6 +714,7 @@ def _resolve_reason(
                 capacity_min=reason.capacity_min,
                 table_count=reason.table_count,
                 group_count=reservation.group_count,
+                has_bracket=reservation.has_bracket,
             )
         case PlayerOverSubscribed():
             # The one arm that names a *player* — and a preview's entrants are

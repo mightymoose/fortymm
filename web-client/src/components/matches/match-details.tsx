@@ -1,4 +1,5 @@
 import { Breadcrumb } from './match-details/breadcrumb'
+import { CallStatusBanner } from './match-details/call-status-banner'
 import { ConfirmationCallout } from './match-details/confirmation-callout'
 import { FinalizeCallout } from './match-details/finalize-callout'
 import { HeadToHead } from './match-details/head-to-head'
@@ -49,6 +50,12 @@ export function MatchDetails({ matchId }: { matchId: string }) {
           </div>
           <aside className="md-col-2__aside">
             <MatchInfo matchId={matchId} />
+            {/* Sits alongside the "Status" row above, not in place of it —
+                Status can read "Scheduled" for reasons this banner
+                distinguishes (uncalled tournament fixture vs. a plain
+                pending casual match). Renders nothing for a scorable or
+                casual match (#1288). */}
+            <CallStatusBanner matchId={matchId} />
             <Ratings matchId={matchId} />
             <HeadToHead matchId={matchId} />
           </aside>

@@ -12,9 +12,13 @@ regardless of how many events there are. A per-event count would be an N+1, and
 """
 
 import uuid
-from collections.abc import Collection, Sequence
-from datetime import UTC, datetime
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time
+from typing import Any
+from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
 from sqlalchemy import ColumnElement, Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager
@@ -30,6 +34,9 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentEventGroupReservation,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
     TournamentEventStage,
     TournamentEventStageGroup,
     TournamentFixture,
@@ -41,10 +48,17 @@ from app.ratings.rated import is_rated_member
 from app.schemas.tournament import (
     DrawTypeRead,
     FixtureTimeRead,
+    Slot,
     TournamentEntrantRead,
     TournamentFixtureRead,
 )
 from app.venue_time import venue_local
+
+#: A fixture whose linked match is in one of these statuses is history (ADR-0790's
+#: write-side freeze, ``tournament_placement._enforce_fixture_placeable``): its
+#: placement is no longer live, so neither ADR-0790 read-flag applies to it
+#: (``_placement_flags`` below).
+_DECIDED_MATCH_STATUSES = frozenset({MatchStatus.completed, MatchStatus.voided})
 
 # The statuses in which a tournament has been ANNOUNCED to the world. Publishing
 # is the act that makes a tournament public (ADR-0017), and nothing walks
@@ -77,11 +91,9 @@ def visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
     admit. A draft the caller cannot see is indistinguishable from one that was
     never created.
 
-    ``tournament.view`` is a separate question, and it is asked first — the HTTP
-    route hangs it off a dependency and the MCP adapter checks it before this
-    predicate is ever built, so a caller without the permission is refused (403 /
-    a ``ToolError``) first. Permission says "may you read tournaments at all";
-    this says "which ones are there for you to read".
+    No permission precedes this predicate: #1092 deleted ``tournament.view``, so
+    every signed-in caller reaches it. It says only *which* tournaments are there
+    for you to read — never *whether* you may read tournaments at all.
 
     One predicate, shared by the list route, the detail route, and the MCP
     ``get_tournament`` tool, because two copies of this rule would eventually
@@ -379,6 +391,18 @@ async def fixtures_by_event(
     The rows are validated into read models here, at the loader — the same boundary the
     entrants cross — so no ORM instance and no lazily-loadable relationship escapes into
     the serializer.
+
+    **ADR-0790's two deferred read-side flags** (``table_off_reservation`` /
+    ``start_outside_reservation_window``, #1537 — see ``TournamentFixtureRead``'s own
+    docstring for the field-level contract) cost **at most ONE additional batched
+    statement**, never one per event or per fixture:
+    :func:`_reservation_windows_by_group` runs once, over every group named by an
+    *evaluable* fixture across the WHOLE batch (placed on at least one axis, match not
+    yet decided — ``_DECIDED_MATCH_STATUSES``), and is skipped entirely when nothing in
+    the batch is evaluable (an un-cut, un-placed, or fully-decided page pays nothing —
+    mirrors the ``if not fixtures: return fixtures`` guard above). The event's own
+    ``slot`` — the event-wide reservation's window (ADR 20260807) — rides on THIS
+    statement (a plain extra column off the join already here), not a second one.
     """
     fixtures: dict[uuid.UUID, list[TournamentFixtureRead]] = {
         event_id: [] for event_id in event_ids
@@ -390,6 +414,7 @@ async def fixtures_by_event(
             select(
                 TournamentFixture,
                 TournamentEvent.timezone,
+                TournamentEvent.slot,
                 Match.status,
                 Match.completed_at,
             )
@@ -422,7 +447,23 @@ async def fixtures_by_event(
             )
         )
     ).all()
-    for fixture, event_timezone, match_status, match_completed_at in rows:
+
+    evaluable_group_ids = {
+        fixture.group_id
+        for fixture, _tz, _slot, match_status, _completed_at in rows
+        if match_status not in _DECIDED_MATCH_STATUSES
+        and (fixture.table_id is not None or fixture.scheduled_start is not None)
+    }
+    reservation_windows = (
+        await _reservation_windows_by_group(db, evaluable_group_ids)
+        if evaluable_group_ids
+        else {}
+    )
+
+    for fixture, event_timezone, event_slot, match_status, match_completed_at in rows:
+        table_off_reservation, start_outside_window = _placement_flags(
+            fixture, match_status, event_timezone, event_slot, reservation_windows
+        )
         fixtures[fixture.event_id].append(
             TournamentFixtureRead(
                 id=fixture.id,
@@ -437,12 +478,230 @@ async def fixtures_by_event(
                 match_status=match_status,
                 table_id=fixture.table_id,
                 scheduled_start=_fixture_time(fixture.scheduled_start, event_timezone),
+                table_off_reservation=table_off_reservation,
+                start_outside_reservation_window=start_outside_window,
                 pinned_at=_fixture_time(fixture.pinned_at, event_timezone),
                 call_notified_count=fixture.call_notified_count,
                 completed_at=_fixture_time(match_completed_at, event_timezone),
             )
         )
     return fixtures
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupReservationWindow:
+    """One group's **mapped** reservation, as much as the ADR-0790 read-flags need
+    (#1537): the tables it holds (``frozenset`` — empty is a real, valid answer,
+    the ``ReservationHasNoTables`` state ``app.scheduling`` also names), and its
+    wall-clock window's raw ``date``/``time`` components exactly as
+    ``TournamentEventReservation`` stores them — not yet anchored to an instant,
+    because that needs the event's own timezone, which the caller already holds
+    per-fixture from the main statement and applies at use (``_placement_flags``),
+    not here.
+
+    Carries no ``reservation_id``: ``_placement_flags`` only ever needs to know
+    "does this group have a mapped reservation" (this dict's own membership),
+    never which one — see that function's own docstring for why a round-trip
+    through ``app.schedule_solves.restricting_reservation_key`` would be
+    redundant with that membership test."""
+
+    table_ids: frozenset[str]
+    slot_date: date
+    slot_start: time
+    slot_end: time
+
+
+async def _reservation_windows_by_group(
+    db: AsyncSession, group_ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, _GroupReservationWindow]:
+    """The **one** additional batched statement the ADR-0790 read-flags cost
+    (#1537, see ``fixtures_by_event``'s own docstring): every group in
+    ``group_ids`` that has a **mapped** reservation, joined out to that
+    reservation's own window and LEFT-joined to its tables.
+
+    A group missing from the mapping table (``TournamentEventGroupReservation`` —
+    the row's ABSENCE means "no reservation", never a null ``reservation_id`` on
+    one present, see that model's own docstring) simply does not appear in the
+    returned dict — the caller (``_placement_flags``) reads that absence as
+    "judge this fixture against the event-wide reservation instead" (ADR 20260807),
+    never as an empty-tables stand-in: that would be indistinguishable from a real
+    reservation that resolved with zero tables reserved.
+
+    Batched over every evaluable group of the WHOLE page in one statement — not
+    keyed by event, not one call per event — which is what keeps this loader's
+    total statement count independent of how many events or fixtures are on the
+    page (the tripwires in ``tests/test_tournaments.py``). The caller only invokes
+    this when ``group_ids`` is non-empty.
+    """
+    rows = (
+        await db.execute(
+            select(
+                TournamentEventGroupReservation.group_id,
+                TournamentEventReservation.slot_date,
+                TournamentEventReservation.slot_start,
+                TournamentEventReservation.slot_end,
+                TournamentEventReservationTable.table_id,
+            )
+            # "My reservation is my own event's reservation" — the same leg
+            # ``TournamentEventGroupReservation`` itself foreign-keys on.
+            .join(
+                TournamentEventReservation,
+                and_(
+                    TournamentEventReservation.event_id
+                    == TournamentEventGroupReservation.event_id,
+                    TournamentEventReservation.id
+                    == TournamentEventGroupReservation.reservation_id,
+                ),
+            )
+            # LEFT: a reservation with zero tables reserved joins to no row here,
+            # and its group's ``table_ids`` comes back the empty set below — the
+            # ``ReservationHasNoTables`` state, not a miss.
+            .outerjoin(
+                TournamentEventReservationTable,
+                and_(
+                    TournamentEventReservationTable.event_id
+                    == TournamentEventGroupReservation.event_id,
+                    TournamentEventReservationTable.reservation_id
+                    == TournamentEventGroupReservation.reservation_id,
+                ),
+            )
+            .where(TournamentEventGroupReservation.group_id.in_(group_ids))
+        )
+    ).all()
+    windows: dict[uuid.UUID, tuple[date, time, time, set[str]]] = {}
+    for group_id, slot_date, slot_start, slot_end, table_id in rows:
+        _, _, _, table_ids = windows.setdefault(
+            group_id, (slot_date, slot_start, slot_end, set())
+        )
+        if table_id is not None:
+            table_ids.add(table_id)
+    return {
+        group_id: _GroupReservationWindow(
+            table_ids=frozenset(table_ids),
+            slot_date=slot_date,
+            slot_start=slot_start,
+            slot_end=slot_end,
+        )
+        for group_id, (slot_date, slot_start, slot_end, table_ids) in windows.items()
+    }
+
+
+def _placement_flags(
+    fixture: TournamentFixture,
+    match_status: MatchStatus | None,
+    event_timezone: str,
+    event_slot: dict[str, Any],
+    reservation_windows: Mapping[uuid.UUID, _GroupReservationWindow],
+) -> tuple[bool | None, bool | None]:
+    """The two ADR-0790 read-flags for one fixture (#1537) — see
+    ``TournamentFixtureRead``'s own docstring for the field-level contract this
+    implements.
+
+    ``None`` (never ``false``) is "not applicable": a fixture whose linked match is
+    decided (``_DECIDED_MATCH_STATUSES`` — ADR-0790's write-side placement freeze,
+    the placement is history) is never flagged on either axis, and each flag is
+    independently ``None`` when its own half of the placement (``table_id`` /
+    ``scheduled_start``) is unset — a half-placement can still flag its OTHER half.
+
+    Judged against the fixture's group's **mapped** reservation
+    (``reservation_windows``, see :func:`_reservation_windows_by_group`) when one
+    exists, the event-wide reservation otherwise. ``reservation_windows`` is total
+    over "has a mapped reservation" (that function's own docstring: a missing group
+    means "no reservation"), so ``resolved is None`` **is** the same branch
+    ``app.schedule_solves.restricting_reservation_key`` decides — its body reduces to
+    exactly this same "does ``group_id`` have an entry" test (#1484: a stored
+    fixture's ``group_id`` is NOT NULL, so its own separate ``group_id is None`` arm
+    never fires here either way). Calling it would add an import and a round-trip
+    through a single-entry map built to ask a question this function already holds
+    the direct fact for.
+
+    The event-wide **table** check is provably always satisfied, so it costs no
+    lookup at all: a placement's ``table_id`` is a real foreign key (ADR 20260801)
+    that every writer of it — the placement route
+    (``app.tournament_placement._enforce_table_exists``), the solver's apply
+    (``app.schedule_solves``), and the removed-table unplace path
+    (``app.tournament_tables``) — only ever sets to a table of the fixture's OWN
+    tournament, or clears to ``None``. The event-wide reservation's own table set
+    IS that tournament's whole catalogue (ADR 20260807), so a placed table is
+    always a member of it by construction. There is no live drift on this axis the
+    way there is on the event's own *window* (``event_slot``), which a director may
+    freely re-edit after the cut (``app.tournament_events``) — only the window
+    check is a real lookup in the event-wide branch.
+
+    The window is judged a **closed interval**, a start landing exactly on either
+    edge counting as *inside* — see ``TournamentFixtureRead``'s own
+    ``start_outside_reservation_window`` docstring for the rule and its rationale
+    (a deliberate booking-semantics choice, deliberately divergent from
+    ``app.scheduling``'s solver-grid ``Window``, which is a different, half-open
+    thing for a different purpose).
+
+    ``event_slot`` is raw ``TournamentEvent.slot`` JSONB, read through the SAME
+    "no environment holds a malformed row today, but a read boundary should not
+    depend on that staying true" contract ``TournamentEventRead.slot`` and
+    :class:`~app.tournament_events._stored_event_window` state explicitly for this
+    identical column — so a value that fails to parse degrades the window flag to
+    ``None`` (unjudgeable) rather than 500ing the whole read. This risk is
+    EVENT-WIDE-branch only: the mapped-reservation branch builds its ``Slot`` from
+    typed ``date``/``time`` DB columns (:class:`_GroupReservationWindow`), which
+    cannot fail to format.
+    """
+    if match_status in _DECIDED_MATCH_STATUSES:
+        return None, None
+
+    # Imported lazily: ``app.schedule_solves`` imports ``stage_ids_for_events`` from
+    # THIS module at its top, so a module-level import here would be a cycle. By
+    # request time both modules are already fully loaded, so this costs a
+    # sys.modules lookup, not a fresh import.
+    from app.schedule_solves import _slot_bounds
+
+    resolved = reservation_windows.get(fixture.group_id)
+
+    if resolved is not None:
+        table_off_reservation = (
+            None
+            if fixture.table_id is None
+            else fixture.table_id not in resolved.table_ids
+        )
+        slot: Slot | None = Slot(
+            date=resolved.slot_date.isoformat(),
+            start=resolved.slot_start.strftime("%H:%M"),
+            end=resolved.slot_end.strftime("%H:%M"),
+        )
+    else:
+        # Event-wide (ADR 20260807): no mapped reservation, so the fixture is
+        # judged against the event's own window and the tournament's whole
+        # catalogue. The table half is always satisfied — see the docstring
+        # above — only the window can actually drift.
+        table_off_reservation = None if fixture.table_id is None else False
+        try:
+            slot = Slot.model_validate(event_slot)
+        except ValidationError:
+            # See the docstring above: a legacy-shaped row means this axis
+            # cannot be judged, not a 500 out of a flag whose whole job is to
+            # inform.
+            slot = None
+
+    start_outside_window = None
+    if fixture.scheduled_start is not None and slot is not None:
+        window_bounds: tuple[datetime, datetime] | None
+        try:
+            window_bounds = _slot_bounds(slot, ZoneInfo(event_timezone))
+        except ValueError:
+            # `Slot.model_validate` above only checks SHAPE (three strings); a
+            # value that parses as a `Slot` can still fail `_slot_bounds`'
+            # `strptime` if its strings aren't real dates/times — same
+            # unjudgeable-window contract as the `ValidationError` case.
+            window_bounds = None
+        if window_bounds is not None:
+            window_start, window_end = window_bounds
+            # Closed interval — see the docstring above for the rule and why
+            # it does not (and need not) mirror the solver's own half-open
+            # grid window.
+            start_outside_window = not (
+                window_start <= fixture.scheduled_start <= window_end
+            )
+
+    return table_off_reservation, start_outside_window
 
 
 def _fixture_time(instant: datetime | None, timezone: str) -> FixtureTimeRead | None:

@@ -153,7 +153,19 @@ function projectMatchDetails(seed: Seed) {
     ],
     games,
     current_game: nextNumber !== null ? { game_number: nextNumber } : null,
-    can_score: nextNumber !== null,
+    // Mirrors the real API's `is_scorable`: in_progress + no posted result
+    // (this projector never models a posted result), independent of whether
+    // the board happens to be decided yet — `current_game` going null at the
+    // decider must not also flip `can_score` false, or #1288's client-side
+    // `ensure_scorable` mirror in ScoreEntry blocks the very form these specs
+    // drive.
+    can_score: seed.status === 'in_progress',
+    not_scorable_reason:
+      seed.status === 'in_progress'
+        ? null
+        : seed.status === 'pending'
+          ? 'not_called'
+          : 'not_scorable',
     can_finalize: canFinalizeSeed(seed),
     // Score entry is always the pre-result scratchpad, so the negotiation is
     // ``live`` (no result posted yet) for every seed these specs build.

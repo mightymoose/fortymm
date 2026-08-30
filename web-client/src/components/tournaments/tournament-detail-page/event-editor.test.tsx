@@ -8,6 +8,7 @@ import { screen, waitFor } from '@/test/utilities'
 import { emptyEvent } from '../data/helpers'
 import { eventToCreateBody, eventToUpdateBody } from '../data/api'
 import {
+  buildDrawnEvent,
   buildEvent,
   buildFixture,
   buildReservation,
@@ -18,6 +19,7 @@ import {
   groupIdFor,
 } from '../data/seed.factory'
 import { eventEditorPage } from './event-editor.page'
+import { reservationCardPage } from './event-editor/reservations-section/reservation-card.page'
 
 // A name genuinely past the server's VARCHAR(255) limit — the #933 case. A short
 // name would sail through the client schema and prove nothing.
@@ -1684,7 +1686,7 @@ describe('EventEditor', () => {
 
       await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
       expect(screen.getByRole('button', { name: 'Add reservation' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: 'Remove reservation' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /^Remove reservation/ })).toBeDisabled()
       expect(screen.getByTestId('reservations-frozen-notice')).toHaveTextContent(
         'Delete the draw',
       )
@@ -1707,7 +1709,7 @@ describe('EventEditor', () => {
 
       await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
       expect(screen.getByRole('button', { name: 'Add reservation' })).toBeEnabled()
-      expect(screen.getByRole('button', { name: 'Remove reservation' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: /^Remove reservation/ })).toBeEnabled()
       expect(screen.queryByTestId('reservations-frozen-notice')).toBeNull()
     })
   })
@@ -1930,7 +1932,7 @@ describe('EventEditor', () => {
       eventEditorPage.render({ event: buildEvent(), onSave })
 
       await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
-      await userEvent.click(screen.getByRole('button', { name: 'Remove reservation' }))
+      await userEvent.click(screen.getByRole('button', { name: /^Remove reservation/ }))
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
@@ -2057,6 +2059,197 @@ describe('EventEditor', () => {
       eventEditorPage.render({ event: buildEvent({ name: 'Open Singles' }), saving: false })
 
       expect(eventEditorPage.getSaveButton()).toBeEnabled()
+    })
+  })
+
+  /**
+   * The #1537 confirmation: a reservation edit that would newly strand an already-
+   * placed match gets a consequence-stating confirm in front of the save — never a
+   * refusal. `performSave` is the one function both the ordinary submit and the
+   * conflict-override funnel through, so intercepting there is what covers both paths
+   * with one check (`event-editor.tsx`'s own doc on the split).
+   */
+  describe('the newly-stranded-match confirmation (#1537)', () => {
+    /** A drawn event with ONE reservation (round-robin's #1482 cap — a non-`rr-then-
+     * ko` draw type may hold at most one) and one placed, in-progress match on `t1`,
+     * under it. */
+    const drawnWithPlacement = (overrides: Partial<Parameters<typeof buildFixture>[0]> = {}) =>
+      buildDrawnEvent({
+        id: 'ev-1',
+        reservations: [
+          buildReservation({ id: 'res-a', name: 'Reservation A', tableIds: ['t1', 't2'] }),
+        ],
+        fixtures: [
+          buildFixture({
+            id: 'fx-1',
+            groupId: groupIdFor('res-a'),
+            tableId: 't1',
+            scheduledStart: '2026-06-13T09:30:00',
+            matchId: 'm-1',
+            matchStatus: 'in_progress',
+            ...overrides,
+          }),
+        ],
+      })
+
+    /** Drive the one edit every test in this block starts from: drop `t1` from
+     * Reservation A's tables, which strands `fx-1` (placed on `t1`). */
+    const dropT1FromReservationA = async () => {
+      await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
+      await userEvent.click(reservationCardPage.getSelectedTableToggle('T1'))
+    }
+
+    it('does NOT open for a save that touches nothing about reservations', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: drawnWithPlacement(), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventEditorPage.queryStrandConfirm()).not.toBeInTheDocument()
+    })
+
+    it('opens on an edit that newly strands a placed match, naming BOTH numbers', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        // `fx-1` is CALLED (`pinnedAt` set), so the confirm's second number is 1.
+        event: drawnWithPlacement({
+          pinnedAt: '2026-06-13T09:00:00',
+          callNotifiedCount: 1,
+        }),
+        onSave,
+      })
+
+      await dropT1FromReservationA()
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      const dialog = await waitFor(() => eventEditorPage.getStrandConfirm())
+      expect(dialog).toHaveTextContent('1')
+      expect(dialog).toHaveTextContent('called')
+      // Nothing sent yet — the confirm gates the write.
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    it('Cancel sends nothing and keeps the sheet — and the edit — intact', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      const onClose = vi.fn()
+      eventEditorPage.render({ event: drawnWithPlacement(), onSave, onClose })
+
+      await dropT1FromReservationA()
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryStrandConfirm()).toBeInTheDocument())
+
+      await userEvent.click(eventEditorPage.getStrandConfirmCancel())
+
+      expect(eventEditorPage.queryStrandConfirm()).not.toBeInTheDocument()
+      expect(onSave).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+      expect(eventEditorPage.querySheet()).toBeInTheDocument()
+      // The edit survives the dismissal — T1 is still deselected.
+      expect(reservationCardPage.getTableToggle('T1')).toBeInTheDocument()
+    })
+
+    it('"Save anyway" sends the EXACT draft already composed — the edited reservations, unmodified', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      const onClose = vi.fn()
+      eventEditorPage.render({ event: drawnWithPlacement(), onSave, onClose })
+
+      await dropT1FromReservationA()
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryStrandConfirm()).toBeInTheDocument())
+
+      await userEvent.click(eventEditorPage.getStrandConfirmSave())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+      const sent = onSave.mock.calls[0][0] as {
+        reservations: { id?: string; tableIds: string[] }[]
+      }
+      const resA = sent.reservations.find(
+        (r: { id?: string; tableIds: string[] }) => r.id === 'res-a',
+      )
+      expect(resA?.tableIds).toEqual(['t2']) // t1 dropped, exactly as the director left it
+      expect(eventEditorPage.queryStrandConfirm()).not.toBeInTheDocument()
+      await waitFor(() => expect(onClose).toHaveBeenCalledWith({ force: true }))
+    })
+
+    it('does not reopen on a repeat save of an already-stranded match', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        // The server already flags fx-1 as off its reservation — nothing about to
+        // change makes that any newer.
+        event: drawnWithPlacement({ tableOffReservation: true }),
+        onSave,
+      })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventEditorPage.queryStrandConfirm()).not.toBeInTheDocument()
+    })
+
+    it('never blocks the save — "Save anyway" is always available, whatever the tournament’s status', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: drawnWithPlacement(),
+        onSave,
+      })
+
+      await dropT1FromReservationA()
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryStrandConfirm()).toBeInTheDocument())
+      expect(eventEditorPage.getStrandConfirmSave()).toBeEnabled()
+    })
+
+    // The confirmation composes IN FRONT of the existing 409 handling — it must
+    // never bypass or replace it. Confirming "Save anyway" against a stale version
+    // must still land on the conflict banner, with its own override.
+    it('still surfaces the 409 conflict banner after "Save anyway" — the confirmation does not bypass it', async () => {
+      const conflictError = new ApiError(409, null, 'update event', {
+        detail: {
+          code: 'event_version_conflict',
+          message: 'server sentence — never shown',
+        },
+      })
+      const onSave = vi.fn().mockRejectedValue(conflictError)
+      eventEditorPage.render({
+        event: drawnWithPlacement(),
+        currentLockVersion: 3,
+        onSave,
+      })
+
+      await dropT1FromReservationA()
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryStrandConfirm()).toBeInTheDocument())
+      await userEvent.click(eventEditorPage.getStrandConfirmSave())
+
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toBeInTheDocument())
+      expect(eventEditorPage.queryFailure()).toHaveTextContent(
+        'This event has changed since you opened it',
+      )
+      expect(eventEditorPage.getOverrideButton()).toBeInTheDocument()
+    })
+
+    // Review repair: `performSave` used to clear `failure` only inside `doSave`,
+    // which the stranding branch never reaches — so a banner from an EARLIER,
+    // unrelated refusal stayed on screen underneath the new confirmation,
+    // wrongly implying THIS attempt had already failed too.
+    it('clears a stale failure banner from an earlier refusal before opening the strand confirmation', async () => {
+      const onSave = vi.fn().mockRejectedValueOnce(new ApiError(500, null, 'update event'))
+      eventEditorPage.render({ event: drawnWithPlacement(), onSave })
+
+      // First attempt: an ordinary save, nothing about reservations touched,
+      // that fails — the failure banner renders.
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toBeInTheDocument())
+
+      // Now edit the reservation to newly strand `fx-1`, and save again.
+      await dropT1FromReservationA()
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      // The confirmation opens, and the STALE banner from the first attempt is
+      // gone: this attempt has not failed, it is merely paused on a question.
+      await waitFor(() => expect(eventEditorPage.queryStrandConfirm()).toBeInTheDocument())
+      expect(eventEditorPage.queryFailure()).not.toBeInTheDocument()
     })
   })
 })

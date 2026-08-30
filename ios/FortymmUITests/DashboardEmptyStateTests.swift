@@ -17,6 +17,13 @@
 //  completed matches yet.", DashboardWidgets.swift:254). See
 //  docs/adr/20260802-ios-e2e-tests-live-in-a-new-xcuitest-ui-test-target.md.
 //
+//  Cold launch also surfaces the notification-authorization prompt: `RootView`
+//  asks for permission the moment the session resolves, so on a simulator with
+//  no recorded decision the system alert can cover the app while
+//  `GET /v1/dashboard` is still in flight. An interruption monitor registered
+//  before launch (see `setUpWithError`) handles that prompt and only that
+//  prompt, choosing **Allow** so the test sees through to the dashboard.
+//
 //  Requires a running backend. Point it at one via `FMM_API_BASE_URL` in the
 //  environment `xcodebuild test` (or the `FortymmUITests` scheme's Test
 //  action) runs with — see `setUpWithError` for exactly how that reaches the
@@ -31,6 +38,24 @@ final class DashboardEmptyStateTests: XCTestCase {
     /// port (`docker-compose.dev.yml`), the same default a local Xcode run of
     /// the app documents in `ios/CLAUDE.md`.
     private static let defaultAPIBaseURL = "http://localhost:8080"
+
+    /// The app's display name as the system spells it inside permission
+    /// prompts — `INFOPLIST_KEY_CFBundleDisplayName` in the Xcode project,
+    /// which is "FortyMM", not the target name "Fortymm".
+    private static let appDisplayName = "FortyMM"
+
+    /// The stable tail of the system notification-authorization prompt's
+    /// title: "“FortyMM” Would Like to Send You Notifications". Matching this
+    /// phrase (plus the display name above) is what keeps the interruption
+    /// monitor from touching any other alert.
+    ///
+    /// iOS localizes system-alert text, so this phrase — and the `Allow`
+    /// button lookup in the handler — assume an English-locale simulator.
+    /// That is what CI provisions (`ios.yml`'s fresh runner + simulator). On
+    /// a non-English simulator the prompt is left unhandled and the test
+    /// fails visibly; there is no locale-stable identifier for system
+    /// alerts to match instead.
+    private static let notificationPromptPhrase = "Would Like to Send You Notifications"
 
     private var app: XCUIApplication!
 
@@ -71,11 +96,27 @@ final class DashboardEmptyStateTests: XCTestCase {
         //   2. Locally, on a simulator that has already run this app, erase
         //      its content first (Simulator > Device > Erase All Content and
         //      Settings) or uninstall the app so a stale guest token from a
-        //      previous run isn't reused.
+        //         previous run isn't reused.
         // Note the assertions below don't actually depend on literal
         // freshness — they hold for *any* guest with zero completed rated
         // matches — but a genuinely fresh guest is what this spec is meant to
         // exercise end to end (guest-session mint included).
+        //
+        // The notification-authorization prompt is a *system* alert, and
+        // XCTest dispatches interruption monitors only while the app under
+        // test performs an interaction — the passive `waitForExistence`
+        // waits below never provide one, so an unhandled prompt would sit
+        // over the app for the whole test. Register the monitor before
+        // `launch()` because the prompt can be up within the first seconds
+        // of the cold session request; the interaction that triggers it
+        // happens in the test body, once the session has resolved (see the
+        // tap there).
+        addUIInterruptionMonitor(
+            withDescription: "\(Self.appDisplayName) notification permission prompt"
+        ) { alert in
+            Self.handleNotificationPermissionAlert(alert)
+        }
+
         app.launch()
     }
 
@@ -83,19 +124,71 @@ final class DashboardEmptyStateTests: XCTestCase {
         app = nil
     }
 
+    /// Handles ONLY the system notification-authorization prompt: the alert
+    /// must be titled with the app's display name plus the fixed "Would Like
+    /// to Send You Notifications" wording, and its **Allow** button must
+    /// exist, before the handler taps Allow and reports the interruption as
+    /// handled. Every other alert returns `false` — XCTest leaves it in
+    /// place, so an unexpected obstruction stays visible and fails the test
+    /// instead of being silently accepted or dismissed. When the permission
+    /// decision was already recorded, no prompt exists and the monitor is
+    /// simply never invoked.
+    private static func handleNotificationPermissionAlert(_ alert: XCUIElement) -> Bool {
+        let title = alert.label
+        guard
+            title.contains(appDisplayName),
+            title.contains(notificationPromptPhrase)
+        else { return false }
+
+        let allow = alert.buttons["Allow"]
+        guard allow.exists else { return false }
+        allow.tap()
+        return true
+    }
+
     func testFreshGuestSeesDashboardEmptyState() throws {
         let dashboard = DashboardScreen(app: app)
 
+        // 30s: the cold launch performs two sequential real-backend requests
+        // (`GET /v1/session`, then `GET /v1/dashboard`), and slow CI runners
+        // have measured the first dashboard wait starting 50s+ after launch.
+        // The 15s budget below stays for the second element, which by then
+        // loads with the same payload.
         XCTAssertTrue(
-            dashboard.ratingEmpty.waitForExistence(timeout: 15),
+            dashboard.ratingEmpty.waitForExistence(timeout: 30),
             "Expected the rating card's empty-state copy "
                 + "(\"Unrated — finish a rated match to start your rating\") to appear"
         )
+
+        // The session has resolved by now, so the notification prompt — if
+        // this simulator had no recorded permission decision — is up or about
+        // to be. `requestAuthorizationAndRegister` and the dashboard load
+        // start at the same instant (`RootView` fires both once the session
+        // gate renders the signed-in shell), so `ratingEmpty` existing proves
+        // the dashboard resolved, not that the alert has finished presenting.
+        // XCTest invokes interruption monitors only while the app performs an
+        // interaction, and this tap is that interaction: with the prompt up
+        // it never reaches the app; it triggers the monitor, which taps
+        // **Allow** and hands control back. With the decision already
+        // recorded there is no prompt, and the tap lands on the dashboard's
+        // inert mid-card area (plain text, no controls), changing nothing
+        // the assertions below check.
+        app.tap()
+
         XCTAssertTrue(
             dashboard.recentResultsEmpty.waitForExistence(timeout: 15),
             "Expected the recent-results card's empty-state copy "
                 + "(\"No completed matches yet.\") to appear"
         )
+
+        // Second trigger, for a prompt that finished presenting just after
+        // the first tap reached the app: that tap was then consumed by the
+        // app inertly instead of dispatching the monitor, and the alert
+        // would otherwise sit unhandled over the hittability assertions
+        // below. Monitors are consulted on every interaction while an alert
+        // is up, so this tap dispatches it; with no alert pending — prompt
+        // already handled, or never shown — it is as inert as the first.
+        app.tap()
 
         XCTAssertTrue(dashboard.ratingEmpty.isHittable, "Rating empty state should be visible on screen")
         XCTAssertTrue(
