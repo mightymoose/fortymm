@@ -256,7 +256,9 @@ internal protocol APIProtocol: Sendable {
     ///
     /// Open to anyone, signed in or not. A signed-in caller gets
     /// is_current_user / can_score flags; an anonymous caller gets the same
-    /// scorecard with those flags off. Per-IP rate-limited (60/min) so an open URL
+    /// scorecard with those flags off. can_score is also true for a signed-in
+    /// caller who is the director of the tournament this match belongs to, even
+    /// when they aren't a participant. Per-IP rate-limited (60/min) so an open URL
     /// can't be scraped from one source.
     ///
     /// The richer history payload — recent form, head-to-head, and per-side rating
@@ -301,8 +303,13 @@ internal protocol APIProtocol: Sendable {
     ///
     /// Solo / unrated matches (no second party whose acceptance is worth waiting on)
     /// self-accept and finalize immediately — ``side.won`` and the rating update
-    /// fire here. Rated two-human matches leave the result *standing* (unaccepted)
-    /// for the opposing side to accept via
+    /// fire here — and so does a result submitted by the tournament's director
+    /// (entitled to write on any called match in a tournament they created, even
+    /// as a non-participant): the director's result is authoritative and is never
+    /// left standing for anyone to accept on their behalf, whether it's a first
+    /// proposal or a counter to a player's standing one. Rated two-human matches
+    /// proposed by one of their own participants leave the result *standing*
+    /// (unaccepted) for the opposing side to accept via
     /// ``POST /results/{result_id}/acceptance``.
     ///
     /// - Remark: HTTP `POST /v1/matches/{match_id}/results`.
@@ -319,7 +326,12 @@ internal protocol APIProtocol: Sendable {
     /// or there's no standing proposal, the caller gets a 409 carrying the moved-on
     /// negotiation state (or a 404 if no result with that id exists on the match).
     /// The proposing side already consented by proposing, so only a participant on
-    /// the *opposing* side may accept.
+    /// the *opposing* side may accept — with one exception: the tournament's
+    /// director may also accept a player's standing proposal on a match they
+    /// didn't play in, since they share the same authorization gate every write on
+    /// this match goes through (a director never has a "submitter's side" to be
+    /// blocked by). A director's own proposals never reach this endpoint at all —
+    /// they always self-finalize at ``POST /results``.
     ///
     /// - Remark: HTTP `POST /v1/matches/{match_id}/results/{result_id}/acceptance`.
     /// - Remark: Generated from `#/paths//v1/matches/{match_id}/results/{result_id}/acceptance/post(accept_match_result_v1_matches__match_id__results__result_id__acceptance_post)`.
@@ -1583,7 +1595,9 @@ extension APIProtocol {
     ///
     /// Open to anyone, signed in or not. A signed-in caller gets
     /// is_current_user / can_score flags; an anonymous caller gets the same
-    /// scorecard with those flags off. Per-IP rate-limited (60/min) so an open URL
+    /// scorecard with those flags off. can_score is also true for a signed-in
+    /// caller who is the director of the tournament this match belongs to, even
+    /// when they aren't a participant. Per-IP rate-limited (60/min) so an open URL
     /// can't be scraped from one source.
     ///
     /// The richer history payload — recent form, head-to-head, and per-side rating
@@ -1664,8 +1678,13 @@ extension APIProtocol {
     ///
     /// Solo / unrated matches (no second party whose acceptance is worth waiting on)
     /// self-accept and finalize immediately — ``side.won`` and the rating update
-    /// fire here. Rated two-human matches leave the result *standing* (unaccepted)
-    /// for the opposing side to accept via
+    /// fire here — and so does a result submitted by the tournament's director
+    /// (entitled to write on any called match in a tournament they created, even
+    /// as a non-participant): the director's result is authoritative and is never
+    /// left standing for anyone to accept on their behalf, whether it's a first
+    /// proposal or a counter to a player's standing one. Rated two-human matches
+    /// proposed by one of their own participants leave the result *standing*
+    /// (unaccepted) for the opposing side to accept via
     /// ``POST /results/{result_id}/acceptance``.
     ///
     /// - Remark: HTTP `POST /v1/matches/{match_id}/results`.
@@ -1692,7 +1711,12 @@ extension APIProtocol {
     /// or there's no standing proposal, the caller gets a 409 carrying the moved-on
     /// negotiation state (or a 404 if no result with that id exists on the match).
     /// The proposing side already consented by proposing, so only a participant on
-    /// the *opposing* side may accept.
+    /// the *opposing* side may accept — with one exception: the tournament's
+    /// director may also accept a player's standing proposal on a match they
+    /// didn't play in, since they share the same authorization gate every write on
+    /// this match goes through (a director never has a "submitter's side" to be
+    /// blocked by). A director's own proposals never reach this endpoint at all —
+    /// they always self-finalize at ``POST /results``.
     ///
     /// - Remark: HTTP `POST /v1/matches/{match_id}/results/{result_id}/acceptance`.
     /// - Remark: Generated from `#/paths//v1/matches/{match_id}/results/{result_id}/acceptance/post(accept_match_result_v1_matches__match_id__results__result_id__acceptance_post)`.
@@ -18144,7 +18168,9 @@ internal enum Operations {
     ///
     /// Open to anyone, signed in or not. A signed-in caller gets
     /// is_current_user / can_score flags; an anonymous caller gets the same
-    /// scorecard with those flags off. Per-IP rate-limited (60/min) so an open URL
+    /// scorecard with those flags off. can_score is also true for a signed-in
+    /// caller who is the director of the tournament this match belongs to, even
+    /// when they aren't a participant. Per-IP rate-limited (60/min) so an open URL
     /// can't be scraped from one source.
     ///
     /// The richer history payload — recent form, head-to-head, and per-side rating
@@ -19026,8 +19052,13 @@ internal enum Operations {
     ///
     /// Solo / unrated matches (no second party whose acceptance is worth waiting on)
     /// self-accept and finalize immediately — ``side.won`` and the rating update
-    /// fire here. Rated two-human matches leave the result *standing* (unaccepted)
-    /// for the opposing side to accept via
+    /// fire here — and so does a result submitted by the tournament's director
+    /// (entitled to write on any called match in a tournament they created, even
+    /// as a non-participant): the director's result is authoritative and is never
+    /// left standing for anyone to accept on their behalf, whether it's a first
+    /// proposal or a counter to a player's standing one. Rated two-human matches
+    /// proposed by one of their own participants leave the result *standing*
+    /// (unaccepted) for the opposing side to accept via
     /// ``POST /results/{result_id}/acceptance``.
     ///
     /// - Remark: HTTP `POST /v1/matches/{match_id}/results`.
@@ -19227,7 +19258,12 @@ internal enum Operations {
     /// or there's no standing proposal, the caller gets a 409 carrying the moved-on
     /// negotiation state (or a 404 if no result with that id exists on the match).
     /// The proposing side already consented by proposing, so only a participant on
-    /// the *opposing* side may accept.
+    /// the *opposing* side may accept — with one exception: the tournament's
+    /// director may also accept a player's standing proposal on a match they
+    /// didn't play in, since they share the same authorization gate every write on
+    /// this match goes through (a director never has a "submitter's side" to be
+    /// blocked by). A director's own proposals never reach this endpoint at all —
+    /// they always self-finalize at ``POST /results``.
     ///
     /// - Remark: HTTP `POST /v1/matches/{match_id}/results/{result_id}/acceptance`.
     /// - Remark: Generated from `#/paths//v1/matches/{match_id}/results/{result_id}/acceptance/post(accept_match_result_v1_matches__match_id__results__result_id__acceptance_post)`.

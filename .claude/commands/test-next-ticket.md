@@ -1,5 +1,5 @@
 ---
-description: Test one specified In Testing ticket. Refuses without a human LGTM on the pull request. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge, clean up the run's resources, and move successful work to Done. Requires the ticket number, which the implement-ticket-end-to-end orchestrator passes.
+description: Test one specified In Testing ticket. Refuses without a passing Codex review on the pull request. Run the qa-review skill adversarially, repair current-ticket failures when clear, create To Do issues for separate discoveries, leave structured testing notes, then merge, clean up the run's resources, and move successful work to Done. Requires the ticket number, which the implement-ticket-end-to-end orchestrator passes.
 model: sonnet
 ---
 
@@ -11,13 +11,102 @@ Testing is an adversarial behavioral gate. Its primary testing engine is the exi
 
 Read the ticket specification, relevant parent requirements, Review Notes, and linked PR. Use implementation details only for setup/diagnosis, not to decide what behavior deserves testing.
 
-## Precondition — the human review gate
+## Precondition — the Codex review
 
-**Before anything else**, confirm the ticket's pull request carries the release signal. `.claude/rules/the-review-gate.md` defines it, who may give it, and the check that reads all three comment surfaces. Read that file and run its check.
+**Before anything else**, confirm Codex has passed this pull request. This is the
+gate. A ticket reaches Testing because the automated reviewer found nothing
+outstanding, and for no other reason.
 
-If the signal is absent, **refuse to run.** Report which PR was checked and that no `LGTM` from `mightymoose` was found on any of the three surfaces, then stop.
+The reviewer is the Codex GitHub App, which posts as `chatgpt-codex-connector`.
+It reacts 👀 while it works, reacts 👍 when it finds nothing, and posts a normal
+GitHub review with inline P0/P1 comments when it does.
 
-This is a **precondition check, not a status transition.** Do not move the ticket to satisfy it, and do not move it back on refusal. Do not accept a Review Note, a board column, or a coordinator's say-so as a substitute — the whole point is that this holds when someone runs the stage by hand and the coordinator was never involved. A gate that lives only in the coordinator's prose is not a gate.
+Read Codex's **most recent** verdict, not any verdict it ever gave. A pull request
+that failed round one and passed round two has passed. A pull request that passed
+and then picked up a new finding has not. The window is "latest", never "ever",
+because a finding Codex raised after its last pass is still outstanding.
+
+```bash
+PR_NUMBER=<the pull request number>
+REPO=mightymoose/fortymm
+BOT=chatgpt-codex-connector
+
+FACTS="$(mktemp)"
+trap 'rm -f "$FACTS"' EXIT
+
+# Reactions carry created_at. Reviews carry submitted_at and have no created_at
+# at all, so a plain .created_at silently discards the surface a review lands on.
+gh api "repos/$REPO/issues/$PR_NUMBER/reactions" --paginate --jq \
+  ".[] | select(.user.login | startswith(\"$BOT\"))
+       | {at: .created_at, kind: \"reaction\", text: .content} | @json" >> "$FACTS"
+gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate --jq \
+  ".[] | select(.user.login | startswith(\"$BOT\"))
+       | {at: .submitted_at, kind: \"review\", text: .body} | @json" >> "$FACTS"
+gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --paginate --jq \
+  ".[] | select(.user.login | startswith(\"$BOT\"))
+       | {at: .created_at, kind: \"inline\", text: .body} | @json" >> "$FACTS"
+
+python3 - "$FACTS" <<'PY'
+import json, re, sys
+
+records = []
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        records.append(json.loads(line))
+
+# 'eyes' means Codex is still working. It is not a verdict.
+verdicts = []
+for rec in records:
+    kind, text = rec["kind"], (rec.get("text") or "")
+    if kind == "reaction":
+        if text == "+1":
+            verdicts.append((rec["at"] or "", "PASS"))
+    elif kind == "inline":
+        verdicts.append((rec["at"] or "", "FINDINGS"))
+    elif kind == "review":
+        if re.search(r"\bP[01]\b", text):
+            verdicts.append((rec["at"] or "", "FINDINGS"))
+        elif text.strip():
+            verdicts.append((rec["at"] or "", "PASS"))
+
+if not verdicts:
+    print("NONE")
+else:
+    verdicts.sort(key=lambda v: v[0])
+    print(verdicts[-1][1])
+PY
+```
+
+`mktemp`, never a fixed path. Many agent sessions run at once here, and two
+stages checking two pull requests would otherwise clobber the same file.
+
+Redirect to a file rather than piping the three calls straight into `python3`. A
+zsh pipeline reports its **last** element's status, so a failed `gh api` inside
+one reads as success and the gate answers on partial data.
+
+| Result | What it means | What you do |
+| --- | --- | --- |
+| `PASS` | Codex's latest verdict found nothing | Continue |
+| `FINDINGS` | Codex's latest verdict raised something | **Refuse.** Report the findings and stop |
+| `NONE` | Codex has never reviewed this pull request | **Refuse.** Report that no Codex review exists |
+
+On `NONE`, say how to get one: comment `@codex review` on the pull request, wait
+for the bot to answer, then run this stage again. That is the whole remedy, and a
+person or a coordinator can do it in one step.
+
+`NONE` is the expected result on a pull request that never went through
+`/ticket-flow`. `implement-ticket-end-to-end` does not ask Codex for a review, so
+its pull requests reach here unreviewed unless the Codex App's automatic reviews
+are enabled. That is deliberate. Codex is the reviewer whose verdict opens
+Testing, whichever arc produced the pull request, and an unreviewed pull request
+does not get in.
+
+This is a **precondition check, not a status transition**. Do not move the ticket
+to satisfy it, and do not move it back on refusal. Do not accept a board column,
+a Review Note, or a coordinator's say-so as a substitute. The whole point is that
+this holds when someone runs the stage by hand and no coordinator was involved. A
+gate that lives only in a coordinator's prose is not a gate.
 
 ## Run QA Review
 
@@ -50,7 +139,7 @@ If the correct repair is clear:
 1. Repair it autonomously.
 2. Add or update regression coverage.
 3. Commit and push the repair.
-4. Invoke `review-next-ticket` in a fresh context as a **Testing repair round** (see that command). It reviews the repair diff only, posts no decision comment, and moves no column — the ticket stays **In Testing**, and the human's earlier release still covers it because the gate's window is "ever" by design.
+4. Invoke `review-next-ticket` in a fresh context as a **Testing repair round** (see that command). It reviews the repair diff only, posts no decision comment, and moves no column — the ticket stays **In Testing**. A repair pushed here changes the code Codex passed, so re-run the Codex precondition against the repaired branch before merging: comment `@codex review`, wait for the verdict, and require a `PASS`.
 5. After that round passes, re-run `qa-review` or the relevant portion of it against the repaired behavior.
 
 Do not create a follow-up ticket as a substitute for fixing the current ticket.
@@ -194,7 +283,7 @@ Then:
 ## Hard Rules
 
 - Process exactly one ticket, and only the ticket number given. Never select from the board.
-- **Refuse to run without the review gate signal on the pull request.** See `.claude/rules/the-review-gate.md`.
+- **Refuse to run without a passing Codex review on the pull request.** Read Codex's latest verdict, not any verdict it ever gave. This stage no longer requires a human `LGTM`.
 - Use `qa-review` as the adversarial testing engine, testing behavior against the specification, not implementer expectations.
 - Current-ticket failures must be fixed before Done.
 - Separate discoveries become linked issues at the **top of To Do**.

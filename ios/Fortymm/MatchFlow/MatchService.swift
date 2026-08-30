@@ -416,7 +416,12 @@ struct MatchService {
             // `canScore` is the server's authoritative "scores are editable"
             // signal — true whenever no result has been proposed (the
             // scratchpad is open), regardless of whether a next game remains.
-            // `canResume` is built on it.
+            // It is *not* by itself "viewer is a participant": the server also
+            // sets it for the tournament director on a called, unresolved
+            // match the director isn't playing in (#1523). ANDing with
+            // `viewerIsParticipant` is what keeps a director off the
+            // participant-shaped score entry screen — iOS has no director
+            // scoring surface, by design. `canResume` is built on the result.
             canScore: canScore && viewerIsParticipant,
             canFinalize: canFinalize && viewerIsParticipant,
             yourSideNumber: mine?.sideNumber ?? 1
