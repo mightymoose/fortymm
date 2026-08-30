@@ -20,9 +20,18 @@ class UserToken(Base):
         # touch. The partial predicate mirrors that sweep's WHERE clause
         # exactly, so the index holds only the tiny replaced pending-email
         # population; both prefixes must stay in step with the sweep's
-        # EMAIL_*_CONTEXT_PREFIX constants (tests/test_email.py pins the
-        # sweep's clause against the router's, and the migration carries the
-        # same declaration for migrated databases).
+        # EMAIL_*_CONTEXT_PREFIX constants (tests/test_email.py pins this
+        # predicate against those constants and those constants against the
+        # router's, and the migration carries the same declaration for
+        # databases built from the migrations).
+        #
+        # "Mirrors exactly" is about the predicate, not the literal SQL: the
+        # sweep binds its prefixes, so Postgres only proves the partial
+        # predicate once it folds those parameters, which it does under a
+        # custom plan. One statement per ``python -m app.email_token_sweep``
+        # process always gets one. A caller that ran the sweep repeatedly on
+        # one connection would cross into a generic plan and silently return
+        # to the seq scan.
         Index(
             "ix_user_tokens_replaced_pending_email",
             "created_at",

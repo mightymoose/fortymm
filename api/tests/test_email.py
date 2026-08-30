@@ -14,7 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.db import get_session
 from app.email_token_sweep import (
+    EMAIL_CHANGE_CONTEXT_PREFIX as SWEEP_EMAIL_CHANGE_CONTEXT_PREFIX,
+)
+from app.email_token_sweep import (
     EMAIL_CONFIRM_TOKEN_LIFETIME as SWEEP_EMAIL_CONFIRM_TOKEN_LIFETIME,
+)
+from app.email_token_sweep import (
+    EMAIL_MERGE_CONTEXT_PREFIX as SWEEP_EMAIL_MERGE_CONTEXT_PREFIX,
 )
 from app.email_token_sweep import (
     _pending_email_token_clause as _sweep_pending_email_token_clause,
@@ -1207,9 +1213,15 @@ def test_sweep_reproduction_matches_the_router_predicates():
     app.email_token_sweep's docstring for why). This pin is what makes that
     reproduction safe: a change to either side reds here instead of silently
     mis-scoping the sweep."""
-    assert str(_sweep_pending_email_token_clause().compile()) == str(
-        _pending_email_token_clause().compile()
-    )
+    sweep_clause = _sweep_pending_email_token_clause().compile()
+    router_clause = _pending_email_token_clause().compile()
+    assert str(sweep_clause) == str(router_clause)
+    # The compiled SQL binds both prefixes as parameters, so the strings above
+    # stay equal through a one-sided *value* drift ("change:" renamed on one
+    # side only compiles to the identical `context LIKE :context_1 || '%'`).
+    # Compare the bound values too, or the pin guards the shape and nothing
+    # else — and a mis-scoped sweep deletes nothing while every test is green.
+    assert sweep_clause.params == router_clause.params
     assert SWEEP_EMAIL_CONFIRM_TOKEN_LIFETIME == EMAIL_CONFIRM_TOKEN_LIFETIME
 
 
@@ -1291,11 +1303,15 @@ async def test_scheduled_sweep_is_served_by_a_partial_index(
     assert indexes[0]["column_names"] == ["created_at"]
     # The reflected predicate comes back dialect-compiled (LIKE → ~~), so
     # assert on the parts that carry the selectivity contract: replaced
-    # rows only, and both pending-email context prefixes.
+    # rows only, and both pending-email context prefixes. The prefixes are
+    # derived from the sweep's own constants rather than written out here:
+    # hardcoded literals would stay green through the coordinated rename the
+    # index comment warns about, leaving the predicate stale and every run
+    # back on a seq scan.
     where = str(indexes[0]["dialect_options"]["postgresql_where"])
     assert "replaced_at IS NOT NULL" in where
-    assert "'change:%'" in where
-    assert "'merge:%'" in where
+    assert f"'{SWEEP_EMAIL_CHANGE_CONTEXT_PREFIX}%'" in where
+    assert f"'{SWEEP_EMAIL_MERGE_CONTEXT_PREFIX}%'" in where
 
 
 async def test_confirm_after_the_scheduled_sweep_reports_the_same_plain_expired(
