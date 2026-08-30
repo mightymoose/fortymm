@@ -146,16 +146,28 @@ export const EventCard = ({
                 {/* The badges name the rules; this line names their SCOPE. A
                     badge like `Rating ≥ 1800` reads as "unrated players
                     excluded", while the server admits them — an unrated player
-                    passes every rule (ADR-0783 §3) — so the admission is stated
+                    passes every rule (ADR-0783 §3) — so the exemption is stated
                     beside the constraint, in visible text, never a tooltip, an
                     icon or a color alone (#1608). Operator-agnostic: it reads
-                    the same over a `between` rule or several ANDed ones. */}
+                    the same over a `between` rule or several ANDed ones.
+
+                    Two things it deliberately does NOT say. It does not promise
+                    ENTRY: capacity and the registration window refuse
+                    independently of eligibility, and `EnterEventControl` on this
+                    same card renders those refusals — "unrated players may
+                    enter" beside "Event full" would be a fresh contradiction of
+                    exactly the species #1608 exists to remove. Exempt from the
+                    RULES is the whole of what the evaluator guarantees. And
+                    "rated" is qualified by LADDER: the server compares against
+                    the rating on this tournament's league
+                    (`entrant_rating(db, tournament.league_id, …)`), so a player
+                    rated in another league is unrated here and is exempt too. */}
                 <p
                   data-testid="eligibility-scope"
                   className="mt-1.5 text-[12px] leading-snug text-[color:var(--fg-3)]"
                 >
-                  Rated players must satisfy every rule. Unrated players may
-                  enter.
+                  Players rated on this tournament's ladder must satisfy every
+                  rule. Unrated players are exempt.
                 </p>
               </div>
             )}

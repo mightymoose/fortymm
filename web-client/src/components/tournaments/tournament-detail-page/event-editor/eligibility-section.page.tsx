@@ -40,8 +40,9 @@ const scoped = (container: Container) => ({
   queryColumnHeaders() {
     return container.queryByTestId('predicate-column-headers')
   },
-  /** The "All N rules apply to rated players" footnote, with the unrated
-   * admission (and, for the organizer, the AND mechanics) beside it. */
+  /** The "All N rules apply to players rated on this tournament's ladder"
+   * footnote, with the unrated exemption (and, for the organizer, the AND
+   * mechanics) beside it. */
   getFootnote() {
     return container.getByTestId('eligibility-footnote')
   },

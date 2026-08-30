@@ -31,13 +31,15 @@ describe('EventCard', () => {
    * #1608: a badge like `Rating ≥ 1800` reads as "unrated players excluded",
    * while the server admits them — an unrated player passes every rule
    * (ADR-0783 §3). The card states the rules' true scope beside the badges, in
-   * visible text, so the exception reaches every reader.
+   * visible text, so the exception reaches every reader. It speaks only for the
+   * RULES — capacity and the registration window refuse on their own terms, so
+   * the line must never promise entry beside an `Event full` notice.
    */
   describe('the eligibility scope line', () => {
     const SCOPE =
-      'Rated players must satisfy every rule. Unrated players may enter.'
+      "Players rated on this tournament's ladder must satisfy every rule. Unrated players are exempt."
 
-    it('tells the reader the rules bind rated players and unrated players may enter', () => {
+    it('tells the reader the rules bind ladder-rated players and exempt unrated ones', () => {
       // The exact rule QA reproduced against: `Rating ≥ 1800` still admitted an
       // unrated player.
       eventCardPage.render({
@@ -62,11 +64,34 @@ describe('EventCard', () => {
       expect(eventCardPage.queryEligibilityScope()).toHaveTextContent(SCOPE)
     })
 
+    // The repair #1608's own first cut needed: the line is gated on
+    // `predicates.length > 0` alone, so it renders on a FULL event too — and
+    // "unrated players may enter" beside a full card is a fresh contradiction of
+    // exactly the species this ticket exists to remove. It speaks for the RULES
+    // (exempt), never for entry, which capacity and the registration window
+    // refuse on their own terms.
+    it('states the exemption without promising entry on a full event', () => {
+      eventCardPage.render({
+        event: buildEvent({
+          entrants: buildEntrants(16),
+          maxPlayers: 16,
+          predicates: [
+            buildPredicate({ field: 'rating', op: '>=', value: 1800 }),
+          ],
+        }),
+      })
+      const scope = eventCardPage.queryEligibilityScope()
+      // Asserted FIRST, because it is the discriminating one: this is the whole
+      // of what the full card would have contradicted.
+      expect(scope).not.toHaveTextContent(/may enter/)
+      expect(scope).toHaveTextContent(SCOPE)
+    })
+
     it('carries no rated/unrated qualifier for an event with no rules', () => {
       eventCardPage.render({ event: buildEvent({ predicates: [] }) })
       expect(eventCardPage.queryEligibilityScope()).toBeNull()
-      expect(document.body).not.toHaveTextContent('Unrated players may enter')
-      expect(document.body).not.toHaveTextContent('Rated players must satisfy')
+      expect(document.body).not.toHaveTextContent('Unrated players are exempt')
+      expect(document.body).not.toHaveTextContent('must satisfy every rule')
     })
   })
 

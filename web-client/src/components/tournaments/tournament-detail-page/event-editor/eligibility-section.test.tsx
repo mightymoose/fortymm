@@ -28,15 +28,15 @@ describe('EligibilitySection', () => {
   // would bind would describe a constraint that does not exist.
   it('adds no rated/unrated qualifier to the no-rules empty state', () => {
     eligibilitySectionPage.render({ event: buildEvent({ predicates: [] }) })
-    expect(document.body).not.toHaveTextContent('Unrated players may enter')
-    expect(document.body).not.toHaveTextContent('Rated players must satisfy')
+    expect(document.body).not.toHaveTextContent('Unrated players are exempt')
+    expect(document.body).not.toHaveTextContent("rated on this tournament's ladder")
 
     eligibilitySectionPage.render({
       event: buildEvent({ predicates: [] }),
       canEdit: false,
     })
-    expect(document.body).not.toHaveTextContent('Unrated players may enter')
-    expect(document.body).not.toHaveTextContent('Rated players must satisfy')
+    expect(document.body).not.toHaveTextContent('Unrated players are exempt')
+    expect(document.body).not.toHaveTextContent("rated on this tournament's ladder")
   })
 
   // The three mutations, each asserted against the live form state the section
@@ -84,12 +84,15 @@ describe('EligibilitySection', () => {
   // organizer's on the config-speak clause only they can act on.
   //
   // Once a rule exists both voices qualify the sentence with WHO it binds:
-  // rated players must satisfy the rules, and an unrated player is admitted
-  // (ADR-0783 §3). With no rules the sentence stays unqualified — see the
-  // empty-state test above.
+  // players rated ON THIS TOURNAMENT'S LADDER must satisfy the rules, and an
+  // unrated player is exempt from every one of them (ADR-0783 §3). The ladder
+  // qualifier matters: the server compares against the rating on this
+  // tournament's league, so a player rated elsewhere is unrated here. With no
+  // rules the sentence stays unqualified — see the empty-state test above.
   describe('the subtitle', () => {
     const SHARED = 'Players must satisfy every rule to enter.'
-    const SCOPED = 'Rated players must satisfy every rule to enter.'
+    const SCOPED =
+      "Players rated on this tournament's ladder must satisfy every rule to enter."
 
     it('tells the organizer what an empty rule set does', () => {
       eligibilitySectionPage.render({ event: buildEvent() })
@@ -105,7 +108,7 @@ describe('EligibilitySection', () => {
       expect(screen.queryByText(/Empty = open to all/)).toBeNull()
     })
 
-    it('scopes the sentence to rated players once a rule exists', () => {
+    it('scopes the sentence to ladder-rated players once a rule exists', () => {
       eligibilitySectionPage.render({
         event: buildEvent({ predicates: [buildPredicate()] }),
         canEdit: false,
@@ -121,7 +124,9 @@ describe('EligibilitySection', () => {
       eligibilitySectionPage.render({
         event: buildEvent({ predicates: [buildPredicate()] }),
       })
-      expect(screen.getByText(/Rated players must satisfy every rule/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/rated on this tournament's ladder must satisfy every rule/),
+      ).toBeInTheDocument()
       expect(screen.getByText(/Empty = open to all\./)).toBeInTheDocument()
       // The scoped sentence is the prefix of the organizer's node, so the exact
       // match is the reader's node and must be absent here too.
@@ -179,18 +184,20 @@ describe('EligibilitySection', () => {
 
     // "Combine with AND" is config-speak — it explains how the builder assembles
     // the rules, which is not something a reader is doing. The count sentence
-    // names who the rules bind (#1608): rated players — and, beside it, the
-    // unrated admission the count alone would erase.
-    it('scopes the rule count to rated players and states the unrated admission', () => {
+    // names who the rules bind (#1608): players rated on this tournament's
+    // ladder — and, beside it, the unrated exemption the count alone would
+    // erase. "Exempt", never "may enter": the rules are all this footnote
+    // speaks for, and capacity and the registration window refuse separately.
+    it('scopes the rule count to ladder-rated players and states the unrated exemption', () => {
       eligibilitySectionPage.render({
         event: buildEvent({ predicates: twoRules() }),
         canEdit: false,
       })
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'All 2 rules apply to rated players.',
+        "All 2 rules apply to players rated on this tournament's ladder.",
       )
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'Unrated players may enter.',
+        'Unrated players are exempt.',
       )
       expect(eligibilitySectionPage.getFootnote()).not.toHaveTextContent(
         /Combine with/,
@@ -204,21 +211,21 @@ describe('EligibilitySection', () => {
         canEdit: false,
       })
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'All 1 rule applies to rated players.',
+        "All 1 rule applies to players rated on this tournament's ladder.",
       )
     })
 
     // The organizer gets the same policy plus the AND mechanics — the exception
     // is not swapped out for the config-speak, it stands beside it.
-    it('keeps the AND config-speak for the organizer and still states the admission', () => {
+    it('keeps the AND config-speak for the organizer and still states the exemption', () => {
       eligibilitySectionPage.render({
         event: buildEvent({ predicates: twoRules() }),
       })
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'All 2 rules apply to rated players.',
+        "All 2 rules apply to players rated on this tournament's ladder.",
       )
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'Unrated players may enter.',
+        'Unrated players are exempt.',
       )
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
         /Combine with/,
