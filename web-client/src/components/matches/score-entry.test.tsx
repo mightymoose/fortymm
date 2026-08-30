@@ -3762,7 +3762,11 @@ describe('ScoreEntry — director scoring (#1523)', () => {
     ])
   })
 
-  it('still redirects a plain spectator — no side and no can_score', async () => {
+  it('still refuses a plain spectator — no side and no can_score — with the inline explanation, not a redirect (#1288)', async () => {
+    // #1288 replaced the bare spectator bounce with an inline "Can't enter a
+    // score here" explanation for every `can_score: false` viewer, director
+    // widening included — see the "not-scorable guard (#1288)" describe block
+    // below for the full reason matrix.
     server.use(
       http.get('*/v1/matches/m-1', () =>
         HttpResponse.json(directorMatch({ can_score: false })),
@@ -3770,9 +3774,11 @@ describe('ScoreEntry — director scoring (#1523)', () => {
     )
     renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
 
-    await waitFor(() =>
-      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Only participants in this match can enter scores.',
     )
+    expect(screen.queryByText('match-page m-1')).not.toBeInTheDocument()
   })
 
   it("keeps a participant's own side first even when it's side 2 (regression guard)", async () => {
