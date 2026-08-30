@@ -33,7 +33,7 @@ from app.result_acceptance import (
     ScoreConflictError,
     ScoreNotAllowedError,
 )
-from tests._helpers import make_user
+from tests._helpers import directed_tournament_match, make_user
 
 
 async def _rated_match(db_session: AsyncSession, tag: str) -> Match:
@@ -217,6 +217,167 @@ async def test_delete_game_score_without_a_committed_score_raises_score_not_foun
         )
 
     assert excinfo.value.message == "Score not found."
+
+
+# ----- director authorization (#1523) ---------------------------------------
+
+
+async def test_director_can_enter_score_on_a_called_match_in_their_tournament(
+    db_session: AsyncSession,
+) -> None:
+    match, director = await directed_tournament_match(db_session, tag="dir-enter")
+
+    updated = await enter_game_score(
+        db_session,
+        match.id,
+        director.id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
+    )
+
+    score = _score_for(updated, 1)
+    assert score.side_1_points == 11
+    assert score.side_2_points == 4
+
+
+async def test_director_can_update_score_on_a_called_match_in_their_tournament(
+    db_session: AsyncSession,
+) -> None:
+    match, director = await directed_tournament_match(db_session, tag="dir-update")
+    await enter_game_score(
+        db_session,
+        match.id,
+        director.id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
+    )
+
+    updated = await update_game_score(
+        db_session,
+        match.id,
+        director.id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=9,
+        expected_version=1,
+    )
+
+    score = _score_for(updated, 1)
+    assert score.side_2_points == 9
+
+
+async def test_director_can_delete_score_on_a_called_match_in_their_tournament(
+    db_session: AsyncSession,
+) -> None:
+    match, director = await directed_tournament_match(db_session, tag="dir-delete")
+    await enter_game_score(
+        db_session,
+        match.id,
+        director.id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
+    )
+
+    updated = await delete_game_score(db_session, match.id, director.id, game_number=1)
+
+    game = next(g for g in updated.games if g.game_number == 1)
+    assert game.score is None
+
+
+async def test_a_stranger_who_is_neither_participant_nor_director_gets_match_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """A caller who is not a participant and not the tournament's director still
+    gets the existing opaque 404 (AC "unchanged refusals")."""
+    match, _director = await directed_tournament_match(db_session, tag="dir-stranger")
+    stranger = await make_user(db_session, "dir-stranger-outsider")
+
+    with pytest.raises(MatchNotFoundError) as excinfo:
+        await enter_game_score(
+            db_session,
+            match.id,
+            stranger.id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert excinfo.value.message == "Match not found."
+
+
+async def test_the_owner_of_a_different_tournament_still_gets_match_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """A caller who directs some OTHER tournament — not the one this match
+    belongs to — is not this match's director, and still 404s. This is the
+    case that catches a broken join (a query that forgot to scope by this
+    match's own tournament)."""
+    match, _director = await directed_tournament_match(db_session, tag="dir-a")
+    _other_match, other_director = await directed_tournament_match(
+        db_session, tag="dir-b"
+    )
+
+    with pytest.raises(MatchNotFoundError) as excinfo:
+        await enter_game_score(
+            db_session,
+            match.id,
+            other_director.id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert excinfo.value.message == "Match not found."
+
+
+async def test_a_completed_tournament_match_stays_closed_to_the_director(
+    db_session: AsyncSession,
+) -> None:
+    """A completed/voided match stays closed to the director, with the existing
+    refusal copy — the director gets no special treatment past the terminal
+    gate."""
+    match, director = await directed_tournament_match(db_session, tag="dir-completed")
+    match.status = MatchStatus.completed
+    await db_session.commit()
+
+    with pytest.raises(MatchNotScorableError) as excinfo:
+        await enter_game_score(
+            db_session,
+            match.id,
+            director.id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.message == "This match is no longer scorable."
+
+
+async def test_an_uncalled_tournament_match_stays_refused_for_the_director(
+    db_session: AsyncSession,
+) -> None:
+    """A match nobody has called to a table stays refused for the director too
+    — the schedule is authoritative regardless of who is asking."""
+    match, director = await directed_tournament_match(db_session, tag="dir-uncalled")
+    match.status = MatchStatus.pending
+    await db_session.commit()
+
+    with pytest.raises(MatchNotScorableError) as excinfo:
+        await enter_game_score(
+            db_session,
+            match.id,
+            director.id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=4,
+        )
+
+    assert excinfo.value.http_status == 409
+    assert excinfo.value.message == "This match hasn't been called to a table yet."
 
 
 # ----- scorability (MatchNotScorableError) ---------------------------------

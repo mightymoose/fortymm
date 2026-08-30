@@ -117,15 +117,18 @@ class CannotAcceptOwnProposalError(Exception):
 
 class MatchNotFoundError(Exception):
     """Raised by the per-game score service (``app.match_scoring``) when the
-    write target can't be resolved — either the match id is absent or the acting
-    user isn't a participant (today's score endpoints collapse both into one
-    opaque 404 so a non-participant can't probe match existence), or, on the
-    update/delete paths, the addressed game score doesn't exist.
+    write target can't be resolved — either the match id is absent, or the
+    acting user is neither a participant nor the director of the tournament
+    that materialized this match (#1523) — today's score endpoints collapse
+    all three into one opaque 404 so an unauthorized caller can't probe match
+    existence — or, on the update/delete paths, the addressed game score
+    doesn't exist.
 
     Carries the exact ``message`` the HTTP adapter must reproduce as its 404
-    ``detail``: ``"Match not found."`` for an absent match or non-participant,
-    ``"Score not found."`` for a missing game score. Never an ``HTTPException`` —
-    it has no HTTP context; the caller adapts it to its transport."""
+    ``detail``: ``"Match not found."`` for an absent match or an unauthorized
+    caller, ``"Score not found."`` for a missing game score. Never an
+    ``HTTPException`` — it has no HTTP context; the caller adapts it to its
+    transport."""
 
     def __init__(self, message: str = "Match not found.") -> None:
         super().__init__(message)

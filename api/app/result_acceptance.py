@@ -505,8 +505,20 @@ async def accept_result(
     # themselves) can't accept their own proposal. Only meaningful while the
     # targeted result is still standing — a superseded/absent one falls through
     # to the core's conflict signal below.
+    #
+    # The side check alone is not enough since #1523. A tournament director is
+    # on neither side, so ``my_side`` returns ``None`` for a director-submitted
+    # proposal and the side check does nothing — the submitting director could
+    # accept their own result. ``_requires_confirmation``
+    # (``app.result_proposal``) is what stops such a proposal ever standing, but
+    # that is a mint-site invariant in another module, and a future path that
+    # mints a standing ``MatchResult`` without going through ``propose_result``
+    # would silently reopen the hole. So check the submitter's identity too:
+    # nobody accepts their own proposal, side or no side.
     standing = standing_result(match)
     if standing is not None and standing.id == result_id:
+        if standing.submitted_by_user_id == user_id:
+            raise CannotAcceptOwnProposalError
         submitter_side = my_side(match, standing.submitted_by_user_id)
         if submitter_side is not None and any(
             p.user_id == user_id for p in submitter_side.players
