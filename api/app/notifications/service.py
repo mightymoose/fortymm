@@ -16,14 +16,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, assert_never, cast
 
-from sqlalchemy import ColumnElement, CursorResult, delete, func, select, update
+from sqlalchemy import ColumnElement, CursorResult, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app import queue as queue_module
 from app.models import (
     DeviceToken,
+    MatchResult,
     Notification,
     NotificationChannelSetting,
     NotificationPreference,
@@ -309,6 +311,44 @@ def enqueue_notification_job(job: NotificationJob) -> bool:
     return True
 
 
+def _visible_notifications_clause() -> ColumnElement[bool]:
+    """The feed-visibility predicate: a notification is visible unless it's
+    bound (``result_id``) to a ``MatchResult`` that is no longer live — i.e.
+    it's been accepted, or a later proposal supersedes it. This is the SQL
+    twin of ``app.result_chain.standing_result`` (a result is *standing* iff
+    it's the un-superseded head of its chain and unaccepted); the two must stay
+    in sync, since this predicate is how a stale "Accept your match result" /
+    "A result is waiting for you" prompt disappears from the feed and unread
+    count once its match resolves — accept, counter, self-correction, or the
+    retirement sweep's auto-accept all flip ``accepted_by_user_id`` or insert a
+    superseding row, so one predicate covers every path with no write-path
+    bookkeeping (issue #1583).
+
+    ``result_id IS NULL`` covers every other notification (including the two
+    ``result_confirm`` FYI notices that must never hide) — those always pass.
+    Written as a WHERE-clause predicate, not a Python post-filter, so it
+    composes correctly with ``list_feed``'s ``ORDER BY ... LIMIT``: filtering
+    after the limit would silently drop real rows off the bottom of the page
+    instead of admitting the next-newest one.
+
+    Bound per ``result_id`` rather than per-player, so every player's row on a
+    doubles match's owing side (one row each, same ``result_id``) resolves
+    together with no extra join."""
+    superseding = aliased(MatchResult)
+    result_is_live = (
+        select(MatchResult.id)
+        .where(
+            MatchResult.id == Notification.result_id,
+            MatchResult.accepted_by_user_id.is_(None),
+            ~select(superseding.id)
+            .where(superseding.supersedes_result_id == MatchResult.id)
+            .exists(),
+        )
+        .exists()
+    )
+    return or_(Notification.result_id.is_(None), result_is_live)
+
+
 class NotificationService:
     def __init__(self, db: AsyncSession, sender: PushSender) -> None:
         self._db = db
@@ -408,6 +448,7 @@ class NotificationService:
         push_data: Mapping[str, str] | None = None,
         collapse_id: str | None = None,
         channels: Collection[NotificationChannel] | None = None,
+        result_id: uuid.UUID | None = None,
     ) -> NotifyResult:
         """Deliver one notification to one user across every channel the user's
         preferences allow for the notification's category.
@@ -422,7 +463,13 @@ class NotificationService:
         already delivered one channel transactionally (the match-call pin
         persists its in-app row in the pin transaction, ``app.match_calls``)
         fans out here with the remainder. Preferences still apply on top —
-        this can only ever subtract channels, never bypass a mute."""
+        this can only ever subtract channels, never bypass a mute.
+
+        ``result_id`` binds the in-app row to a specific ``MatchResult`` so it
+        can be hidden once that result is no longer live — see
+        ``Notification.result_id`` / ``_visible_notifications_clause``. Leave
+        it ``None`` for every notification that isn't one of the two hideable
+        result-acceptance prompts."""
         user = await self._db.get(User, user_id)
         if user is None or user.merged_into_user_id is not None:
             return NotifyResult()
@@ -441,6 +488,7 @@ class NotificationService:
                     link=link,
                     action_label=action_label,
                     delta=delta,
+                    result_id=result_id,
                 )
             )
             await self._db.commit()
@@ -516,12 +564,20 @@ class NotificationService:
     # ----- the in-app feed -------------------------------------------------
 
     async def list_feed(self, user_id: uuid.UUID) -> NotificationFeed:
-        """The most recent notifications (capped) plus the live unread total."""
+        """The most recent notifications (capped) plus the live unread total.
+
+        Excludes a hideable result-acceptance prompt whose bound result is no
+        longer live (see ``_visible_notifications_clause``) — filtered in the
+        WHERE clause, not after the fact, so a resolved row never displaces a
+        real one off the bottom of the ``LIMIT``ed page."""
         rows = (
             (
                 await self._db.execute(
                     select(Notification)
-                    .where(Notification.user_id == user_id)
+                    .where(
+                        Notification.user_id == user_id,
+                        _visible_notifications_clause(),
+                    )
                     .order_by(Notification.created_at.desc())
                     .limit(FEED_LIMIT)
                 )
@@ -539,12 +595,17 @@ class NotificationService:
         return UnreadCountResponse(unread_count=await self._unread_count(user_id))
 
     async def _unread_count(self, user_id: uuid.UUID) -> int:
+        """Same visibility rule as ``list_feed`` — see
+        ``_visible_notifications_clause``. This backs the polled bell badge, so
+        it stays a single indexed-lookup ``EXISTS`` per row rather than a
+        Python filter."""
         return int(
             (
                 await self._db.execute(
                     select(func.count(Notification.id)).where(
                         Notification.user_id == user_id,
                         Notification.read_at.is_(None),
+                        _visible_notifications_clause(),
                     )
                 )
             ).scalar_one()

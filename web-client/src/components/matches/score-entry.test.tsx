@@ -3675,6 +3675,237 @@ describe('ScoreEntry — submit-gated validation (ADR-0018)', () => {
   })
 })
 
+describe('ScoreEntry — director scoring (#1523)', () => {
+  // Neither side is the viewer's own — `can_score` is true only because the
+  // viewer is the tournament director scoring a called, unresolved match
+  // they don't play in. `sidesOrder: 'reversed'` seeds the API payload with
+  // side 2 first in the array, so a test using it can prove the neutral view
+  // is genuinely SIDE-NUMBER-ordered (`ordered-sides.ts`'s sort), not just an
+  // array-order passthrough.
+  function directorSides({
+    meWins = 1,
+    oppWins = 1,
+    sidesOrder = 'natural',
+  }: {
+    meWins?: number
+    oppWins?: number
+    sidesOrder?: 'natural' | 'reversed'
+  } = {}): [MatchDetailsSide, MatchDetailsSide] {
+    const side1: MatchDetailsSide = {
+      side_number: 1,
+      players: [
+        { user_id: 'u-a', username: 'alice.wong', is_current_user: false },
+      ],
+      games_won: meWins,
+      won: null,
+      is_current_user_side: false,
+    }
+    const side2: MatchDetailsSide = {
+      side_number: 2,
+      players: [
+        { user_id: 'u-b', username: 'bo.singh', is_current_user: false },
+      ],
+      games_won: oppWins,
+      won: null,
+      is_current_user_side: false,
+    }
+    return sidesOrder === 'reversed' ? [side2, side1] : [side1, side2]
+  }
+
+  function directorMatch(overrides: Parameters<typeof matchDetails>[0] = {}) {
+    return matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: directorSides(),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+      ],
+      current_game: { game_number: 3 },
+      can_score: true,
+      can_finalize: false,
+      ...overrides,
+    })
+  }
+
+  it('renders both sides by name in side-number order, and does not redirect', async () => {
+    // Sides arrive REVERSED in the API payload — if the screen merely read
+    // array order (rather than `ordered-sides.ts`'s side-number sort) this
+    // would show bo.singh first.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          directorMatch({ sides: directorSides({ sidesOrder: 'reversed' }) }),
+        ),
+      ),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    // Not redirected: the create-mode heading renders instead of the
+    // read-only match page score-entry.tsx:291 used to bounce every no-side
+    // viewer to.
+    expect(
+      await screen.findByRole('heading', { name: /enter game 3 score/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('match-page m-1')).not.toBeInTheDocument()
+
+    // Neutral naming, side 1 left / side 2 right — no "You"/"Opponent"
+    // fallback, since neither side is the viewer.
+    const textboxes = screen.getAllByRole('textbox')
+    expect(textboxes.map((el) => el.getAttribute('aria-label'))).toEqual([
+      'alice.wong score',
+      'bo.singh score',
+    ])
+  })
+
+  it('still refuses a plain spectator — no side and no can_score — with the inline explanation, not a redirect (#1288)', async () => {
+    // #1288 replaced the bare spectator bounce with an inline "Can't enter a
+    // score here" explanation for every `can_score: false` viewer, director
+    // widening included — see the "not-scorable guard (#1288)" describe block
+    // below for the full reason matrix.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(directorMatch({ can_score: false })),
+      ),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Only participants in this match can enter scores.',
+    )
+    expect(screen.queryByText('match-page m-1')).not.toBeInTheDocument()
+  })
+
+  it("keeps a participant's own side first even when it's side 2 (regression guard)", async () => {
+    // rita.kovac (the viewer) sits on side 2 here — a broken "always neutral"
+    // rewrite would put nguyen.t (side 1) on the left instead.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(inProgressMatchMeSide2()),
+      ),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    const textboxes = screen.getAllByRole('textbox')
+    expect(textboxes.map((el) => el.getAttribute('aria-label'))).toEqual([
+      'rita.kovac score',
+      'nguyen.t score',
+    ])
+  })
+
+  it('pre-populates a persisted score for the director in side-number order', async () => {
+    // Falsifies the seedScoreValues fix: deriving "mine" from
+    // `is_current_user_side` (false for every side here) would leave both
+    // inputs empty even though game 1 has a persisted 11–8 score.
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(directorMatch())),
+    )
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    const leftInput = await screen.findByRole('textbox', {
+      name: 'alice.wong score',
+    })
+    const rightInput = screen.getByRole('textbox', { name: 'bo.singh score' })
+    await waitFor(() => expect(leftInput).toHaveValue('11'))
+    expect(rightInput).toHaveValue('8')
+  })
+
+  it('POSTs a director-entered score with the left (side 1) input as side_1_points', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(directorMatch())),
+      http.post(
+        '*/v1/matches/m-1/games/3/scores/new',
+        async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json(directorMatch(), { status: 201 })
+        },
+      ),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    const leftInput = await screen.findByRole('textbox', {
+      name: 'alice.wong score',
+    })
+    const rightInput = screen.getByRole('textbox', { name: 'bo.singh score' })
+    await user.type(leftInput, '11')
+    await user.type(rightInput, '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    await waitFor(() =>
+      expect(captured).toEqual({ side_1_points: 11, side_2_points: 4 }),
+    )
+  })
+
+  it('always finalizes immediately for a director — never "Post result" or "for your opponent to accept"', async () => {
+    // A rated match (`affects_rating: true`) would normally leave a
+    // participant's proposal standing for the opponent to accept. A
+    // director's own proposal never does — it always self-finalizes
+    // (POST /results docstring, #1523) — so the copy must say so regardless
+    // of `affects_rating`, and must not frame either side as "your opponent".
+    const user = userEvent.setup()
+    let resultsBody: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          directorMatch({
+            sides: directorSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+            affects_rating: true,
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        resultsBody = await request.json()
+        return HttpResponse.json(
+          directorMatch({
+            status: 'completed',
+            status_label: 'Final',
+            current_game: null,
+            can_score: false,
+          }),
+        )
+      }),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    const leftInput = await screen.findByRole('textbox', {
+      name: 'alice.wong score',
+    })
+    const rightInput = screen.getByRole('textbox', { name: 'bo.singh score' })
+    await user.type(leftInput, '11')
+    await user.type(rightInput, '4')
+
+    expect(
+      screen.queryByRole('button', { name: /post result/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /finalize result/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/will finalize the result immediately/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/for your opponent to accept/i),
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /finalize result/i }))
+
+    await waitFor(() => expect(resultsBody).not.toBeNull())
+  })
+})
+
 describe('ScoreEntry — not-scorable guard (#1288)', () => {
   it('explains a match with no opponent, mirroring the API 422 message, and renders no form', async () => {
     server.use(

@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from typing import Any, Literal
 
 import pytest
@@ -19,16 +20,22 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import schedule_solves, scheduling
 from app.geocoding import FakeGeocoder, GeocodeResult
+from app.leagues import get_default_league
 from app.main import app as fastapi_app
+from app.match_creation import create_match
+from app.match_queries import match_eager_options
 from app.models import (
     DrawType,
+    EventFormat,
     League,
+    Match,
     Permission,
     RatingHistory,
     RatingHistorySource,
     Role,
     RolePermission,
     Tournament,
+    TournamentEntry,
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentEventGroupReservation,
@@ -36,6 +43,7 @@ from app.models import (
     TournamentEventReservationTable,
     TournamentEventStage,
     TournamentEventStageGroup,
+    TournamentFixture,
     User,
     UserLeagueRating,
     UserRole,
@@ -164,6 +172,149 @@ async def make_user(
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+async def attach_match_to_director_tournament(
+    db_session: AsyncSession,
+    match_id: uuid.UUID,
+    *,
+    tag: str,
+    director: User,
+    p1: User,
+    p2: User,
+    best_of: int = 5,
+    rated: bool = True,
+) -> Match:
+    """Wire an ALREADY-CREATED match (``match_id``, between participants
+    ``p1``/``p2``) onto a bare-minimum tournament/event/stage/group/fixture
+    chain so ``director`` resolves as its director (#1523,
+    ``app.match_queries.is_tournament_director``) — the seed #1523's
+    director-authorization tests build on, factored out from
+    :func:`directed_tournament_match` so an HTTP-level test can wire a match it
+    created through the API (rather than through :func:`app.match_creation.create_match`
+    directly) onto the same tournament shape.
+
+    Bypasses the draw/materialize/call pipeline entirely: the director check
+    only cares that ``tournament_fixtures.match_id`` resolves, through its
+    stage/event/tournament, to a tournament whose ``created_by_user_id`` is
+    ``director`` — not how the match came to exist. Seeds two
+    ``TournamentEntry`` rows and sets the fixture's ``entry_a_id``/
+    ``entry_b_id`` so a director's own ``propose_result`` call exercises the
+    real completion seam (``app.tournament_advancement.on_match_completed`` —
+    the fixture's ``winner_entry_id`` write and re-advance) rather than
+    skirting it.
+
+    Returns the match, reloaded through the app's own eager-load chain (a bare
+    ``refresh()`` would leave ``sides``/``results`` expired by the commit
+    below, which async-lazy-loads into a ``MissingGreenlet`` the next time a
+    caller reads them)."""
+    league = await get_default_league(db_session)
+    assert league is not None, "the autouse default_league fixture seeds this"
+
+    tournament = Tournament(
+        name=f"{tag} Director Test Open",
+        league_id=league.id,
+        created_by_user_id=director.id,
+    )
+    db_session.add(tournament)
+    await db_session.flush()
+
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
+        match_settings={"rated": rated, "length_games": best_of},
+    )
+    db_session.add(event)
+    await db_session.flush()
+
+    stage = TournamentEventStage(event_id=event.id, position=0)
+    stage.draw_type = DrawType.round_robin
+    db_session.add(stage)
+    await db_session.flush()
+
+    group = TournamentEventStageGroup(stage_id=stage.id, position=0)
+    db_session.add(group)
+    await db_session.flush()
+
+    entry_a = TournamentEntry(event_id=event.id, user_id=p1.id)
+    entry_b = TournamentEntry(event_id=event.id, user_id=p2.id)
+    db_session.add_all([entry_a, entry_b])
+    await db_session.flush()
+
+    fixture = TournamentFixture(
+        stage_id=stage.id,
+        group_id=group.id,
+        round=1,
+        position=1,
+        match_id=match_id,
+        entry_a_id=entry_a.id,
+        entry_b_id=entry_b.id,
+    )
+    db_session.add(fixture)
+    await db_session.commit()
+    return (
+        await db_session.execute(
+            select(Match).where(Match.id == match_id).options(*match_eager_options())
+        )
+    ).scalar_one()
+
+
+async def directed_tournament_match(
+    db_session: AsyncSession,
+    *,
+    tag: str,
+    best_of: int = 5,
+    rated: bool = True,
+    director_is_participant: bool = False,
+) -> tuple[Match, User]:
+    """A best-of-``best_of`` match (rated by default) between two fresh
+    participants, wired to a minimal tournament/event/stage/group/fixture chain
+    so its creator resolves as the match's DIRECTOR (#1523) — the seed
+    #1523's director-authorization tests build on.
+
+    Bypasses the draw/materialize/call pipeline entirely: the match is created
+    the ordinary way (``create_match``, which is born ``in_progress`` and
+    already scorable), and :func:`attach_match_to_director_tournament` wires a
+    bare-minimum tournament chain onto it after the fact.
+
+    ``director_is_participant=True`` seats the returned director as one of the
+    match's own two players (constraint 9's "a director who is also a
+    participant follows the ordinary participant flow" scenario) — otherwise
+    the director is a fresh third user who never plays in this match.
+
+    Returns ``(match, director)``."""
+    director = await make_user(db_session, f"{tag}-director")
+    p1 = (
+        director
+        if director_is_participant
+        else await make_user(db_session, f"{tag}-p1")
+    )
+    p2 = await make_user(db_session, f"{tag}-p2")
+    match = await create_match(
+        db_session,
+        creator=p1,
+        opponent_user_id=p2.id,
+        league_id=None,
+        best_of=best_of,
+        rated=rated,
+    )
+    reloaded = await attach_match_to_director_tournament(
+        db_session,
+        match.id,
+        tag=tag,
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=best_of,
+        rated=rated,
+    )
+    return reloaded, director
 
 
 def venue_tables(*specs: tuple[str, str]) -> list[VenueTable]:

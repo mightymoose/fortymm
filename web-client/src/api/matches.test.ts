@@ -7,6 +7,7 @@ import { createElement, type ReactNode } from 'react'
 import { server } from '@/mocks/server'
 import { matchDetails, matchListResponse, matchListRow } from '@/test/factories'
 import { RenderBoundary } from '@/test/utilities'
+import { NOTIFICATIONS_QUERY_KEY } from './notifications'
 import {
   type MatchDetails,
   type MatchListParams,
@@ -16,6 +17,7 @@ import {
   matchQueryKey,
   matchQueryOptions,
   scoreMutationKey,
+  useAcceptResult,
   useCreateMatch,
   useDeleteScore,
   useMatch,
@@ -1029,6 +1031,60 @@ describe('useProposeResult', () => {
     // the user to fix and retry — no refetch, so nothing navigates them away.
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: matchQueryKey(matchId),
+    })
+  })
+})
+
+/**
+ * Regression for #1583: a result write that resolves the OTHER side's "Accept
+ * your match result" prompt (accept, or a propose/counter that supersedes a
+ * standing result) must invalidate the notifications feed/unread-count query
+ * too, not just the match views. Before the fix, `applyBoardWriteCache` ran
+ * `invalidateMatchViews` alone, so the bell badge stayed stale for up to the
+ * 60s background poll — the counter/self-correction path had no other
+ * invalidation to incidentally cover it (unlike Accept via a notification
+ * link, which happens to route through `useMarkNotificationRead`'s own
+ * invalidation first).
+ */
+describe('notifications invalidation on result writes (#1583)', () => {
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children)
+
+  it('invalidates the notifications query on a successful propose/counter result write', async () => {
+    const matchId = 'm-1583-propose'
+    server.use(
+      http.post('*/v1/matches/:matchId/results', () =>
+        HttpResponse.json(matchDetails({ id: matchId }), { status: 201 }),
+      ),
+    )
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useProposeResult(matchId), { wrapper })
+    result.current.mutate({ games: [] })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: NOTIFICATIONS_QUERY_KEY,
+    })
+  })
+
+  it('invalidates the notifications query on a successful accept', async () => {
+    const matchId = 'm-1583-accept'
+    server.use(
+      http.post('*/v1/matches/:matchId/results/:resultId/acceptance', () =>
+        HttpResponse.json(matchDetails({ id: matchId }), { status: 201 }),
+      ),
+    )
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useAcceptResult(matchId), { wrapper })
+    result.current.mutate('r-1583')
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: NOTIFICATIONS_QUERY_KEY,
     })
   })
 })
