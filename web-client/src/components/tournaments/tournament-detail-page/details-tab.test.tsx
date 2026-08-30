@@ -385,6 +385,47 @@ describe('DetailsTab', () => {
       expect(onUpdate.mock.calls[0][0].name).toBe('x'.repeat(255))
     })
 
+    // The server counts Unicode code points; Zod's own `.max` counts UTF-16
+    // code units, under which 255 emoji are 510 "characters" — so a name the
+    // server would take was refused here before the form ever sent it. The
+    // schema counts code points (`atMostCodePoints`), so this name goes through.
+    it('accepts a name of 255 emoji — 255 code points, 510 UTF-16 units', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      const emoji = '🏆'.repeat(255)
+      // The count `.max` would have applied — the reason this test can tell
+      // code points from code units at all.
+      expect(emoji.length).toBe(510)
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: emoji },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe(emoji)
+    })
+
+    it('refuses a name of 256 code points, emoji included', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: '🏆'.repeat(256) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Name must be 255 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(onUpdate).not.toHaveBeenCalled()
+    })
+
     it('refuses a description over 1,024 characters and accepts one exactly at it', async () => {
       const onUpdate = vi.fn()
       detailsTabPage.render({ tournament: buildTournament(), onUpdate })
@@ -572,6 +613,22 @@ describe('DetailsTab', () => {
       expect(screen.queryByText(new RegExp(PYDANTIC))).toBeNull()
     })
 
+    it('moves focus to the field a 422 names, so the refusal is announced, not silent', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(refusedName)
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() =>
+        expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument(),
+      )
+      // Focus goes with the message, as it does to the form-level alert:
+      // otherwise the caret stays on Save and the refused save still reads as
+      // a click that did nothing.
+      expect(detailsTabPage.getNameInput()).toHaveFocus()
+    })
+
     it('sends a nested-address 422 to the form alert — never to one arbitrary box', async () => {
       // A FastAPI location under `address` identifies only the Venue address
       // block, so pinning it onto one of the six inputs would be a lie about
@@ -745,6 +802,37 @@ describe('DetailsTab', () => {
       expect(detailsTabPage.querySaveError()).toBeNull()
       expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeInTheDocument()
       expect(onUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    it('clears a form-level refusal once the draft is back at its committed values', async () => {
+      const onUpdate = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        )
+      detailsTabPage.render({
+        tournament: buildTournament({ name: 'Bay Area Open 2026' }),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeInTheDocument())
+
+      // Undo the edit by hand — not with Revert — so the draft returns to the
+      // committed values on its own. Save and Revert are gone; the alert must
+      // not outlive them: it claims unsaved changes remain, and nothing left
+      // on the tab could dismiss it.
+      await userEvent.clear(detailsTabPage.getNameInput())
+      await userEvent.type(detailsTabPage.getNameInput(), 'Bay Area Open 2026')
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeNull())
+
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+
+      // Cleared, not merely hidden while pristine: a fresh edit does not
+      // resurrect the stale banner.
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      expect(detailsTabPage.querySaveError()).toBeNull()
     })
 
     it('keeps the draft — dirty and editable — after a refused save', async () => {

@@ -48,6 +48,16 @@ export interface DetailsTabProps {
 const NAME_MAX = 255
 const DESCRIPTION_MAX = 1024
 
+/** One bound, counted the way the server counts it. Zod's `.max` caps a string
+ * by UTF-16 code units (`string.length`), but the server's Pydantic bounds cap
+ * by Unicode code points: a supplementary character — most emoji, some CJK — is
+ * one code point yet two code units, so `.max(255)` would refuse a name of 255
+ * emoji, whose `length` is 510 and which the server would take. Counting code
+ * points (`[...v].length`) keeps the client refusing exactly what the server
+ * refuses (#1593 review). */
+const atMostCodePoints = (max: number, message: string) =>
+  z.string().refine((v) => [...v].length <= max, { message })
+
 /**
  * One address component, bounded — the client's mirror of the server's
  * `AddressComponent` (255), which applies to **all six** components and not just
@@ -56,24 +66,31 @@ const DESCRIPTION_MAX = 1024
  * The `maxLength` DOM attribute below is a hard stop for **typing and pasting**
  * only; a value that arrives by any other route — browser autofill, a programmatic
  * fill — sails straight past it, so the schema bound remains authoritative before
- * submission (#1593).
+ * submission (#1593). The attribute counts UTF-16 code units and errs on the
+ * strict side for supplementary characters; the schema is the one that counts
+ * code points, as the server does.
  */
 const addressComponent = (label: string) =>
-  z.string().max(MAX_ADDRESS_COMPONENT, {
-    message: `${label} must be ${MAX_ADDRESS_COMPONENT} characters or fewer.`,
-  })
+  atMostCodePoints(
+    MAX_ADDRESS_COMPONENT,
+    `${label} must be ${MAX_ADDRESS_COMPONENT} characters or fewer.`,
+  )
 
 const schema = z.object({
   name: z
     .string()
     .trim()
     .min(1, { message: 'Name is required.' })
-    .max(NAME_MAX, {
-      message: `Name must be ${NAME_MAX} characters or fewer.`,
-    }),
-  description: z.string().max(DESCRIPTION_MAX, {
-    message: `Description must be ${DESCRIPTION_MAX} characters or fewer.`,
-  }),
+    .pipe(
+      atMostCodePoints(
+        NAME_MAX,
+        `Name must be ${NAME_MAX} characters or fewer.`,
+      ),
+    ),
+  description: atMostCodePoints(
+    DESCRIPTION_MAX,
+    `Description must be ${DESCRIPTION_MAX} characters or fewer.`,
+  ),
   venue: addressComponent('Venue name'),
   street: addressComponent('Street'),
   city: addressComponent('City'),
@@ -214,6 +231,18 @@ export const DetailsTab = ({
     if (errors.root) failureRef.current?.focus()
   }, [errors.root])
 
+  /** A form-level refusal reports *unsaved* work — "your changes are still
+   * here". Undoing the edits by hand makes the draft pristine, which already
+   * removes Save and Revert, and the alert would then be all that is left:
+   * claiming unsaved changes that no longer exist, with no action to dismiss
+   * it. Clear it when the dirtiness clears. `reset` (Revert, reconciliation)
+   * already wipes it; this covers undoing by hand (#1593 review). Field errors
+   * need no such sweep: `mode: 'onChange'` revalidates a box as it is retyped,
+   * so the undo clears the complaint that box raised. */
+  useEffect(() => {
+    if (!isDirty) form.clearErrors('root')
+  }, [isDirty, form])
+
   /** Re-seed the form when a different/refetched committed tournament arrives —
    * the reconciliation a successful save rides home on (the mutation's
    * invalidation refetch replaces the object). An effect, not the
@@ -256,8 +285,10 @@ export const DetailsTab = ({
         const field = refusedFormField(failure)
         if (field) {
           // The server blamed a box this form shows: the message goes under it,
-          // where the repo's Forms convention puts a field error.
-          form.setError(field, { type: 'server', message })
+          // where the repo's Forms convention puts a field error — and focus
+          // moves there, as it does to the form-level alert, so a screen
+          // reader hears the refusal instead of a save that did nothing.
+          form.setError(field, { type: 'server', message }, { shouldFocus: true })
           return
         }
         // EVERY other failure — a nested-address 422, a 403, a 409, a **5xx**, an
