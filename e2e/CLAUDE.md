@@ -22,6 +22,7 @@ or edit `web-client/e2e/` from here.
 From `e2e/` (after `npm install`; first run also needs `npx playwright install chromium`):
 
 ```bash
+npm run typecheck            # TypeScript gate: semantic check of the whole suite, no emit
 npm run test                 # default: build + run the full compose stack, test it, tear it down
 npm run test:ui              # same, in Playwright's interactive UI mode
 npm run test -- landing      # single spec by path/substring (tests/landing.spec.ts)
@@ -34,8 +35,13 @@ E2E_BASE_URL=http://localhost:8080 npm run test   # dev compose stack
 E2E_BASE_URL=http://127.0.0.1:8085 npm run test   # a QA stack
 ```
 
-Only `test` and `test:ui` exist as scripts. Everything after `--` is passed
-through to `playwright test` — don't invent scripts for flags.
+Only `typecheck`, `test` and `test:ui` exist as scripts. Everything after `--` is
+passed through to `playwright test` — don't invent scripts for flags.
+
+`npm run typecheck` is the authoritative TypeScript check for this package, and
+CI runs that same script. Playwright transpiles the suite to run it, so a green
+Playwright run is not a semantic typecheck. Run the gate before you run the
+stack — it is fast, and it needs no Docker.
 
 ## How it wires up
 
