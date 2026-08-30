@@ -20,6 +20,7 @@ import {
   parseScheduleSolve,
   placementConflictSchema,
   placementConflictSentence,
+  runOutcomeAmbiguous,
   runSchedulerNotice,
   scheduleRefetchInterval,
   solveInFlight,
@@ -1155,5 +1156,37 @@ describe('runSchedulerNotice', () => {
     expect(runSchedulerNotice(new Error('x')).title).toBe(
       "Couldn't run the scheduler",
     )
+  })
+})
+
+// #1614 review: the route commits the run before it answers, so a lost
+// transport or a proxy 5xx says "the answer was lost", not "the run was
+// refused" — the consumer must hold its placement gate shut across the
+// ambiguity, while a refusal the server actually answered releases it.
+describe('runOutcomeAmbiguous', () => {
+  it.each([422, 403, 404] as const)(
+    'reads a %i as definite — the server answered, nothing was queued',
+    (status) => {
+      expect(runOutcomeAmbiguous(apiError(status))).toBe(false)
+    },
+  )
+
+  it('reads the documented 503 as definite — the queue was unreachable, nothing was queued', () => {
+    expect(runOutcomeAmbiguous(apiError(503))).toBe(false)
+  })
+
+  it('reads a lost transport (status 0) as ambiguous', () => {
+    expect(runOutcomeAmbiguous(apiError(0))).toBe(true)
+  })
+
+  it.each([500, 502, 504] as const)(
+    'reads a %i as ambiguous — a proxy can mint it after the upstream committed',
+    (status) => {
+      expect(runOutcomeAmbiguous(apiError(status))).toBe(true)
+    },
+  )
+
+  it('reads a non-ApiError throw as ambiguous — it never got an answer', () => {
+    expect(runOutcomeAmbiguous(new Error('x'))).toBe(true)
   })
 })

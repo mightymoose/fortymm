@@ -1031,3 +1031,35 @@ export function runSchedulerNotice(error: unknown): RunSchedulerNotice {
     description: 'Something went wrong on our side. Try again in a moment.',
   }
 }
+
+/**
+ * Whether a failed run request leaves the outcome **unknown** — the server may
+ * have accepted and queued the run even though this client saw the failure.
+ *
+ * The route commits the run before it answers, so the response and the
+ * acceptance can be separated by an outage: a lost transport (status 0) and a
+ * 5xx minted by a proxy between the client and the API both say "the answer was
+ * lost", not "the run was refused". Acting on the pre-click placements while a
+ * queue may be replacing them is the hazard (#1614), so the consumer holds its
+ * provisional gate shut across the ambiguity — until a successful detail read
+ * (which reads the solve and its placements together) reconciles it.
+ *
+ * A **definite** refusal is one the server *answered*: any 4xx (the documented
+ * 422 "cut a draw first", the 403) — it read the request and refused, nothing
+ * was queued. The **503** is definite by contract too: the queue was
+ * unreachable, nothing was queued (`runSchedulerNotice` says exactly that).
+ * Anything that is not an `ApiError` never got an answer, so it is ambiguous.
+ *
+ * Pure — unit-tested next to `runSchedulerNotice`, whose copy already spells
+ * each case (`./solve.test.ts`).
+ */
+export function runOutcomeAmbiguous(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true
+  // The documented queue-unavailable refusal: the contract says nothing was
+  // queued, so the click is accounted for.
+  if (error.status === 503) return false
+  // Any 4xx the server answered is a definite refusal; status 0 (the
+  // transport) and any other 5xx (a proxy after the upstream committed) are
+  // ambiguous.
+  return !(error.status >= 400 && error.status < 500)
+}

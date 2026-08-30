@@ -1415,6 +1415,115 @@ describe('ScheduleTab', () => {
     expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
   })
 
+  // The #1614 review's ambiguous-failure case: the route commits the run
+  // BEFORE it answers, so the POST can fail (a lost transport, a 5xx from a
+  // proxy) while the queue accepted the run. The success-only latch never
+  // arms and no in-flight row is cached — so the tab latches the snapshot
+  // itself (`runOutcomeAmbiguous`), holding the gate shut past `isPending`
+  // until a successful detail read reconciles it.
+  it('keeps the gate closed when the POST fails ambiguously (a proxy 5xx), until a payload reconciles it', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json({ detail: 'bad gateway' }, { status: 502 }),
+            )
+        }),
+    )
+
+    page.render({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+      ),
+      tables: buildTables(),
+    })
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+
+    page.clickRunScheduler()
+    await waitFor(() => expect(posts).toBe(1))
+    release()
+    // The request settled on an "error" the server never actually stated —
+    // the strip shows its generic notice, but the gate still holds: the
+    // notice is up and Place/Move stay withheld.
+    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+    expect(page.queryRunNotice()).toBeInTheDocument()
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
+
+    // The first reconciling read carries the run the queue actually
+    // accepted (the worker, not the request, failed) — still in flight, so
+    // the gate holds on the payload's own account.
+    page.rerender({
+      tournament: buildLivePartlyPlaced(buildInFlightSolve('queued', 'manual')),
+    })
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
+
+    // The run lands terminal: the reconciled truth, actions restored.
+    page.rerender({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ id: 'solve-2', trigger: 'manual' }),
+      ),
+    })
+    expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+    expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+  })
+
+  // The contrast the classification exists for: a DEFINITE refusal — the
+  // documented 503, "the queue could not be reached, so nothing was queued" —
+  // answers the click, so the gate releases with it. No latch, no lingering
+  // notice beyond the strip's own, and the pre-click placements are the truth.
+  it('releases the gate when the POST is definitely refused (the documented 503)', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json(
+                {
+                  detail:
+                    'The scheduling queue is unavailable, so the solve was not queued. Try again in a moment.',
+                },
+                { status: 503 },
+              ),
+            )
+        }),
+    )
+
+    page.render({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+      ),
+      tables: buildTables(),
+    })
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+
+    page.clickRunScheduler()
+    await waitFor(() => expect(posts).toBe(1))
+    release()
+    // The refusal notice is up — and the gate is OPEN the moment the request
+    // settles: nothing was queued, so the placements on screen stand.
+    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+    expect(page.queryRunNotice()).toHaveTextContent(
+      'The scheduler is unavailable right now',
+    )
+    expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+    expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+  })
+
   it.each([
     'go_live',
     'match_completed',

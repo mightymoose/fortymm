@@ -35,7 +35,7 @@ import {
   type ScheduleMatch,
   type ScheduleTable,
 } from '../data/schedule'
-import { solveInFlight } from '../data/solve'
+import { runOutcomeAmbiguous, solveInFlight } from '../data/solve'
 import {
   buildTimelineBoard,
   calledAtLabel,
@@ -641,15 +641,24 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   //    refetch needed. The next detail response (the settle refetch, then the
   //    ~3s in-flight poll) hands back the same row or a later one, and a
   //    terminal payload restores the actions, as the tests below pin.
-  // 3. **When the 202 itself arrives terminal**, the cache write stands down —
-  //    merging a solved row would pair it with this snapshot's PRE-solve
-  //    fixtures, a state no server read ever produced (#1614 review). The tab
-  //    latches the detail snapshot the click happened on (`detailAtRequest`)
-  //    and holds the gate shut while the prop is STILL that object: any detail
-  //    payload — settle refetch or poll — reads the solve and its fixtures
-  //    together and arrives as a fresh object, so its arrival IS the
+  // 3. **When the 202 itself arrives terminal** — or the request fails
+  //    ambiguously (#1614 review) — the cache write stands down and the
+  //    success-only callback never arms, so the tab latches the detail
+  //    snapshot the click happened on (`detailAtRequest`) and holds the gate
+  //    shut while the prop is STILL that object. Terminal-202: merging a
+  //    solved row would pair it with this snapshot's PRE-solve fixtures, a
+  //    state no server read ever produced. Ambiguous failure (a lost
+  //    transport or a proxy 5xx — `runOutcomeAmbiguous` in `../data/solve`):
+  //    the route commits the run before it answers, so the run may be
+  //    accepted while `mutateAsync` rejects, and once `isPending` cleared the
+  //    cached terminal (or null) solve would make Place/Move actionable again
+  //    on placements the accepted worker may still replace. Either way, any
+  //    detail payload — settle refetch or poll — reads the solve and its
+  //    fixtures together and arrives as a fresh object, so its arrival IS the
   //    reconciliation. A failed refetch cannot open the gate — no payload, no
-  //    fresh object — so this bridge fails shut.
+  //    fresh object — so this bridge fails shut. A DEFINITE refusal (the
+  //    documented 422/403/503) arms nothing: the server answered "nothing was
+  //    queued", so the pre-click state is the truth.
   const [detailAtRequest, setDetailAtRequest] = useState<Tournament | null>(null)
   // Bridge 3, derived — no effect, no clearing: the latch is held exactly
   // while the prop is the latched snapshot, and any payload replaces that
@@ -739,13 +748,32 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
       <SolveStrip
         solve={tournament.latestScheduleSolve}
         canEdit={canEdit}
-        onRun={() =>
-          requestSolve.mutateAsync().then(() => {
-            // Bridge 3's latch: the snapshot this click happened on. The next
-            // detail object reconciles it (see the gate above).
-            setDetailAtRequest(tournament)
-          })
-        }
+        onRun={async () => {
+          try {
+            await requestSolve.mutateAsync()
+          } catch (error) {
+            // An AMBIGUOUS failure arms the latch too (#1614 review): the
+            // route commits the run before it answers, so a lost transport
+            // (status 0) or a proxy 5xx can leave the run accepted while
+            // `mutateAsync` rejects — the success-only latch below never
+            // arms, and once `isPending` clears, the cached terminal (or
+            // null) solve makes Place/Move actionable again on placements
+            // the accepted worker may still replace. So the same snapshot is
+            // latched here, holding the gate shut across the ambiguity until
+            // a successful detail read — which reads the solve and its
+            // placements together — reconciles it (the refetch the mutation's
+            // `onSettled` triggers, the in-flight poll, or any later read).
+            // A DEFINITE refusal (the documented 422/403/503 — the server
+            // answered "nothing was queued") releases the gate instead, as
+            // the refusal notice says it may. The error rethrows either way:
+            // the strip owns the inline refusal notice.
+            if (runOutcomeAmbiguous(error)) setDetailAtRequest(tournament)
+            throw error
+          }
+          // Bridge 3's latch: the snapshot this click happened on. The next
+          // detail object reconciles it (see the gate above).
+          setDetailAtRequest(tournament)
+        }}
       />
 
       {/* The provisional half of the same fact: the strip above says the solver
