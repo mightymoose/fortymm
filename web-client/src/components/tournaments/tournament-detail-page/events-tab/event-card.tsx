@@ -135,12 +135,28 @@ export const EventCard = ({
               <span>{drawLabel}</span>
             </div>
             {ev.predicates.length > 0 && (
-              <div className="mt-2.5 flex flex-wrap gap-1">
-                {ev.predicates.map((p) => (
-                  <Badge key={p.id} variant="ghost" className="border-[color:var(--border-subtle)]">
-                    {formatPredicate(p)}
-                  </Badge>
-                ))}
+              <div className="mt-2.5">
+                <div className="flex flex-wrap gap-1">
+                  {ev.predicates.map((p) => (
+                    <Badge key={p.id} variant="ghost" className="border-[color:var(--border-subtle)]">
+                      {formatPredicate(p)}
+                    </Badge>
+                  ))}
+                </div>
+                {/* The badges name the rules; this line names their SCOPE. A
+                    badge like `Rating ≥ 1800` reads as "unrated players
+                    excluded", while the server admits them — an unrated player
+                    passes every rule (ADR-0783 §3) — so the admission is stated
+                    beside the constraint, in visible text, never a tooltip, an
+                    icon or a color alone (#1608). Operator-agnostic: it reads
+                    the same over a `between` rule or several ANDed ones. */}
+                <p
+                  data-testid="eligibility-scope"
+                  className="mt-1.5 text-[12px] leading-snug text-[color:var(--fg-3)]"
+                >
+                  Rated players must satisfy every rule. Unrated players may
+                  enter.
+                </p>
               </div>
             )}
           </div>

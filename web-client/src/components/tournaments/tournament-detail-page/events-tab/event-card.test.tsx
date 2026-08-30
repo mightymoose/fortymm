@@ -27,6 +27,49 @@ describe('EventCard', () => {
     expect(document.body).toHaveTextContent('Rating < 1500')
   })
 
+  /**
+   * #1608: a badge like `Rating ≥ 1800` reads as "unrated players excluded",
+   * while the server admits them — an unrated player passes every rule
+   * (ADR-0783 §3). The card states the rules' true scope beside the badges, in
+   * visible text, so the exception reaches every reader.
+   */
+  describe('the eligibility scope line', () => {
+    const SCOPE =
+      'Rated players must satisfy every rule. Unrated players may enter.'
+
+    it('tells the reader the rules bind rated players and unrated players may enter', () => {
+      // The exact rule QA reproduced against: `Rating ≥ 1800` still admitted an
+      // unrated player.
+      eventCardPage.render({
+        event: buildEvent({
+          predicates: [
+            buildPredicate({ field: 'rating', op: '>=', value: 1800 }),
+          ],
+        }),
+      })
+      expect(eventCardPage.queryEligibilityScope()).toHaveTextContent(SCOPE)
+    })
+
+    it('states the same scope for a between rule and for several rules at once', () => {
+      eventCardPage.render({
+        event: buildEvent({
+          predicates: [
+            buildPredicate({ id: 'pr-1', op: 'between', value: [1200, 1500] }),
+            buildPredicate({ id: 'pr-2', op: '<', value: 1500 }),
+          ],
+        }),
+      })
+      expect(eventCardPage.queryEligibilityScope()).toHaveTextContent(SCOPE)
+    })
+
+    it('carries no rated/unrated qualifier for an event with no rules', () => {
+      eventCardPage.render({ event: buildEvent({ predicates: [] }) })
+      expect(eventCardPage.queryEligibilityScope()).toBeNull()
+      expect(document.body).not.toHaveTextContent('Unrated players may enter')
+      expect(document.body).not.toHaveTextContent('Rated players must satisfy')
+    })
+  })
+
   /** The card names the event's draw type in the **server's** words (ADR 20260726) —
    * it looks the stored slug up in the catalogue it was handed, exactly as the editor's
    * read-only row does, so the two cannot say different things about one event.
