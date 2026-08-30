@@ -71,22 +71,35 @@ const CONFIRM_COPY: Partial<
   replaced: {
     // Distinct from `expired`: this link is dead because a LATER resend
     // replaced it, not because time ran out — sending yet another new link
-    // isn't the fix, opening the one already sent is (#1616).
+    // isn't the fix, opening the one already sent is (#1616). Deliberately
+    // does NOT say "for this address": the newer link goes to whatever
+    // address was pending when it was requested, which a second change may
+    // have moved — so it only claims a newer link exists.
     eyebrow: '● Newer link sent',
     title: 'A newer link was sent',
     subtitle:
-      'A newer confirmation link was requested for this address, so this one is no longer live. Open the most recent email we sent you.',
+      'A newer confirmation link was requested, so this one is no longer live. Open the most recent email we sent you — it may be for a different address.',
+  },
+  error: {
+    // Distinct from `expired`: nothing here claims the link was rejected —
+    // the request never got a real answer (transport failure or 5xx), so
+    // resending would replace a link that is probably still live.
+    eyebrow: '● Connection trouble',
+    title: "We couldn't check this link",
+    subtitle:
+      "The server didn't answer, so this link went unused. It's usually still good — try again in a moment.",
   },
 }
 
 // `POST /v1/me/email/confirm`'s 400 body for a superseded link,
-// `{ detail: { code, message } }` (#1616) — NOT declared on the route's
-// OpenAPI `responses=` (matches the login-consume precedent), so it never
-// reaches `schema.d.ts` — read it off `ApiError.body`, never off the typed
-// `ApiError.detail` (a bare `string | null`), and parse it here. Shaped after
+// `{ detail: { code, message } }` (#1616) — declared on the route's OpenAPI
+// `responses=` as `ConfirmEmailErrorResponse`, but read off `ApiError.body`
+// (the raw response body) and parsed here rather than trusted: the same
+// status also carries the plain-string detail of every other dead link,
+// which the declared model does not describe. Shaped after
 // `login.verifying.tsx` (#1466): a code this client has no screen for, a
-// plain-string detail (every other dead confirmation link), or no body fails
-// the parse and falls through to the generic invalid/expired screen.
+// plain-string detail, or no body fails the parse and falls through to the
+// generic invalid/expired screen.
 const CONFIRM_ERROR_CODES = ['replaced'] as const
 type ConfirmErrorCode = (typeof CONFIRM_ERROR_CODES)[number]
 
@@ -100,6 +113,14 @@ function confirmErrorCode(err: unknown): ConfirmErrorCode | null {
   if (!(err instanceof ApiError)) return null
   const parsed = confirmErrorSchema.safeParse(err.body)
   return parsed.success ? parsed.data.detail.code : null
+}
+
+/** Whether `err` is a 4xx that actually rejects the token — the only kind of
+ * failure whose copy may say the link is unusable. A transport failure or a
+ * server-side 5xx answers nothing about the token, so it must not land on
+ * the expired screen and its "send a fresh one" advice (#1616). */
+function isRejectedConfirmError(err: unknown): boolean {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500
 }
 
 function ConfirmEmailPage() {
@@ -131,12 +152,18 @@ function ConfirmEmailPage() {
   const confirmWithToast = (input: FinalizeTokenInput) =>
     confirm.mutate(input, { onSuccess: showMergeToast })
 
+  // The token is scrubbed from the URL once the mutation settles (#521), but
+  // a transient failure keeps its retry button on screen — remember the token
+  // it was cut for so that retry can re-fire the confirm.
+  const firedToken = useRef('')
+
   // Preview the link first. A merge that would carry matches over waits for the
   // user at the gate; everything else (plain confirm, empty guest, or a preview
   // failure) finalizes straight away.
   useEffect(() => {
     if (fired.current || !token) return
     fired.current = true
+    firedToken.current = token
     preview.mutate(token, {
       onSuccess: (p) => {
         if (!(p.is_merge && p.guest_matches_count > 0)) {
@@ -208,10 +235,25 @@ function ConfirmEmailPage() {
     </div>
   )
 
-  // The five `LinkCheckPage` states this page maps onto (the merge gate above
-  // is a separate render path). A coded `replaced` 4xx reaches its own
-  // screen; every other failure — plain-string 4xx, network error, anything
-  // unparsed — stays on the generic invalid/expired screen.
+  // The `error` screen's one action is the retry: the request never answered
+  // the question "is this token good?", so the link is probably still live
+  // and a resend would replace it (#1616).
+  const errorFooter = (
+    <button
+      type="button"
+      style={{ ...btnPrimary, width: '100%' }}
+      onClick={() => confirmWithToast({ token: firedToken.current })}
+    >
+      Try again
+    </button>
+  )
+
+  // The six `LinkCheckPage` states this page maps onto (the merge gate above
+  // is a separate render path). A coded `replaced` 4xx reaches its own screen;
+  // any other 4xx is a genuine rejection and lands on the invalid/expired
+  // screen; a transport failure or 5xx answers nothing about the token, so it
+  // gets the retryable `error` screen instead of the "send a fresh one" copy
+  // that would push the user into replacing a probably-live link (#1616).
   const linkState: LinkCheckState =
     status === 'ok'
       ? 'success'
@@ -219,9 +261,11 @@ function ConfirmEmailPage() {
         ? 'checking'
         : status === 'missing-token'
           ? 'missing'
-          : status === 'error' && confirmErrorCode(confirm.error) === 'replaced'
+          : confirmErrorCode(confirm.error) === 'replaced'
             ? 'replaced'
-            : 'expired'
+            : isRejectedConfirmError(confirm.error)
+              ? 'expired'
+              : 'error'
 
   // Each failure state's reason is stated once, in its own subtitle — the
   // API's sentence is deliberately not repeated under it (#1616).
@@ -247,6 +291,8 @@ function ConfirmEmailPage() {
           </Link>
         ) : linkState === 'replaced' ? (
           replacedFooter
+        ) : linkState === 'error' ? (
+          errorFooter
         ) : linkState === 'expired' || linkState === 'missing' ? (
           <Link
             to="/settings"

@@ -3,8 +3,9 @@ import SwiftUI
 /// The email-confirmation landing — the iOS counterpart to the web app's
 /// `/confirm-email` page. A Universal Link from the "confirm your email" message
 /// opens it (see `Navigation/DeepLink.swift`); it redeems the token
-/// (`POST /v1/me/email/confirm`) and resolves to one of three terminal states:
-/// confirmed, link expired/used, or server unreachable.
+/// (`POST /v1/me/email/confirm`) and resolves to one of four terminal states:
+/// confirmed, superseded by a newer resend, link expired/used, or server
+/// unreachable.
 ///
 /// Built on the same `LoginScaffold` / receipt primitives as `VerifyLoginView`
 /// so the two emailed-link landings read as one flow. Unlike `VerifyLoginView`
@@ -26,6 +27,7 @@ struct ConfirmEmailView: View {
         case gate(MergePreview)
         case success(SessionResponse)
         case expired
+        case replaced
         case unreachable
     }
     @State private var phase: Phase = .verifying
@@ -51,6 +53,7 @@ struct ConfirmEmailView: View {
             )
         case let .success(response): success(response)
         case .expired: expired
+        case .replaced: replaced
         case .unreachable: unreachable
         }
     }
@@ -159,6 +162,48 @@ struct ConfirmEmailView: View {
         }
     }
 
+    // MARK: Superseded by a newer resend
+
+    /// A newer resend replaced this link. Deliberately NOT the "re-send from
+    /// your profile" advice the expired screen gives: resending now would kill
+    /// the newer link this screen points to (#1616). The fix it names is
+    /// opening the most recent email — which may be addressed to a different
+    /// inbox, since the resend goes to whatever address was pending when it
+    /// was requested.
+    private var replaced: some View {
+        LoginScaffold(
+            eyebrow: "Net out",
+            eyebrowColor: FMColor.warn,
+            line1: "Superseded.",
+            line2: "Use the newest email.",
+            accent: FMColor.warn,
+            stepNo: ">>",
+            stepLabel: "Link replaced",
+            title: "A newer link was sent",
+            subtitle: "A newer confirmation email has gone out since this link, "
+                + "so this one is no longer live. Open the most recent email we "
+                + "sent you — it may be for a different address."
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                ReceiptCard(tint: FMColor.warn.opacity(0.6), glow: true) {
+                    ReceiptHeader(
+                        badge: { StatusBadge(kind: .failure) },
+                        eyebrow: "● TOKEN SUPERSEDED",
+                        eyebrowColor: FMColor.warn,
+                        title: "Replaced by a newer link"
+                    )
+                    ReceiptDivider()
+                    ReceiptRow(
+                        key: "Fix",
+                        value: "Open the most recent email",
+                        valueColor: FMColor.fg2
+                    )
+                }
+                LoginButton(title: "Back to FortyMM") { onClose() }
+            }
+        }
+    }
+
     // MARK: Server unreachable
 
     private var unreachable: some View {
@@ -210,6 +255,10 @@ struct ConfirmEmailView: View {
             phase = .success(
                 try await service.confirmEmail(token: token, skipMerge: skipMerge)
             )
+        } catch LoginConsumeError.replaced {
+            // A newer resend superseded this link — opening the most recent
+            // email is the fix; resending would kill that newer link (#1616).
+            phase = .replaced
         } catch LoginConsumeError.rejected {
             // Invalid / expired / already-used link — terminal.
             phase = .expired

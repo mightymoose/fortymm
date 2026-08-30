@@ -42,6 +42,7 @@ from app.rate_limiting import RedisRateLimiter
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.roles import grant_default_role
 from app.schemas.session import (
+    ConfirmEmailErrorResponse,
     ConfirmEmailRequest,
     ConsumeLoginRequest,
     LoginRequestAccepted,
@@ -282,20 +283,35 @@ async def _has_live_login_token(db: AsyncSession, user_id: uuid.UUID) -> bool:
 
 async def _has_live_email_token(db: AsyncSession, user_id: uuid.UUID) -> bool:
     """Whether ``user_id`` still has a confirmation link (change or merge
-    flavour) that could actually be opened — one not yet replaced and not past
-    ``EMAIL_CONFIRM_TOKEN_LIFETIME`` by its own ``created_at``.
+    flavour) that could actually be opened — one not yet replaced, not past
+    ``EMAIL_CONFIRM_TOKEN_LIFETIME`` by its own ``created_at``, **and** passing
+    the validity predicates ``confirm_email`` itself applies before accepting
+    such a token (#1616).
 
     ``confirm_email`` asks this before reporting ``CONFIRM_REPLACED_CODE``,
-    because that answer sends the user off to open their most recent email.
-    Confirm deletes the row it accepts, so once the newer link has itself been
-    confirmed there is nothing left to open, and "replaced" would be one more
-    untrue confirmation message — the exact thing #1616 removes. Age is read
+    because that answer sends the user off to open their most recent email —
+    which must actually work once they get there. So the check mirrors the
+    acceptance predicates, not just the row's existence:
+
+    * merge flavour — ``_confirm_account_merge`` rejects when the target
+      account is gone, already merged away, or no longer holds the address
+      the token was cut against (``target.email != token.sent_to``), e.g.
+      after the owner confirmed a later change off that address;
+    * change flavour — the change branch rejects when the token's user is
+      gone or their current confirmed address no longer matches the ``old``
+      address baked into the context.
+
+    A newer link that would fail those checks must not be reported as live:
+    "replaced" would point the user at an email whose link cannot work — the
+    exact thing #1616 removes. Confirm deletes the row it accepts, so once
+    the newer link has itself been confirmed there is nothing left to open,
+    and "replaced" would be one more untrue confirmation message. Age is read
     off ``created_at`` rather than inferred from the row still existing,
     matching ``_token_expired``: the sweep in ``_issue_confirmation_token`` is
     opportunistic and may not have run."""
     live = (
         await db.execute(
-            select(UserToken.id)
+            select(UserToken)
             .where(
                 UserToken.user_id == user_id,
                 _pending_email_token_clause(),
@@ -303,10 +319,26 @@ async def _has_live_email_token(db: AsyncSession, user_id: uuid.UUID) -> bool:
                 UserToken.created_at
                 >= datetime.now(UTC) - EMAIL_CONFIRM_TOKEN_LIFETIME,
             )
+            .order_by(UserToken.created_at.desc(), UserToken.id.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
-    return live is not None
+    if live is None:
+        return False
+    # Mirror ``confirm_email``'s acceptance predicates for whichever flavour
+    # the live row is (see the docstring for why).
+    if live.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):
+        target_id = _target_id_from_merge_context(live.context)
+        target = await db.get(User, target_id) if target_id is not None else None
+        return (
+            target is not None
+            and target.merged_into_user_id is None
+            and target.email == live.sent_to
+        )
+    user = await db.get(User, live.user_id)
+    if user is None:
+        return False
+    return user.email == _old_email_from_context(live.context)
 
 
 async def _guest_match_count(db: AsyncSession, guest_id: uuid.UUID) -> int:
@@ -998,9 +1030,10 @@ async def _issue_confirmation_token(
     replaced for up to ``EMAIL_CONFIRM_TOKEN_LIFETIME`` past its own
     ``created_at`` — the sweep below is keyed on age alone, not on
     ``replaced_at``, so a chain of several resends each still reports
-    "replaced" (not "gone") until they individually age out. That sweep is
-    what bounds a replaced row's lifetime; no separate cleanup job is
-    needed."""
+    "replaced" (not "gone") until they individually age out. Two sweeps bound
+    a replaced row's lifetime: this one (runs at the next issuance) and the
+    consumption sweep in the confirm paths, which fires as soon as the live
+    link is used — no separate cleanup job is needed."""
     now = datetime.now(UTC)
     await db.execute(
         delete(UserToken).where(
@@ -1274,7 +1307,22 @@ async def resend_email_confirmation(
     return await _build_session_response(db, current_user)
 
 
-@router.post("/v1/me/email/confirm", response_model=SessionResponse)
+@router.post(
+    "/v1/me/email/confirm",
+    response_model=SessionResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": ConfirmEmailErrorResponse,
+            "description": (
+                "The confirmation link is dead. For a link a newer resend "
+                "replaced, the detail is the coded "
+                "``ConfirmEmailErrorResponse`` shape (#1616); every other "
+                "dead link carries the plain-string detail instead, which "
+                "that model does not describe."
+            ),
+        },
+    },
+)
 async def confirm_email(
     payload: ConfirmEmailRequest,
     response: Response,
@@ -1410,6 +1458,18 @@ async def confirm_email(
         user.email = token_row.sent_to
         user.confirmed_at = datetime.now(UTC)
         await db.delete(token_row)
+        # The live link is consumed, so no replaced row for this user can ever
+        # report ``replaced`` again (``_has_live_email_token`` now finds no
+        # unreplaced row) — they are dead weight holding a ``sent_to`` address
+        # forever. Sweep them here rather than waiting for a later issuance
+        # that may never come (#1616).
+        await db.execute(
+            delete(UserToken).where(
+                UserToken.user_id == user.id,
+                _pending_email_token_clause(),
+                UserToken.replaced_at.is_not(None),
+            )
+        )
         merged = await _maybe_merge_prior_session(db, session_cookie, user)
         # After the cookie lookup above, before the replacement token below.
         await _revoke_other_sessions(db, user)
@@ -1484,6 +1544,18 @@ async def _confirm_account_merge(
         # — the inbox click still proves ownership, so sign them in as the owner.
         # A merge would have deleted this token; do it explicitly to stay single-use.
         await db.delete(token_row)
+        # ``merge_user`` deletes every guest token on the fold path; this skip
+        # path leaves the guest alive, so sweep the guest's replaced rows here:
+        # with the live link consumed, none can report ``replaced`` again and
+        # each would otherwise hold its ``sent_to`` address indefinitely
+        # (#1616).
+        await db.execute(
+            delete(UserToken).where(
+                UserToken.user_id == token_row.user_id,
+                _pending_email_token_clause(),
+                UserToken.replaced_at.is_not(None),
+            )
+        )
     return await _sign_in_after_merge(db, response, target, merged)
 
 

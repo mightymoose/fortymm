@@ -104,6 +104,28 @@ class ConfirmEmailRequest(BaseModel):
     skip_merge: bool = False
 
 
+class ConfirmEmailErrorDetail(BaseModel):
+    """The coded detail a ``400`` from ``/v1/me/email/confirm`` carries for one
+    specific failure — a confirmation link a newer resend superseded
+    (#1616). ``code`` is the machine-readable reason clients branch on
+    (``replaced``); ``message`` is the server's own sentence. Every other dead
+    link 400s with the plain-string detail this model does not describe, so
+    clients must still parse the body at their boundary rather than assume the
+    coded shape."""
+
+    code: str
+    message: str
+
+
+class ConfirmEmailErrorResponse(BaseModel):
+    """The 400 body ``confirm_email`` raises for a superseded confirmation
+    link — ``{"detail": {"code": ..., "message": ...}}`` (#1616). Declared on
+    the route's ``responses=`` so generated client types carry the coded
+    shape; it describes only the coded variant of that status."""
+
+    detail: ConfirmEmailErrorDetail
+
+
 class RequestLoginRequest(CaptchaProtectedRequest):
     email: BoundedEmailStr
 

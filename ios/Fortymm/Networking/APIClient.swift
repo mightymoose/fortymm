@@ -210,6 +210,46 @@ struct APIClient {
         throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
     }
 
+    /// Status-aware request that distinguishes a 2xx success body from a `4xx`
+    /// body whose `detail` is a structured object (`{"detail": {"code": ...,
+    /// "message": ...}}`), letting a caller read the coded reason the generic
+    /// `send` path discards (it keeps only a humanized `detail` string, and a
+    /// coded body yields none at all).
+    ///
+    /// Used for the email confirm, whose `400` carries `{code: "replaced"}`
+    /// for a link a newer resend superseded (#1616) — a reason that must not
+    /// read as "expired or already used", whose fix is opening the most
+    /// recent email rather than resending.
+    /// - `2xx` → decode `Success` → `.success`
+    /// - `4xx` whose body decodes as `CodedError` → `.failure`
+    /// - any other non-2xx → throw the same `APIError` `send` would.
+    ///
+    /// Shares `perform` with `send`, so auth, cookie capture, the merged-session
+    /// 401, and the JSON decoder configuration are identical. Only a body that
+    /// actually parses as the coded shape returns `.failure` — a plain-string
+    /// detail (every other dead link), a 422 validation array, or an empty body
+    /// falls through to `APIError`, so the caller's existing 4xx handling keeps
+    /// working.
+    func sendExpectingCodedError<Success: Decodable, CodedError: Decodable>(
+        _ method: String,
+        _ path: String,
+        body: some Encodable
+    ) async throws -> Result<Success, CodedError> {
+        let (data, http) = try await perform(method, path, body: body)
+        if (200..<300).contains(http.statusCode) {
+            do {
+                return .success(try decoder.decode(Success.self, from: data))
+            } catch {
+                throw APIError.decoding(error)
+            }
+        }
+        if (400..<500).contains(http.statusCode),
+           let coded = try? decoder.decode(CodedError.self, from: data) {
+            return .failure(coded)
+        }
+        throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
+    }
+
     /// Build, send, and post-process a request up to (but not including) the
     /// 2xx/decoding step: attaches auth cookies + CSRF, encodes the optional JSON
     /// body, handles the merged-session 401, and captures any rotated cookie.

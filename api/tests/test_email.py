@@ -754,6 +754,115 @@ async def test_confirm_a_replaced_link_twice_reports_replaced_both_times(
     assert second.json()["detail"]["code"] == "replaced"
 
 
+async def test_confirming_the_live_merge_link_sweeps_replaced_merge_rows(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """A replaced row must not outlive the confirmation that makes it
+    unreportable: once the live merge link is consumed (here via the
+    "don't bring the matches" path, which leaves the guest alive), no click
+    on the old link can ever report ``replaced`` again, so the row — and its
+    ``sent_to`` address — is swept instead of waiting for an issuance that
+    may never come (#1616)."""
+    db_session.add(
+        User(
+            username="owner", email="taken@example.com", confirmed_at=datetime.now(UTC)
+        )
+    )
+    await db_session.commit()
+    guest = await start_session(api_client, db_session)
+
+    await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="taken@example.com"
+    )  # merge link 1
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )  # merge link 2 (live)
+    raw_2 = _all_send_tokens(fake_email_queue)[-1]
+
+    confirmed = await api_client.post(
+        "/v1/me/email/confirm", json={"token": raw_2, "skip_merge": True}
+    )
+    assert confirmed.status_code == 200
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+    # The skip path leaves the guest alive; the sweep is about rows, not users.
+    survivor = (
+        await db_session.execute(select(User).where(User.id == guest.id))
+    ).scalar_one_or_none()
+    assert survivor is not None
+    assert survivor.merged_into_user_id is None
+
+
+async def test_confirm_reports_invalid_not_replaced_when_the_newer_merge_link_cannot_work(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """``replaced`` sends the user off to open their most recent email, so it
+    may only be said while that email's link would actually work. If the
+    owner confirmed a change off the claimed address, ``_confirm_account_merge``
+    rejects the newer merge link too (``target.email != token.sent_to``) —
+    the old link must then report the plain invalid/expired body, not point
+    at an email that cannot work (#1616)."""
+    owner = User(
+        username="owner", email="taken@example.com", confirmed_at=datetime.now(UTC)
+    )
+    db_session.add(owner)
+    await db_session.commit()
+
+    await start_session(api_client, db_session)
+    await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="taken@example.com"
+    )  # merge link 1
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )  # merge link 2 (live, but about to become unconfirmable)
+    raw_1 = _all_send_tokens(fake_email_queue)[0]
+
+    owner.email = "moved@example.com"
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_1})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That confirmation link is invalid or expired."
+
+
+async def test_confirm_reports_invalid_not_replaced_when_the_newer_change_link_cannot_work(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Same mirroring for the change flavour: the change branch of
+    ``confirm_email`` burns a token whose user no longer matches the ``old``
+    address baked into the context, so a newer link in that state is not
+    "live" and the replaced link must not claim a newer one was requested
+    (#1616)."""
+    user = await start_session(api_client, db_session)
+    await _capture_raw_token(api_client, db_session, fake_email_queue)  # link 1
+    await _set_email(api_client, email="rita2@example.com")  # link 2 (live)
+    raw_1 = _all_send_tokens(fake_email_queue)[0]
+
+    # Move the user's current confirmed address out from under the context
+    # both tokens were cut against (admin reset, Auth0 provisioning, ...) —
+    # the change branch's ``user.email != expected_old`` burn now applies to
+    # link 2 as well.
+    user.email = "someone-else@example.com"
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_1})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That confirmation link is invalid or expired."
+
+
 async def test_resend_sweep_keeps_a_replaced_row_within_its_lifetime(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
@@ -832,8 +941,8 @@ async def test_pending_email_ignores_a_replaced_token(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
     """``pending_email`` reflects a live token only: a replaced token never
-    drives it, and after the live link is confirmed the session reports no
-    pending email even though the replaced row survives in the table."""
+    drives it, and confirming the live link sweeps the replaced row away —
+    no later issuance is needed to bound its lifetime (#1616)."""
     await start_session(api_client, db_session)
     await _capture_raw_token(api_client, db_session, fake_email_queue)
     await _set_email(api_client, email="rita2@example.com")
@@ -847,7 +956,8 @@ async def test_pending_email_ignores_a_replaced_token(
 
     session_body = await api_client.get("/v1/session")
     assert session_body.json()["data"]["user"]["pending_email"] is None
-    # The replaced row is still there — only the live token drives the field.
+    # Consuming the live link deleted the replaced row along with it — the
+    # consumption sweep, so the table doesn't grow by one row per resend.
     replaced_rows = (
         (
             await db_session.execute(
@@ -860,7 +970,21 @@ async def test_pending_email_ignores_a_replaced_token(
         .scalars()
         .all()
     )
-    assert len(replaced_rows) == 1
+    assert replaced_rows == []
+
+
+def test_confirm_route_declares_the_coded_400_response():
+    """The superseded-link 400 is a typed response on the route's OpenAPI
+    document, so the generated web/iOS client types carry the coded shape
+    instead of learning it by word of mouth (#1616)."""
+    schema = app.openapi()
+    declared = schema["paths"]["/v1/me/email/confirm"]["post"]["responses"]["400"]
+    assert declared["content"]["application/json"]["schema"]["$ref"].endswith(
+        "ConfirmEmailErrorResponse"
+    )
+    detail = schema["components"]["schemas"]["ConfirmEmailErrorDetail"]
+    assert detail["properties"]["code"]["type"] == "string"
+    assert detail["properties"]["message"]["type"] == "string"
 
 
 async def test_confirm_reports_replaced_code_for_a_superseded_merge_token(

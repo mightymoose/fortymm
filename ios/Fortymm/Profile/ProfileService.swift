@@ -63,20 +63,38 @@ struct ProfileService {
     /// response, not just the user.
     ///
     /// Classifies failure the same way `LoginService.consume` does — and reuses
-    /// its `LoginConsumeError`: a `4xx` is a rejected token (invalid, expired,
-    /// already used) and terminal; anything else is transient and worth a retry.
-    /// Keeping that boundary-typing in the service, not the view, is the
-    /// convention the rest of the API layer follows.
+    /// its `LoginConsumeError` — with one extra reading: the confirm endpoint's
+    /// one coded 400 (`{"detail": {"code": "replaced", ...}}`, a link a newer
+    /// resend superseded) surfaces as `.replaced` rather than `.rejected`,
+    /// because its fix is opening the most recent email, not resending — a
+    /// resend would kill the newer live link (#1616). Every other `4xx` is a
+    /// rejected token (invalid, expired, already used) and terminal; anything
+    /// else is transient and worth a retry. Keeping that boundary-typing in the
+    /// service, not the view, is the convention the rest of the API layer
+    /// follows.
     func confirmEmail(token: String, skipMerge: Bool = false) async throws -> SessionResponse {
+        let result: Result<SessionResponse, ConfirmEmailCodedError>
         do {
-            return try await client.post(
+            result = try await client.sendExpectingCodedError(
+                "POST",
                 "/v1/me/email/confirm",
                 body: ConfirmEmailBody(token: token, skipMerge: skipMerge)
             )
         } catch let APIError.http(status, _) where (400..<500).contains(status) {
+            // A 4xx whose body isn't the coded shape — the plain-string
+            // "invalid or expired" detail every other dead link carries.
             throw LoginConsumeError.rejected
         } catch {
             throw LoginConsumeError.unreachable
+        }
+        switch result {
+        case .success(let session):
+            return session
+        case let .failure(coded) where coded.detail.code == "replaced":
+            throw LoginConsumeError.replaced
+        case .failure:
+            // A coded 400 this client has no screen for is still a rejection.
+            throw LoginConsumeError.rejected
         }
     }
 }
@@ -105,4 +123,18 @@ private struct ResendEmailBody: Encodable {
 private struct ConfirmEmailBody: Encodable {
     let token: String
     let skipMerge: Bool
+}
+
+/// The coded detail `POST /v1/me/email/confirm` carries on the one `400` whose
+/// body is structured — a superseded link (#1616), mirroring the API's
+/// `ConfirmEmailErrorDetail`. Decode-what-you-need: `message` is deliberately
+/// unread, since a code this client recognises is one it already has a screen
+/// for, and an unrecognised code falls back to `.rejected` anyway.
+private struct ConfirmEmailCodedError: Decodable, Error {
+    let detail: Detail
+
+    struct Detail: Decodable {
+        let code: String
+        let message: String?
+    }
 }

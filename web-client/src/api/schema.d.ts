@@ -2152,6 +2152,32 @@ export interface components {
             /** Error */
             error?: string | null;
         };
+        /**
+         * ConfirmEmailErrorDetail
+         * @description The coded detail a ``400`` from ``/v1/me/email/confirm`` carries for one
+         *     specific failure — a confirmation link a newer resend superseded
+         *     (#1616). ``code`` is the machine-readable reason clients branch on
+         *     (``replaced``); ``message`` is the server's own sentence. Every other dead
+         *     link 400s with the plain-string detail this model does not describe, so
+         *     clients must still parse the body at their boundary rather than assume the
+         *     coded shape.
+         */
+        ConfirmEmailErrorDetail: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * ConfirmEmailErrorResponse
+         * @description The 400 body ``confirm_email`` raises for a superseded confirmation
+         *     link — ``{"detail": {"code": ..., "message": ...}}`` (#1616). Declared on
+         *     the route's ``responses=`` so generated client types carry the coded
+         *     shape; it describes only the coded variant of that status.
+         */
+        ConfirmEmailErrorResponse: {
+            detail: components["schemas"]["ConfirmEmailErrorDetail"];
+        };
         /** ConfirmEmailRequest */
         ConfirmEmailRequest: {
             /** Token */
@@ -6221,6 +6247,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description The confirmation link is dead. For a link a newer resend replaced, the detail is the coded ``ConfirmEmailErrorResponse`` shape (#1616); every other dead link carries the plain-string detail instead, which that model does not describe. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmEmailErrorResponse"];
                 };
             };
             /** @description Validation Error */

@@ -204,6 +204,112 @@ describe('/confirm-email failure copy (#1616)', () => {
     )
     expect(screen.getByText(/confirmation link is missing its token/i)).toBeInTheDocument()
   })
+
+  it("doesn't claim the newer link targets the same address", async () => {
+    // The user may have changed the pending address after the first request —
+    // the newer link then lives in a different inbox, so "requested for this
+    // address" would send them looking in the wrong one (#1616 review).
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              code: 'replaced',
+              message:
+                'A newer confirmation link was requested. Open the most recent email.',
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    )
+    renderAt('/confirm-email?token=superseded-token')
+
+    await screen.findByRole('heading', { name: /a newer link was sent/i })
+    expect(
+      screen.getByText(/it may be for a different address/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/requested for this address/i),
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe('/confirm-email transient failures (#1616)', () => {
+  it('sends a 5xx to the retryable error screen, not the expired screen', async () => {
+    // A server-side failure says nothing about the token — telling the user
+    // the link can't be used and to send a fresh one would replace a link
+    // that is probably still live.
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json({ detail: 'Internal server error' }, { status: 500 }),
+      ),
+    )
+    renderAt('/confirm-email?token=maybe-good-token')
+
+    await screen.findByRole('heading', { name: /we couldn't check this link/i })
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'error',
+    )
+    expect(
+      screen.queryByText(/this link can't be used/i),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/send a fresh one/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /try again/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('sends a transport failure to the retryable error screen and retries the same token', async () => {
+    // `HttpResponse.error()` aborts at the transport layer — the mutation
+    // error isn't even an ApiError. The retry must re-fire the confirm with
+    // the token the page was opened with, even though the URL scrubbing has
+    // since removed it (#521).
+    let calls = 0
+    server.use(
+      http.post('*/v1/me/email/confirm', () => {
+        calls += 1
+        return calls === 1 ? HttpResponse.error() : HttpResponse.json(mockSession)
+      }),
+    )
+    renderAt('/confirm-email?token=flaky-token')
+
+    await screen.findByRole('heading', { name: /we couldn't check this link/i })
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'error',
+    )
+    expect(calls).toBe(1)
+
+    screen.getByRole('button', { name: /try again/i }).click()
+
+    await screen.findByText(/you’re in\./i)
+    expect(calls).toBe(2)
+  })
+
+  it('keeps a non-coded 4xx on the expired screen', async () => {
+    // A real rejection — the server saw the token and said no — is the only
+    // thing the expired screen may claim.
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json(
+          { detail: 'That confirmation link is invalid or expired.' },
+          { status: 400 },
+        ),
+      ),
+    )
+    renderAt('/confirm-email?token=dead-token')
+
+    await screen.findByText(/this link can't be used/i)
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'expired',
+    )
+    expect(
+      screen.queryByRole('button', { name: /try again/i }),
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe('/confirm-email merged-matches toast (#241)', () => {

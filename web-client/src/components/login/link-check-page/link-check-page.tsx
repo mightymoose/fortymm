@@ -11,6 +11,7 @@ export type LinkCheckState =
   | 'missing'
   | 'replaced'
   | 'email_changed'
+  | 'error'
 
 const ACCENT: Record<LinkCheckState, string> = {
   checking: 'var(--ball-500)',
@@ -19,6 +20,7 @@ const ACCENT: Record<LinkCheckState, string> = {
   missing: 'var(--loss)',
   replaced: 'var(--warn)',
   email_changed: 'var(--loss)',
+  error: 'var(--warn)',
 }
 
 const HALO: Record<LinkCheckState, string> = {
@@ -28,6 +30,7 @@ const HALO: Record<LinkCheckState, string> = {
   missing: 'rgba(255,77,109,0.14)',
   replaced: 'rgba(255,196,0,0.16)',
   email_changed: 'rgba(255,77,109,0.14)',
+  error: 'rgba(255,196,0,0.16)',
 }
 
 // The short code shown in the header pill. Distinct per failure so a missing
@@ -39,6 +42,7 @@ const PILL_CODE: Record<LinkCheckState, string> = {
   missing: '??',
   replaced: '>>',
   email_changed: '!!',
+  error: '5xx',
 }
 
 const DEFAULT_COPY: Record<
@@ -91,6 +95,15 @@ const DEFAULT_COPY: Record<
     title: "This link doesn't match anymore",
     subtitle:
       'The email address on this account changed since this link was sent, so it no longer matches. Send yourself a fresh one.',
+  },
+  error: {
+    // Distinct from `expired`: nothing here says the token was rejected —
+    // the request never got a real answer (transport failure or 5xx), so
+    // the link may still be live and the fix is a retry, not a new link.
+    eyebrow: '● Connection trouble',
+    title: "We couldn't check this link",
+    subtitle:
+      "The server didn't answer, so this link went unused. It's usually still good — try again in a moment.",
   },
 }
 
@@ -173,7 +186,8 @@ export function LinkCheckPage({
         {(state === 'expired' ||
           state === 'missing' ||
           state === 'replaced' ||
-          state === 'email_changed') && (
+          state === 'email_changed' ||
+          state === 'error') && (
           <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
             Still stuck?{' '}
             <a href="mailto:support@fortymm.com" style={linkInline}>
