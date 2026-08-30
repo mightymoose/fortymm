@@ -27,7 +27,7 @@ import {
 } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
-import { waitFor } from '@/test/utilities'
+import { screen, waitFor } from '@/test/utilities'
 
 import {
   buildAddress,
@@ -383,6 +383,39 @@ describe('TournamentDetailPage', () => {
     expect(notice).not.toContain('cut the draw')
 
     expect(tournamentDetailPagePage.getStatusBadge()).toHaveTextContent('Published')
+  })
+
+  /**
+   * **The promise the route returns reaches the Details form** (#1593). The page
+   * only CARRIES `onUpdate` across — but a page that caught the rejection, or
+   * narrowed its type on the way through, would end the silent-failure contract
+   * one level below the boundary where these tests stand. So the page-level
+   * assertion is the same one the tab makes: a rejected update is spoken inline,
+   * beside the draft it preserved.
+   */
+  it('reports a refused Details save in the Details tab — the promise reaches the form', async () => {
+    const onUpdate = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError(500, 'Internal Server Error', 'update tournament'),
+      )
+    tournamentDetailPagePage.render({ tournament: buildTournament(), onUpdate })
+
+    await userEvent.click(tournamentDetailPagePage.getTab('Details'))
+    await userEvent.type(screen.getByLabelText(/Name/), '!')
+    await userEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+
+    const alert = await waitFor(() => {
+      const el = screen.queryByTestId('details-save-error')
+      expect(el).toBeInTheDocument()
+      return el!
+    })
+    expect(alert).toHaveTextContent(
+      'Something went wrong on our end. Nothing you did caused it — try again in a moment.',
+    )
+    // The draft was not binned by the refusal.
+    expect(screen.getByLabelText(/Name/)).toHaveValue('Bay Area Open 2026!')
+    expect(onUpdate).toHaveBeenCalledTimes(1)
   })
 
   it('opens the event editor and creates a new event', async () => {

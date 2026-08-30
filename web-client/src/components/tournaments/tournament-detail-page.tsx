@@ -39,7 +39,11 @@ export interface TournamentDetailPageProps {
   tournament: Tournament
   /** This tournament's table catalogue (for the Tables tab and reservations editor). */
   allTables: TournamentTable[]
-  onUpdate: (tournament: Tournament) => void
+  /** Persist the Details tab's draft. **The returned promise is load-bearing**
+   * (#1593): `DetailsTab` awaits it, keeps the draft and its Save affordance over
+   * a rejection, and reports every failure inline — so a rejection must reach it
+   * rather than being swallowed by a toast. */
+  onUpdate: (tournament: Tournament) => Promise<void>
   /** Persist an edited table catalogue (add/remove from the Tables tab) as the
    * server's id-keyed diff (ADR 20260801). **The returned promise is load-bearing**:
    * `TablesTab` awaits it and turns the 409 on removing an in-use table into a

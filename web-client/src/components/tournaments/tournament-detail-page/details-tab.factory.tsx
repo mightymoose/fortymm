@@ -8,7 +8,7 @@ export function buildDetailsTabProps(
   return {
     tournament: buildTournament(),
     canEdit: true,
-    onUpdate: () => {},
+    onUpdate: async () => {},
     ...overrides,
   }
 }

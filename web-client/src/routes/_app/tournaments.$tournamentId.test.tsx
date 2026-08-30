@@ -570,3 +570,67 @@ describe('tournament detail route — which event editor is open lives in the UR
     expect(discardDialog()).not.toBeInTheDocument()
   })
 })
+
+/**
+ * **The Details save is a promise, not a fire-and-forget** (#1593).
+ *
+ * These live at the ROUTE because the claim is about the WIRING: the route's
+ * `onUpdate` must `await` `mutateAsync` and hand the rejection to `DetailsTab`,
+ * which words it inline. The predecessor shape — `mutate(...)` with the rejection
+ * left to a global toast — is exactly what a component test cannot see: the prop
+ * spy resolves just the same. A refused PATCH here is the only assertion that
+ * cannot pass while the promise is swallowed on the way from the route to the
+ * form.
+ */
+describe('tournament detail route — a refused Details save is reported inline (#1593)', () => {
+  /** What FastAPI really answers an over-long name with — the string that must
+   * never reach the UI (ADR-0968, `DEFINITION_OF_COMPLETE.md`). */
+  const PYDANTIC = 'String should have at most 255 characters'
+
+  /** Serve a real, parseable, editable tournament (the creator's view). */
+  function mockEditableTournament() {
+    server.use(
+      http.get('*/v1/tournaments/:id', () =>
+        HttpResponse.json(buildTournamentDetailRead({ id: UNKNOWN_ID })),
+      ),
+    )
+  }
+
+  it('carries a PATCH rejection to the Details form, which words it itself', async () => {
+    const user = userEvent.setup()
+    mockEditableTournament()
+    let patches = 0
+    server.use(
+      http.patch('*/v1/tournaments/:id', () => {
+        patches += 1
+        return HttpResponse.json(
+          {
+            detail: [
+              { type: 'string_too_long', loc: ['body', 'name'], msg: PYDANTIC },
+            ],
+          },
+          { status: 422 },
+        )
+      }),
+    )
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}`)
+    await screen.findByRole('heading', { level: 1 })
+
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    await user.type(screen.getByLabelText(/Name/), '!')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+
+    // The client-owned sentence, under the box the server blamed — and never
+    // the wire's own prose.
+    expect(
+      await screen.findByText(
+        'The Name was rejected. Check that field and try again.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(PYDANTIC)).not.toBeInTheDocument()
+    // The form-level alert stays out of it: this refusal was attributed.
+    expect(screen.queryByTestId('details-save-error')).not.toBeInTheDocument()
+    expect(patches).toBe(1)
+  })
+})

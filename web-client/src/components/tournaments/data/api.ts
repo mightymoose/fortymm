@@ -839,7 +839,15 @@ export function useCreateTournament() {
 
 /** Patch tournament-level fields (name/dates/description/address/
  * table_catalogue) — never events, and never `status` (ADR-0017: the lifecycle
- * moves only through `POST /v1/tournaments/{id}/transitions`). */
+ * moves only through `POST /v1/tournaments/{id}/transitions`).
+ *
+ * **No global `onError` toast** (#1593): the `DetailsTab` awaits this through
+ * `mutateAsync` and surfaces every refusal inline, in the form it keeps open —
+ * a toast on top would tell the director the same thing twice and then take it
+ * away after four seconds. (Same convention as `useCreateTournament` above and
+ * the RBAC form mutations — see `rbac/queries.ts`.) The Tables tab's catalogue
+ * write does not come through here — it is `useUpdateTableCatalogue` below,
+ * which has always surfaced its own refusal. */
 export function useUpdateTournament() {
   const qc = useQueryClient()
   return useMutation({
@@ -855,7 +863,6 @@ export function useUpdateTournament() {
         }),
       ),
     onSuccess: (_data, input) => invalidateTournament(qc, input.id),
-    onError: notifyError('update the tournament'),
   })
 }
 

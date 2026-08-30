@@ -13,6 +13,21 @@ const scoped = (container: Container) => ({
   getNameInput() {
     return container.getByLabelText(/Name/)
   },
+  getDescriptionInput() {
+    return container.getByLabelText('Description')
+  },
+  /** A field-level validation message — the red `<p>` under the control, by its
+   * exact sentence, whether it came from the Zod schema or from a server refusal
+   * the form attributed to that box. Absent when the field is clean. */
+  queryFieldMessage(text: string) {
+    return container.queryByText(text)
+  },
+  /** The form-level save-failure alert — every refused write the form cannot pin
+   * to one box (a nested-address 422, another 4xx, a 5xx, an outage, a bug), in
+   * the client's own words. Absent while the last attempt did not fail. */
+  querySaveError() {
+    return container.queryByTestId('details-save-error')
+  },
   /** The six venue boxes, in the order the Venue & address card lays them out.
    * A tournament with NO VENUE (`address: null`) still gets all six — empty — so
    * the organizer has somewhere to type one. */

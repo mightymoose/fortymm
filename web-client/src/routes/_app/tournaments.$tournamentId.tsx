@@ -167,12 +167,19 @@ function TournamentDetailRoute() {
       openEditorFor={openEditorFor}
       onOpenEditor={openEditor}
       onCloseEditor={closeEditor}
-      onUpdate={(next) =>
-        updateTournament.mutate({
+      // `mutateAsync`, and the rejection is deliberately NOT caught here: the
+      // `DetailsTab` awaits it, keeps the draft (and its Save affordance) over a
+      // refusal, and reports every failure inline — field-level where the server
+      // names a box, in the tab's own alert where it cannot (#1593). Catching it
+      // here — or letting the mutation toast — would either bin the report or
+      // take it away after four seconds, exactly the silent-failure shape #614
+      // and #933 ended for the modals.
+      onUpdate={async (next) => {
+        await updateTournament.mutateAsync({
           id: next.id,
           patch: tournamentToUpdateBody(next),
         })
-      }
+      }}
       // `mutateAsync`, and the rejection is deliberately NOT caught here: the
       // `TablesTab` awaits it, turns the in-use 409 into a confirm carrying the
       // server's sentence, and re-sends the identical diff with the opt-in when the
