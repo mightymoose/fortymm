@@ -91,8 +91,13 @@ function renderRoute(initialEntry: string) {
     path: '/tournaments',
     component: () => <div>tournaments list</div>,
   })
+  const loginRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/login',
+    component: () => <div>login</div>,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([listRoute, detailRoute]),
+    routeTree: rootRoute.addChildren([listRoute, detailRoute, loginRoute]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   return {
@@ -635,6 +640,53 @@ describe('tournament detail route — a refused Details save is reported inline 
     // The form-level alert stays out of it: this refusal was attributed.
     expect(screen.queryByTestId('details-save-error')).not.toBeInTheDocument()
     expect(patches).toBe(1)
+  })
+
+  it('lets the identity-loss login redirect bypass a pending PATCH blocker', async () => {
+    const user = userEvent.setup()
+    mockEditableTournament()
+    let patches = 0
+    let refuse!: () => void
+    server.use(
+      http.patch('*/v1/tournaments/:id', async () => {
+        patches += 1
+        await new Promise<void>((resolve) => {
+          refuse = resolve
+        })
+        return HttpResponse.json(
+          {
+            detail: {
+              code: 'session_ended',
+              message: 'Your session has ended. Sign in to continue.',
+            },
+          },
+          { status: 401 },
+        )
+      }),
+    )
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}`)
+    await screen.findByRole('heading', { level: 1 })
+
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    await user.type(screen.getByLabelText(/Name/), '!')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(patches).toBe(1))
+
+    try {
+      // `main.tsx` makes this exact navigation from the structured-401 handler.
+      // It must bypass the pending-save blocker before the PATCH has settled.
+      void router.navigate({
+        to: '/login',
+        search: { email: undefined, error: undefined },
+      })
+      await waitFor(
+        () => expect(router.state.location.pathname).toBe('/login'),
+        { timeout: 250 },
+      )
+    } finally {
+      await act(async () => refuse())
+    }
   })
 
   it('allows event search updates but blocks route departure while a PATCH is pending', async () => {

@@ -88,12 +88,17 @@ function TournamentDetailRoute() {
    * before the awaited rejection lands. Search-only updates stay on this pathname
    * and are safe: they open and close the event editor without unmounting the
    * force-mounted Details form. Refresh/tab-close gets the browser's native prompt
-   * through the matching `enableBeforeUnload` predicate. No resolver is needed:
-   * there is no safe "leave anyway" action while this sole reporter is waiting for
-   * the server (#1593 review). */
+   * through the matching `enableBeforeUnload` predicate. The one safe pathname
+   * departure is `/login`: a structured session-ended 401 has already cleared the
+   * departed identity's cache and must be allowed to send the signed-out user back
+   * to sign-in while the mutation is still settling. No resolver is needed: there
+   * is no user-driven "leave anyway" action while this sole reporter is waiting
+   * for the server (#1593 review). */
   useBlocker({
     shouldBlockFn: ({ current, next }) =>
-      updateTournament.isPending && current.pathname !== next.pathname,
+      updateTournament.isPending &&
+      next.pathname !== '/login' &&
+      current.pathname !== next.pathname,
     enableBeforeUnload: () => updateTournament.isPending,
   })
 
