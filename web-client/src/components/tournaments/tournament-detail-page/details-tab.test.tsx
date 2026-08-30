@@ -369,16 +369,18 @@ describe('DetailsTab', () => {
       expect(onUpdate).not.toHaveBeenCalled()
     })
 
-    it('refuses a whitespace-only name — requiredness is judged on the trimmed value', async () => {
+    it('saves a server-valid whitespace-only stored name untouched when another field is edited', async () => {
       const onUpdate = vi.fn()
-      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+      detailsTabPage.render({
+        tournament: buildTournament({ name: '   ' }),
+        onUpdate,
+      })
 
-      await userEvent.clear(detailsTabPage.getNameInput())
-      await userEvent.type(detailsTabPage.getNameInput(), '   ')
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
       await userEvent.click(detailsTabPage.querySaveButton()!)
 
-      expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeInTheDocument()
-      expect(onUpdate).not.toHaveBeenCalled()
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe('   ')
     })
 
     it('bounds an enormous whitespace-only name before checking requiredness', async () => {
@@ -386,8 +388,8 @@ describe('DetailsTab', () => {
       detailsTabPage.render({ tournament: buildTournament(), onUpdate })
 
       // `mode: onChange` validates this value on the paste and every later edit.
-      // The bounded code-point check must reject after 256 pulls; only an
-      // in-bounds value may pay for the full whitespace scan required by trim.
+      // The bounded code-point check remains the first stage, so this is the
+      // refusal even though whitespace-only values within the bound are valid.
       fireEvent.change(detailsTabPage.getNameInput(), {
         target: { value: ' '.repeat(1_000_000) },
       })
@@ -407,8 +409,8 @@ describe('DetailsTab', () => {
     // TRANSFORM replaced the submitted value, so editing only another field
     // renamed a whitespace-padded stored name to its trimmed form — a rename
     // the server, which does not normalize `TournamentUpdate.name`, would have
-    // committed. Requiredness is judged on the trimmed value; the stored value
-    // itself is what gets sent.
+    // committed. Non-emptiness is validated without transforming the value; the
+    // stored value itself is what gets sent.
     it('saves a whitespace-padded stored name untouched when only another field is edited', async () => {
       const onUpdate = vi.fn()
       detailsTabPage.render({

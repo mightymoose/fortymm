@@ -94,16 +94,16 @@ const schema = z.object({
   // touched only another field renamed a whitespace-padded stored name to its
   // trimmed form — a rename the server, which does not normalize
   // `TournamentUpdate.name`, would have committed silently (#1593 review).
-  // Requiredness is judged on the trimmed value; the box's exact value is what
-  // gets saved. The bounded code-point check is the FIRST pipeline stage so an
-  // enormous whitespace-heavy paste is rejected after `NAME_MAX + 1` pulls;
-  // only a value known to fit pays for `trim()`'s whole-string scan on each
-  // `onChange` validation (#1593 review).
+  // Requiredness mirrors Pydantic's `min_length=1`: only the empty string is
+  // refused, while a server-valid whitespace-only stored name remains editable.
+  // The box's exact value is still what gets saved. The bounded code-point check
+  // remains the FIRST pipeline stage so an enormous whitespace-heavy paste is
+  // rejected after `NAME_MAX + 1` pulls (#1593 review).
   name: atMostCodePoints(
     NAME_MAX,
     `Name must be ${NAME_MAX} characters or fewer.`,
   ).pipe(
-    z.string().refine((v) => v.trim().length > 0, {
+    z.string().min(1, {
       message: 'Name is required.',
     }),
   ),
