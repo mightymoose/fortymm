@@ -130,14 +130,16 @@ export const EligibilitySection = ({
           >
             <Filter size={14} className="text-[color:var(--ball-500)]" />
             <span className="text-[13px] text-[color:var(--fg-2)]">
-              All{' '}
+              {/* One rule has nothing to combine with, so the "All" framing and
+                  the AND guidance both appear only from two rules up — and the
+                  AND explanation is the organizer's concern; a reader only
+                  needs to know that all of them apply. */}
+              {fields.length > 1 && <>All{' '}</>}
               <strong className="text-[color:var(--fg-1)]">
                 {fields.length}
               </strong>{' '}
               {fields.length === 1 ? 'rule' : 'rules'} must match.
-              {/* How the builder combines them is the organizer's concern; a
-                  reader only needs to know that all of them apply. */}
-              {canEdit && (
+              {fields.length > 1 && canEdit && (
                 <>
                   {' '}
                   Combine with{' '}

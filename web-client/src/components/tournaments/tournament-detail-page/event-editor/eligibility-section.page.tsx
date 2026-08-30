@@ -18,6 +18,12 @@ const scoped = (container: Container) => ({
   getAddRuleButton() {
     return container.getByRole('button', { name: /Add (a )?rule/ })
   },
+  /** The empty state's "Add a rule" CTA. Pinned by exact name — the header's
+   * "Add rule" also matches /Add (a )?rule/, so `getAddRuleButton` would
+   * find two in the empty state. */
+  getEmptyStateAddButton() {
+    return container.getByRole('button', { name: 'Add a rule' })
+  },
   /** Absent for a viewer: a mutating affordance is hidden, never disabled. */
   queryAddRuleButton() {
     return container.queryByRole('button', { name: /Add (a )?rule/ })
@@ -40,9 +46,13 @@ const scoped = (container: Container) => ({
   queryColumnHeaders() {
     return container.queryByTestId('predicate-column-headers')
   },
-  /** The "All N rules must match" footnote. */
+  /** The rule-count footnote ("N rule(s) must match"). Absent with no rules —
+   * the empty state replaces it. */
   getFootnote() {
     return container.getByTestId('eligibility-footnote')
+  },
+  queryFootnote() {
+    return container.queryByTestId('eligibility-footnote')
   },
   /** Every interactive control in the section, swept by role. Supplement only —
    * `getFormElements()` is the guarantee. */

@@ -21,6 +21,9 @@ describe('EligibilitySection', () => {
     eligibilitySectionPage.render({ event: buildEvent({ predicates: [] }) })
     expect(eligibilitySectionPage.queryRows()).toHaveLength(0)
     expect(document.body).toHaveTextContent('Open to all players')
+    // The organizer's way out of the empty state. The viewer's absence is
+    // pinned in the read-only describe; this is its editable twin.
+    expect(eligibilitySectionPage.getEmptyStateAddButton()).toBeInTheDocument()
   })
 
   // The three mutations, each asserted against the live form state the section
@@ -81,6 +84,73 @@ describe('EligibilitySection', () => {
       eligibilitySectionPage.render({ event: buildEvent(), canEdit: false })
       expect(screen.getByText(SHARED, { exact: true })).toBeInTheDocument()
       expect(screen.queryByText(/Empty = open to all/)).toBeNull()
+    })
+  })
+
+  // The editable twin of the read-only test that pins the headers' absence.
+  it('labels the rule rows with the column headers for the organizer', () => {
+    eligibilitySectionPage.render({ event: buildEvent({ predicates: twoRules() }) })
+    expect(eligibilitySectionPage.queryColumnHeaders()).toBeInTheDocument()
+  })
+
+  // The one-rule summary is a plain count ("1 rule must match."), not the
+  // "All N" framing — there is nothing to combine yet. The "All" framing and
+  // the AND guidance arrive together, with the second rule.
+  describe('the rule-count footnote', () => {
+    it('reads the singular without the All framing for a lone rule', () => {
+      eligibilitySectionPage.render({
+        event: buildEvent({ predicates: [buildPredicate()] }),
+      })
+      expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
+        '1 rule must match.',
+      )
+      expect(eligibilitySectionPage.getFootnote()).not.toHaveTextContent(/All/)
+    })
+
+    it('drops the AND guidance for a lone rule, even for the organizer', () => {
+      eligibilitySectionPage.render({
+        event: buildEvent({ predicates: [buildPredicate()] }),
+      })
+      expect(eligibilitySectionPage.getFootnote()).not.toHaveTextContent(
+        /Combine with/,
+      )
+      expect(screen.queryByText('AND')).toBeNull()
+    })
+
+    it('keeps the All framing and the AND guidance once rules combine', () => {
+      eligibilitySectionPage.render({ event: buildEvent({ predicates: twoRules() }) })
+      // The exact sentence, whitespace included: a substring match on
+      // 'Combine with' would survive a dropped space between the clauses.
+      expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
+        'All 2 rules must match. Combine with AND.',
+      )
+    })
+
+    // Every transition runs against live form state — no close, no save.
+    it('tracks the zero-, one-, and many-rule states as rules come and go', async () => {
+      eligibilitySectionPage.render({
+        event: buildEvent({ predicates: [buildPredicate()] }),
+      })
+      expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
+        '1 rule must match.',
+      )
+
+      await userEvent.click(eligibilitySectionPage.getAddRuleButton())
+      expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
+        'All 2 rules must match.',
+      )
+
+      await userEvent.click(eligibilitySectionPage.getRemoveRuleButtons()[0])
+      expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
+        '1 rule must match.',
+      )
+      expect(eligibilitySectionPage.getFootnote()).not.toHaveTextContent(
+        /Combine with/,
+      )
+
+      await userEvent.click(eligibilitySectionPage.getRemoveRuleButtons()[0])
+      expect(eligibilitySectionPage.queryFootnote()).toBeNull()
+      expect(document.body).toHaveTextContent('Open to all players')
     })
   })
 
@@ -148,14 +218,20 @@ describe('EligibilitySection', () => {
       expect(screen.queryByText('AND')).toBeNull()
     })
 
-    it('keeps the singular for a lone rule', () => {
+    // A lone rule has no "All" framing and nothing to combine with.
+    it('reads a lone rule without the All framing or the AND guidance', () => {
       eligibilitySectionPage.render({
         event: buildEvent({ predicates: [buildPredicate()] }),
         canEdit: false,
       })
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'All 1 rule must match.',
+        '1 rule must match.',
       )
+      expect(eligibilitySectionPage.getFootnote()).not.toHaveTextContent(/All/)
+      expect(eligibilitySectionPage.getFootnote()).not.toHaveTextContent(
+        /Combine with/,
+      )
+      expect(screen.queryByText('AND')).toBeNull()
     })
 
     // The empty state already reads correctly for a viewer — it just must not
