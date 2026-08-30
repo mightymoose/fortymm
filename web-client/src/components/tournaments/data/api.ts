@@ -30,6 +30,7 @@ import {
   parseLatestScheduleSolve,
   parseScheduleSolve,
   scheduleRefetchInterval,
+  solveInFlight,
   type ScheduleSolve,
 } from './solve'
 import type { LifecycleEdge } from './lifecycle'
@@ -1344,17 +1345,25 @@ export function usePlaceFixture(tournamentId: string) {
  * strip**, in the words `./solve` owns (`runSchedulerNotice`) — the 422 "cut a draw
  * first" is a designed state there, not an error channel's business.
  *
- * **The 202's row is cached on arrival, before the refetch** (#1614): the POST
- * resolves to the ledger row the queue just accepted, and `onSettled`'s
+ * **An in-flight 202 row is cached on arrival, before the refetch** (#1614): the
+ * POST resolves to the ledger row the queue just accepted, and `onSettled`'s
  * invalidation re-reads the tournament only at the network's speed. Left alone,
  * everything this page derives from `latestScheduleSolve` — the strip's state, the
  * in-flight poll cadence, and the Schedule tab's placement gate — would keep the
  * PREVIOUS terminal (or null) solve across that gap, leaving Place/Move live on
- * data the just-accepted run may replace. So the parsed row is written into the
- * detail cache entry the moment the server accepts; the settle refetch (and the
- * poll it arms, now that the cached row is in flight) replaces it with the same
- * row or a later one, and a failed refetch leaves it as last-good — an honest
- * snapshot of the server's own acceptance, never a guess. */
+ * data the just-accepted run may replace. So a `queued`/`running` row is written
+ * into the detail cache entry the moment the server accepts; the settle refetch
+ * (and the poll it arms, now that the cached row is in flight) replaces it with
+ * the same row or a later one, and a failed refetch leaves it as last-good — an
+ * honest snapshot of the server's own acceptance, never a guess.
+ *
+ * A **terminal** row is not cached (#1614 review): the queue can finish a small
+ * solve — or answer an absorbed request with its just-finished run — before the
+ * response serializes, and merging that row would set a solved ledger beside the
+ * entry's PRE-solve fixtures, a pair no server read ever produced. The Schedule
+ * tab's placement gate would open on it the moment `isPending` cleared. The row
+ * and its placements travel together only by the detail refetch, and the tab
+ * holds a local gate shut until that payload lands. */
 export function useRequestScheduleSolve(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -1370,10 +1379,15 @@ export function useRequestScheduleSolve(tournamentId: string) {
     },
     // The bridge between the 202 and the refetch (`onSettled` below): every
     // consumer of the detail entry — the Schedule tab's placement gate, the
-    // strip, the fast-poll interval — reads the accepted `queued` row from the
-    // moment the server accepted it. The refetch overwrites it with the same
-    // row or a later one; nothing else is trusted.
+    // strip, the fast-poll interval — reads the accepted row from the moment
+    // the server accepted it. The refetch overwrites it with the same row or a
+    // later one; nothing else is trusted.
+    //
+    // Only an in-flight row merges (see the doc note above): a terminal row
+    // would sit beside this entry's pre-solve fixtures, so it travels only by
+    // the refetch, which reads solve and fixtures together.
     onSuccess: (solve) => {
+      if (!solveInFlight(solve)) return
       qc.setQueryData<TournamentDetail>(
         tournamentKey(tournamentId),
         (detail) =>

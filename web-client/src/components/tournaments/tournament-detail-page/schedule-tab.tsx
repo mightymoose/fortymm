@@ -628,7 +628,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   // race by hand): a manual "Run scheduler" has the previous terminal (or null)
   // solve in `tournament.latestScheduleSolve` for the whole request — and the
   // fire-and-forget invalidate that follows it re-reads only at the network's
-  // speed. Two bridges hold the gate shut across that window, so Place/Move
+  // speed. Three bridges hold the gate shut across that window, so Place/Move
   // never sit on data the just-accepted run may replace:
   //
   // 1. **While the request is out** (`requestSolve.isPending`) — nothing has
@@ -636,13 +636,31 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   //    run (the 422 "cut a draw first") flashes the notice only for the request's
   //    own length, which is the honest reading of "an update is in progress".
   // 2. **From the 202 onward**, `useRequestScheduleSolve` writes the accepted
-  //    queued row into the detail cache (`./api`), so this prop carries it the
-  //    moment the server accepts — no poll, no refetch needed. The next detail
-  //    response (the settle refetch, then the ~3s in-flight poll) hands back the
-  //    same row or a later one, and a terminal payload restores the actions, as
-  //    the tests below pin.
+  //    row into the detail cache (`./api`) while it is still `queued`/`running`,
+  //    so this prop carries it the moment the server accepts — no poll, no
+  //    refetch needed. The next detail response (the settle refetch, then the
+  //    ~3s in-flight poll) hands back the same row or a later one, and a
+  //    terminal payload restores the actions, as the tests below pin.
+  // 3. **When the 202 itself arrives terminal**, the cache write stands down —
+  //    merging a solved row would pair it with this snapshot's PRE-solve
+  //    fixtures, a state no server read ever produced (#1614 review). The tab
+  //    latches the detail snapshot the click happened on (`detailAtRequest`)
+  //    and holds the gate shut while the prop is STILL that object: any detail
+  //    payload — settle refetch or poll — reads the solve and its fixtures
+  //    together and arrives as a fresh object, so its arrival IS the
+  //    reconciliation. A failed refetch cannot open the gate — no payload, no
+  //    fresh object — so this bridge fails shut.
+  const [detailAtRequest, setDetailAtRequest] = useState<Tournament | null>(null)
+  // Bridge 3, derived — no effect, no clearing: the latch is held exactly
+  // while the prop is the latched snapshot, and any payload replaces that
+  // object, retiring it. A later click re-arms it against the then-current
+  // snapshot.
+  const runAwaitingDetail =
+    detailAtRequest !== null && detailAtRequest === tournament
   const placementActionable =
-    !solveInFlight(tournament.latestScheduleSolve) && !requestSolve.isPending
+    !solveInFlight(tournament.latestScheduleSolve) &&
+    !requestSolve.isPending &&
+    !runAwaitingDetail
   // Memoized on the query cache's stable references: the reduction walks every
   // fixture of every event, so it should re-run when the data changes, not on
   // every poll-driven re-render.
@@ -721,7 +739,13 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
       <SolveStrip
         solve={tournament.latestScheduleSolve}
         canEdit={canEdit}
-        onRun={() => requestSolve.mutateAsync().then(() => undefined)}
+        onRun={() =>
+          requestSolve.mutateAsync().then(() => {
+            // Bridge 3's latch: the snapshot this click happened on. The next
+            // detail object reconciles it (see the gate above).
+            setDetailAtRequest(tournament)
+          })
+        }
       />
 
       {/* The provisional half of the same fact: the strip above says the solver

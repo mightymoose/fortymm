@@ -1283,6 +1283,138 @@ describe('ScheduleTab', () => {
     await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
   })
 
+  // The #1614 review's terminal-row case: a small solve can finish before the
+  // POST serializes (and an absorbed request can return its just-finished run),
+  // so the 202's row can already be TERMINAL. Merging it would pair a solved
+  // ledger with pre-solve fixtures, so `./api` stands the cache write down and
+  // the tab latches the snapshot the click happened on, holding the gate until
+  // a detail payload — which reads the solve and its fixtures together — lands.
+  it('keeps the gate closed when the POST itself returns a terminal solve, until a payload reconciles it', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json(
+                buildScheduleSolveRead({
+                  id: 'solve-2',
+                  status: 'succeeded',
+                  verdict: 'optimal',
+                }),
+                { status: 202 },
+              ),
+            )
+        }),
+    )
+
+    page.render({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+      ),
+      tables: buildTables(),
+    })
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+
+    page.clickRunScheduler()
+    await waitFor(() => expect(posts).toBe(1))
+    release()
+    // The request has settled (the strip's latch is off and the button
+    // relights) — but the terminal 202 row merged nowhere, so the gate still
+    // holds: the notice stays up and Place/Move stay withheld.
+    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
+
+    // The reconciling payload — ONE detail read carrying the terminal row and
+    // the fixtures it placed — retires the latch and restores the actions.
+    page.rerender({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ id: 'solve-2', trigger: 'manual' }),
+      ),
+    })
+    expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+    expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+  })
+
+  // The same case where the absorbed request's rerun is ALREADY queued: the
+  // reconciling payload then carries a queued row, which keeps the gate shut on
+  // its own, and only the rerun's own terminal payload opens it.
+  it('holds the gate through the rerun a queued-behind POST leaves in flight', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json(
+                buildScheduleSolveRead({
+                  id: 'solve-2',
+                  status: 'succeeded',
+                  verdict: 'optimal',
+                }),
+                { status: 202 },
+              ),
+            )
+        }),
+    )
+
+    page.render({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+      ),
+      tables: buildTables(),
+    })
+    page.clickRunScheduler()
+    await waitFor(() => expect(posts).toBe(1))
+    release()
+    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+
+    // First payload after the acceptance: the rerun (solve-3) the server
+    // enqueued behind the absorbed request — still `queued`, so the gate holds.
+    page.rerender({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({
+          id: 'solve-3',
+          trigger: 'rerun',
+          status: 'queued',
+          verdict: null,
+          startedAt: null,
+          finishedAt: null,
+          wallTimeMs: null,
+          fixturesPlaced: null,
+          fixturesPinned: null,
+        }),
+      ),
+    })
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
+
+    // The rerun lands terminal: its payload reconciles, the actions return.
+    page.rerender({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({
+          id: 'solve-3',
+          trigger: 'rerun',
+          status: 'succeeded',
+          verdict: 'optimal',
+        }),
+      ),
+    })
+    expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+    expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+  })
+
   it.each([
     'go_live',
     'match_completed',

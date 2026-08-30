@@ -1697,6 +1697,54 @@ describe('useRequestScheduleSolve', () => {
       status: 'queued',
     })
   })
+
+  // #1614 review: the queue can finish a small solve — or answer an absorbed
+  // request with its just-finished run — before the POST serializes, so the row
+  // that comes back can already be TERMINAL. Merging it would set a solved
+  // ledger beside the entry's pre-solve fixtures, a pair no server read ever
+  // produced, and the Schedule tab's placement gate would open on it the moment
+  // `isPending` cleared. A terminal row travels only by the settle refetch,
+  // which reads the solve and its fixtures together.
+  it('does not cache a terminal 202 row — the entry keeps its last reconciled solve', async () => {
+    mockScheduleSolveEndpoint(server, () =>
+      HttpResponse.json(
+        buildScheduleSolveRead({
+          id: 'solve-2',
+          status: 'succeeded',
+          verdict: 'optimal',
+        }),
+        { status: 202 },
+      ),
+    )
+    const { queryClient, wrapper } = setupClient()
+    // The detail this page holds while the click happens: the previous run's
+    // terminal solve, with the placements that run produced.
+    queryClient.setQueryData(['tournaments', 't-1'], {
+      tournament: apiToTournament(
+        buildTournamentDetailRead({
+          id: 't-1',
+          latest_schedule_solve: buildScheduleSolveRead(),
+        }),
+      ),
+      tables: [],
+    })
+
+    const { result } = renderHookRaw(() => useRequestScheduleSolve('t-1'), {
+      wrapper,
+    })
+    await result.current.mutateAsync()
+
+    // The POST's terminal row (solve-2) never touched the entry: the cached
+    // solve is still the one the last detail read put there.
+    const cached = queryClient.getQueryData<{
+      tournament: { latestScheduleSolve: { id: string } | null }
+      tables: unknown[]
+    }>(['tournaments', 't-1'])
+    expect(cached?.tournament.latestScheduleSolve).toMatchObject({
+      id: 'solve-1',
+      status: 'succeeded',
+    })
+  })
 })
 
 // The whole point of the fixtures riding the DETAIL payload (ADR-0786): cutting a draw
