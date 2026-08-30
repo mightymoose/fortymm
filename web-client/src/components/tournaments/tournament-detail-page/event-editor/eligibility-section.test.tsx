@@ -110,13 +110,11 @@ describe('EligibilitySection', () => {
 
     it('keeps the All framing and the AND guidance once rules combine', () => {
       eligibilitySectionPage.render({ event: buildEvent({ predicates: twoRules() }) })
+      // The exact sentence, whitespace included: a substring match on
+      // 'Combine with' would survive a dropped space between the clauses.
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'All 2 rules must match.',
+        'All 2 rules must match. Combine with AND.',
       )
-      expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'Combine with',
-      )
-      expect(screen.getByText('AND')).toBeInTheDocument()
     })
 
     // Every transition runs against live form state — no close, no save.
