@@ -96,9 +96,13 @@ describe('/confirm-email token scrubbing (#521)', () => {
     )
     renderAt('/confirm-email?token=first&token=second')
 
-    await screen.findByText(/invalid or expired/i)
+    await screen.findByText(/this link can't be used/i)
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'expired',
+    )
     expect(
-      screen.queryByText(/this link is missing its token/i),
+      screen.queryByText(/this link is incomplete/i),
     ).not.toBeInTheDocument()
   })
 
@@ -114,11 +118,91 @@ describe('/confirm-email token scrubbing (#521)', () => {
     const { router } = renderAt('/confirm-email?token=bad-token')
 
     // The error screen still renders (mutation state, not the token, drives it)…
-    await screen.findByText(/invalid or expired/i)
+    await screen.findByText(/this link can't be used/i)
     // …with the token scrubbed.
     await waitFor(() => {
       expect(router.state.location.search).toEqual({ token: '' })
     })
+  })
+})
+
+describe('/confirm-email failure copy (#1616)', () => {
+  it('maps a coded replaced 4xx onto the replaced screen and demotes the action', async () => {
+    // A link a newer resend replaced must say so — not collapse into the
+    // generic expired screen — and must not offer, as its main action,
+    // anything that would kill the newer link the copy points to.
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              code: 'replaced',
+              message:
+                'A newer confirmation link was requested. Open the most recent email.',
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    )
+    renderAt('/confirm-email?token=superseded-token')
+
+    await screen.findByRole('heading', { name: /a newer link was sent/i })
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'replaced',
+    )
+    // Guidance before anything resend-shaped; the "Back to settings" route is
+    // present but demoted to a secondary action.
+    expect(
+      screen.getByText(/look for the most recent confirmation email/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: /back to settings/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/send a fresh/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/resend/i)).not.toBeInTheDocument()
+  })
+
+  it('renders every failure in confirmation wording and states the reason once', async () => {
+    // No sign-in copy (15 minutes / "straight in"), and no duplicate of the
+    // API's own sentence under a subtitle that already says it.
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json(
+          { detail: 'That confirmation link is invalid or expired.' },
+          { status: 400 },
+        ),
+      ),
+    )
+    renderAt('/confirm-email?token=dead-token')
+
+    await screen.findByRole('heading', { name: /this link can't be used/i })
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'expired',
+    )
+    expect(screen.getByText(/confirmation links last 24 hours/i)).toBeInTheDocument()
+    // Still offers the route to Resend.
+    expect(
+      screen.getByRole('link', { name: /back to settings/i }),
+    ).toBeInTheDocument()
+    // Sign-in copy and the duplicated detail line are gone.
+    expect(screen.queryByText(/sign-in links last 15 minutes/i)).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/that confirmation link is invalid or expired/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('reports a missing token as an incomplete link, in confirmation wording', async () => {
+    renderAt('/confirm-email')
+
+    await screen.findByRole('heading', { name: /this link is incomplete/i })
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'missing',
+    )
+    expect(screen.getByText(/confirmation link is missing its token/i)).toBeInTheDocument()
   })
 })
 

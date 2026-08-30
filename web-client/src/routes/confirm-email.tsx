@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import {
@@ -9,7 +10,7 @@ import {
   useConfirmEmail,
   useMergePreview,
 } from '@/api/session'
-import { btnPrimary } from '@/components/login/styles'
+import { btnGhost, btnPrimary, fineprint } from '@/components/login/styles'
 import {
   LinkCheckPage,
   type LinkCheckState,
@@ -33,6 +34,12 @@ export const Route = createFileRoute('/confirm-email')({
   component: ConfirmEmailPage,
 })
 
+// Confirmation copy for every state this page renders. `LinkCheckPage`'s
+// defaults are written for the *sign-in* flow (15-minute links, "you'll be
+// straight in") — wrong for a confirmation link, which lasts 24 hours
+// (`EMAIL_CONFIRM_TOKEN_LIFETIME`) and signs nobody in, so every state
+// supplies its own wording (#1616). `email_changed` is absent on purpose:
+// the nearest confirm branch stays opaque, so the page can never name it.
 const CONFIRM_COPY: Partial<
   Record<LinkCheckState, { eyebrow: string; title: string; subtitle: string }>
 > = {
@@ -46,6 +53,53 @@ const CONFIRM_COPY: Partial<
     title: 'Confirming your email',
     subtitle: 'Hang tight — this only takes a second.',
   },
+  expired: {
+    // Covers genuinely expired, already-used, and never-valid links.
+    eyebrow: '● Link expired',
+    title: "This link can't be used",
+    subtitle:
+      'Confirmation links last 24 hours and work once. Send a fresh one from Settings and try again.',
+  },
+  missing: {
+    // Distinct from `expired`: the link arrived without its token at all
+    // (often truncated when copied), so "expired or already used" is wrong.
+    eyebrow: '● Link incomplete',
+    title: 'This link is incomplete',
+    subtitle:
+      'This confirmation link is missing its token — it may have been cut off when it was copied. Open the most recent email in full, or send a fresh one from Settings.',
+  },
+  replaced: {
+    // Distinct from `expired`: this link is dead because a LATER resend
+    // replaced it, not because time ran out — sending yet another new link
+    // isn't the fix, opening the one already sent is (#1616).
+    eyebrow: '● Newer link sent',
+    title: 'A newer link was sent',
+    subtitle:
+      'A newer confirmation link was requested for this address, so this one is no longer live. Open the most recent email we sent you.',
+  },
+}
+
+// `POST /v1/me/email/confirm`'s 400 body for a superseded link,
+// `{ detail: { code, message } }` (#1616) — NOT declared on the route's
+// OpenAPI `responses=` (matches the login-consume precedent), so it never
+// reaches `schema.d.ts` — read it off `ApiError.body`, never off the typed
+// `ApiError.detail` (a bare `string | null`), and parse it here. Shaped after
+// `login.verifying.tsx` (#1466): a code this client has no screen for, a
+// plain-string detail (every other dead confirmation link), or no body fails
+// the parse and falls through to the generic invalid/expired screen.
+const CONFIRM_ERROR_CODES = ['replaced'] as const
+type ConfirmErrorCode = (typeof CONFIRM_ERROR_CODES)[number]
+
+const confirmErrorSchema = z.object({
+  detail: z.object({ code: z.enum(CONFIRM_ERROR_CODES) }),
+})
+
+/** The structured `code` a 4xx from `/v1/me/email/confirm` carries, or
+ * `null` when the body doesn't parse as the coded shape. */
+function confirmErrorCode(err: unknown): ConfirmErrorCode | null {
+  if (!(err instanceof ApiError)) return null
+  const parsed = confirmErrorSchema.safeParse(err.body)
+  return parsed.success ? parsed.data.detail.code : null
 }
 
 function ConfirmEmailPage() {
@@ -124,13 +178,6 @@ function ConfirmEmailPage() {
             ? 'missing-token'
             : 'confirming'
 
-  const errorMsg =
-    status === 'missing-token'
-      ? 'This link is missing its token.'
-      : confirm.error instanceof ApiError && confirm.error.detail
-        ? confirm.error.detail
-        : 'Confirmation failed.'
-
   if (status === 'gate' && p) {
     return (
       <MergeGate
@@ -145,33 +192,62 @@ function ConfirmEmailPage() {
     )
   }
 
+  // The `replaced` screen must NOT put a resend-shaped action up front —
+  // "Back to settings" leads at Resend, and resending now would kill the
+  // newer link the copy just told the user to open (#1466 precedent, #1616
+  // acceptance criteria). Guidance text first, demoted secondary action
+  // instead of the primary CTA every other error state uses.
+  const replacedFooter = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
+        Look for the most recent confirmation email — that link is still live.
+      </p>
+      <Link to="/settings" hash="sec-email" style={{ ...btnGhost, width: '100%' }}>
+        Back to settings
+      </Link>
+    </div>
+  )
+
+  // The five `LinkCheckPage` states this page maps onto (the merge gate above
+  // is a separate render path). A coded `replaced` 4xx reaches its own
+  // screen; every other failure — plain-string 4xx, network error, anything
+  // unparsed — stays on the generic invalid/expired screen.
+  const linkState: LinkCheckState =
+    status === 'ok'
+      ? 'success'
+      : status === 'confirming'
+        ? 'checking'
+        : status === 'missing-token'
+          ? 'missing'
+          : status === 'error' && confirmErrorCode(confirm.error) === 'replaced'
+            ? 'replaced'
+            : 'expired'
+
+  // Each failure state's reason is stated once, in its own subtitle — the
+  // API's sentence is deliberately not repeated under it (#1616).
+  const copy = CONFIRM_COPY[linkState]
+
   // Intentionally NOT wrapped in <AppShell> — AppShell calls useSession()
-  // on mount, and `GET /v1/session` auto-mints a guest user for cookieless
+  // on mount, and `GET /v1/session` auto-mints a guest for cookieless
   // requests. Clicking the link on a device that doesn't share cookies
   // with the requesting browser (mobile mail, in-app webview) would leak
   // one orphan user + session-token row per click. The confirm endpoint
   // itself rotates the cookie to the token's owner, so the user lands on
   // the dashboard signed in as themselves.
-  const linkState: LinkCheckState =
-    status === 'ok' ? 'success' : status === 'confirming' ? 'checking' : 'expired'
-
-  // Email-confirm copy per state; `expired` falls through to LinkCheckPage's
-  // own defaults.
-  const copy = CONFIRM_COPY[linkState]
-
   return (
     <LinkCheckPage
       state={linkState}
       eyebrow={copy?.eyebrow}
       title={copy?.title}
       subtitle={copy?.subtitle}
-      detail={linkState === 'expired' ? errorMsg : undefined}
       footer={
         linkState === 'success' ? (
           <Link to="/dashboard" style={{ ...btnPrimary, width: '100%' }}>
             Go to dashboard
           </Link>
-        ) : linkState === 'expired' ? (
+        ) : linkState === 'replaced' ? (
+          replacedFooter
+        ) : linkState === 'expired' || linkState === 'missing' ? (
           <Link
             to="/settings"
             hash="sec-email"

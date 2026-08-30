@@ -127,6 +127,12 @@ export interface paths {
          *     stamping an address onto the guest that requested it, the guest is folded
          *     into the account that owns the address and the caller is signed in as that
          *     account. See ``_confirm_account_merge``.
+         *
+         *     A link a newer resend replaced is distinguishable from every other dead
+         *     link: it 400s with a structured ``{"code": "replaced", "message": ...}``
+         *     detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
+         *     coded reasons (#1466). Every other dead confirmation link keeps the plain
+         *     string detail it has always returned.
          */
         post: operations["confirm_email_v1_me_email_confirm_post"];
         delete?: never;
