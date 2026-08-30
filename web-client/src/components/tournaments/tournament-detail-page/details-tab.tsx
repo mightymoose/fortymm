@@ -17,6 +17,7 @@ import {
   blankAddress,
   hasVenue,
 } from '../data/helpers'
+import { exceedsCodePoints } from '../data/code-points'
 import {
   TOURNAMENT_SAVE_TARGET,
   saveFailure,
@@ -44,7 +45,9 @@ export interface DetailsTabProps {
 // so the refusals we already know about are caught here, with a message under the
 // box, instead of at the server (#1593). `name` maps to a NOT NULL VARCHAR(255)
 // column; `description` is capped at 1,024 characters; each `AddressInput`
-// component at the shared 255.
+// component at the shared 255. The server does not normalize any of them (no
+// trim on the way in), so this schema VALIDATES without TRANSFORMING: the value
+// a save submits is the value in the box (#1593 review).
 const NAME_MAX = 255
 const DESCRIPTION_MAX = 1024
 
@@ -52,11 +55,12 @@ const DESCRIPTION_MAX = 1024
  * by UTF-16 code units (`string.length`), but the server's Pydantic bounds cap
  * by Unicode code points: a supplementary character — most emoji, some CJK — is
  * one code point yet two code units, so `.max(255)` would refuse a name of 255
- * emoji, whose `length` is 510 and which the server would take. Counting code
- * points (`[...v].length`) keeps the client refusing exactly what the server
- * refuses (#1593 review). */
+ * emoji, whose `length` is 510 and which the server would take. The count is
+ * `exceedsCodePoints`'s, which stops at the first code point past the limit —
+ * so re-validating a huge pasted value on every keystroke costs at most the
+ * limit, not the value (#1593 review). */
 const atMostCodePoints = (max: number, message: string) =>
-  z.string().refine((v) => [...v].length <= max, { message })
+  z.string().refine((v) => !exceedsCodePoints(v, max), { message })
 
 /**
  * One address component, bounded — the client's mirror of the server's
@@ -78,10 +82,15 @@ const addressComponent = (label: string) =>
   )
 
 const schema = z.object({
+  // No `.trim()` transform: it REPLACED the submitted value, so a save that
+  // touched only another field renamed a whitespace-padded stored name to its
+  // trimmed form — a rename the server, which does not normalize
+  // `TournamentUpdate.name`, would have committed silently (#1593 review).
+  // Requiredness is judged on the trimmed value; the box's exact value is what
+  // gets saved.
   name: z
     .string()
-    .trim()
-    .min(1, { message: 'Name is required.' })
+    .refine((v) => v.trim().length > 0, { message: 'Name is required.' })
     .pipe(
       atMostCodePoints(
         NAME_MAX,

@@ -405,7 +405,23 @@ export const TournamentDetailPage = ({
           <TabsContent value="schedule">
             <ScheduleTab tournament={tournament} tables={allTables} />
           </TabsContent>
-          <TabsContent value="details">
+          {/* forceMount + self-managed `hidden`: the Details form stays mounted
+              across tab switches. Radix unmounts every other panel when it goes
+              inactive, so a save still in flight when the organizer moved to
+              Events/Tables/Schedule used to have its rejection written into a
+              form that was already gone — and returning to Details mounted a
+              fresh, silent one (#1593 review). Mounted, the report waits beside
+              the draft it preserved: the alert, any field error, and Save are
+              all there when Details comes back. Radix's forceMount hides
+              nothing itself (`hidden: !present` is always false here), so the
+              inactive panel is hidden with the attribute — display:none via
+              preflight in a browser, and out of the accessibility tree (role
+              queries included) everywhere. */}
+          <TabsContent
+            value="details"
+            forceMount
+            hidden={tab !== 'details'}
+          >
             <DetailsTab
               tournament={tournament}
               canEdit={canEdit}

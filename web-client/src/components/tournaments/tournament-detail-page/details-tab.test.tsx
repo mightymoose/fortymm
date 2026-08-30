@@ -341,7 +341,7 @@ describe('DetailsTab', () => {
       expect(onUpdate).not.toHaveBeenCalled()
     })
 
-    it('refuses a whitespace-only name after trimming, with the same message', async () => {
+    it('refuses a whitespace-only name — requiredness is judged on the trimmed value', async () => {
       const onUpdate = vi.fn()
       detailsTabPage.render({ tournament: buildTournament(), onUpdate })
 
@@ -351,6 +351,43 @@ describe('DetailsTab', () => {
 
       expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeInTheDocument()
       expect(onUpdate).not.toHaveBeenCalled()
+    })
+
+    // The finding's exact scenario (#1593 review): the schema's old `.trim()`
+    // TRANSFORM replaced the submitted value, so editing only another field
+    // renamed a whitespace-padded stored name to its trimmed form — a rename
+    // the server, which does not normalize `TournamentUpdate.name`, would have
+    // committed. Requiredness is judged on the trimmed value; the stored value
+    // itself is what gets sent.
+    it('saves a whitespace-padded stored name untouched when only another field is edited', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({
+        tournament: buildTournament({ name: ' Bay Area Open 2026 ' }),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe(' Bay Area Open 2026 ')
+    })
+
+    // The other half of the same decision: with no transform in the schema, the
+    // name is sent exactly as typed — edge whitespace included — never silently
+    // rewritten by the form.
+    it('saves the name exactly as typed, edge whitespace included', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: '  Renamed Open  ' },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe('  Renamed Open  ')
     })
 
     it('refuses a name over 255 characters with a message under the box', async () => {
@@ -448,6 +485,39 @@ describe('DetailsTab', () => {
         target: { value: 'y'.repeat(1024) },
       })
       await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    })
+
+    // The bound counts code points, but the WORK of counting is bounded by the
+    // limit, not by the value: the counter stops at max + 1, so re-validating a
+    // huge paste on every keystroke (`mode: 'onChange'`) cannot materialize the
+    // whole string each time (#1593 review). The bounded counter's own unit
+    // tests — including the one that can fail against an unbounded `[...v]` —
+    // live in `data/code-points.test.ts`; this pins the form-level behaviour:
+    // the paste sits in the box (no DOM cap), the refusal is spoken, and the
+    // form still saves once it is cleared.
+    it('refuses an enormous paste at the bound and still saves once it is cleared', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      // 1,000,000 code points of description — a thousand times the 1,024 bound.
+      fireEvent.change(detailsTabPage.getDescriptionInput(), {
+        target: { value: 'y'.repeat(1_000_000) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Description must be 1024 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(onUpdate).not.toHaveBeenCalled()
+
+      // The tab is not wedged: clearing the paste and saving works.
+      await userEvent.clear(detailsTabPage.getDescriptionInput())
       await userEvent.click(detailsTabPage.querySaveButton()!)
 
       await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))

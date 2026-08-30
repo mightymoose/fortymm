@@ -12,10 +12,12 @@ const scoped = (container: Container) => ({
   getTab(name: string | RegExp) {
     return container.getByRole('tab', { name })
   },
-  /** The currently-active tab panel — Radix unmounts the inactive ones, so there
-   * is exactly one in the DOM. The scope a per-tab read-only sweep runs over: the
-   * tab STRIP (its triggers) sits outside it, so it is never miscounted as a
-   * control. */
+  /** The currently-active tab panel — the one tabpanel in the DOM that is
+   * accessible. Inactive panels unmount, except the force-mounted Details one,
+   * whose inactive rendering carries the `hidden` attribute — a subtree role
+   * queries skip — so exactly one panel is ever resolved here. The scope a
+   * per-tab read-only sweep runs over: the tab STRIP (its triggers) sits
+   * outside it, so it is never miscounted as a control. */
   getActiveTabPanel() {
     return container.getByRole('tabpanel')
   },

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { act, type ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 
@@ -414,6 +414,53 @@ describe('TournamentDetailPage', () => {
       'Something went wrong on our end. Nothing you did caused it — try again in a moment.',
     )
     // The draft was not binned by the refusal.
+    expect(screen.getByLabelText(/Name/)).toHaveValue('Bay Area Open 2026!')
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * The same refusal, landed while ANOTHER tab is showing (#1593 review). Radix
+   * used to unmount the Details panel on the way out, so a slow save that was
+   * then refused reported into a dead form — and a returning organizer found a
+   * fresh, silent one holding their draft. The panel is force-mounted now: the
+   * report waits beside the draft it preserved, and Details renders it on the
+   * way back. Leaving while the write is pending must stay possible.
+   */
+  it('reports a Details save refused while another tab was showing, once Details returns', async () => {
+    let reject!: (err: unknown) => void
+    const onUpdate = vi.fn(
+      () =>
+        new Promise<void>((_, rej) => {
+          reject = rej
+        }),
+    )
+    tournamentDetailPagePage.render({ tournament: buildTournament(), onUpdate })
+
+    await userEvent.click(tournamentDetailPagePage.getTab(/^Details/))
+    await userEvent.type(screen.getByLabelText(/Name/), '!')
+    await userEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+
+    // The write is slow: the organizer gives up waiting and moves to Events…
+    await userEvent.click(tournamentDetailPagePage.getTab(/^Events/))
+    expect(tournamentDetailPagePage.getNewEventButton()).toBeInTheDocument()
+
+    // …and only then does the PATCH refuse.
+    await act(async () =>
+      reject(new ApiError(500, 'Internal Server Error', 'update tournament')),
+    )
+
+    // Back on Details: the refusal is spoken beside the intact draft — not a
+    // fresh, silent form.
+    await userEvent.click(tournamentDetailPagePage.getTab(/^Details/))
+    const alert = await waitFor(() => {
+      const el = screen.queryByTestId('details-save-error')
+      expect(el).toBeInTheDocument()
+      return el!
+    })
+    expect(alert).toHaveTextContent(
+      'Something went wrong on our end. Nothing you did caused it — try again in a moment.',
+    )
     expect(screen.getByLabelText(/Name/)).toHaveValue('Bay Area Open 2026!')
     expect(onUpdate).toHaveBeenCalledTimes(1)
   })
