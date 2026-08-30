@@ -702,6 +702,80 @@ describe('DetailsTab', () => {
       resolve()
       await waitFor(() => expect(detailsTabPage.querySaveButton()).toBeEnabled())
     })
+
+    // The finding's exact scenario (#1593 review): Revert stays usable while
+    // the PATCH is pending, and the rejection lands in a catch whose snapshot
+    // is gone. The `isDirty` sweep clears errors when dirtiness CHANGES, and
+    // the reset has already made the form pristine, so an error the catch
+    // installs afterwards would strand a "your changes are still here" alert
+    // on a form with no Save and no Revert. The catch must not install one.
+    it('stays silent when the PATCH rejects after Revert wiped the draft mid-flight', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // The draft is reverted while the write is still in flight: the form
+      // is pristine again, with no Save and no Revert.
+      await userEvent.click(detailsTabPage.getRevertButton())
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+
+      // The PATCH then rejects. Its refusal is about a snapshot the form no
+      // longer holds: no alert, and no complaint under any box.
+      await act(async () =>
+        reject(new ApiError(500, 'Internal Server Error', 'update tournament')),
+      )
+      await flush()
+
+      expect(detailsTabPage.querySaveError()).toBeNull()
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+
+      // Cleared, not merely hidden while pristine: a fresh edit does not
+      // resurrect the refusal.
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      expect(detailsTabPage.querySaveError()).toBeNull()
+    })
+
+    // The complementary half: the guard suppresses a refusal whose draft is
+    // GONE, not dirtiness itself. Work re-typed after the mid-flight Revert
+    // re-dirties the form, and a refusal beside that unsaved work is the
+    // truth: the last save the organizer saw really did fail.
+    it('still speaks when the draft was re-edited after a mid-flight Revert', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      await userEvent.click(detailsTabPage.getRevertButton())
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+
+      await act(async () =>
+        reject(new ApiError(500, 'Internal Server Error', 'update tournament')),
+      )
+      await flush()
+
+      const alert = detailsTabPage.querySaveError()
+      expect(alert).toBeInTheDocument()
+      expect(alert).toHaveTextContent(FAULTED_REFUSAL)
+    })
   })
 
   /**

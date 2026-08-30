@@ -314,7 +314,10 @@ export const DetailsTab = ({
    * it. Clear it when the dirtiness clears. `reset` (Revert, reconciliation)
    * already wipes it; this covers undoing by hand (#1593 review). Field errors
    * need no such sweep: `mode: 'onChange'` revalidates a box as it is retyped,
-   * so the undo clears the complaint that box raised. */
+   * so the undo clears the complaint that box raised. The sweep keyed to
+   * dirtiness CHANGES cannot catch an error installed after a reset that made
+   * the form pristine; the save's catch guards its installs on this same
+   * `isDirty` for that (#1593 review). */
   useEffect(() => {
     if (!isDirty) form.clearErrors('root')
   }, [isDirty, form])
@@ -351,6 +354,18 @@ export const DetailsTab = ({
       try {
         await onUpdate(draftFrom(tournament, values))
       } catch (err) {
+        // A refusal is about the draft this attempt SENT. Revert or the
+        // reconciliation effect can reset the form while the PATCH is in
+        // flight. The reset makes the form pristine and clears the errors,
+        // and the `isDirty` sweep above fires only when dirtiness CHANGES, so
+        // it cannot clear an error this catch installs afterwards: the
+        // pristine form would keep a "your changes are still here" alert with
+        // no Save and no Revert to answer it (#1593 review). Guard on the
+        // same dirtiness the sweep reads. If the draft is gone, the refusal
+        // has nothing to stand beside, so say nothing. A form re-edited after
+        // the reset is dirty again; a refusal beside its unsaved work is the
+        // truth.
+        if (!form.formState.isDirty) return
         // Classify first, word second (`data/save-failure`, ADR-0968) — the SAME
         // classifier and the same copy table the event editor uses. A 422's
         // `detail` is Pydantic's own prose ("String should have at most 255
