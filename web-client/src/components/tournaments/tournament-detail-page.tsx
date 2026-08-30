@@ -37,6 +37,10 @@ import { TablesTab } from './tournament-detail-page/tables-tab'
 
 export interface TournamentDetailPageProps {
   tournament: Tournament
+  /** TanStack Query's successful-update marker for the tournament detail entry.
+   * Unlike the selected tournament object's identity, this advances after an
+   * equal successful refetch when structural sharing preserves `tournament`. */
+  tournamentDetailUpdatedAt: number
   /** This tournament's table catalogue (for the Tables tab and reservations editor). */
   allTables: TournamentTable[]
   onUpdate: (tournament: Tournament) => void
@@ -154,6 +158,7 @@ function MetaItem({
  * Details tabs, plus the slide-in event editor. */
 export const TournamentDetailPage = ({
   tournament,
+  tournamentDetailUpdatedAt,
   allTables,
   onUpdate,
   onChangeCatalogue,
@@ -399,7 +404,11 @@ export const TournamentDetailPage = ({
             />
           </TabsContent>
           <TabsContent value="schedule">
-            <ScheduleTab tournament={tournament} tables={allTables} />
+            <ScheduleTab
+              tournament={tournament}
+              tournamentDetailUpdatedAt={tournamentDetailUpdatedAt}
+              tables={allTables}
+            />
           </TabsContent>
           <TabsContent value="details">
             <DetailsTab

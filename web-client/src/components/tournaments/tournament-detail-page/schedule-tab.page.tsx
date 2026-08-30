@@ -264,12 +264,12 @@ const scoped = (container: Container) => ({
 /** The last render's view and props, so `rerender` can deliver a fresh payload
  * the way the poll does — same mounted component, new `tournament`. */
 let currentView: RenderResult | null = null
-let currentProps: Partial<ScheduleTabProps> | null = null
+let currentProps: ScheduleTabProps | null = null
 
 export const scheduleTabPage = {
   render(overrides: Partial<ScheduleTabProps> = {}) {
-    currentProps = overrides
-    currentView = render(<ScheduleTab {...buildScheduleTabProps(overrides)} />)
+    currentProps = buildScheduleTabProps(overrides)
+    currentView = render(<ScheduleTab {...currentProps} />)
     return currentView
   },
 
@@ -280,8 +280,17 @@ export const scheduleTabPage = {
     if (currentView === null || currentProps === null) {
       throw new Error('scheduleTabPage.render must run before rerender')
     }
-    currentProps = { ...currentProps, ...overrides }
-    currentView.rerender(<ScheduleTab {...buildScheduleTabProps(currentProps)} />)
+    // This helper models a fresh tournament-detail payload landing. TanStack's
+    // successful-update marker advances even when structural sharing preserves
+    // the selected tournament object, so mirror that unless a test pins it.
+    currentProps = {
+      ...currentProps,
+      ...overrides,
+      tournamentDetailUpdatedAt:
+        overrides.tournamentDetailUpdatedAt ??
+        (currentProps.tournamentDetailUpdatedAt ?? 0) + 1,
+    }
+    currentView.rerender(<ScheduleTab {...currentProps} />)
   },
 
   ...scoped(screen),

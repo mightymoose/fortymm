@@ -1477,6 +1477,43 @@ describe('ScheduleTab', () => {
     expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
   })
 
+  // The #1618 P2 follow-up: a status-0 failure may mean the POST never reached
+  // the API. Its settle refetch then succeeds with a detail payload exactly
+  // equal to the cached one. Production structural sharing preserves the
+  // selected `tournament` object in that case, but the successful read still
+  // reconciles the ambiguity and must retire the latch.
+  it('releases the ambiguous-failure latch after an equal detail read', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () => resolve(HttpResponse.error())
+        }),
+    )
+
+    const tournament = buildLivePartlyPlaced(
+      buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+    )
+    page.render({ tournament, tables: buildTables() })
+
+    page.clickRunScheduler()
+    await waitFor(() => expect(posts).toBe(1))
+    release()
+    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+
+    // A successful GET returned equal data, so structural sharing handed the
+    // component the exact same selected object. Fetch completion — not object
+    // identity — is what releases the latch.
+    page.rerender({ tournament })
+    expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+    expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+  })
+
   // The contrast the classification exists for: a DEFINITE refusal — the
   // documented 503, "the queue could not be reached, so nothing was queued" —
   // answers the click, so the gate releases with it. No latch, no lingering

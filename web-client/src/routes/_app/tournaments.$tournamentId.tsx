@@ -73,7 +73,11 @@ function TournamentDetailRoute() {
   const navigate = useNavigate()
   const editorNavigate = Route.useNavigate()
   const router = useRouter()
-  const { data: tournament, isPending } = useTournament(tournamentId)
+  const {
+    data: tournament,
+    dataUpdatedAt: tournamentDetailUpdatedAt,
+    isPending,
+  } = useTournament(tournamentId)
   const allTables = useTables(tournamentId)
   const updateTournament = useUpdateTournament()
   const updateCatalogue = useUpdateTableCatalogue(tournamentId)
@@ -161,6 +165,7 @@ function TournamentDetailRoute() {
   return (
     <TournamentDetailPage
       tournament={tournament}
+      tournamentDetailUpdatedAt={tournamentDetailUpdatedAt}
       allTables={allTables}
       // The open editor, as three facts the page does not have to own: which one the
       // URL names, and the two navigations that change it (#1503).

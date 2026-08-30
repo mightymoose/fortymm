@@ -91,6 +91,9 @@ const isScheduleView = (v: string): v is ScheduleView =>
 
 export interface ScheduleTabProps {
   tournament: Tournament
+  /** The detail query's successful-update marker. It advances even when an
+   * equal response preserves `tournament` through structural sharing. */
+  tournamentDetailUpdatedAt: number
   /** The tournament's table catalogue (labels + courts), resolving a placement's
    * `tableId` to a table. Passed alongside the tournament because the domain
    * `Tournament` carries only table *ids* — the labels live on the catalogue. */
@@ -604,7 +607,11 @@ const TableColumn = ({
  * a terminal solve lands. Conflict flagging (double-booked tables/players) is a later
  * scheduler slice and deliberately absent here — placement is soft (ADR-0790).
  */
-export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
+export const ScheduleTab = ({
+  tournament,
+  tournamentDetailUpdatedAt,
+  tables,
+}: ScheduleTabProps) => {
   const canEdit = tournament.canEdit
   const place = usePlaceFixture(tournament.id)
   const requestSolve = useRequestScheduleSolve(tournament.id)
@@ -644,8 +651,8 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   // 3. **When the 202 itself arrives terminal** — or the request fails
   //    ambiguously (#1614 review) — the cache write stands down and the
   //    success-only callback never arms, so the tab latches the detail
-  //    snapshot the click happened on (`detailAtRequest`) and holds the gate
-  //    shut while the prop is STILL that object. Terminal-202: merging a
+  //    query's successful-update marker and holds the gate shut until
+  //    that marker advances. Terminal-202: merging a
   //    solved row would pair it with this snapshot's PRE-solve fixtures, a
   //    state no server read ever produced. Ambiguous failure (a lost
   //    transport or a proxy 5xx — `runOutcomeAmbiguous` in `../data/solve`):
@@ -654,18 +661,22 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   //    cached terminal (or null) solve would make Place/Move actionable again
   //    on placements the accepted worker may still replace. Either way, any
   //    detail payload — settle refetch or poll — reads the solve and its
-  //    fixtures together and arrives as a fresh object, so its arrival IS the
-  //    reconciliation. A failed refetch cannot open the gate — no payload, no
-  //    fresh object — so this bridge fails shut. A DEFINITE refusal (the
+  //    fixtures together, so its successful completion IS the reconciliation.
+  //    This tracks the query marker rather than `tournament` identity because
+  //    structural sharing preserves that selected object after an equal read.
+  //    A failed refetch cannot open the gate — its marker does not advance — so
+  //    this bridge fails shut. A DEFINITE refusal (the
   //    documented 422/403/503) arms nothing: the server answered "nothing was
   //    queued", so the pre-click state is the truth.
-  const [detailAtRequest, setDetailAtRequest] = useState<Tournament | null>(null)
-  // Bridge 3, derived — no effect, no clearing: the latch is held exactly
-  // while the prop is the latched snapshot, and any payload replaces that
-  // object, retiring it. A later click re-arms it against the then-current
-  // snapshot.
+  const [detailUpdatedAtAtRequest, setDetailUpdatedAtAtRequest] = useState<
+    number | null
+  >(null)
+  // Bridge 3, derived — no effect, no clearing: the latch is held until a
+  // successful detail read advances the query marker. A later click re-arms it
+  // against the then-current marker.
   const runAwaitingDetail =
-    detailAtRequest !== null && detailAtRequest === tournament
+    detailUpdatedAtAtRequest !== null &&
+    tournamentDetailUpdatedAt <= detailUpdatedAtAtRequest
   const placementActionable =
     !solveInFlight(tournament.latestScheduleSolve) &&
     !requestSolve.isPending &&
@@ -749,6 +760,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
         solve={tournament.latestScheduleSolve}
         canEdit={canEdit}
         onRun={async () => {
+          const detailUpdatedAtBeforeRequest = tournamentDetailUpdatedAt
           try {
             await requestSolve.mutateAsync()
           } catch (error) {
@@ -767,12 +779,14 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
             // answered "nothing was queued") releases the gate instead, as
             // the refusal notice says it may. The error rethrows either way:
             // the strip owns the inline refusal notice.
-            if (runOutcomeAmbiguous(error)) setDetailAtRequest(tournament)
+            if (runOutcomeAmbiguous(error)) {
+              setDetailUpdatedAtAtRequest(detailUpdatedAtBeforeRequest)
+            }
             throw error
           }
-          // Bridge 3's latch: the snapshot this click happened on. The next
-          // detail object reconciles it (see the gate above).
-          setDetailAtRequest(tournament)
+          // Bridge 3's latch: the completed detail read this request began on.
+          // The next successful detail read reconciles it (see above).
+          setDetailUpdatedAtAtRequest(detailUpdatedAtBeforeRequest)
         }}
       />
 
