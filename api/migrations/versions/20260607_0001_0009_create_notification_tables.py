@@ -10,6 +10,17 @@ master toggles and per-(category, channel) cells). The lookup tables are created
 and seeded first so the category/channel columns can carry FKs to them. Per the
 pre-deploy convention in api/CLAUDE.md, edits to this migration happen in place.
 No backfill — assumes a fresh / empty DB.
+
+``notifications.result_id`` (issue #1583) was folded in here from a
+since-deleted standalone ``add_column`` revision, per the same pre-deploy
+rollup convention — ``match_results`` (0004) and this table both already
+exist by the time that column was added, so there's no ordering reason to
+keep it as a separate revision. It binds a *hideable* prompt (e.g. "Accept
+your match result") to the specific ``MatchResult`` it's asking about, so
+``NotificationService.list_feed`` / ``_unread_count`` can hide the row once
+that result is no longer live — accepted, superseded, or auto-accepted by
+the retirement sweep — without deleting it. ``NULL`` for every other
+notification, including the FYI notices that must never disappear.
 """
 import uuid
 from typing import Sequence, Union
@@ -184,6 +195,12 @@ def upgrade() -> None:
         sa.Column("link", sa.String(length=512), nullable=True),
         sa.Column("action_label", sa.String(length=40), nullable=True),
         sa.Column("delta", sa.String(length=16), nullable=True),
+        sa.Column(
+            "result_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("match_results.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
@@ -197,6 +214,13 @@ def upgrade() -> None:
         "ix_notifications_user_id_created_at",
         "notifications",
         ["user_id", "created_at"],
+    )
+    # Postgres does not auto-index a FK column (unlike its referenced PK side).
+    # Without this, every match_results delete (including one cascaded from a
+    # matches delete) would force a sequential scan of notifications to find
+    # the ON DELETE SET NULL rows to touch.
+    op.create_index(
+        "ix_notifications_result_id", "notifications", ["result_id"]
     )
 
     op.create_table(
@@ -292,6 +316,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("notification_preferences")
     op.drop_table("notification_channel_settings")
+    op.drop_index("ix_notifications_result_id", table_name="notifications")
     op.drop_index("ix_notifications_user_id_created_at", table_name="notifications")
     op.drop_table("notifications")
     op.drop_index(

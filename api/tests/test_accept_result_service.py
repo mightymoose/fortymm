@@ -24,7 +24,7 @@ from app.result_acceptance import (
 from app.result_chain import standing_result
 from app.result_proposal import propose_result
 from app.schemas.match import MatchResultsGameWrite
-from tests._helpers import make_user
+from tests._helpers import attach_match_to_director_tournament, make_user
 
 
 def _decisive_board(winner_side: int = 1) -> list[MatchResultsGameWrite]:
@@ -129,6 +129,66 @@ async def test_submitter_side_self_accept_raises_cannot_accept_own(
             match.id,
             creator.id,
             result_id=standing.id,
+        )
+
+
+async def test_a_bystander_submitter_cannot_accept_their_own_standing_proposal(
+    db_session: AsyncSession,
+) -> None:
+    """The self-accept guard holds for a submitter who is on NEITHER side.
+
+    Since #1523 the write gate admits a tournament director, who is not a
+    participant, so ``my_side`` returns ``None`` for a director-submitted
+    proposal and the submitter-SIDE check alone does nothing. The guard
+    therefore also compares the submitter's identity.
+
+    ``_requires_confirmation`` (``app.result_proposal``) is what stops such a
+    proposal ever standing, so this state cannot arise through
+    ``propose_result``. The test hand-crafts it — re-pointing a player's
+    standing result at the director — precisely because the guard's job is to
+    hold when that upstream invariant does not.
+    """
+    creator = await make_user(db_session, "bystander-accept-proposer")
+    opponent = await make_user(db_session, "bystander-accept-opp")
+    director = await make_user(db_session, "bystander-accept-director")
+    match = await create_match(
+        db_session,
+        creator=creator,
+        opponent_user_id=opponent.id,
+        league_id=None,
+        best_of=1,
+        rated=True,
+    )
+    match_id, director_id = match.id, director.id
+    # Wire the match to a tournament this director created, so they clear
+    # ``load_match_for_write`` and actually reach the guard under test.
+    await attach_match_to_director_tournament(
+        db_session,
+        match_id,
+        tag="bystander-accept",
+        director=director,
+        p1=creator,
+        p2=opponent,
+    )
+    outcome = await propose_result(
+        db_session,
+        match_id,
+        creator.id,
+        games=_decisive_board(winner_side=1),
+        supersedes_result_id=None,
+    )
+    standing = standing_result(outcome.match)
+    assert standing is not None
+    result_id = standing.id
+    standing.submitted_by_user_id = director_id
+    await db_session.commit()
+
+    with pytest.raises(CannotAcceptOwnProposalError):
+        await accept_result(
+            db_session,
+            match_id,
+            director_id,
+            result_id=result_id,
         )
 
 

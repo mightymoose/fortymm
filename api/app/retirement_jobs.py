@@ -72,11 +72,13 @@ _RETIRED_BODY = (
     "You didn't respond in time, so the reported result was finalized as the "
     "official outcome."
 )
+_RETIRED_ACTION_LABEL = "View result"
 _REMINDER_TITLE = "A result is waiting for you"
 _REMINDER_BODY = (
     "A reported result will be finalized automatically within 24 hours unless "
     "you respond."
 )
+_REMINDER_ACTION_LABEL = "Review"
 
 
 class RetirementOutcome(enum.Enum):
@@ -140,7 +142,23 @@ async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
 def _owing_side(match: Match, submitter_id: uuid.UUID) -> MatchSide | None:
     """The side that owes acceptance: the one whose players do **not** include
     the standing result's submitter. Returns ``None`` if no such side has a
-    player (defensive against a solo / player-less sentinel side)."""
+    player (defensive against a solo / player-less sentinel side).
+
+    NOTE (#1523): when ``submitter_id`` is on NEITHER side — the tournament-
+    director case — every side's players exclude the submitter, so this
+    resolves the FIRST side with players as "owing" (side 1, by ``match.sides``
+    order), arbitrarily and regardless of which side actually played. That
+    never fires via the retirement sweep today: a director-submitted proposal
+    never lapses standing to be swept in the first place —
+    ``_requires_confirmation`` (``app.result_proposal``) now requires the
+    submitter to be a participant before it ever leaves a result unaccepted, so
+    a director's own proposal always self-finalizes immediately at
+    ``propose_result`` and is never a candidate row this sweep's SQL filter
+    would even select. This function is unchanged rather than hardened,
+    because there is no correct non-arbitrary side to pick for a submitter
+    who is a director — the fix belongs upstream, at the source that would
+    otherwise create such a standing result, which is exactly what
+    ``_requires_confirmation``'s conjunct does."""
     for side in match.sides:
         if not side.players:
             continue
@@ -157,13 +175,21 @@ def _notify_owing(
     *,
     title: str,
     body: str,
+    action_label: str,
+    result_id: uuid.UUID | None,
 ) -> None:
     """Fire-and-forget one notification per owing-side player. Reuses the
     ``RESULT_CONFIRM`` category the propose/accept prompts already file under
     (a dedicated "retirement" category would need a seeded ``notification_types``
     row via migration + conftest + MSW factory — out of scope here). Deep-links
     to the match. Enqueue is best-effort — ``enqueue_notification`` swallows a
-    Redis hiccup — so it never sinks the sweep."""
+    Redis hiccup — so it never sinks the sweep.
+
+    ``result_id`` has no default: each caller must say explicitly whether this
+    notice is *hideable* (issue #1583). ``remind_if_due``'s reminder is still
+    asking about a live standing result, so it binds one; ``retire_if_lapsed``'s
+    "Match finalized" is a closed-loop FYI (the match is already done) and
+    passes ``None`` so it's never hidden."""
     for user_id in owing_user_ids:
         notifications.enqueue_notification(
             NotificationJob(
@@ -172,8 +198,9 @@ def _notify_owing(
                 title=title,
                 body=body,
                 link=f"/matches/{match_id}",
-                action_label="Review",
+                action_label=action_label,
                 collapse_id=f"result-confirm:{match_id}",
+                result_id=result_id,
             )
         )
 
@@ -237,6 +264,10 @@ async def retire_if_lapsed(
         owing_user_ids,
         title=_RETIRED_TITLE,
         body=_RETIRED_BODY,
+        action_label=_RETIRED_ACTION_LABEL,
+        # FYI notice: the match is already finalized, so there's nothing left
+        # to review — never hideable.
+        result_id=None,
     )
     return RetirementOutcome.retired
 
@@ -363,6 +394,8 @@ async def remind_if_due(
         return False
 
     owing_user_ids = [player.user_id for player in owing.players]
+    # Capture before the commit too, mirroring owing_user_ids above.
+    standing_result_id = standing.id
     standing.reminder_sent_at = now
     await db.commit()
     _notify_owing(
@@ -371,6 +404,9 @@ async def remind_if_due(
         owing_user_ids,
         title=_REMINDER_TITLE,
         body=_REMINDER_BODY,
+        action_label=_REMINDER_ACTION_LABEL,
+        # Hideable: still asking about a live standing result, so binds it.
+        result_id=standing_result_id,
     )
     return True
 

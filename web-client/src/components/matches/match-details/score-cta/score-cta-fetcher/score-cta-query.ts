@@ -15,8 +15,10 @@ export type ScoreCtaView = {
 
 const selectScoreCta = (match: MatchDetailsResult): ScoreCtaView | null => {
   const details = match.unmigrated;
-  // The backend gates `can_score` on participation + an open, scorable game;
-  // `current_game` is the slot the button deep-links to. Both must be present.
+  // The backend gates `can_score` on participation OR being the tournament
+  // director of a called, unresolved match in their own tournament (#1523),
+  // plus an open, scorable game; `current_game` is the slot the button
+  // deep-links to. Both must be present.
   if (!details.can_score || !details.current_game) return null;
   return {
     matchId: details.id,

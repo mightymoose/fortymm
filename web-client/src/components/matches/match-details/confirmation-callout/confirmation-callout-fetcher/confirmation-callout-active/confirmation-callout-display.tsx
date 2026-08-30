@@ -136,8 +136,19 @@ export function ConfirmationCalloutDisplay({
   onAccept,
   onReload,
 }: ConfirmationCalloutDisplayProps) {
-  // The opponent posted the first result — accept it or suggest a correction.
+  // A result has been posted and the viewer must act on it. Two voices: a
+  // player is being asked to ratify their opponent's claim, while the
+  // tournament's director is officiating a match they don't play in (#1523)
+  // and has no "opponent" to speak of.
+  //
+  // The director gets Accept and nothing else. "Suggest correction" opens the
+  // correction route, which is built around the viewer's own side — it orients
+  // every game as me-vs-them and redirects a viewer with no side straight back
+  // here — so offering it to a director would be a link to a bounce. Their
+  // route to a different score stays the API/MCP board write #1523 already
+  // authorizes.
   if (view.kind === "review") {
+    const { officiating } = view;
     return (
       <section
         className="md-confirm-callout md-confirm-callout--featured"
@@ -152,8 +163,9 @@ export function ConfirmationCalloutDisplay({
             Accept the result to finalize this match.
           </h3>
           <p className="md-confirm-callout__body">
-            Your opponent has posted the result below. Accept it to finalize the
-            match, or suggest a correction if the score looks off.
+            {officiating
+              ? "A player has posted the result below. As this tournament's director you can accept it to finalize the match."
+              : "Your opponent has posted the result below. Accept it to finalize the match, or suggest a correction if the score looks off."}
           </p>
           <CalloutBody
             staleConflict={staleConflict}
@@ -169,13 +181,15 @@ export function ConfirmationCalloutDisplay({
             onAccept={onAccept}
             onReload={onReload}
           />
-          <Link
-            {...newResultRoute(matchId)}
-            className="md-btn md-btn--ghost"
-            data-testid="match-confirm-callout-correct"
-          >
-            Suggest correction
-          </Link>
+          {!officiating && (
+            <Link
+              {...newResultRoute(matchId)}
+              className="md-btn md-btn--ghost"
+              data-testid="match-confirm-callout-correct"
+            >
+              Suggest correction
+            </Link>
+          )}
         </div>
       </section>
     );

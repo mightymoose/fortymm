@@ -44,6 +44,7 @@ import {
   isDecidedMatch,
   overrunDecider,
 } from '@/lib/scoring'
+import { orderedSides } from './match-details/ordered-sides'
 import { NOT_SCORABLE_REASON_COPY } from './not-scorable-reason-copy'
 import { reconstructBoard, scoredGamePoints } from './reconstruct-board'
 import {
@@ -71,15 +72,21 @@ type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
  * Computed at the top of the component (before the loading guard) where the
  * derived `persistedMe`/`failedMe` aren't in scope yet; the render body recomputes
  * the same baseline for the dirty check and the conflict notice.
+ *
+ * The left-hand slot ("me") is the viewer's own side when they're a
+ * participant, else the neutral `orderedSides` first side (side 1) for a
+ * director scoring a match they don't play in (#1523) — this must stay the
+ * SAME first-side pick the render body uses below, or the seed and the write
+ * orientation (`toBody`) would disagree about which side is which.
  */
 function seedScoreValues(
   data: MatchDetails,
   gameNumber: number,
   ownSave: ReturnType<typeof useGameSaveState>,
 ): GameScoreInput {
-  const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
-  if (!mySide) return { me: '', opp: '' }
-  const mySideNumber: 1 | 2 = mySide.side_number === 2 ? 2 : 1
+  const [firstSide] = orderedSides(data)
+  if (!firstSide) return { me: '', opp: '' }
+  const mySideNumber: 1 | 2 = firstSide.side_number === 2 ? 2 : 1
   const persistedScore =
     data.games.find((g) => g.game_number === gameNumber)?.score ?? null
   const persistedMe = persistedScore
@@ -369,14 +376,16 @@ function ScoreEntryInner({
 
   // Refuse at the boundary and explain why, rather than letting the user
   // fill out a form the write path would 409/422 on (#1288's client-side
-  // mirror of `ensure_scorable`). Placed before the participant lookup below
-  // — not a `<Navigate>` — so it also catches a spectator (`can_score:
-  // false` with `not_scorable_reason: null`, since that reason is
-  // match-relative, not viewer-relative) with an explanation instead of a
-  // silent bounce. The completed/posted-result case above already returned,
-  // so what's left here is: not yet called, no opponent, or some other
-  // terminal state (e.g. voided) — plus a spectator on a match none of those
-  // apply to.
+  // mirror of `ensure_scorable`). Not a `<Navigate>`, so it also catches a
+  // spectator (`can_score: false` with `not_scorable_reason: null`, since
+  // that reason is match-relative, not viewer-relative) with an explanation
+  // instead of a silent bounce. `can_score` is also true for the tournament
+  // director on a called, unresolved match in their own tournament, even when
+  // they hold no side (#1523), so a director on a scorable match falls
+  // through this guard same as a participant. The completed/posted-result
+  // case above already returned, so what's left here is: not yet called, no
+  // opponent, or some other terminal state (e.g. voided) — plus a spectator
+  // on a match none of those apply to.
   if (!data.can_score) {
     return (
       <div className="entry-wrap">
@@ -391,15 +400,22 @@ function ScoreEntryInner({
     )
   }
 
-  // `can_score` above already guarantees the viewer is a participant on a
-  // two-sided match, so this is unreachable at runtime — it exists purely to
-  // narrow `mySide`/`oppSide` from `X | null` to `X` for TypeScript, which
-  // can't see that guarantee.
-  const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
-  const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null
-  if (!mySide || !oppSide) {
+  // The perspective pair: the viewer's own side first when they're a
+  // participant (unchanged), else side 1 / side 2 in order (`ordered-sides.ts`,
+  // shared with the players panel / scoreboard) for the director's neutral
+  // view. Both must resolve — a match not shaped like a real two-sided match
+  // still bounces out rather than rendering a half-built board.
+  const [firstSide, secondSide] = orderedSides(data)
+  if (!firstSide || !secondSide) {
     return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
   }
+  // `can_score` above already guarantees the viewer is authorized — a
+  // participant OR the tournament's director (#1523) — on this scorable,
+  // two-sided match. `orderedSides` puts the viewer's own side first when
+  // they're a participant, so `!firstSide.is_current_user_side` identifies
+  // the director's neutral, side-number-ordered view instead of the
+  // participant's "me/opp" perspective.
+  const isDirectorView = !firstSide.is_current_user_side
 
   // The game number past which no more games can be played: once a side has
   // clinched (gap-tolerant), the trailing games are unplayable. Drives the nav
@@ -442,16 +458,22 @@ function ScoreEntryInner({
     )
   }
 
-  const mySideNumber: 1 | 2 = mySide.side_number === 2 ? 2 : 1
-  const oppUsername = oppSide.players[0]?.username ?? null
+  const mySideNumber: 1 | 2 = firstSide.side_number === 2 ? 2 : 1
+  const oppUsername = secondSide.players[0]?.username ?? null
   const oppName = oppUsername ?? NO_OPPONENT_LABEL
-  const meName = mySide.players[0]?.username ?? 'You'
+  // A director names both sides by player — no "you" framing — so the first
+  // slot falls back to the same "No opponent" placeholder as the second
+  // rather than defaulting to "You" (#1523). A participant keeps the
+  // unchanged "You" fallback (defensive only: their own side always carries
+  // their own player).
+  const meName =
+    firstSide.players[0]?.username ?? (isDirectorView ? NO_OPPONENT_LABEL : 'You')
   const meInitials = initialsOf(meName)
   const oppHasPlayer = oppUsername !== null
 
   const bestOf = data.best_of
-  const meWins = mySide.games_won
-  const oppWins = oppSide.games_won
+  const meWins = firstSide.games_won
+  const oppWins = secondSide.games_won
 
   const persistedMe =
     persistedScore &&
@@ -888,8 +910,14 @@ function ScoreEntryInner({
   const heading = isEdit
     ? `Edit game ${gameNumber} score.`
     : `Enter game ${gameNumber} score.`
+  // A director's proposal always self-finalizes immediately — never left
+  // standing for anyone to accept (#1523) — regardless of `affects_rating`,
+  // so the acceptance-round-trip copy below is participant-only. Also keeps
+  // the screen free of "your opponent" framing on the director's path (AC:
+  // no you/them framing).
+  const requiresAcceptance = data.affects_rating && !isDirectorView
   const subtitle = wouldFinalize
-    ? data.affects_rating
+    ? requiresAcceptance
       ? 'This score finishes the match — submitting posts the result for your opponent to accept.'
       : 'This score finishes the match — submitting will finalize the result immediately.'
     : isEdit
@@ -901,10 +929,10 @@ function ScoreEntryInner({
           : 'Final game. Save to post the result.'
   const submitLabel = wouldFinalize
     ? finalizeMutation.isPending
-      ? data.affects_rating
+      ? requiresAcceptance
         ? 'Posting result…'
         : 'Finalizing…'
-      : data.affects_rating
+      : requiresAcceptance
         ? 'Post result'
         : 'Finalize result'
     : isEdit

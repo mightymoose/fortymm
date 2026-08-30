@@ -326,6 +326,58 @@ async def test_owing_side_without_players_is_a_noop(
     assert match.status is MatchStatus.in_progress
 
 
+# ----- #1523 constraint 1: submitter on neither side (director bypass) -----
+
+
+async def test_owing_side_resolves_arbitrarily_when_submitter_is_a_bystander(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    """Pins the documented (not fixed) gap #1523 names at
+    ``app.retirement_jobs._owing_side``: line 140 of the ticket.
+
+    This standing result cannot arise through the real write path — a
+    director-submitted proposal never leaves a result standing at all
+    (``_requires_confirmation``'s submitter-is-a-participant conjunct,
+    ``app.result_proposal``), so this test constructs one directly (bypassing
+    ``propose_result`` entirely) to exercise ``_owing_side`` the one way it
+    could ever see a submitter on neither side: a future bug, or a race, that
+    lets such a row exist despite that invariant.
+
+    When that happens, ``_owing_side`` resolves side 1 "owing" regardless of
+    who actually played — not ``None`` — because a bystander submitter matches
+    neither side's player-exclusion check. This is a known, accepted gap (see
+    the function's docstring): there is no correct non-arbitrary side to
+    choose for a submitter who isn't a participant, so the fix belongs
+    upstream (which is exactly what the ``_requires_confirmation`` conjunct
+    does), not in this arbitrary-pick fallback."""
+    match, result, poster, _opponent = await _build_standing_match(
+        db_session, default_league, submitted_ago=timedelta(days=8)
+    )
+    # Capture ids before ``expire_all()`` below — an expired ``poster.id``
+    # access mid-assertion would trigger a synchronous lazy load (the
+    # sibling tests in this module follow the same pattern for ``match``/
+    # ``result``).
+    match_id, result_id, poster_id = match.id, result.id, poster.id
+    bystander = await _uniq_user(db_session, "bystander")
+    # Re-point the standing result's submitter to someone on NEITHER side —
+    # the state ``_requires_confirmation`` now prevents ``propose_result``
+    # from ever producing.
+    result.submitted_by_user_id = bystander.id
+    await db_session.commit()
+
+    db_session.expire_all()
+    outcome = await retire_if_lapsed(
+        db_session, match_id, result_id, _notifications(db_session)
+    )
+
+    # Retires — but against side 1 (the poster), arbitrarily, not because side
+    # 1 actually owed anything: the poster's own proposal was accepted on
+    # their own behalf.
+    assert outcome is RetirementOutcome.retired
+    await db_session.refresh(result)
+    assert result.accepted_by_user_id == poster_id
+
+
 # ----- notifications: retired-on-lapse notice -----------------------------
 
 
@@ -353,6 +405,11 @@ async def test_lapse_notifies_owing_side_only(
     job = jobs[0]
     assert job.category.value == "result_confirm"
     assert job.link == f"/matches/{match.id}"
+    # #1583: the "Match finalized" notice is a closed-loop FYI — the match is
+    # already done, so it must never be hideable, and it carries the copy
+    # swap ("View result", not "Review") the ticket names.
+    assert job.result_id is None
+    assert job.action_label == "View result"
 
 
 # ----- notifications: deadline-nearing reminder ---------------------------
@@ -390,6 +447,10 @@ async def test_reminder_within_24h_enqueues_once_and_stamps(
     jobs = enqueued_notification_jobs(fake_notifications_queue)
     assert [job.user_id for job in jobs] == [opponent.id]
     assert jobs[0].link == f"/matches/{match.id}"
+    # #1583: unlike "Match finalized", the reminder is still asking about a
+    # live standing result — it stays hideable, and keeps the "Review" label.
+    assert jobs[0].result_id == result.id
+    assert jobs[0].action_label == "Review"
 
     await db_session.refresh(result)
     assert result.reminder_sent_at is not None
