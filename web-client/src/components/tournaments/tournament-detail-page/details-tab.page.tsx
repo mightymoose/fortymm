@@ -89,7 +89,18 @@ const scoped = (container: Container) => ({
 /** Test page-object for `DetailsTab`. */
 export const detailsTabPage = {
   render(overrides: Partial<DetailsTabProps> = {}) {
-    render(<DetailsTab {...buildDetailsTabProps(overrides)} />)
+    const props = buildDetailsTabProps(overrides)
+    const utils = render(<DetailsTab {...props} />)
+    return {
+      ...utils,
+      /** Rerender with prop overrides merged over the FIRST render's props —
+       * deliberately not fresh ones, because a fresh `tournament` object is a
+       * reconciliation (`form.reset`), not a re-render. This is how a test says
+       * "the page flipped the panel's visibility" (`active`). */
+      rerenderWith(next: Partial<DetailsTabProps> = {}) {
+        utils.rerender(<DetailsTab {...props} {...next} />)
+      },
+    }
   },
 
   within(container: Container = screen) {

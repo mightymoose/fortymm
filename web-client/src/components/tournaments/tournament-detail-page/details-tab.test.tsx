@@ -1033,4 +1033,101 @@ describe('DetailsTab', () => {
       expect(detailsTabPage.querySaveButton()).toBeNull()
     })
   })
+
+  /**
+   * A refusal that lands while the panel is HIDDEN (#1593 review). The page
+   * force-mounts this form across tab switches, so a slow PATCH can be refused
+   * while another tab is showing — and a browser refuses to focus into
+   * `display: none`, so the refusal-time focus attempt dies there and the
+   * unchanged error never re-fires it. The `active` prop is the event the
+   * panel coming back is: on its false→true edge the retained refusal takes
+   * focus, so the non-live hint is finally announced.
+   */
+  describe('a refusal that lands while the panel is hidden', () => {
+    /** Park focus on nothing — the state a real browser is left in when its
+     * refusal-time focus attempt died on a hidden panel. jsdom has no layout
+     * and will happily focus a `hidden` subtree, so the test blurs whatever
+     * that quirk focused before the panel comes back. */
+    const blurFocus = () => {
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && focused !== document.body) {
+        focused.blur()
+      }
+    }
+
+    it('focuses the refused field when the panel becomes visible again', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      // The save starts on the visible tab...
+      const view = detailsTabPage.render({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // ...the organizer moves to another tab while it is in flight, and the
+      // field-level 422 lands on a panel that is now display: none.
+      view.rerenderWith({ active: false })
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The refusal is retained beside the draft — rendered, though nothing in
+      // the hidden panel can hold focus in a browser.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument()
+
+      // Model the browser, where the refusal-time attempt failed silently.
+      blurFocus()
+      expect(detailsTabPage.getNameInput()).not.toHaveFocus()
+
+      // Returning to Details is the event the unchanged error never had: the
+      // refused field takes focus, hint and all. (`setFocus` defers the DOM
+      // focus a tick, so the assertion waits for it.)
+      view.rerenderWith({ active: true })
+      await waitFor(() => expect(detailsTabPage.getNameInput()).toHaveFocus())
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument()
+    })
+
+    it('focuses the failure alert instead when the refusal names no box', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      const view = detailsTabPage.render({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      view.rerenderWith({ active: false })
+      await act(async () =>
+        reject(new ApiError(500, 'Internal Server Error', 'update tournament')),
+      )
+      await flush()
+
+      const alert = detailsTabPage.querySaveError()
+      expect(alert).toBeInTheDocument()
+      expect(alert).toHaveTextContent(FAULTED_REFUSAL)
+
+      // Model the browser's failed focus attempt, as above.
+      blurFocus()
+      expect(alert).not.toHaveFocus()
+
+      // The panel comes back: the alert — not a box the refusal never named —
+      // takes focus.
+      view.rerenderWith({ active: true })
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toHaveFocus())
+    })
+  })
 })

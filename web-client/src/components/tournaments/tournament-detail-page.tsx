@@ -416,7 +416,13 @@ export const TournamentDetailPage = ({
               nothing itself (`hidden: !present` is always false here), so the
               inactive panel is hidden with the attribute — display:none via
               preflight in a browser, and out of the accessibility tree (role
-              queries included) everywhere. */}
+              queries included) everywhere.
+
+              That hiding is also why the tab gets `active`: a refusal landing
+              under another tab cannot take focus (nothing in display:none can),
+              and the unchanged error never re-fires — so the tab re-focuses the
+              retained refusal on this edge, the moment the panel is back
+              (#1593 review). */}
           <TabsContent
             value="details"
             forceMount
@@ -425,6 +431,7 @@ export const TournamentDetailPage = ({
             <DetailsTab
               tournament={tournament}
               canEdit={canEdit}
+              active={tab === 'details'}
               onUpdate={onUpdate}
             />
           </TabsContent>

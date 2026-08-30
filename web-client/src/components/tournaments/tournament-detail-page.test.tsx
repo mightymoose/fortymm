@@ -465,6 +465,62 @@ describe('TournamentDetailPage', () => {
     expect(onUpdate).toHaveBeenCalledTimes(1)
   })
 
+  /**
+   * The refusal-FOCUS half of the hidden-panel scenario (#1593 review): a
+   * field-level 422 landing on the force-mounted panel while another tab is up
+   * aims `shouldFocus: true` at an input inside `display: none` — a browser
+   * refuses to focus it, and the unchanged error never re-fires. The tab is
+   * told when the panel is back (`active`), and the refused field takes focus
+   * then, so the non-live hint under it is announced to a screen-reader user.
+   */
+  it('refocuses the refused field once Details comes back', async () => {
+    const PYDANTIC = 'String should have at most 255 characters'
+    const refusedName = new ApiError(422, PYDANTIC, 'update tournament', {
+      detail: [
+        { type: 'string_too_long', loc: ['body', 'name'], msg: PYDANTIC },
+      ],
+    })
+    let reject!: (err: unknown) => void
+    const onUpdate = vi.fn(
+      () =>
+        new Promise<void>((_, rej) => {
+          reject = rej
+        }),
+    )
+    tournamentDetailPagePage.render({ tournament: buildTournament(), onUpdate })
+
+    await userEvent.click(tournamentDetailPagePage.getTab(/^Details/))
+    await userEvent.type(screen.getByLabelText(/Name/), '!')
+    await userEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+
+    // The write is slow: the organizer moves to Events, and the field-level
+    // 422 lands while the Details panel is display: none.
+    await userEvent.click(tournamentDetailPagePage.getTab(/^Events/))
+    expect(tournamentDetailPagePage.getNewEventButton()).toBeInTheDocument()
+    await act(async () => reject(refusedName))
+
+    // Back on Details — reached the way a keyboard user reaches it, by FOCUSING
+    // the trigger (Radix activates a tab when it receives focus). A pointer
+    // click cannot prove the refocus here: jsdom runs the mousedown default
+    // action (focus the trigger) AFTER React's act-flushed effects, so the
+    // harness would always hand the last focus to the trigger. A real browser
+    // runs passive effects after that default action — and a focus event has
+    // no default action to race at all.
+    tournamentDetailPagePage.getTab(/^Details/).focus()
+
+    // The refused field takes focus — the focus the refusal could not land
+    // while the panel was hidden — with the refusal under it in our words, and
+    // the draft intact.
+    const nameInput = screen.getByLabelText(/Name/)
+    await waitFor(() => expect(nameInput).toHaveFocus())
+    expect(
+      screen.queryByText('The Name was rejected. Check that field and try again.'),
+    ).toBeInTheDocument()
+    expect(nameInput).toHaveValue('Bay Area Open 2026!')
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+  })
+
   it('opens the event editor and creates a new event', async () => {
     const onCreateEvent = vi.fn().mockResolvedValue(undefined)
     tournamentDetailPagePage.render({

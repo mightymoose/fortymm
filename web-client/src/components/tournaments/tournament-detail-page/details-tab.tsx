@@ -33,6 +33,14 @@ export interface DetailsTabProps {
   /** When false (a non-creator), the tab renders the tournament's details as
    * values rather than as a disabled form: no controls, no Save (ADR 0015). */
   canEdit: boolean
+  /** Whether Details is the tab in view. The page force-mounts this form and
+   * hides it with the `hidden` attribute while another tab is up (#1593), so a
+   * slow PATCH can be refused while nothing in it can take focus — a browser
+   * refuses to focus into `display: none`, and the unchanged error never
+   * re-fires. This flag is the event the panel coming back is: on its false→
+   * true edge the retained refusal takes focus, field first, alert otherwise
+   * (#1593 review). */
+  active: boolean
   /** Persist the draft. **The returned promise is load-bearing** (#1593): the tab
    * awaits it, keeps the draft and its Save affordance over a rejection, and
    * reports every failure inline — so a rejection must reach it rather than being
@@ -173,6 +181,21 @@ const FORM_FIELD: Partial<Record<string, keyof FormValues>> = {
   description: 'description',
 }
 
+/** The form's fields in the order the tab renders them — the order "the
+ * retained field error" resolves in, so a panel coming back focuses the FIRST
+ * box the form shows a refusal under, the same first-invalid-control order
+ * React Hook Form's own submit path uses. */
+const FIELD_ORDER: (keyof FormValues)[] = [
+  'name',
+  'description',
+  'venue',
+  'street',
+  'city',
+  'region',
+  'postal',
+  'country',
+]
+
 /** The first refused field this form actually shows, or `null` — for a refusal
  * that named none of them (or named nothing at all), in which case the tab says
  * so in the alert rather than reddening a box the server never mentioned. */
@@ -205,7 +228,9 @@ function refusedFormField(failure: SaveFailure): keyof FormValues | null {
  * something inline, beside the draft it preserved — a 422 naming a box reddens
  * that box in our words, and every other refusal (a nested-address 422, a 403,
  * a 409, a 5xx, a dead network, a bug) lands on the tab's own alert. A failure
- * the UI does not report is a click that did nothing.
+ * the UI does not report is a click that did nothing. The panel is force-mounted
+ * while hidden too, so a refusal that lands under another tab waits beside the
+ * draft — and takes focus when Details comes back (`active`, #1593 review).
  *
  * Each row hands `Field` both its control and the value it holds, and passes one
  * `readOnly={!canEdit}`; `Field` picks between them and drops the form's
@@ -215,6 +240,7 @@ function refusedFormField(failure: SaveFailure): keyof FormValues | null {
 export const DetailsTab = ({
   tournament,
   canEdit,
+  active,
   onUpdate,
 }: DetailsTabProps) => {
   const form = useForm<FormValues>({
@@ -248,6 +274,38 @@ export const DetailsTab = ({
   useEffect(() => {
     if (errors.root) failureRef.current?.focus()
   }, [errors.root])
+
+  /** The refusal that landed while the panel was HIDDEN. The page force-mounts
+   * this form across tab switches (#1593), so a slow PATCH can be refused while
+   * Events/Tables/Schedule is showing — and both focus routes above die there:
+   * `shouldFocus: true` aims at a non-focusable input, and the `errors.root`
+   * effect fires against a non-focusable alert. A browser simply refuses to
+   * focus into `display: none`, and the unchanged error never re-fires its
+   * effect — so the hint the organizer never saw stays unannounced.
+   *
+   * The `active` prop is the event the panel coming back is. On its false→true
+   * edge, re-focus the retained refusal: the first field the form shows an
+   * error under, else the alert — the same targets the refusal aimed at, so
+   * the non-live hint under the box is finally read out.
+   *
+   * Scoped to the EDGE, not to every error change, so a live panel never
+   * re-runs it: there, the refusal-time focus above already won, and re-firing
+   * on an unrelated error clearing would drag the caret out of the box the
+   * organizer is typing in. The ref mirrors the prop because the edge is
+   * exactly what the deps cannot express; StrictMode's mount double-run sees
+   * the same `active` twice and arms it identically. */
+  const activeRef = useRef(active)
+  useEffect(() => {
+    const becameActive = active && !activeRef.current
+    activeRef.current = active
+    if (!becameActive) return
+    const fieldWithError = FIELD_ORDER.find((f) => errors[f])
+    if (fieldWithError) {
+      form.setFocus(fieldWithError)
+    } else if (errors.root) {
+      failureRef.current?.focus()
+    }
+  }, [active, errors, form])
 
   /** A form-level refusal reports *unsaved* work — "your changes are still
    * here". Undoing the edits by hand makes the draft pristine, which already
