@@ -62,6 +62,13 @@ const scoped = (container: Container) => ({
     return container.queryByTestId('capacity-bar')
   },
 
+  /** The line beneath the eligibility chips stating their true scope: the rules
+   * bind rated players, and unrated players may enter (ADR-0783 §3). Absent for
+   * an event with no rules — an open event carries no rated/unrated qualifier. */
+  queryEligibilityScope() {
+    return container.queryByTestId('eligibility-scope')
+  },
+
   /** The count as a screen reader hears it — the sentence behind the `12 / 64`
    * numeral, which is hidden from the accessibility tree. Queried by text
    * because that IS the assertion: `sr-only` is still in the a11y tree. */
