@@ -283,16 +283,17 @@ describe('DetailsTab', () => {
 
   /**
    * The organizer meets the server's `AddressComponent` bound here, not at the
-   * 422 (#1199). The generated schema cannot carry it — `openapi-typescript` has
-   * no TypeScript construct for a string length, so `maxLength` appears nowhere
-   * in `src/api/schema.d.ts` — which makes this the only statement of it on the
-   * edit surface.
+   * 422 (#1199). The bound is the zod schema's, counted in code points — the
+   * boxes carry NO `maxLength`: the DOM attribute counts UTF-16 code units, so
+   * it would stop a value the server accepts (128 emoji are 256 units, 128
+   * code points) from ever being typed, and the schema would never see it
+   * (#1593 review).
    */
-  it('caps every venue box at the 255 characters the server accepts', () => {
+  it('puts no UTF-16 typing cap on the venue boxes', () => {
     detailsTabPage.render({ tournament: buildTournament() })
 
     for (const input of detailsTabPage.getVenueInputs()) {
-      expect(input).toHaveAttribute('maxlength', '255')
+      expect(input).not.toHaveAttribute('maxlength')
     }
   })
 
@@ -452,9 +453,9 @@ describe('DetailsTab', () => {
       await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
     })
 
-    it('catches an over-long address component that bypassed maxLength', async () => {
-      // Browser autofill and programmatic fills do not honour the attribute,
-      // which is why the schema bound remains authoritative at submit (#1593).
+    it('catches an over-long address component typed straight into the box', async () => {
+      // With no `maxLength` on the boxes, the typing path itself reaches the
+      // schema bound — the only statement of it left (#1593 review).
       const onUpdate = vi.fn()
       detailsTabPage.render({ tournament: buildTournament(), onUpdate })
 
@@ -481,6 +482,31 @@ describe('DetailsTab', () => {
       await userEvent.click(detailsTabPage.querySaveButton()!)
 
       await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    })
+
+    // The UTF-16 `maxLength` this form used to carry stopped this value being
+    // TYPED at all: 128 emoji are 256 UTF-16 code units — past the attribute —
+    // but 128 code points, which the server accepts (#1593 review). The typing
+    // path now reaches the code-point schema.
+    it('accepts a venue of 128 emoji — 128 code points, 256 UTF-16 units', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      const emoji = '🏆'.repeat(128)
+      expect(emoji.length).toBe(256)
+
+      fireEvent.change(detailsTabPage.getVenueInputs()[0], {
+        target: { value: emoji },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: expect.objectContaining({ venue: emoji }),
+        }),
+      )
     })
 
     it('wires aria-invalid and aria-describedby to the rendered message', async () => {
@@ -571,6 +597,41 @@ describe('DetailsTab', () => {
       resolve()
       await waitFor(() => expect(detailsTabPage.querySaveButton()).toBeEnabled())
     })
+
+    // The finding's exact scenario (#1593 review): `form.reset` (Revert)
+    // resets React Hook Form's submission state, so with the lock INSIDE the
+    // form, Revert mid-flight re-opened Save and a second edit let a second
+    // PATCH race the first. The lock now lives outside the form, where no
+    // reset can reach it.
+    it('keeps the duplicate-submit gate when Revert resets the form mid-flight', async () => {
+      let resolve!: () => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((res) => {
+            resolve = res
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+
+      // Revert hands the draft back while the write is still in flight...
+      await userEvent.click(detailsTabPage.getRevertButton())
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+
+      // ...and a fresh edit dirties the form again — but the ORIGINAL write
+      // is still pending, so Save stays shut and no second PATCH can start.
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      resolve()
+      await waitFor(() => expect(detailsTabPage.querySaveButton()).toBeEnabled())
+    })
   })
 
   /**
@@ -627,6 +688,42 @@ describe('DetailsTab', () => {
       // otherwise the caret stays on Save and the refused save still reads as
       // a click that did nothing.
       expect(detailsTabPage.getNameInput()).toHaveFocus()
+    })
+
+    // The boxes stay live during a slow PATCH (#1593 review): a refusal is for
+    // the snapshot the attempt SENT, so a blamed box that has since changed
+    // must not be reddened and have focus dragged back to it — that blames a
+    // value the server never saw. The complaint goes to the alert instead.
+    it('does not pin a 422 to a box whose value changed while the PATCH was pending', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // The write is slow: the organizer keeps typing, and the Name box no
+      // longer holds the snapshot the server is refusing.
+      await userEvent.type(detailsTabPage.getNameInput(), '?')
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The refused value is gone from the box, so the complaint cannot go
+      // under it — and focus must not be dragged back to it either.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      // But the refusal is still spoken: it lands on the tab's alert, which
+      // takes focus the same way any other unpinnable refusal does.
+      const alert = detailsTabPage.querySaveError()
+      expect(alert).toBeInTheDocument()
+      expect(alert).toHaveTextContent(NAME_REFUSAL)
+      expect(alert).toHaveFocus()
     })
 
     it('sends a nested-address 422 to the form alert — never to one arbitrary box', async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
@@ -63,12 +63,13 @@ const atMostCodePoints = (max: number, message: string) =>
  * `AddressComponent` (255), which applies to **all six** components and not just
  * the venue name.
  *
- * The `maxLength` DOM attribute below is a hard stop for **typing and pasting**
- * only; a value that arrives by any other route — browser autofill, a programmatic
- * fill — sails straight past it, so the schema bound remains authoritative before
- * submission (#1593). The attribute counts UTF-16 code units and errs on the
- * strict side for supplementary characters; the schema is the one that counts
- * code points, as the server does.
+ * The bound lives ONLY here, counted the way the server counts it — code
+ * points, by `atMostCodePoints`. The boxes carry **no** `maxLength` attribute:
+ * it counts UTF-16 code units, so it would refuse, from the keyboard, values
+ * the server accepts (128 emoji are 256 units but 128 code points), and the
+ * normal typing path would never reach this schema (#1593 review). Whatever
+ * route a value arrives by — typed, pasted, autofill, a programmatic fill —
+ * the schema bound is what stands before submission.
  */
 const addressComponent = (label: string) =>
   atMostCodePoints(
@@ -217,8 +218,16 @@ export const DetailsTab = ({
   const {
     register,
     control,
-    formState: { errors, isDirty, isSubmitting },
+    formState: { errors, isDirty },
   } = form
+
+  /** The pending-save lock, OUTSIDE React Hook Form's resettable form state
+   * (#1593 review). `formState.isSubmitting` lives inside the form, and every
+   * `form.reset` — Revert, the reconciliation effect below — wipes it: Save
+   * re-opened while the original PATCH was still in flight, and a second one
+   * could race it. Component state survives every reset; only this
+   * component's own `finally` clears it. */
+  const [saving, setSaving] = useState(false)
 
   /** The failure alert's own DOM node (#1538 pattern). `submit` does
    * `form.clearErrors('root')` before every attempt and `form.setError('root',
@@ -266,6 +275,9 @@ export const DetailsTab = ({
    * offer for the retry, and the UI never implies the rejected values committed. */
   const submit = form.handleSubmit(
     async (values) => {
+      // The write is pending from here until the `finally` below — gated on
+      // the `saving` state above, which no `form.reset` can clear.
+      setSaving(true)
       // Last attempt's banner belongs to last attempt (a field's red clears
       // itself: `mode: 'onChange'` re-validates the box as it is retyped).
       form.clearErrors('root')
@@ -283,11 +295,20 @@ export const DetailsTab = ({
         const failure = saveFailure(err)
         const message = saveFailureMessage(failure, TOURNAMENT_SAVE_TARGET)
         const field = refusedFormField(failure)
-        if (field) {
-          // The server blamed a box this form shows: the message goes under it,
-          // where the repo's Forms convention puts a field error — and focus
-          // moves there, as it does to the form-level alert, so a screen
-          // reader hears the refusal instead of a save that did nothing.
+        if (
+          field &&
+          // A refusal is about the SNAPSHOT this attempt sent. The boxes stay
+          // live during a slow PATCH, so a blamed box that no longer holds
+          // the refused value must not be reddened and have focus dragged
+          // back to it — that would blame a value the server never saw. The
+          // complaint goes to the alert with the rest (#1593 review).
+          form.getValues(field) === values[field]
+        ) {
+          // The server blamed a box this form shows, still holding the value
+          // it refused: the message goes under it, where the repo's Forms
+          // convention puts a field error — and focus moves there, as it does
+          // to the form-level alert, so a screen reader hears the refusal
+          // instead of a save that did nothing.
           form.setError(field, { type: 'server', message }, { shouldFocus: true })
           return
         }
@@ -295,6 +316,8 @@ export const DetailsTab = ({
         // outage, a bug of ours — lands on the tab's own alert. There is no arm
         // left that can end in silence (#783 QA, round three).
         form.setError('root', { type: 'server', message })
+      } finally {
+        setSaving(false)
       }
     },
     // A client-blocked attempt is still an attempt: clear the prior form-level
@@ -319,12 +342,15 @@ export const DetailsTab = ({
    * client (the read `Address` carries them; the write shape does not), so the
    * edit form neither shows nor submits them.
    *
-   * Every one of the six is capped at `MAX_ADDRESS_COMPONENT` — the server's
-   * `AddressComponent` bound, which the generated schema cannot express, so the
-   * schema above and this attribute are the only places the organizer meets it
-   * before the 422 (#1199, #1593). The attribute caps the *typing*, not the
-   * value: a row that already holds a 680-character venue from before the bound
-   * still renders it in full, and can still be shortened. */
+    * Every one of the six is bounded at `MAX_ADDRESS_COMPONENT` — the server's
+    * `AddressComponent` bound, which the generated schema cannot express, so
+    * the zod schema above is the only place the organizer meets it before the
+    * 422 (#1199, #1593). The boxes carry no `maxLength`: the DOM attribute
+    * counts UTF-16 code units and would stop a value the server accepts from
+    * being typed at all (#1593 review), so the code-point schema is the bound —
+    * checked at submit and as a box is retyped. The bound caps the *value*,
+    * not the display: a row that already holds a 680-character venue from
+    * before the bound still renders it in full, and can still be shortened. */
   const addressField = (
     label: string,
     key: keyof AddressText,
@@ -343,7 +369,6 @@ export const DetailsTab = ({
         <Input
           id={id}
           className={className}
-          maxLength={MAX_ADDRESS_COMPONENT}
           aria-invalid={!!errors[key]}
           aria-describedby={hintId}
           {...register(key)}
@@ -376,9 +401,10 @@ export const DetailsTab = ({
               {/* Not gated on form validity: handleSubmit already blocks an
                   invalid submit and renders the inline error, so an empty or
                   over-long name surfaces a message instead of a dead, disabled
-                  button. Disabled while the write is in flight, so one save
-                  cannot be submitted twice (#1593). */}
-              <Button type="submit" disabled={isSubmitting}>
+                  button. Gated on the `saving` lock above — not
+                  `formState.isSubmitting`, which a reset mid-flight would
+                  clear (#1593) — so one save cannot be submitted twice. */}
+              <Button type="submit" disabled={saving}>
                 <Check size={16} />
                 Save changes
               </Button>
