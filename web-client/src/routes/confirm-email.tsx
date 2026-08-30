@@ -10,7 +10,7 @@ import {
   useConfirmEmail,
   useMergePreview,
 } from '@/api/session'
-import { btnGhost, btnPrimary, fineprint } from '@/components/login/styles'
+import { btnGhost, btnPrimary } from '@/components/login/styles'
 import {
   LinkCheckPage,
   type LinkCheckState,
@@ -234,17 +234,15 @@ function ConfirmEmailPage() {
   // The `replaced` screen must NOT put a resend-shaped action up front —
   // "Back to settings" leads at Resend, and resending now would kill the
   // newer link the copy just told the user to open (#1466 precedent, #1616
-  // acceptance criteria). Guidance text first, demoted secondary action
-  // instead of the primary CTA every other error state uses.
+  // acceptance criteria). So the route is present but demoted to a ghost
+  // action, never the primary CTA every other error state uses. It carries no
+  // guidance line of its own: the subtitle already says to open the most
+  // recent email, and saying it twice is the exact duplication this ticket
+  // set out to remove (#1616).
   const replacedFooter = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
-        Look for the most recent confirmation email — that link is still live.
-      </p>
-      <Link to="/settings" hash="sec-email" style={{ ...btnGhost, width: '100%' }}>
-        Back to settings
-      </Link>
-    </div>
+    <Link to="/settings" hash="sec-email" style={{ ...btnGhost, width: '100%' }}>
+      Back to settings
+    </Link>
   )
 
   // The `error` screen's one action is the retry: the request never answered

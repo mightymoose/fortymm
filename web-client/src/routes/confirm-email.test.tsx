@@ -152,16 +152,18 @@ describe('/confirm-email failure copy (#1616)', () => {
       'data-state',
       'replaced',
     )
-    // Guidance before anything resend-shaped; the "Back to settings" route is
-    // present but demoted to a secondary action.
-    expect(
-      screen.getByText(/look for the most recent confirmation email/i),
-    ).toBeInTheDocument()
+    // The "Back to settings" route is present but demoted to a secondary
+    // action, and nothing resend-shaped leads.
     expect(
       screen.getByRole('link', { name: /back to settings/i }),
     ).toBeInTheDocument()
     expect(screen.queryByText(/send a fresh/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/resend/i)).not.toBeInTheDocument()
+    // States its instruction ONCE. The screen used to carry a footer line
+    // ("Look for the most recent confirmation email") that repeated the
+    // subtitle's own "Open the most recent email we sent you" — the exact
+    // duplication this ticket set out to remove (#1616).
+    expect(screen.getAllByText(/most recent/i)).toHaveLength(1)
   })
 
   it('renders every failure in confirmation wording and states the reason once', async () => {
@@ -193,6 +195,43 @@ describe('/confirm-email failure copy (#1616)', () => {
       screen.queryByText(/that confirmation link is invalid or expired/i),
     ).not.toBeInTheDocument()
   })
+
+  it.each([
+    [
+      'replaced',
+      { code: 'replaced', message: 'A newer link was requested.' },
+      /a newer link was sent/i,
+    ],
+    ['expired', 'That confirmation link is invalid or expired.', /this link can't be used/i],
+  ])(
+    'states the %s screen\'s instruction exactly once',
+    async (_state, detail, heading) => {
+      // Every failure state, not just one. The `replaced` screen shipped a
+      // footer line that repeated its own subtitle, and a fixture that only
+      // exercised `expired` stayed green through it (#1616).
+      server.use(
+        http.post('*/v1/me/email/confirm', () =>
+          HttpResponse.json({ detail }, { status: 400 }),
+        ),
+      )
+      renderAt('/confirm-email?token=dead-token')
+
+      await screen.findByRole('heading', { name: heading })
+      // The one instruction each screen gives, given once. `queryAllByText`,
+      // not `getAllByText`: the latter throws on zero matches, so a screen
+      // that dropped its instruction entirely would red on the wrong reason.
+      expect(
+        screen.queryAllByText(/most recent/i).length,
+      ).toBeLessThanOrEqual(1)
+      expect(
+        screen.queryAllByText(/send a fresh one from settings/i).length,
+      ).toBeLessThanOrEqual(1)
+      // And never in sign-in wording.
+      expect(screen.queryByText(/15 minutes/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/straight in/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/sign-in link/i)).not.toBeInTheDocument()
+    },
+  )
 
   it('reports a missing token as an incomplete link, in confirmation wording', async () => {
     renderAt('/confirm-email')
