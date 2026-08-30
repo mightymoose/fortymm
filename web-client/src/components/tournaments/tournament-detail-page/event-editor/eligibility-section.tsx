@@ -147,15 +147,21 @@ export const EligibilitySection = ({
           >
             <Filter size={14} className="text-[color:var(--ball-500)]" />
             <span className="text-[13px] text-[color:var(--fg-2)]">
-              All{' '}
+              {/* One rule has nothing to combine with, so the "All" framing and
+                  the AND guidance both appear only from two rules up — and the
+                  AND explanation is the organizer's concern; a reader only
+                  needs to know that all of them apply. */}
+              {fields.length > 1 && <>All{' '}</>}
               <strong className="text-[color:var(--fg-1)]">
                 {fields.length}
               </strong>{' '}
-              {fields.length === 1 ? 'rule applies' : 'rules apply'}{' '}
-              {"to players rated on this tournament's ladder."}
-              {/* How the builder combines them is the organizer's concern; a
-                  reader only needs to know that all of them apply. */}
-              {canEdit && (
+              {fields.length === 1 ? 'rule' : 'rules'} must match{' '}
+              {/* WHO the rules bind, named right where the count is (#1608).
+                  "Rated" is qualified by LADDER: the server compares against the
+                  rating on this tournament's league, so a player rated in
+                  another league is unrated here. */}
+              {"for players rated on this tournament's ladder."}
+              {fields.length > 1 && canEdit && (
                 <>
                   {' '}
                   Combine with{' '}
