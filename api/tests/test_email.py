@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
@@ -9,6 +10,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.email_token_sweep import (
+    EMAIL_CONFIRM_TOKEN_LIFETIME as SWEEP_EMAIL_CONFIRM_TOKEN_LIFETIME,
+)
+from app.email_token_sweep import (
+    _pending_email_token_clause as _sweep_pending_email_token_clause,
+)
+from app.email_token_sweep import (
+    _run_email_token_sweep,
+    sweep_expired_email_tokens,
+)
 from app.leagues import get_default_league
 from app.main import app
 from app.models import (
@@ -1120,8 +1131,9 @@ async def test_resend_sweep_deletes_a_row_once_it_genuinely_expires(
 ):
     """The bound on a replaced row's lifetime: once a row (replaced or not) is
     older than EMAIL_CONFIRM_TOKEN_LIFETIME, the next issue for this user
-    sweeps it away. This is the only cleanup a replaced row ever gets — no
-    background job runs it."""
+    sweeps it away. In-request sweeps are not the only cleanup: the scheduled
+    ``app.email_token_sweep`` deletes the same expired replaced rows without
+    waiting for any user activity (#1616)."""
     await start_session(api_client, db_session)
     await _capture_raw_token(api_client, db_session, fake_email_queue)
     raw_1 = _all_send_tokens(fake_email_queue)[0]
@@ -1154,6 +1166,145 @@ async def test_resend_sweep_deletes_a_row_once_it_genuinely_expires(
     # The aged-out raw token no longer confirms anything.
     response = await api_client.post("/v1/me/email/confirm", json={"token": raw_1})
     assert response.status_code == 400
+
+
+def test_sweep_reproduction_matches_the_router_predicates():
+    """The scheduled sweep reproduces the pending-email clause and the token
+    lifetime rather than importing them from the sessions router (see
+    app.email_token_sweep's docstring for why). This pin is what makes that
+    reproduction safe: a change to either side reds here instead of silently
+    mis-scoping the sweep."""
+    assert str(_sweep_pending_email_token_clause().compile()) == str(
+        _pending_email_token_clause().compile()
+    )
+    assert SWEEP_EMAIL_CONFIRM_TOKEN_LIFETIME == EMAIL_CONFIRM_TOKEN_LIFETIME
+
+
+async def test_scheduled_sweep_deletes_only_expired_replaced_pending_email_tokens(
+    db_session: AsyncSession,
+):
+    """Scope of the scheduled sweep (#1616): an expired *replaced* row is dead
+    weight holding a ``sent_to`` address — ``confirm_email`` already reports
+    plain "invalid or expired" for it, whether the row is present or not — so
+    the sweep deletes it across all users. A still-young replaced row stays
+    reportable; an expired *unreplaced* row stays the resend target
+    (``_pending_change_token`` does not filter by age); and a replaced
+    login-context row is a different token domain the sweep must not touch."""
+    user = User(username="swept")
+    db_session.add(user)
+    await db_session.commit()
+
+    expired = EMAIL_CONFIRM_TOKEN_LIFETIME + timedelta(seconds=1)
+    young = timedelta(hours=1)
+    now = datetime.now(UTC)
+
+    def _row(context: str, *, replaced: bool, age: timedelta) -> UserToken:
+        return UserToken(
+            user_id=user.id,
+            context=context,
+            token=hash_token(f"raw:{context}:{age}"),
+            sent_to="someone@example.com",
+            created_at=now - age,
+            replaced_at=now - age if replaced else None,
+        )
+
+    gone_change = _row(
+        EMAIL_CHANGE_CONTEXT_PREFIX + "old@example.com", replaced=True, age=expired
+    )
+    kept_young = _row(
+        EMAIL_CHANGE_CONTEXT_PREFIX + "young@example.com", replaced=True, age=young
+    )
+    kept_live = _row(
+        EMAIL_CHANGE_CONTEXT_PREFIX + "live@example.com", replaced=False, age=expired
+    )
+    gone_merge = _row(
+        EMAIL_MERGE_CONTEXT_PREFIX + str(uuid.uuid4()), replaced=True, age=expired
+    )
+    kept_login = _row("login", replaced=True, age=expired)
+    db_session.add_all([gone_change, kept_young, kept_live, gone_merge, kept_login])
+    await db_session.commit()
+
+    deleted = await sweep_expired_email_tokens(db_session)
+
+    assert deleted == 2
+    remaining = (await db_session.execute(select(UserToken.context))).scalars().all()
+    assert sorted(remaining) == sorted(
+        [kept_young.context, kept_live.context, kept_login.context]
+    )
+
+
+async def test_confirm_after_the_scheduled_sweep_reports_the_same_plain_expired(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Deleting an expired replaced row is behavior-preserving: expiry beats
+    replacement in ``confirm_email``, so a click on such a link reports the
+    plain "invalid or expired" exactly as it did while the row still existed
+    — the scheduled sweep changes nothing a user could observe (#1616)."""
+    await start_session(api_client, db_session)
+    raw_1 = await _capture_raw_token(api_client, db_session, fake_email_queue)
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )
+
+    replaced_row = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+                UserToken.replaced_at.is_not(None),
+            )
+        )
+    ).scalar_one()
+    replaced_row.created_at = (
+        datetime.now(UTC) - EMAIL_CONFIRM_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+
+    assert await sweep_expired_email_tokens(db_session) == 1
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_1})
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "That confirmation link is invalid or expired."
+    }
+
+
+async def test_sweep_entry_point_owns_its_session_and_commits(
+    db_session: AsyncSession,
+):
+    """The cron entry point opens its own session from ``DATABASE_URL`` (the
+    autouse conftest fixture already points it at the test database) and
+    commits the sweep — the shape a deployment actually invokes."""
+    user = User(username="sweep-entry")
+    db_session.add(user)
+    await db_session.commit()
+    expired = EMAIL_CONFIRM_TOKEN_LIFETIME + timedelta(seconds=1)
+    now = datetime.now(UTC)
+    db_session.add(
+        UserToken(
+            user_id=user.id,
+            context=EMAIL_CHANGE_CONTEXT_PREFIX + "old@example.com",
+            token=hash_token("raw-entry"),
+            sent_to="old@example.com",
+            created_at=now - expired,
+            replaced_at=now - expired,
+        )
+    )
+    await db_session.commit()
+
+    await _run_email_token_sweep()
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
 
 
 async def test_pending_email_ignores_a_replaced_token(
@@ -1195,15 +1346,26 @@ async def test_pending_email_ignores_a_replaced_token(
 def test_confirm_route_declares_the_coded_400_response():
     """The superseded-link 400 is a typed response on the route's OpenAPI
     document, so the generated web/iOS client types carry the coded shape
-    instead of learning it by word of mouth (#1616)."""
+    instead of learning it by word of mouth (#1616). The 400 is declared as a
+    union covering BOTH body shapes the endpoint actually returns — the coded
+    superseded-link body and the plain-string detail of every other dead
+    link — so a generated client decoding any 400 as only the coded shape
+    cannot fail on a normal rejected link (#1632)."""
     schema = app.openapi()
     declared = schema["paths"]["/v1/me/email/confirm"]["post"]["responses"]["400"]
-    assert declared["content"]["application/json"]["schema"]["$ref"].endswith(
-        "ConfirmEmailErrorResponse"
-    )
+    union_ref = declared["content"]["application/json"]["schema"]["$ref"]
+    assert union_ref.endswith("ConfirmEmail400Response")
+
+    union = schema["components"]["schemas"]["ConfirmEmail400Response"]
+    refs = sorted(variant["$ref"].rsplit("/", 1)[-1] for variant in union["anyOf"])
+    assert refs == ["ConfirmEmailErrorResponse", "PlainDetailErrorResponse"]
+
     detail = schema["components"]["schemas"]["ConfirmEmailErrorDetail"]
     assert detail["properties"]["code"]["type"] == "string"
     assert detail["properties"]["message"]["type"] == "string"
+
+    plain = schema["components"]["schemas"]["PlainDetailErrorResponse"]
+    assert plain["properties"]["detail"]["type"] == "string"
 
 
 async def test_confirm_reports_replaced_code_for_a_superseded_merge_token(

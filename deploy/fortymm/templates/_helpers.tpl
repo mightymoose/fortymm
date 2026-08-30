@@ -44,8 +44,9 @@ boundary and fail the render loudly instead.
 
 {{/*
 Fully-qualified api image reference. Shared by the api Deployment, the worker
-Deployment, the migrate hook Job and the retirement-sweep CronJob — they must
-resolve through this one helper so they cannot end up on different artifacts.
+Deployment, the migrate hook Job, the retirement-sweep CronJob and the
+email-token-sweep CronJob — they must resolve through this one helper so they
+cannot end up on different artifacts.
 */}}
 {{- define "fortymm.apiImage" -}}
 {{- include "fortymm.imageRef" .Values.images.api -}}

@@ -42,7 +42,7 @@ from app.rate_limiting import RedisRateLimiter
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.roles import grant_default_role
 from app.schemas.session import (
-    ConfirmEmailErrorResponse,
+    ConfirmEmail400Response,
     ConfirmEmailRequest,
     ConsumeLoginRequest,
     LoginRequestAccepted,
@@ -1049,11 +1049,14 @@ async def _issue_confirmation_token(
     replaced for up to ``EMAIL_CONFIRM_TOKEN_LIFETIME`` past its own
     ``created_at`` — the sweep below is keyed on age alone, not on
     ``replaced_at``, so a chain of several resends each still reports
-    "replaced" (not "gone") until they individually age out. Two sweeps bound
-    a replaced row's lifetime: this one (runs at the next issuance) and
+    "replaced" (not "gone") until they individually age out. Three sweeps
+    bound a replaced row's lifetime: this one (runs at the next issuance),
     ``_sweep_replaced_email_tokens``, which the confirm paths call as soon as
-    the live link is consumed or permanently burned without confirming — no
-    separate cleanup job is needed."""
+    the live link is consumed or permanently burned without confirming, and
+    the scheduled sweep (``app.email_token_sweep``, hourly in every
+    deployment) — the last one exists because a user who never requests
+    another link and never opens the newest one runs neither of the first
+    two (#1616)."""
     now = datetime.now(UTC)
     await db.execute(
         delete(UserToken).where(
@@ -1332,13 +1335,14 @@ async def resend_email_confirmation(
     response_model=SessionResponse,
     responses={
         status.HTTP_400_BAD_REQUEST: {
-            "model": ConfirmEmailErrorResponse,
+            "model": ConfirmEmail400Response,
             "description": (
-                "The confirmation link is dead. For a link a newer resend "
-                "replaced, the detail is the coded "
-                "``ConfirmEmailErrorResponse`` shape (#1616); every other "
-                "dead link carries the plain-string detail instead, which "
-                "that model does not describe."
+                "The confirmation link is dead. Two body shapes exist: a "
+                "link a newer resend replaced carries the coded "
+                "``ConfirmEmailErrorResponse`` detail (#1616); every other "
+                "dead link — invalid, expired, or a replaced row whose "
+                "newer link is itself gone — carries the plain-string "
+                "detail of ``PlainDetailErrorResponse`` instead."
             ),
         },
     },
