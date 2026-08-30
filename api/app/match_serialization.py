@@ -29,6 +29,7 @@ from app.mappers.match_extras_mapper import (
 )
 from app.match_queries import (
     current_game_number,
+    is_tournament_director,
     match_eager_options,
     my_side,
     singles_user_ids,
@@ -78,12 +79,14 @@ from app.tournament_queries import ANNOUNCED_STATUSES
 # module-internal helper (leading underscore) and stays private.
 __all__ = [
     "compact_games",
+    "director_flag_is_material",
     "first_decider",
     "games_payload_from_match",
     "is_participant",
     "is_scorable",
     "load_match_eager",
     "negotiation",
+    "resolve_viewer_is_director",
     "score_view",
     "serialize_details",
     "side_schema",
@@ -91,6 +94,7 @@ __all__ = [
     "tournament_context",
     "validate_finalize_games",
     "view_extras",
+    "view_extras_if_participant",
 ]
 
 
@@ -222,7 +226,12 @@ def _submitted_on_side(match: Match, result: MatchResult, side: MatchSide) -> bo
     return any(p.user_id == result.submitted_by_user_id for p in side.players)
 
 
-def negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotiation:
+def negotiation(
+    match: Match,
+    current_user_id: uuid.UUID | None,
+    *,
+    viewer_is_director: bool = False,
+) -> MatchNegotiation:
     """Viewer-relative negotiation state for the BFF (#713).
 
     The viewer's "side" is the side the current user is on; the opponent side is
@@ -233,7 +242,26 @@ def negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotia
     they did. ``final`` once a result is accepted; ``live`` before any result.
 
     Non-participants / anonymous callers get a neutral spectator mapping
-    (``your_turn=False``, no diff/prior)."""
+    (``your_turn=False``, no diff/prior) — unless ``viewer_is_director``, in
+    which case a standing proposal IS the director's to act on and
+    ``your_turn`` is True. The director is authorized to accept a player's
+    standing proposal (``accept_result``, #1523), and ``can_finalize`` is False
+    the moment any result exists, so without this the director has no read flag
+    at all that the clients could hang an Accept affordance off — the
+    scorers'-table recovery this ticket exists for would stop at the exact
+    point a player posts a result. ``viewer_state`` stays ``review``: the
+    director never proposed, so there is no baseline to diff against and
+    ``corrected`` is unreachable for them.
+
+    ``viewer_is_director`` is resolved by the caller (a query — see
+    :func:`resolve_viewer_is_director`) and defaults to False. Every handler
+    that returns a whole ``MatchDetails`` passes it: the two read paths (the
+    HTTP ``GET /v1/matches/{id}`` handler and the MCP ``get_match`` tool) and
+    every write response on both surfaces. The 409 conflict bodies
+    (``matches._negotiation_conflict``) and the list rows
+    (``matches._list_row``) stay participant-only, matching
+    :func:`serialize_details`' own call-site decision — a director who loses an
+    accept race re-reads the match rather than re-rendering off the 409."""
     accepted = accepted_result(match)
     if accepted is not None:
         return MatchNegotiation(
@@ -261,11 +289,21 @@ def negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotia
         my_side(match, current_user_id) if current_user_id is not None else None
     )
     # Spectators / anonymous: neutral mapping — there is a standing proposal but
-    # the viewer has no side, so treat as a read-only "review" view.
+    # the viewer has no side, so treat as a read-only "review" view. The
+    # tournament's director is the one sideless viewer who may act on it.
     if viewer_side is None:
         return MatchNegotiation(
             viewer_state="review",
-            your_turn=False,
+            # A director never accepts their own proposal. Today that is
+            # unreachable — ``_requires_confirmation`` (``app.result_proposal``)
+            # self-finalizes every non-participant's proposal, so a standing
+            # result's submitter is always a player — but that is a mint-site
+            # invariant in another module. This mirrors the identity guard in
+            # ``accept_result``: the read flag never offers an Accept the write
+            # path would 409, whatever a future mint path does.
+            your_turn=(
+                viewer_is_director and standing.submitted_by_user_id != current_user_id
+            ),
             standing_result=standing_view,
             prior_result=None,
             diff=None,
@@ -342,6 +380,76 @@ def is_scorable(match: Match) -> bool:
         len(match.sides) >= 2
         and match.status == MatchStatus.in_progress
         and not match.results
+    )
+
+
+def director_flag_is_material(match: Match) -> bool:
+    """Whether ``viewer_is_director`` can change anything in ``match``'s view —
+    the predicate :func:`resolve_viewer_is_director` gates the director query
+    on, so no call site pays an extra join for an answer the serializer would
+    discard.
+
+    Two disjoint windows, one per affordance the flag drives:
+
+    - **A scorable match** (``is_scorable`` — live, two sides, no result yet):
+      the flag feeds ``can_score`` / ``can_finalize``, the scratchpad and the
+      "Post result" callout.
+    - **A live match carrying a standing proposal**: the flag feeds
+      ``negotiation.your_turn``, the Accept affordance. Both ``can_score`` and
+      ``can_finalize`` are already False here (each requires no result), and
+      there is no standing proposal in the first window, so the two windows
+      never overlap — together they are "live, and somebody could still act".
+
+    Every other match (completed, voided, pending) throws the answer away. Those
+    are exactly the matches people share links to, so the skip is the hot path.
+
+    One predicate, every call site: the read and write surfaces must widen
+    together or two responses about the same match disagree about who may act
+    on it."""
+    return is_scorable(match) or (
+        match.status == MatchStatus.in_progress and standing_result(match) is not None
+    )
+
+
+async def resolve_viewer_is_director(
+    db: AsyncSession,
+    match: Match,
+    current_user_id: uuid.UUID | None,
+) -> bool:
+    """Resolve the ``viewer_is_director`` input :func:`serialize_details` takes —
+    the single answer every ``MatchDetails`` response is built from.
+
+    One function, because a response that reports ``can_score: false`` on a
+    write the API just authorized is a contradiction a client acts on: an
+    API/MCP caller that treats the mutation response as its next state
+    concludes the director's scoring run is over, while a GET on the same
+    still-scorable match says the opposite. So the read handlers (HTTP
+    ``GET /v1/matches/{id}``, the MCP ``get_match`` tool) and every write
+    handler that returns ``MatchDetails`` (the three score verbs, propose and
+    accept, on both surfaces) resolve it here rather than each deciding.
+
+    Three short-circuits before the join, in cost order: an anonymous caller
+    has no director identity; a participant already holds every flag the
+    director bit could add (and is the common case); and
+    :func:`director_flag_is_material` throws out the matches where the answer
+    changes nothing. Only a signed-in non-participant reading or writing a
+    live, unsettled match pays :func:`app.match_queries.is_tournament_director`.
+
+    A write handler could infer the bit for free — ``load_match_for_write``
+    turns away everyone who is neither a participant nor the director, so a
+    non-participant who got a response *is* one. That inference is deliberately
+    not taken: it silently produces a wrong flag the day the write gate widens
+    again, and the join it saves only ever runs on the director's own writes.
+
+    ``matches._negotiation_conflict``'s 409 bodies and ``matches._list_row``
+    stay participant-only, by decision — a caller who lost a race re-reads the
+    match rather than re-rendering off the conflict, and the list rows carry no
+    scoring affordance to widen."""
+    return (
+        current_user_id is not None
+        and not is_participant(match, current_user_id)
+        and director_flag_is_material(match)
+        and await is_tournament_director(db, match.id, current_user_id)
     )
 
 
@@ -521,8 +629,30 @@ def serialize_details(
     current_user_id: uuid.UUID | None,
     extras: MatchDetailsExtras | None = None,
     domain_match: MatchModel | None = None,
+    *,
+    viewer_is_director: bool = False,
     tournament: MatchTournamentContext | None = None,
 ) -> MatchDetails:
+    """Build the viewer-relative ``MatchDetails`` view for ``current_user_id``.
+
+    ``viewer_is_director`` is a second, independent input to ``can_score``,
+    ``can_finalize`` and ``negotiation.your_turn`` (#1523 constraint 10: "the
+    read flag is a second change, not a consequence of the [write-gate] one") —
+    whether ``current_user_id`` created the tournament that materialized
+    ``match``, resolved by the caller (a query, so it can't be computed here
+    without a session — :func:`resolve_viewer_is_director` is that one
+    resolver). Every handler returning a whole ``MatchDetails`` passes it: the
+    HTTP detail route, the MCP ``get_match`` tool, and every write response on
+    both surfaces, so a response can never deny a write the same request just
+    authorized. It defaults to ``False`` for the call sites that don't —
+    ``_list_row`` and the 409 conflict bodies (``app.matches``) — by decision;
+    see those call sites for why.
+
+    Which of the three flags it can move depends on where the match is in its
+    life: the scoring pair before any result exists, ``your_turn`` once a
+    player's proposal is standing. :func:`director_flag_is_material` is the
+    single predicate the resolver uses to skip the query when neither
+    applies."""
     extras = extras or empty_extras()
     # The ``data`` view is built from the domain model. The match-details
     # endpoint loads it through MatchService/MatchRepository and passes it in;
@@ -574,24 +704,43 @@ def serialize_details(
         ],
         games=games,
         current_game=current_game,
-        # "This participant may edit scores" — true whenever the match is
-        # scorable (no result posted yet; see ``is_scorable``), *independent*
-        # of whether there's a next un-played game. A decided-but-unposted
-        # board is still editable, so this is True while ``current_game`` is
-        # None. Spectators get the read-only view — writes
-        # 404 for non-participants in the score endpoints regardless.
-        can_score=(viewer_is_participant and scorable),
+        # "This viewer may edit scores" — true whenever the match is scorable
+        # (no result posted yet; see ``is_scorable``), *independent* of whether
+        # there's a next un-played game. A decided-but-unposted board is still
+        # editable, so this is True while ``current_game`` is None. True for a
+        # participant OR the tournament's director (#1523) — matching
+        # ``load_match_for_write``'s widened write gate, per constraint 7
+        # ("can_score and the write guard must not drift"). Everyone else gets
+        # the read-only view — writes 404 in the score endpoints regardless.
+        can_score=((viewer_is_participant or viewer_is_director) and scorable),
         not_scorable_reason=_scorability_reason(match, scorable=scorable),
         # True iff the saved games already form a decided, validly-ordered
-        # match AND no result is currently posted — the FE flips the scoring
-        # page's submit button label to "Post result" when this is true.
+        # match AND no result is currently posted.
+        #
+        # Widened to the director alongside ``can_score`` (#1523). It is the
+        # ONLY thing that renders the match page's "Post result" callout
+        # (``finalize-callout-query.ts``), and a decided board reports
+        # ``current_game: None``, which withdraws the Score CTA. Left
+        # participant-only, a director arriving at a board the two players
+        # scored and walked away from would see neither affordance and have no
+        # way to post the result — the exact scorers'-table recovery this
+        # ticket exists for. iOS ANDs this with its own participation check
+        # (``MatchService.common``), so no director scoring surface appears
+        # there.
         can_finalize=(
-            viewer_is_participant and len(match.sides) >= 2 and _can_finalize(match)
+            (viewer_is_participant or viewer_is_director)
+            and len(match.sides) >= 2
+            and _can_finalize(match)
         ),
         # Viewer-relative negotiation state — the standing proposal, whose turn
         # it is, and (when the opponent corrected the viewer's own proposal) the
         # diff. Drives the accept CTA + the negotiation callouts (#713).
-        negotiation=negotiation(match, current_user_id),
+        # ``viewer_is_director`` reaches it for the same reason it reaches
+        # ``can_finalize``: once a player's result stands, ``your_turn`` is the
+        # only flag left that can surface the director's authorized accept.
+        negotiation=negotiation(
+            match, current_user_id, viewer_is_director=viewer_is_director
+        ),
         # ``extras.recent_form`` is a read-only Sequence; the response model owns
         # its own list, so copy rather than alias it.
         recent_form=list(extras.recent_form),
@@ -642,6 +791,28 @@ async def view_extras(
             user_ids=singles_user_ids(match),
         )
     )
+
+
+async def view_extras_if_participant(
+    match_service: "MatchService", match: Match, current_user_id: uuid.UUID
+) -> MatchDetailsExtras:
+    """Participant-gated wrapper over :func:`view_extras`, for the score-write
+    and negotiation-write response paths (``app.matches``'s score/results
+    handlers, the MCP write tools' ``_serialize_written_match``).
+
+    Before #1523 those write handlers could call :func:`view_extras`
+    unconditionally: the only way to reach them at all was
+    ``load_match_for_write`` finding the caller a participant, so "reached this
+    point" already implied "gate on participation before calling this" (see
+    :func:`view_extras`'s own docstring). Now that the same write gate also
+    authorizes a tournament director who is NOT a participant, that implication
+    is gone — an ungated call would hand a director the players' rating/form/
+    head-to-head data #515 reserves for participants. This re-checks
+    participation and returns ``empty_extras()`` for anyone who fails it,
+    mirroring the read path's (``serialize_details`` callers') existing gate."""
+    if not is_participant(match, current_user_id):
+        return empty_extras()
+    return await view_extras(match_service, match)
 
 
 async def tournament_context(

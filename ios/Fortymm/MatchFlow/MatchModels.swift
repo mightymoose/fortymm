@@ -285,11 +285,15 @@ struct FinalMatch: Identifiable {
     /// create. Defaults to side 1 (the match creator).
     var yourSideNumber: Int = 1
 
-    /// The viewer can resume entering / editing scores. Relies solely on the
-    /// server's `canScore`, which is false once a result has been proposed (the
-    /// scratchpad closes; changes then flow through the propose/accept
-    /// negotiation). Single source of truth for the "Score" affordances on the
-    /// list, detail, and dashboard.
+    /// The viewer can resume entering / editing scores. `canScore` here is
+    /// already the ANDed value `MatchService.common` builds (server `can_score`
+    /// && `viewerIsParticipant`) — not the raw wire flag, which the server also
+    /// sets for a tournament director on a called, unresolved match the
+    /// director isn't playing in (#1523). It's false once a result has been
+    /// proposed (the scratchpad closes; changes then flow through the
+    /// propose/accept negotiation), or the viewer isn't a participant. Single
+    /// source of truth for the "Score" affordances on the list, detail, and
+    /// dashboard.
     var canResume: Bool { canScore && inProgress }
 
     /// Context for resuming live scoring, or `nil` when the viewer can't (or

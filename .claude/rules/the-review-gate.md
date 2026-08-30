@@ -1,9 +1,17 @@
 # The review gate
 
-A ticket does not reach Testing because an agent reviewed it. It reaches Testing because
-**a human said so, on the pull request.** This file is the single definition of that signal.
-`implement-ticket-end-to-end` watches for it and `test-next-ticket` refuses without it. Both
-reference this file, and neither restates the rule, because two prose copies drift.
+**This file defines one signal, and it now has exactly one consumer.**
+
+`implement-ticket-end-to-end` holds a human review gate: a ticket in that arc reaches Testing
+because a human said so, on the pull request. Everything below defines that signal, so the
+coordinator and `review-next-ticket` do not keep two prose copies that drift.
+
+**`test-next-ticket` no longer enforces it.** Its Testing precondition is now a passing Codex
+review, read as Codex's *latest* verdict, and that check lives in `test-next-ticket.md` itself.
+`/ticket-flow` asks Codex for that review and waits for it. Neither command reads this file.
+
+So a `LGTM` here is a coordination signal inside one arc, not a repository-wide gate on
+merging. Do not cite this file as a reason to add an `LGTM` poll anywhere else.
 
 ## Why a comment, and not an approval
 
@@ -57,12 +65,10 @@ directions.
 
 | Consumer | Window | Question |
 | --- | --- | --- |
-| `test-next-ticket` precondition | **Ever** | Has this pull request ever carried the signal? |
 | `implement-ticket-end-to-end` watch | **Since the anchor** | Has a *new* decision arrived since the round I just posted? |
 
-The precondition is deliberately "ever". A ticket that was released, went to Testing, failed,
-and came back through a repair round must still satisfy it — the human already released this
-work, and re-asking on every repair is not what the gate is for.
+There used to be a second consumer, `test-next-ticket`, reading an **ever** window. It now
+gates on Codex instead, so the anchored window below is the only one this file still defines.
 
 The watch is deliberately "since". **The anchor is the decision comment the round just posted.**
 `review-next-ticket` reports that comment's timestamp; the coordinator carries it into the
@@ -144,7 +150,7 @@ has the ask.
 
 - **`review-next-ticket`** posts the decision comment, reports its timestamp, and stops. It
   moves no columns, in any mode. In a Testing repair round it posts no decision comment
-  either, because the "ever" window above already carries the human's release.
+  either, because that round is a repair inside Testing, not a fresh request to release.
 - **`implement-ticket-end-to-end`** moves the ticket to **Waiting For Sign Off** after
   `review-next-ticket` reports its decision comment, then watches for the signal for a
   bounded 15 minutes over the **since-the-anchor** window. On release it moves the ticket to
@@ -153,14 +159,14 @@ has the ask.
   targeted mode, and moves the ticket back to **Waiting For Sign Off** when that round reports
   its fresh decision comment. On expiry it stops and reports, leaving the ticket in
   **Waiting For Sign Off**.
-- **`test-next-ticket`** re-runs this same check as a **precondition**, over the **ever**
-  window, and refuses to run without it. That refusal is the gate's only enforcement outside
-  the coordinator, and it is what makes the gate hold when someone runs the stage by hand. A
-  rule that lives only in the coordinator's prose is not a gate.
+- **`test-next-ticket`** does not read this file at all. It refuses without a passing **Codex**
+  review, checked against Codex's latest verdict. That refusal is what makes a Testing gate
+  hold when someone runs the stage by hand, and a rule that lives only in a coordinator's
+  prose is still not a gate. The actor changed. The principle did not.
 
 Every gate column is the coordinator's write: **Waiting For Sign Off**, the **In Progress**
 bounce-back, and **In Testing**. Review posts comments and the coordinator moves the ticket.
 One writer for every transition.
 
-The precondition is a check, not a status transition. `test-next-ticket` does not move the
-ticket to satisfy it, and it does not accept a board column as a substitute for the comment.
+A precondition is a check, not a status transition. Neither gate moves a ticket to satisfy
+itself, and neither accepts a board column as a substitute for the thing it actually reads.

@@ -94,6 +94,7 @@ from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE
 from tests._helpers import (
+    attach_match_to_director_tournament,
     enqueued_notification_jobs,
     event_groups,
     grant_permissions,
@@ -1281,6 +1282,206 @@ async def test_enter_game_score_on_frozen_match_raises_scorable_reason(
             )
 
 
+# ----- director authorization (#1523) ---------------------------------------
+
+
+async def test_director_can_enter_game_score_via_mcp(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """AC: 'The same widened authorization reaches the MCP tools
+    enter_game_score, update_game_score, propose_result and
+    delete_game_score.'"""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-score-p2")
+    director = await make_user(db_session, "mcp-dir-score-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-score",
+        director=director,
+        p1=p1,
+        p2=p2,
+    )
+
+    async with _mcp_client(director_token) as client, client:
+        entered = await client.call_tool_mcp(
+            "enter_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 5,
+            },
+        )
+
+    assert entered.isError is False
+    score = _game_score(entered.structuredContent, 1)
+    assert (score["side_1_points"], score["side_2_points"]) == (11, 5)
+
+
+async def test_score_write_tools_keep_the_directors_scoring_flags_via_mcp(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """An agent drives the next call off the tool's own return value.
+
+    ``can_score: false`` on a write the tool just accepted tells the agent to
+    stop scoring a match it may still score — the MCP half of the HTTP
+    contradiction, and the reason the three write tools share one serializer
+    (``_serialize_written_match``) rather than three copies of the decision."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-write-flags-p2")
+    director = await make_user(db_session, "mcp-dir-write-flags-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-write-flags",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    async with _mcp_client(director_token) as client, client:
+        entered = await client.call_tool_mcp(
+            "enter_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 5,
+            },
+        )
+        updated = await client.call_tool_mcp(
+            "update_game_score",
+            {
+                "match_id": match_id,
+                "game_number": 1,
+                "side_1_points": 11,
+                "side_2_points": 7,
+                "expected_version": 1,
+            },
+        )
+        cleared = await client.call_tool_mcp(
+            "delete_game_score",
+            {"match_id": match_id, "game_number": 1},
+        )
+
+    for written in (entered, updated, cleared):
+        assert written.isError is False
+        assert written.structuredContent is not None
+        assert written.structuredContent["can_score"] is True
+
+
+async def test_the_mcp_write_that_decides_the_board_reports_can_finalize(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """The clinching write is where an agent learns it may call
+    ``propose_result``. A decided board reports no ``current_game``, so
+    ``can_finalize`` is the only flag left saying the run has somewhere to
+    go."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-write-finalize-p2")
+    director = await make_user(db_session, "mcp-dir-write-finalize-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-write-finalize",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    async with _mcp_client(director_token) as client, client:
+        for game_number in (1, 2):
+            written = await client.call_tool_mcp(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": game_number,
+                    "side_1_points": 11,
+                    "side_2_points": 5,
+                },
+            )
+
+    assert written.isError is False
+    assert written.structuredContent is not None
+    assert written.structuredContent["current_game"] is None
+    assert written.structuredContent["can_finalize"] is True
+
+
+async def test_get_match_can_score_true_for_director_via_mcp(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """AC: the BFF can_score flag for MCP get_match is also true for the
+    tournament's director, even as a non-participant."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-canscore-p2")
+    director = await make_user(db_session, "mcp-dir-canscore-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-canscore",
+        director=director,
+        p1=p1,
+        p2=p2,
+    )
+
+    async with _mcp_client(director_token) as client, client:
+        seen = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    assert seen.isError is False
+    assert seen.structuredContent is not None
+    assert seen.structuredContent["can_score"] is True
+    # The director is not a participant — no side is theirs, and neither
+    # side's roster names them.
+    assert not any(s["is_current_user_side"] for s in seen.structuredContent["sides"])
+    assert not any(
+        p["user_id"] == str(director.id)
+        for side in seen.structuredContent["sides"]
+        for p in side["players"]
+    )
+
+
+async def test_a_stranger_gets_tool_error_naming_both_authorization_paths(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-stranger-p2")
+    director = await make_user(db_session, "mcp-dir-stranger-director")
+    stranger = await make_user(db_session, "mcp-dir-stranger")
+    stranger_token = await _mint(db_session, stranger)
+    match_id = await _create_match(api_client, p2)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-stranger",
+        director=director,
+        p1=p1,
+        p2=p2,
+    )
+
+    async with _mcp_client(stranger_token) as client, client:
+        with pytest.raises(ToolError, match="tournament's director"):
+            await client.call_tool(
+                "enter_game_score",
+                {
+                    "match_id": match_id,
+                    "game_number": 1,
+                    "side_1_points": 11,
+                    "side_2_points": 5,
+                },
+            )
+
+
 # ----- propose_result / accept_result tools --------------------------------
 
 # A decided best-of-3 board — side 1 clinches 2–0 — for the first proposal, and a
@@ -1528,6 +1729,127 @@ async def test_propose_undecided_board_raises_tool_error(
                     ],
                 },
             )
+
+
+# ----- director authorization, propose/accept (#1523) -----------------------
+
+
+async def test_director_propose_result_via_mcp_self_finalizes(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """AC: 'The director can propose a result on such a match through POST
+    /v1/matches/{match_id}/results [...] The match completes at once.' Pinned
+    here for the MCP ``propose_result`` tool."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-propose-p2")
+    director = await make_user(db_session, "mcp-dir-propose-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-propose",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    async with _mcp_client(director_token) as client, client:
+        proposed = await client.call_tool_mcp(
+            "propose_result", {"match_id": match_id, "games": _DECISIVE_BOARD}
+        )
+
+    assert proposed.isError is False
+    body = proposed.structuredContent
+    assert body is not None
+    # Never left standing — the director's result finalizes at once.
+    assert body["status"] == "completed"
+    assert body["negotiation"]["viewer_state"] == "final"
+
+
+async def test_director_can_accept_a_players_standing_result_via_mcp(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """Emergent capability of the shared write gate (constraint 2 — one
+    definition of who may write, no second gate): the director may also accept
+    a player's own standing proposal on a match they didn't play in, since
+    they carry no "submitter's side" to be blocked by
+    ``CannotAcceptOwnProposalError``. Pinned here as documented, intentional
+    behavior, not an oversight."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-accept-p2")
+    director = await make_user(db_session, "mcp-dir-accept-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-accept",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    # p1 proposes — a rated two-human match, so it stays standing.
+    proposed = await api_client.post(
+        f"/v1/matches/{match_id}/results",
+        json={"games": _DECISIVE_BOARD},
+    )
+    assert proposed.status_code == 201, proposed.text
+    standing_id = proposed.json()["negotiation"]["standing_result"]["id"]
+
+    async with _mcp_client(director_token) as client, client:
+        accepted = await client.call_tool_mcp(
+            "accept_result", {"match_id": match_id, "result_id": standing_id}
+        )
+
+    assert accepted.isError is False
+    assert accepted.structuredContent is not None
+    assert accepted.structuredContent["status"] == "completed"
+
+
+async def test_get_match_your_turn_true_for_director_on_standing_result_via_mcp(
+    api_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    """The read flag behind the accept above. ``get_match`` and the HTTP detail
+    route resolve the director bit off one shared predicate
+    (``director_flag_is_material``), so this pins the MCP half of it: a client
+    reading the match sees whose turn it is without having to try the write and
+    read the error."""
+    p1 = await start_session(api_client, db_session)
+    p2 = await make_user(db_session, "mcp-dir-yourturn-p2")
+    director = await make_user(db_session, "mcp-dir-yourturn-director")
+    director_token = await _mint(db_session, director)
+    match_id = await _create_match(api_client, p2, best_of=3)
+    await attach_match_to_director_tournament(
+        db_session,
+        uuid.UUID(match_id),
+        tag="mcp-dir-yourturn",
+        director=director,
+        p1=p1,
+        p2=p2,
+        best_of=3,
+    )
+
+    # p1 proposes — a rated two-human match, so it stays standing.
+    proposed = await api_client.post(
+        f"/v1/matches/{match_id}/results",
+        json={"games": _DECISIVE_BOARD},
+    )
+    assert proposed.status_code == 201, proposed.text
+
+    async with _mcp_client(director_token) as client, client:
+        seen = await client.call_tool_mcp("get_match", {"match_id": match_id})
+
+    assert seen.isError is False
+    assert seen.structuredContent is not None
+    # The scoring flags are spent once a result exists, so `your_turn` is the
+    # only one left that can say the director has something to do here.
+    assert seen.structuredContent["can_finalize"] is False
+    assert seen.structuredContent["negotiation"]["viewer_state"] == "review"
+    assert seen.structuredContent["negotiation"]["your_turn"] is True
 
 
 # ----- search_players / list_my_matches read tools -------------------------

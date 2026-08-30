@@ -44,6 +44,27 @@ describe("ConfirmationCalloutDisplay", () => {
       ).not.toBeInTheDocument();
     });
 
+    it("addresses the tournament's director in their own voice, with Accept as their only action", async () => {
+      // A director isn't playing, so "your opponent" is wrong, and the
+      // correction route redirects anyone with no side straight back to the
+      // match — offering it here would be a link to a bounce (#1523).
+      confirmationCalloutDisplayPage.render({
+        view: buildReviewConfirmationView({ officiating: true }),
+      });
+
+      const callout = await waitFor(() =>
+        confirmationCalloutDisplayPage.getCallout(),
+      );
+      expect(callout).toHaveTextContent(
+        "A player has posted the result below. As this tournament's director you can accept it to finalize the match.",
+      );
+      expect(callout).not.toHaveTextContent(/your opponent/i);
+      expect(confirmationCalloutDisplayPage.getAcceptButton()).toBeEnabled();
+      expect(
+        confirmationCalloutDisplayPage.querySuggestCorrectionLink(),
+      ).not.toBeInTheDocument();
+    });
+
     it("shows the unrated stakes when the match doesn't affect ratings", async () => {
       confirmationCalloutDisplayPage.render({
         view: {
@@ -51,6 +72,7 @@ describe("ConfirmationCalloutDisplay", () => {
           resultId: "r-1",
           rated: false,
           retirementDeadline: null,
+          officiating: false,
         },
       });
 
@@ -119,9 +141,9 @@ describe("ConfirmationCalloutDisplay", () => {
 
       await waitFor(() => confirmationCalloutDisplayPage.getCallout());
       // Wiring only: the exact copy/tone is pinned by the retirement-countdown tests.
-      expect(
-        confirmationCalloutDisplayPage.getCountdown(),
-      ).toHaveTextContent("3 days left to respond");
+      expect(confirmationCalloutDisplayPage.getCountdown()).toHaveTextContent(
+        "3 days left to respond",
+      );
     });
 
     it("renders no countdown when the view has no deadline", async () => {
@@ -185,9 +207,9 @@ describe("ConfirmationCalloutDisplay", () => {
 
       await waitFor(() => confirmationCalloutDisplayPage.getCallout());
       // Wiring only: the exact copy/tone is pinned by the retirement-countdown tests.
-      expect(
-        confirmationCalloutDisplayPage.getCountdown(),
-      ).toHaveTextContent("5 hours left to respond");
+      expect(confirmationCalloutDisplayPage.getCountdown()).toHaveTextContent(
+        "5 hours left to respond",
+      );
     });
 
     it("swaps Accept for a reload prompt on a stale conflict, keeping Counter (#726)", async () => {

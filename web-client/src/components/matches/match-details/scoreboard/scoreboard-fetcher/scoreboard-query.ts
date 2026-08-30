@@ -38,7 +38,8 @@ export type GameGridCellView =
       points: number;
       won: boolean;
       /** Game number to link the cell to its scores/edit route; null when the
-       * viewer can't edit this cell (spectator, or the opponent's row). */
+       * viewer can't edit this cell (spectator, or the mirrored second row —
+       * the first row carries the match's one link per game). */
       editGameNumber: number | null;
     };
 
@@ -295,12 +296,20 @@ const selectGameGrid = (match: MatchDetailsResult): GameGridView | null => {
     slots.push(gamesByNumber.get(n) ?? null);
   }
 
-  // Per-cell edit links are gated on the server's `can_score` flag — which is
-  // false once a result is posted/confirmed (the board is locked) or for a
-  // spectator — and only the viewer's own row carries them, so the user doesn't
-  // see two stacked links over the same game, nor a hand cursor on scores that
-  // can no longer be edited.
-  const canEdit = details.can_score && first.is_current_user_side;
+  // Per-cell edit links are gated on the server's `can_score` flag alone —
+  // false once a result is posted/confirmed (the board is locked) and for a
+  // spectator, true for a participant OR the tournament's director on a match
+  // they don't play in (#1523).
+  //
+  // Only the FIRST row carries them, so the user never sees two stacked links
+  // over the same game — the edit route is per game number, not per side, so
+  // one link is the whole affordance. That row is the viewer's own side when
+  // they play in the match and side 1 for the sideless director
+  // (`ordered-sides.ts`), which is why this no longer reads
+  // `first.is_current_user_side`: that gate silently withheld every edit link
+  // from the director, leaving them to hand-type the score-entry URL to correct
+  // an already-scored game the write path authorizes them to change.
+  const canEdit = details.can_score;
   return {
     matchId: details.id,
     bestOf: details.best_of,

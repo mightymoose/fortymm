@@ -843,6 +843,55 @@ describe("scoreboardQuery", () => {
     expect(second.cells[0]).toMatchObject({ editGameNumber: null });
   });
 
+  it("carries an edit link on the first row for a sideless viewer the server says can score", async () => {
+    // The tournament's director scoring a match they don't play in (#1523):
+    // `can_score` is true but no side is theirs, so a gate on
+    // `is_current_user_side` leaves the whole grid unlinked and the only way to
+    // correct a scored game is to hand-type the URL. The link lands on the
+    // first row because the edit route is per game number, not per side — one
+    // link per game, exactly as for a participant.
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          can_score: true,
+          sides: [
+            buildMatchDetailsSide({
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-a",
+                  username: "ada.l",
+                  is_current_user: false,
+                }),
+              ],
+              is_current_user_side: false,
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-b",
+                  username: "bo.k",
+                  is_current_user: false,
+                }),
+              ],
+              is_current_user_side: false,
+            }),
+          ],
+          games: [buildMatchDetailsGame({ score: buildMatchDetailsScore() })],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const [first, second] = result.current.data!.gameGrid!.rows;
+    expect(first.cells[0]).toMatchObject({ editGameNumber: 1 });
+    // Still one link per game — the mirrored row never doubles it up.
+    expect(second.cells[0]).toMatchObject({ editGameNumber: null });
+  });
+
   it("projects a playerless side as a ghost 'No opponent' row", async () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(

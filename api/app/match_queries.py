@@ -19,7 +19,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, exists, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
@@ -30,6 +31,10 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    Tournament,
+    TournamentEvent,
+    TournamentEventStage,
+    TournamentFixture,
     User,
 )
 from app.result_acceptance import _games_to_win, side_win_counts
@@ -127,7 +132,17 @@ def my_standing_proposal_exists(current_user_id: uuid.UUID) -> Any:
     ``team_size == 1`` (the only topology today — see ``create_match``) the two
     coincide. When doubles lands, a partner's proposal would make this ``False``
     while the classifier says ``waiting_opponent``, so this must move to a
-    side-based match to keep the SQL and Python twins aligned."""
+    side-based match to keep the SQL and Python twins aligned.
+
+    Also keys on ``submitted_by_user_id`` without checking participation at all
+    (#1523): a tournament director's proposal would leave this ``False`` for
+    every participant, not ``True`` for one of them — nobody's row would show
+    "waiting on opponent" for it. This callsite is reached only via
+    ``participant_filter``-scoped queries (a viewer's own matches), so it never
+    has to answer "is the director's proposal mine?" in the first place; and
+    the case is moot regardless, because ``_requires_confirmation``
+    (``app.result_proposal``) never leaves a director's proposal standing to be
+    queried here at all."""
     superseding = aliased(MatchResult)
     return (
         select(MatchResult.id)
@@ -196,6 +211,38 @@ def _attention_matches_query(
     if q:
         base = _player_username_filter(base, q)
     return base
+
+
+# ----- director resolution --------------------------------------------------
+
+
+async def is_tournament_director(
+    db: AsyncSession, match_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """Whether ``user_id`` is the director of the tournament that materialized
+    ``match_id`` — i.e. ``tournaments.created_by_user_id`` for the tournament
+    reached by walking ``tournament_fixtures.match_id`` up through its stage and
+    event (#1523, ADR-0784 "director entry is the same endpoint, gated by
+    ownership").
+
+    ``Match`` carries no tournament id of its own (#1523 constraint 4), so this
+    is a real query, not an in-memory check — one indexed ``EXISTS`` over the
+    join chain, run only for a caller who has already failed the query-free
+    ``is_participant`` check (the common case). A casual match (no
+    ``tournament_fixtures`` row references it) and a match belonging to a
+    tournament ``user_id`` did not create both resolve ``False`` here, so both
+    collapse into the caller's ordinary "not authorized" handling — this
+    function draws no distinction between them."""
+    stmt = select(
+        exists().where(
+            TournamentFixture.match_id == match_id,
+            TournamentEventStage.id == TournamentFixture.stage_id,
+            TournamentEvent.id == TournamentEventStage.event_id,
+            Tournament.id == TournamentEvent.tournament_id,
+            Tournament.created_by_user_id == user_id,
+        )
+    )
+    return bool((await db.execute(stmt)).scalar())
 
 
 # ----- readers over a loaded match -----------------------------------------
