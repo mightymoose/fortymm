@@ -904,7 +904,7 @@ export interface TournamentsStoreOptions {
    * Cut with the same planner the cut ROUTE uses, from the same entrants and the same
    * reservations, so a seeded draw is one this stub could have dealt — never a hand-written
    * list of fixtures no cut would ever produce. */
-  drawn?: string[]
+  drawn?: readonly string[]
   /** Attach a **played-out** result to `EVENT.JOURNEY` (ADR-0788): its one group decided,
    * with a champion — the standings the tournament detail renders once matches complete.
    * Opt-in, and only meaningful with `drawable`, because standings ride on a round-robin

@@ -23,6 +23,9 @@ const gameScore = (
         side_1_points: side1Points,
         side_2_points: side2Points,
         winner_side_number: side1Points > side2Points ? 1 : 2,
+        // A freshly created score starts at version 1 (the create body carries
+        // no version; `expected_version = 0` means "no score exists yet").
+        version: 1,
     },
 });
 
