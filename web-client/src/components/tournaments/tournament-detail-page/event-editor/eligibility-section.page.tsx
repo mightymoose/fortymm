@@ -40,9 +40,13 @@ const scoped = (container: Container) => ({
   queryColumnHeaders() {
     return container.queryByTestId('predicate-column-headers')
   },
-  /** The "All N rules must match" footnote. */
+  /** The rule-count footnote ("N rule(s) must match"). Absent with no rules —
+   * the empty state replaces it. */
   getFootnote() {
     return container.getByTestId('eligibility-footnote')
+  },
+  queryFootnote() {
+    return container.queryByTestId('eligibility-footnote')
   },
   /** Every interactive control in the section, swept by role. Supplement only —
    * `getFormElements()` is the guarantee. */
