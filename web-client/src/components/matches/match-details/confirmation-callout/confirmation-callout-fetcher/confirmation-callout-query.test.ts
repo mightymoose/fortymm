@@ -2,6 +2,8 @@ import { HttpResponse } from "msw";
 
 import {
   buildMatchDetails,
+  buildMatchDetailsPlayer,
+  buildMatchDetailsSide,
   type MatchDetails,
 } from "@/mocks/factories/matches/match-details.factory";
 import type { components } from "@/api/schema";
@@ -47,6 +49,34 @@ const reviewMatch = (
     ...overrides,
   });
 
+/** Both sides belonging to somebody else — the shape the BFF serves a viewer
+ * who isn't playing in this match (the tournament's director, or a
+ * spectator). */
+const sidesWithNoViewerSide = (): MatchDetails["sides"] => [
+  buildMatchDetailsSide({
+    side_number: 1,
+    players: [
+      buildMatchDetailsPlayer({
+        user_id: "u-player-1",
+        username: "ana.silva",
+        is_current_user: false,
+      }),
+    ],
+    is_current_user_side: false,
+  }),
+  buildMatchDetailsSide({
+    side_number: 2,
+    players: [
+      buildMatchDetailsPlayer({
+        user_id: "u-opponent",
+        username: "leo.mertens",
+        is_current_user: false,
+      }),
+    ],
+    is_current_user_side: false,
+  }),
+];
+
 const renderView = async () => {
   const { result } = confirmationCalloutQueryPage.render();
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -72,6 +102,7 @@ describe("confirmationCalloutQuery", () => {
       resultId: "r-1",
       rated: true,
       retirementDeadline: null,
+      officiating: false,
     });
   });
 
@@ -87,6 +118,7 @@ describe("confirmationCalloutQuery", () => {
       resultId: "r-1",
       rated: false,
       retirementDeadline: null,
+      officiating: false,
     });
   });
 
@@ -176,6 +208,25 @@ describe("confirmationCalloutQuery", () => {
     expect(result.current.data).toEqual({
       kind: "awaiting",
       pendingSignerName: "leo.mertens",
+    });
+  });
+
+  it("flags the review view as officiating when your_turn lands on a viewer who is on neither side", async () => {
+    // The tournament director reading a match they don't play in (#1523): the
+    // BFF says it's their turn, yet no side is theirs. That pairing is
+    // unreachable for a player, so it's what the copy branch keys off.
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(reviewMatch({}, { sides: sidesWithNoViewerSide() })),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toEqual({
+      kind: "review",
+      resultId: "r-1",
+      rated: true,
+      retirementDeadline: null,
+      officiating: true,
     });
   });
 

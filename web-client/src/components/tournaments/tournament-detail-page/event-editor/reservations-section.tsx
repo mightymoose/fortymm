@@ -368,6 +368,11 @@ export const ReservationsSection = ({
               // renumbers when a card above is removed.
               key={reservationEntryKey(entry)}
               reservation={entry}
+              // #1441: this card's 1-based place in the order being rendered *right
+              // now* — the index `remove(i)` below addresses, so the Remove control's
+              // name (`Remove reservation 2: Reservation B`) names the exact row the
+              // click will take, and renumbers the moment the order does.
+              position={i + 1}
               tables={tables}
               timezone={timezone ?? ''}
               canEdit={canEdit}

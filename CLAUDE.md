@@ -185,7 +185,9 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **Verify the artifact under test is the one you changed** — see `.claude/rules/verify-the-artifact-under-test.md`.
 
-**A human releases work from Review to Testing** — see `.claude/rules/the-review-gate.md`. `review-next-ticket` posts a decision comment on the PR and stops; `implement-ticket-end-to-end` parks the ticket in **Waiting For Sign Off** once Review reports, then holds a bounded watch for an `LGTM` from `mightymoose`; `test-next-ticket` refuses without one.
+**Testing is gated on a passing Codex review, not on a human.** `test-next-ticket` refuses unless the Codex GitHub App's **latest** verdict on the pull request is a pass; the check lives in `test-next-ticket.md`. `/ticket-flow` posts `@codex review`, loops repair rounds until Codex passes, then tests and merges without asking anyone.
+
+**One arc still holds a human gate** — see `.claude/rules/the-review-gate.md`. `review-next-ticket` posts a decision comment on the PR and stops, and `implement-ticket-end-to-end` parks the ticket in **Waiting For Sign Off** once Review reports, then holds a bounded watch for an `LGTM` from `mightymoose`. That signal now coordinates that arc only. It no longer gates Testing anywhere.
 
 **Collect the garbage you create** — `land-the-plane` Step 7 runs `scripts/reap-worktrees.sh` and `scripts/qa-down.sh` (see their headers for why). Whoever merges cleans up: `test-next-ticket` after its own merge, `land-the-plane` after its stack walk. Whoever merges also fast-forwards `main` at the repo root, so the next run starts from a current base. `implement-ticket-end-to-end` reaps the worktree, first and last, because it is the only thing standing outside one.
 

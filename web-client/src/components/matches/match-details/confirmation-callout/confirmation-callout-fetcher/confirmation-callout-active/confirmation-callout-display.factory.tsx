@@ -7,7 +7,9 @@ type NegotiationDiffEntry = components["schemas"]["NegotiationDiffEntry"];
 
 /** The review variant: the opponent posted the first result; the viewer can
  * Accept or suggest a correction. Carries the standing result's acceptance
- * token + the rated stakes. */
+ * token + the rated stakes. Defaults to the player's view
+ * (`officiating: false`); pass `{ officiating: true }` for the tournament
+ * director's Accept-only variant (#1523). */
 export function buildReviewConfirmationView(
   overrides: Partial<Extract<ConfirmationCalloutView, { kind: "review" }>> = {},
 ): ConfirmationCalloutView {
@@ -16,6 +18,7 @@ export function buildReviewConfirmationView(
     resultId: "r-1",
     rated: true,
     retirementDeadline: null,
+    officiating: false,
     ...overrides,
   };
 }

@@ -267,6 +267,12 @@ struct MatchDetailsDTO: Decodable {
     let createdAt: Date
     let sides: [MatchSideDTO]
     let games: [MatchGameDTO]
+    /// Also `true` for the tournament director on a called, unresolved match
+    /// even when the director isn't a participant (#1523) — this flag alone is
+    /// **not** "viewer is a participant". `MatchService.common` ANDs it with
+    /// `sides.contains(where: \.isCurrentUserSide)` before it reaches a view,
+    /// so the participant-shaped score entry screen stays out of reach for a
+    /// director. iOS has no director scoring surface, by design.
     let canScore: Bool
     let canFinalize: Bool
     let negotiation: MatchNegotiationDTO
@@ -290,8 +296,12 @@ struct MatchListRowDTO: Decodable {
     /// Next game to score; nil once every game is scored or the match is
     /// finalized. Game rows are created lazily, so this is a number, not an id.
     let currentGameNumber: Int?
-    /// The viewer can enter scores for this (live) match — drives the row's
-    /// "Score" affordance.
+    /// The viewer can enter scores for this (live) match. Also `true` for the
+    /// tournament director on a called, unresolved match even when the
+    /// director isn't a participant (#1523) — see the note on
+    /// `MatchDetailsDTO.canScore`. `MatchService.common` ANDs this with side
+    /// membership before it drives the row's "Score" affordance, so it does
+    /// not, by itself, mean "viewer is a participant".
     let canScore: Bool
     /// Viewer-relative negotiation state — populated on list rows too (unlike
     /// the old `signatures` field), so the row-level "your turn" affordances

@@ -52,7 +52,11 @@ from app.match_scoring import (
     _MatchWriteLoader,
     load_match_for_write,
 )
-from app.match_serialization import compact_games, validate_finalize_games
+from app.match_serialization import (
+    compact_games,
+    is_participant,
+    validate_finalize_games,
+)
 from app.models import (
     League,
     Match,
@@ -104,13 +108,30 @@ def _all_sides_have_players(match: Match) -> bool:
     return len(match.sides) >= 2 and all(side.players for side in match.sides)
 
 
-def _requires_confirmation(match: Match) -> bool:
-    """Only rated matches go through the accept round-trip. Acceptance exists to
-    protect ratings from one-sided claims; an unrated match has no stakes worth a
-    second party's consent, and a solo match has no second human to accept anyway
-    (rated already implies a registered opponent at creation — the player check
-    is defensive)."""
-    return match.match_settings.affects_rating and _all_sides_have_players(match)
+def _requires_confirmation(match: Match, submitted_by_user_id: uuid.UUID) -> bool:
+    """Only a rated match, proposed BY A PARTICIPANT, goes through the accept
+    round-trip. Acceptance exists to protect ratings from one-sided claims; an
+    unrated match has no stakes worth a second party's consent, and a solo
+    match has no second human to accept anyway (rated already implies a
+    registered opponent at creation — the player check is defensive).
+
+    The submitter-is-a-participant conjunct is what makes a tournament
+    director's result authoritative (#1523): a director is not a side, so the
+    round trip that exists to protect a claim FROM a side doesn't apply to a
+    claim made BY someone who isn't one. A director-submitted proposal (first
+    post or a supersede of a player's standing one) always self-finalizes
+    through the same branch below a solo/unrated match already takes — never a
+    second completion path, and never left standing for anyone to "accept" on
+    the director's behalf. This is also the invariant the three
+    submitter-relative reads downstream (``result_acceptance``'s
+    submitter-side accept guard, the retirement sweep's owing-side resolution,
+    the dashboard/list waiting-vs-actionable split) all lean on: none of them
+    ever sees a standing result whose submitter isn't a participant."""
+    return (
+        match.match_settings.affects_rating
+        and _all_sides_have_players(match)
+        and is_participant(match, submitted_by_user_id)
+    )
 
 
 def _result_games_snapshot(
@@ -219,10 +240,13 @@ async def propose_result(
     either miss raises :class:`NegotiationConflictError` carrying the loaded
     ``Match``. It commits the canonical board and appends the ``MatchResult``,
     self-accepting + finalizing solo/unrated matches immediately (``side.won`` and
-    the rating update fire here) or leaving the result *standing* (status
-    ``in_progress``) for a rated two-human match. On the
-    ``uq_match_results_supersedes_result_id`` race it reloads and raises
-    :class:`NegotiationConflictError` with the moved-on state.
+    the rating update fire here) — as does ANY proposal submitted by a
+    non-participant, i.e. the tournament's director (#1523): a director's result
+    is authoritative and is never left standing for someone to accept on their
+    behalf, first post or supersede alike — or leaving the result *standing*
+    (status ``in_progress``) for a rated two-human match proposed by one of its
+    own participants. On the ``uq_match_results_supersedes_result_id`` race it
+    reloads and raises :class:`NegotiationConflictError` with the moved-on state.
 
     ``load_match`` defaults to the FastAPI-free :func:`load_match_for_write`; the
     HTTP handler injects ``matches._load_match_for_scoring`` so the router's
@@ -283,13 +307,16 @@ async def propose_result(
     )
     match.results.append(result)
 
-    # Only a rated two-human match leaves the other side owing an acceptance.
-    awaiting_acceptance = _requires_confirmation(match)
+    # Only a rated two-human match, proposed by one of its own participants,
+    # leaves the other side owing an acceptance (#1523: a director's proposal
+    # never does, regardless of rated/solo — see ``_requires_confirmation``).
+    awaiting_acceptance = _requires_confirmation(match, user_id)
     if not awaiting_acceptance:
-        # Solo / unrated path: no second acceptance needed — the proposer
-        # self-accepts and the match finalizes immediately (stamping
-        # ``completed_at``). A solo match has no second human to accept, so the
-        # proposer's own id is recorded as the acceptor.
+        # Solo / unrated / director path: no second acceptance needed — the
+        # proposer self-accepts and the match finalizes immediately (stamping
+        # ``completed_at``). A solo match has no second human to accept, and a
+        # director is not a side for anyone else to accept on behalf of, so
+        # either way the proposer's own id is recorded as the acceptor.
         result.accepted_by_user_id = user_id
         result.accepted_at = datetime.now(UTC)
         # The one completion path shared with the rated accept (``finalize_match``):

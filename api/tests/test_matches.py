@@ -13,6 +13,7 @@ from sqlalchemy.sql.base import ExecutableOption
 
 from app import matches as matches_mod
 from app.domain.match.extras import CareerRecord, PreMatchRating
+from app.match_creation import create_match
 from app.match_voiding import void_match
 from app.matches import (
     _compact_games,
@@ -54,6 +55,7 @@ from app.services.dependencies import get_match_service
 from tests._helpers import (
     FakeSender,
     accept_standing_result,
+    attach_match_to_director_tournament,
     counted_statements,
     enqueued_notification_jobs,
     make_client,
@@ -1814,6 +1816,594 @@ async def test_can_score_match_without_opponent(
     body = response.json()
     sides = sorted(body["sides"], key=lambda s: s["side_number"])
     assert [s["games_won"] for s in sides] == [1, 0]
+
+
+# ----- director authorization (#1523) ---------------------------------------
+
+
+async def test_director_can_score_a_called_tournament_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: 'The director can write per-game scores on a called match between
+    two other players in their own tournament, through POST/PUT/DELETE
+    .../scores.'"""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-score",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 201
+        sides = sorted(response.json()["sides"], key=lambda s: s["side_number"])
+        assert [s["games_won"] for s in sides] == [1, 0]
+
+
+async def test_score_write_responses_keep_the_directors_scoring_flags(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A write the API just authorized must not answer with flags that deny it.
+
+    Every score handler returns the same ``MatchDetails`` the GET returns, and
+    an API or MCP client that treats the mutation response as its next state
+    reads ``can_score: false`` as "this director's scoring run is over" — while
+    a GET on the same still-scorable match says the opposite. Create, update
+    and delete are asserted in one test because they are three separate
+    serialize call sites and any one left behind reproduces the contradiction
+    on its own."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-write-flags",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+
+        entered = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert entered.status_code == 201
+        assert entered.json()["can_score"] is True
+
+        updated = await director_client.put(
+            f"/v1/matches/{created['id']}/games/1/scores",
+            json={"side_1_points": 11, "side_2_points": 6, "expected_version": 1},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["can_score"] is True
+
+        cleared = await director_client.delete(
+            f"/v1/matches/{created['id']}/games/1/scores",
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["can_score"] is True
+
+
+async def test_the_score_write_that_decides_the_board_reports_can_finalize(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The write that clinches the match is where the director learns they may
+    post the result.
+
+    ``can_finalize`` is the only thing that renders the "Post result" callout,
+    and ``current_game`` goes null on a decided board, so a response that
+    reports both false tells the director there is nothing left to do on the
+    very match they just finished scoring."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-write-finalize",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+        first = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert first.status_code == 201
+        assert first.json()["can_finalize"] is False
+
+        second = await director_client.post(
+            f"/v1/matches/{created['id']}/games/2/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert second.status_code == 201
+        body = second.json()
+        assert body["current_game"] is None
+        assert body["can_finalize"] is True
+
+
+async def test_a_participants_score_write_response_is_unchanged(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The write-response widening is the director's alone. A participant's own
+    score write still reports the participant flags, and the same match's
+    director-owned tournament changes nothing for them."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await make_user(db_session, "http-participant-write-director")
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-participant-write",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+
+        entered = await api_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert entered.status_code == 201
+        assert entered.json()["can_score"] is True
+
+
+async def test_director_can_finalize_a_result_via_post_results(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: 'The director can propose a result... the match completes at once,
+    side.won is set, the rating update runs, and the draw advances.' Also
+    pins: 'A director-submitted result is never left standing.'"""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=1)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-finalize",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=1,
+        )
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["status"] == "completed"
+        sides = sorted(body["sides"], key=lambda s: s["side_number"])
+        assert sides[0]["won"] is True
+        assert sides[1]["won"] is False
+
+
+async def test_a_stranger_who_is_neither_participant_nor_director_gets_404(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        stranger = await start_session(stranger_client, db_session)
+        del stranger
+        created = await _create_match(api_client, p2.id)
+        director = await make_user(db_session, "http-dir-stranger-director")
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-stranger",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await stranger_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 404
+
+
+async def test_the_director_of_a_different_tournament_still_gets_404(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: 'A match in a tournament the caller did not create stays a 404 for
+    that caller.' This is the case that catches a broken join — the caller
+    genuinely directs A tournament, just not this one."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as other_director_client:
+        p2 = await start_session(p2_client, db_session)
+        other_director = await start_session(other_director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        real_director = await make_user(db_session, "http-dir-real")
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-real",
+            director=real_director,
+            p1=p1,
+            p2=p2,
+        )
+        # ``other_director`` directs a genuinely different tournament — no
+        # fixture of theirs references this match.
+        other_p1 = await make_user(db_session, "http-dir-other-p1")
+        other_p2 = await make_user(db_session, "http-dir-other-p2")
+        other_match = await create_match(
+            db_session,
+            creator=other_p1,
+            opponent_user_id=other_p2.id,
+            league_id=None,
+            best_of=5,
+            rated=True,
+        )
+        await attach_match_to_director_tournament(
+            db_session,
+            other_match.id,
+            tag="http-dir-other",
+            director=other_director,
+            p1=other_p1,
+            p2=other_p2,
+        )
+
+        response = await other_director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 404
+
+
+async def test_can_score_flag_is_true_for_the_director_on_the_detail_route(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-canscore",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await director_client.get(f"/v1/matches/{created['id']}")
+        assert response.status_code == 200
+        assert response.json()["can_score"] is True
+
+
+async def test_the_director_can_still_post_a_board_the_players_left_decided(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A decided-but-unposted board must not strand the director.
+
+    `current_game` goes null once the board decides, which withdraws the Score
+    CTA, so `can_finalize` is the only thing left that renders the match page's
+    "Post result" callout. Both flags are asserted together because it is the
+    PAIR that decides whether the director has any affordance at all.
+    """
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-canfinalize",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+        # The two players score the match out and walk away without posting.
+        for game_number in (1, 2):
+            scored = await api_client.post(
+                f"/v1/matches/{created['id']}/games/{game_number}/scores/new",
+                json={"side_1_points": 11, "side_2_points": 4},
+            )
+            assert scored.status_code == 201
+
+        body = (await director_client.get(f"/v1/matches/{created['id']}")).json()
+        # The board decided, so there is no next game to deep-link to.
+        assert body["current_game"] is None
+        assert body["can_finalize"] is True
+
+        # And the callout's one-click post actually works for the director.
+        posted = await director_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert posted.status_code == 201
+        assert posted.json()["status"] == "completed"
+
+
+async def test_can_finalize_stays_false_for_a_signed_in_stranger_on_a_decided_board(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The widening is the director's alone — a spectator on the same decided
+    board gets no "Post result" callout."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await make_user(db_session, "canfinalize-stranger-director")
+        await start_session(stranger_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-stranger-canfinalize",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+        for game_number in (1, 2):
+            scored = await api_client.post(
+                f"/v1/matches/{created['id']}/games/{game_number}/scores/new",
+                json={"side_1_points": 11, "side_2_points": 4},
+            )
+            assert scored.status_code == 201
+
+        body = (await stranger_client.get(f"/v1/matches/{created['id']}")).json()
+        assert body["can_finalize"] is False
+        assert body["can_score"] is False
+
+
+async def test_your_turn_is_true_for_the_director_on_a_players_standing_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player's posted result must not strand the director either.
+
+    ``can_finalize`` goes false the instant any result exists, so once a player
+    posts, the scoring pair the tests above cover is spent and
+    ``negotiation.your_turn`` is the only read flag left that can surface the
+    director's accept — which ``accept_result`` already authorizes. Asserted
+    together with the accept itself, because a true flag over a refused write
+    would be the same dead end in a different place."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=1)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-yourturn",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=1,
+        )
+        # A rated match between two real players, posted by one of them, leaves
+        # the result STANDING — the state the director has to be able to act on.
+        posted = await api_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 4}]
+            },
+        )
+        assert posted.status_code == 201
+        assert posted.json()["status"] == "in_progress"
+        result_id = posted.json()["negotiation"]["standing_result"]["id"]
+
+        body = (await director_client.get(f"/v1/matches/{created['id']}")).json()
+        # The scoring pair is spent, so this flag is carrying the affordance
+        # alone. Both are asserted so a future widening of `can_finalize` can't
+        # quietly make the `your_turn` assertion redundant.
+        assert body["can_finalize"] is False
+        assert body["can_score"] is False
+        assert body["negotiation"]["viewer_state"] == "review"
+        assert body["negotiation"]["your_turn"] is True
+
+        accepted = await director_client.post(
+            f"/v1/matches/{created['id']}/results/{result_id}/acceptance",
+        )
+        assert accepted.status_code == 201
+        assert accepted.json()["status"] == "completed"
+
+
+async def test_your_turn_stays_false_for_a_signed_in_stranger_on_a_standing_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The negotiation widening is the director's alone — a spectator on the
+    same standing result still gets the neutral read-only mapping, so no client
+    offers them an Accept the API would refuse."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await make_user(db_session, "yourturn-stranger-director")
+        await start_session(stranger_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=1)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-stranger-yourturn",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=1,
+        )
+        posted = await api_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 4}]
+            },
+        )
+        assert posted.status_code == 201
+
+        body = (await stranger_client.get(f"/v1/matches/{created['id']}")).json()
+        assert body["negotiation"]["viewer_state"] == "review"
+        assert body["negotiation"]["your_turn"] is False
+
+
+async def test_can_score_flag_stays_false_for_a_signed_in_stranger(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as stranger_client:
+        p2 = await start_session(p2_client, db_session)
+        stranger = await start_session(stranger_client, db_session)
+        del stranger
+        created = await _create_match(api_client, p2.id)
+        director = await make_user(db_session, "http-dir-canscore-false")
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-canscore-false",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        response = await stranger_client.get(f"/v1/matches/{created['id']}")
+        assert response.status_code == 200
+        assert response.json()["can_score"] is False
+
+
+async def test_a_completed_tournament_match_stays_closed_to_the_director(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: unchanged refusals — a completed/voided match stays closed to the
+    director, with the existing copy."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        match = await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-completed",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+        match.status = MatchStatus.completed
+        await db_session.commit()
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "This match is no longer scorable."
+
+
+async def test_an_uncalled_tournament_match_stays_refused_for_the_director(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """AC: unchanged refusals — a match nobody has called to a table stays
+    refused for the director, with the existing 409 copy."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id)
+        match = await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-uncalled",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+        match.status = MatchStatus.pending
+        await db_session.commit()
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert response.status_code == 409
+        assert (
+            response.json()["detail"] == "This match hasn't been called to a table yet."
+        )
+
+
+async def test_a_directors_write_response_withholds_the_players_history_extras(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """#515's participant-only extras survive #1523's widened write gate.
+
+    Before #1523 a score-write handler could assemble the rich extras block
+    unconditionally, because ``load_match_for_write`` only ever admitted a
+    participant. A director is not one, so the write response must carry the
+    same empty block a spectator's read gets — this pins
+    ``view_extras_if_participant``."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        # A prior completed meeting is what gives these two players recent form
+        # and a head-to-head. Without it both branches below read empty and the
+        # assertions could not tell a gated response from an ungated one.
+        await _play_match_to_completion(
+            api_client, p2_client, p2.id, best_of=3, side_1_wins=True
+        )
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-extras",
+            director=director,
+            p1=p1,
+            p2=p2,
+        )
+
+        director_write = await director_client.post(
+            f"/v1/matches/{created['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert director_write.status_code == 201
+        director_body = director_write.json()
+        assert director_body["recent_form"] == []
+        assert director_body["head_to_head"] is None
+
+        # The participant's own write response is unchanged. This is what makes
+        # the two assertions above discriminating rather than vacuous.
+        participant_write = await api_client.post(
+            f"/v1/matches/{created['id']}/games/2/scores/new",
+            json={"side_1_points": 11, "side_2_points": 6},
+        )
+        assert participant_write.status_code == 201
+        participant_body = participant_write.json()
+        assert participant_body["recent_form"]
+        assert participant_body["head_to_head"]["total_meetings"] == 1
 
 
 # ----- finalize (POST /v1/matches/{id}/results) ---------------------------

@@ -17,10 +17,10 @@ from app.result_acceptance import (
     NegotiationConflictError,
     UndecidedBoardError,
 )
-from app.result_chain import accepted_result, standing_result
+from app.result_chain import accepted_result, head_result, standing_result
 from app.result_proposal import propose_result
 from app.schemas.match import MatchResultsGameWrite
-from tests._helpers import make_user
+from tests._helpers import directed_tournament_match, make_user
 
 
 def _decisive_board(winner_side: int = 1) -> list[MatchResultsGameWrite]:
@@ -139,6 +139,143 @@ async def test_counter_supersedes_the_standing_result(
     assert new_standing is not None
     assert new_standing.supersedes_result_id == first_id.id
     assert new_standing.submitted_by_user_id == opponent.id
+
+
+# ----- director authorization (#1523) ---------------------------------------
+#
+# The load-bearing invariant: a director-submitted result is NEVER left
+# standing (``awaiting_acceptance`` is always False), first proposal or
+# supersede alike — see ``_requires_confirmation``'s submitter-is-a-participant
+# conjunct.
+
+
+async def test_director_first_proposal_on_rated_match_self_finalizes(
+    db_session: AsyncSession,
+) -> None:
+    match, director = await directed_tournament_match(
+        db_session, tag="dir-propose", best_of=1
+    )
+
+    outcome = await propose_result(
+        db_session,
+        match.id,
+        director.id,
+        games=_decisive_board(winner_side=1),
+        supersedes_result_id=None,
+    )
+
+    # A director's result is authoritative — it is never left standing,
+    # regardless of the match being rated with two registered players.
+    assert outcome.awaiting_acceptance is False
+    assert outcome.match.status is MatchStatus.completed
+    sides = sorted(outcome.match.sides, key=lambda s: s.side_number)
+    assert sides[0].won is True
+    assert sides[1].won is False
+    posted = outcome.match.results[0]
+    assert posted.submitted_by_user_id == director.id
+    assert posted.accepted_by_user_id == director.id
+
+
+async def test_director_supersedes_a_players_standing_proposal_and_self_finalizes(
+    db_session: AsyncSession,
+) -> None:
+    """AC: 'The director can supersede a result a player proposed... that
+    counter also finalizes the match at once.'"""
+    match, director = await directed_tournament_match(
+        db_session, tag="dir-supersede", best_of=1
+    )
+    sides = sorted(match.sides, key=lambda s: s.side_number)
+    p1_id = sides[0].players[0].user_id
+
+    # A player proposes first — a rated two-human match, so it stays standing.
+    first = await propose_result(
+        db_session,
+        match.id,
+        p1_id,
+        games=_decisive_board(winner_side=1),
+        supersedes_result_id=None,
+    )
+    assert first.awaiting_acceptance is True
+    standing = standing_result(first.match)
+    assert standing is not None
+
+    # The director supersedes it with a counter — still finalizes at once,
+    # never left standing for anyone to accept.
+    countered = await propose_result(
+        db_session,
+        match.id,
+        director.id,
+        games=_decisive_board(winner_side=2),
+        supersedes_result_id=standing.id,
+    )
+
+    assert countered.awaiting_acceptance is False
+    assert countered.match.status is MatchStatus.completed
+    completed_sides = sorted(countered.match.sides, key=lambda s: s.side_number)
+    assert completed_sides[0].won is False
+    assert completed_sides[1].won is True
+    # The director's counter is the new head, and it's accepted (not standing)
+    # — self-finalized at once, never left for anyone to accept.
+    assert standing_result(countered.match) is None
+    new_head = head_result(countered.match)
+    assert new_head is not None
+    assert new_head.submitted_by_user_id == director.id
+    assert new_head.accepted_by_user_id == director.id
+
+
+async def test_director_first_proposal_on_unrated_match_self_finalizes_as_before(
+    db_session: AsyncSession,
+) -> None:
+    """Edge case: an unrated match already self-finalizes for a participant's
+    own proposal (``_requires_confirmation`` is already False). The director
+    path must reach the same end state, not a second one."""
+    match, director = await directed_tournament_match(
+        db_session, tag="dir-unrated", best_of=1, rated=False
+    )
+
+    outcome = await propose_result(
+        db_session,
+        match.id,
+        director.id,
+        games=_decisive_board(winner_side=1),
+        supersedes_result_id=None,
+    )
+
+    assert outcome.awaiting_acceptance is False
+    assert outcome.match.status is MatchStatus.completed
+
+
+async def test_participant_who_is_also_director_follows_the_participant_round_trip(
+    db_session: AsyncSession,
+) -> None:
+    """Constraint 9: director authority never applies to a match the director
+    plays in. A director who is also a participant in THIS match follows the
+    unchanged participant flow, including leaving a rated proposal standing
+    for the opponent to accept."""
+    match, director = await directed_tournament_match(
+        db_session, tag="dir-plays", best_of=1, director_is_participant=True
+    )
+    assert any(
+        p.user_id == director.id for side in match.sides for p in side.players
+    ), "the director must actually be seated on a side for this test to be meaningful"
+
+    outcome = await propose_result(
+        db_session,
+        match.id,
+        director.id,
+        games=_decisive_board(winner_side=1),
+        supersedes_result_id=None,
+    )
+
+    # Ordinary participant behavior: a rated two-human match leaves the
+    # director-as-proposer's own result standing for the opponent, exactly as
+    # it would for any other participant.
+    assert outcome.awaiting_acceptance is True
+    assert outcome.match.status is MatchStatus.in_progress
+    standing = standing_result(outcome.match)
+    assert standing is not None
+    assert standing.submitted_by_user_id == director.id
+    assert standing.accepted_by_user_id is None
 
 
 async def test_counter_targeting_a_stale_id_raises_negotiation_conflict(
