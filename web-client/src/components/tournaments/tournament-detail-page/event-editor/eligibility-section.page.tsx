@@ -46,7 +46,9 @@ const scoped = (container: Container) => ({
   queryColumnHeaders() {
     return container.queryByTestId('predicate-column-headers')
   },
-  /** The rule-count footnote ("N rule(s) must match"). Absent with no rules —
+  /** The rule-count footnote ("N rule(s) must match for players rated on this
+   * tournament's ladder"), with the unrated exemption (and, for the organizer
+   * of two rules or more, the AND mechanics) beside it. Absent with no rules —
    * the empty state replaces it. */
   getFootnote() {
     return container.getByTestId('eligibility-footnote')

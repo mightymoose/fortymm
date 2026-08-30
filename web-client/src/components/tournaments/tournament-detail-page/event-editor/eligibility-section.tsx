@@ -30,7 +30,10 @@ export interface EligibilitySectionProps {
 
 /** The event editor's "Eligibility" tab — a free-form, ANDed rule builder for
  * the creator; for everyone else, the same rules read back as prose. No rules
- * means the event is open to everyone, which reads the same either way. */
+ * means the event is open to everyone, which reads the same either way. With
+ * rules, both voices state the policy truthfully (ADR-0783 §3): the rules bind
+ * players rated on this tournament's ladder, and an unrated player is exempt
+ * from every one of them (#1608). */
 export const EligibilitySection = ({
   control,
   canEdit,
@@ -55,10 +58,24 @@ export const EligibilitySection = ({
         // "Empty = open to all" tells the organizer what leaving the builder
         // empty will do — config-speak for someone who cannot empty it. What is
         // true for a reader either way is the first sentence.
+        //
+        // Once a rule exists, the sentence names who it binds: the rules
+        // constrain players RATED ON THIS TOURNAMENT'S LADDER, and an unrated
+        // player passes every one of them (ADR-0783 §3) — an unqualified
+        // "players must satisfy every rule" is the lie #1608 exists to correct.
+        // The ladder qualifier is not decoration: the server compares against
+        // the rating on this tournament's league, so a player rated elsewhere is
+        // unrated here. With no rules the sentence stays as it is: a
+        // rated/unrated distinction would qualify an event that is simply open
+        // to all.
         subtitle={
-          canEdit
-            ? 'Players must satisfy every rule to enter. Empty = open to all.'
-            : 'Players must satisfy every rule to enter.'
+          fields.length === 0
+            ? canEdit
+              ? 'Players must satisfy every rule to enter. Empty = open to all.'
+              : 'Players must satisfy every rule to enter.'
+            : canEdit
+              ? "Players rated on this tournament's ladder must satisfy every rule to enter. Empty = open to all."
+              : "Players rated on this tournament's ladder must satisfy every rule to enter."
         }
         action={
           canEdit && (
@@ -138,7 +155,12 @@ export const EligibilitySection = ({
               <strong className="text-[color:var(--fg-1)]">
                 {fields.length}
               </strong>{' '}
-              {fields.length === 1 ? 'rule' : 'rules'} must match.
+              {fields.length === 1 ? 'rule' : 'rules'} must match{' '}
+              {/* WHO the rules bind, named right where the count is (#1608).
+                  "Rated" is qualified by LADDER: the server compares against the
+                  rating on this tournament's league, so a player rated in
+                  another league is unrated here. */}
+              {"for players rated on this tournament's ladder."}
               {fields.length > 1 && canEdit && (
                 <>
                   {' '}
@@ -148,7 +170,15 @@ export const EligibilitySection = ({
                   </code>
                   .
                 </>
-              )}
+              )}{' '}
+              {/* The exception the rule count alone would erase: an unrated
+                  player passes every one of these rules (ADR-0783 §3), so the
+                  exemption is stated beside the constraint, in text, never left
+                  to a color, an icon or a hover (#1608). "Exempt", not "may
+                  enter": these rules are the only thing being spoken for, and
+                  capacity and the registration window still refuse on their own
+                  terms. */}
+              Unrated players are exempt.
             </span>
           </div>
         </div>
