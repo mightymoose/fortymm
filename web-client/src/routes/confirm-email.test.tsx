@@ -306,7 +306,9 @@ describe('/confirm-email transient failures (#1616)', () => {
         }),
       ),
       http.post('*/v1/me/email/confirm', async ({ request }) => {
-        bodies.push(await request.json())
+        bodies.push(
+          (await request.json()) as { token: string; skip_merge?: boolean },
+        )
         return bodies.length === 1
           ? HttpResponse.error()
           : HttpResponse.json(mockSession)

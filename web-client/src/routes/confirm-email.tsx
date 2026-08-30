@@ -198,11 +198,14 @@ function ConfirmEmailPage() {
   // Order matters: the confirm result wins over `!token`, because we scrub the
   // token from the URL after the mutation settles (#521) — a cleared token on
   // a settled mutation is "ok"/"error", not "missing-token". A tokenless
-  // moment that still holds a retained input is a retry, not a fresh visit:
+  // moment whose confirm has already fired is a retry, not a fresh visit:
   // rendering "link incomplete" while confirmation is actively running would
   // hide the retry control and offer a misleading route back to Settings
-  // (#1616). A genuine no-token visit has no retained input and falls through
-  // to "missing-token".
+  // (#1616). A genuine no-token visit never fires a confirm, so the mutation
+  // is still idle and it falls through to "missing-token". Read that from the
+  // mutation's own reactive status, never from the `firedInput` ref — a ref
+  // read during render does not re-render when it changes, so the screen
+  // could keep the state it computed before the retry fired.
   const status: 'missing-token' | 'gate' | 'confirming' | 'ok' | 'error' =
     confirm.isSuccess
       ? 'ok'
@@ -210,7 +213,7 @@ function ConfirmEmailPage() {
         ? 'error'
         : showGate
           ? 'gate'
-          : !token && firedInput.current === null
+          : !token && confirm.isIdle
             ? 'missing-token'
             : 'confirming'
 
