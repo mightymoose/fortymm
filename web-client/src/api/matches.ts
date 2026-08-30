@@ -14,6 +14,7 @@ import {
   unwrap,
 } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
+import { NOTIFICATIONS_QUERY_KEY } from './notifications'
 import {
   matchDetailsQueryKey,
   matchDetailsResultFromPayload,
@@ -418,7 +419,17 @@ function applyGameWriteCache(
 /** Seed the cached match wholesale from a whole-board result write. The result
  * verbs' POST obliterates and replaces every scratch score server-side, so the
  * response *is* the canonical board — there's nothing to preserve, so we replace
- * rather than upsert. */
+ * rather than upsert.
+ *
+ * A result write (propose/counter/self-correction via `useProposeResult`, or
+ * `useAcceptResult`) can resolve the *other* side's "Accept your match result"
+ * prompt server-side — accepted, superseded by a counter, or otherwise no
+ * longer standing (#1583). The notifications feed and unread-count queries
+ * only reconcile that on their own 30s/60s poll otherwise, so the bell badge
+ * reads stale until then. Invalidate `NOTIFICATIONS_QUERY_KEY` here too, the
+ * one place both result verbs funnel through, so the badge and feed catch up
+ * immediately regardless of which path (notification link, dashboard, match
+ * list) got the user to the mutation. */
 function applyBoardWriteCache(
   queryClient: QueryClientArg,
   matchId: string,
@@ -426,6 +437,7 @@ function applyBoardWriteCache(
 ) {
   queryClient.setQueryData<MatchDetails>(matchQueryKey(matchId), data)
   invalidateMatchViews(queryClient, matchId)
+  queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY })
 }
 
 /**

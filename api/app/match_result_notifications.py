@@ -167,7 +167,14 @@ async def notify_result_posted(
     right match), and the standing result id (so a tapped Approve binds to the
     exact result the push described, not whatever is standing at tap time — see
     docs/adr/0007), plus a per-match ``collapse_id`` so a superseding push
-    replaces the stale one on the lock screen."""
+    replaces the stale one on the lock screen.
+
+    The prompt is *hideable* (issue #1583): it carries ``result_id`` bound to
+    the standing result, so the feed hides it once that result is no longer
+    live. If there's no standing result to bind to — the head was already
+    accepted or nothing was ever posted — there's nothing to review, so no
+    prompt is enqueued at all rather than one with no binding (which would be
+    unhideable and could go stale exactly like the bug this closes)."""
     recipient_side = opponent_side(match, poster_id)
     if recipient_side is None or not recipient_side.players:
         return
@@ -186,11 +193,11 @@ async def notify_result_posted(
     copy = _result_confirmation_copy(match, poster_id, is_counter=is_counter)
     if copy is None:
         return
-    title, body = copy
     result = standing_result(match)
-    push_data = {"match_id": str(match.id)}
-    if result is not None:
-        push_data["result_id"] = str(result.id)
+    if result is None:
+        return
+    title, body = copy
+    push_data = {"match_id": str(match.id), "result_id": str(result.id)}
     for player in recipient_side.players:
         notifications.enqueue_notification(
             NotificationJob(
@@ -203,5 +210,6 @@ async def notify_result_posted(
                 push_category=MATCH_RESULT_CONFIRMATION_CATEGORY,
                 push_data=push_data,
                 collapse_id=f"result-confirm:{match.id}",
+                result_id=result.id,
             )
         )
