@@ -37,6 +37,10 @@ export interface SolveStripProps {
   /** Owner? The Run-scheduler button is theirs alone — hidden, never disabled,
    * for a viewer (ADR-0015; the API independently 403s a non-owner). */
   canEdit: boolean
+  /** A run has settled, but a tournament-detail read started afterward has not
+   * completed yet. Its placements may still change, so another run would be a
+   * premature retry. */
+  reconciling: boolean
   /** Fire the solve request. Must reject with the `ApiError` on refusal — the
    * strip owns the inline notice (`runSchedulerNotice`), so the mutation behind
    * this must not also toast. */
@@ -275,10 +279,16 @@ const ConflictWarning = ({ solve }: { solve: ScheduleSolve | null }) => {
  *
  * The button is **withheld while a solve is in flight** (queued/running): the
  * server would absorb the click anyway (one solve per tournament), so offering it
- * would be offering a no-op. `submitting` guards the gap before the queued row
- * arrives — the double-click family (#436).
+ * would be offering a no-op. It also stays disabled while a settled request is
+ * reconciling its placements. `submitting` guards the gap before either server
+ * state arrives — the double-click family (#436).
  */
-export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
+export const SolveStrip = ({
+  solve,
+  canEdit,
+  reconciling,
+  onRun,
+}: SolveStripProps) => {
   // The last refusal, in words. Cleared when a new attempt starts — a notice about the
   // click before last is worse than none.
   //
@@ -296,7 +306,7 @@ export const SolveStrip = ({ solve, canEdit, onRun }: SolveStripProps) => {
   // window — no prop needed for that.
   const [submitting, setSubmitting] = useState(false)
 
-  const busy = submitting || solveInFlight(solve)
+  const busy = submitting || solveInFlight(solve) || reconciling
 
   const run = async () => {
     if (busy) return

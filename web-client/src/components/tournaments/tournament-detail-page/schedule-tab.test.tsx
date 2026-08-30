@@ -1,6 +1,6 @@
 import { HttpResponse } from 'msw'
 
-import { waitFor, within } from '@/test/utilities'
+import { act, waitFor, within } from '@/test/utilities'
 import {
   mockFixturePlacementEndpoint,
   mockScheduleSolveEndpoint,
@@ -1287,8 +1287,8 @@ describe('ScheduleTab', () => {
   // POST serializes (and an absorbed request can return its just-finished run),
   // so the 202's row can already be TERMINAL. Merging it would pair a solved
   // ledger with pre-solve fixtures, so `./api` stands the cache write down and
-  // the tab latches the snapshot the click happened on, holding the gate until
-  // a detail payload — which reads the solve and its fixtures together — lands.
+  // the tab latches the detail marker at POST settlement, holding the gate until
+  // the post-settlement detail payload reads solve and fixtures together.
   it('keeps the gate closed when the POST itself returns a terminal solve, until a payload reconciles it', async () => {
     let release: () => void = () => {}
     let posts = 0
@@ -1321,11 +1321,13 @@ describe('ScheduleTab', () => {
 
     page.clickRunScheduler()
     await waitFor(() => expect(posts).toBe(1))
-    release()
-    // The request has settled (the strip's latch is off and the button
-    // relights) — but the terminal 202 row merged nowhere, so the gate still
-    // holds: the notice stays up and Place/Move stay withheld.
-    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    // The request has settled, but the terminal 202 row merged nowhere. Both
+    // placement actions and another Run stay disabled until detail reconciles.
+    expect(page.getRunScheduler()).toBeDisabled()
     expect(page.getPlacementUpdating()).toBeInTheDocument()
     expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
     expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
@@ -1337,9 +1339,69 @@ describe('ScheduleTab', () => {
         buildScheduleSolve({ id: 'solve-2', trigger: 'manual' }),
       ),
     })
+    expect(page.getRunScheduler()).toBeEnabled()
     expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
     expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
     expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+  })
+
+  it('does not accept a detail read that started before the terminal POST settled as reconciliation', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json(
+                buildScheduleSolveRead({
+                  id: 'solve-2',
+                  status: 'succeeded',
+                  verdict: 'optimal',
+                }),
+                { status: 202 },
+              ),
+            )
+        }),
+    )
+
+    const tournament = buildLivePartlyPlaced(
+      buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+    )
+    page.render({
+      tournament,
+      tournamentDetailUpdatedAt: 1,
+      tables: buildTables(),
+    })
+    page.clickRunScheduler()
+    await waitFor(() => expect(posts).toBe(1))
+
+    // A poll that began before the click returns the old snapshot while the
+    // POST is still pending. Its completion advances the query timestamp, but
+    // it is not evidence of whether the server accepted this run.
+    page.rerender({ tournament, tournamentDetailUpdatedAt: 2 })
+
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    expect(page.getRunScheduler()).toBeDisabled()
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+
+    // The invalidation started after settlement now completes. This joint
+    // solve-and-fixtures read is the first payload allowed to reopen the gate.
+    page.rerender({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ id: 'solve-2', trigger: 'manual' }),
+      ),
+      tournamentDetailUpdatedAt: 3,
+    })
+    expect(page.getRunScheduler()).toBeEnabled()
+    expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
   })
 
   // The same case where the absorbed request's rerun is ALREADY queued: the
@@ -1375,8 +1437,11 @@ describe('ScheduleTab', () => {
     })
     page.clickRunScheduler()
     await waitFor(() => expect(posts).toBe(1))
-    release()
-    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    expect(page.getRunScheduler()).toBeDisabled()
 
     // First payload after the acceptance: the rerun (solve-3) the server
     // enqueued behind the absorbed request — still `queued`, so the gate holds.
@@ -1417,11 +1482,10 @@ describe('ScheduleTab', () => {
 
   // The #1614 review's ambiguous-failure case: the route commits the run
   // BEFORE it answers, so the POST can fail (a lost transport, a 5xx from a
-  // proxy) while the queue accepted the run. The success-only latch never
-  // arms and no in-flight row is cached — so the tab latches the snapshot
-  // itself (`runOutcomeAmbiguous`), holding the gate shut past `isPending`
-  // until a successful detail read reconciles it.
-  it('keeps the gate closed when the POST fails ambiguously (a proxy 5xx), until a payload reconciles it', async () => {
+  // proxy) while the queue accepted the run. No in-flight row is cached, so the
+  // mutation classifies the outcome and arms the same post-settlement detail
+  // marker, holding the gate shut until a successful detail read reconciles it.
+  it('keeps the gate closed when an intermediary returns an unrecognized 503, until a payload reconciles it', async () => {
     let release: () => void = () => {}
     let posts = 0
     mockScheduleSolveEndpoint(
@@ -1431,7 +1495,10 @@ describe('ScheduleTab', () => {
           posts += 1
           release = () =>
             resolve(
-              HttpResponse.json({ detail: 'bad gateway' }, { status: 502 }),
+              HttpResponse.json(
+                { detail: 'upstream temporarily unavailable' },
+                { status: 503 },
+              ),
             )
         }),
     )
@@ -1446,12 +1513,15 @@ describe('ScheduleTab', () => {
 
     page.clickRunScheduler()
     await waitFor(() => expect(posts).toBe(1))
-    release()
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
     // The request settled on an "error" the server never actually stated —
     // the strip shows its generic notice, but the gate still holds: the
     // notice is up and Place/Move stay withheld.
-    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
-    expect(page.queryRunNotice()).toBeInTheDocument()
+    await waitFor(() => expect(page.queryRunNotice()).toBeInTheDocument())
+    expect(page.getRunScheduler()).toBeDisabled()
     expect(page.getPlacementUpdating()).toBeInTheDocument()
     expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
     expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
@@ -1501,14 +1571,19 @@ describe('ScheduleTab', () => {
 
     page.clickRunScheduler()
     await waitFor(() => expect(posts).toBe(1))
-    release()
-    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(page.queryRunNotice()).toBeInTheDocument())
+    expect(page.getRunScheduler()).toBeDisabled()
     expect(page.getPlacementUpdating()).toBeInTheDocument()
 
     // A successful GET returned equal data, so structural sharing handed the
     // component the exact same selected object. Fetch completion — not object
     // identity — is what releases the latch.
     page.rerender({ tournament })
+    expect(page.getRunScheduler()).toBeEnabled()
     expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
     expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
     expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')

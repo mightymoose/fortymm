@@ -1745,6 +1745,46 @@ describe('useRequestScheduleSolve', () => {
       status: 'succeeded',
     })
   })
+
+  it('arms terminal reconciliation after the POST settles and before starting the detail read', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json(
+                buildScheduleSolveRead({
+                  id: 'solve-2',
+                  status: 'succeeded',
+                  verdict: 'optimal',
+                }),
+                { status: 202 },
+              ),
+            )
+        }),
+    )
+    const onReconciliationRequired = vi.fn()
+    const { invalidateSpy, wrapper } = setupClient()
+    const { result } = renderHookRaw(
+      () => useRequestScheduleSolve('t-1', onReconciliationRequired),
+      { wrapper },
+    )
+
+    act(() => result.current.mutate())
+    await waitForRaw(() => expect(posts).toBe(1))
+    expect(onReconciliationRequired).not.toHaveBeenCalled()
+
+    release()
+    await waitForRaw(() => expect(onReconciliationRequired).toHaveBeenCalledOnce())
+    await waitForRaw(() => expect(invalidateSpy).toHaveBeenCalledTimes(2))
+    expect(onReconciliationRequired.mock.invocationCallOrder[0]).toBeLessThan(
+      invalidateSpy.mock.invocationCallOrder[0],
+    )
+  })
 })
 
 // The whole point of the fixtures riding the DETAIL payload (ADR-0786): cutting a draw

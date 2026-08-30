@@ -29,6 +29,7 @@ import { parseStages } from './stages'
 import {
   parseLatestScheduleSolve,
   parseScheduleSolve,
+  runOutcomeAmbiguous,
   scheduleRefetchInterval,
   solveInFlight,
   type ScheduleSolve,
@@ -1364,7 +1365,10 @@ export function usePlaceFixture(tournamentId: string) {
  * tab's placement gate would open on it the moment `isPending` cleared. The row
  * and its placements travel together only by the detail refetch, and the tab
  * holds a local gate shut until that payload lands. */
-export function useRequestScheduleSolve(tournamentId: string) {
+export function useRequestScheduleSolve(
+  tournamentId: string,
+  onReconciliationRequired: () => void = () => {},
+) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (): Promise<ScheduleSolve> => {
@@ -1399,8 +1403,19 @@ export function useRequestScheduleSolve(tournamentId: string) {
               },
       )
     },
-    // Reconcile on BOTH paths — see the note above.
-    onSettled: () => invalidateTournament(qc, tournamentId),
+    // Reconcile on BOTH paths — see the note above. A terminal response is not
+    // cached, and an ambiguous failure may conceal an accepted run, so arm the
+    // caller's placement gate synchronously after the POST settles but BEFORE
+    // invalidation. `invalidateQueries` cancels an older overlapping refetch by
+    // default and starts a new one; only that post-settlement read may retire
+    // the marker the caller records here.
+    onSettled: (solve, error) => {
+      const needsPlacementReconciliation =
+        (solve !== undefined && !solveInFlight(solve)) ||
+        (solve === undefined && runOutcomeAmbiguous(error))
+      if (needsPlacementReconciliation) onReconciliationRequired()
+      invalidateTournament(qc, tournamentId)
+    },
   })
 }
 

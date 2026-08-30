@@ -1139,10 +1139,23 @@ describe('runSchedulerNotice', () => {
     )
   })
 
-  it('words the 503 as "nothing was queued, retry is safe"', () => {
-    const notice = runSchedulerNotice(apiError(503))
+  it('words the documented queue-unavailable 503 as "nothing was queued, retry is safe"', () => {
+    const notice = runSchedulerNotice(
+      apiError(503, {
+        detail:
+          'The scheduling queue is unavailable, so the solve was not queued. Try again in a moment.',
+      }),
+    )
     expect(notice.description).toContain('nothing was queued')
     expect(notice.description).toContain('Try again')
+  })
+
+  it('does not claim an arbitrary intermediary 503 definitely refused the run', () => {
+    const notice = runSchedulerNotice(
+      apiError(503, { detail: 'upstream temporarily unavailable' }),
+    )
+    expect(notice.title).toBe("Couldn't run the scheduler")
+    expect(notice.description).not.toContain('nothing was queued')
   })
 
   it('words a network failure (status 0) as the connection, never the server', () => {
@@ -1172,7 +1185,22 @@ describe('runOutcomeAmbiguous', () => {
   )
 
   it('reads the documented 503 as definite — the queue was unreachable, nothing was queued', () => {
-    expect(runOutcomeAmbiguous(apiError(503))).toBe(false)
+    expect(
+      runOutcomeAmbiguous(
+        apiError(503, {
+          detail:
+            'The scheduling queue is unavailable, so the solve was not queued. Try again in a moment.',
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  it('reads an arbitrary intermediary 503 as ambiguous', () => {
+    expect(
+      runOutcomeAmbiguous(
+        apiError(503, { detail: 'upstream temporarily unavailable' }),
+      ),
+    ).toBe(true)
   })
 
   it('reads a lost transport (status 0) as ambiguous', () => {

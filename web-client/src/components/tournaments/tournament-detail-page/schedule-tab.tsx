@@ -10,7 +10,7 @@ import {
   Users,
 } from 'lucide-react'
 import { Loader2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,7 @@ import {
   type ScheduleMatch,
   type ScheduleTable,
 } from '../data/schedule'
-import { runOutcomeAmbiguous, solveInFlight } from '../data/solve'
+import { solveInFlight } from '../data/solve'
 import {
   buildTimelineBoard,
   calledAtLabel,
@@ -614,7 +614,19 @@ export const ScheduleTab = ({
 }: ScheduleTabProps) => {
   const canEdit = tournament.canEdit
   const place = usePlaceFixture(tournament.id)
-  const requestSolve = useRequestScheduleSolve(tournament.id)
+  const [detailUpdatedAtAtSettlement, setDetailUpdatedAtAtSettlement] = useState<
+    number | null
+  >(null)
+  // Mutation callbacks can run after this render's event-handler closure. Keep
+  // the latest successful detail marker available so the settle callback arms
+  // against every read that completed while the POST was pending.
+  const latestDetailUpdatedAt = useRef(tournamentDetailUpdatedAt)
+  useLayoutEffect(() => {
+    latestDetailUpdatedAt.current = tournamentDetailUpdatedAt
+  }, [tournamentDetailUpdatedAt])
+  const requestSolve = useRequestScheduleSolve(tournament.id, () => {
+    setDetailUpdatedAtAtSettlement(latestDetailUpdatedAt.current)
+  })
   // **Provisional placements** (#1614): while the latest solve is `queued` or
   // `running`, the fixture placements this tab renders are the server's LAST
   // ACCEPTED plan — the go-live transition commits matches and enqueues the
@@ -649,34 +661,33 @@ export const ScheduleTab = ({
   //    ~3s in-flight poll) hands back the same row or a later one, and a
   //    terminal payload restores the actions, as the tests below pin.
   // 3. **When the 202 itself arrives terminal** — or the request fails
-  //    ambiguously (#1614 review) — the cache write stands down and the
-  //    success-only callback never arms, so the tab latches the detail
-  //    query's successful-update marker and holds the gate shut until
-  //    that marker advances. Terminal-202: merging a
+  //    ambiguously (#1614 review) — the cache write stands down, so the solve
+  //    mutation arms this tab's detail-query marker AFTER the POST settles and
+  //    immediately BEFORE it invalidates detail. Invalidation cancels any
+  //    older overlapping read and starts a new one; only completion of that
+  //    post-settlement read can advance the marker and reopen the gate.
+  //    Terminal-202: merging a
   //    solved row would pair it with this snapshot's PRE-solve fixtures, a
   //    state no server read ever produced. Ambiguous failure (a lost
   //    transport or a proxy 5xx — `runOutcomeAmbiguous` in `../data/solve`):
   //    the route commits the run before it answers, so the run may be
-  //    accepted while `mutateAsync` rejects, and once `isPending` cleared the
+  //    accepted while `mutateAsync` rejects, and once `isPending` clears the
   //    cached terminal (or null) solve would make Place/Move actionable again
   //    on placements the accepted worker may still replace. Either way, any
-  //    detail payload — settle refetch or poll — reads the solve and its
-  //    fixtures together, so its successful completion IS the reconciliation.
+  //    post-settlement detail payload reads the solve and its fixtures together,
+  //    so its successful completion IS the reconciliation.
   //    This tracks the query marker rather than `tournament` identity because
   //    structural sharing preserves that selected object after an equal read.
   //    A failed refetch cannot open the gate — its marker does not advance — so
-  //    this bridge fails shut. A DEFINITE refusal (the
-  //    documented 422/403/503) arms nothing: the server answered "nothing was
-  //    queued", so the pre-click state is the truth.
-  const [detailUpdatedAtAtRequest, setDetailUpdatedAtAtRequest] = useState<
-    number | null
-  >(null)
+  //    this bridge fails shut. A DEFINITE refusal (a 4xx, or the application's
+  //    exact queue-unavailable 503 body) arms nothing: the server answered
+  //    "nothing was queued", so the pre-click state is the truth.
   // Bridge 3, derived — no effect, no clearing: the latch is held until a
   // successful detail read advances the query marker. A later click re-arms it
   // against the then-current marker.
   const runAwaitingDetail =
-    detailUpdatedAtAtRequest !== null &&
-    tournamentDetailUpdatedAt <= detailUpdatedAtAtRequest
+    detailUpdatedAtAtSettlement !== null &&
+    tournamentDetailUpdatedAt <= detailUpdatedAtAtSettlement
   const placementActionable =
     !solveInFlight(tournament.latestScheduleSolve) &&
     !requestSolve.isPending &&
@@ -759,35 +770,8 @@ export const ScheduleTab = ({
       <SolveStrip
         solve={tournament.latestScheduleSolve}
         canEdit={canEdit}
-        onRun={async () => {
-          const detailUpdatedAtBeforeRequest = tournamentDetailUpdatedAt
-          try {
-            await requestSolve.mutateAsync()
-          } catch (error) {
-            // An AMBIGUOUS failure arms the latch too (#1614 review): the
-            // route commits the run before it answers, so a lost transport
-            // (status 0) or a proxy 5xx can leave the run accepted while
-            // `mutateAsync` rejects — the success-only latch below never
-            // arms, and once `isPending` clears, the cached terminal (or
-            // null) solve makes Place/Move actionable again on placements
-            // the accepted worker may still replace. So the same snapshot is
-            // latched here, holding the gate shut across the ambiguity until
-            // a successful detail read — which reads the solve and its
-            // placements together — reconciles it (the refetch the mutation's
-            // `onSettled` triggers, the in-flight poll, or any later read).
-            // A DEFINITE refusal (the documented 422/403/503 — the server
-            // answered "nothing was queued") releases the gate instead, as
-            // the refusal notice says it may. The error rethrows either way:
-            // the strip owns the inline refusal notice.
-            if (runOutcomeAmbiguous(error)) {
-              setDetailUpdatedAtAtRequest(detailUpdatedAtBeforeRequest)
-            }
-            throw error
-          }
-          // Bridge 3's latch: the completed detail read this request began on.
-          // The next successful detail read reconciles it (see above).
-          setDetailUpdatedAtAtRequest(detailUpdatedAtBeforeRequest)
-        }}
+        reconciling={runAwaitingDetail}
+        onRun={() => requestSolve.mutateAsync().then(() => undefined)}
       />
 
       {/* The provisional half of the same fact: the strip above says the solver

@@ -975,6 +975,18 @@ const noDrawnEventsBodySchema = z.object({
   detail: z.object({ code: z.literal('no_drawn_events') }),
 })
 
+/** The queue adapter's one definite 503 refusal. Other infrastructure can mint
+ * the same status after the API accepted the run, so status alone is not proof
+ * that nothing was queued. */
+const queueUnavailableBodySchema = z.object({
+  detail: z.literal(
+    'The scheduling queue is unavailable, so the solve was not queued. Try again in a moment.',
+  ),
+})
+
+const isQueueUnavailableRefusal = (error: ApiError): boolean =>
+  error.status === 503 && queueUnavailableBodySchema.safeParse(error.body).success
+
 /** What a refused run looks like to the director, inline on the strip. */
 export interface RunSchedulerNotice {
   title: string
@@ -988,8 +1000,9 @@ export interface RunSchedulerNotice {
  *   error in any real sense: the page simply got ahead of the draws.
  * - **403** — not the owner. The button is not offered to a non-owner, so this is
  *   a stale or forged view; say who may, not what went wrong.
- * - **503** — the queue was unreachable, nothing was queued, retrying is safe —
- *   which is exactly what the notice says.
+ * - **the queue-unavailable 503 body** — the queue was unreachable, nothing was
+ *   queued, retrying is safe — which is exactly what the notice says. An
+ *   unrecognized 503 takes the generic path because a proxy can mint it.
  * - **status 0** — the network, per the repo's taxonomy: the server was never
  *   reached, and the copy must not claim otherwise.
  * - anything else — the honest generic, retry included.
@@ -1012,7 +1025,7 @@ export function runSchedulerNotice(error: unknown): RunSchedulerNotice {
         description: 'Only the tournament owner can run the scheduler.',
       }
     }
-    if (error.status === 503) {
+    if (isQueueUnavailableRefusal(error)) {
       return {
         title: 'The scheduler is unavailable right now',
         description:
@@ -1046,8 +1059,10 @@ export function runSchedulerNotice(error: unknown): RunSchedulerNotice {
  *
  * A **definite** refusal is one the server *answered*: any 4xx (the documented
  * 422 "cut a draw first", the 403) — it read the request and refused, nothing
- * was queued. The **503** is definite by contract too: the queue was
- * unreachable, nothing was queued (`runSchedulerNotice` says exactly that).
+ * was queued. The application's **queue-unavailable 503 body** is definite by
+ * contract too: the queue was unreachable, nothing was queued
+ * (`runSchedulerNotice` says exactly that). An unrecognized 503 may come from an
+ * intermediary after acceptance and remains ambiguous.
  * Anything that is not an `ApiError` never got an answer, so it is ambiguous.
  *
  * Pure — unit-tested next to `runSchedulerNotice`, whose copy already spells
@@ -1055,9 +1070,9 @@ export function runSchedulerNotice(error: unknown): RunSchedulerNotice {
  */
 export function runOutcomeAmbiguous(error: unknown): boolean {
   if (!(error instanceof ApiError)) return true
-  // The documented queue-unavailable refusal: the contract says nothing was
-  // queued, so the click is accounted for.
-  if (error.status === 503) return false
+  // Only the documented queue-unavailable body proves nothing was queued. A
+  // proxy can mint an arbitrary 503 after the upstream accepted the run.
+  if (isQueueUnavailableRefusal(error)) return false
   // Any 4xx the server answered is a definite refusal; status 0 (the
   // transport) and any other 5xx (a proxy after the upstream committed) are
   // ambiguous.
