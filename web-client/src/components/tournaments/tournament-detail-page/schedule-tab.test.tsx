@@ -1,3 +1,5 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render as renderRaw } from '@testing-library/react'
 import { HttpResponse } from 'msw'
 
 import { act, waitFor, within } from '@/test/utilities'
@@ -32,6 +34,7 @@ import {
 } from '../data/seed.factory'
 import type { ScheduleSolve, ScheduleSolveTrigger } from '../data/solve'
 import type { Tournament } from '../data/types'
+import { ScheduleTab } from './schedule-tab'
 import { scheduleTabPage as page } from './schedule-tab.page'
 
 /** A drawn event with one match PLACED on table `t1` (in progress) and one still
@@ -1402,6 +1405,77 @@ describe('ScheduleTab', () => {
     expect(page.getRunScheduler()).toBeEnabled()
     expect(page.queryPlacementUpdating()).not.toBeInTheDocument()
     expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+  })
+
+  it('snapshots an overlapping detail completion from the query cache when the terminal POST settles', async () => {
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json(
+                buildScheduleSolveRead({
+                  id: 'solve-2',
+                  status: 'succeeded',
+                  verdict: 'optimal',
+                }),
+                { status: 202 },
+              ),
+            )
+        }),
+    )
+
+    const tournament = buildLivePartlyPlaced(
+      buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+    )
+    const tables = buildTables()
+    const queryKey = ['tournaments', tournament.id] as const
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    queryClient.setQueryData(queryKey, { tournament, tables }, { updatedAt: 1 })
+    const view = renderRaw(
+      <QueryClientProvider client={queryClient}>
+        <ScheduleTab
+          tournament={tournament}
+          tournamentDetailUpdatedAt={1}
+          tables={tables}
+        />
+      </QueryClientProvider>,
+    )
+
+    page.clickRunScheduler()
+    await waitFor(() => expect(posts).toBe(1))
+
+    // An already-running detail read completes after React's last committed
+    // prop but immediately before the terminal POST settles. TanStack owns the
+    // newer marker now; this component has not rendered it yet.
+    queryClient.setQueryData(queryKey, { tournament, tables }, { updatedAt: 2 })
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+
+    // React now commits that overlapping read. It must NOT count as the
+    // post-settlement reconciliation: Place/Move remain withheld until the
+    // invalidation started by onSettled returns a still-newer payload.
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <ScheduleTab
+          tournament={tournament}
+          tournamentDetailUpdatedAt={2}
+          tables={tables}
+        />
+      </QueryClientProvider>,
+    )
+    expect(page.getRunScheduler()).toBeDisabled()
+    expect(page.getPlacementUpdating()).toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
   })
 
   // The same case where the absorbed request's rerun is ALREADY queued: the

@@ -10,7 +10,7 @@ import {
   Users,
 } from 'lucide-react'
 import { Loader2 } from 'lucide-react'
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -617,15 +617,13 @@ export const ScheduleTab = ({
   const [detailUpdatedAtAtSettlement, setDetailUpdatedAtAtSettlement] = useState<
     number | null
   >(null)
-  // Mutation callbacks can run after this render's event-handler closure. Keep
-  // the latest successful detail marker available so the settle callback arms
-  // against every read that completed while the POST was pending.
-  const latestDetailUpdatedAt = useRef(tournamentDetailUpdatedAt)
-  useLayoutEffect(() => {
-    latestDetailUpdatedAt.current = tournamentDetailUpdatedAt
-  }, [tournamentDetailUpdatedAt])
-  const requestSolve = useRequestScheduleSolve(tournament.id, () => {
-    setDetailUpdatedAtAtSettlement(latestDetailUpdatedAt.current)
+  const requestSolve = useRequestScheduleSolve(tournament.id, (queryUpdatedAt) => {
+    // The query cache is authoritative at settlement: it may already contain a
+    // successful overlapping read React has not committed as this prop yet.
+    // Keep the committed marker as a floor for cache-less standalone consumers.
+    setDetailUpdatedAtAtSettlement(
+      Math.max(queryUpdatedAt, tournamentDetailUpdatedAt),
+    )
   })
   // **Provisional placements** (#1614): while the latest solve is `queued` or
   // `running`, the fixture placements this tab renders are the server's LAST

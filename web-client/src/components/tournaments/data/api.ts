@@ -1367,7 +1367,7 @@ export function usePlaceFixture(tournamentId: string) {
  * holds a local gate shut until that payload lands. */
 export function useRequestScheduleSolve(
   tournamentId: string,
-  onReconciliationRequired: () => void = () => {},
+  onReconciliationRequired: (detailUpdatedAtAtSettlement: number) => void = () => {},
 ) {
   const qc = useQueryClient()
   return useMutation({
@@ -1413,7 +1413,15 @@ export function useRequestScheduleSolve(
       const needsPlacementReconciliation =
         (solve !== undefined && !solveInFlight(solve)) ||
         (solve === undefined && runOutcomeAmbiguous(error))
-      if (needsPlacementReconciliation) onReconciliationRequired()
+      if (needsPlacementReconciliation) {
+        // Read the marker from TanStack at the settlement boundary, not from a
+        // React prop/ref that may still be waiting to commit an overlapping
+        // detail completion. Only a successful read started by the invalidation
+        // below may advance beyond this snapshot and retire the caller's latch.
+        const detailUpdatedAtAtSettlement =
+          qc.getQueryState(tournamentKey(tournamentId))?.dataUpdatedAt ?? 0
+        onReconciliationRequired(detailUpdatedAtAtSettlement)
+      }
       invalidateTournament(qc, tournamentId)
     },
   })
