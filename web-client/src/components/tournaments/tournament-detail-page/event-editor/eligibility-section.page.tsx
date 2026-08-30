@@ -18,6 +18,12 @@ const scoped = (container: Container) => ({
   getAddRuleButton() {
     return container.getByRole('button', { name: /Add (a )?rule/ })
   },
+  /** The empty state's "Add a rule" CTA. Pinned by exact name — the header's
+   * "Add rule" also matches /Add (a )?rule/, so `getAddRuleButton` would
+   * find two in the empty state. */
+  getEmptyStateAddButton() {
+    return container.getByRole('button', { name: 'Add a rule' })
+  },
   /** Absent for a viewer: a mutating affordance is hidden, never disabled. */
   queryAddRuleButton() {
     return container.queryByRole('button', { name: /Add (a )?rule/ })

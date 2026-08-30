@@ -21,6 +21,9 @@ describe('EligibilitySection', () => {
     eligibilitySectionPage.render({ event: buildEvent({ predicates: [] }) })
     expect(eligibilitySectionPage.queryRows()).toHaveLength(0)
     expect(document.body).toHaveTextContent('Open to all players')
+    // The organizer's way out of the empty state. The viewer's absence is
+    // pinned in the read-only describe; this is its editable twin.
+    expect(eligibilitySectionPage.getEmptyStateAddButton()).toBeInTheDocument()
   })
 
   // The three mutations, each asserted against the live form state the section
@@ -82,6 +85,12 @@ describe('EligibilitySection', () => {
       expect(screen.getByText(SHARED, { exact: true })).toBeInTheDocument()
       expect(screen.queryByText(/Empty = open to all/)).toBeNull()
     })
+  })
+
+  // The editable twin of the read-only test that pins the headers' absence.
+  it('labels the rule rows with the column headers for the organizer', () => {
+    eligibilitySectionPage.render({ event: buildEvent({ predicates: twoRules() }) })
+    expect(eligibilitySectionPage.queryColumnHeaders()).toBeInTheDocument()
   })
 
   // The one-rule summary is a plain count ("1 rule must match."), not the
