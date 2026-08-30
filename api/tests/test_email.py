@@ -27,6 +27,7 @@ from app.sessions import (
     EMAIL_MERGE_CONTEXT_PREFIX,
     _pending_email_token_clause,
 )
+from app.token_hashing import hash_token
 from tests._helpers import CSRF_EVENT_HOOKS, make_client, start_session
 
 
@@ -805,7 +806,225 @@ async def test_confirming_the_live_merge_link_sweeps_replaced_merge_rows(
     assert survivor.merged_into_user_id is None
 
 
-async def test_confirm_reports_invalid_not_replaced_when_the_newer_merge_link_cannot_work(
+async def test_confirm_burning_the_live_change_token_sweeps_replaced_rows(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """A replaced row must not outlive a live token that is burned without
+    confirming: with no unreplaced row left, no click can ever report
+    ``replaced`` again and no later issuance may ever come to age-sweep the
+    survivors — so the ``user.email != expected_old`` burn sweeps them too
+    (#1616)."""
+    user = await start_session(api_client, db_session)
+    await _capture_raw_token(api_client, db_session, fake_email_queue)  # link 1
+    await _set_email(api_client, email="rita2@example.com")  # link 2 (live)
+    raw_2 = _all_send_tokens(fake_email_queue)[-1]
+
+    # Move the current confirmed address out from under the context both
+    # tokens were cut against (admin reset, ...) — the change branch burns
+    # the LIVE link 2 on the ``user.email != expected_old`` check.
+    user.email = "someone-else@example.com"
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_2})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That confirmation link is invalid or expired."
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+async def test_confirm_burning_the_live_merge_token_sweeps_replaced_rows(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Same sweep for the merge flavour: when the owner no longer owns the
+    address the live merge link was cut against, that link is burned — and
+    the older replaced links must go with it (#1616)."""
+    owner = User(
+        username="owner", email="taken@example.com", confirmed_at=datetime.now(UTC)
+    )
+    db_session.add(owner)
+    await db_session.commit()
+
+    await start_session(api_client, db_session)
+    await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="taken@example.com"
+    )  # merge link 1
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )  # merge link 2 (live, but about to become unconfirmable)
+    raw_2 = _all_send_tokens(fake_email_queue)[-1]
+
+    owner.email = "moved@example.com"
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_2})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That confirmation link is invalid or expired."
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+async def test_confirm_burning_the_live_token_on_a_collision_sweeps_replaced_rows(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The IntegrityError path (another user confirmed the address first)
+    burns the live token without confirming — the replaced rows must be
+    swept with it, or they outlive every link that could report them
+    (#1616)."""
+    user = await start_session(api_client, db_session)
+    await _capture_raw_token(api_client, db_session, fake_email_queue)  # link 1
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )  # link 2 (live)
+    raw_2 = _all_send_tokens(fake_email_queue)[-1]
+
+    # Another user takes the address between issue and confirm — the
+    # users.email unique constraint fires inside the confirm's try block.
+    db_session.add(
+        User(username="owner", email="rita@example.com", confirmed_at=datetime.now(UTC))
+    )
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_2})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That confirmation link is invalid or expired."
+
+    # The confirm did not land for either party.
+    await db_session.refresh(user)
+    assert user.email is None
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+async def test_confirm_burning_an_expired_live_token_sweeps_replaced_rows(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Expiry is also a permanent burn of the live token: once it is deleted,
+    no click can ever report ``replaced`` again, so the replaced rows are
+    swept instead of waiting for an issuance that may never come (#1616)."""
+    await start_session(api_client, db_session)
+    await _capture_raw_token(api_client, db_session, fake_email_queue)  # link 1
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )  # link 2 (live)
+    raw_2 = _all_send_tokens(fake_email_queue)[-1]
+
+    token_row = await _live_change_token(db_session)
+    token_row.created_at = (
+        datetime.now(UTC) - EMAIL_CONFIRM_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_2})
+    assert response.status_code == 400
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
+async def test_confirm_burning_a_replaced_expired_token_keeps_its_reportable_siblings(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Falsification target for the sweep guard: a replaced token that has
+    ALSO expired is burned on its own, but a live successor still exists —
+    the sibling replaced rows are still reportable and must NOT be swept
+    with it. Sweeping unconditionally in the expiry path turns this red."""
+    await start_session(api_client, db_session)
+    await _capture_raw_token(api_client, db_session, fake_email_queue)  # link 1
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )  # link 2
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )  # link 3 (live)
+    raw_1, raw_2, _raw_3 = _all_send_tokens(fake_email_queue)
+
+    # Every resend re-delivers to the pending token's ``sent_to``, so the
+    # raw token — not ``sent_to`` — is what identifies link 1's row.
+    token_row = (
+        await db_session.execute(
+            select(UserToken).where(UserToken.token == hash_token(raw_1))
+        )
+    ).scalar_one()
+    token_row.created_at = (
+        datetime.now(UTC) - EMAIL_CONFIRM_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_1})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That confirmation link is invalid or expired."
+
+    # Link 2 survived the burn of its expired sibling and still reports
+    # ``replaced`` while link 3 is live.
+    siblings = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+                    UserToken.replaced_at.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(siblings) == 1
+    still_reportable = await api_client.post(
+        "/v1/me/email/confirm", json={"token": raw_2}
+    )
+    assert still_reportable.status_code == 400
+    assert still_reportable.json()["detail"]["code"] == "replaced"
+
+
+async def test_confirm_reports_invalid_not_replaced_when_a_newer_merge_link_is_dead(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
     """``replaced`` sends the user off to open their most recent email, so it
@@ -838,7 +1057,7 @@ async def test_confirm_reports_invalid_not_replaced_when_the_newer_merge_link_ca
     assert response.json()["detail"] == "That confirmation link is invalid or expired."
 
 
-async def test_confirm_reports_invalid_not_replaced_when_the_newer_change_link_cannot_work(
+async def test_confirm_reports_invalid_not_replaced_when_a_newer_change_link_is_dead(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
     """Same mirroring for the change flavour: the change branch of

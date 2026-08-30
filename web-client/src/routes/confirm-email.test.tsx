@@ -288,6 +288,85 @@ describe('/confirm-email transient failures (#1616)', () => {
     expect(calls).toBe(2)
   })
 
+  it('replays skip_merge when a declined merge is retried after a transport failure', async () => {
+    // "Not now" tells the server to sign the owner in without folding the
+    // guest. If that request dies on a transport error, the retry must carry
+    // the same skip_merge: true — replaying only the token would default it
+    // back to false and merge the guest's matches the user explicitly
+    // declined (#1616).
+    const bodies: Array<{ token: string; skip_merge?: boolean }> = []
+    server.use(
+      http.post('*/v1/merge/preview', () =>
+        HttpResponse.json({
+          is_merge: true,
+          owner_username: 'rita',
+          guest_username: null,
+          guest_matches_count: 2,
+          adopts_guest_username: false,
+        }),
+      ),
+      http.post('*/v1/me/email/confirm', async ({ request }) => {
+        bodies.push(await request.json())
+        return bodies.length === 1
+          ? HttpResponse.error()
+          : HttpResponse.json(mockSession)
+      }),
+    )
+    renderAt('/confirm-email?token=declined-merge-token')
+
+    await screen.findByRole('heading', { name: /bring your matches over/i })
+    screen
+      .getByRole('button', { name: /not now — just sign me in/i })
+      .click()
+
+    await screen.findByRole('heading', { name: /we couldn't check this link/i })
+
+    screen.getByRole('button', { name: /try again/i }).click()
+
+    await screen.findByText(/you’re in\./i)
+    expect(bodies).toEqual([
+      { token: 'declined-merge-token', skip_merge: true },
+      { token: 'declined-merge-token', skip_merge: true },
+    ])
+  })
+
+  it('keeps the confirming screen up while a retry is in flight', async () => {
+    // After the first transient failure the URL scrub has cleared the token.
+    // While the retry runs, the page must show the confirming screen — not
+    // "This link is incomplete", which would hide the retry control and
+    // offer a misleading route back to Settings mid-attempt (#1616).
+    let calls = 0
+    server.use(
+      http.post('*/v1/me/email/confirm', () => {
+        calls += 1
+        if (calls === 1) return HttpResponse.error()
+        return new Promise(() => {}) // hang: the retry stays pending
+      }),
+    )
+    renderAt('/confirm-email?token=slow-retry-token')
+
+    await screen.findByRole('heading', { name: /we couldn't check this link/i })
+    expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+      'data-state',
+      'error',
+    )
+
+    screen.getByRole('button', { name: /try again/i }).click()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('link-check-page')).toHaveAttribute(
+        'data-state',
+        'checking',
+      )
+    })
+    expect(
+      screen.queryByText(/this link is incomplete/i),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /try again/i }),
+    ).not.toBeInTheDocument()
+  })
+
   it('keeps a non-coded 4xx on the expired screen', async () => {
     // A real rejection — the server saw the token and said no — is the only
     // thing the expired screen may claim.

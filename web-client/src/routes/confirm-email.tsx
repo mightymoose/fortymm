@@ -146,16 +146,22 @@ function ConfirmEmailPage() {
     }
   }
 
+  // The token is scrubbed from the URL once the mutation settles (#521), but
+  // a transient failure keeps its retry button on screen — remember the exact
+  // input that attempt carried so "Try again" can replay it whole. Retaining
+  // only the token would drop `skipMerge`, so a retried "Not now" would
+  // default it back to false and merge the guest data the user explicitly
+  // declined (#1616).
+  const firedInput = useRef<FinalizeTokenInput | null>(null)
+
   // Every confirm this page ever fires wants the toast wired the same way —
   // wrap it once so the mutate-level `onSuccess` doesn't repeat at each call
-  // site.
-  const confirmWithToast = (input: FinalizeTokenInput) =>
+  // site. Recording the input here — the one choke point every confirm passes
+  // through — keeps the retained copy identical to the real attempt.
+  const confirmWithToast = (input: FinalizeTokenInput) => {
+    firedInput.current = input
     confirm.mutate(input, { onSuccess: showMergeToast })
-
-  // The token is scrubbed from the URL once the mutation settles (#521), but
-  // a transient failure keeps its retry button on screen — remember the token
-  // it was cut for so that retry can re-fire the confirm.
-  const firedToken = useRef('')
+  }
 
   // Preview the link first. A merge that would carry matches over waits for the
   // user at the gate; everything else (plain confirm, empty guest, or a preview
@@ -163,7 +169,6 @@ function ConfirmEmailPage() {
   useEffect(() => {
     if (fired.current || !token) return
     fired.current = true
-    firedToken.current = token
     preview.mutate(token, {
       onSuccess: (p) => {
         if (!(p.is_merge && p.guest_matches_count > 0)) {
@@ -192,8 +197,12 @@ function ConfirmEmailPage() {
 
   // Order matters: the confirm result wins over `!token`, because we scrub the
   // token from the URL after the mutation settles (#521) — a cleared token on
-  // a settled mutation is "ok"/"error", not "missing-token". A genuine
-  // no-token visit falls through to "missing-token".
+  // a settled mutation is "ok"/"error", not "missing-token". A tokenless
+  // moment that still holds a retained input is a retry, not a fresh visit:
+  // rendering "link incomplete" while confirmation is actively running would
+  // hide the retry control and offer a misleading route back to Settings
+  // (#1616). A genuine no-token visit has no retained input and falls through
+  // to "missing-token".
   const status: 'missing-token' | 'gate' | 'confirming' | 'ok' | 'error' =
     confirm.isSuccess
       ? 'ok'
@@ -201,7 +210,7 @@ function ConfirmEmailPage() {
         ? 'error'
         : showGate
           ? 'gate'
-          : !token
+          : !token && firedInput.current === null
             ? 'missing-token'
             : 'confirming'
 
@@ -237,12 +246,16 @@ function ConfirmEmailPage() {
 
   // The `error` screen's one action is the retry: the request never answered
   // the question "is this token good?", so the link is probably still live
-  // and a resend would replace it (#1616).
+  // and a resend would replace it (#1616). The retry replays the whole input
+  // the failed attempt carried — `skipMerge` included.
   const errorFooter = (
     <button
       type="button"
       style={{ ...btnPrimary, width: '100%' }}
-      onClick={() => confirmWithToast({ token: firedToken.current })}
+      onClick={() => {
+        const input = firedInput.current
+        if (input !== null) confirmWithToast(input)
+      }}
     >
       Try again
     </button>
