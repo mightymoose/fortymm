@@ -1,15 +1,26 @@
 ---
-description: Run a ticket and every child Planning creates from Discovery to Waiting For Sign Off
+description: Run a ticket and every child Planning creates from Discovery all the way to merged and Done
 ---
 
 Run the ticket workflow below for GitHub issue `$1` and for every child ticket
 that Planning creates under it.
 
 You are the local OpenCode coordinator. Use the Herdr CLI from this OpenCode
-session. Do not perform Discovery, Planning, Implementation or a repair yourself.
+session. Do not perform Discovery, Planning, Implementation, a repair or a
+testing pass yourself.
 
-The run ends at **Waiting For Sign Off**. It never merges and it never releases
-the human gate. `.claude/rules/the-review-gate.md` still owns that gate.
+**The run ends at Done, with every pull request merged.** It does not stop at
+**Waiting For Sign Off**. That column is a signpost partway through, not the
+finish line: it records that Codex passed a leaf and that the leaf is queued for
+phase four's testing pass.
+
+So a ticket already sitting in **Waiting For Sign Off** is *not* finished, and it
+is never a reason to report that there is nothing to do. It resumes at phase
+four. **Resuming a cancelled run** works out where any ticket resumes, and it is
+the first thing you run.
+
+The only terminal states are **Done** with the pull request merged, and a **stop**
+code from the table below.
 
 ## Coordinator rules
 
