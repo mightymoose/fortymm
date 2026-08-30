@@ -84,9 +84,9 @@ function seedScoreValues(
   gameNumber: number,
   ownSave: ReturnType<typeof useGameSaveState>,
 ): GameScoreInput {
-  const [mySide] = orderedSides(data)
-  if (!mySide) return { me: '', opp: '' }
-  const mySideNumber: 1 | 2 = mySide.side_number === 2 ? 2 : 1
+  const [firstSide] = orderedSides(data)
+  if (!firstSide) return { me: '', opp: '' }
+  const mySideNumber: 1 | 2 = firstSide.side_number === 2 ? 2 : 1
   const persistedScore =
     data.games.find((g) => g.game_number === gameNumber)?.score ?? null
   const persistedMe = persistedScore
@@ -400,12 +400,6 @@ function ScoreEntryInner({
     )
   }
 
-  // `can_score` above already guarantees the viewer is authorized — a
-  // participant OR the tournament's director (#1523) — on a scorable,
-  // two-sided match. `mySide` narrows *which* of those it is: `null`
-  // identifies the director's neutral, side-number-ordered view instead of
-  // the participant's "me/opp" perspective.
-  const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
   // The perspective pair: the viewer's own side first when they're a
   // participant (unchanged), else side 1 / side 2 in order (`ordered-sides.ts`,
   // shared with the players panel / scoreboard) for the director's neutral
@@ -415,7 +409,13 @@ function ScoreEntryInner({
   if (!firstSide || !secondSide) {
     return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
   }
-  const isDirectorView = mySide === null
+  // `can_score` above already guarantees the viewer is authorized — a
+  // participant OR the tournament's director (#1523) — on this scorable,
+  // two-sided match. `orderedSides` puts the viewer's own side first when
+  // they're a participant, so `!firstSide.is_current_user_side` identifies
+  // the director's neutral, side-number-ordered view instead of the
+  // participant's "me/opp" perspective.
+  const isDirectorView = !firstSide.is_current_user_side
 
   // The game number past which no more games can be played: once a side has
   // clinched (gap-tolerant), the trailing games are unplayable. Drives the nav
