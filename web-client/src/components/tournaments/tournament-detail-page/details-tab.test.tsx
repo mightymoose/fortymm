@@ -745,11 +745,14 @@ describe('DetailsTab', () => {
       expect(detailsTabPage.querySaveError()).toBeNull()
     })
 
-    // The complementary half: the guard suppresses a refusal whose draft is
-    // GONE, not dirtiness itself. Work re-typed after the mid-flight Revert
-    // re-dirties the form, and a refusal beside that unsaved work is the
-    // truth: the last save the organizer saw really did fail.
-    it('still speaks when the draft was re-edited after a mid-flight Revert', async () => {
+    // The finding's exact scenario (#1593 review), beyond the pristine case
+    // above: Revert abandons the snapshot the PATCH was sent, and the form's
+    // dirtiness afterwards belongs to a NEW draft. The old guard read only
+    // "is the form dirty", so the abandoned attempt's refusal — a 422 for the
+    // old Name — was installed against the new draft: an alert blaming Name
+    // beside a form whose Name was restored and whose only edit was the
+    // Description. The attempt generation is what says the snapshot is gone.
+    it('stays silent when the PATCH rejects after Revert and a fresh edit of another field', async () => {
       let reject!: (err: unknown) => void
       const onUpdate = vi.fn(
         () =>
@@ -762,19 +765,111 @@ describe('DetailsTab', () => {
       await userEvent.type(detailsTabPage.getNameInput(), '!')
       await userEvent.click(detailsTabPage.querySaveButton()!)
       expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // The draft is reverted while the write is still in flight...
       await userEvent.click(detailsTabPage.getRevertButton())
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+
+      // ...and a NEW edit starts before the PATCH rejects: the form is dirty
+      // again, but not with the attempt's work.
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The refusal is about the abandoned snapshot: nothing under Name,
+      // whose value was restored, and no alert blaming Name beside a draft
+      // that edits only the Description.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+
+      // The fresh edit is untouched, and Save stays on offer for it.
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Two-day open. USATT-sanctioned, ratings-eligible. Still on.',
+      )
+      expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+    })
+
+    // The silence belongs to the abandoned attempt alone. A save the
+    // organizer starts AFTER the mid-flight Revert is a fresh attempt bound
+    // to the fresh draft, and its refusal speaks beside that draft.
+    it('speaks for an attempt the organizer started after the mid-flight Revert', async () => {
+      const rejects: Array<(err: unknown) => void> = []
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            rejects.push(rej)
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
 
       await userEvent.type(detailsTabPage.getNameInput(), '!')
-      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      await userEvent.click(detailsTabPage.getRevertButton())
 
+      // The first PATCH rejects against the abandoned snapshot: silence.
       await act(async () =>
-        reject(new ApiError(500, 'Internal Server Error', 'update tournament')),
+        rejects[0](
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        ),
+      )
+      await flush()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+
+      // The fresh draft's own save fails out loud.
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Held.')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(2))
+      await act(async () =>
+        rejects[1](
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        ),
       )
       await flush()
 
       const alert = detailsTabPage.querySaveError()
       expect(alert).toBeInTheDocument()
       expect(alert).toHaveTextContent(FAULTED_REFUSAL)
+    })
+
+    // The finding names BOTH reset paths: a different committed tournament
+    // arriving (a refetch) re-seeds the form through the reconciliation
+    // effect, which abandons the submitted snapshot just as Revert does.
+    it('stays silent when the PATCH rejects after a reconciliation re-seed mid-flight', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      const view = detailsTabPage.render({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // A refetch replaces the committed tournament while the PATCH is in
+      // flight: the form is re-seeded from it, pristine again.
+      view.rerenderWith({
+        tournament: buildTournament({ description: 'Moved venues.' }),
+      })
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+      // The form holds the re-seeded tournament, not the refused draft.
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Moved venues.',
+      )
     })
   })
 

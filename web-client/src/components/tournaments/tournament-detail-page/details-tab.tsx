@@ -264,6 +264,21 @@ export const DetailsTab = ({
    * component's own `finally` clears it. */
   const [saving, setSaving] = useState(false)
 
+  /** Which draft the pending save belongs to, as a generation — OUTSIDE React
+   * Hook Form's resettable form state for the same reason `saving` is (#1593
+   * review). Revert or the reconciliation effect can abandon the snapshot a
+   * pending PATCH was sent while it is in flight: the reset makes the form
+   * pristine, and an edit made afterwards dirties it again — with NEW work
+   * the attempt never sent. Dirtiness alone cannot tell that work from the
+   * attempt's own, so the abandoned attempt's refusal would be installed
+   * against the new draft: a 422 for the old Name reading as an alert that
+   * blames Name beside a form whose Name was restored and whose only edit is
+   * the Description (#1593 review). Both resets bump this counter; the
+   * attempt captures it on the way out, and its catch installs nothing once
+   * it has moved — the organizer's next save, against the draft actually on
+   * screen, speaks for itself. */
+  const attemptGenRef = useRef(0)
+
   /** The failure alert's own DOM node (#1538 pattern). `submit` does
    * `form.clearErrors('root')` before every attempt and `form.setError('root',
    * ...)` only in the catch, so a fresh `errors.root` arrives on every refusal,
@@ -336,6 +351,10 @@ export const DetailsTab = ({
   useEffect(() => {
     if (tournament !== seenRef.current) {
       seenRef.current = tournament
+      // The re-seed abandons the snapshot a pending save was sent, exactly as
+      // the Revert button does — bump the generation with the reset (#1593
+      // review).
+      attemptGenRef.current += 1
       form.reset(valuesFrom(tournament))
     }
   }, [tournament, form])
@@ -344,28 +363,41 @@ export const DetailsTab = ({
    * is untouched — React Hook Form still holds every edit — so Save stays on
    * offer for the retry, and the UI never implies the rejected values committed. */
   const submit = form.handleSubmit(
+    // eslint-disable-next-line react-hooks/refs -- this callback runs on the submit event, and its catch after the PATCH settles; it never runs during render, so the ref reads below are event-time, not render-time
     async (values) => {
       // The write is pending from here until the `finally` below — gated on
       // the `saving` state above, which no `form.reset` can clear.
       setSaving(true)
+      // The generation this attempt's refusal may still stand beside. A
+      // Revert or reconciliation reset before the PATCH settles moves it out
+      // from under the attempt (#1593 review).
+      const attemptGen = attemptGenRef.current
       // Last attempt's banner belongs to last attempt (a field's red clears
       // itself: `mode: 'onChange'` re-validates the box as it is retyped).
       form.clearErrors('root')
       try {
         await onUpdate(draftFrom(tournament, values))
       } catch (err) {
-        // A refusal is about the draft this attempt SENT. Revert or the
-        // reconciliation effect can reset the form while the PATCH is in
-        // flight. The reset makes the form pristine and clears the errors,
-        // and the `isDirty` sweep above fires only when dirtiness CHANGES, so
-        // it cannot clear an error this catch installs afterwards: the
-        // pristine form would keep a "your changes are still here" alert with
-        // no Save and no Revert to answer it (#1593 review). Guard on the
-        // same dirtiness the sweep reads. If the draft is gone, the refusal
-        // has nothing to stand beside, so say nothing. A form re-edited after
-        // the reset is dirty again; a refusal beside its unsaved work is the
-        // truth.
+        // A refusal is about the draft this attempt SENT, and two guards
+        // decide whether the form still holds it. The first is dirtiness:
+        // Revert or the reconciliation effect can reset the form while the
+        // PATCH is in flight, and the `isDirty` sweep above fires only when
+        // dirtiness CHANGES, so it cannot clear an error this catch installs
+        // afterwards — the pristine form would keep a "your changes are
+        // still here" alert with no Save and no Revert to answer it (#1593
+        // review). Guard on the same dirtiness the sweep reads.
         if (!form.formState.isDirty) return
+        // The second is the draft's generation, which dirtiness alone cannot
+        // serve for: an edit made after such a reset dirties the form again,
+        // but with NEW work the attempt never sent. Treating that dirty
+        // state as the attempt's would blame the new draft for the abandoned
+        // snapshot — a 422 for the old Name reading as an alert that blames
+        // Name beside a form whose Name was restored and whose only edit is
+        // the Description (#1593 review). A reset moved the generation past
+        // the one captured on the way out, so an abandoned attempt says
+        // nothing; the next save, started against the draft actually on
+        // screen, speaks for itself.
+        if (attemptGenRef.current !== attemptGen) return
         // Classify first, word second (`data/save-failure`, ADR-0968) — the SAME
         // classifier and the same copy table the event editor uses. A 422's
         // `detail` is Pydantic's own prose ("String should have at most 255
@@ -472,11 +504,16 @@ export const DetailsTab = ({
           canEdit &&
           isDirty && (
             <div className="flex gap-2">
-              {/* `type="button"` — a bare button inside a form submits it. */}
+              {/* `type="button"` — a bare button inside a form submits it. The
+                  reset abandons the snapshot a pending PATCH was sent, so it
+                  bumps the attempt generation too (#1593 review). */}
               <Button
                 variant="ghost"
                 type="button"
-                onClick={() => form.reset(valuesFrom(tournament))}
+                onClick={() => {
+                  attemptGenRef.current += 1
+                  form.reset(valuesFrom(tournament))
+                }}
               >
                 Revert
               </Button>
