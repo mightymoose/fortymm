@@ -85,12 +85,15 @@ function TournamentDetailRoute() {
   /** The Details form is the one durable owner of its mutation refusal while
    * this route exists. Block every in-app departure while that write is pending
    * so neither browser Back nor an AppShell navigation can unmount the form
-   * before the awaited rejection lands. Refresh/tab-close gets the browser's
-   * native prompt through the matching `enableBeforeUnload` predicate. No
-   * resolver is needed: there is no safe "leave anyway" action while this sole
-   * reporter is waiting for the server (#1593 review). */
+   * before the awaited rejection lands. Search-only updates stay on this pathname
+   * and are safe: they open and close the event editor without unmounting the
+   * force-mounted Details form. Refresh/tab-close gets the browser's native prompt
+   * through the matching `enableBeforeUnload` predicate. No resolver is needed:
+   * there is no safe "leave anyway" action while this sole reporter is waiting for
+   * the server (#1593 review). */
   useBlocker({
-    shouldBlockFn: () => updateTournament.isPending,
+    shouldBlockFn: ({ current, next }) =>
+      updateTournament.isPending && current.pathname !== next.pathname,
     enableBeforeUnload: () => updateTournament.isPending,
   })
 

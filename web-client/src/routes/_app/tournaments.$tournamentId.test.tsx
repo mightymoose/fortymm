@@ -637,7 +637,7 @@ describe('tournament detail route — a refused Details save is reported inline 
     expect(patches).toBe(1)
   })
 
-  it('blocks route departure until a pending PATCH refusal is reported inline', async () => {
+  it('allows event search updates but blocks route departure while a PATCH is pending', async () => {
     const user = userEvent.setup()
     mockEditableTournament()
     let patches = 0
@@ -675,6 +675,18 @@ describe('tournament detail route — a refused Details save is reported inline 
     expect(screen.getByText('Tournaments')).toBeInTheDocument()
     expect(router.state.location.pathname).toBe(`/tournaments/${UNKNOWN_ID}`)
 
+    // Switching tabs does not unmount the force-mounted Details form, and opening
+    // an event only adds search state to this same tournament route. The pending
+    // blocker must let that navigation through so the deliberately-enabled Events
+    // UI keeps working while the write is in flight.
+    await user.click(screen.getByRole('tab', { name: /^Events/ }))
+    await user.click(
+      screen.getByRole('button', { name: /New event|Add an event/ }),
+    )
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`/tournaments/${UNKNOWN_ID}`)
+    expect(router.state.location.search).toEqual({ event: 'new' })
+
     // The breadcrumb is not the only way out. A global AppShell link (or any
     // other router navigation) is refused by the route-level pending blocker.
     await act(async () => {
@@ -694,6 +706,10 @@ describe('tournament detail route — a refused Details save is reported inline 
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText(PYDANTIC)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    )
     expect(
       screen.getByRole('button', { name: 'Tournaments' }),
     ).toBeInTheDocument()
