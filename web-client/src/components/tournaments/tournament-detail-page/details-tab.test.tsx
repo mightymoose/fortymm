@@ -353,6 +353,28 @@ describe('DetailsTab', () => {
       expect(onUpdate).not.toHaveBeenCalled()
     })
 
+    it('bounds an enormous whitespace-only name before checking requiredness', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      // `mode: onChange` validates this value on the paste and every later edit.
+      // The bounded code-point check must reject after 256 pulls; only an
+      // in-bounds value may pay for the full whitespace scan required by trim.
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: ' '.repeat(1_000_000) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Name must be 255 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeNull()
+      expect(onUpdate).not.toHaveBeenCalled()
+    })
+
     // The finding's exact scenario (#1593 review): the schema's old `.trim()`
     // TRANSFORM replaced the submitted value, so editing only another field
     // renamed a whitespace-padded stored name to its trimmed form — a rename
@@ -790,6 +812,39 @@ describe('DetailsTab', () => {
       expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
     })
 
+    it('stays silent when manual undo abandons the pending draft before a fresh edit', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.renderStrict({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // Ordinary typing, not Revert, returns every field to its committed value.
+      // That pristine transition abandons the submitted Name snapshot too.
+      await userEvent.clear(detailsTabPage.getNameInput())
+      await userEvent.type(detailsTabPage.getNameInput(), 'Bay Area Open 2026')
+      await waitFor(() => expect(detailsTabPage.querySaveButton()).toBeNull())
+
+      // A different edit begins before the abandoned request settles.
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+      await act(async () => reject(refusedName))
+      await flush()
+
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Two-day open. USATT-sanctioned, ratings-eligible. Still on.',
+      )
+      expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+    })
+
     // The silence belongs to the abandoned attempt alone. A save the
     // organizer starts AFTER the mid-flight Revert is a fresh attempt bound
     // to the fresh draft, and its refusal speaks beside that draft.
@@ -844,7 +899,7 @@ describe('DetailsTab', () => {
             reject = rej
           }),
       )
-      const view = detailsTabPage.render({
+      const view = detailsTabPage.renderStrict({
         tournament: buildTournament(),
         onUpdate,
       })
@@ -870,6 +925,44 @@ describe('DetailsTab', () => {
       expect(detailsTabPage.getDescriptionInput()).toHaveValue(
         'Moved venues.',
       )
+    })
+
+    it('preserves the pending draft when an unrelated tournament refetch arrives', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      const view = detailsTabPage.renderStrict({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // Events and Tables mutations refetch the shared tournament query. Those
+      // collections produce a new Tournament object, but they do not change the
+      // committed fields this form edits and must not wipe its pending draft.
+      view.rerenderWith({
+        tournament: buildTournament({
+          events: [],
+          dateRange: null,
+          tableIds: ['t1'],
+        }),
+      })
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The attempt still belongs to the draft on screen, so its refusal is
+      // retained and attributed normally rather than disappearing in a reset.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument()
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
     })
   })
 
@@ -926,6 +1019,32 @@ describe('DetailsTab', () => {
       // Focus goes with the message, as it does to the form-level alert:
       // otherwise the caret stays on Save and the refused save still reads as
       // a click that did nothing.
+      expect(detailsTabPage.getNameInput()).toHaveFocus()
+    })
+
+    it('live-announces a field refusal when Enter submits from the already-focused field', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      // Keyboard submit leaves focus in Name. Focusing it again after the async
+      // response creates no focus event, so the inserted error text itself must
+      // be a live announcement.
+      await userEvent.type(detailsTabPage.getNameInput(), '!{Enter}')
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      expect(detailsTabPage.getNameInput()).toHaveFocus()
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      const message = detailsTabPage.queryFieldMessage(NAME_REFUSAL)
+      expect(message).toBeInTheDocument()
+      expect(message).toHaveAttribute('role', 'alert')
       expect(detailsTabPage.getNameInput()).toHaveFocus()
     })
 

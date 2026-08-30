@@ -95,16 +95,18 @@ const schema = z.object({
   // trimmed form — a rename the server, which does not normalize
   // `TournamentUpdate.name`, would have committed silently (#1593 review).
   // Requiredness is judged on the trimmed value; the box's exact value is what
-  // gets saved.
-  name: z
-    .string()
-    .refine((v) => v.trim().length > 0, { message: 'Name is required.' })
-    .pipe(
-      atMostCodePoints(
-        NAME_MAX,
-        `Name must be ${NAME_MAX} characters or fewer.`,
-      ),
-    ),
+  // gets saved. The bounded code-point check is the FIRST pipeline stage so an
+  // enormous whitespace-heavy paste is rejected after `NAME_MAX + 1` pulls;
+  // only a value known to fit pays for `trim()`'s whole-string scan on each
+  // `onChange` validation (#1593 review).
+  name: atMostCodePoints(
+    NAME_MAX,
+    `Name must be ${NAME_MAX} characters or fewer.`,
+  ).pipe(
+    z.string().refine((v) => v.trim().length > 0, {
+      message: 'Name is required.',
+    }),
+  ),
   description: atMostCodePoints(
     DESCRIPTION_MAX,
     `Description must be ${DESCRIPTION_MAX} characters or fewer.`,
@@ -118,6 +120,21 @@ const schema = z.object({
 })
 
 type FormValues = z.infer<typeof schema>
+
+/** The Details fields in render order. Besides defining first-error focus, this
+ * is the complete committed snapshot that may re-seed the form: Events, Tables,
+ * schedule results, and the other query-owned tournament data are deliberately
+ * outside it. */
+const FIELD_ORDER: (keyof FormValues)[] = [
+  'name',
+  'description',
+  'venue',
+  'street',
+  'city',
+  'region',
+  'postal',
+  'country',
+]
 
 /** The form values a committed tournament seeds: its name, description, and the
  * six address components — the blank stand-in for a venue-less one (`address:
@@ -135,6 +152,11 @@ function valuesFrom(t: Tournament): FormValues {
     postal: a.postal,
     country: a.country,
   }
+}
+
+/** Whether two committed tournaments seed the same Details form. */
+function sameValues(left: FormValues, right: FormValues): boolean {
+  return FIELD_ORDER.every((field) => left[field] === right[field])
 }
 
 /** Build the draft `Tournament` a save sends — the form's values folded back
@@ -180,21 +202,6 @@ const FORM_FIELD: Partial<Record<string, keyof FormValues>> = {
   name: 'name',
   description: 'description',
 }
-
-/** The form's fields in the order the tab renders them — the order "the
- * retained field error" resolves in, so a panel coming back focuses the FIRST
- * box the form shows a refusal under, the same first-invalid-control order
- * React Hook Form's own submit path uses. */
-const FIELD_ORDER: (keyof FormValues)[] = [
-  'name',
-  'description',
-  'venue',
-  'street',
-  'city',
-  'region',
-  'postal',
-  'country',
-]
 
 /** The first refused field this form actually shows, or `null` — for a refusal
  * that named none of them (or named nothing at all), in which case the tab says
@@ -332,30 +339,41 @@ export const DetailsTab = ({
    * so the undo clears the complaint that box raised. The sweep keyed to
    * dirtiness CHANGES cannot catch an error installed after a reset that made
    * the form pristine; the save's catch guards its installs on this same
-   * `isDirty` for that (#1593 review). */
+   * `isDirty` for that (#1593 review).
+   *
+   * That dirty→pristine edge also abandons a pending attempt's snapshot, even
+   * though ordinary typing performs no `form.reset`. Advance the same generation
+   * the explicit reset paths do, so a later fresh edit cannot make the old
+   * attempt's refusal look relevant again (#1593 review). */
+  const dirtyRef = useRef(isDirty)
   useEffect(() => {
+    const becamePristine = dirtyRef.current && !isDirty
+    dirtyRef.current = isDirty
+    if (becamePristine) attemptGenRef.current += 1
     if (!isDirty) form.clearErrors('root')
   }, [isDirty, form])
 
-  /** Re-seed the form when a different/refetched committed tournament arrives —
-   * the reconciliation a successful save rides home on (the mutation's
-   * invalidation refetch replaces the object). An effect, not the
-   * adjust-during-render dance the draft state used: `reset` is a side effect on
-   * form state and the DOM, and does not belong in a render. React Query's
-   * structural sharing returns a byte-identical payload as the very same object,
-   * so an unchanged refetch never wipes the draft.
+  /** Re-seed the form when its committed DETAILS fields change — the
+   * reconciliation a successful save rides home on. Events and Tables mutate
+   * other fields of this same shared Tournament query, and their refetches must
+   * not wipe a Details draft or abandon its pending attempt merely because the
+   * containing object changed identity (#1593 review).
+   *
+   * An effect, not the adjust-during-render dance the draft state used: `reset`
+   * is a side effect on form state and the DOM, and does not belong in a render.
    *
    * A REF, not state, for the same reason nothing renders from it — it only
    * decides whether this effect resets. */
-  const seenRef = useRef(tournament)
+  const committedValuesRef = useRef(valuesFrom(tournament))
   useEffect(() => {
-    if (tournament !== seenRef.current) {
-      seenRef.current = tournament
+    const committedValues = valuesFrom(tournament)
+    if (!sameValues(committedValues, committedValuesRef.current)) {
+      committedValuesRef.current = committedValues
       // The re-seed abandons the snapshot a pending save was sent, exactly as
       // the Revert button does — bump the generation with the reset (#1593
       // review).
       attemptGenRef.current += 1
-      form.reset(valuesFrom(tournament))
+      form.reset(committedValues)
     }
   }, [tournament, form])
 
@@ -565,6 +583,11 @@ export const DetailsTab = ({
               readOnly={!canEdit}
               value={tournament.name}
               error={!!errors.name}
+              // Client validation either follows an attempted focus move or
+              // fires while typing. A server refusal is asynchronous and can
+              // arrive while Name already owns focus, so only that error must
+              // announce its own insertion (#1593 review).
+              announceError={errors.name?.type === 'server'}
               hint={errors.name?.message}
             >
               {(id, hintId) => (
@@ -585,6 +608,7 @@ export const DetailsTab = ({
                 'Optional. Shown on the public registration page.'
               }
               error={!!errors.description}
+              announceError={errors.description?.type === 'server'}
               readOnly={!canEdit}
               value={tournament.description}
               // Taller than a single-line row so the value mirrors the textarea

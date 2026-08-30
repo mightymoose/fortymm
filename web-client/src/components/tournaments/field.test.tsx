@@ -13,7 +13,15 @@ describe('Field', () => {
 
   it('renders a hint as error text when error is set', () => {
     fieldPage.render({ hint: 'Required', error: true })
-    expect(fieldPage.queryHint('Required')).toHaveClass('text-[color:var(--loss)]')
+    const hint = fieldPage.queryHint('Required')
+    expect(hint).toHaveClass('text-[color:var(--loss)]')
+    expect(hint).not.toHaveAttribute('role')
+  })
+
+  it('live-announces an error only when the caller opts in', () => {
+    fieldPage.render({ hint: 'Save was refused', error: true, announceError: true })
+    const hint = fieldPage.queryHint('Save was refused')
+    expect(hint).toHaveAttribute('role', 'alert')
   })
 
   // The hint is the sentence that explains the control — a validation message, or the
