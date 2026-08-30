@@ -98,6 +98,130 @@ describe('ReservationsSection', () => {
   })
 
   /**
+   * #1441: every card's Remove control once shared the one accessible name "Remove
+   * reservation", so with three cards on the tab a keyboard or screen-reader user could
+   * not tell which card the focused control would remove. Each control now names its
+   * card — the Tables tab's `Remove T1` convention, carried one disambiguator further:
+   * the card's 1-based rendered position plus the LIVE name, because names are
+   * editable, can be briefly blank, and can be duplicated while #1046 is open.
+   */
+  describe('every Remove control names the card it removes (#1441)', () => {
+    /** The reproduction: three normally named cards. */
+    const threeReservations = () => [
+      buildReservation({ id: 'p-1', name: 'Reservation A', position: 0 }),
+      buildReservation({ id: 'p-2', name: 'Reservation B', position: 1 }),
+      buildReservation({ id: 'p-3', name: 'Reservation C', position: 2 }),
+    ]
+
+    it('gives the three reproduced cards three distinct, target-specific names', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: threeReservations() }),
+      })
+
+      const [a, b, c] = reservationsSectionPage.getRemoveReservationButtons()
+      expect(a).toHaveAccessibleName('Remove reservation 1: Reservation A')
+      expect(b).toHaveAccessibleName('Remove reservation 2: Reservation B')
+      expect(c).toHaveAccessibleName('Remove reservation 3: Reservation C')
+    })
+
+    // The position is what keeps identical names apart — #1046 owns rejecting the
+    // duplicates; until it does, the editor must still be narratable.
+    it('keeps duplicated names distinct, by position alone', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({
+          drawType: 'rr-then-ko',
+          reservations: [
+            buildReservation({ id: 'p-1', name: 'Morning', position: 0 }),
+            buildReservation({ id: 'p-2', name: 'Morning', position: 1 }),
+          ],
+        }),
+      })
+
+      const [first, second] = reservationsSectionPage.getRemoveReservationButtons()
+      expect(first).toHaveAccessibleName('Remove reservation 1: Morning')
+      expect(second).toHaveAccessibleName('Remove reservation 2: Morning')
+    })
+
+    it('gives a blank-named card a name with no empty colon', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({
+          drawType: 'rr-then-ko',
+          reservations: [
+            buildReservation({ id: 'p-1', name: '', position: 0 }),
+            buildReservation({ id: 'p-2', name: 'Reservation B', position: 1 }),
+          ],
+        }),
+      })
+
+      const [blank, named] = reservationsSectionPage.getRemoveReservationButtons()
+      expect(blank).toHaveAccessibleName('Remove reservation 1')
+      expect(named).toHaveAccessibleName('Remove reservation 2: Reservation B')
+    })
+
+    it('follows a rename before any save, and touches no other card', () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: threeReservations() }),
+      })
+
+      // Rename the middle card; nothing has been saved.
+      fireEvent.change(reservationsSectionPage.getReservationNameInputs()[1], {
+        target: { value: 'Afternoon' },
+      })
+
+      const buttons = reservationsSectionPage.getRemoveReservationButtons()
+      expect(buttons[1]).toHaveAccessibleName('Remove reservation 2: Afternoon')
+      expect(buttons[0]).toHaveAccessibleName('Remove reservation 1: Reservation A')
+      expect(buttons[2]).toHaveAccessibleName('Remove reservation 3: Reservation C')
+    })
+
+    // Removing a middle card renumbers every card after it — a stale "Remove
+    // reservation 3: Reservation C" would announce one card and remove another.
+    it('renumbers the survivors after an earlier card is removed', async () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: threeReservations() }),
+      })
+
+      await userEvent.click(reservationsSectionPage.getRemoveReservationButtons()[0])
+
+      const buttons = reservationsSectionPage.getRemoveReservationButtons()
+      expect(buttons).toHaveLength(2)
+      expect(buttons[0]).toHaveAccessibleName('Remove reservation 1: Reservation B')
+      expect(buttons[1]).toHaveAccessibleName('Remove reservation 2: Reservation C')
+    })
+
+    // The name and the wiring must agree: the control that SAYS it removes B removes B,
+    // and nothing else. Queried the way a screen-reader user reaches it — by the full
+    // accessible name.
+    it('removes the exact card the activated control names', async () => {
+      reservationsSectionPage.render({
+        event: buildEvent({ drawType: 'rr-then-ko', reservations: threeReservations() }),
+      })
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Remove reservation 2: Reservation B' }),
+      )
+
+      const remaining = reservationsSectionPage.getReservations()
+      expect(remaining.map(reservationEntryKey)).toEqual(['p-1', 'p-3'])
+    })
+
+    // Frozen Remove controls are disabled, not hidden — still in the accessibility
+    // tree, so each still carries its target-specific name beside the one shared
+    // description of WHY (the section's freeze notice).
+    it('keeps every frozen control named after its card, beside the shared reason', () => {
+      reservationsSectionPage.render({ event: buildDrawnEvent() })
+
+      const buttons = reservationsSectionPage.getRemoveReservationButtons()
+      expect(buttons).toHaveLength(2)
+      const notice = reservationsSectionPage.queryFrozenNotice()
+      expect(buttons[0]).toHaveAccessibleName('Remove reservation 1: Reservation A')
+      expect(buttons[0]).toHaveAttribute('aria-describedby', notice?.id)
+      expect(buttons[1]).toHaveAccessibleName('Remove reservation 2: Reservation B')
+      expect(buttons[1]).toHaveAttribute('aria-describedby', notice?.id)
+    })
+  })
+
+  /**
    * **Ten reservations read 1 … 10** — the claim `Reservation.position` was added to make.
    *
    * The fixture (`buildTenReservations`) hands the section its reservations in the order a sort by ID
@@ -671,7 +795,7 @@ describe('ReservationsSection', () => {
         canEdit: false,
       })
       expect(reservationsSectionPage.queryAddReservationButton()).toBeNull()
-      expect(screen.queryByRole('button', { name: 'Remove reservation' })).toBeNull()
+      expect(screen.queryByRole('button', { name: /^Remove reservation/ })).toBeNull()
     })
 
     // "No reservations yet" / "Add a reservation to…" is the organizer's to-do list. A viewer

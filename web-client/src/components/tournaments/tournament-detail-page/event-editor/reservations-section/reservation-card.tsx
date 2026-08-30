@@ -33,8 +33,10 @@ export interface ReservationCardProps {
   /** The three fields this card can edit — a `ReservationDraft`, never a whole `Reservation`
    * (`data/types`). The identity is deliberately out of reach: an id is the server's to
    * mint (ADR 20260801) and a `position` is the server's to assign, so a card that could
-   * not see either is a card that cannot author either. Its owner re-attaches the entry's
-   * arm around what comes back through `onChange`. */
+   * not see either is a card that cannot author either — what it hands back through
+   * `onChange` is the draft, and its owner re-attaches the entry's arm around that.
+   * (#1441 hands the card its **rendered** position separately, below; it names the
+   * Remove control and the draft never carries it.) */
   reservation: ReservationDraft
   /** The tables available to this tournament. */
   tables: TournamentTable[]
@@ -46,6 +48,13 @@ export interface ReservationCardProps {
    * its window, and the tables it reserves — instead of a name box, three
    * date/time fields and a wall of table toggles (ADR 0015). */
   canEdit: boolean
+  /** This card's 1-based position in the **rendered** list — the section's field-array
+   * order as it stands right now, recomputed on every render and never the entry's
+   * server-managed `position`. #1441 pairs it with the live name in the Remove
+   * control's accessible name (`Remove reservation 2: Reservation B`) because names
+   * are editable, can be briefly blank, and can be duplicated while #1046 is open —
+   * the position is the part that stays distinct when the name cannot. */
+  position: number
   /** Whether this reservation may be removed (see `ReservationRemoval`). It gates the trash button
    * and **nothing else**: with the draw cut, the name box, the window and the table
    * chips are all still live, because a reservation's venue attributes were never frozen and
@@ -133,6 +142,7 @@ export const ReservationCard = ({
   tables,
   timezone,
   canEdit,
+  position,
   removal,
   nameError,
   windowError,
@@ -167,6 +177,18 @@ export const ReservationCard = ({
         ? reservation.tableIds.filter((x) => x !== id)
         : [...reservation.tableIds, id],
     })
+
+  // The Remove control's accessible name (#1441) — the Tables tab's `Remove T1`
+  // convention, carried one disambiguator further: the card's 1-based rendered
+  // position, plus the LIVE name, so the name is the one on screen right now and
+  // follows every keystroke before any save. A blank or whitespace-only name falls
+  // back to the bare position, with no empty colon — and duplicated names stay
+  // distinct, because the positions differ. Never the entry's id or its stored
+  // position: this is about the card in front of the director, not the row on the
+  // server.
+  const removeAccessibleName = reservation.name.trim()
+    ? `Remove reservation ${position}: ${reservation.name}`
+    : `Remove reservation ${position}`
 
   if (!canEdit) {
     return (
@@ -240,12 +262,12 @@ export const ReservationCard = ({
               one explanation of why (ADR-0786). Hiding it would take the way out with it:
               this button is one deleted draw away from working, which is exactly what
               distinguishes this case from the viewer's (whose controls are absent, because
-              nothing they could do would bring them back). The accessible name stays
-              "Remove reservation" — the name of a control is what it *does*, not what state it is
-              in; the state is `disabled` and the reason is the description. */}
+              nothing they could do would bring them back). The accessible name names the
+              card it removes (#1441) and stays so while disabled: the state is `disabled`,
+              the reason is the description, and the name still says what it would remove. */}
           <button
             type="button"
-            aria-label="Remove reservation"
+            aria-label={removeAccessibleName}
             disabled={removal.kind === 'frozen'}
             aria-describedby={
               removal.kind === 'frozen' ? removal.reasonId : undefined

@@ -1686,7 +1686,7 @@ describe('EventEditor', () => {
 
       await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
       expect(screen.getByRole('button', { name: 'Add reservation' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: 'Remove reservation' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /^Remove reservation/ })).toBeDisabled()
       expect(screen.getByTestId('reservations-frozen-notice')).toHaveTextContent(
         'Delete the draw',
       )
@@ -1709,7 +1709,7 @@ describe('EventEditor', () => {
 
       await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
       expect(screen.getByRole('button', { name: 'Add reservation' })).toBeEnabled()
-      expect(screen.getByRole('button', { name: 'Remove reservation' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: /^Remove reservation/ })).toBeEnabled()
       expect(screen.queryByTestId('reservations-frozen-notice')).toBeNull()
     })
   })
@@ -1932,7 +1932,7 @@ describe('EventEditor', () => {
       eventEditorPage.render({ event: buildEvent(), onSave })
 
       await userEvent.click(eventEditorPage.getSectionTab('Reservations'))
-      await userEvent.click(screen.getByRole('button', { name: 'Remove reservation' }))
+      await userEvent.click(screen.getByRole('button', { name: /^Remove reservation/ }))
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(onSave).toHaveBeenCalled())
