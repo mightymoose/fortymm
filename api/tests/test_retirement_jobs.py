@@ -353,6 +353,11 @@ async def test_lapse_notifies_owing_side_only(
     job = jobs[0]
     assert job.category.value == "result_confirm"
     assert job.link == f"/matches/{match.id}"
+    # #1583: the "Match finalized" notice is a closed-loop FYI — the match is
+    # already done, so it must never be hideable, and it carries the copy
+    # swap ("View result", not "Review") the ticket names.
+    assert job.result_id is None
+    assert job.action_label == "View result"
 
 
 # ----- notifications: deadline-nearing reminder ---------------------------
@@ -390,6 +395,10 @@ async def test_reminder_within_24h_enqueues_once_and_stamps(
     jobs = enqueued_notification_jobs(fake_notifications_queue)
     assert [job.user_id for job in jobs] == [opponent.id]
     assert jobs[0].link == f"/matches/{match.id}"
+    # #1583: unlike "Match finalized", the reminder is still asking about a
+    # live standing result — it stays hideable, and keeps the "Review" label.
+    assert jobs[0].result_id == result.id
+    assert jobs[0].action_label == "Review"
 
     await db_session.refresh(result)
     assert result.reminder_sent_at is not None

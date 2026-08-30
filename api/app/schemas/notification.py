@@ -267,7 +267,13 @@ class NotificationJob(BaseModel):
     for flows that already delivered a channel transactionally — the match-call
     pin (``app.match_calls``) persists the in-app row inside the pin
     transaction and fans out here with only push/email — and can only ever
-    *subtract* candidates; the recipient's preferences still apply on top."""
+    *subtract* candidates; the recipient's preferences still apply on top.
+
+    ``result_id`` binds a *hideable* result-acceptance prompt to the specific
+    ``MatchResult`` it's asking about (see ``Notification.result_id``), so the
+    feed can hide it once that result is no longer live. ``None`` for every
+    other notification, including the two ``result_confirm`` FYI notices that
+    must never disappear ("Your result was accepted", "Match finalized")."""
 
     user_id: uuid.UUID
     category: NotificationCategory
@@ -280,6 +286,7 @@ class NotificationJob(BaseModel):
     push_data: dict[str, str] | None = None
     collapse_id: str | None = None
     channels: list[NotificationChannel] | None = None
+    result_id: uuid.UUID | None = None
 
 
 class BroadcastRecipient(BaseModel):
