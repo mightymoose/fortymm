@@ -93,7 +93,10 @@ test.describe('Administration · System Health', () => {
 
     await expect(admin.widget).toHaveAttribute('data-state', 'bad')
 
-    let resolvePending: (() => void) | null = null
+    // The route handler parks on this promise before fulfilling, and the
+    // "Checking"/loading assertions below can only pass while it is parked —
+    // so the resolver is guaranteed assigned by the time it is called.
+    let resolvePending!: () => void
     await admin.page.unroute('**/v1/health')
     await admin.page.route('**/v1/health', async (route) => {
       await new Promise<void>((resolve) => {
@@ -115,7 +118,7 @@ test.describe('Administration · System Health', () => {
     await expect(admin.widget).toHaveAttribute('data-state', 'loading')
     await expect(admin.recheckButton).toBeDisabled()
 
-    resolvePending?.()
+    resolvePending()
 
     await expect(admin.widget).toHaveAttribute('data-state', 'ok')
     await expect(admin.eyebrow).toHaveText('Operational')

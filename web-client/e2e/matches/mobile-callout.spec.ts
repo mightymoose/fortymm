@@ -3,7 +3,10 @@ import { matchDetails, sessionResponse } from '../../src/test/factories';
 import type { components } from '../../src/api/schema';
 import { stubRealtimeStream } from '../support/realtime';
 
-type MatchDetails = components['schemas']['MatchDetails'];
+// Two pydantic models share the `MatchDetails` name, so the generated schema
+// namespaces them (see match-details.spec.ts) — the bare key does not exist.
+type MatchDetails =
+    components['schemas']['app__schemas__match__MatchDetails'];
 type MatchNegotiation = components['schemas']['MatchNegotiation'];
 
 const CORRECTED_ID = '00000000-0000-4000-8000-0000000007a0';

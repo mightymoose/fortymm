@@ -36,7 +36,10 @@ test.describe('Administration · Permissions', () => {
 
   test('renders skeleton placeholders while permissions load', async ({ page }) => {
     await mockAdminSession(page)
-    let release: (() => void) | null = null
+    // The route handler parks on this promise before fulfilling, and the
+    // skeleton assertion below can only pass while it is parked — so the
+    // resolver is guaranteed assigned by the time it is called.
+    let release!: () => void
     await page.route('**/api/v1/permissions', async (route) => {
       await new Promise<void>((resolve) => {
         release = resolve
@@ -51,7 +54,7 @@ test.describe('Administration · Permissions', () => {
     )
     await page.goto('/admin/permissions')
     await expect(page.locator('[data-slot=skeleton]').first()).toBeVisible()
-    release?.()
+    release()
     await expect(page.getByText('No permissions yet')).toBeVisible()
   })
 
