@@ -127,6 +127,12 @@ export interface paths {
          *     stamping an address onto the guest that requested it, the guest is folded
          *     into the account that owns the address and the caller is signed in as that
          *     account. See ``_confirm_account_merge``.
+         *
+         *     A link a newer resend replaced is distinguishable from every other dead
+         *     link: it 400s with a structured ``{"code": "replaced", "message": ...}``
+         *     detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
+         *     coded reasons (#1466). Every other dead confirmation link keeps the plain
+         *     string detail it has always returned.
          */
         post: operations["confirm_email_v1_me_email_confirm_post"];
         delete?: never;
@@ -2158,6 +2164,44 @@ export interface components {
             /** Error */
             error?: string | null;
         };
+        /**
+         * ConfirmEmail400Response
+         * @description Both 400 bodies ``/v1/me/email/confirm`` can return. A link a newer
+         *     resend replaced carries the coded ``ConfirmEmailErrorResponse`` shape
+         *     (#1616); every other dead link — invalid, expired, or a replaced row whose
+         *     newer link is itself gone — carries the plain-string
+         *     ``PlainDetailErrorResponse`` shape. Declared on the route's ``responses=``
+         *     as this union, because a generated client decoding every 400 as only the
+         *     coded shape would fail on a normal rejected link before it could handle
+         *     it (#1632).
+         */
+        ConfirmEmail400Response: components["schemas"]["ConfirmEmailErrorResponse"] | components["schemas"]["PlainDetailErrorResponse"];
+        /**
+         * ConfirmEmailErrorDetail
+         * @description The coded detail a ``400`` from ``/v1/me/email/confirm`` carries for one
+         *     specific failure — a confirmation link a newer resend superseded
+         *     (#1616). ``code`` is the machine-readable reason clients branch on
+         *     (``replaced``); ``message`` is the server's own sentence. It is one of the
+         *     two ``400`` bodies that endpoint can return (see
+         *     ``ConfirmEmail400Response``); every other dead link carries the
+         *     plain-string detail of ``PlainDetailErrorResponse``.
+         */
+        ConfirmEmailErrorDetail: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * ConfirmEmailErrorResponse
+         * @description The coded 400 body ``confirm_email`` raises for a superseded
+         *     confirmation link — ``{"detail": {"code": ..., "message": ...}}`` (#1616).
+         *     One of the two ``400`` bodies that endpoint can return (see
+         *     ``ConfirmEmail400Response``).
+         */
+        ConfirmEmailErrorResponse: {
+            detail: components["schemas"]["ConfirmEmailErrorDetail"];
+        };
         /** ConfirmEmailRequest */
         ConfirmEmailRequest: {
             /** Token */
@@ -3717,6 +3761,18 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+        };
+        /**
+         * PlainDetailErrorResponse
+         * @description The default FastAPI error body — ``{"detail": "<sentence>"}``, what
+         *     ``HTTPException(detail=str)`` produces. The 400 ``confirm_email`` returns
+         *     for every dead confirmation link except the superseded one: invalid,
+         *     expired, or a replaced row whose newer link is itself dead. Alongside
+         *     ``ConfirmEmailErrorResponse`` it makes up ``ConfirmEmail400Response``.
+         */
+        PlainDetailErrorResponse: {
+            /** Detail */
+            detail: string;
         };
         /**
          * PlayerCareer
@@ -6227,6 +6283,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description The confirmation link is dead. Two body shapes exist: a link a newer resend replaced carries the coded ``ConfirmEmailErrorResponse`` detail (#1616); every other dead link — invalid, expired, or a replaced row whose newer link is itself gone — carries the plain-string detail of ``PlainDetailErrorResponse`` instead. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmEmail400Response"];
                 };
             };
             /** @description Validation Error */

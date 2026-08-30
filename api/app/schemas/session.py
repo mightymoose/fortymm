@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, RootModel
 
 # RFC 5321 §4.5.3.1.1 caps the local part (before the ``@``) at 64 octets and
 # the whole address at 254. ``EmailStr`` / email-validator enforces the 254
@@ -102,6 +102,53 @@ class ConfirmEmailRequest(BaseModel):
     # the owner a "sign in but don't bring those matches" choice. Defaults to
     # merging (the common, desired path).
     skip_merge: bool = False
+
+
+class ConfirmEmailErrorDetail(BaseModel):
+    """The coded detail a ``400`` from ``/v1/me/email/confirm`` carries for one
+    specific failure — a confirmation link a newer resend superseded
+    (#1616). ``code`` is the machine-readable reason clients branch on
+    (``replaced``); ``message`` is the server's own sentence. It is one of the
+    two ``400`` bodies that endpoint can return (see
+    ``ConfirmEmail400Response``); every other dead link carries the
+    plain-string detail of ``PlainDetailErrorResponse``."""
+
+    code: str
+    message: str
+
+
+class ConfirmEmailErrorResponse(BaseModel):
+    """The coded 400 body ``confirm_email`` raises for a superseded
+    confirmation link — ``{"detail": {"code": ..., "message": ...}}`` (#1616).
+    One of the two ``400`` bodies that endpoint can return (see
+    ``ConfirmEmail400Response``)."""
+
+    detail: ConfirmEmailErrorDetail
+
+
+class PlainDetailErrorResponse(BaseModel):
+    """The default FastAPI error body — ``{"detail": "<sentence>"}``, what
+    ``HTTPException(detail=str)`` produces. The 400 ``confirm_email`` returns
+    for every dead confirmation link except the superseded one: invalid,
+    expired, or a replaced row whose newer link is itself dead. Alongside
+    ``ConfirmEmailErrorResponse`` it makes up ``ConfirmEmail400Response``."""
+
+    detail: str
+
+
+class ConfirmEmail400Response(
+    RootModel[ConfirmEmailErrorResponse | PlainDetailErrorResponse]
+):
+    """Both 400 bodies ``/v1/me/email/confirm`` can return. A link a newer
+    resend replaced carries the coded ``ConfirmEmailErrorResponse`` shape
+    (#1616); every other dead link — invalid, expired, or a replaced row whose
+    newer link is itself gone — carries the plain-string
+    ``PlainDetailErrorResponse`` shape. Declared on the route's ``responses=``
+    as this union, because a generated client decoding every 400 as only the
+    coded shape would fail on a normal rejected link before it could handle
+    it (#1632)."""
+
+    root: ConfirmEmailErrorResponse | PlainDetailErrorResponse
 
 
 class RequestLoginRequest(CaptchaProtectedRequest):

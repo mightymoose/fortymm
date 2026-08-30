@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import {
@@ -9,7 +10,7 @@ import {
   useConfirmEmail,
   useMergePreview,
 } from '@/api/session'
-import { btnPrimary } from '@/components/login/styles'
+import { btnGhost, btnPrimary } from '@/components/login/styles'
 import {
   LinkCheckPage,
   type LinkCheckState,
@@ -33,6 +34,12 @@ export const Route = createFileRoute('/confirm-email')({
   component: ConfirmEmailPage,
 })
 
+// Confirmation copy for every state this page renders. `LinkCheckPage`'s
+// defaults are written for the *sign-in* flow (15-minute links, "you'll be
+// straight in") — wrong for a confirmation link, which lasts 24 hours
+// (`EMAIL_CONFIRM_TOKEN_LIFETIME`) and signs nobody in, so every state
+// supplies its own wording (#1616). `email_changed` is absent on purpose:
+// the nearest confirm branch stays opaque, so the page can never name it.
 const CONFIRM_COPY: Partial<
   Record<LinkCheckState, { eyebrow: string; title: string; subtitle: string }>
 > = {
@@ -46,6 +53,74 @@ const CONFIRM_COPY: Partial<
     title: 'Confirming your email',
     subtitle: 'Hang tight — this only takes a second.',
   },
+  expired: {
+    // Covers genuinely expired, already-used, and never-valid links.
+    eyebrow: '● Link expired',
+    title: "This link can't be used",
+    subtitle:
+      'Confirmation links last 24 hours and work once. Send a fresh one from Settings and try again.',
+  },
+  missing: {
+    // Distinct from `expired`: the link arrived without its token at all
+    // (often truncated when copied), so "expired or already used" is wrong.
+    eyebrow: '● Link incomplete',
+    title: 'This link is incomplete',
+    subtitle:
+      'This confirmation link is missing its token — it may have been cut off when it was copied. Open the most recent email in full, or send a fresh one from Settings.',
+  },
+  replaced: {
+    // Distinct from `expired`: this link is dead because a LATER resend
+    // replaced it, not because time ran out — sending yet another new link
+    // isn't the fix, opening the one already sent is (#1616). Deliberately
+    // does NOT say "for this address": the newer link goes to whatever
+    // address was pending when it was requested, which a second change may
+    // have moved — so it only claims a newer link exists.
+    eyebrow: '● Newer link sent',
+    title: 'A newer link was sent',
+    subtitle:
+      'A newer confirmation link was requested, so this one is no longer live. Open the most recent email we sent you — it may be for a different address.',
+  },
+  error: {
+    // Distinct from `expired`: nothing here claims the link was rejected —
+    // the request never got a real answer (transport failure or 5xx), so
+    // resending would replace a link that is probably still live.
+    eyebrow: '● Connection trouble',
+    title: "We couldn't check this link",
+    subtitle:
+      "The server didn't answer, so this link went unused. It's usually still good — try again in a moment.",
+  },
+}
+
+// `POST /v1/me/email/confirm`'s 400 body for a superseded link,
+// `{ detail: { code, message } }` (#1616) — declared on the route's OpenAPI
+// `responses=` as `ConfirmEmailErrorResponse`, but read off `ApiError.body`
+// (the raw response body) and parsed here rather than trusted: the same
+// status also carries the plain-string detail of every other dead link,
+// which the declared model does not describe. Shaped after
+// `login.verifying.tsx` (#1466): a code this client has no screen for, a
+// plain-string detail, or no body fails the parse and falls through to the
+// generic invalid/expired screen.
+const CONFIRM_ERROR_CODES = ['replaced'] as const
+type ConfirmErrorCode = (typeof CONFIRM_ERROR_CODES)[number]
+
+const confirmErrorSchema = z.object({
+  detail: z.object({ code: z.enum(CONFIRM_ERROR_CODES) }),
+})
+
+/** The structured `code` a 4xx from `/v1/me/email/confirm` carries, or
+ * `null` when the body doesn't parse as the coded shape. */
+function confirmErrorCode(err: unknown): ConfirmErrorCode | null {
+  if (!(err instanceof ApiError)) return null
+  const parsed = confirmErrorSchema.safeParse(err.body)
+  return parsed.success ? parsed.data.detail.code : null
+}
+
+/** Whether `err` is a 4xx that actually rejects the token — the only kind of
+ * failure whose copy may say the link is unusable. A transport failure or a
+ * server-side 5xx answers nothing about the token, so it must not land on
+ * the expired screen and its "send a fresh one" advice (#1616). */
+function isRejectedConfirmError(err: unknown): boolean {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500
 }
 
 function ConfirmEmailPage() {
@@ -71,11 +146,22 @@ function ConfirmEmailPage() {
     }
   }
 
+  // The token is scrubbed from the URL once the mutation settles (#521), but
+  // a transient failure keeps its retry button on screen — remember the exact
+  // input that attempt carried so "Try again" can replay it whole. Retaining
+  // only the token would drop `skipMerge`, so a retried "Not now" would
+  // default it back to false and merge the guest data the user explicitly
+  // declined (#1616).
+  const firedInput = useRef<FinalizeTokenInput | null>(null)
+
   // Every confirm this page ever fires wants the toast wired the same way —
   // wrap it once so the mutate-level `onSuccess` doesn't repeat at each call
-  // site.
-  const confirmWithToast = (input: FinalizeTokenInput) =>
+  // site. Recording the input here — the one choke point every confirm passes
+  // through — keeps the retained copy identical to the real attempt.
+  const confirmWithToast = (input: FinalizeTokenInput) => {
+    firedInput.current = input
     confirm.mutate(input, { onSuccess: showMergeToast })
+  }
 
   // Preview the link first. A merge that would carry matches over waits for the
   // user at the gate; everything else (plain confirm, empty guest, or a preview
@@ -111,8 +197,15 @@ function ConfirmEmailPage() {
 
   // Order matters: the confirm result wins over `!token`, because we scrub the
   // token from the URL after the mutation settles (#521) — a cleared token on
-  // a settled mutation is "ok"/"error", not "missing-token". A genuine
-  // no-token visit falls through to "missing-token".
+  // a settled mutation is "ok"/"error", not "missing-token". A tokenless
+  // moment whose confirm has already fired is a retry, not a fresh visit:
+  // rendering "link incomplete" while confirmation is actively running would
+  // hide the retry control and offer a misleading route back to Settings
+  // (#1616). A genuine no-token visit never fires a confirm, so the mutation
+  // is still idle and it falls through to "missing-token". Read that from the
+  // mutation's own reactive status, never from the `firedInput` ref — a ref
+  // read during render does not re-render when it changes, so the screen
+  // could keep the state it computed before the retry fired.
   const status: 'missing-token' | 'gate' | 'confirming' | 'ok' | 'error' =
     confirm.isSuccess
       ? 'ok'
@@ -120,16 +213,9 @@ function ConfirmEmailPage() {
         ? 'error'
         : showGate
           ? 'gate'
-          : !token
+          : !token && confirm.isIdle
             ? 'missing-token'
             : 'confirming'
-
-  const errorMsg =
-    status === 'missing-token'
-      ? 'This link is missing its token.'
-      : confirm.error instanceof ApiError && confirm.error.detail
-        ? confirm.error.detail
-        : 'Confirmation failed.'
 
   if (status === 'gate' && p) {
     return (
@@ -145,33 +231,83 @@ function ConfirmEmailPage() {
     )
   }
 
+  // The `replaced` screen must NOT put a resend-shaped action up front —
+  // "Back to settings" leads at Resend, and resending now would kill the
+  // newer link the copy just told the user to open (#1466 precedent, #1616
+  // acceptance criteria). So the route is present but demoted to a ghost
+  // action, never the primary CTA every other error state uses. It carries no
+  // guidance line of its own: the subtitle already says to open the most
+  // recent email, and saying it twice is the exact duplication this ticket
+  // set out to remove (#1616).
+  const replacedFooter = (
+    <Link to="/settings" hash="sec-email" style={{ ...btnGhost, width: '100%' }}>
+      Back to settings
+    </Link>
+  )
+
+  // The `error` screen's one action is the retry: the request never answered
+  // the question "is this token good?", so the link is probably still live
+  // and a resend would replace it (#1616). The retry replays the whole input
+  // the failed attempt carried — `skipMerge` included.
+  const errorFooter = (
+    <button
+      type="button"
+      style={{ ...btnPrimary, width: '100%' }}
+      onClick={() => {
+        const input = firedInput.current
+        if (input !== null) confirmWithToast(input)
+      }}
+    >
+      Try again
+    </button>
+  )
+
+  // The six `LinkCheckPage` states this page maps onto (the merge gate above
+  // is a separate render path). A coded `replaced` 4xx reaches its own screen;
+  // any other 4xx is a genuine rejection and lands on the invalid/expired
+  // screen; a transport failure or 5xx answers nothing about the token, so it
+  // gets the retryable `error` screen instead of the "send a fresh one" copy
+  // that would push the user into replacing a probably-live link (#1616).
+  const linkState: LinkCheckState =
+    status === 'ok'
+      ? 'success'
+      : status === 'confirming'
+        ? 'checking'
+        : status === 'missing-token'
+          ? 'missing'
+          : confirmErrorCode(confirm.error) === 'replaced'
+            ? 'replaced'
+            : isRejectedConfirmError(confirm.error)
+              ? 'expired'
+              : 'error'
+
+  // Each failure state's reason is stated once, in its own subtitle — the
+  // API's sentence is deliberately not repeated under it (#1616).
+  const copy = CONFIRM_COPY[linkState]
+
   // Intentionally NOT wrapped in <AppShell> — AppShell calls useSession()
-  // on mount, and `GET /v1/session` auto-mints a guest user for cookieless
+  // on mount, and `GET /v1/session` auto-mints a guest for cookieless
   // requests. Clicking the link on a device that doesn't share cookies
   // with the requesting browser (mobile mail, in-app webview) would leak
   // one orphan user + session-token row per click. The confirm endpoint
   // itself rotates the cookie to the token's owner, so the user lands on
   // the dashboard signed in as themselves.
-  const linkState: LinkCheckState =
-    status === 'ok' ? 'success' : status === 'confirming' ? 'checking' : 'expired'
-
-  // Email-confirm copy per state; `expired` falls through to LinkCheckPage's
-  // own defaults.
-  const copy = CONFIRM_COPY[linkState]
-
   return (
     <LinkCheckPage
       state={linkState}
       eyebrow={copy?.eyebrow}
       title={copy?.title}
       subtitle={copy?.subtitle}
-      detail={linkState === 'expired' ? errorMsg : undefined}
       footer={
         linkState === 'success' ? (
           <Link to="/dashboard" style={{ ...btnPrimary, width: '100%' }}>
             Go to dashboard
           </Link>
-        ) : linkState === 'expired' ? (
+        ) : linkState === 'replaced' ? (
+          replacedFooter
+        ) : linkState === 'error' ? (
+          errorFooter
+        ) : linkState === 'expired' || linkState === 'missing' ? (
           <Link
             to="/settings"
             hash="sec-email"

@@ -80,6 +80,12 @@ internal protocol APIProtocol: Sendable {
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
     ///
+    /// A link a newer resend replaced is distinguishable from every other dead
+    /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
+    /// detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
+    /// coded reasons (#1466). Every other dead confirmation link keeps the plain
+    /// string detail it has always returned.
+    ///
     /// - Remark: HTTP `POST /v1/me/email/confirm`.
     /// - Remark: Generated from `#/paths//v1/me/email/confirm/post(confirm_email_v1_me_email_confirm_post)`.
     func confirmEmailV1MeEmailConfirmPost(_ input: Operations.ConfirmEmailV1MeEmailConfirmPost.Input) async throws -> Operations.ConfirmEmailV1MeEmailConfirmPost.Output
@@ -1252,6 +1258,12 @@ extension APIProtocol {
     /// stamping an address onto the guest that requested it, the guest is folded
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
+    ///
+    /// A link a newer resend replaced is distinguishable from every other dead
+    /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
+    /// detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
+    /// coded reasons (#1466). Every other dead confirmation link keeps the plain
+    /// string detail it has always returned.
     ///
     /// - Remark: HTTP `POST /v1/me/email/confirm`.
     /// - Remark: Generated from `#/paths//v1/me/email/confirm/post(confirm_email_v1_me_email_confirm_post)`.
@@ -3823,6 +3835,111 @@ internal enum Components {
                 case healthy
                 case latencyMs = "latency_ms"
                 case error
+            }
+        }
+        /// Both 400 bodies ``/v1/me/email/confirm`` can return. A link a newer
+        /// resend replaced carries the coded ``ConfirmEmailErrorResponse`` shape
+        /// (#1616); every other dead link — invalid, expired, or a replaced row whose
+        /// newer link is itself gone — carries the plain-string
+        /// ``PlainDetailErrorResponse`` shape. Declared on the route's ``responses=``
+        /// as this union, because a generated client decoding every 400 as only the
+        /// coded shape would fail on a normal rejected link before it could handle
+        /// it (#1632).
+        ///
+        /// - Remark: Generated from `#/components/schemas/ConfirmEmail400Response`.
+        internal struct ConfirmEmail400Response: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ConfirmEmail400Response/value1`.
+            internal var value1: Components.Schemas.ConfirmEmailErrorResponse?
+            /// - Remark: Generated from `#/components/schemas/ConfirmEmail400Response/value2`.
+            internal var value2: Components.Schemas.PlainDetailErrorResponse?
+            /// Creates a new `ConfirmEmail400Response`.
+            ///
+            /// - Parameters:
+            ///   - value1:
+            ///   - value2:
+            internal init(
+                value1: Components.Schemas.ConfirmEmailErrorResponse? = nil,
+                value2: Components.Schemas.PlainDetailErrorResponse? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try .init(from: decoder)
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try .init(from: decoder)
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            internal func encode(to encoder: any Swift.Encoder) throws {
+                try self.value1?.encode(to: encoder)
+                try self.value2?.encode(to: encoder)
+            }
+        }
+        /// The coded detail a ``400`` from ``/v1/me/email/confirm`` carries for one
+        /// specific failure — a confirmation link a newer resend superseded
+        /// (#1616). ``code`` is the machine-readable reason clients branch on
+        /// (``replaced``); ``message`` is the server's own sentence. It is one of the
+        /// two ``400`` bodies that endpoint can return (see
+        /// ``ConfirmEmail400Response``); every other dead link carries the
+        /// plain-string detail of ``PlainDetailErrorResponse``.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ConfirmEmailErrorDetail`.
+        internal struct ConfirmEmailErrorDetail: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ConfirmEmailErrorDetail/code`.
+            internal var code: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ConfirmEmailErrorDetail/message`.
+            internal var message: Swift.String
+            /// Creates a new `ConfirmEmailErrorDetail`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - message:
+            internal init(
+                code: Swift.String,
+                message: Swift.String
+            ) {
+                self.code = code
+                self.message = message
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case code
+                case message
+            }
+        }
+        /// The coded 400 body ``confirm_email`` raises for a superseded
+        /// confirmation link — ``{"detail": {"code": ..., "message": ...}}`` (#1616).
+        /// One of the two ``400`` bodies that endpoint can return (see
+        /// ``ConfirmEmail400Response``).
+        ///
+        /// - Remark: Generated from `#/components/schemas/ConfirmEmailErrorResponse`.
+        internal struct ConfirmEmailErrorResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ConfirmEmailErrorResponse/detail`.
+            internal var detail: Components.Schemas.ConfirmEmailErrorDetail
+            /// Creates a new `ConfirmEmailErrorResponse`.
+            ///
+            /// - Parameters:
+            ///   - detail:
+            internal init(detail: Components.Schemas.ConfirmEmailErrorDetail) {
+                self.detail = detail
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case detail
             }
         }
         /// - Remark: Generated from `#/components/schemas/ConfirmEmailRequest`.
@@ -7486,6 +7603,27 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case name
                 case description
+            }
+        }
+        /// The default FastAPI error body — ``{"detail": "<sentence>"}``, what
+        /// ``HTTPException(detail=str)`` produces. The 400 ``confirm_email`` returns
+        /// for every dead confirmation link except the superseded one: invalid,
+        /// expired, or a replaced row whose newer link is itself dead. Alongside
+        /// ``ConfirmEmailErrorResponse`` it makes up ``ConfirmEmail400Response``.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlainDetailErrorResponse`.
+        internal struct PlainDetailErrorResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlainDetailErrorResponse/detail`.
+            internal var detail: Swift.String
+            /// Creates a new `PlainDetailErrorResponse`.
+            ///
+            /// - Parameters:
+            ///   - detail:
+            internal init(detail: Swift.String) {
+                self.detail = detail
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case detail
             }
         }
         /// A player's lifetime record ACROSS EVERY LEAGUE they play in (CONTEXT.md,
@@ -14139,6 +14277,12 @@ internal enum Operations {
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
     ///
+    /// A link a newer resend replaced is distinguishable from every other dead
+    /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
+    /// detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
+    /// coded reasons (#1466). Every other dead confirmation link keeps the plain
+    /// string detail it has always returned.
+    ///
     /// - Remark: HTTP `POST /v1/me/email/confirm`.
     /// - Remark: Generated from `#/paths//v1/me/email/confirm/post(confirm_email_v1_me_email_confirm_post)`.
     internal enum ConfirmEmailV1MeEmailConfirmPost {
@@ -14222,6 +14366,57 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct BadRequest: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/me/email/confirm/POST/responses/400/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/me/email/confirm/POST/responses/400/content/application\/json`.
+                    case json(Components.Schemas.ConfirmEmail400Response)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.ConfirmEmail400Response {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ConfirmEmailV1MeEmailConfirmPost.Output.BadRequest.Body
+                /// Creates a new `BadRequest`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ConfirmEmailV1MeEmailConfirmPost.Output.BadRequest.Body) {
+                    self.body = body
+                }
+            }
+            /// The confirmation link is dead. Two body shapes exist: a link a newer resend replaced carries the coded ``ConfirmEmailErrorResponse`` detail (#1616); every other dead link — invalid, expired, or a replaced row whose newer link is itself gone — carries the plain-string detail of ``PlainDetailErrorResponse`` instead.
+            ///
+            /// - Remark: Generated from `#/paths//v1/me/email/confirm/post(confirm_email_v1_me_email_confirm_post)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Operations.ConfirmEmailV1MeEmailConfirmPost.Output.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            internal var badRequest: Operations.ConfirmEmailV1MeEmailConfirmPost.Output.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
                             response: self
                         )
                     }

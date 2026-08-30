@@ -1,0 +1,49 @@
+{{- if .Values.emailTokenSweep.enabled }}
+# Periodic email-confirmation token sweep (#1616). Deletes replaced pending-
+# email token rows once they age out of EMAIL_CONFIRM_TOKEN_LIFETIME by running
+# the sweep inline (see api/app/email_token_sweep.py) once per tick — the
+# cleanup bound that does not depend on the user requesting or confirming
+# another link. A CronJob runs exactly one pod per schedule regardless of how
+# many api replicas are up, so there is no duplicate-execution race;
+# concurrencyPolicy: Forbid additionally prevents a slow sweep from overlapping
+# the next tick. Hourly, matching the retirement sweep; the rows it removes
+# already expired, so any cadence well under 24h suffices. Same image + env
+# wiring the api and worker use; unlike the retirement sweep it needs no APNs
+# key — it touches only the database.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: email-token-sweep
+  labels:
+    {{- include "fortymm.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.emailTokenSweep.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "fortymm.selector" (dict "component" "email-token-sweep") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: email-token-sweep
+              image: {{ include "fortymm.apiImage" . }}
+              imagePullPolicy: {{ .Values.pullPolicy }}
+              command: ["python", "-m", "app.email_token_sweep"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              envFrom:
+                {{- include "fortymm.appEnvFrom" . | nindent 16 }}
+{{- end }}

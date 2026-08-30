@@ -180,6 +180,14 @@ retirement:
   enabled: true
   schedule: "0 * * * *"
 
+# Periodic email-confirmation token sweep CronJob (#1616). Runs
+# `python -m app.email_token_sweep` on this schedule to delete replaced
+# confirmation-token rows once they age out of their 24h lifetime — the
+# cleanup bound that does not wait on the user's next request or confirm.
+emailTokenSweep:
+  enabled: true
+  schedule: "0 * * * *"
+
 # Fixed NodePort for the routing nginx Service. Empty means "let Kubernetes
 # allocate one from the node port range", which is the only portable answer — a
 # hard-coded port that another Service already holds fails the install outright

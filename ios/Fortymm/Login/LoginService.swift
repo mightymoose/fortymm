@@ -73,11 +73,17 @@ struct LoginService {
     }
 }
 
-/// Why redeeming a sign-in link failed, classified for the UI.
+/// Why redeeming an emailed link failed, classified for the UI.
 enum LoginConsumeError: Error {
     /// The link is no longer valid — expired, already used, or for another
     /// account. Terminal; the user must request a fresh link.
     case rejected
+    /// A newer link replaced this one — the fix is opening the most recent
+    /// email, NOT resending, which would kill that newer link (#1616). Only
+    /// the email-confirm flow produces this today (`ProfileService.confirmEmail`
+    /// parses the confirm endpoint's coded 400; `consume`'s own coded reasons
+    /// aren't parsed on iOS yet).
+    case replaced
     /// The server couldn't be reached (5xx / timeout / offline). Retrying the
     /// same still-valid link may succeed.
     case unreachable
