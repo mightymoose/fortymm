@@ -298,8 +298,11 @@ async def _has_live_email_token(db: AsyncSession, user_id: uuid.UUID) -> bool:
       the token was cut against (``target.email != token.sent_to``), e.g.
       after the owner confirmed a later change off that address;
     * change flavour — the change branch rejects when the token's user is
-      gone or their current confirmed address no longer matches the ``old``
-      address baked into the context.
+      gone, when their current confirmed address no longer matches the
+      ``old`` address baked into the context, or when another account
+      already holds the address the token would stamp (``sent_to``): that
+      write trips the ``users.email`` unique index and the token is burned
+      as invalid.
 
     A newer link that would fail those checks must not be reported as live:
     "replaced" would point the user at an email whose link cannot work — the
@@ -338,7 +341,26 @@ async def _has_live_email_token(db: AsyncSession, user_id: uuid.UUID) -> bool:
     user = await db.get(User, live.user_id)
     if user is None:
         return False
-    return user.email == _old_email_from_context(live.context)
+    if user.email != _old_email_from_context(live.context):
+        return False
+    # The confirm write stamps ``live.sent_to`` onto the user, so an account
+    # already holding that address trips the ``users.email`` unique index and
+    # confirm burns the token as invalid. Two users can hold pending change
+    # links for the same formerly-unclaimed address, and whichever confirms
+    # first makes the other's newer link unconfirmable — reporting "replaced"
+    # would then point at an email that cannot work (#1616). The probe mirrors
+    # the raw constraint — case-sensitive, tombstones included — rather than
+    # ``name_taken``'s case-insensitive version: every writer of
+    # ``users.email`` lowercases first, so the constraint is the only guard
+    # confirm relies on here.
+    claimed = (
+        await db.execute(
+            select(User.id)
+            .where(User.email == live.sent_to, User.id != live.user_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return claimed is None
 
 
 async def _guest_match_count(db: AsyncSession, guest_id: uuid.UUID) -> int:

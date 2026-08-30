@@ -62,6 +62,11 @@ logger = logging.getLogger(__name__)
 # lifetime must match the router's exactly: a smaller value would delete
 # replaced rows that can still report "replaced" on click, and a larger one
 # merely delays cleanup. ``tests/test_email.py`` asserts the equality.
+#
+# The prefixes also appear verbatim in the partial index that serves this
+# sweep's global delete (``ix_user_tokens_replaced_pending_email``, migration
+# 0002): changing them means changing the index predicate in the same change,
+# or every sweep run seq-scans the table again.
 EMAIL_CONFIRM_TOKEN_LIFETIME = timedelta(hours=24)
 EMAIL_CHANGE_CONTEXT_PREFIX = "change:"
 EMAIL_MERGE_CONTEXT_PREFIX = "merge:"

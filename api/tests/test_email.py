@@ -2,12 +2,15 @@ import hashlib
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.db import get_session
 from app.email_token_sweep import (
@@ -1093,6 +1096,36 @@ async def test_confirm_reports_invalid_not_replaced_when_a_newer_change_link_is_
     assert response.json()["detail"] == "That confirmation link is invalid or expired."
 
 
+async def test_confirm_reports_invalid_not_replaced_when_newer_link_address_was_claimed(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Same mirroring for the change flavour, target-address edition: another
+    account confirming onto the address the newer link would stamp trips the
+    ``users.email`` unique index inside ``confirm_email`` (the IntegrityError
+    path), so the newer link cannot succeed and the replaced link must not
+    send the user off to open it (#1616)."""
+    await start_session(api_client, db_session)
+    await _capture_raw_token(api_client, db_session, fake_email_queue)  # link 1
+    await _set_email(api_client, email="rita2@example.com")  # link 2 (live)
+    raw_1 = _all_send_tokens(fake_email_queue)[0]
+
+    # Another user claims the same formerly-unclaimed address between our
+    # resends and this click — the exact race the IntegrityError path at the
+    # confirm write exists for.
+    db_session.add(
+        User(
+            username="owner",
+            email="rita2@example.com",
+            confirmed_at=datetime.now(UTC),
+        )
+    )
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_1})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That confirmation link is invalid or expired."
+
+
 async def test_resend_sweep_keeps_a_replaced_row_within_its_lifetime(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
@@ -1231,6 +1264,38 @@ async def test_scheduled_sweep_deletes_only_expired_replaced_pending_email_token
     assert sorted(remaining) == sorted(
         [kept_young.context, kept_live.context, kept_login.context]
     )
+
+
+async def test_scheduled_sweep_is_served_by_a_partial_index(
+    engine: AsyncEngine,
+):
+    """The scheduled sweep is the one ALL-users statement on ``user_tokens``:
+    its context / replaced_at / created_at predicate matches no other index,
+    so without the partial index every hourly run seq-scans a table dominated
+    by session tokens the sweep must never delete. ``create_all`` builds the
+    schema under tests, so this pins the model's declaration (the migrated
+    copy is verified by running ``alembic upgrade head`` against a fresh
+    database, per api/CLAUDE.md)."""
+
+    def _user_token_indexes(sync_conn: Connection) -> list[dict[str, Any]]:
+        return [
+            index
+            for index in sa_inspect(sync_conn).get_indexes("user_tokens")
+            if index["name"] == "ix_user_tokens_replaced_pending_email"
+        ]
+
+    async with engine.connect() as conn:
+        indexes = await conn.run_sync(_user_token_indexes)
+
+    assert len(indexes) == 1
+    assert indexes[0]["column_names"] == ["created_at"]
+    # The reflected predicate comes back dialect-compiled (LIKE → ~~), so
+    # assert on the parts that carry the selectivity contract: replaced
+    # rows only, and both pending-email context prefixes.
+    where = str(indexes[0]["dialect_options"]["postgresql_where"])
+    assert "replaced_at IS NOT NULL" in where
+    assert "'change:%'" in where
+    assert "'merge:%'" in where
 
 
 async def test_confirm_after_the_scheduled_sweep_reports_the_same_plain_expired(

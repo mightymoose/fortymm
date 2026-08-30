@@ -50,9 +50,28 @@ def upgrade() -> None:
     op.create_index(
         "ix_user_tokens_token", "user_tokens", ["token"]
     )
+    # The hourly scheduled sweep (app.email_token_sweep) deletes every
+    # replaced pending-email token past its lifetime in ONE statement across
+    # all users, keyed on context / replaced_at / created_at — a predicate no
+    # index above can serve, so each run would seq-scan the whole table even
+    # when there is nothing to delete, and the table is dominated by session
+    # tokens the sweep must never touch. The partial predicate mirrors the
+    # sweep's WHERE clause exactly, so the index holds only the tiny
+    # replaced pending-email population; both prefixes must stay in step with
+    # app.email_token_sweep's EMAIL_*_CONTEXT_PREFIX constants.
+    op.create_index(
+        "ix_user_tokens_replaced_pending_email",
+        "user_tokens",
+        ["created_at"],
+        postgresql_where=sa.text(
+            "replaced_at IS NOT NULL "
+            "AND (context LIKE 'change:%' OR context LIKE 'merge:%')"
+        ),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_user_tokens_replaced_pending_email", table_name="user_tokens")
     op.drop_index("ix_user_tokens_token", table_name="user_tokens")
     op.drop_index("ix_user_tokens_user_id", table_name="user_tokens")
     op.drop_table("user_tokens")

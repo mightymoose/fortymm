@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, LargeBinary, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,6 +11,27 @@ from app.models.user import User
 
 class UserToken(Base):
     __tablename__ = "user_tokens"
+    __table_args__ = (
+        # Serves the one ALL-users statement on this table — the hourly sweep
+        # in ``app.email_token_sweep`` — whose context / replaced_at /
+        # created_at predicate nothing else indexes. Without it every run
+        # seq-scans the whole table even when there is nothing to delete, and
+        # the table is dominated by session tokens the sweep must never
+        # touch. The partial predicate mirrors that sweep's WHERE clause
+        # exactly, so the index holds only the tiny replaced pending-email
+        # population; both prefixes must stay in step with the sweep's
+        # EMAIL_*_CONTEXT_PREFIX constants (tests/test_email.py pins the
+        # sweep's clause against the router's, and the migration carries the
+        # same declaration for migrated databases).
+        Index(
+            "ix_user_tokens_replaced_pending_email",
+            "created_at",
+            postgresql_where=text(
+                "replaced_at IS NOT NULL "
+                "AND (context LIKE 'change:%' OR context LIKE 'merge:%')"
+            ),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
