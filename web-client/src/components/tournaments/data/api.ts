@@ -1343,7 +1343,18 @@ export function usePlaceFixture(tournamentId: string) {
  * awaits this through `mutateAsync` and renders every refusal **inline, on the
  * strip**, in the words `./solve` owns (`runSchedulerNotice`) — the 422 "cut a draw
  * first" is a designed state there, not an error channel's business.
- */
+ *
+ * **The 202's row is cached on arrival, before the refetch** (#1614): the POST
+ * resolves to the ledger row the queue just accepted, and `onSettled`'s
+ * invalidation re-reads the tournament only at the network's speed. Left alone,
+ * everything this page derives from `latestScheduleSolve` — the strip's state, the
+ * in-flight poll cadence, and the Schedule tab's placement gate — would keep the
+ * PREVIOUS terminal (or null) solve across that gap, leaving Place/Move live on
+ * data the just-accepted run may replace. So the parsed row is written into the
+ * detail cache entry the moment the server accepts; the settle refetch (and the
+ * poll it arms, now that the cached row is in flight) replaces it with the same
+ * row or a later one, and a failed refetch leaves it as last-good — an honest
+ * snapshot of the server's own acceptance, never a guess. */
 export function useRequestScheduleSolve(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -1356,6 +1367,23 @@ export function useRequestScheduleSolve(tournamentId: string) {
       )
       // The response is untrusted like every other payload — parse it, don't cast it.
       return parseScheduleSolve(row)
+    },
+    // The bridge between the 202 and the refetch (`onSettled` below): every
+    // consumer of the detail entry — the Schedule tab's placement gate, the
+    // strip, the fast-poll interval — reads the accepted `queued` row from the
+    // moment the server accepted it. The refetch overwrites it with the same
+    // row or a later one; nothing else is trusted.
+    onSuccess: (solve) => {
+      qc.setQueryData<TournamentDetail>(
+        tournamentKey(tournamentId),
+        (detail) =>
+          detail === undefined
+            ? detail
+            : {
+                ...detail,
+                tournament: { ...detail.tournament, latestScheduleSolve: solve },
+              },
+      )
     },
     // Reconcile on BOTH paths — see the note above.
     onSettled: () => invalidateTournament(qc, tournamentId),

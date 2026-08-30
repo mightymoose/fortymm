@@ -53,6 +53,7 @@ import { addedReservation, keepReservations } from './reservation-entries'
 import { buildEditedEvent, buildTenReservations } from './seed.factory'
 import {
   apiToEvent,
+  apiToTournament,
   eventToUpdateBody,
   useCreateTournament,
   useCutDraw,
@@ -263,7 +264,7 @@ function setupClient() {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
-  return { invalidateSpy, wrapper }
+  return { queryClient, invalidateSpy, wrapper }
 }
 
 // A tournament-level edit, exactly as `tournamentToUpdateBody` builds it: no
@@ -1642,6 +1643,59 @@ describe('useRequestScheduleSolve', () => {
 
     const { result } = renderHook(() => useRequestScheduleSolve('t-1'))
     await expect(result.current.mutateAsync()).rejects.toThrow()
+  })
+
+  // #1614: the 202's row lands in the detail cache BEFORE the settle refetch
+  // returns. The Schedule tab's placement gate (and the strip, and the fast
+  // poll's cadence) all read `latestScheduleSolve` off that entry — so the
+  // gate must close on the server's acceptance, not wait for the next detail
+  // response to carry the queued row back.
+  it('caches the 202 row into the detail entry the moment the POST is accepted', async () => {
+    mockScheduleSolveEndpoint(server, () =>
+      HttpResponse.json(
+        buildScheduleSolveRead({
+          status: 'queued',
+          verdict: null,
+          started_at: null,
+          finished_at: null,
+          wall_time_ms: null,
+          fixtures_placed: null,
+          fixtures_pinned: null,
+        }),
+        { status: 202 },
+      ),
+    )
+    const { queryClient, wrapper } = setupClient()
+    // The detail this page holds while the click happens: a TERMINAL solve —
+    // the prop whose staleness the review flagged. Primed through the real
+    // mapper, so what the cache holds is what a real read primed it with.
+    queryClient.setQueryData(['tournaments', 't-1'], {
+      tournament: apiToTournament(
+        buildTournamentDetailRead({
+          id: 't-1',
+          latest_schedule_solve: buildScheduleSolveRead(),
+        }),
+      ),
+      tables: [],
+    })
+
+    const { result } = renderHookRaw(() => useRequestScheduleSolve('t-1'), {
+      wrapper,
+    })
+    await result.current.mutateAsync()
+
+    // No detail observer is subscribed here, so the settle invalidate
+    // refetches nothing — what the cache holds is EXACTLY the onSuccess write:
+    // the accepted queued row, where a terminal one sat while the request was
+    // out.
+    const cached = queryClient.getQueryData<{
+      tournament: { latestScheduleSolve: { status: string } | null }
+      tables: unknown[]
+    }>(['tournaments', 't-1'])
+    expect(cached?.tournament.latestScheduleSolve).toMatchObject({
+      id: 'solve-1',
+      status: 'queued',
+    })
   })
 })
 

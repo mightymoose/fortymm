@@ -623,7 +623,26 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
   // the placements actionable again; the poll carries that payload in without
   // any reload, and a FAILED refetch cannot flip the flag (it derives from the
   // last-good cache entry, which stays whatever it was).
-  const placementActionable = !solveInFlight(tournament.latestScheduleSolve)
+  //
+  // **The gate closes around the director's own click too** (#1614, the same
+  // race by hand): a manual "Run scheduler" has the previous terminal (or null)
+  // solve in `tournament.latestScheduleSolve` for the whole request — and the
+  // fire-and-forget invalidate that follows it re-reads only at the network's
+  // speed. Two bridges hold the gate shut across that window, so Place/Move
+  // never sit on data the just-accepted run may replace:
+  //
+  // 1. **While the request is out** (`requestSolve.isPending`) — nothing has
+  //    landed yet, so the request state is the only signal there is. A refused
+  //    run (the 422 "cut a draw first") flashes the notice only for the request's
+  //    own length, which is the honest reading of "an update is in progress".
+  // 2. **From the 202 onward**, `useRequestScheduleSolve` writes the accepted
+  //    queued row into the detail cache (`./api`), so this prop carries it the
+  //    moment the server accepts — no poll, no refetch needed. The next detail
+  //    response (the settle refetch, then the ~3s in-flight poll) hands back the
+  //    same row or a later one, and a terminal payload restores the actions, as
+  //    the tests below pin.
+  const placementActionable =
+    !solveInFlight(tournament.latestScheduleSolve) && !requestSolve.isPending
   // Memoized on the query cache's stable references: the reduction walks every
   // fixture of every event, so it should re-run when the data changes, not on
   // every poll-driven re-render.

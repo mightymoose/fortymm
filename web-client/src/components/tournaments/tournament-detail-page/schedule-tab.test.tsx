@@ -1220,6 +1220,69 @@ describe('ScheduleTab', () => {
     },
   )
 
+  // The review's P1 on #1618: between the click on Run scheduler and the settle
+  // refetch, the `tournament` prop still carries the previous terminal solve —
+  // and the gate must close across that window. Two bridges, pinned separately:
+  // the request itself (this test) and the 202 row the mutation caches into the
+  // detail entry (the data-layer test in `api.hooks.test`).
+  it('closes the gate while the run request is in the air, on a prop that still holds the previous terminal solve', async () => {
+    // A POST the test holds in the air, so the in-flight window is observable.
+    let release: () => void = () => {}
+    let posts = 0
+    mockScheduleSolveEndpoint(
+      server,
+      () =>
+        new Promise((resolve) => {
+          posts += 1
+          release = () =>
+            resolve(
+              HttpResponse.json(
+                buildScheduleSolveRead({
+                  status: 'queued',
+                  verdict: null,
+                  started_at: null,
+                  finished_at: null,
+                  wall_time_ms: null,
+                  fixtures_placed: null,
+                  fixtures_pinned: null,
+                }),
+                { status: 202 },
+              ),
+            )
+        }),
+    )
+
+    page.render({
+      tournament: buildLivePartlyPlaced(
+        buildScheduleSolve({ trigger: 'manual', verdict: 'feasible' }),
+      ),
+      tables: buildTables(),
+    })
+    // A terminal solve: the actions are live right up to the click.
+    expect(page.getPlaceTrigger('fx-unplaced')).toHaveTextContent('Place')
+    expect(page.getPlaceTrigger('fx-placed')).toHaveTextContent('Move')
+
+    page.clickRunScheduler()
+
+    // The request is out and the prop still holds the previous terminal solve
+    // — yet the gate is closed: the notice is up and Place/Move are withheld.
+    await waitFor(() => {
+      expect(posts).toBe(1)
+      expect(page.getPlacementUpdating()).toBeInTheDocument()
+    })
+    expect(page.queryPlaceTrigger('fx-unplaced')).not.toBeInTheDocument()
+    expect(page.queryPlaceTrigger('fx-placed')).not.toBeInTheDocument()
+
+    // The 202 lands (the accepted queued run — `./api` caches it into the
+    // detail entry, where the real tab reads it). Nothing else to prove here,
+    // so let the pending chain settle.
+    release()
+    // Settled: the harness's prop still holds the terminal solve, so the
+    // in-flight latch alone (the strip's) ends and the button relights — the
+    // cached-queued-row bridge is proven at the data layer (`api.hooks.test`).
+    await waitFor(() => expect(page.getRunScheduler()).toBeEnabled())
+  })
+
   it.each([
     'go_live',
     'match_completed',
