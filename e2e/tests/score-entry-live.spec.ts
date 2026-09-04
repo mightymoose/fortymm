@@ -5,6 +5,7 @@ import {
   completeUnratedMatch,
   createGameScore,
   createMatch,
+  editGameScore,
   findUserId,
   guestFromContext,
   mintGuest,
@@ -31,6 +32,24 @@ import {
  * page never needs a reload or a save of its own to notice.
  */
 test.describe('Score entry — the page follows the other side', () => {
+  test('keeping a saved score replaces both fields on a dirty edit page', async ({ page, baseURL }) => {
+    const a = await guestFromContext(page.request)
+    const b = await mintGuest(baseURL!)
+    const matchId = await createMatch(a, await findUserId(a, b.username), 3)
+    const version = await createGameScore(a, matchId, 1, 11, 5)
+    const entry = await ScoreEntryPage.navigateToEdit(page, matchId, 1)
+    await expect(entry.scoreInput(a.username)).toHaveValue('11')
+    await entry.scoreInput(b.username).fill('7')
+    const edited = await editGameScore(b, matchId, 1, 5, 11, version)
+    expect(edited.status()).toBe(200)
+    await expect(entry.conflictNotice).toBeVisible({ timeout: 15_000 })
+    await entry.keepSavedButton.click()
+    await expect(entry.conflictNotice).toBeHidden()
+    await expect(entry.scoreInput(a.username)).toHaveValue('5')
+    await expect(entry.scoreInput(b.username)).toHaveValue('11')
+    await b.ctx.dispose()
+  })
+
   test('a clean page fills in the opponent\'s save, then closes when they finalize', async ({
     page,
     baseURL,

@@ -4201,6 +4201,11 @@ describe('ScoreEntry — the page follows the other side (#1661 item 6)', () => 
     await screen.findByText(/this game was saved by someone else/i)
     await user.click(screen.getByRole('button', { name: /replace with my score/i }))
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toHaveAttribute('aria-invalid', 'true'))
+    await user.click(screen.getByRole('button', { name: /keep saved score/i }))
+    await waitFor(() => {
+      expect(me).toHaveValue('5')
+      expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toHaveValue('11')
+    })
   })
 
   it('a dirty EDIT-mode page shows the live conflict when the committed score moves under it, and Replace PUTs the fresh version', async () => {

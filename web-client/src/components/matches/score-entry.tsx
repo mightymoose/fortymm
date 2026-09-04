@@ -305,10 +305,10 @@ function ScoreEntryInner({
 
   // React Hook Form owns the two score fields and their Zod validation — and
   // nothing else (ADR-0018). Its `values` are the FROZEN `baseline` above, not
-  // a fresh recompute — see that declaration for why. `keepDirtyValues` stays
-  // as a belt-and-suspenders: with `values` frozen while dirty it should never
-  // have anything to reconcile, but it's harmless if some other path ever
-  // pushes a genuine `values` change mid-edit. `keepSubmitCount` keeps the
+  // a fresh recompute — see that declaration for why. The frozen baseline
+  // protects both fields while dirty. Do not also keep RHF's dirty values:
+  // those flags can outlive a successful save and would retain stale inputs
+  // when a clean page receives the next score. `keepSubmitCount` keeps the
   // errors-after-first-submit gate from silently resetting when a background
   // refetch changes the baseline mid-edit.
   //
@@ -324,7 +324,6 @@ function ScoreEntryInner({
     defaultValues: { me: '', opp: '' },
     values: data ? { me: baseline.me, opp: baseline.opp } : undefined,
     resetOptions: {
-      keepDirtyValues: true,
       keepSubmitCount: true,
       keepIsSubmitted: true,
     },
@@ -1022,14 +1021,16 @@ function ScoreEntryInner({
     if (replacingRef.current) return
     // Drop our rejected scratch save; the inputs fall back to the committed
     // score and the conflict notice clears. `form.reset` to the committed score
-    // clears RHF's dirty flags so the recomputed `values` (now the persisted
-    // score, with the failed scratch gone) don't get kept as our losing entry by
-    // `keepDirtyValues`, and drops `submitCount` so the fresh state starts clean.
+    // replaces both fields and clears RHF's dirty flags. Explicitly discard
+    // the inherited submit state so this fresh entry starts without errors.
     forgetScoreSaves(queryClient, matchId, gameNumber)
-    form.reset({
-      me: persistedMe != null ? String(persistedMe) : '',
-      opp: persistedOpp != null ? String(persistedOpp) : '',
-    })
+    form.reset(
+      {
+        me: persistedMe != null ? String(persistedMe) : '',
+        opp: persistedOpp != null ? String(persistedOpp) : '',
+      },
+      { keepSubmitCount: false, keepIsSubmitted: false },
+    )
     setIsDirty(false)
   }
 
