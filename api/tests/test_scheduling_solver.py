@@ -158,10 +158,34 @@ def _random_snapshot(
     )
 
 
+def _assert_no_variable_conflict(
+    tagged: list[tuple[int, int, bool]], *, min_gap: int, message: str
+) -> None:
+    """No two intervals for one resource may sit closer than ``min_gap`` apart
+    UNLESS **both** are fixed (in-progress occupancy or a pin) — a fixed-vs-
+    fixed collision is *tolerated, not fatal* (ADR "A called match holds its
+    time, and a clashing call is refused": a pin overlapping a running match,
+    or another pin, is merged rather than rejected). Only a claim involving a
+    **variable** (unpinned) interval is asserted here — an unpinned placement
+    must never collide with anything, fixed or variable."""
+    for i, (start_a, end_a, variable_a) in enumerate(tagged):
+        for start_b, end_b, variable_b in tagged[i + 1 :]:
+            too_close = start_a < end_b + min_gap and start_b < end_a + min_gap
+            if too_close and (variable_a or variable_b):
+                raise AssertionError(
+                    f"{message}: [{start_a},{end_a}) vs [{start_b},{end_b}) "
+                    f"(min_gap={min_gap})"
+                )
+
+
 def _assert_hard_constraints(snapshot: ScheduleSnapshot, result: SolveResult) -> None:
     """Every invariant a solved plan must satisfy, checked from the output
     alone: coverage, reservation tables, windows, the grid, table no-overlap
-    (including in-progress occupancy), and the per-player rest floor."""
+    for every UNPINNED placement against anything else (a pin echoes its own
+    table/start verbatim and may legitimately collide with in-progress
+    occupancy or another pin — tolerated, not fatal, see
+    :func:`_assert_no_variable_conflict`), and the per-player rest floor,
+    same tolerance."""
     assert result.verdict in SOLVED
     reservations = {r.id: r for r in snapshot.reservations}
     events = {e.id: e for e in snapshot.events}
@@ -174,25 +198,22 @@ def _assert_hard_constraints(snapshot: ScheduleSnapshot, result: SolveResult) ->
     }
     assert set(placed) == expected
 
-    by_table: dict[TableId, list[tuple[int, int]]] = {}
-    by_player: dict[PlayerId, list[tuple[int, int]]] = {}
+    # (start, end, is_variable) per resource — "variable" means unpinned; a
+    # pin or an in-progress occupancy is fixed.
+    by_table: dict[TableId, list[tuple[int, int, bool]]] = {}
+    by_player: dict[PlayerId, list[tuple[int, int, bool]]] = {}
 
     for placement in result.placements:
         fixture = fixtures[placement.fixture_id]
         duration = match_minutes(events[fixture.event_id].length_games)
         assert placement.end_min == placement.start_min + duration
-        by_table.setdefault(placement.table_id, []).append(
-            (placement.start_min, placement.end_min)
-        )
-        for player in (fixture.player_a_id, fixture.player_b_id):
-            by_player.setdefault(player, []).append(
-                (placement.start_min, placement.end_min)
-            )
         if fixture.pin is not None:
-            # A called match holds its table as a hard constant; its start can
-            # slide later but never earlier than promised. Windows do not apply.
+            # A called match's table AND start are the pin's own, echoed
+            # verbatim — never a solver decision (ADR "A called match holds
+            # its time..."). Windows do not apply.
             assert placement.table_id == fixture.pin.table_id
-            assert placement.start_min >= fixture.pin.start_min
+            assert placement.start_min == fixture.pin.start_min
+            is_variable = False
         else:
             reservation = reservations[fixture.reservation_id]
             assert placement.table_id in reservation.table_ids
@@ -200,31 +221,42 @@ def _assert_hard_constraints(snapshot: ScheduleSnapshot, result: SolveResult) ->
             assert placement.start_min >= reservation.window.start_min
             assert placement.end_min <= reservation.window.end_min
             assert placement.start_min % BUCKET_MIN == 0
+            is_variable = True
+        by_table.setdefault(placement.table_id, []).append(
+            (placement.start_min, placement.end_min, is_variable)
+        )
+        for player in (fixture.player_a_id, fixture.player_b_id):
+            by_player.setdefault(player, []).append(
+                (placement.start_min, placement.end_min, is_variable)
+            )
 
     for match in snapshot.in_progress:
         fixture = fixtures[match.fixture_id]
         duration = match_minutes(events[fixture.event_id].length_games)
         occ_end = max(match.start_min + duration, snapshot.now_min + BUCKET_MIN)
-        by_table.setdefault(match.table_id, []).append((match.start_min, occ_end))
+        by_table.setdefault(match.table_id, []).append(
+            (match.start_min, occ_end, False)
+        )
         for player in (fixture.player_a_id, fixture.player_b_id):
-            by_player.setdefault(player, []).append((match.start_min, occ_end))
+            by_player.setdefault(player, []).append((match.start_min, occ_end, False))
 
     # A rest shadow is a just-completed match that ended at ``completed_at_min``
-    # and occupies no table — a zero-length player interval, so the shared rest-
-    # floor check below forces that player's next match to start ≥ end + rest.
+    # and occupies no table — a zero-length, fixed player interval, so the
+    # shared rest-floor check below forces an UNPINNED player's next match to
+    # start ≥ end + rest (a pin may still legitimately land inside it — tolerated).
     for shadow in snapshot.rest_shadows:
         by_player.setdefault(shadow.player_id, []).append(
-            (shadow.completed_at_min, shadow.completed_at_min)
+            (shadow.completed_at_min, shadow.completed_at_min, False)
         )
 
     for intervals in by_table.values():
-        intervals.sort()
-        for (_, end), (start, _) in zip(intervals, intervals[1:], strict=False):
-            assert start >= end, "two matches overlap on a table"
+        _assert_no_variable_conflict(
+            intervals, min_gap=0, message="two matches overlap on a table"
+        )
     for intervals in by_player.values():
-        intervals.sort()
-        for (_, end), (start, _) in zip(intervals, intervals[1:], strict=False):
-            assert start >= end + REST_MIN, "player rest floor violated"
+        _assert_no_variable_conflict(
+            intervals, min_gap=REST_MIN, message="player rest floor violated"
+        )
 
 
 class TestDurations:
@@ -283,15 +315,17 @@ class TestHardConstraints:
 
 class TestPinsArePromises:
     def test_pinned_placements_survive_arbitrary_resolves(self) -> None:
-        """THE invariant, post-ADR "a called match holds its table and slides
-        later": across re-solves with mutated unpinned inputs — added and
-        removed fixtures, junk previous plans, shrunk capacity elsewhere, and a
-        later clock — a called match's *table* is byte-identical and its *start*
-        never precedes the promise. (The stronger "start is byte-identical too"
-        no longer holds: a called match's start is now a variable that can slide
-        later under contention; the no-drift-when-uncontended case is proven
-        exactly, against a proven optimum, in
-        ``TestCalledMatchesSlideNotBreak``.)"""
+        """THE invariant, post-ADR "A called match holds its time, and a
+        clashing call is refused": across re-solves with mutated unpinned
+        inputs — added and removed fixtures, junk previous plans, shrunk
+        capacity elsewhere, and a later clock — a called match's *table* AND
+        its *start* are both byte-identical to the promise, every time. (The
+        superseded "a called match holds its table and slides later" ADR once
+        made only the table half of this claim, allowing the start to slide
+        later under contention; that slide is gone — see
+        ``TestCalledMatchesHoldNotSlide``, which proves the same "never moves"
+        claim under contention this test proves under arbitrary unpinned
+        churn.)"""
         base = _random_snapshot(seed=7)
         first = solve(base, time_cap_s=CAP)
         assert first.verdict in SOLVED
@@ -349,7 +383,7 @@ class TestPinsArePromises:
             placed = {p.fixture_id: p for p in result.placements}
             for fixture_id, promise in called.items():
                 assert placed[fixture_id].table_id == promise.table_id
-                assert placed[fixture_id].start_min >= promise.start_min
+                assert placed[fixture_id].start_min == promise.start_min
 
     def test_hard_constraints_hold_around_pins(self) -> None:
         """Run the full hard-constraint check over a plan that CONTAINS a pin
@@ -398,30 +432,33 @@ class TestPinsArePromises:
         assert placed[FixtureId("F2")].start_min >= 40
 
 
-class TestCalledMatchesSlideNotBreak:
-    """A called match holds its *table* as a hard constant but its *start* is a
-    variable that can only be pushed later (ADR "a called match holds its table
-    and slides later", #1141). The promise contradictions that used to make a
-    day INFEASIBLE — a called match under an in-progress overrun, two called
-    matches promised the same table at overlapping times — now auto-resolve by
-    sliding one later on the same table. Each test here goes red before that
-    change: the old fully-rigid pin overlapped a fixed interval and the solve
-    answered INFEASIBLE."""
+class TestCalledMatchesHoldNotSlide:
+    """A called match is a constant in BOTH dimensions — table AND start —
+    never a variable this module moves (ADR "A called match holds its time,
+    and a clashing call is refused", superseding "a called match holds its
+    table and slides later", #1141). The promise contradictions that used to
+    make a day INFEASIBLE under a fully-rigid pin — and that the superseded
+    ADR resolved by sliding one match later — are now TOLERATED as fixed-vs-
+    fixed overlaps (like two in-progress matches, #1144): the day stays
+    feasible, and every pin is echoed at exactly its own table and start,
+    whatever else is going on around it. Each test here goes red if a pin ever
+    moves off its own promised values."""
 
-    def test_called_match_slides_behind_an_overrunning_predecessor(self) -> None:
-        """The motivating bug: a match ahead of a called one on the *same*
-        shared table overruns its estimate, so the called match's promised slot
-        overlaps the still-busy court. Old model (pin a rigid constant): the two
-        fixed intervals overlap on the table -> INFEASIBLE, the whole board
-        frozen. New model: the called match slides later on the *same* table,
-        just past the occupancy, and the day is feasible.
+    def test_called_match_holds_behind_an_overrunning_predecessor(self) -> None:
+        """The scenario the superseded ADR's slide used to "fix": a match ahead
+        of a called one on the *same* shared table overruns its estimate, so
+        the called match's promised slot overlaps the still-busy court. The
+        called match is NOT re-timed — it is echoed at exactly its promised
+        table and start, and the overlap with the overrunning occupancy is
+        tolerated (a control desk's "a few more minutes on Table 3", not a
+        solver decision).
 
-        Proves: overrun predecessor behind a same-table pin -> feasible/optimal
-        with the called fixture slid later ON THE SAME TABLE."""
+        Proves: an overrun predecessor behind a same-table pin never moves the
+        pin — the day stays feasible with the pin unchanged."""
         p1, p2, p3, p4 = _players(4)
         # F1 started at 0 (a 25-minute best-of-3) but now is 60 — 35 minutes
         # over. Its occupancy blocks T1 through max(0 + 25, 60 + 5) = 65. F2 is
-        # called to that same T1 at 30, which overlaps [0, 65). It must slide.
+        # called to that same T1 at 30, which overlaps [0, 65) — tolerated.
         fixtures = (
             _fixture(1, p1, p2),
             _fixture(2, p3, p4, pin=Pin(TableId("T1"), 30)),
@@ -435,20 +472,19 @@ class TestCalledMatchesSlideNotBreak:
         result = solve(snapshot, time_cap_s=CAP)
         _assert_hard_constraints(snapshot, result)
         called = {p.fixture_id: p for p in result.placements}[FixtureId("F2")]
-        assert called.table_id == TableId("T1")  # never a different court
-        # Slid just past the overrunning occupancy end (65), off-grid-friendly.
-        assert called.start_min == 65
+        assert called.table_id == TableId("T1")
+        # Held exactly at the promise — not re-timed behind the overrun.
+        assert called.start_min == 30
 
     def test_uncontended_called_match_holds_its_off_grid_start_exactly(
         self,
     ) -> None:
-        """With no contention the slide bottoms out at the promised floor: the
-        solved start equals ``pin.start_min`` exactly, with zero drift. The
-        promised time is deliberately *off* the 5-minute grid to prove the
-        start is not snapped (snapping would both drift and over-delay).
+        """With or without contention a pin echoes its promised floor exactly,
+        zero drift. The promised time is deliberately *off* the 5-minute grid
+        to prove the start is not snapped.
 
-        Proves: no contention -> solved start == pin.start_min exactly, off
-        grid, no grid-snap and no drift."""
+        Proves: solved start == pin.start_min exactly, off grid, no grid-snap
+        and no drift."""
         p1, p2 = _players(2)
         off_grid = 63  # not a multiple of BUCKET_MIN
         assert off_grid % BUCKET_MIN != 0
@@ -462,13 +498,14 @@ class TestCalledMatchesSlideNotBreak:
         assert placed.start_min == off_grid  # no snap, no drift
         assert placed.end_min == off_grid + match_minutes(3)
 
-    def test_called_matchs_table_is_invariant_across_a_resolve(self) -> None:
-        """The one-line rule: a called match may be pushed later on a re-solve
-        but never moved to a different table. Solve twice — once uncontended,
-        once with an overrun on the pinned table that forces a slide — and the
-        table is identical both times even as the start moves.
+    def test_called_matchs_placement_is_invariant_across_a_resolve(self) -> None:
+        """A called match's table AND start are both invariant across a
+        re-solve. Solve twice — once uncontended, once with an overrun on the
+        pinned table that would have forced the old model to slide — and the
+        placement is byte-identical both times.
 
-        Proves: a called fixture's ``table_id`` is invariant across a re-solve."""
+        Proves: a called fixture's (table_id, start_min) never varies across a
+        re-solve, whatever else changes around it."""
         p1, p2, p3, p4 = _players(4)
         pin = Pin(TableId("T2"), 100)
         base = _one_reservation_snapshot(
@@ -479,37 +516,39 @@ class TestCalledMatchesSlideNotBreak:
         assert first.verdict in SOLVED
         first_called = {p.fixture_id: p for p in first.placements}[FixtureId("F1")]
         assert first_called.table_id == TableId("T2")
-        assert first_called.start_min == 100  # uncontended: at the floor
+        assert first_called.start_min == 100  # exactly the promise
 
-        # Re-solve with an overrun on T2 that overlaps the promise, forcing a
-        # slide — but never a table change.
+        # Re-solve with an overrun on T2 that overlaps the promise — tolerated,
+        # never a re-time and never a table change.
         contended = dataclasses.replace(
             base,
             now_min=110,
             in_progress=(InProgressMatch(FixtureId("F2"), TableId("T2"), 100),),
         )
-        # F2 becomes the running match; drop its unpinned duplicate placement by
-        # keeping it as the in-progress fixture (already in `fixtures`).
         second = solve(contended, time_cap_s=CAP)
         assert second.verdict in SOLVED
         second_called = {p.fixture_id: p for p in second.placements}[FixtureId("F1")]
         assert second_called.table_id == TableId("T2")  # table never varies
-        assert second_called.start_min > 100  # but the start slid later
+        assert second_called.start_min == 100  # start never varies either
 
-    def test_two_called_matches_same_table_overlap_resolves_by_sliding(
+    def test_two_called_matches_same_table_overlap_is_tolerated(
         self,
     ) -> None:
-        """Two promises to the same table at overlapping times. Old model: two
-        rigid fixed intervals overlap on T1 -> INFEASIBLE. New model: one holds
-        its floor and the other slides just past it — feasible, both still on
-        T1, non-overlapping.
+        """Two promises to the same table at overlapping times — a promise the
+        director made twice, or two independent calls that happened to
+        collide. This is now tolerated, fixed-vs-fixed data (like two
+        in-progress matches, #1144): the day stays feasible and BOTH pins are
+        echoed at exactly their own promised values, overlap and all — the
+        write-boundary clash refusal (``app.tournament_placement``) is what
+        prevents this from ever being CREATED; this module just never breaks
+        on it if it somehow exists.
 
-        Proves: two called fixtures promised the same table at overlapping times
-        resolve to one sliding later (feasible), not INFEASIBLE."""
+        Proves: two called fixtures promised the same table at overlapping
+        times solve as feasible/optimal with NEITHER moved."""
         p1, p2, p3, p4 = _players(4)
         fixtures = (
             _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),  # [0, 25)
-            _fixture(2, p3, p4, pin=Pin(TableId("T1"), 10)),  # promised [10, 35)
+            _fixture(2, p3, p4, pin=Pin(TableId("T1"), 10)),  # [10, 35)
         )
         snapshot = _one_reservation_snapshot(fixtures, tables=1)
         result = solve(snapshot, time_cap_s=CAP)
@@ -517,9 +556,9 @@ class TestCalledMatchesSlideNotBreak:
         placed = {p.fixture_id: p for p in result.placements}
         assert placed[FixtureId("F1")].table_id == TableId("T1")
         assert placed[FixtureId("F2")].table_id == TableId("T1")
-        # F1 holds its 0 floor; F2 slides from 10 to just past F1's end (25).
-        starts = sorted(p.start_min for p in result.placements)
-        assert starts == [0, 25]
+        # Both echoed exactly as promised — overlapping, and that's fine.
+        assert placed[FixtureId("F1")].start_min == 0
+        assert placed[FixtureId("F2")].start_min == 10
 
 
 def _reasons_by_kind(

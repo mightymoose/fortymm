@@ -53,6 +53,7 @@ from app.match_queries import (
 from app.match_result_notifications import (
     notify_result_accepted,
     notify_result_posted,
+    notify_result_recorded,
 )
 from app.match_scoring import (
     MatchLockUnavailable,
@@ -902,6 +903,20 @@ async def post_match_result(
             await db.rollback()
             log.exception(
                 "Failed to record result-acceptance notification",
+                extra={"match_id": str(match_id)},
+            )
+    else:
+        # Self-accept path (solo / unrated / a director's result): nobody owes
+        # an acceptance, so the match just finalized with no round trip.
+        # Announce it to whoever didn't post it (ADR "a result finalized
+        # without a player's acceptance is announced", #1661 item 4) — a
+        # no-op for a solo match. Same best-effort guard as the sibling branch.
+        try:
+            await notify_result_recorded(notifications, reloaded, current_user)
+        except Exception:
+            await db.rollback()
+            log.exception(
+                "Failed to record result-recorded notification",
                 extra={"match_id": str(match_id)},
             )
     return details

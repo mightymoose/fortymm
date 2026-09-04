@@ -85,7 +85,7 @@ from app.match_errors import (
     SelfMatchError,
     UndecidedBoardError,
 )
-from app.match_result_notifications import notify_result_posted
+from app.match_result_notifications import notify_result_posted, notify_result_recorded
 from app.match_scoring import MatchLockUnavailable
 from app.match_scoring import delete_game_score as delete_game_score_core
 from app.match_scoring import enter_game_score as enter_game_score_core
@@ -170,6 +170,7 @@ from app.tournament_errors import (
     NonSinglesEntryError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PlacementClashError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
     ReservationNotInEventError,
@@ -2022,18 +2023,24 @@ async def place_fixture(
     tournament's ``table_catalogue`` is refused, not stored — a placement whose table
     does not exist is a dangling reference, not a state the director chose.
 
-    **The placement is otherwise SOFT** (ADR-0790): ``scheduled_start`` is a
-    prediction, and the other constraints (table-in-group, time-in-window, no
-    double-booking) are flags derived on read, NOT invariants — so an out-of-window
-    time, or a table outside the fixture's group's reservation, is STORED, not rejected.
-    The one hard rule about the fixture itself: one whose linked match is ``completed``
-    or ``voided`` is history, so its placement can no longer be changed. Owner-gated:
-    only the tournament's creator may place its fixtures.
+    **The placement is otherwise SOFT — except a live call** (ADR-0790):
+    ``scheduled_start`` is a prediction, and the other constraints (table-in-group,
+    time-in-window, no double-booking) are flags derived on read, NOT invariants — so an
+    out-of-window time, or a table outside the fixture's group's reservation, is
+    STORED, not rejected. The one exception: while the tournament is **live**, a full
+    placement that would CALL this fixture onto a table or a player an unfinished
+    ``in_progress`` match already holds is refused, not stored — nothing is written and
+    nobody is notified (ADR "A called match holds its time, and a clashing call is
+    refused"). Pre-live, a double-booking still saves. The one hard rule about the
+    fixture itself: one whose linked match is ``completed`` or ``voided`` is history, so
+    its placement can no longer be changed. Owner-gated: only the tournament's creator
+    may place its fixtures.
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
     tournament's owner, when no fixture with that id belongs to the tournament, when the
-    placement's ``table_id`` names no table in the tournament's catalogue, or when
-    the fixture's match is already completed/voided (its placement is frozen)."""
+    placement's ``table_id`` names no table in the tournament's catalogue, when the
+    fixture's match is already completed/voided (its placement is frozen), or when a
+    live call would clash with a table or a player an unfinished match already holds."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         actor = await _load_user(db, user_id)
@@ -2062,6 +2069,13 @@ async def place_fixture(
             # name a real table. Named with the offending id, because an MCP caller
             # composed it rather than clicked it.
             raise ToolError(f"{exc} (table_id: {exc.table_id})") from exc
+        except PlacementClashError as exc:
+            # The HTTP route's 409: a live call onto a table or a player an
+            # unfinished in_progress match already holds — the domain-authored
+            # sentence naming the clash, surfaced as ``ToolError`` prose verbatim
+            # (ADR "A called match holds its time, and a clashing call is
+            # refused"). Nothing was written.
+            raise ToolError(str(exc)) from exc
 
 
 @mcp.tool
@@ -2448,6 +2462,33 @@ async def _fire_result_notification(
         )
 
 
+async def _fire_result_recorded_notification(
+    db: AsyncSession, match: Match, poster_id: uuid.UUID
+) -> None:
+    """Best-effort "your match result was recorded" announcement to every
+    player who did NOT post it, mirroring the HTTP ``post_match_result``
+    handler's self-accept branch (ADR "a result finalized without a player's
+    acceptance is announced", #1661 item 4).
+
+    Loads the poster's live ``User`` row: :func:`notify_result_recorded` names
+    the poster in its copy even when they are on no side at all (a tournament
+    director), so it needs the row, not just the id. Same fire-and-forget
+    guard as :func:`_fire_result_notification` — the result is already
+    committed, so nothing here may fail the tool."""
+    notifications = NotificationService(db, get_push_sender())
+    try:
+        poster = await _load_user(db, poster_id)
+        if poster is None:
+            return
+        await notify_result_recorded(notifications, match, poster)
+    except Exception:
+        await db.rollback()
+        log.exception(
+            "Failed to record result-recorded notification",
+            extra={"match_id": str(match.id)},
+        )
+
+
 @mcp.tool
 async def propose_result(
     match_id: uuid.UUID,
@@ -2509,6 +2550,12 @@ async def propose_result(
         # notify failure can never fail the tool.
         if outcome.awaiting_acceptance:
             await _fire_result_notification(db, outcome.match, user_id)
+        else:
+            # Self-accept path (solo / unrated / a director's result):
+            # announce the finalize to whoever didn't post it — a no-op for a
+            # solo match (ADR "a result finalized without a player's
+            # acceptance is announced", #1661 item 4).
+            await _fire_result_recorded_notification(db, outcome.match, user_id)
         return await _serialize_written_match(db, outcome.match, user_id)
 
 

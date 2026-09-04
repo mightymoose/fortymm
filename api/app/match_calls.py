@@ -85,16 +85,21 @@ API replicas double-enqueueing ticks is likewise harmless — the second tick
 finds ``pinned_at`` set with a nonzero count and is a no-op.
 ``call_notified_count`` increments on the real transition (0 → told = 1,
 whether that is a fresh call or a silent pin's late delivery) and once per
-**moved/cancelled correction** sent by :func:`notify_pin_repairs` — the count
-is "how many times the players were told", so silent (pre-live) repairs do
-not touch it.
+**cancelled correction** sent by :func:`notify_pin_repairs` — the count is
+"how many times the players were told", so silent (pre-live) repairs do not
+touch it. (A *moved* correction is the manual placement path's own, sent
+directly by :func:`apply_manual_placement` — see below — never through
+:func:`notify_pin_repairs`, which as of ADR "A called match holds its time,
+and a clashing call is refused" only ever cancels.)
 
 **Broken-pin corrections.** A pin is inviolable against optimization, not
-against physics (ADR): when a pinned fixture's table leaves the venue or an
-entrant withdraws, the *solve pipeline* detects it in its snapshot and repairs
-it in its guarded apply (``app.schedule_solves``), then calls
-:func:`notify_pin_repairs` here — same transaction, same locks, same
-atomic-in-app + post-commit-fan-out split as the call itself.
+against physics (ADR): when a pinned fixture's entrant withdraws, the *solve
+pipeline* detects it in its snapshot and repairs it in its guarded apply
+(``app.schedule_solves``), then calls :func:`notify_pin_repairs` here — same
+transaction, same locks, same atomic-in-app + post-commit-fan-out split as the
+call itself. A called match's table and start are otherwise a constant the
+solver never rewrites (``app.scheduling``), so withdrawal is the only physics
+left that can still break a pin.
 
 Calls fire only while the tournament is **live**: pre-live placements are
 silent estimates ("free rearranging while planning" — ADR), so a pre-live
@@ -302,9 +307,35 @@ async def _un_call_pristine_match(db: AsyncSession, match_id: uuid.UUID | None) 
     )
 
 
+@dataclass(frozen=True)
+class HeldResources:
+    """The unfinished (``in_progress``) tournament fixtures currently holding a
+    table or a player, keyed by what they hold — so a caller can name *which*
+    match holds a clashing resource, not just that something does (the live
+    placement clash refusal, ADR "A called match holds its time, and a
+    clashing call is refused"; :func:`call_due_fixtures`'s automatic gate
+    only ever needed the sets, so it reads ``.tables``/``.users`` as sets).
+
+    ``tables`` maps a table id to the ``in_progress`` fixture holding it.
+    ``users`` maps a user id to the fixture holding them, at the same
+    **user**-level granularity :func:`_held_resources`'s docstring already
+    describes — the same human across two events is one person. Two
+    ``in_progress`` fixtures reporting the same table or player is
+    contradictory data the solver already tolerates-and-reports elsewhere
+    (ADR "overlapping in-progress matches are tolerated and reported"); this
+    reader keeps whichever one it saw last — a caller here only needs someone
+    to name, not an adjudication of which is "real"."""
+
+    tables: dict[str, TournamentFixture]
+    users: dict[uuid.UUID, TournamentFixture]
+
+
 async def _held_resources(
-    db: AsyncSession, tournament_id: uuid.UUID
-) -> tuple[set[str], set[uuid.UUID]]:
+    db: AsyncSession,
+    tournament_id: uuid.UUID,
+    *,
+    exclude_match_id: uuid.UUID | None = None,
+) -> HeldResources:
     """The tables and **users** an unfinished (``in_progress``) match in this
     tournament currently holds — the resource-freedom gate's occupancy read
     (ADR "a tournament match is called only when its table and players are
@@ -320,43 +351,61 @@ async def _held_resources(
     already treats them (``schedule_solves`` maps entrants → ``PlayerId`` via
     the user). Runs on the caller's already-locked transaction: one occupancy
     query, plus one entry→user resolution, per batch.
+
+    ``exclude_match_id`` drops one match's own fixture from the read — the
+    live placement clash check's own fixture, when it is itself already
+    ``in_progress`` (a re-place is a *move*, not a clash against itself).
+    :func:`call_due_fixtures`'s automatic gate passes none: a fixture it is
+    evaluating is never itself already ``in_progress`` (:func:`_due_for_call`
+    requires ``winner_entry_id IS NULL`` and an un-notified pin, neither of
+    which an already-called, running match satisfies), so there is nothing of
+    its own to exclude there.
+
+    Returns a :class:`HeldResources` naming which fixture holds each
+    resource; :func:`call_due_fixtures` reads ``set(.tables)``/``set(.users)``
+    off it exactly as it always has.
     """
-    rows = (
-        await db.execute(
-            select(
-                TournamentFixture.table_id,
-                TournamentFixture.entry_a_id,
-                TournamentFixture.entry_b_id,
-            )
-            .join(Match, Match.id == TournamentFixture.match_id)
-            .where(
-                TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
-                Match.status == MatchStatus.in_progress,
-            )
+    stmt = (
+        select(TournamentFixture)
+        .join(Match, Match.id == TournamentFixture.match_id)
+        .where(
+            TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
+            Match.status == MatchStatus.in_progress,
         )
-    ).all()
-    held_tables: set[str] = set()
+    )
+    if exclude_match_id is not None:
+        stmt = stmt.where(TournamentFixture.match_id != exclude_match_id)
+    fixtures = (await db.execute(stmt)).scalars().all()
+
+    held_tables: dict[str, TournamentFixture] = {}
     held_entry_ids: set[uuid.UUID] = set()
-    for table_id, entry_a_id, entry_b_id in rows:
-        if table_id is not None:
-            held_tables.add(table_id)
-        for entry_id in (entry_a_id, entry_b_id):
+    for fixture in fixtures:
+        if fixture.table_id is not None:
+            held_tables[fixture.table_id] = fixture
+        for entry_id in (fixture.entry_a_id, fixture.entry_b_id):
             if entry_id is not None:
                 held_entry_ids.add(entry_id)
-    held_users: set[uuid.UUID] = set()
+
+    held_users: dict[uuid.UUID, TournamentFixture] = {}
     if held_entry_ids:
-        held_users = set(
-            (
+        entry_user: dict[uuid.UUID, uuid.UUID] = {
+            entry_id: user_id
+            for entry_id, user_id in (
                 await db.execute(
-                    select(TournamentEntry.user_id).where(
+                    select(TournamentEntry.id, TournamentEntry.user_id).where(
                         TournamentEntry.id.in_(held_entry_ids)
                     )
                 )
-            )
-            .scalars()
-            .all()
-        )
-    return held_tables, held_users
+            ).all()
+        }
+        for fixture in fixtures:
+            for entry_id in (fixture.entry_a_id, fixture.entry_b_id):
+                if entry_id is None:
+                    continue
+                user_id = entry_user.get(entry_id)
+                if user_id is not None:
+                    held_users[user_id] = fixture
+    return HeldResources(tables=held_tables, users=held_users)
 
 
 async def call_due_fixtures(
@@ -423,8 +472,11 @@ async def call_due_fixtures(
     # contending for the same freshly-free resource within one pass are settled
     # by earliest predicted start; the loser defers to a later pass.
     # Seed the running claim from real held state, then admit due fixtures into
-    # it; the loop mutates these in place (the returned sets are freshly built).
-    claimed_tables, claimed_users = await _held_resources(db, tournament.id)
+    # it; the loop mutates these in place (freshly-built sets off the held
+    # resources' own keys — this pass only needs "is it held", not "by whom").
+    held = await _held_resources(db, tournament.id)
+    claimed_tables: set[str] = set(held.tables)
+    claimed_users: set[uuid.UUID] = set(held.users)
     free: list[TournamentFixture] = []
     for fixture in sorted(due, key=lambda f: (f.scheduled_start, f.id)):
         user_ids = {
@@ -544,16 +596,23 @@ async def notify_pin_repairs(
     db: AsyncSession,
     tournament: Tournament,
     *,
-    moved: Sequence[TournamentFixture],
     cancelled: Sequence[TournamentFixture],
     withdrawn_entry_ids: AbstractSet[uuid.UUID],
     ingredients: "CopyIngredients | None" = None,
 ) -> list[NotificationJob]:
-    """Send the corrections for pins the guarded apply just repaired: a
-    *moved* message per entrant of each re-placed pin (``moved`` rows already
-    carry their NEW ``table_id``/``scheduled_start`` and refreshed
-    ``pinned_at``), and a *cancelled* message for each voided pin (``cancelled``
-    rows already have their placement columns cleared).
+    """Send a *cancelled* message for each voided pin (``cancelled`` rows
+    already have their placement columns cleared) — the physics-broke-the-
+    promise correction (ADR "A called match holds its time, and a clashing
+    call is refused"'s "broken pins" carve-out): an entrant withdrew, so the
+    promised match cannot happen.
+
+    There is no *moved* correction here any more. A called match's table AND
+    start are both a constant the solver never rewrites (module docstring of
+    ``app.scheduling``), so a re-solve can never hand the guarded apply a
+    changed pin to correct — only ``app.tournament_placement``'s director-hand
+    re-place still moves a called match, and that path sends its own "moved"
+    message directly (``_moved_to``, ``apply_manual_placement``), never
+    through here.
 
     Same contract as :func:`call_due_fixtures`: the caller (only ever the
     guarded apply) holds the tournament and fixture row locks and owns the
@@ -580,35 +639,10 @@ async def notify_pin_repairs(
     """
     if tournament.status is not TournamentStatus.live:
         return []
-    repaired = [*moved, *cancelled]
-    if not repaired:
+    if not cancelled:
         return []
     if ingredients is None:
-        ingredients = await load_copy_ingredients(db, tournament, repaired)
-
-    # First pass over both branches, so the whole batch's in-app preferences
-    # resolve in one round (the locks are already held).
-    moves: list[tuple[TournamentFixture, User, User, _OpponentCopy]] = []
-    for fixture in moved:
-        event = ingredients.events.get(fixture.event_id)
-        user_a = ingredients.user_for_entry(fixture.entry_a_id)
-        user_b = ingredients.user_for_entry(fixture.entry_b_id)
-        if (
-            event is None
-            or user_a is None
-            or user_b is None
-            or fixture.table_id is None
-            or fixture.scheduled_start is None
-        ):
-            continue
-        context = ingredients.context_for(tournament, event, fixture)
-        table_label = ingredients.table_labels.get(fixture.table_id, fixture.table_id)
-        build = _moved_copy(
-            table_label,
-            venue_local(fixture.scheduled_start, event.timezone),
-            context,
-        )
-        moves.append((fixture, user_a, user_b, build))
+        ingredients = await load_copy_ingredients(db, tournament, cancelled)
 
     # Cancellations go to the REMAINING entrant only (docstring above).
     cancellations: list[
@@ -639,8 +673,7 @@ async def notify_pin_repairs(
 
     in_app_ids = await _in_app_allowed(
         db,
-        [user for _, user_a, user_b, _ in moves for user in (user_a, user_b)]
-        + [
+        [
             remaining
             for _, _, recipients in cancellations
             for remaining, _ in recipients
@@ -648,19 +681,6 @@ async def notify_pin_repairs(
     )
 
     fanout: list[NotificationJob] = []
-    for fixture, user_a, user_b, build in moves:
-        _tell_pair(
-            db,
-            fixture,
-            user_a,
-            user_b,
-            build=build,
-            tournament_id=tournament.id,
-            in_app_ids=in_app_ids,
-            increment_always=False,
-            fanout=fanout,
-        )
-
     for fixture, context, recipients in cancellations:
         told = False
         for remaining, withdrew in recipients:
@@ -901,22 +921,6 @@ def _called_copy(
         return match_called_message(
             table_label=table_label,
             estimated_start=estimated_start,
-            opponent_name=opponent.username,
-            context=context,
-        )
-
-    return build
-
-
-def _moved_copy(
-    new_table_label: str, new_estimated_start: datetime, context: MatchCallContext
-) -> _OpponentCopy:
-    """Bind a *match_call_moved* correction to everything but the opponent."""
-
-    def build(opponent: User) -> MatchCallMessage:
-        return match_call_moved_message(
-            new_table_label=new_table_label,
-            new_estimated_start=new_estimated_start,
             opponent_name=opponent.username,
             context=context,
         )

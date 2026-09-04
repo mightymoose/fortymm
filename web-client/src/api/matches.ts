@@ -69,8 +69,17 @@ export function matchListQueryKey(params: MatchListParams) {
   return ['matches', 'list', params] as const
 }
 
+/** The prefix every `matchQueryKey(matchId)` shares — exported so a caller that
+ * needs to invalidate EVERY open match's detail cache (not just one) can do so
+ * without re-spelling `['matches', 'detail']`. Used by the realtime
+ * invalidation table (`api/realtime/invalidation.ts`): a pushed hint doesn't
+ * name which match changed, so it invalidates every match query this prefix
+ * matches — cheap, since only an actually-mounted, actually-observed query
+ * refetches. */
+export const MATCH_QUERY_KEY_PREFIX = ['matches', 'detail'] as const
+
 export function matchQueryKey(matchId: string) {
-  return ['matches', 'detail', matchId] as const
+  return [...MATCH_QUERY_KEY_PREFIX, matchId] as const
 }
 
 /** Mutation-cache key for one game's scratch-pad score save. Keyed per game so

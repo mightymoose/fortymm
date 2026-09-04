@@ -43,6 +43,7 @@ from app.match_errors import (
 )
 from app.match_queries import is_tournament_director, match_eager_options
 from app.match_realtime import stage_match_participant_hints
+from app.match_score_notifications import director_score_notices
 from app.match_serialization import (
     _scorability_reason,
     first_decider,
@@ -51,6 +52,7 @@ from app.match_serialization import (
     score_view,
 )
 from app.models import Match, MatchGame, MatchGameScore
+from app.notifications.service import enqueue_notification_job
 from app.result_acceptance import _games_to_win
 from app.schemas.match import (
     MatchDetailsScore,
@@ -251,10 +253,18 @@ def _overrun_decided_at(games: list[MatchResultsGameWrite], best_of: int) -> int
     still-undecided, or exactly-decided-at-the-last-game boards — all legal
     scratchpad states.
 
-    Gap-tolerant on purpose: it shares the decider core with the finalize
-    validator but does **not** require ``1..N`` contiguity, so legitimate
-    out-of-order / gappy entry (e.g. scoring game 3 first) is allowed right up
-    until a side actually clinches *before* the highest-numbered scored game."""
+    Contiguity-agnostic on purpose: it shares the decider core with the
+    finalize validator but does **not** itself require ``1..N`` contiguity —
+    that invariant is enforced upstream, at the write boundary, by
+    :func:`ensure_contiguous_for_save` (create) and
+    :func:`ensure_no_later_saved_game` (delete), the scratchpad-is-contiguous
+    guards (ADR "the scratchpad is contiguous"). Those guards mean a board this
+    function ever sees is already gap-free by construction on every path that
+    goes through them — but this function stays a plain computation over
+    whatever list it is handed (``update_game_score``'s prospective board
+    included), rather than assuming contiguity itself, so it keeps working
+    unchanged as a defensive backstop against a gappy board built some other
+    way (a client composing ``/results`` directly, or legacy data)."""
     if not games:
         return None
     decider = first_decider(games, _games_to_win(best_of))
@@ -278,6 +288,45 @@ def ensure_no_overrun(
         raise ScoreNotAllowedError(
             f"The match was already decided at game {decided_at}; "
             f"game {game_number} can't be played."
+        )
+
+
+def ensure_contiguous_for_save(match: Match, game_number: int) -> None:
+    """Reject (:class:`ScoreNotAllowedError`, 422-equivalent) a **create** write
+    to ``game_number`` unless every game ``1..game_number - 1`` already carries
+    a committed score — the scratchpad-is-contiguous invariant (ADR "the
+    scratchpad is contiguous"): a table-tennis match plays its games in order,
+    so a board with a hole is not a state the match can be in.
+
+    Named with the first unsaved game, so the refusal tells the scorer exactly
+    what to deal with first: ``"Save game K before game N."`` Create-path only
+    — :func:`update_game_score` replaces a score already on the board in
+    place, which cannot open a gap, so it carries no call to this guard."""
+    for candidate in range(1, game_number):
+        game = _game_by_number(match, candidate)
+        if game is None or game.score is None:
+            raise ScoreNotAllowedError(
+                f"Save game {candidate} before game {game_number}."
+            )
+
+
+def ensure_no_later_saved_game(match: Match, game_number: int) -> None:
+    """Reject (:class:`ScoreNotAllowedError`, 422-equivalent) a **delete** of
+    ``game_number`` unless no game numbered above it carries a committed score
+    — only the *last* saved game may ever be cleared (ADR "the scratchpad is
+    contiguous"): clearing an earlier game out from under a later saved one
+    would leave a hole, so a player who wants to change an earlier game edits
+    it (``update_game_score``) instead of clearing it.
+
+    Named with the highest saved game, so the refusal tells the scorer exactly
+    what to deal with first: ``"Clear game M first, or edit game N instead."``"""
+    highest_saved = max(
+        (game.game_number for game in match.games if game.score is not None),
+        default=None,
+    )
+    if highest_saved is not None and highest_saved > game_number:
+        raise ScoreNotAllowedError(
+            f"Clear game {highest_saved} first, or edit game {game_number} instead."
         )
 
 
@@ -505,22 +554,25 @@ async def enter_game_score(
 
     Loads under the blocking match row lock, enforces scorability and the
     best-of range, then — only when this game has no committed score yet — the
-    no-overrun guard against the prospective board (a pre-existing committed
-    score short-circuits to :class:`ScoreConflictError` below without running
-    overrun, preserving the historical conflict-before-overrun ordering). The
-    prospective board is the currently-scored games plus this write.
+    contiguity guard (:func:`ensure_contiguous_for_save`, ADR "the scratchpad
+    is contiguous") and the no-overrun guard against the prospective board (a
+    pre-existing committed score short-circuits to :class:`ScoreConflictError`
+    below without running either, preserving the historical
+    conflict-before-overrun ordering). The prospective board is the
+    currently-scored games plus this write.
 
     Raises :class:`MatchNotFoundError` (absent match, or a caller who is
     neither a participant nor the tournament's director),
-    :class:`MatchNotScorableError`, :class:`ScoreNotAllowedError` (range or
-    overrun), or :class:`ScoreConflictError` (a concurrent writer already
-    scored this game)."""
+    :class:`MatchNotScorableError`, :class:`ScoreNotAllowedError` (range,
+    contiguity, or overrun), or :class:`ScoreConflictError` (a concurrent
+    writer already scored this game)."""
     match = await load_match(db, match_id, user_id, lock=True)
     ensure_scorable(match)
     ensure_game_in_range(match, game_number)
 
     game = _game_by_number(match, game_number)
     if game is None or game.score is None:
+        ensure_contiguous_for_save(match, game_number)
         prospective = [
             g for g in games_payload_from_match(match) if g.game_number != game_number
         ] + [
@@ -532,13 +584,24 @@ async def enter_game_score(
         ]
         ensure_no_overrun(prospective, match.match_settings.best_of, game_number)
 
-    return await _enter_game_score_locked(
+    notices = await director_score_notices(
+        db,
+        match,
+        user_id,
+        game_number=game_number,
+        action="recorded",
+        points=(side_1_points, side_2_points),
+    )
+    reloaded = await _enter_game_score_locked(
         db,
         match,
         game_number=game_number,
         side_1_points=side_1_points,
         side_2_points=side_2_points,
     )
+    for notice in notices:
+        enqueue_notification_job(notice)
+    return reloaded
 
 
 async def update_game_score(
@@ -584,7 +647,15 @@ async def update_game_score(
     ]
     ensure_no_overrun(prospective, match.match_settings.best_of, game_number)
 
-    return await _update_game_score_locked(
+    notices = await director_score_notices(
+        db,
+        match,
+        user_id,
+        game_number=game_number,
+        action="corrected",
+        points=(side_1_points, side_2_points),
+    )
+    reloaded = await _update_game_score_locked(
         db,
         match,
         game_number=game_number,
@@ -592,6 +663,9 @@ async def update_game_score(
         side_2_points=side_2_points,
         expected_version=expected_version,
     )
+    for notice in notices:
+        enqueue_notification_job(notice)
+    return reloaded
 
 
 async def delete_game_score(
@@ -603,18 +677,33 @@ async def delete_game_score(
     load_match: _MatchWriteLoader = load_match_for_write,
 ) -> Match:
     """Clear the committed score for ``game_number`` and return the reloaded
-    match. Loads under the blocking match row lock and enforces scorability and
-    the score's existence.
+    match. Loads under the blocking match row lock, enforces scorability and
+    the score's existence, then the contiguity guard
+    (:func:`ensure_no_later_saved_game`, ADR "the scratchpad is contiguous"):
+    only the last saved game may be cleared, so clearing never opens a hole
+    under a later saved one.
 
     Raises :class:`MatchNotFoundError` — ``"Match not found."`` for an absent
     match or an unauthorized caller (neither a participant nor the tournament's
     director), ``"Score not found."`` for a missing game score — or
-    :class:`MatchNotScorableError`."""
+    :class:`MatchNotScorableError`, :class:`ScoreNotAllowedError` (a later
+    game is still saved)."""
     match = await load_match(db, match_id, user_id, lock=True)
     ensure_scorable(match)
 
     game = _game_by_number(match, game_number)
     if game is None or game.score is None:
         raise MatchNotFoundError("Score not found.")
+    ensure_no_later_saved_game(match, game_number)
 
-    return await _delete_game_score_locked(db, match, game_number=game_number)
+    notices = await director_score_notices(
+        db,
+        match,
+        user_id,
+        game_number=game_number,
+        action="cleared",
+    )
+    reloaded = await _delete_game_score_locked(db, match, game_number=game_number)
+    for notice in notices:
+        enqueue_notification_job(notice)
+    return reloaded

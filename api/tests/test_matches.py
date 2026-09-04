@@ -1171,7 +1171,10 @@ async def test_create_game_score_racing_first_propose_never_strays(
     concurrent first-propose (which locks ``NOWAIT``) bounces with a 409, and
     the scorer's own ``_enforce_scorable`` recheck runs under the lock on still
     -unfrozen state: the write lands as a plain scratchpad edit (board
-    ``[1, 2, 5]``, no result) rather than a stray game atop a frozen result.
+    ``[1, 2, 3]``, no result) rather than a stray game atop a frozen result.
+    Targets game 3 (not 5, as this test predated the "the scratchpad is
+    contiguous" ADR): games 1 and 2 are already saved, so 3 is the next legal
+    write.
 
     Pre-fix this is RED: both sides return ``(201, 201)`` and the committed match
     carries a stray game 5 on top of a posted result.
@@ -1204,7 +1207,7 @@ async def test_create_game_score_racing_first_propose_never_strays(
                 payload = MatchGameScoreWrite(side_1_points=11, side_2_points=2)
                 try:
                     await create_game_score(
-                        match_id, payload, 5, user, session, get_match_service(session)
+                        match_id, payload, 3, user, session, get_match_service(session)
                     )
                     return 201
                 except HTTPException as exc:
@@ -1242,7 +1245,7 @@ async def test_create_game_score_racing_first_propose_never_strays(
             # No result was minted, and the board is a still-editable scratchpad —
             # the #835 stray-atop-a-frozen-result is unreachable.
             assert final.results == []
-            assert sorted(g.game_number for g in final.games) == [1, 2, 5]
+            assert sorted(g.game_number for g in final.games) == [1, 2, 3]
 
 
 async def test_delete_game_score_double_clear_never_500s(
@@ -1265,6 +1268,16 @@ async def test_delete_game_score_double_clear_never_500s(
         match_id = uuid.UUID(match["id"])
         me_id = me.id
 
+        # Games 1 and 2 first: the scratchpad is contiguous, so game 3 can only
+        # be saved once they are.
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 5},
+        )
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/2/scores/new",
+            json={"side_1_points": 11, "side_2_points": 5},
+        )
         await api_client.post(
             f"/v1/matches/{match['id']}/games/3/scores/new",
             json={"side_1_points": 11, "side_2_points": 5},
@@ -1305,7 +1318,9 @@ async def test_delete_game_score_double_clear_never_500s(
                 .scalars()
                 .all()
             )
-            assert scores == [], scores
+            # Only game 3 — the one raced on — was cleared; games 1 and 2 are
+            # untouched by this race.
+            assert len(scores) == 2
 
 
 async def test_update_game_score_racing_first_propose_never_500s(
@@ -1405,27 +1420,36 @@ async def test_score_create_422_when_game_number_exceeds_best_of(
     assert "best of 3" in response.json()["detail"]
 
 
-async def test_score_create_accepts_gaps(
+async def test_score_create_422_on_a_gap(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    # The per-game endpoints are pure scratchpad — gaps are fine. Contiguity
-    # is enforced only when finalizing via POST /results.
+    # ADR "the scratchpad is contiguous" (#1661 item 5): a save past an unsaved
+    # earlier game is refused, naming the first unsaved game — the board can
+    # never hold a hole.
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=5)
 
-    # Score game 3 before game 1 or 2 — the FE can let users enter games in
-    # any order.
+    # Score game 3 before game 1 or 2 is now refused.
     response = await api_client.post(
         f"/v1/matches/{match['id']}/games/3/scores/new",
         json={"side_1_points": 11, "side_2_points": 9},
     )
-    assert response.status_code == 201
-    body = response.json()
-    assert [g["game_number"] for g in body["games"]] == [3]
-    # current_game falls back to the lowest unscored slot — game 1.
-    assert body["current_game"] == {"game_number": 1}
-    assert body["can_finalize"] is False
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Save game 1 before game 3."
+
+    # In order, it saves.
+    await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 9},
+    )
+    ok = await api_client.post(
+        f"/v1/matches/{match['id']}/games/2/scores/new",
+        json={"side_1_points": 11, "side_2_points": 9},
+    )
+    assert ok.status_code == 201
+    body = ok.json()
+    assert [g["game_number"] for g in body["games"]] == [1, 2]
 
 
 async def _sweep_games(
@@ -1464,8 +1488,10 @@ async def test_score_create_422_on_full_sweep_out_of_order(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     # The literal bug report: building a 7-0 board by entering games out of
-    # order. With games 1-4 swept, a direct write to game 7 is rejected — you
-    # can't play a game after the match was already won.
+    # order. With games 1-4 swept, a direct write to game 7 is rejected — now
+    # by the contiguity guard (ADR "the scratchpad is contiguous"), which fires
+    # before the overrun guard even gets a chance to name the clinch: games 5
+    # and 6 were never saved, so game 7 can't be either.
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=7)
@@ -1477,7 +1503,7 @@ async def test_score_create_422_on_full_sweep_out_of_order(
         json={"side_1_points": 11, "side_2_points": 2},
     )
     assert response.status_code == 422
-    assert "already decided at game 4" in response.json()["detail"]
+    assert response.json()["detail"] == "Save game 5 before game 7."
 
 
 async def test_4_3_board_to_game_7_is_valid_and_finalizes(
@@ -1581,13 +1607,23 @@ async def test_score_update_422_on_overrun_when_board_has_a_gap(
     # one — otherwise the edited game's raw ``game_number`` no longer aligns with
     # the renumbered slots and the substitution lands on the wrong game, silently
     # bypassing the guard. Board: side 1 takes games 1-3, side 2 takes games 5-6,
-    # game 4 left blank (a legal, undecided gappy scratchpad). Flipping game 5 to
-    # a side-1 win clinches side 1 at game 5 while game 6 is still scored →
-    # overrun → 422.
+    # game 4 left blank.
+    #
+    # ADR "the scratchpad is contiguous" (#1661 item 5) means the scratchpad
+    # itself can no longer produce this shape — POSTing game 5 before game 4 is
+    # now refused. This test seeds the gap directly at the ORM layer, bypassing
+    # the write-boundary guards, so ``update_game_score``'s own overrun guard —
+    # which carries no contiguity requirement of its own (it edits a game
+    # already on the board in place; it cannot open a hole) — is still pinned
+    # against a gappy board, the defensive property the docstring above names.
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=7)
+    match_id = uuid.UUID(match["id"])
 
+    loaded = (
+        await db_session.execute(select(Match).where(Match.id == match_id))
+    ).scalar_one()
     for n, (side1, side2) in [
         (1, (11, 2)),
         (2, (11, 2)),
@@ -1595,11 +1631,10 @@ async def test_score_update_422_on_overrun_when_board_has_a_gap(
         (5, (2, 11)),
         (6, (2, 11)),
     ]:
-        response = await api_client.post(
-            f"/v1/matches/{match['id']}/games/{n}/scores/new",
-            json={"side_1_points": side1, "side_2_points": side2},
-        )
-        assert response.status_code == 201, response.json()
+        game = MatchGame(match=loaded, game_number=n)
+        game.score = MatchGameScore(side_1_points=side1, side_2_points=side2)
+        db_session.add(game)
+    await db_session.commit()
 
     edit = await api_client.put(
         f"/v1/matches/{match['id']}/games/5/scores",
@@ -3380,26 +3415,36 @@ async def test_finalize_compacts_gappy_decided_board(
         assert sorted(g.game_number for g in game_rows) == [1, 2]
 
 
-async def test_can_finalize_true_for_gappy_decided_saved_board(
+async def test_scratchpad_save_past_an_unsaved_game_is_refused(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """#742 self-heal: a saved scratchpad where the deciding game landed out of
-    order (games 1-3 then game 5, leaving game 4 blank) is decided once
-    compacted, so ``can_finalize`` reports true — the SaveBanner then offers
-    "Post result" and the user recovers from the previously-stuck state."""
+    """ADR "the scratchpad is contiguous" (#1661 item 5) supersedes the old
+    #742 self-heal this test used to pin: a scratchpad save that would land the
+    deciding game out of order (games 1-3 then a direct write to game 5,
+    leaving game 4 blank) is refused outright, naming the first unsaved game —
+    the board can never hold the hole ``compact_games`` used to heal after the
+    fact."""
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=7)
 
-    # Side 1 wins games 1-3, then clinches the 4th win on game 5 (game 4 blank).
+    # Side 1 wins games 1-3; a direct write to game 5 (game 4 still blank) is
+    # refused rather than landing a gap for finalize to compact later.
     await _sweep_games(api_client, match["id"], [1, 2, 3])
     after_g5 = await api_client.post(
         f"/v1/matches/{match['id']}/games/5/scores/new",
         json={"side_1_points": 11, "side_2_points": 2},
     )
-    assert after_g5.status_code == 201, after_g5.json()
-    # The gappy board [1,2,3,5] compacts to [1,2,3,4] — decided, so finalizable.
-    assert after_g5.json()["can_finalize"] is True
+    assert after_g5.status_code == 422, after_g5.json()
+    assert after_g5.json()["detail"] == "Save game 4 before game 5."
+
+    # In order, it saves and decides the match at game 4.
+    ok = await api_client.post(
+        f"/v1/matches/{match['id']}/games/4/scores/new",
+        json={"side_1_points": 11, "side_2_points": 2},
+    )
+    assert ok.status_code == 201, ok.json()
+    assert ok.json()["can_finalize"] is True
 
 
 # ----- league binding -----------------------------------------------------
@@ -5161,7 +5206,10 @@ async def test_unrated_result_enqueues_no_confirmation(
     fake_notifications_queue: Queue,
 ):
     """An unrated match finalizes on post with nothing for the opponent to
-    confirm — so no confirmation delivery is enqueued."""
+    *confirm* — so no accept/counter confirmation delivery is enqueued. It DOES
+    now get a "recorded" FYI (ADR "a result finalized without a player's
+    acceptance is announced", #1661 item 4) — see
+    ``test_unrated_self_accept_notifies_the_opponent_of_the_recorded_result``."""
     await start_session(api_client, db_session)
 
     async with opponent_session(db_session, "rival") as (_opp_client, opp):
@@ -5180,7 +5228,205 @@ async def test_unrated_result_enqueues_no_confirmation(
         )
         assert response.status_code == 201
 
-    assert enqueued_notification_jobs(fake_notifications_queue) == []
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.collapse_id for job in jobs] == [f"result-recorded:{match['id']}"]
+
+
+# ----- "a result finalized without a player's acceptance is announced" ----
+# ADR 20260902-a-result-finalized-without-a-players-acceptance-is-announced
+# (#1661 item 4). Three self-accept shapes finalize with no round trip — solo
+# (test_solo_result_enqueues_no_confirmation, above, unaffected: nobody to
+# tell), unrated two-human (test_unrated_result_enqueues_no_confirmation,
+# above), and a tournament director's result (below) — each now announces the
+# finalize to whoever did not post it. The rated two-human path is unaffected
+# (test_rated_two_human_post_enqueues_only_the_confirmation_prompt, below).
+
+
+async def test_unrated_self_accept_notifies_the_opponent_of_the_recorded_result(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """The full "recorded" notice: title, link, category, no push action group
+    (nothing left to accept or counter), the score, and "Recorded by
+    {poster}." — no "tournament director" phrase, since the poster here is a
+    participant."""
+    me = await start_session(api_client, db_session)
+    me.username = "unrated-poster"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "unrated-rival") as (_opp_client, opp):
+        created = await api_client.post(
+            "/v1/matches",
+            json={"opponent_user_id": str(opp.id), "best_of": 1, "rated": False},
+        )
+        match = created.json()
+
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+            },
+        )
+        assert response.status_code == 201
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.user_id for job in jobs] == [opp.id]
+    job = jobs[0]
+    assert job.category.value == "result_confirm"
+    assert job.title == "Your match result was recorded"
+    assert job.link == f"/matches/{match['id']}"
+    assert job.action_label == "View result"
+    assert job.collapse_id == f"result-recorded:{match['id']}"
+    # No stale action group — the match is already final.
+    assert job.push_category is None
+    # The headline score is games-won (best-of-1: 1-0), not points; the
+    # per-game points follow in "Games: ...".
+    assert "unrated-poster beat unrated-rival 1–0" in job.body
+    assert "Games: 11–5" in job.body
+    assert "Recorded by unrated-poster." in job.body
+    assert "tournament director" not in job.body
+    assert "It's now official." in job.body
+
+
+async def test_director_game_writes_notify_both_players_only_after_success(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        created = await _create_match(api_client, p2.id, best_of=3)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="director-game-notices",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=3,
+        )
+        path = f"/v1/matches/{created['id']}/games/1/scores"
+        saved = await director_client.post(
+            f"{path}/new", json={"side_1_points": 11, "side_2_points": 5}
+        )
+        assert saved.status_code == 201
+        version = saved.json()["games"][0]["score"]["version"]
+        corrected = await director_client.put(
+            path,
+            json={
+                "side_1_points": 11,
+                "side_2_points": 8,
+                "expected_version": version,
+            },
+        )
+        assert corrected.status_code == 200
+        stale = await director_client.put(
+            path,
+            json={
+                "side_1_points": 11,
+                "side_2_points": 9,
+                "expected_version": version,
+            },
+        )
+        assert stale.status_code == 409
+        assert (await director_client.delete(path)).status_code == 200
+        assert (await director_client.delete(path)).status_code == 404
+        # Ordinary participant saves remain silent.
+        assert (
+            await api_client.post(
+                f"{path}/new", json={"side_1_points": 11, "side_2_points": 3}
+            )
+        ).status_code == 201
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert len(jobs) == 6
+    for action in ("recorded", "corrected", "cleared"):
+        notices = [j for j in jobs if j.title == f"Your game score was {action}"]
+        assert {j.user_id for j in notices} == {p1.id, p2.id}
+        for notice in notices:
+            assert (
+                f"{director.username}, the tournament director, {action} game 1"
+                in notice.body
+            )
+            assert notice.link == f"/matches/{created['id']}"
+
+
+async def test_director_result_notifies_both_players_not_the_director(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """A tournament director's result finalizes at once (#1523) and is on no
+    side at all, so BOTH players get the "recorded" notice — naming the
+    director as the tournament director, not just by username — and the
+    director gets nothing about their own act."""
+    p1 = await start_session(api_client, db_session)
+    async with make_client() as p2_client, make_client() as director_client:
+        p2 = await start_session(p2_client, db_session)
+        director = await start_session(director_client, db_session)
+        director.username = "the-director"
+        await db_session.commit()
+        created = await _create_match(api_client, p2.id, best_of=1)
+        await attach_match_to_director_tournament(
+            db_session,
+            uuid.UUID(created["id"]),
+            tag="http-dir-recorded",
+            director=director,
+            p1=p1,
+            p2=p2,
+            best_of=1,
+        )
+
+        response = await director_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert response.status_code == 201
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert sorted(job.user_id for job in jobs) == sorted([p1.id, p2.id])
+    for job in jobs:
+        assert job.title == "Your match result was recorded"
+        assert job.collapse_id == f"result-recorded:{created['id']}"
+        # The director is on no side, so the headline names the two PLAYERS,
+        # not the director — who shows up only in the "Recorded by" sentence.
+        assert " beat " in job.body
+        assert "11–4" in job.body
+        assert "Recorded by the-director, the tournament director." in job.body
+    # The director never hears about their own act.
+    assert director.id not in [job.user_id for job in jobs]
+
+
+async def test_rated_two_human_post_enqueues_only_the_confirmation_prompt(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """A rated two-human match proposed by a participant is unaffected: the
+    existing "Accept your match result" round trip fires, and no "recorded"
+    notice does — that notice belongs to the self-accept paths only."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rated-rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 4}]
+            },
+        )
+        assert response.status_code == 201
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.user_id for job in jobs] == [opp.id]
+    assert jobs[0].title == "Accept your match result"
+    assert all(job.collapse_id != f"result-recorded:{match['id']}" for job in jobs)
 
 
 async def test_accepting_result_notifies_the_poster(

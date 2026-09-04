@@ -1358,3 +1358,54 @@ export async function listTournamentsNearMe(
   }
   return (await res.json()) as ReadonlyArray<NearMeListing>
 }
+
+
+/** A naive wall-clock ISO timestamp (`YYYY-MM-DDTHH:MM:SS`, no zone suffix) for an
+ * instant — the shape `scheduled_start` takes on the wire (ADR-0790). Every event this
+ * module seeds carries `timezone: 'UTC'`, so the UTC wall-clock IS the venue
+ * wall-clock. */
+export function naiveWallClock(at: Date): string {
+  return at.toISOString().slice(0, 19)
+}
+
+/** The body of a placement PATCH — the placement whole, `null` on either half to
+ * clear it (ADR-0790). */
+export interface PlacementBody {
+  readonly table_id: string | null
+  readonly scheduled_start: string | null
+}
+
+/**
+ * `PATCH …/fixtures/{fixtureId}/placement` as the director, returning the **raw**
+ * response — for a spec whose subject is the refusal itself. `callFixture` above
+ * throws on anything but a 200, which is right for a seed and wrong for an
+ * assertion: a spec asserting a 409 needs the status and the body, not an error.
+ */
+export async function placeFixtureRaw(
+  director: Guest,
+  tournamentId: string,
+  fixtureId: string,
+  body: PlacementBody,
+): Promise<APIResponse> {
+  return director.ctx.patch(
+    `${API}/tournaments/${tournamentId}/fixtures/${fixtureId}/placement`,
+    { headers: { [CSRF_HEADER]: director.csrf }, data: body },
+  )
+}
+
+/** The event's fixture pairing exactly these two entries (either order), or throw —
+ * a round-robin cuts one fixture per pair, so a miss means the draw is not the one
+ * the spec seeded. */
+export function fixtureBetween(
+  fixtures: ReadonlyArray<FixtureDetail>,
+  entryA: string,
+  entryB: string,
+): FixtureDetail {
+  const fixture = fixtures.find(
+    (f) =>
+      (f.entry_a_id === entryA && f.entry_b_id === entryB) ||
+      (f.entry_a_id === entryB && f.entry_b_id === entryA),
+  )
+  if (!fixture) throw new Error(`no fixture pairs entries ${entryA} and ${entryB}`)
+  return fixture
+}

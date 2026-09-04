@@ -296,3 +296,36 @@ function versionOf(details: unknown, gameNumber: number): number {
   }
   return score.version
 }
+
+/** First write of a game's score, returning the **raw** response — for a spec whose
+ * subject is the refusal (a 422 on an out-of-order game), where `createGameScore`'s
+ * throw-on-anything-but-201 is the wrong shape. */
+export async function createGameScoreRaw(
+  writer: Guest,
+  matchId: string,
+  gameNumber: number,
+  side1: number,
+  side2: number,
+): Promise<APIResponse> {
+  return writer.ctx.post(
+    `${API}/matches/${matchId}/games/${gameNumber}/scores/new`,
+    {
+      headers: { [CSRF_HEADER]: writer.csrf },
+      data: { side_1_points: side1, side_2_points: side2 },
+    },
+  )
+}
+
+/** Clear a game's committed score (`DELETE .../scores`), returning the raw response
+ * so a spec can assert the status — a 200 on the last game, or the refusal on any
+ * earlier one. */
+export async function deleteGameScore(
+  writer: Guest,
+  matchId: string,
+  gameNumber: number,
+): Promise<APIResponse> {
+  return writer.ctx.delete(
+    `${API}/matches/${matchId}/games/${gameNumber}/scores`,
+    { headers: { [CSRF_HEADER]: writer.csrf } },
+  )
+}

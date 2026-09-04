@@ -11,23 +11,22 @@ import {
 } from '../support/match-api'
 
 /**
- * End-to-end coverage for the 409 score-conflict flow (issue #873).
+ * End-to-end coverage for the score-conflict flow (issue #873, reshaped by #1661).
  *
  * This path is structurally unreachable on a *solo* match: producing a version
  * conflict requires a second participant committing the same game while the
- * first is still editing. Every prior browser QA pass over scoring used a solo
- * match, so the conflict notice + "Replace with my score" have never been
- * exercised end-to-end. This spec provisions a real two-party match over the
+ * first is still editing. This spec provisions a real two-party match over the
  * API and drives the loser's side through the browser.
  *
- * The ordering is load-bearing. A's page must load the score at version 1
- * *before* B commits version 2 — otherwise A mounts already holding the fresh
- * version and its save never conflicts. The score-detail query has no polling
- * and no window-focus refetch fires in a single focused page, so once A has
- * loaded v1 it holds that stale version until it submits (proven deterministic
- * across repeated local runs against the real stack).
+ * Since #1661 the entry page follows the other side live: the moment B's edit
+ * lands, A's page — which holds A's own typed entry — surfaces the conflict notice
+ * on its own, before A ever presses Save. The conditional-write 409 behind the
+ * notice is still the server's guarantee for the race a hint can't outrun; what
+ * this spec proves is the flow a player actually meets: the notice shows the
+ * *server's* value against their own, and "Replace with my score" then succeeds
+ * first try against the fresh version.
  */
-test.describe('Score entry — 409 conflict flow', () => {
+test.describe('Score entry — conflict flow', () => {
   test('the loser sees the committed score and "Replace with my score" then succeeds first try', async ({
     page,
     baseURL,
@@ -42,47 +41,33 @@ test.describe('Score entry — 409 conflict flow', () => {
     // participant who writes the same game out from under A.
     const b = await mintGuest(baseURL!)
 
-    // A starts a best-of-3 (so game 1 is not the decider — saving it continues
-    // to game 2 rather than firing the finalize flow, keeping this focused on
-    // the conflict surface) match against B, and commits game 1 at version 1.
+    // A starts a best-of-3 match against B, and commits game 1 at version 1.
     const opponentId = await findUserId(a, b.username)
     const matchId = await createMatch(a, opponentId, 3)
     const v1 = await createGameScore(a, matchId, 1, 11, 5)
     expect(v1).toBe(1)
 
-    // A opens game 1's edit screen and loads the committed score at v1 — its
-    // own 11 must be showing before B writes, or there is no stale version to
-    // conflict on.
+    // A opens game 1's edit screen, loads the committed score at v1, and edits it
+    // to 11–9 — a dirty page holding A's own view.
     const scorePage = await ScoreEntryPage.navigateToEdit(page, matchId, 1)
     await expect(scorePage.scoreInput(a.username)).toHaveValue('11')
     await expect(scorePage.scoreInput(b.username)).toHaveValue('5')
+    await scorePage.scoreInput(b.username).fill('9')
 
     // B now commits a different score (B wins 5–11), bumping the game to v2.
     const bEdit = await editGameScore(b, matchId, 1, 5, 11, v1)
     expect(bEdit.status()).toBe(200)
 
-    // A, still holding v1, edits to 11–9 and saves. The per-game save is
-    // fire-and-forget: it advances to the next game synchronously while the PUT
-    // settles in the background, where the conditional write loses the version
-    // race → 409. That surfaces as the conflict-review banner on game 2, which
-    // routes back to game 1 rather than showing the notice inline.
-    await scorePage.scoreInput(b.username).fill('9')
-    await scorePage.saveButton.click()
-
-    await expect(scorePage.conflictReviewBanner(1)).toBeVisible()
-    await scorePage.reviewGameButton(1).click()
-
-    // Back on game 1's edit screen, the in-page conflict notice renders B's
+    // A's page notices on its own: the in-page conflict notice renders B's
     // committed score (B's win as A sees it, A on side 1 → "A 5 – 11 B") against
-    // A's rejected entry — proving the notice shows the *server's* value, not
-    // A's stale one.
-    await expect(scorePage.conflictNotice).toBeVisible()
+    // A's typed entry — proving the notice shows the *server's* value, not A's
+    // stale one, and that A's typing survived the refetch.
+    await expect(scorePage.conflictNotice).toBeVisible({ timeout: 15_000 })
     await expect(scorePage.conflictNotice).toContainText(`${a.username} 5`)
     await expect(scorePage.conflictNotice).toContainText('Your entry was 11')
 
-    // "Replace with my score" re-fires the save against the now-fresh v2. It
-    // must succeed on the first try — a 200, not a second 409 — which is the
-    // half the unit tests never covered.
+    // "Replace with my score" fires the save against the now-fresh v2. It must
+    // succeed on the first try — a 200, not a 409.
     const replacePut = page.waitForResponse(
       (r) =>
         r.url().includes(`/matches/${matchId}/games/1/scores`) &&

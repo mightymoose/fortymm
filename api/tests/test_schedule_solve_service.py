@@ -538,7 +538,7 @@ async def _pin_fixture(
     notified: int = 1,
 ) -> None:
     """Stage an already-called fixture directly on the row — table, promised
-    start, ``pinned_at`` and the told-count — the pre-state the slide/echo
+    start, ``pinned_at`` and the told-count — the pre-state the hold/echo
     apply paths read."""
     fixture.table_id = table_id
     fixture.scheduled_start = start
@@ -573,9 +573,11 @@ def _slide_pin_later(
 ) -> Callable[[ScheduleSnapshot, float, int], SolveResult]:
     """Interpose on the ``_solve`` seam: run the real solver, then push only
     the target pin's placement ``extra_min`` minutes later on its (unchanged)
-    table — exactly the "predecessor overran" outcome 1a's solver produces
-    under contention, staged deterministically so the apply path is what's
-    under test."""
+    table — a placement ``app.scheduling.solve`` itself can no longer produce
+    (ADR "A called match holds its time, and a clashing call is refused": a
+    pin is a constant in both dimensions), staged here so
+    ``TestCalledMatchHolds`` can prove the apply's OWN defense holds even
+    against a hostile/buggy solve output, not just the real solver's."""
     real = scheduling.solve
     target_id = str(target_fixture_id)
 
@@ -1211,12 +1213,12 @@ class TestSolveJob:
     async def test_pinned_fixture_columns_are_untouched_by_apply(
         self, db_session: AsyncSession, solver_queue: Queue
     ) -> None:
-        """When the solver returns a called match UNCHANGED (its start is a
-        floor with nothing competing for that slot — 1a's no-drift guarantee),
-        the apply must not rewrite the promise's columns even with identical
-        values, so a deliberately off-grid pin survives byte for byte. The pin
-        sits late enough that no other fixture wants its slot, so the floor is
-        the minimum and it never slides (contrast the slide path below)."""
+        """The solver always echoes a called match's placement verbatim (ADR
+        "A called match holds its time, and a clashing call is refused") — the
+        apply must not rewrite the promise's columns even with identical
+        values, so a deliberately off-grid pin survives byte for byte. See
+        ``TestCalledMatchHolds`` for the apply's OWN defense of this even
+        against a hostile/buggy solve output."""
         tournament_id, event_id = await _make_tournament(db_session)
         fixtures = await _fixtures_of(db_session, event_id)
         pinned = fixtures[0]
@@ -1878,31 +1880,36 @@ class TestDriftGuard:
         assert len(placed) == 6
 
 
-class TestCalledMatchSlides:
-    """Chore 2a (ADR "a called match holds its table and slides later"): the
-    guarded apply persists a called match the solver pushed LATER on its
-    (unchanged) table and fires the same "moved" correction a broken-pin move
-    does — while a pin the solver echoes unchanged is still byte-stable and
-    tells no one."""
+class TestCalledMatchHolds:
+    """ADR "A called match holds its time, and a clashing call is refused"
+    (superseding "a called match holds its table and slides later", #1141):
+    the guarded apply never rewrites a pinned fixture's placement, whatever
+    ``app.scheduling.solve`` returns for it — the apply's own gate is
+    ``fixture.pinned_at is not None``, checked BEFORE it ever looks at the
+    placement's start, so even a (now-impossible in production, since
+    ``app.scheduling`` itself never slides a pin) hostile/buggy solve output
+    that tries to move a pin is silently ignored. That defends the ADR's
+    promise at the layer a player's trust actually depends on: not "the
+    solver behaves", but "the apply never writes over a promise"."""
 
-    async def test_a_slid_called_match_is_persisted_and_moved_notified(
+    async def test_a_pinned_fixture_holds_even_if_solve_returns_a_moved_placement(
         self,
         db_session: AsyncSession,
         solver_queue: Queue,
         fake_notifications_queue: Queue,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A predecessor overran: the solver returns the called match 20
-        minutes later on the SAME table. The apply persists the slid start,
-        refreshes ``pinned_at``, and sends exactly one *moved* correction per
-        entrant — the pin counts as placed, not pinned."""
+        """Defense in depth: force ``_solve`` (the seam ``_slide_pin_later``
+        interposes on) to hand back the called match 20 minutes later on the
+        same table — the shape the superseded ADR's solver used to produce
+        under contention. The apply must still leave the fixture byte-
+        identical to its promise and notify nobody: it never inspects the
+        placement's start for an already-pinned fixture at all."""
         tournament_id, event_id = await _make_tournament(
             db_session, status=TournamentStatus.live, entrants=2, tables=("t1",)
         )
         fixture = (await _fixtures_of(db_session, event_id))[0]
         fixture_id = fixture.id
-        entry_a_id, entry_b_id = fixture.entry_a_id, fixture.entry_b_id
-        assert entry_a_id is not None and entry_b_id is not None
         original_pin_time = BASE - timedelta(minutes=15)
         (table_1,) = await table_ids_of(db_session, tournament_id)
         await _pin_fixture(
@@ -1913,7 +1920,6 @@ class TestCalledMatchSlides:
             pinned_at=original_pin_time,
             notified=1,
         )
-        user_a, user_b = await _fixture_user_ids(db_session, entry_a_id, entry_b_id)
 
         apply_now = BASE - timedelta(minutes=60)
         monkeypatch.setattr(schedule_solves, "_wall_now", lambda: apply_now)
@@ -1930,26 +1936,19 @@ class TestCalledMatchSlides:
         _run_recorded_job(solver_queue, row_id)
 
         db_session.expire_all()
-        slid = (await _fixtures_of(db_session, event_id))[0]
-        assert slid.table_id == table_1  # the table is invariant
-        assert slid.scheduled_start == BASE + timedelta(minutes=20)  # slid later
-        assert slid.pinned_at == apply_now  # the promise is renewed, not demoted
-        assert slid.call_notified_count == 2  # the call, then the moved correction
+        held = (await _fixtures_of(db_session, event_id))[0]
+        assert held.table_id == table_1
+        assert held.scheduled_start == BASE  # NOT the fake solve's slid start
+        assert held.pinned_at == original_pin_time  # not refreshed
+        assert held.call_notified_count == 1  # never re-told
 
-        rows = await _match_call_notifications(db_session)
-        assert len(rows) == 2  # exactly one per entrant, nobody else
-        assert {str(row.user_id) for row in rows} == {user_a, user_b}
-        for notification in rows:
-            assert notification.title == "Your match moved to T1"
-            assert "09:20" in notification.body  # BASE + 20 minutes
-        jobs = _fanout_jobs(fake_notifications_queue)
-        assert {str(job.user_id) for job in jobs} == {user_a, user_b}
-        assert all(job.collapse_id == f"match-call:{fixture_id}" for job in jobs)
+        assert await _match_call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
 
         (ledger,) = await _solve_rows(db_session, tournament_id)
         assert ledger.status is ScheduleSolveStatus.succeeded
-        assert ledger.fixtures_placed == 1  # the slid pin moved → placed
-        assert ledger.fixtures_pinned == 0
+        assert ledger.fixtures_placed == 0
+        assert ledger.fixtures_pinned == 1  # counted as pinned, never placed
 
     async def test_an_unchanged_called_match_is_echoed_verbatim_and_silent(
         self,

@@ -160,9 +160,11 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
 // invalidate/refetch the match underneath a dirty form (#818).
 function renderEntryWithSibling({
   gameNumber,
+  mode = { kind: 'create' },
   sibling,
 }: {
   gameNumber: number
+  mode?: { kind: 'create' } | { kind: 'edit' }
   sibling: (queryClient: QueryClient) => ReactNode
 }) {
   const queryClient = new QueryClient({
@@ -177,11 +179,7 @@ function renderEntryWithSibling({
       return (
         <>
           {sibling(qc)}
-          <ScoreEntry
-            matchId="m-1"
-            gameNumber={gameNumber}
-            mode={{ kind: 'create' }}
-          />
+          <ScoreEntry matchId="m-1" gameNumber={gameNumber} mode={mode} />
         </>
       )
     },
@@ -672,14 +670,13 @@ describe('ScoreEntry — create', () => {
     })
   })
 
-  it('finalizes an out-of-order clinch (game 4 blank) and posts the compacted board (#742)', async () => {
-    // The repro: Bo7, games 1-3 to side 1, then the user jumps to game 5 (game 4
-    // still blank) and scores the clinching 4th win there. That leaves a gappy
-    // decided board [1,2,3,5]. Pre-fix the button stayed "save & next" and the
-    // save funnelled into the empty game 4 (dead-end). Now the board compacts to
-    // [1,2,3,4]: the button flips to "Post result" and posts the contiguous board.
-    const user = userEvent.setup()
-    let finalizedBody: unknown = null
+  it('refuses an out-of-order jump to game 5 with game 4 still blank (#742, superseded by #1661 item 5)', async () => {
+    // The old repro let a player jump to game 5 (game 4 still blank) and
+    // score the clinching win there, then quietly compacted the gappy board
+    // at finalize. The scratchpad is now contiguous end to end (#1661 item
+    // 5): the entry screen itself refuses the boundary, naming game 4 — the
+    // same sentence `enter_game_score`'s 422 would answer with — instead of
+    // ever letting the player type a score the write path would reject.
     server.use(
       http.get('*/v1/matches/m-1', () =>
         HttpResponse.json(
@@ -696,59 +693,16 @@ describe('ScoreEntry — create', () => {
           }),
         ),
       ),
-      http.post('*/v1/matches/m-1/results', async ({ request }) => {
-        finalizedBody = await request.json()
-        return HttpResponse.json(
-          matchDetails({
-            id: 'm-1',
-            status: 'completed',
-            status_label: 'Final',
-            best_of: 7,
-            games_to_win: 4,
-            sides: participantSides({ meWins: 4, oppWins: 0, meWon: true }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-              { id: 'g-3', game_number: 3, score: score('s-3', 11, 5) },
-              { id: 'g-4', game_number: 4, score: score('s-4', 11, 3) },
-            ],
-            current_game: null,
-            can_score: false,
-            can_finalize: false,
-          }),
-          { status: 201 },
-        )
-      }),
     )
 
-    // Land on game 5 — the out-of-order slot the scoreline let the user tap.
     renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 5 })
-    const meInput = await screen.findByRole('textbox', {
-      name: 'rita.kovac score',
-    })
-    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
 
-    await user.type(meInput, '11')
-    await user.type(oppInput, '3')
-
-    // The clinch is recognised through compaction, so the button offers to post
-    // the result rather than funnelling into the empty game 4.
-    const postBtn = screen.getByRole('button', { name: /post result/i })
-    expect(postBtn).toBeInTheDocument()
-    await user.click(postBtn)
-
-    await waitFor(() =>
-      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
-    )
-    // The posted board is contiguous: the stray "game 5" was renumbered to 4.
-    expect(finalizedBody).toEqual({
-      games: [
-        { game_number: 1, side_1_points: 11, side_2_points: 4 },
-        { game_number: 2, side_1_points: 11, side_2_points: 6 },
-        { game_number: 3, side_1_points: 11, side_2_points: 5 },
-        { game_number: 4, side_1_points: 11, side_2_points: 3 },
-      ],
-    })
+    const refusal = await screen.findByRole('alert')
+    expect(refusal).toHaveTextContent("Can't enter a score here")
+    expect(refusal).toHaveTextContent('Save game 4 before game 5.')
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
   })
 
   it('fires a single POST /results when "Post result" is double-clicked in one frame (#641)', async () => {
@@ -1231,17 +1185,21 @@ describe('ScoreEntry — edit', () => {
   })
 
   it('clears the saved score and lands back on the same game in create mode', async () => {
+    // The scratchpad is contiguous (#1661 item 5): Clear is offered only for
+    // the HIGHEST saved game. The default fixture has games 1 AND 2 saved, so
+    // this exercises game 2 — game 1's own Clear-button coverage moved to the
+    // "highest saved game only" describe block below.
     const user = userEvent.setup()
     let deleted = false
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.delete('*/v1/matches/m-1/games/1/scores', () => {
+      http.delete('*/v1/matches/m-1/games/2/scores', () => {
         deleted = true
         return HttpResponse.json(inProgressMatch())
       }),
     )
 
-    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 2 })
 
     await screen.findByRole('textbox', { name: 'rita.kovac score' })
     // Match the standalone "Clear" button — the scoreline cells carry
@@ -1254,7 +1212,7 @@ describe('ScoreEntry — edit', () => {
     await user.click(screen.getByRole('button', { name: /clear game/i }))
 
     await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
+      expect(screen.getByText('scoring-new m-1 2')).toBeInTheDocument(),
     )
     expect(deleted).toBe(true)
   })
@@ -1270,17 +1228,20 @@ describe('ScoreEntry — edit', () => {
     // reproduce the same-frame race — `fireEvent`/awaited `user.click` each
     // flush their own `act`, which would unmount the button after the first
     // click and hide the regression.
+    //
+    // Game 2 (the highest saved game in the default fixture) is the one
+    // whose Clear button renders (#1661 item 5).
     const user = userEvent.setup()
     let deletes = 0
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.delete('*/v1/matches/m-1/games/1/scores', () => {
+      http.delete('*/v1/matches/m-1/games/2/scores', () => {
         deletes += 1
         return HttpResponse.json(inProgressMatch())
       }),
     )
 
-    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 2 })
 
     await screen.findByRole('textbox', { name: 'rita.kovac score' })
     await user.click(screen.getByRole('button', { name: /^clear$/i }))
@@ -1293,24 +1254,26 @@ describe('ScoreEntry — edit', () => {
     })
 
     await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
+      expect(screen.getByText('scoring-new m-1 2')).toBeInTheDocument(),
     )
     // Exactly one DELETE — the second same-frame click was swallowed.
     expect(deletes).toBe(1)
   })
 
   it('cancelling the clear confirmation keeps the saved score (#387)', async () => {
+    // Game 2 (the highest saved game) is the one whose Clear button renders
+    // (#1661 item 5).
     const user = userEvent.setup()
     let deleted = false
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.delete('*/v1/matches/m-1/games/1/scores', () => {
+      http.delete('*/v1/matches/m-1/games/2/scores', () => {
         deleted = true
         return HttpResponse.json(inProgressMatch())
       }),
     )
 
-    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 2 })
 
     await screen.findByRole('textbox', { name: 'rita.kovac score' })
     await user.click(screen.getByRole('button', { name: /^clear$/i }))
@@ -1323,13 +1286,31 @@ describe('ScoreEntry — edit', () => {
     )
     expect(deleted).toBe(false)
     // Still on the edit screen, score intact — no navigation away.
-    expect(screen.queryByText('scoring-new m-1 1')).not.toBeInTheDocument()
+    expect(screen.queryByText('scoring-new m-1 2')).not.toBeInTheDocument()
+  })
+
+  it('offers no Clear button when editing an earlier saved game (#1661 item 5)', async () => {
+    // Game 1 is saved but NOT the highest (game 2 also is) — clearing it
+    // would leave a gap under game 2, exactly the write the server 422s
+    // ("Clear game 2 first, or edit game 1 instead."). The client mirrors
+    // the guard by not offering the affordance at all.
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    expect(
+      screen.queryByRole('button', { name: /^clear$/i }),
+    ).not.toBeInTheDocument()
   })
 
   it("✕ on another game's cell clears that game in place without leaving the page", async () => {
-    // User is entering game 3 in /new mode. Game 1 is already logged. They
-    // tap the ✕ on G1's scoreline cell: G1 is cleared via DELETE
-    // /v1/matches/m-1/games/1/scores, the page stays put (no redirect), and
+    // User is entering game 3 in /new mode. Games 1 and 2 are already logged,
+    // so game 2 is the highest saved game — the only one whose ✕ renders
+    // (#1661 item 5). They tap it: G2 is cleared via DELETE
+    // /v1/matches/m-1/games/2/scores, the page stays put (no redirect), and
     // focus lands on the first empty input on the active game.
     const user = userEvent.setup()
     let deletedGameNumber: number | null = null
@@ -1353,17 +1334,22 @@ describe('ScoreEntry — edit', () => {
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
     await user.type(oppInput, '7')
 
-    await user.click(screen.getByRole('button', { name: /clear game 1/i }))
+    // Game 1 is saved but NOT the highest — no ✕ for it (#1661 item 5).
+    expect(
+      screen.queryByRole('button', { name: /clear game 1/i }),
+    ).not.toBeInTheDocument()
 
-    // Confirm first (#387): the ✕ opens a dialog scoped to game 1.
+    await user.click(screen.getByRole('button', { name: /clear game 2/i }))
+
+    // Confirm first (#387): the ✕ opens a dialog scoped to game 2.
     const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('heading')).toHaveTextContent(
-      /clear game 1\?/i,
+      /clear game 2\?/i,
     )
     expect(deletedGameNumber).toBeNull()
     await user.click(within(dialog).getByRole('button', { name: /clear game/i }))
 
-    await waitFor(() => expect(deletedGameNumber).toBe(1))
+    await waitFor(() => expect(deletedGameNumber).toBe(2))
     // No redirect — still on the active game's entry route.
     expect(
       screen.queryByText(/scoring-(new|edit) m-1/),
@@ -1692,15 +1678,16 @@ describe('ScoreEntry — failed saves', () => {
   it('the banner Retry re-fires just that game; a successful retry clears the failure', async () => {
     const user = userEvent.setup()
     let attempts = 0
-    server.use(
-      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
-        attempts += 1
-        if (attempts === 1) {
-          return HttpResponse.json({ detail: 'boom' }, { status: 500 })
-        }
-        return HttpResponse.json(
-          inProgressMatch({
+    // The GET must echo the successful retry (`attempts >= 2`): the entry
+    // screen re-mounted on game 4 reads `data.games` to confirm the scratchpad
+    // stays contiguous (#1661 item 5), and `invalidateMatchViews` triggers a
+    // real background refetch once the retry's mutation-level `onSuccess`
+    // upserts the cache — a GET that never reflects the write would clobber
+    // that upsert straight back to a 2-game board and reopen "Save game 3
+    // before game 4" underneath the assertions below.
+    const boardAfter = () =>
+      attempts >= 2
+        ? inProgressMatch({
             sides: participantSides({ meWins: 2, oppWins: 1 }),
             games: [
               { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
@@ -1708,8 +1695,16 @@ describe('ScoreEntry — failed saves', () => {
               { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
             ],
             current_game: { game_number: 4 },
-          }),
-        )
+          })
+        : inProgressMatch()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(boardAfter())),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        attempts += 1
+        if (attempts === 1) {
+          return HttpResponse.json({ detail: 'boom' }, { status: 500 })
+        }
+        return HttpResponse.json(boardAfter())
       }),
     )
 
@@ -2404,19 +2399,21 @@ describe('ScoreEntry — unsaved-input guard', () => {
     // Passes before and after the fix (the old latch armed this path too); the
     // pre-existing clear test never typed a change, so `isDirty` was false and
     // it never exercised the bypass.
+    // Game 2 (the highest saved game) is the one whose Clear button renders
+    // (#1661 item 5).
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.delete('*/v1/matches/m-1/games/1/scores', () =>
+      http.delete('*/v1/matches/m-1/games/2/scores', () =>
         HttpResponse.json(inProgressMatch()),
       ),
     )
 
-    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 2 })
     const meInput = await screen.findByRole('textbox', {
       name: 'rita.kovac score',
     })
-    await waitFor(() => expect(meInput).toHaveValue('11'))
+    await waitFor(() => expect(meInput).toHaveValue('9'))
 
     // Make the form dirty, then clear.
     await user.clear(meInput)
@@ -2426,7 +2423,7 @@ describe('ScoreEntry — unsaved-input guard', () => {
     await user.click(screen.getByRole('button', { name: /clear game/i }))
 
     await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
+      expect(screen.getByText('scoring-new m-1 2')).toBeInTheDocument(),
     )
     expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
   })
@@ -3069,9 +3066,22 @@ describe('ScoreEntry — games past the decider', () => {
     )
     renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
 
+    // Only the NEXT unsaved game (2) is a link (#1661 item 5) — tapping it
+    // opens a create screen the write path would accept.
     expect(
       await screen.findByRole('link', { name: /game 2, not yet played/i }),
     ).toBeInTheDocument()
+    // Games 3-5 are unsaved but NOT next — tapping one would open a create
+    // screen the write path would 422 on ("Save game 2 before game N."), so
+    // they render the same text with no link at all.
+    for (const n of [3, 4, 5]) {
+      expect(
+        screen.queryByRole('link', { name: new RegExp(`game ${n}\\b`, 'i') }),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.getByLabelText(`Game ${n}, not yet played`),
+      ).toBeInTheDocument()
+    }
   })
 })
 
@@ -4014,6 +4024,440 @@ describe('ScoreEntry — not-scorable guard (#1288)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Only participants in this match can enter scores.',
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #1661 items 5 and 6: the same `dashboard.changed` hint that refreshes the
+// dashboard now refreshes an open match/score-entry screen too
+// (`api/realtime/invalidation.ts`). These tests drive that refresh directly —
+// a sibling button that invalidates the shared QueryClient, exactly the
+// effect a pushed hint has — rather than the realtime plumbing itself (that
+// table is covered by `invalidation.test.ts`). Three states of the page:
+// clean (RHF's `values` + `keepDirtyValues` alone), dirty (a NEW conflict
+// notice with no save of its own), and over (the existing `can_score`
+// boundary, reached via a background refetch instead of the initial load).
+// ---------------------------------------------------------------------------
+describe('ScoreEntry — the page follows the other side (#1661 item 6)', () => {
+  it('a clean edit-mode page takes a committed score pushed from elsewhere, with no typing of its own', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+    renderEntryWithSibling({
+      gameNumber: 1,
+      mode: { kind: 'edit' },
+      sibling: (qc) => (
+        <button type="button" onClick={() => qc.invalidateQueries()}>
+          refetch match
+        </button>
+      ),
+    })
+
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+    expect(
+      screen.getByRole('textbox', { name: 'nguyen.t score' }),
+    ).toHaveValue('8')
+
+    // Someone edits game 1 elsewhere — the committed score (and its version)
+    // moves while this page's inputs sit untouched.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 9,
+                  winner_side_number: 1,
+                  version: 2,
+                },
+              },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+          }),
+        ),
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('textbox', { name: 'nguyen.t score' }),
+      ).toHaveValue('9'),
+    )
+    expect(meInput).toHaveValue('11')
+    // Nothing was typed, so there's nothing to decide — no conflict notice.
+    expect(
+      screen.queryByText(/this game was saved by someone else/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('a dirty CREATE-mode page shows the live conflict when a score appears under it, without firing a save', async () => {
+    const user = userEvent.setup()
+    let posts = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [],
+            sides: participantSides({ meWins: 0, oppWins: 0 }),
+            current_game: { game_number: 1 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/1/scores/new', () => {
+        posts += 1
+        return HttpResponse.json(inProgressMatch())
+      }),
+    )
+    renderEntryWithSibling({
+      gameNumber: 1,
+      sibling: (qc) => (
+        <button type="button" onClick={() => qc.invalidateQueries()}>
+          refetch match
+        </button>
+      ),
+    })
+    await screen.findByRole('heading', { name: /enter game 1 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '9')
+
+    // The opponent creates game 1's score elsewhere — 5–11, their way —
+    // before this page ever saves.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 5,
+                  side_2_points: 11,
+                  winner_side_number: 2,
+                  version: 1,
+                },
+              },
+            ],
+            sides: participantSides({ meWins: 0, oppWins: 1 }),
+            current_game: { game_number: 2 },
+          }),
+        ),
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
+
+    const noticeText = await screen.findByText(
+      /this game was saved by someone else/i,
+    )
+    const notice = noticeText.closest('[role="alert"]') as HTMLElement
+    expect(notice).toHaveTextContent(/rita\.kovac 5.11 nguyen\.t/)
+    expect(notice).toHaveTextContent(/your entry was 11.9/i)
+
+    // Submitting while the notice is shown must not fire a write.
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    expect(posts).toBe(0)
+
+    // "Keep saved score" resolves it without ever writing. The game now has a
+    // committed score, so the page's existing mode/URL alignment (unchanged
+    // by this ticket) hands off to the edit route — this harness stubs that
+    // route, so reaching it (rather than hanging on the stale conflict) is
+    // itself the proof the notice cleared cleanly.
+    await user.click(screen.getByRole('button', { name: /keep saved score/i }))
+    await waitFor(() =>
+      expect(screen.getByText('scoring-edit')).toBeInTheDocument(),
+    )
+    expect(posts).toBe(0)
+  })
+
+  it('detects a cleared and recreated score at the same version and validates a partial replacement', async () => {
+    const user = userEvent.setup()
+    let current = inProgressMatch()
+    server.use(http.get('*/v1/matches/m-1', () => HttpResponse.json(current)))
+    renderEntryWithSibling({
+      gameNumber: 1,
+      mode: { kind: 'edit' },
+      sibling: (qc) => <button onClick={() => qc.invalidateQueries()}>refetch match</button>,
+    })
+    const me = await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    await waitFor(() => expect(me).toHaveValue('11'))
+    await user.clear(screen.getByRole('textbox', { name: 'nguyen.t score' }))
+    current = inProgressMatch({ games: [
+      { id: 'g-1', game_number: 1, score: score('recreated-score', 5, 11) },
+    ] })
+    await user.click(screen.getByRole('button', { name: 'refetch match' }))
+    await screen.findByText(/this game was saved by someone else/i)
+    await user.click(screen.getByRole('button', { name: /replace with my score/i }))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toHaveAttribute('aria-invalid', 'true'))
+  })
+
+  it('a dirty EDIT-mode page shows the live conflict when the committed score moves under it, and Replace PUTs the fresh version', async () => {
+    const user = userEvent.setup()
+    const puts: Record<string, unknown>[] = []
+    let releaseReplacement: () => void = () => {}
+    const replacementHeld = new Promise<void>((resolve) => { releaseReplacement = resolve })
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
+        puts.push((await request.json()) as Record<string, unknown>)
+        await replacementHeld
+        return HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 12,
+                  side_2_points: 10,
+                  winner_side_number: 1,
+                  version: 3,
+                },
+              },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+          }),
+        )
+      }),
+    )
+    renderEntryWithSibling({
+      gameNumber: 1,
+      mode: { kind: 'edit' },
+      sibling: (qc) => (
+        <button type="button" onClick={() => qc.invalidateQueries()}>
+          refetch match
+        </button>
+      ),
+    })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.clear(oppInput)
+    await user.type(oppInput, '10')
+
+    // The opponent edits game 1 elsewhere, bumping its version — before this
+    // page ever attempts a save of its own.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 9,
+                  winner_side_number: 1,
+                  version: 2,
+                },
+              },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+          }),
+        ),
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
+
+    const noticeText = await screen.findByText(
+      /this game was saved by someone else/i,
+    )
+    const notice = noticeText.closest('[role="alert"]') as HTMLElement
+    expect(notice).toHaveTextContent(/rita\.kovac 11.9 nguyen\.t/)
+    expect(notice).toHaveTextContent(/your entry was 12.10/i)
+    expect(puts).toHaveLength(0)
+
+    await user.click(
+      screen.getByRole('button', { name: /replace with my score/i }),
+    )
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(meInput).toBeDisabled()
+    expect(oppInput).toBeDisabled()
+    expect(screen.getByRole('button', { name: /keep saved score/i })).toBeDisabled()
+    releaseReplacement()
+    // The version claimed is the FRESH one the live conflict just showed
+    // (2), not the stale one the page was originally seeded against (1).
+    expect(puts[0]).toMatchObject({
+      side_1_points: 12,
+      side_2_points: 10,
+      expected_version: 2,
+    })
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/this game was saved by someone else/i),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
+  it('typing only ONE side freezes BOTH once a refetch delivers a conflicting score (real-stack repro)', async () => {
+    // The repro: A edits game 1 (committed 11–5) and types ONLY the
+    // opponent's score — "me" is left untouched at its seeded 11. RHF's
+    // `values` + `keepDirtyValues` alone preserves a field only when the user
+    // actually typed IN THAT FIELD (per-field, not per-form) — so a naive fix
+    // would let the refetch below silently re-seed "me" to the fresh
+    // committed value while "opp" stayed as typed, and the conflict notice
+    // would read a Frankenstein pair (fresh "me" + typed "opp") as if the
+    // player had typed both. The whole entry must freeze together.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 5,
+                  winner_side_number: 1,
+                  version: 1,
+                },
+              },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+          }),
+        ),
+      ),
+    )
+    renderEntryWithSibling({
+      gameNumber: 1,
+      mode: { kind: 'edit' },
+      sibling: (qc) => (
+        <button type="button" onClick={() => qc.invalidateQueries()}>
+          refetch match
+        </button>
+      ),
+    })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    expect(oppInput).toHaveValue('5')
+
+    // Type ONLY the opponent field — "me" is never touched.
+    await user.clear(oppInput)
+    await user.type(oppInput, '9')
+    expect(meInput).toHaveValue('11')
+
+    // B edits the same game the other way (5–11), bumping its version —
+    // before A ever attempts a save of A's own.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 5,
+                  side_2_points: 11,
+                  winner_side_number: 2,
+                  version: 2,
+                },
+              },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+          }),
+        ),
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
+
+    const noticeText = await screen.findByText(
+      /this game was saved by someone else/i,
+    )
+    const notice = noticeText.closest('[role="alert"]') as HTMLElement
+    expect(notice).toHaveTextContent(/rita\.kovac 5.11 nguyen\.t/)
+    // The whole pair, not a Frankenstein mix of the fresh "me" and the typed
+    // "opp": the player's real, unsaved entry was 11–9.
+    expect(notice).toHaveTextContent(/your entry was 11.9/i)
+
+    // The untouched "me" input must still show what the player left it
+    // at — 11 — not the fresh committed 5 the refetch delivered.
+    expect(meInput).toHaveValue('11')
+    expect(oppInput).toHaveValue('9')
+  })
+
+  it('a clean page explains a match closed elsewhere instead of offering to finalize it again', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+    )
+    renderEntryWithSibling({
+      gameNumber: 3,
+      sibling: (qc) => (
+        <button type="button" onClick={() => qc.invalidateQueries()}>
+          refetch match
+        </button>
+      ),
+    })
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // The opponent (or a director) finalizes the match elsewhere — the
+    // viewer did NOT just finalize it themselves.
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(completedMatch())),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'This match is no longer scorable.',
+      ),
+    )
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /finalize result|post result/i }),
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe('ScoreEntry — scratchpad contiguity (#1661 item 5)', () => {
+  it("refuses a create-mode entry past an unsaved earlier game, mirroring the write path's own 422", async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [{ id: 'g-1', game_number: 1, score: score('s-1', 11, 5) }],
+            sides: participantSides({ meWins: 1, oppWins: 0 }),
+            current_game: { game_number: 2 },
+          }),
+        ),
+      ),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    const refusal = await screen.findByRole('alert')
+    expect(refusal).toHaveTextContent("Can't enter a score here")
+    expect(refusal).toHaveTextContent('Save game 2 before game 3.')
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
   })
 })
 

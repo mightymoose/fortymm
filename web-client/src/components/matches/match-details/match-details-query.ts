@@ -55,8 +55,21 @@ export type MatchNotScorableReason = z.infer<
   typeof matchNotScorableReasonSchema
 >;
 
+/** The fields every `matchDetailsQueryKey(matchId)` shares — exported so a
+ * caller that needs to invalidate EVERY open match's details cache (not just
+ * one) can do so without re-spelling the object literal. TanStack Query's
+ * default (non-exact) key matching treats an object element as a SUBSET match
+ * — a query whose key's object carries every field this one does (plus
+ * `matchId`) still matches — so this prefix, with no `matchId`, matches every
+ * match. Used by the realtime invalidation table
+ * (`api/realtime/invalidation.ts`): a pushed hint doesn't name which match
+ * changed, so it invalidates every match-details query this prefix matches. */
+export const MATCH_DETAILS_QUERY_KEY_PREFIX = [
+  { scope: "matches", version: "v1", entity: "details" },
+] as const;
+
 const queryKey = (matchId: string) =>
-  [{ scope: "matches", version: "v1", entity: "details", matchId }] as const;
+  [{ ...MATCH_DETAILS_QUERY_KEY_PREFIX[0], matchId }] as const;
 
 /** The cache key the scoreboard (`scoreboardQuery` → `matchDetailsQuery`)
  * reads from. Mutations that change a match must invalidate this — it is a

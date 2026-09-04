@@ -2142,9 +2142,10 @@ class TestManualPlacementPin:
         target_id = target.id
         the_table = await _table(db_session, event_id, "t1")
         # Late on the shared table, after the other two pack in: a called
-        # match's start is a floor, not a constant (ADR "a called match holds
-        # its table and slides later"), so an uncontended pin is the one the
-        # solver leaves byte-for-byte — the "does not undo it" point here.
+        # match's table AND start are both a constant now (ADR "A called
+        # match holds its time, and a clashing call is refused"), so the
+        # solver leaves this pin byte-for-byte whatever else is on the table
+        # — the "does not undo it" point here.
         pin_start = BASE + timedelta(minutes=200)
         fanout = await match_calls.apply_manual_placement(
             db_session,

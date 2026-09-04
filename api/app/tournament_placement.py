@@ -21,21 +21,32 @@ refusal with a **domain exception** from ``app.tournament_errors`` — never an
 ``HTTPException`` — and each adapter maps it back to the exact response it produced
 before. ``apply_manual_placement`` raises no refusal of its own (the placement is still
 soft everywhere ADR-0790 made it soft: an out-of-window time, an off-group table and a
-double-booking all SAVE), so all three coded refusals — a missing fixture
-(:class:`FixtureNotFoundError`), a played-out fixture
-(:class:`FixturePlacementFrozenError`), and a ``table_id`` that names no table in the
-tournament's catalogue (:class:`PlacementTableNotFoundError`, ADR 20260801) — are judged
-here, before it is called.
+double-booking all SAVE while pre-live, or while the placement isn't a live call), so
+these four coded refusals are judged here, before it is called: a missing fixture
+(:class:`FixtureNotFoundError`); a played-out fixture
+(:class:`FixturePlacementFrozenError`); a ``table_id`` that names no table in the
+tournament's catalogue (:class:`PlacementTableNotFoundError`, ADR 20260801); and — the
+one hard exception to the "double-booking SAVEs" rule above — a **live** placement that
+would call the fixture onto a table or a player an unfinished ``in_progress`` match
+already holds (:class:`PlacementClashError`, ADR "A called match holds its time, and a
+clashing call is refused").
 """
 
 import uuid
+from datetime import datetime
 from typing import assert_never
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager
 
-from app.match_calls import apply_manual_placement, enqueue_call_fanout
+from app.match_calls import (
+    CopyIngredients,
+    _held_resources,
+    apply_manual_placement,
+    enqueue_call_fanout,
+    load_copy_ingredients,
+)
 from app.models import (
     Match,
     MatchStatus,
@@ -44,6 +55,7 @@ from app.models import (
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
+    TournamentStatus,
     User,
 )
 from app.schedule_solves import request_solve
@@ -55,6 +67,7 @@ from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     FixtureNotFoundError,
     FixturePlacementFrozenError,
+    PlacementClashError,
     PlacementTableNotFoundError,
 )
 from app.tournament_queries import fixtures_by_event
@@ -162,6 +175,96 @@ def _enforce_table_exists(tournament: Tournament, table_id: str | None) -> None:
         raise PlacementTableNotFoundError(table_id)
 
 
+def _holder_names(
+    ingredients: CopyIngredients, holder: TournamentFixture
+) -> tuple[str, str]:
+    """The holding fixture's own two entrants' usernames, in ``entry_a``/
+    ``entry_b`` order — ``"TBD"`` for a side the ``CopyIngredients`` batch
+    can't resolve (a dangling ref under a stale row), which should not happen
+    for an ``in_progress`` match (both entrants are known by construction) but
+    is handled rather than indexed into blindly (api/CLAUDE.md: no bare
+    ``[0]`` on a value that could be absent)."""
+    a = ingredients.user_for_entry(holder.entry_a_id)
+    b = ingredients.user_for_entry(holder.entry_b_id)
+    a_name = a.username if a is not None else "TBD"
+    b_name = b.username if b is not None else "TBD"
+    return a_name, b_name
+
+
+async def _enforce_no_live_call_clash(
+    db: AsyncSession,
+    tournament: Tournament,
+    fixture: TournamentFixture,
+    *,
+    table_id: str | None,
+    scheduled_start: datetime | None,
+) -> None:
+    """Raise :class:`PlacementClashError` when this placement, while the
+    tournament is **live**, would CALL the fixture — a full placement (table
+    AND start both set) with both entrants known — onto a table or a player
+    an unfinished ``in_progress`` match in this tournament already holds (ADR
+    "A called match holds its time, and a clashing call is refused").
+
+    A no-op for anything that isn't a live call: pre-live (ADR-0790 keeps
+    every pre-live placement soft), a half-placement (nothing to call), or a
+    fixture with a TBD side (a promise to nobody is not a promise, and
+    :func:`app.match_calls.apply_manual_placement` pins nothing for it
+    either) — matching exactly the condition under which that function itself
+    would notify.
+
+    Reads :func:`app.match_calls._held_resources`, the same occupancy read
+    the automatic call pass uses, **excluding this fixture's own match**: a
+    fixture that is itself already ``in_progress`` (being re-placed, e.g.
+    moved to a different table while it plays) is not a clash against
+    itself — that is a *move*, judged elsewhere. Checks the table first, then
+    each of this fixture's own players, so a director sees the more concrete
+    conflict when both apply. Judged, and refused, before anything is
+    written — a clash writes nothing and notifies nobody."""
+    if (
+        tournament.status is not TournamentStatus.live
+        or table_id is None
+        or scheduled_start is None
+        or fixture.entry_a_id is None
+        or fixture.entry_b_id is None
+    ):
+        return
+
+    held = await _held_resources(db, tournament.id, exclude_match_id=fixture.match_id)
+    if not held.tables and not held.users:
+        return
+
+    ingredients = await load_copy_ingredients(
+        db, tournament, [fixture, *held.tables.values(), *held.users.values()]
+    )
+
+    table_holder = held.tables.get(table_id)
+    if table_holder is not None:
+        table_label = ingredients.table_labels.get(table_id, table_id)
+        a_name, b_name = _holder_names(ingredients, table_holder)
+        raise PlacementClashError(
+            f"{table_label} is busy: {a_name} vs {b_name} was called there and "
+            "has not finished. Finish or clear that match first."
+        )
+
+    for entry_id in (fixture.entry_a_id, fixture.entry_b_id):
+        user = ingredients.user_for_entry(entry_id)
+        if user is None:
+            continue
+        player_holder = held.users.get(user.id)
+        if player_holder is None:
+            continue
+        holder_table_label = (
+            ingredients.table_labels.get(player_holder.table_id, player_holder.table_id)
+            if player_holder.table_id is not None
+            else "another table"
+        )
+        a_name, b_name = _holder_names(ingredients, player_holder)
+        raise PlacementClashError(
+            f"{user.username} is already called to {holder_table_label} for "
+            f"{a_name} vs {b_name}. Finish or clear that match first."
+        )
+
+
 async def place_fixture(
     db: AsyncSession,
     *,
@@ -198,7 +301,16 @@ async def place_fixture(
       this tournament's catalogue (:func:`_enforce_table_exists`, raising
       :class:`PlacementTableNotFoundError`, ADR 20260801). Everything else still saves
       — an out-of-window time, a table outside the fixture's group's reservation and a
-      double-booking are flags derived on read, not refusals (ADR-0790).
+      double-booking are flags derived on read, not refusals (ADR-0790) — **except**
+      the case below.
+    * **409** — the one hard exception to "double-booking saves": while the
+      tournament is **live**, a full placement that would CALL this fixture onto a
+      table or a player an unfinished ``in_progress`` match already holds is refused
+      (:func:`_enforce_no_live_call_clash`, raising :class:`PlacementClashError`, ADR
+      "A called match holds its time, and a clashing call is refused") — nothing is
+      written and nobody is notified. A no-op pre-live, on a half-placement, or with a
+      TBD side, exactly where :func:`app.match_calls.apply_manual_placement` itself
+      would notify nobody.
 
     Then the whole pin/notify transition runs through
     :func:`app.match_calls.apply_manual_placement` on this open transaction (a
@@ -236,6 +348,20 @@ async def place_fixture(
     # still saves: an out-of-window start, an off-group table and a double-booking are
     # flags derived on read, not refusals (ADR-0790).
     _enforce_table_exists(tournament, placement.table_id)
+    # The live-call clash refusal (ADR "A called match holds its time, and a
+    # clashing call is refused"): a full placement that would CALL this fixture
+    # while the tournament is live is refused if its table or either entrant is
+    # still held by an unfinished in_progress match — before anything is
+    # written. A no-op pre-live, on a half-placement, or with a TBD side (see
+    # the function's own docstring for why those match apply_manual_placement's
+    # own no-pin conditions).
+    await _enforce_no_live_call_clash(
+        db,
+        tournament,
+        fixture,
+        table_id=placement.table_id,
+        scheduled_start=placement.scheduled_start,
+    )
     # The whole pin/notify transition — columns, ``pinned_at``, in-app rows — on this
     # open transaction (the atomicity contract of ``app.match_calls``: a call and its
     # durable record commit together); the returned push/email fan-out is enqueued

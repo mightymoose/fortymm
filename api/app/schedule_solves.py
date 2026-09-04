@@ -38,15 +38,13 @@ lock or Redis key to drift from it.
     run produced nothing) and keeps the status enum closed. On a match, every
     returned placement for an *unpinned* fixture is written back as an instant
     (``base + minutes``, and ``base`` is an aware instant); a pinned fixture's
-    **table** is never rewritten, and its start is left byte-identical when the
-    solver echoes it unchanged (a promise is not rewritten even with its own
-    bytes) — but a called match the solver slid **later** on its (unchanged)
-    table has that later start persisted with ``pinned_at`` refreshed and fires
-    the same "moved" correction as a broken-pin move (ADR "a called match holds
-    its table and slides later"). (Physics moving a pin is the other exception —
-    see the
-    broken-pins section below.) No per-fixture merging, ever: the output is
-    taken whole or not at all.
+    **table AND start are both never rewritten** — ``app.scheduling`` echoes
+    every pin verbatim (ADR "A called match holds its time, and a clashing
+    call is refused"), so a pinned placement is always the same bytes it went
+    in with, and the apply's only response to it is to count it and move on
+    (no write, no notification). The only correction a pin can still need is
+    the broken-pin void below, for physics (a withdrawal), never a re-time. No
+    per-fixture merging, ever: the output is taken whole or not at all.
 
 **Lock order: tournament → schedule_solves → tournament_fixtures.** Routes
 take the tournament row lock before calling :func:`request_solve` (which takes
@@ -71,9 +69,10 @@ set is included even though the solver never reads entry *status*, because a
 mid-solve withdrawal means the draw is about to be re-cut and a plan computed
 against the old field should not land.
 
-**Broken pins: physics may move a pin, with a correction (ADR).** A pin is
+**Broken pins: physics may void a pin, with a correction (ADR).** A pin is
 inviolable against *optimization*, never against physics. The snapshot phase
-detects pins physics broke, so they never reach the solver *as pins*:
+detects the one thing physics can still do to a pin, so it never reaches the
+solver *as a pin*:
 
 * **entrant withdrew** — an entry of the fixture is ``withdrawn`` (and the
   match isn't already settled): the promised match cannot happen, so the
@@ -89,7 +88,7 @@ like any other — the pure module treats pins as constants and never checks a
 pin's table against the reservation (or even the catalogue) — survives every solve
 byte-identical, and is called by the ordinary call pass when imminent.
 
-There **was** a third case here, "the pinned table is no longer in the venue
+There **was** a second case here, "the pinned table is no longer in the venue
 catalogue" (``SolveInputs.broken_pin_moves``): the fixture entered the snapshot
 unpinned and was re-pinned + moved-notified at apply. It is gone, because the
 state it repaired stopped being representable when ADR 20260801 landed in full.
@@ -103,8 +102,15 @@ tournament and the fourth writes ``NULL``. The arm survived only because its
 tests manufactured the state by re-parenting a table row onto a throwaway
 tournament, which no production path performs — a guard whose only reachable
 caller is its own test is not defence in depth, it is a claim that the invariant
-above it is optional. The slide-later repair keeps the whole "moved" machinery
-alive, so what went is the detection, not the correction.
+above it is optional.
+
+There **was** a third case too — a called match's start sliding later on a
+re-solve, persisted with a "moved" correction (the superseded ADR "a called
+match holds its table and slides later", #1141). It is gone as of the
+2026-09-02 amendment: a pin's start is a constant now, exactly like its table,
+so a re-solve can never hand the apply a changed start to persist. What went
+is both the detection AND the correction, this time — there is nothing left
+about a called match's placement for phase (c) to repair.
 
 A *planned* (unpinned) fixture needs no case at all and never did: it is
 re-placed by the ordinary placement write, silently, because it was never
@@ -114,18 +120,16 @@ The *repair* is applied only by phase (c), in the same transaction and under
 the same locks as every other placement write — and only on a successful
 verdict (whole-or-nothing: an infeasible/failed run writes nothing, and the
 still-broken pin is re-detected by every later snapshot until a solve lands).
-A moved pin gets the solver's new placement with ``pinned_at`` **refreshed to
-now** — the promise is renewed, not demoted to an estimate. A voided pin has
-its placement columns (``table_id``, ``scheduled_start``, ``pinned_at``)
-cleared — whether the draw layer later voids or deletes the fixture is its
-business. Both corrections notify via ``app.match_calls.notify_pin_repairs``
-(live tournaments only; moved → both entrants, cancelled → the remaining
-entrant only), with the same in-app-atomic + post-commit-fan-out split as the
-call. Repairs touch only fixtures that were actually **pinned**: a *planned*
-fixture on a removed table is simply re-planned by the ordinary placement
-write, silently — it was never promised. Because a repair rewrites the very
-columns whose state triggered detection, it is self-extinguishing: the next
-snapshot sees a healthy pin (or no pin) and detects nothing.
+A voided pin has its placement columns (``table_id``, ``scheduled_start``,
+``pinned_at``) cleared — whether the draw layer later voids or deletes the
+fixture is its business. The correction notifies via
+``app.match_calls.notify_pin_repairs`` (live tournaments only; the remaining
+entrant only — the withdrawn player asked to leave), with the same
+in-app-atomic + post-commit-fan-out split as the call. A *planned* fixture on
+a removed table is simply re-planned by the ordinary placement write,
+silently — it was never promised. Because a repair rewrites the very columns
+whose state triggered detection, it is self-extinguishing: the next snapshot
+sees a healthy pin (or no pin) and detects nothing.
 
 **In-progress occupancy is a proxy, documented as one.** A tournament match is
 born ``pending`` and flips to ``in_progress`` when it is called (the 2026-07-17
@@ -1797,33 +1801,21 @@ async def _apply_result(
             case scheduling.Verdict.optimal | scheduling.Verdict.feasible:
                 placed = 0
                 pinned = 0
-                moved_repairs: list[TournamentFixture] = []
                 for placement in result.placements:
                     fixture = fresh.fixtures[uuid.UUID(placement.fixture_id)]
+                    if fixture.pinned_at is not None:
+                        # A called match's table AND start are both constants
+                        # the solver never rewrites (ADR "A called match holds
+                        # its time, and a clashing call is refused" —
+                        # app.scheduling echoes every pin verbatim, never a
+                        # solver decision). Nothing is written and nobody is
+                        # told; the only correction a pin can still need is
+                        # the broken-pin void below, for physics (a withdrawal),
+                        # never a re-time.
+                        pinned += 1
+                        continue
                     new_table = str(placement.table_id)
                     new_start = fresh.base + timedelta(minutes=placement.start_min)
-                    if fixture.pinned_at is not None:
-                        # A called match holds its table, but its start can be
-                        # pushed LATER on a re-solve when a predecessor overruns
-                        # (ADR "a called match holds its table and slides
-                        # later"). The solver floors a pin at its stored start,
-                        # so it can only echo that start or return a strictly
-                        # later minute. An unchanged pin — off-grid start
-                        # included — is byte-stable and moves no one; a slid pin
-                        # falls through to the shared moved-repair path below,
-                        # which persists the later start, renews ``pinned_at``,
-                        # and fires the SAME "moved" correction (its
-                        # ``table_id`` write is a no-op, since the solver never
-                        # re-tables a pin).
-                        if (
-                            fixture.scheduled_start is None
-                            or new_start <= fixture.scheduled_start
-                        ):
-                            # Unchanged: a promise's columns are never rewritten,
-                            # not even with their own bytes, and nobody is told.
-                            pinned += 1
-                            continue
-                    repaired_pin = fixture.pinned_at is not None
                     if (fixture.table_id, fixture.scheduled_start) != (
                         new_table,
                         new_start,
@@ -1833,13 +1825,6 @@ async def _apply_result(
                         moved_event_ids.add(fixture.event_id)
                     fixture.table_id = new_table
                     fixture.scheduled_start = new_start
-                    if repaired_pin:
-                        # A pin the solver slid later: physics moved the promise,
-                        # so it is renewed — still a pin, re-dated to the moment
-                        # the new placement was made — never demoted back to
-                        # an estimate.
-                        fixture.pinned_at = apply_now
-                        moved_repairs.append(fixture)
                     placed += 1
                 # Broken pins: an entrant withdrew, so the promised
                 # match cannot happen and the fixture stops being schedulable.
@@ -1876,13 +1861,15 @@ async def _apply_result(
                         db, tournament, list(fresh.fixtures.values())
                     )
                 # Corrections for the repairs above — same transaction, same
-                # locks, live tournaments only: moved → both entrants,
-                # cancelled → the remaining entrant. In-app rows persist
-                # here; push/email jobs join the post-commit fan-out.
+                # locks, live tournaments only: cancelled → the remaining
+                # entrant (there is no "moved" repair any more — a called
+                # match's table and start are both constants the solver never
+                # rewrites, ADR "A called match holds its time, and a clashing
+                # call is refused"). In-app rows persist here; push/email jobs
+                # join the post-commit fan-out.
                 call_fanout = await match_calls.notify_pin_repairs(
                     db,
                     tournament,
-                    moved=moved_repairs,
                     cancelled=voided_repairs,
                     withdrawn_entry_ids=fresh.withdrawn_entry_ids,
                     ingredients=ingredients,

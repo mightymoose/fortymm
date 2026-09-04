@@ -662,6 +662,33 @@ class PlacementTableNotFoundError(Exception):
         self.table_id = table_id
 
 
+class PlacementClashError(Exception):
+    """Raised by the place-fixture verb when a **live** placement that would
+    CALL the fixture — the tournament is live, the placement is full (a table
+    AND a start), and both entrants are known — names a table or a player
+    still held by an unfinished ``in_progress`` match in this tournament (ADR
+    "A called match holds its time, and a clashing call is refused").
+
+    Judged, and refused, BEFORE :func:`app.match_calls.apply_manual_placement`
+    writes anything: a clash writes nothing and notifies nobody — the director
+    is warned, the players hear nothing. The same occupancy read the automatic
+    call pass already uses (:func:`app.match_calls._held_resources`), excluding
+    the fixture's own match — re-placing an in-progress fixture onto its
+    current table/players is a *move*, not a clash. The table is checked first
+    when both the table and a player are held, so a director sees the more
+    concrete conflict.
+
+    Carries the already-composed, domain-authored sentence — naming the busy
+    table or the held player, and the match holding it — which the HTTP
+    adapter rebuilds verbatim into a 409 with ``str(exc)``, and the MCP tool
+    turns into ``ToolError`` prose the same way. Pre-live placements never
+    raise this: a pre-live placement calls nobody, so a clash there stays a
+    flag on read (ADR-0790), not a refusal. Never an ``HTTPException``."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class NoDrawnEventsError(Exception):
     """Raised by the request-schedule-solve verb when no event of the addressed
     tournament has a **cut draw** — nothing the solver can place, so a run would

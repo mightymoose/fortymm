@@ -1551,6 +1551,38 @@ describe('usePlaceFixture', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments', 't-1'] })
     expect(invalidateSpy).toHaveBeenCalledTimes(2)
   })
+
+  // #1661 item 3: a live call that clashes is refused with a 409 whose plain-
+  // string `detail` names the table or the player and the match that holds it
+  // (`PlacementClashError`, `api/app/tournament_placement.py`). `notifyError`'s
+  // description is `error.message`, and `ApiError`'s constructor seeds
+  // `message` from `detail` (`super(detail ?? …)`, `web-client/src/api/
+  // client.ts`) — so the server's own sentence must reach the toast verbatim,
+  // and the schedule tab's `placementRefusal` locator (root `e2e/`) finds it by
+  // that exact text.
+  it('surfaces a call-clash 409 detail sentence verbatim as the toast description', async () => {
+    const clash =
+      "Table 1 is already called for Alice vs Bob's unfinished match."
+    mockFixturePlacementEndpoint(server, () =>
+      HttpResponse.json({ detail: clash }, { status: 409 }),
+    )
+
+    const { result } = renderHook(() => usePlaceFixture('t-1'))
+
+    await expect(
+      result.current.mutateAsync({
+        fixtureId: 'fx-1',
+        body: { table_id: 't1', scheduled_start: '2026-06-13T10:30:00' },
+      }),
+    ).rejects.toBeInstanceOf(ApiError)
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't place the match",
+        { description: clash },
+      ),
+    )
+  })
 })
 
 describe('useRequestScheduleSolve', () => {

@@ -1,4 +1,6 @@
+import { MATCH_QUERY_KEY_PREFIX } from '../matches'
 import { DASHBOARD_QUERY_KEY } from '../dashboard'
+import { MATCH_DETAILS_QUERY_KEY_PREFIX } from '@/components/matches/match-details/match-details-query'
 import { UNKNOWN_EVENT_KIND, type DecodedEventKind, type RealtimeEvent } from './events'
 
 /**
@@ -21,18 +23,30 @@ import { UNKNOWN_EVENT_KIND, type DecodedEventKind, type RealtimeEvent } from '.
 
 type QueryKey = readonly unknown[]
 
+/** Every currently-open match screen — `useMatch`'s cache and the
+ * scoreboard/score-entry `matchDetailsQuery` cache alike — refreshed on the
+ * SAME hint the dashboard is (#1661 item 6: "the same hint refreshes an open
+ * match screen"). A hint never names which match changed, so this invalidates
+ * every match query these prefixes match; only a mounted, observed query
+ * actually refetches, so an idle cache entry just goes stale until it's read
+ * again. */
+const OPEN_MATCH_QUERY_KEYS: readonly QueryKey[] = [
+  MATCH_QUERY_KEY_PREFIX,
+  MATCH_DETAILS_QUERY_KEY_PREFIX,
+]
+
 const KEYS_BY_KIND = {
   /** Something the dashboard shows moved. */
-  'dashboard.changed': [DASHBOARD_QUERY_KEY],
+  'dashboard.changed': [DASHBOARD_QUERY_KEY, ...OPEN_MATCH_QUERY_KEYS],
   /** Sent on connect. Whatever was missed while disconnected is recovered by
    * refetching, which is exactly what an idempotent hint already does — so
    * resync is not a special case, it is the same case. */
-  resync: [DASHBOARD_QUERY_KEY],
+  resync: [DASHBOARD_QUERY_KEY, ...OPEN_MATCH_QUERY_KEYS],
   /** A kind from a newer server. Handled **coarsely**: refresh everything this
    * build knows how to refresh, because a hint we can't read is still evidence
    * that something moved. Doing nothing would silently reintroduce the staleness
    * the stream exists to remove. */
-  [UNKNOWN_EVENT_KIND]: [DASHBOARD_QUERY_KEY],
+  [UNKNOWN_EVENT_KIND]: [DASHBOARD_QUERY_KEY, ...OPEN_MATCH_QUERY_KEYS],
 } satisfies Record<DecodedEventKind, readonly QueryKey[]>
 
 /**

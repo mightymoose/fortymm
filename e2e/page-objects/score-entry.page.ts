@@ -80,4 +80,23 @@ export class ScoreEntryPage {
   get replaceButton(): Locator {
     return this.page.getByRole('button', { name: 'Replace with my score' })
   }
+
+  /** "Keep saved score" — the other way out of the conflict notice: drop the
+   * viewer's own entry and adopt the committed one. */
+  get keepSavedButton(): Locator {
+    return this.page.getByRole('button', { name: 'Keep saved score' })
+  }
+
+  /** The screen's heading — `Enter game N score.` / `Edit game N score.` — which
+   * names the game the inputs are for. */
+  get heading(): Locator {
+    return this.page.getByRole('heading', { name: /(Enter|Edit) game \d+ score\./ })
+  }
+
+  /** The boundary refusal (`Can't enter a score here`) with the API's own reason
+   * as its description — what a participant sees on a game they may not score
+   * (the match is over, or an earlier game is still unsaved). */
+  get refusal(): Locator {
+    return this.page.getByRole('alert').filter({ hasText: "Can't enter a score here" })
+  }
 }

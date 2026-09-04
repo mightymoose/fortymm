@@ -428,7 +428,6 @@ async def test_a_withdrawal_cancellation_hints_only_the_player_left_standing(
         fanout = await notify_pin_repairs(
             db_session,
             await _tournament(db_session, staged),
-            moved=[],
             cancelled=[fixture],
             withdrawn_entry_ids={withdrew_entry_id},
         )
