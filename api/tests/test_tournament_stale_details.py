@@ -1,5 +1,6 @@
 """Concurrent editor behavior through the tournament HTTP interface."""
 
+import jsonschema
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,14 @@ async def test_stale_details_save_preserves_the_other_tabs_venue(
     )
     assert stale.status_code == 409, stale.text
     assert stale.json()["detail"]["code"] == "tournament_details_version_conflict"
+    openapi = (await client.get("/openapi.json")).json()
+    response_schema = openapi["paths"]["/v1/tournaments/{tournament_id}"]["patch"][
+        "responses"
+    ]["409"]["content"]["application/json"]["schema"]
+    jsonschema.validate(
+        stale.json(), {**response_schema, "components": openapi["components"]}
+    )
+
     current = (await client.get(url)).json()
     assert current["address"]["venue"] == "Tab A Venue"
     assert current["address"]["region"] == "CA"

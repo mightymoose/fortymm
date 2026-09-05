@@ -115,11 +115,15 @@ export const DetailsTab = ({
     if (failure) failureRef.current?.focus()
   }, [failure])
 
-  const loadLatest = () => {
+  const resetToSaved = () => {
     setBaseline(tournament)
     form.reset(detailsValues(tournament))
     setConfirmLoad(false)
     setFailure(null)
+  }
+  const loadLatest = () => {
+    if (!stale) return
+    resetToSaved()
   }
   const update = (patch: Partial<DetailsValues>) => {
     const options = {
@@ -214,7 +218,7 @@ export const DetailsTab = ({
                 disabled={saving}
                 onClick={() => {
                   if (stale) setConfirmLoad(true)
-                  else loadLatest()
+                  else resetToSaved()
                 }}
               >
                 Revert
@@ -244,7 +248,13 @@ export const DetailsTab = ({
             {failure
               ? `${saveFailureMessage(failure, TOURNAMENT_SAVE_TARGET)} Nothing was saved — your changes are still here.`
               : 'Your unsaved changes are still here.'}
-            {(stale || failure?.kind === 'conflict') && (
+            {failure?.kind === 'conflict' && !stale && (
+              <span>
+                The latest saved values aren’t available yet. Try saving again
+                to refresh them.
+              </span>
+            )}
+            {stale && (
               <Button
                 variant="outline"
                 disabled={saving}

@@ -9,7 +9,7 @@ import { buildAddress, buildTournament } from '../data/seed.factory'
 import { detailsTabPage } from './details-tab.page'
 
 describe('DetailsTab', () => {
-  it('keeps a rejected draft and reports a stale save inline', async () => {
+  it('preserves a rejected draft until a newer Details snapshot is available', async () => {
     const tournament = buildTournament({ name: 'Original', detailsVersion: 1 })
     const onUpdate = async () => {
       throw new ApiError(409, null, 'update tournament', {
@@ -19,11 +19,24 @@ describe('DetailsTab', () => {
         },
       })
     }
-    render(<DetailsTab tournament={tournament} canEdit onUpdate={onUpdate} />)
+    const { rerender } = render(
+      <DetailsTab tournament={tournament} canEdit onUpdate={onUpdate} />,
+    )
     await userEvent.type(screen.getByDisplayValue('Original'), '!')
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Nothing was saved',
+    )
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Load latest' }),
+    ).not.toBeInTheDocument()
+    rerender(
+      <DetailsTab
+        tournament={{ ...tournament, name: 'Other tab', detailsVersion: 2 }}
+        canEdit
+        onUpdate={onUpdate}
+      />,
     )
     expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
     expect(

@@ -2257,6 +2257,19 @@ class TournamentCreate(BaseModel):
     league_id: uuid.UUID | None = None
 
 
+class TournamentUpdateConflictDetail(BaseModel):
+    """Coded refusals produced by a tournament Details save."""
+
+    code: Literal["address_not_geocodable", "tournament_details_version_conflict"]
+    message: str
+
+
+class TournamentUpdateConflict(BaseModel):
+    """HTTP conflict envelope, including table and league state refusals."""
+
+    detail: TournamentUpdateConflictDetail | str
+
+
 class TournamentUpdate(BaseModel):
     """Partial update. A field that is *absent* is left unchanged; an explicit
     value replaces the current one. ``name`` maps to a NOT NULL column and

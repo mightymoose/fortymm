@@ -1401,6 +1401,19 @@ describe('EventEditor', () => {
       expect(eventEditorPage.getLoadLatestButton()).toBeInTheDocument()
     })
 
+    it('preserves a rejected draft when the latest read still has the original version', async () => {
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', name: 'Original', lockVersion: 2 }),
+        latestEvent: buildEvent({ id: 'ev-1', name: 'Original', lockVersion: 2 }),
+        onSave: vi.fn().mockRejectedValue(conflictError),
+      })
+      await userEvent.type(eventEditorPage.getNameInput(), '!')
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toBeInTheDocument())
+      expect(eventEditorPage.getNameInput()).toHaveValue('Original!')
+      expect(screen.queryByRole('button', { name: 'Load latest' })).not.toBeInTheDocument()
+    })
+
     it('loads the latest event only after discarding the draft, without saving it', async () => {
       const onSave = vi.fn().mockRejectedValue(conflictError)
       eventEditorPage.render({

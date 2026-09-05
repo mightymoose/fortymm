@@ -5957,6 +5957,27 @@ export interface components {
             unplace_fixtures_on_removed_tables?: boolean | null;
         };
         /**
+         * TournamentUpdateConflict
+         * @description HTTP conflict envelope, including table and league state refusals.
+         */
+        TournamentUpdateConflict: {
+            /** Detail */
+            detail: components["schemas"]["TournamentUpdateConflictDetail"] | string;
+        };
+        /**
+         * TournamentUpdateConflictDetail
+         * @description Coded refusals produced by a tournament Details save.
+         */
+        TournamentUpdateConflictDetail: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "address_not_geocodable" | "tournament_details_version_conflict";
+            /** Message */
+            message: string;
+        };
+        /**
          * UnreadCountResponse
          * @description Just the unread total — the cheap endpoint the bell badge polls.
          */
@@ -8133,7 +8154,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AddressNotGeocodable"];
+                    "application/json": components["schemas"]["TournamentUpdateConflict"];
                 };
             };
             /** @description Validation Error */

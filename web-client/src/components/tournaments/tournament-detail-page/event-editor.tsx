@@ -436,7 +436,7 @@ export const EventEditor = ({
   const stale = !isNew && latestEvent?.lockVersion !== event?.lockVersion
   const loadLatest = () => {
     setConfirmLoad(false)
-    if (!latestEvent) return
+    if (!latestEvent || !stale) return
     setEvent(latestEvent)
     form.reset(eventToFormValues(latestEvent))
     setFailure(null)
@@ -660,7 +660,7 @@ export const EventEditor = ({
                         It was deleted elsewhere, so there is nothing left to
                         load. Close this sheet and refresh the event list.
                       </span>
-                    ) : (
+                    ) : stale ? (
                       <Button
                         type="button"
                         variant="outline"
@@ -671,6 +671,11 @@ export const EventEditor = ({
                       >
                         Load latest
                       </Button>
+                    ) : (
+                      <span>
+                        The latest saved values aren’t available yet. Try saving
+                        again to refresh them.
+                      </span>
                     )}
                   </span>
                 )}

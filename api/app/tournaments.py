@@ -49,6 +49,7 @@ from app.schemas.tournament import (
     TournamentRead,
     TournamentTransitionCreate,
     TournamentUpdate,
+    TournamentUpdateConflict,
 )
 from app.sessions import SESSION_COOKIE_NAME, get_current_user
 from app.tournament_draw_service import cut_event_draw as _cut_event_draw
@@ -486,7 +487,7 @@ def _table_not_in_catalogue(exc: TableNotInCatalogueError) -> RequestValidationE
 @router.patch(
     "/tournaments/{tournament_id}",
     response_model=TournamentRead,
-    responses={409: {"model": AddressNotGeocodable}},
+    responses={409: {"model": TournamentUpdateConflict}},
 )
 async def update_tournament(
     tournament_id: uuid.UUID,
