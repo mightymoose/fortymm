@@ -328,7 +328,7 @@ export function unwrap<T>(
   options: { allowEmpty?: boolean } = {},
 ): T {
   const { data, error, response } = result
-  if (error) {
+  if (error || (response && !response.ok)) {
     throw new ApiError(response?.status ?? 0, extractDetail(error), label, error)
   }
   if (data === undefined && !options.allowEmpty) {

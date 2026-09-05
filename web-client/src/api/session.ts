@@ -62,16 +62,22 @@ async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false): Pro
   const owner = `${Date.now()}-${Math.random()}`
   const deadline = Date.now() + SESSION_LOCK_TTL_MS
   for (;;) {
-    const held = readStorageLock()
-    if (!held || held.expires < Date.now()) {
-      localStorage.setItem(
-        SESSION_LOCK_STORAGE_KEY,
-        JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }),
-      )
-      // Yield a tick, then re-read: narrows (but can't eliminate) the window
-      // where two tabs both saw no lock and both wrote.
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      if (readStorageLock()?.owner === owner) break
+    try {
+      const held = readStorageLock()
+      if (!held || held.expires < Date.now()) {
+        localStorage.setItem(
+          SESSION_LOCK_STORAGE_KEY,
+          JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }),
+        )
+        // Yield a tick, then re-read: narrows (but can't eliminate) the window
+        // where two tabs both saw no lock and both wrote.
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        if (readStorageLock()?.owner === owner) break
+      }
+    } catch {
+      // Storage may exist but be disabled or full. The caller still holds
+      // the in-tab queue, so overlapping local recovery remains serialized.
+      return fn()
     }
     if (Date.now() > deadline) throw new Error('Another tab is updating your session. Please try again.')
     if (!alwaysLock && hasCsrfCookie()) return fn()
@@ -80,19 +86,28 @@ async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false): Pro
   // Renew while the request is pending: a slow network response must not
   // turn an active recovery into an expired lock that another tab can take.
   const renewal = setInterval(() => {
-    if (readStorageLock()?.owner === owner) {
-      localStorage.setItem(SESSION_LOCK_STORAGE_KEY,
-        JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }))
-    }
+    try {
+      if (readStorageLock()?.owner === owner) {
+        localStorage.setItem(SESSION_LOCK_STORAGE_KEY,
+          JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }))
+      }
+    } catch { clearInterval(renewal) }
   }, SESSION_LOCK_TTL_MS / 3)
   try {
     return await fn()
   } finally {
     clearInterval(renewal)
-    if (readStorageLock()?.owner === owner) {
-      localStorage.removeItem(SESSION_LOCK_STORAGE_KEY)
-    }
+    try {
+      if (readStorageLock()?.owner === owner) localStorage.removeItem(SESSION_LOCK_STORAGE_KEY)
+    } catch { /* Storage became unavailable during the request. */ }
   }
+}
+
+let localSessionQueue: Promise<unknown> = Promise.resolve()
+function withLocalSessionLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = localSessionQueue.then(fn, fn)
+  localSessionQueue = result.catch(() => undefined)
+  return result
 }
 
 /** Single-flights the `/v1/session` cold-bootstrap request across every tab
@@ -103,8 +118,7 @@ async function withSessionBootstrapLock<T>(fn: () => Promise<T>, alwaysLock = fa
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
     return navigator.locks.request(SESSION_LOCK_NAME, () => fn())
   }
-  if (typeof localStorage === 'undefined') return fn()
-  return withStorageLock(fn, alwaysLock)
+  return withLocalSessionLock(() => withStorageLock(fn, alwaysLock))
 }
 
 export function sessionQueryOptions() {
@@ -328,12 +342,16 @@ export function useRequestLogin() {
   })
 }
 
-export function useLogout() {
+export function useLogout(retryOnly = false) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (): Promise<void> => withSessionBootstrapLock(async () => {
-      rememberSessionEnd({ message: 'You have signed out. Sign in to continue.' })
+      if (retryOnly && !readEndedSession()?.logoutPending) return
+      rememberSessionEnd({ message: 'Sign-out is not complete. Retry to finish signing out.', logoutPending: true })
       unwrap('sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
+      if (readEndedSession()?.logoutPending) {
+        rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false })
+      }
     }, true),
     // Drop ALL cached per-user data (matches, dashboard, players, ...), not
     // just SESSION_QUERY_KEY — otherwise the prior user's BFF responses leak
@@ -344,6 +362,7 @@ export function useLogout() {
     // live `/v1/stream` open (the user menu and the settings footer). The
     // caller owns the navigation that follows, so no `navigateToLogin` here.
     onSuccess: () => {
+      if (readEndedSession()?.logoutPending !== false) return
       handleIdentityChange({
         closeRealtime: closeRealtimeConnections,
         clearAppEntered,

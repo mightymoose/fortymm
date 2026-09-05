@@ -253,46 +253,50 @@ struct ConfirmEmailView: View {
     /// Preview the link first; a merge that would carry matches over waits at
     /// the gate, everything else confirms straight away.
     private func start() async {
-        approvedSwitch = nil
-        phase = .verifying
-        do {
-            let preview = try await loginService.mergePreview(token: token)
-            pendingMerge = !chosenSkipMerge && preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
-            if let change = preview.accountSwitch {
-                phase = .accountSwitch(change)
-            } else if let merge = pendingMerge {
-                phase = .gate(merge)
-            } else {
-                await confirm(skipMerge: chosenSkipMerge)
+        await submission.run {
+            approvedSwitch = nil
+            phase = .verifying
+            do {
+                let preview = try await loginService.mergePreview(token: token)
+                pendingMerge = !chosenSkipMerge && preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
+                if let change = preview.accountSwitch {
+                    phase = .accountSwitch(change)
+                } else if let merge = pendingMerge {
+                    phase = .gate(merge)
+                } else {
+                    await finalize(skipMerge: chosenSkipMerge)
+                }
+            } catch {
+                phase = .unreachable
             }
-        } catch {
-            phase = .unreachable
         }
     }
 
     private func confirm(skipMerge: Bool) async {
-        await submission.run {
-            chosenSkipMerge = skipMerge
-            pendingMerge = nil
-            phase = .verifying
-            do {
-                phase = .success(
-                    try await service.confirmEmail(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
-                )
-            } catch LoginConsumeError.accountSwitchRequired(let change) {
-                approvedSwitch = nil
-                phase = .accountSwitch(change)
-            } catch LoginConsumeError.replaced {
-                // A newer resend superseded this link — opening the most recent
-                // email is the fix; resending would kill that newer link (#1616).
-                phase = .replaced
-            } catch LoginConsumeError.rejected {
-                // Invalid / expired / already-used link — terminal.
-                phase = .expired
-            } catch {
-                // 5xx / timeout / offline — the still-valid link is worth a retry.
-                phase = .unreachable
-            }
+        await submission.run { await finalize(skipMerge: skipMerge) }
+    }
+
+    private func finalize(skipMerge: Bool) async {
+        chosenSkipMerge = skipMerge
+        pendingMerge = nil
+        phase = .verifying
+        do {
+            phase = .success(
+                try await service.confirmEmail(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
+            )
+        } catch LoginConsumeError.accountSwitchRequired(let change) {
+            approvedSwitch = nil
+            phase = .accountSwitch(change)
+        } catch LoginConsumeError.replaced {
+            // A newer resend superseded this link — opening the most recent
+            // email is the fix; resending would kill that newer link (#1616).
+            phase = .replaced
+        } catch LoginConsumeError.rejected {
+            // Invalid / expired / already-used link — terminal.
+            phase = .expired
+        } catch {
+            // 5xx / timeout / offline — the still-valid link is worth a retry.
+            phase = .unreachable
         }
     }
 }

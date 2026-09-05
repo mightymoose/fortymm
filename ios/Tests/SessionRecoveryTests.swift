@@ -82,6 +82,14 @@ final class SessionTransport: URLProtocol {
         await tokens.clear()
         SessionTransport.status = 200
         SessionTransport.body = #"{"data":{"user":{"username":"new-guest","permissions":[]}}}"#
+        store.signedOut(reason: "Choose recovery", email: nil)
+        SessionTransport.requestCount = 0
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<2 { group.addTask { await store.startNewGuest() } }
+        }
+        precondition(SessionTransport.requestCount == 1,
+                     "Duplicate native recovery choices must bootstrap one guest")
+        print("PASS: native guest recovery creates one identity")
         let submission = LinkSubmission()
         SessionTransport.requestCount = 0
         await withTaskGroup(of: Void.self) { group in

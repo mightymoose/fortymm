@@ -115,6 +115,7 @@ final class SessionStore: ObservableObject {
     }
 
     func startNewGuest() async {
+        guard case .signedOut = state else { return }
         state = .loading
         do {
             let response = try await client.startNewGuest()

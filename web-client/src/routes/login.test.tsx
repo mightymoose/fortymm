@@ -2,6 +2,7 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from '@testing-library/react'
@@ -19,6 +20,7 @@ import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import { api } from '@/api/client'
+import { useLogout } from '@/api/session'
 import { Route as AppRoute } from './_app/route'
 import { mockSession } from '@/mocks/handlers'
 import { Route as LoginIndexRoute } from './login.index'
@@ -683,4 +685,28 @@ it('redirects a direct dashboard visit after eviction without bootstrapping a gu
   const { router } = renderAt('/dashboard')
   await waitFor(() => expect(router.state.location.pathname).toBe('/login'))
   expect(await screen.findByRole('alert')).toHaveTextContent("You've been signed out")
+})
+
+it('offers a durable retry when sign-out cannot revoke the server session', async () => {
+  let attempts = 0
+  server.use(http.delete('*/v1/session', () => {
+    attempts += 1
+    return new HttpResponse(null, { status: attempts === 1 ? 503 : 204 })
+  }))
+  const client = new QueryClient()
+  const logout = renderHook(() => useLogout(), { wrapper: ({ children }) =>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+  })
+  await act(async () => {
+    await expect(logout.result.current.mutateAsync()).rejects.toThrow()
+  })
+  logout.unmount()
+  const page = renderAt('/login')
+  expect(await screen.findByRole('button', { name: 'Retry sign-out' })).toBeVisible()
+  page.unmount()
+  renderAt('/login')
+  await userEvent.setup().click(await screen.findByRole('button', { name: 'Retry sign-out' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry sign-out' })).not.toBeInTheDocument())
+  expect(attempts).toBe(2)
+  expect(screen.getByRole('alert')).toHaveTextContent('You have signed out.')
 })

@@ -206,41 +206,45 @@ struct VerifyLoginView: View {
     /// Preview the link first; a merge that would carry matches over waits at
     /// the gate, everything else signs in straight away.
     private func start() async {
-        approvedSwitch = nil
-        phase = .verifying
-        do {
-            let preview = try await service.mergePreview(token: token)
-            pendingMerge = !chosenSkipMerge && preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
-            if let change = preview.accountSwitch {
-                phase = .accountSwitch(change)
-            } else if let merge = pendingMerge {
-                phase = .gate(merge)
-            } else {
-                await verify(skipMerge: chosenSkipMerge)
+        await submission.run {
+            approvedSwitch = nil
+            phase = .verifying
+            do {
+                let preview = try await service.mergePreview(token: token)
+                pendingMerge = !chosenSkipMerge && preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
+                if let change = preview.accountSwitch {
+                    phase = .accountSwitch(change)
+                } else if let merge = pendingMerge {
+                    phase = .gate(merge)
+                } else {
+                    await finalize(skipMerge: chosenSkipMerge)
+                }
+            } catch {
+                phase = .unreachable
             }
-        } catch {
-            phase = .unreachable
         }
     }
 
     private func verify(skipMerge: Bool) async {
-        await submission.run {
-            chosenSkipMerge = skipMerge
-            pendingMerge = nil
-            phase = .verifying
-            do {
-                phase = .success(
-                    try await service.consume(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
-                )
-            } catch LoginConsumeError.accountSwitchRequired(let change) {
-                approvedSwitch = nil
-                phase = .accountSwitch(change)
-            } catch LoginConsumeError.rejected {
-                phase = .expired
-            } catch {
-                // Unreachable (or any other transient failure) — offer a retry.
-                phase = .unreachable
-            }
+        await submission.run { await finalize(skipMerge: skipMerge) }
+    }
+
+    private func finalize(skipMerge: Bool) async {
+        chosenSkipMerge = skipMerge
+        pendingMerge = nil
+        phase = .verifying
+        do {
+            phase = .success(
+                try await service.consume(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
+            )
+        } catch LoginConsumeError.accountSwitchRequired(let change) {
+            approvedSwitch = nil
+            phase = .accountSwitch(change)
+        } catch LoginConsumeError.rejected {
+            phase = .expired
+        } catch {
+            // Unreachable (or any other transient failure) — offer a retry.
+            phase = .unreachable
         }
     }
 }

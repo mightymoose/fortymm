@@ -1,7 +1,7 @@
 import { createElement, type ReactNode } from 'react'
 import { act, renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { delay, http, HttpResponse } from 'msw'
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
@@ -17,6 +17,7 @@ function wrapper() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   clients.splice(0).forEach((client) => client.clear())
   forgetSessionEnd()
   document.cookie = 'csrf_token=; Max-Age=0; path=/'
@@ -36,7 +37,8 @@ it('shares sign-out before cookies are cleared and prevents another guest bootst
   await expect(anotherTab.fetchQuery(sessionQueryOptions())).rejects.toMatchObject({ status: 401 })
 })
 
-it('concurrent new-guest choices recover the same identity', async () => {
+it.each([undefined, 'getItem', 'setItem'] as const)('concurrent new-guest choices recover the same identity with %s blocked', async (blockedMethod) => {
+  if (blockedMethod) vi.spyOn(Storage.prototype, blockedMethod).mockImplementation(() => { throw new Error('Storage unavailable') })
   rememberSessionEnd({ message: 'Your session ended.' })
   document.cookie = 'csrf_token=ended-session; path=/'
   let cookieUser: SessionUser | null = null

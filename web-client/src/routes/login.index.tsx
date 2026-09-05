@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { ApiError } from '@/api/client'
-import { useRequestLogin, useStartNewGuest } from '@/api/session'
+import { useRequestLogin, useStartNewGuest, useLogout } from '@/api/session'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useEndedSession } from '@/api/browser-session'
 import {
@@ -28,6 +28,7 @@ function LoginPage() {
   const requestLogin = useRequestLogin()
   const ended = useEndedSession()
   const newGuest = useStartNewGuest()
+  const retryLogout = useLogout(true)
   const [serverError, setServerError] = useState<string | null>(null)
   // Synchronous in-flight guard: the mutation's isPending flips on a batched
   // re-render, so a rapid click burst can dispatch duplicate requests (and
@@ -52,9 +53,13 @@ function LoginPage() {
   return (
     <ScreenEmail
       notice={ended && <Alert className="mb-2 border-[var(--warn)]/40">
-        <AlertTitle>Signed out</AlertTitle>
+        <AlertTitle>{ended.logoutPending ? 'Sign-out incomplete' : 'Signed out'}</AlertTitle>
         <AlertDescription>
           <p>{ended.message}</p>
+          {ended.logoutPending && <button type="button" className="mt-3 underline"
+            disabled={retryLogout.isPending} onClick={() => retryLogout.mutate()}>
+            Retry sign-out
+          </button>}
           <button type="button" className="mt-3 underline" disabled={newGuest.isPending}
             onClick={() => newGuest.mutate(undefined, {
               onSuccess: () => navigate({ to: '/dashboard' }),

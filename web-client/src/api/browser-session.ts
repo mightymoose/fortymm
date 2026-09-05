@@ -6,6 +6,7 @@ const CHANGE = 'fortymm:session-ended'
 const endedSchema = z.object({
   message: z.string(),
   email: z.string().optional(),
+  logoutPending: z.boolean().optional(),
 })
 export type EndedSession = z.infer<typeof endedSchema>
 let unavailableStorageValue: string | null = null
