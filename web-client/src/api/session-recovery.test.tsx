@@ -68,3 +68,29 @@ it('concurrent new-guest choices recover the same identity', async () => {
   expect(minted).toBe(1)
   expect(deletes).toBe(1)
 })
+
+it('keeps a slow new-guest recovery exclusive beyond the fallback lock TTL', async () => {
+  rememberSessionEnd({ message: 'Your session ended.' })
+  document.cookie = 'csrf_token=ended-session; path=/'
+  let deletes = 0
+  server.use(
+    http.delete('*/v1/session', () => {
+      deletes += 1
+      return new HttpResponse(null, { status: 204 })
+    }),
+    http.get('*/v1/session', async () => {
+      await delay(11_000)
+      return HttpResponse.json(mockSession)
+    }),
+  )
+  const first = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
+  const second = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
+  await act(async () => {
+    const firstRecovery = first.result.current.mutateAsync()
+    await delay(100)
+    const secondRecovery = second.result.current.mutateAsync().catch(() => null)
+    await delay(10_200)
+    expect(deletes).toBe(1)
+    await Promise.all([firstRecovery, secondRecovery])
+  })
+}, 30_000)

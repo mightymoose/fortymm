@@ -82,6 +82,10 @@ actor SessionTokenStore {
     func clear() {
         endedFallback = nil
         UserDefaults.standard.removeObject(forKey: endedKey)
+        clearCredentials()
+    }
+
+    private func clearCredentials() {
         cached = nil
         csrf = nil
         needsPersist = false
@@ -100,12 +104,14 @@ actor SessionTokenStore {
     func endIfCurrent(_ token: String?, message: String, email: String?) -> Bool {
         hydrate()
         guard cached == token else { return false }
-        clear()
         let reason = SessionEndReason(message: message, email: email)
         endedFallback = reason
         if let data = try? JSONEncoder().encode(reason), let raw = String(data: data, encoding: .utf8) {
             UserDefaults.standard.set(raw, forKey: endedKey)
         }
+        // Save recovery state before removing the credential. An interruption
+        // between these operations must never look like a first visit.
+        clearCredentials()
         return true
     }
 

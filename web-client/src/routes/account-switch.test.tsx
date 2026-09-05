@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -98,9 +98,11 @@ it.each([
     ).toBeVisible()
     expect(requests).toEqual([])
     await router.navigate({ to: path, search: { token: 'bobs-link' } })
-    await user.click(
-      await screen.findByRole('button', { name: 'Continue as bob' }),
-    )
+    const continueButton = await screen.findByRole('button', { name: 'Continue as bob' })
+    act(() => {
+      continueButton.click()
+      continueButton.click()
+    })
     await waitFor(() =>
       expect(requests).toEqual([
         {
@@ -241,4 +243,44 @@ it.each([
   expect(await screen.findByRole('button', { name: 'Review link' })).toBeVisible()
   await user.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(await screen.findByRole('heading', { name: 'Signed in as bob' })).toBeVisible()
+})
+
+it.each([
+  ['/confirm-email', '/v1/me/email/confirm', ConfirmRoute],
+  ['/login/verifying', '/v1/login/consume', VerifyRoute],
+] as const)('keeps Not now after a successful re-preview at %s', async (path, endpoint, route) => {
+  const user = userEvent.setup()
+  let previews = 0
+  const confirmations: unknown[] = []
+  server.use(
+    http.post('*/v1/merge/preview', () => {
+      previews += 1
+      return previews === 1
+        ? HttpResponse.json({ is_merge: true, guest_matches_count: 1,
+            owner_username: 'bob', guest_username: 'guest',
+            account_switch: { from_user_id: 'alice-id', from_username: 'alice', to_username: 'bob' },
+          })
+        : HttpResponse.json({ is_merge: true, guest_matches_count: 1, owner_username: 'bob', guest_username: 'guest' })
+    }),
+    http.post(`*${endpoint}`, async ({ request }) => {
+      confirmations.push(await request.json())
+      return confirmations.length === 1
+        ? HttpResponse.json({ detail: { code: 'account_switch_required', account_switch: null } }, { status: 409 })
+        : HttpResponse.json(mockSession)
+    }),
+  )
+  const root = createRootRoute()
+  const confirming = createRoute({ getParentRoute: () => root,
+    path, component: route.options.component!,
+    validateSearch: route.options.validateSearch,
+  })
+  const router = createRouter({ routeTree: root.addChildren([confirming]),
+    history: createMemoryHistory({ initialEntries: [`${path}?token=bobs-link`] }),
+  })
+  render(<QueryClientProvider client={new QueryClient()}><RouterProvider router={router} /></QueryClientProvider>)
+  await user.click(await screen.findByRole('button', { name: 'Continue as bob' }))
+  await user.click(await screen.findByRole('button', { name: /not now/i }))
+  await user.click(await screen.findByRole('button', { name: 'Review link' }))
+  await waitFor(() => expect(confirmations).toHaveLength(2))
+  expect(confirmations[1]).toEqual({ token: 'bobs-link', skip_merge: true })
 })

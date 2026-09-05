@@ -172,9 +172,14 @@ function ConfirmEmailPage() {
   // wrap it once so the mutate-level `onSuccess` doesn't repeat at each call
   // site. Recording the input here — the one choke point every confirm passes
   // through — keeps the retained copy identical to the real attempt.
+  const confirming = useRef(false)
+  const [skipMerge, setSkipMerge] = useState(false)
   const confirmWithToast = (input: FinalizeTokenInput) => {
+    if (confirming.current) return
+    confirming.current = true
+    setSkipMerge(input.skipMerge ?? false)
     firedInput.current = input
-    confirm.mutate(input, { onSuccess: showMergeToast })
+    confirm.mutate(input, { onSuccess: showMergeToast, onSettled: () => { confirming.current = false } })
   }
 
   // Preview the link first. A merge that would carry matches over waits for the
@@ -185,7 +190,7 @@ function ConfirmEmailPage() {
     fired.current = true
     preview.mutate(token, {
       onSuccess: (p) => {
-        if (!p.account_switch && !(p.is_merge && p.guest_matches_count > 0)) {
+        if (!p.account_switch && !(p.is_merge && p.guest_matches_count > 0 && !firedInput.current?.skipMerge)) {
           confirmWithToast({ token, skipMerge: firedInput.current?.skipMerge ?? false })
         }
       },
@@ -227,13 +232,13 @@ function ConfirmEmailPage() {
       onCancel={cancelSwitch}
       onContinue={() => {
         setApprovedSwitch(change.from_user_id)
-        if (!(p.is_merge && p.guest_matches_count > 0)) {
-          confirmWithToast({ token, switchFromUserId: change.from_user_id })
+        if (!(p.is_merge && p.guest_matches_count > 0 && !firedInput.current?.skipMerge)) {
+          confirmWithToast({ token, skipMerge: firedInput.current?.skipMerge ?? false, switchFromUserId: change.from_user_id })
         }
       }} />
   }
   const showGate =
-    confirm.status === 'idle' && !!p && p.is_merge && p.guest_matches_count > 0
+    confirm.status === 'idle' && !!p && p.is_merge && p.guest_matches_count > 0 && !skipMerge
 
   // Order matters: the confirm result wins over `!token`, because we scrub the
   // token from the URL after the mutation settles (#521) — a cleared token on

@@ -73,13 +73,22 @@ async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false): Pro
       await new Promise((resolve) => setTimeout(resolve, 0))
       if (readStorageLock()?.owner === owner) break
     }
-    if (Date.now() > deadline) break
+    if (Date.now() > deadline) throw new Error('Another tab is updating your session. Please try again.')
     if (!alwaysLock && hasCsrfCookie()) return fn()
     await new Promise((resolve) => setTimeout(resolve, SESSION_LOCK_POLL_MS))
   }
+  // Renew while the request is pending: a slow network response must not
+  // turn an active recovery into an expired lock that another tab can take.
+  const renewal = setInterval(() => {
+    if (readStorageLock()?.owner === owner) {
+      localStorage.setItem(SESSION_LOCK_STORAGE_KEY,
+        JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }))
+    }
+  }, SESSION_LOCK_TTL_MS / 3)
   try {
     return await fn()
   } finally {
+    clearInterval(renewal)
     if (readStorageLock()?.owner === owner) {
       localStorage.removeItem(SESSION_LOCK_STORAGE_KEY)
     }

@@ -109,11 +109,18 @@ function LoginVerifyingPage() {
   const fired = useRef(false)
   const [approvedSwitch, setApprovedSwitch] = useState<string | undefined>()
 
+  const chosenSkipMerge = useRef(false)
+  const consuming = useRef(false)
+
   const runConsume = (skipMerge: boolean, switchFromUserId?: string) => {
+    if (consuming.current) return
+    consuming.current = true
+    chosenSkipMerge.current = skipMerge
     setGate(null)
     consume.mutate(
       { token, skipMerge, switchFromUserId },
       {
+        onSettled: () => { consuming.current = false },
         onSuccess: (session) => {
           const moved = session.merged?.matches_moved ?? 0
           if (moved > 0) {
@@ -151,13 +158,13 @@ function LoginVerifyingPage() {
     fired.current = true
     preview.mutate(token, {
       onSuccess: (p) => {
-        if (p.account_switch || (p.is_merge && p.guest_matches_count > 0)) {
+        if (p.account_switch || (p.is_merge && p.guest_matches_count > 0 && !chosenSkipMerge.current)) {
           setGate(p)
         } else {
-          runConsume(false)
+          runConsume(chosenSkipMerge.current)
         }
       },
-      onError: () => runConsume(false),
+      onError: () => runConsume(chosenSkipMerge.current),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, error])
@@ -237,8 +244,8 @@ function LoginVerifyingPage() {
           consume.reset()
           setApprovedSwitch(undefined)
           preview.mutate(token, { onSuccess: (p) => {
-            if (p.account_switch || (p.is_merge && p.guest_matches_count > 0)) setGate(p)
-            else runConsume(false)
+            if (p.account_switch || (p.is_merge && p.guest_matches_count > 0 && !chosenSkipMerge.current)) setGate(p)
+            else runConsume(chosenSkipMerge.current)
           }, onError: () => {
             navigate({ to: '/login/verifying', search: { token, error: 'net' } })
           } })
@@ -251,7 +258,7 @@ function LoginVerifyingPage() {
       onCancel={cancelSwitch}
       onContinue={() => {
         setApprovedSwitch(change.from_user_id)
-        if (!(gate.is_merge && gate.guest_matches_count > 0)) runConsume(false, change.from_user_id)
+        if (!(gate.is_merge && gate.guest_matches_count > 0 && !chosenSkipMerge.current)) runConsume(chosenSkipMerge.current, change.from_user_id)
       }} />
   }
   if (gate) {
