@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import './index.css'
 import { Toaster } from '@/components/ui/sonner'
 import { NotFoundPage } from '@/components/not-found-page'
-import { setSessionEndedHandler } from '@/api/client'
+import { readEndedSession, subscribeSessionEnd } from '@/api/browser-session'
 import { closeRealtimeConnections } from '@/api/realtime/connection'
 import { handleIdentityChange } from '@/api/identity-change'
 import { clearAppEntered } from '@/lib/landing-redirect'
@@ -54,7 +54,9 @@ declare module '@tanstack/react-router' {
 // where its ORDER is testable — closing the realtime stream has to happen
 // before the cache is cleared, and a step order written inline here could only
 // ever be checked by reading it.
-setSessionEndedHandler((info) =>
+subscribeSessionEnd(() => {
+  const info = readEndedSession()
+  if (!info) return
   handleIdentityChange(
     {
       closeRealtime: closeRealtimeConnections,
@@ -65,8 +67,8 @@ setSessionEndedHandler((info) =>
         void router.navigate({ to: '/login', search: { email, error: undefined } }),
     },
     info,
-  ),
-)
+  )
+})
 
 async function unregisterServiceWorkers() {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return

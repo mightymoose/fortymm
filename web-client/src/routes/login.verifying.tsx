@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import {
+  accountSwitchConflict,
   type MergePreview,
   useConsumeLoginToken,
   useMergePreview,
@@ -12,6 +13,7 @@ import {
 import { btnGhost, btnPrimary, fineprint } from '@/components/login/styles'
 import { LinkCheckPage } from '@/components/login/link-check-page/link-check-page'
 import { ScreenVerifyNetError } from '@/components/login/login-screens'
+import { AccountSwitchGate, ReviewAccountSwitch } from '@/components/login/account-switch-gate'
 import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
@@ -94,11 +96,12 @@ function LoginVerifyingPage() {
   // (previewing, consuming) renders the same verifying screen.
   const [gate, setGate] = useState<MergePreview | null>(null)
   const fired = useRef(false)
+  const [approvedSwitch, setApprovedSwitch] = useState<string | undefined>()
 
-  const runConsume = (skipMerge: boolean) => {
+  const runConsume = (skipMerge: boolean, switchFromUserId = approvedSwitch) => {
     setGate(null)
     consume.mutate(
-      { token, skipMerge },
+      { token, skipMerge, switchFromUserId },
       {
         onSuccess: (session) => {
           const moved = session.merged?.matches_moved ?? 0
@@ -112,6 +115,7 @@ function LoginVerifyingPage() {
           navigate({ to: '/login/welcome' })
         },
         onError: (err) => {
+          if (accountSwitchConflict(err)) return
           if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
             const code = loginConsumeErrorCode(err)
             const nextError: VerifyError =
@@ -136,7 +140,7 @@ function LoginVerifyingPage() {
     fired.current = true
     preview.mutate(token, {
       onSuccess: (p) => {
-        if (p.is_merge && p.guest_matches_count > 0) {
+        if (p.account_switch || (p.is_merge && p.guest_matches_count > 0)) {
           setGate(p)
         } else {
           runConsume(false)
@@ -212,6 +216,32 @@ function LoginVerifyingPage() {
     )
   }
 
+  const conflict = accountSwitchConflict(consume.error)
+  if (conflict) {
+    const change = conflict.account_switch
+    const cancel = () => navigate({ to: '/dashboard', replace: true })
+    return change
+      ? <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
+          onCancel={cancel} onContinue={() => runConsume(consume.variables?.skipMerge ?? false, change.from_user_id)} />
+      : <ReviewAccountSwitch onCancel={cancel} onReview={() => {
+          consume.reset()
+          setApprovedSwitch(undefined)
+          preview.mutate(token, { onSuccess: (p) => {
+            if (p.account_switch || (p.is_merge && p.guest_matches_count > 0)) setGate(p)
+            else runConsume(false)
+          } })
+        }} />
+  }
+
+  if (gate?.account_switch && !approvedSwitch) {
+    const change = gate.account_switch
+    return <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
+      onCancel={() => navigate({ to: '/dashboard', replace: true })}
+      onContinue={() => {
+        setApprovedSwitch(change.from_user_id)
+        if (!(gate.is_merge && gate.guest_matches_count > 0)) runConsume(false, change.from_user_id)
+      }} />
+  }
   if (gate) {
     return (
       <MergeGate

@@ -97,6 +97,7 @@ class ResendEmailRequest(CaptchaProtectedRequest):
 
 
 class ConfirmEmailRequest(BaseModel):
+    switch_from_user_id: uuid.UUID | None = None
     token: str = Field(min_length=1, max_length=512)
     # When the link would fold a guest into this account, the client can offer
     # the owner a "sign in but don't bring those matches" choice. Defaults to
@@ -176,6 +177,7 @@ class LoginSenderResponse(BaseModel):
 
 
 class ConsumeLoginRequest(BaseModel):
+    switch_from_user_id: uuid.UUID | None = None
     token: str = Field(min_length=1, max_length=512)
     # See ConfirmEmailRequest.skip_merge — sign in without folding the recorded
     # guest's matches in.
@@ -186,6 +188,12 @@ class MergePreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     token: str = Field(min_length=1, max_length=512)
+
+
+class AccountSwitchPreview(BaseModel):
+    from_user_id: uuid.UUID
+    from_username: str
+    to_username: str
 
 
 class MergePreview(BaseModel):
@@ -204,6 +212,7 @@ class MergePreview(BaseModel):
     other merge the username does not move, so the gate must not promise it
     will."""
 
+    account_switch: AccountSwitchPreview | None = None
     is_merge: bool
     owner_username: str | None = None
     guest_username: str | None = None

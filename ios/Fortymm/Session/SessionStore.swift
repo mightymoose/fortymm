@@ -92,6 +92,16 @@ final class SessionStore: ObservableObject {
         state = .loaded(user)
     }
 
+    func startNewGuest() async {
+        state = .loading
+        do {
+            let response = try await client.startNewGuest()
+            state = .loaded(response.data.user)
+        } catch {
+            state = .signedOut(reason: "We couldn't start a new guest. Please try again.", email: nil)
+        }
+    }
+
     /// Create or resume the session. Skips the network call if a user is
     /// already loaded, so re-entering the dashboard doesn't refetch.
     func load(force: Bool = false) async {

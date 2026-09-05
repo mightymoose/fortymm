@@ -8,6 +8,7 @@ import {
 import { z } from 'zod'
 import { ApiError, api, hasCsrfCookie, unwrap } from './client'
 import { handleIdentityChange } from './identity-change'
+import { forgetSessionEnd, readEndedSession } from './browser-session'
 import { closeRealtimeConnections } from './realtime/connection'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -101,9 +102,13 @@ export function sessionQueryOptions() {
   return queryOptions({
     queryKey: SESSION_QUERY_KEY,
     queryFn: (): Promise<Session> =>
-      withSessionBootstrapLock(async () =>
-        unwrap('load session', await api.GET('/v1/session')),
-      ),
+      withSessionBootstrapLock(async () => {
+        const ended = readEndedSession()
+        if (ended) throw new ApiError(401, ended.message, 'load session', {
+          detail: { code: 'session_ended', ...ended },
+        })
+        return unwrap('load session', await api.GET('/v1/session'))
+      }),
     staleTime: 1000 * 60 * 5,
     // Don't retry a 401 (session merged away): the 401 already cleared the
     // cookie, so a retry would silently mint a *new* guest and race the
@@ -228,6 +233,7 @@ export function useMergePreview() {
 export interface FinalizeTokenInput {
   token: string
   skipMerge?: boolean
+  switchFromUserId?: string
 }
 
 /** Seed `SESSION_QUERY_KEY` from a sign-in/confirm response. `GET /v1/session`
@@ -244,11 +250,12 @@ export function useConfirmEmail() {
     mutationFn: async ({
       token,
       skipMerge = false,
+      switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
       unwrap(
         'confirm email',
         await api.POST('/v1/me/email/confirm', {
-          body: { token, skip_merge: skipMerge },
+          body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
         }),
       ),
     // This can sign the caller into a *different* existing account
@@ -262,6 +269,7 @@ export function useConfirmEmail() {
         clearQueryCache: () => qc.clear(),
       })
       cacheSession(qc, session)
+      forgetSessionEnd()
     },
   })
 }
@@ -322,11 +330,12 @@ export function useConsumeLoginToken() {
     mutationFn: async ({
       token,
       skipMerge = false,
+      switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
       unwrap(
         'sign in',
         await api.POST('/v1/login/consume', {
-          body: { token, skip_merge: skipMerge },
+          body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
         }),
       ),
     // Same identity-leak guard as useConfirmEmail (#754): this can sign a
@@ -337,6 +346,7 @@ export function useConsumeLoginToken() {
         clearQueryCache: () => qc.clear(),
       })
       cacheSession(qc, session)
+      forgetSessionEnd()
     },
   })
 }
@@ -372,4 +382,33 @@ export function loginSenderQueryOptions() {
  * this is receipt trivia, never something worth blocking `/login/sent` on. */
 export function useLoginSender() {
   return useQuery(loginSenderQueryOptions())
+}
+
+
+/** An explicit choice to abandon the ended session and start a separate guest. */
+export function useStartNewGuest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<Session> => {
+      unwrap('clear old session', await api.DELETE('/v1/session'), { allowEmpty: true })
+      return unwrap('start a new guest', await api.GET('/v1/session'))
+    },
+    onSuccess: (session) => {
+      handleIdentityChange({ closeRealtime: closeRealtimeConnections, clearQueryCache: () => qc.clear() })
+      cacheSession(qc, session)
+      forgetSessionEnd()
+    },
+  })
+}
+
+
+const switchConflictSchema = z.object({ detail: z.object({
+  code: z.literal('account_switch_required'),
+  account_switch: z.object({ from_user_id: z.string(), from_username: z.string(), to_username: z.string() }).nullable(),
+}) })
+
+export function accountSwitchConflict(error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 409) return null
+  const result = switchConflictSchema.safeParse(error.body)
+  return result.success ? result.data.detail : null
 }

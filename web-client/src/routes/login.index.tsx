@@ -2,7 +2,8 @@ import { useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { ApiError } from '@/api/client'
-import { useRequestLogin } from '@/api/session'
+import { useRequestLogin, useStartNewGuest } from '@/api/session'
+import { useEndedSession } from '@/api/browser-session'
 import {
   ScreenEmail,
   ScreenEmailSendFailed,
@@ -24,6 +25,8 @@ function LoginPage() {
   const { error, email: initialEmail } = Route.useSearch()
   const navigate = useNavigate()
   const requestLogin = useRequestLogin()
+  const ended = useEndedSession()
+  const newGuest = useStartNewGuest()
   const [serverError, setServerError] = useState<string | null>(null)
   // Synchronous in-flight guard: the mutation's isPending flips on a batched
   // re-render, so a rapid click burst can dispatch duplicate requests (and
@@ -46,6 +49,17 @@ function LoginPage() {
   }
 
   return (
+    <>
+      {ended && <div role="alert" className="mx-auto max-w-lg px-6 pt-6">
+        <p>{ended.message}</p>
+        <button type="button" className="mt-3 underline" disabled={newGuest.isPending}
+          onClick={() => newGuest.mutate(undefined, {
+            onSuccess: () => navigate({ to: '/dashboard' }),
+          })}>
+          Continue as a new guest
+        </button>
+        {newGuest.isError && <p>We couldn't start a new guest. Please try again.</p>}
+      </div>}
     <ScreenEmail
       initialEmail={initialEmail ?? ''}
       submitting={requestLogin.isPending}
@@ -97,5 +111,6 @@ function LoginPage() {
         }
       }}
     />
+    </>
   )
 }

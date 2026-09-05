@@ -42,7 +42,7 @@ struct RootView: View {
                 reason: reason,
                 email: email,
                 onSignedIn: { session.resolveDeepLink($0) },
-                onContinueAsGuest: { Task { await session.load(force: true) } }
+                onContinueAsGuest: { Task { await session.startNewGuest() } }
             )
         case let .failed(message):
             sessionFailedView(message)

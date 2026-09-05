@@ -9,6 +9,8 @@ actor SessionTokenStore {
     static let shared = SessionTokenStore()
 
     private let keychain: KeychainStore
+    private let endedKey: String
+    private var endedFallback: SessionEndReason?
     private var cached: String?
     private var didLoad = false
 
@@ -29,6 +31,7 @@ actor SessionTokenStore {
 
     init(keychain: KeychainStore = KeychainStore(account: "session-token")) {
         self.keychain = keychain
+        self.endedKey = keychain.service + "." + keychain.account + ".ended"
     }
 
     /// Load the token from the Keychain into the cache once, on first access.
@@ -56,6 +59,8 @@ actor SessionTokenStore {
     /// Persist a freshly minted or rotated token. No-op if unchanged, so a
     /// resumed session doesn't rewrite the Keychain on every call.
     func update(_ token: String) {
+        endedFallback = nil
+        UserDefaults.standard.removeObject(forKey: endedKey)
         guard token != cached else { return }
         cached = token
         didLoad = true
@@ -75,11 +80,33 @@ actor SessionTokenStore {
     /// the companion CSRF token (the server clears its cookie alongside the
     /// session, and a stale CSRF token is useless without the session anyway).
     func clear() {
+        endedFallback = nil
+        UserDefaults.standard.removeObject(forKey: endedKey)
         cached = nil
         csrf = nil
         needsPersist = false
         didLoad = true
         keychain.delete()
+    }
+
+    func endedSession() -> SessionEndReason? {
+        if let raw = UserDefaults.standard.string(forKey: endedKey), let data = raw.data(using: .utf8),
+           let reason = try? JSONDecoder().decode(SessionEndReason.self, from: data) {
+            return reason
+        }
+        return endedFallback
+    }
+
+    func endIfCurrent(_ token: String?, message: String, email: String?) -> Bool {
+        hydrate()
+        guard cached == token else { return false }
+        clear()
+        let reason = SessionEndReason(message: message, email: email)
+        endedFallback = reason
+        if let data = try? JSONEncoder().encode(reason), let raw = String(data: data, encoding: .utf8) {
+            UserDefaults.standard.set(raw, forKey: endedKey)
+        }
+        return true
     }
 
     /// Clear the session only if `token` is still the one we hold, returning
@@ -94,4 +121,10 @@ actor SessionTokenStore {
         clear()
         return true
     }
+}
+
+
+struct SessionEndReason: Codable {
+    let message: String
+    let email: String?
 }

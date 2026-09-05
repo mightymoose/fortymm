@@ -1,9 +1,10 @@
-import { Outlet, createFileRoute } from '@tanstack/react-router'
+import { Outlet, createFileRoute, redirect } from '@tanstack/react-router'
 import { AppShell } from '@/components/app-shell'
 import { AppError } from '@/components/app-error'
 import { RealtimeProvider } from '@/components/realtime-provider'
 import { RootLoader } from '@/components/root-loader'
 import { sessionQueryOptions } from '@/api/session'
+import { readEndedSession } from '@/api/browser-session'
 
 /**
  * Pathless layout for every in-app surface. Its loader establishes the session
@@ -31,6 +32,10 @@ import { sessionQueryOptions } from '@/api/session'
  * its `<Outlet>` — a global default would shadow its 403/error handling).
  */
 export const Route = createFileRoute('/_app')({
+  beforeLoad: () => {
+    const ended = readEndedSession()
+    if (ended) throw redirect({ to: '/login', search: { email: ended.email, error: undefined } })
+  },
   loader: ({ context }) =>
     context.queryClient.ensureQueryData(sessionQueryOptions()),
   pendingComponent: RootLoader,

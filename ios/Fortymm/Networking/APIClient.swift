@@ -101,7 +101,15 @@ struct APIClient {
     /// the server resolves the existing user; without one it mints a guest and
     /// returns a `Set-Cookie` we capture into the Keychain.
     func getSession() async throws -> SessionResponse {
-        try await get("/v1/session")
+        if let ended = await tokens.endedSession() {
+            throw APIError.sessionMerged(message: ended.message, email: ended.email)
+        }
+        return try await get("/v1/session")
+    }
+
+    func startNewGuest() async throws -> SessionResponse {
+        await tokens.clear()
+        return try await getSession()
     }
 
     // MARK: - Verbs
@@ -349,7 +357,7 @@ struct APIClient {
         guard http.statusCode == 401, let info = Self.mergedSessionInfo(from: body) else {
             return
         }
-        if await tokens.clearIfCurrent(sentToken) {
+        if await tokens.endIfCurrent(sentToken, message: info.message, email: info.email) {
             var userInfo: [String: Any] = ["message": info.message]
             if let email = info.email { userInfo["email"] = email }
             NotificationCenter.default.post(
@@ -492,7 +500,7 @@ struct APIClient {
             let detail: Detail
         }
         guard let parsed = try? JSONDecoder().decode(Body.self, from: data),
-              parsed.detail.code == "session_merged" else { return nil }
+              ["session_merged", "session_ended"].contains(parsed.detail.code) else { return nil }
         return (
             parsed.detail.message ?? "Your session has ended. Sign in to continue.",
             parsed.detail.email

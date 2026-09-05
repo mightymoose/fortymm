@@ -1,4 +1,5 @@
 import createClient from 'openapi-fetch'
+import { rememberSessionEnd } from './browser-session'
 import type { paths } from './schema'
 
 export function resolveBaseUrl(): string {
@@ -124,12 +125,15 @@ api.use({
     // can fire again.
     if (response.ok) {
       sessionEndedFiring = false
-    } else if (response.status === 401 && !sessionEndedFiring) {
+    } else if (response.status === 401) {
       const info = await readSessionEnded(response)
       if (info) {
         // Latch so a burst of in-flight 401s triggers a single redirect.
-        sessionEndedFiring = true
-        sessionEndedHandler?.(info)
+        rememberSessionEnd(info)
+        if (!sessionEndedFiring) {
+          sessionEndedFiring = true
+          sessionEndedHandler?.(info)
+        }
       }
     }
     return response

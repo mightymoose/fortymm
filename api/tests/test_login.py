@@ -591,7 +591,10 @@ async def test_consume_omits_merge_when_prior_session_is_verified(
     opponent = await make_user(db_session, "opponent-jay")
     sam_match = await _record_singles_match(db_session, sam, opponent)
 
-    response = await api_client.post("/v1/login/consume", json={"token": raw_rita})
+    response = await api_client.post(
+        "/v1/login/consume",
+        json={"token": raw_rita, "switch_from_user_id": str(sam.id)},
+    )
     assert response.status_code == 200
     assert response.json().get("merged") is None
 
@@ -1393,10 +1396,8 @@ async def test_confirming_a_mailed_link_revokes_the_requesting_browsers_session(
     stop authenticating as that account.
 
     Asserting only that B's new cookie works proves nothing — the defect is an
-    old credential surviving. So this holds A's cookie and re-uses it. A revoked
-    cookie resolves no user, so ``GET /v1/session`` mints a *fresh guest*
-    (200) rather than 401ing; the discriminating assertion is therefore that the
-    identity A gets back is not the confirmed account."""
+    old credential surviving. A's next load must report that the session ended,
+    without silently signing the browser into a fresh guest (#1641)."""
     rita = await _make_confirmed_user(db_session, "rita@example.com")
     raw_login = "raw-login-token-revocation"
     await _issue_login_token(db_session, rita, raw_login)
@@ -1437,8 +1438,9 @@ async def test_confirming_a_mailed_link_revokes_the_requesting_browsers_session(
     async with make_client() as browser_a:
         browser_a.cookies.set(SESSION_COOKIE_NAME, held_cookie)
         after = await browser_a.get("/v1/session")
-        assert after.status_code == 200
-        assert after.json()["data"]["user"]["username"] != "rita"
+        assert after.status_code == 401
+        assert after.json()["detail"]["code"] == "session_ended"
+        assert not after.cookies.get(SESSION_COOKIE_NAME)
 
 
 async def test_confirming_an_email_change_revokes_the_users_other_sessions(
@@ -1748,3 +1750,56 @@ async def test_login_sender_response_is_identical_across_calls(
     first = await api_client.get("/v1/login/sender")
     second = await api_client.get("/v1/login/sender")
     assert first.json() == second.json()
+
+
+@pytest.mark.parametrize("link_kind", ["login", "change", "merge"])
+async def test_claimed_account_switch_requires_approval_without_consuming_link(
+    api_client: AsyncClient, db_session: AsyncSession, link_kind: str
+):
+    alice = await _make_confirmed_user(db_session, "alice@example.com")
+    bob = await _make_confirmed_user(db_session, "bob@example.com")
+    await _issue_login_token(db_session, alice, "alice-sign-in")
+    endpoint = "/v1/login/consume" if link_kind == "login" else "/v1/me/email/confirm"
+    if link_kind == "login":
+        await _issue_login_token(db_session, bob, "bob-sign-in")
+    else:
+        guest = (
+            await make_user(db_session, "guest-for-bob")
+            if link_kind == "merge"
+            else bob
+        )
+        db_session.add(
+            UserToken(
+                user_id=guest.id,
+                token=hashlib.sha256(b"bob-sign-in").digest(),
+                context=f"merge:{bob.id}"
+                if link_kind == "merge"
+                else "change:bob@example.com",
+                sent_to="bob@example.com"
+                if link_kind == "merge"
+                else "bob-new@example.com",
+            )
+        )
+        await db_session.commit()
+    assert (
+        await api_client.post("/v1/login/consume", json={"token": "alice-sign-in"})
+    ).status_code == 200
+
+    preview = await api_client.post("/v1/merge/preview", json={"token": "bob-sign-in"})
+    assert preview.json()["account_switch"] == {
+        "from_user_id": str(alice.id),
+        "from_username": "alice",
+        "to_username": "bob",
+    }
+    refused = await api_client.post(endpoint, json={"token": "bob-sign-in"})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "account_switch_required"
+    assert (await api_client.get("/v1/session")).json()["data"]["user"]["id"] == str(
+        alice.id
+    )
+    # Declining is read-only: the link remains live until explicitly approved.
+    accepted = await api_client.post(
+        endpoint, json={"token": "bob-sign-in", "switch_from_user_id": str(alice.id)}
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["user"]["id"] == str(bob.id)

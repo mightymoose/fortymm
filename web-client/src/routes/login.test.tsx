@@ -18,6 +18,8 @@ import { HttpResponse, delay, http } from 'msw'
 import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
+import { api } from '@/api/client'
+import { Route as AppRoute } from './_app/route'
 import { mockSession } from '@/mocks/handlers'
 import { Route as LoginIndexRoute } from './login.index'
 import { Route as LoginSentRoute } from './login.sent'
@@ -104,6 +106,7 @@ function renderAt(initialEntry: string) {
   const dashboardRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/dashboard',
+    beforeLoad: AppRoute.options.beforeLoad,
     component: () => <div>Dashboard stub</div>,
   })
   const router = createRouter({
@@ -655,4 +658,29 @@ describe('/login/verifying flow', () => {
       screen.getByRole('button', { name: /not now — sign me in as rita/i }),
     ).toBeInTheDocument()
   })
+})
+
+
+it('keeps the session-ended notice after reopening sign-in and offers an explicit new guest', async () => {
+  server.use(http.get('*/v1/session', () => HttpResponse.json({
+    detail: { code: 'session_ended', message: "You've been signed out. Sign in to continue." },
+  }, { status: 401 })))
+  await api.GET('/v1/session')
+  const first = renderAt('/login')
+  expect(await screen.findByRole('alert')).toHaveTextContent("You've been signed out")
+  first.unmount()
+  renderAt('/login')
+  expect(await screen.findByRole('alert')).toHaveTextContent("You've been signed out")
+  expect(screen.getByRole('button', { name: 'Continue as a new guest' })).toBeVisible()
+})
+
+
+it('redirects a direct dashboard visit after eviction without bootstrapping a guest', async () => {
+  server.use(http.get('*/v1/session', () => HttpResponse.json({
+    detail: { code: 'session_ended', message: "You've been signed out. Sign in to continue." },
+  }, { status: 401 })))
+  await api.GET('/v1/session')
+  const { router } = renderAt('/dashboard')
+  await waitFor(() => expect(router.state.location.pathname).toBe('/login'))
+  expect(await screen.findByRole('alert')).toHaveTextContent("You've been signed out")
 })
