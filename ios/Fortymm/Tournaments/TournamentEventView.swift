@@ -9,6 +9,7 @@ struct TournamentEventView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var confirmingWithdrawal = false
+    @State private var confirmingRecut = false
     @State private var match: FinalMatch?
     enum EventSection: String, CaseIterable { case players = "Players", draw = "Draw", results = "Results", details = "Details" }
 
@@ -41,8 +42,14 @@ struct TournamentEventView: View {
                         }
                     case .draw:
                         if event.fixtures.isEmpty { TournamentNotice(message: "The draw has not been cut yet.") }
-                        if event.canCutDraw(status: tournament.status, canEdit: tournament.canEdit) {
-                            Button(event.fixtures.isEmpty ? "Cut draw" : "Re-cut draw") { mutate { try await service.cutDraw(tournament.id, event: event.id) } }
+                        if event.canCutDraw(canEdit: tournament.canEdit) {
+                            Button(event.fixtures.isEmpty ? "Cut draw" : "Re-cut draw") {
+                                if event.fixtures.isEmpty {
+                                    mutate { try await service.cutDraw(tournament.id, event: event.id) }
+                                } else {
+                                    confirmingRecut = true
+                                }
+                            }
                                 .buttonStyle(.borderedProminent).disabled(busy || event.entrants.count < 2)
                         }
                         ForEach(event.stages.sorted { $0.position < $1.position }) { stage in
@@ -66,6 +73,10 @@ struct TournamentEventView: View {
                         eventDetails(event, tournament: tournament)
                     }
                 }.padding(16)
+                .confirmationDialog("Replace the existing draw?", isPresented: $confirmingRecut, titleVisibility: .visible) {
+                    Button("Re-cut draw", role: .destructive) { mutate { try await service.cutDraw(tournament.id, event: event.id) } }
+                    Button("Cancel", role: .cancel) { }
+                } message: { Text("This replaces all existing pairings and removes their schedule placements. This cannot be undone.") }
                 .confirmationDialog("Withdraw from \(event.name)?", isPresented: $confirmingWithdrawal, titleVisibility: .visible) {
                     if let entry = event.entrants.first(where: { $0.userId == session.user?.id }) {
                         Button("Withdraw", role: .destructive) { mutate { try await service.withdraw(tournament.id, event: event.id, entry: entry.id) } }

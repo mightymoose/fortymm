@@ -110,14 +110,32 @@ private final class TestLocationManager: CLLocationManager {
         TournamentTransport.body = savedBody
         print("PASS: authorization waits, location deadlines, grouped-stage labels and API write bounds")
         var reviewFailures: [String] = []
-        if !event.canCutDraw(status: .published, canEdit: true) { reviewFailures.append("existing published draw cannot be re-cut") }
+        if !event.canCutDraw(canEdit: true) { reviewFailures.append("existing published draw cannot be re-cut") }
         if TournamentCopy.entryFee("12,50", locale: Locale(identifier: "de_DE")) != 12.5 { reviewFailures.append("comma-decimal fee refused") }
         let streetOnly = TournamentDTO.Address(venue: "", street: "123 Test Street", city: "", region: "", postal: "", country: "", latitude: nil, longitude: nil)
         if streetOnly.label != "123 Test Street" { reviewFailures.append("street-only venue has a blank label") }
         for failure in reviewFailures { print("FAIL: \(failure)") }
         precondition(reviewFailures.isEmpty, "Review regression checks failed")
-        precondition(!event.canCutDraw(status: .live, canEdit: true))
-        precondition(!event.canCutDraw(status: .published, canEdit: false))
+        precondition(TournamentCopy.validName("  " + String(repeating: "a", count: 255) + "  "))
+        precondition(!TournamentCopy.validName("  "))
+        precondition(!TournamentCopy.validName(String(repeating: "e\u{301}", count: 128)))
+        precondition(TournamentCopy.validDescription(String(repeating: "e\u{301}", count: 512)))
+        precondition(!TournamentCopy.validDescription(String(repeating: "e\u{301}", count: 513)))
+        precondition(!TournamentCopy.validName(String(repeating: "👩‍💻", count: 86)))
+        for key in ["winner_entry_id", "match_id"] {
+            var playedPayload = payload
+            var playedEvent = eventPayload
+            var fixtures = playedEvent["fixtures"] as! [[String: Any]]
+            fixtures[0][key] = event.entrants[0].id.uuidString
+            playedEvent["fixtures"] = fixtures
+            playedPayload[0]["events"] = [playedEvent]
+            TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: playedPayload), encoding: .utf8)!
+            let played = try await service.list()[0].events[0]
+            precondition(!played.canCutDraw(canEdit: true))
+        }
+        TournamentTransport.body = savedBody
+        print("PASS: draw play-evidence gate and Unicode code-point limits")
+        precondition(!event.canCutDraw(canEdit: false))
         precondition(TournamentCopy.entryFee("12.50", locale: Locale(identifier: "en_US")) == 12.5)
         precondition(TournamentCopy.entryFee("12,50oops", locale: Locale(identifier: "de_DE")) == nil)
         print("PASS: re-cut visibility, localized entry fees, and partial venue labels")

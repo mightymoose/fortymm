@@ -210,8 +210,8 @@ struct TournamentEventDTO: Decodable, Identifiable {
         guard stages.first(where: { $0.id == fixture.stageId })?.drawType == "round-robin" else { return round }
         return "\(round) · \(groupLabel(fixture.groupId))"
     }
-    func canCutDraw(status: TournamentStatus, canEdit: Bool) -> Bool {
-        canEdit && status == .published
+    func canCutDraw(canEdit: Bool) -> Bool {
+        canEdit && !fixtures.contains { $0.winnerEntryId != nil || $0.matchId != nil }
     }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
     var capacityLabel: String { maxPlayers.map { "\(entrants.count)/\($0) players" } ?? TournamentCopy.count(entrants.count, "player") }
@@ -237,6 +237,13 @@ struct TournamentEventDTO: Decodable, Identifiable {
 
 /// Calendar-only API dates never pass through the device's time zone.
 enum TournamentCopy {
+    static func validName(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed.unicodeScalars.count <= 255
+    }
+    static func validDescription(_ text: String) -> Bool {
+        text.unicodeScalars.count <= 1024
+    }
     static func entryFee(_ text: String, locale: Locale = .current) -> Double? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let scanner = Scanner(string: trimmed)

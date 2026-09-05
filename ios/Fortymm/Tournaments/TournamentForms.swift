@@ -30,7 +30,7 @@ struct NewTournamentView: View {
                             } catch { self.error = error.fmMessage }
                             saving = false
                         }
-                    }.disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 255 || description.count > 1024)
+                    }.disabled(saving || !TournamentCopy.validName(name) || !TournamentCopy.validDescription(description))
                 }
             }.interactiveDismissDisabled(saving)
         }.tint(FMColor.ball500).preferredColorScheme(.dark)
@@ -100,7 +100,7 @@ struct NewTournamentEventView: View {
         }.tint(FMColor.ball500).preferredColorScheme(.dark)
     }
     private var valid: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 255 && !drawType.isEmpty &&
+        TournamentCopy.validName(name) && !drawType.isEmpty &&
         (TournamentCopy.entryFee(entryFee).map { $0.isFinite && $0 >= 0 } ?? false) && formatted(start, "HH:mm") < formatted(end, "HH:mm")
     }
     private func formatted(_ date: Date, _ format: String) -> String {
