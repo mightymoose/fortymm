@@ -127,3 +127,41 @@ test('a timed-out recovery tab follows its peer to the recovered dashboard', asy
   await expect(firstRecovery.userMenu).toContainText(user.username)
   await expect(new SessionRecoveryPage(second).userMenu).toContainText(user.username)
 })
+
+for (const kind of ['sign-in', 'confirmation'] as const) {
+  test(`completes ${kind} after a failed logout without leaving the link route`, async ({ context, page }) => {
+    const email = `retry-${randomUUID()}@example.com`
+    await page.goto(await requestLoginLink(context, mailpit!, email))
+    await expect(page).toHaveURL(/\/dashboard$/)
+    const original = (await (await context.request.get('/api/v1/session')).json()).data.user
+    let link: string
+    if (kind === 'sign-in') {
+      link = await requestLoginLink(context, mailpit!, email)
+    } else {
+      const nextEmail = `retry-next-${randomUUID()}@example.com`
+      const change = await context.request.post('/api/v1/me/email', {
+        headers: await csrfHeaders(context),
+        data: { email: nextEmail, captcha_token: 'test-token', fmm_hp_token: '' },
+      })
+      expect(change.status()).toBe(202)
+      link = await receivedLink(context.request, mailpit!, nextEmail)
+    }
+    let failed = false
+    await page.route('**/api/v1/session', async (route) => {
+      if (route.request().method() === 'DELETE' && !failed) {
+        failed = true
+        await route.fulfill({ status: 503, body: '' })
+      } else { await route.continue() }
+    })
+    const recovery = new SessionRecoveryPage(page)
+    await recovery.userMenu.click()
+    const failedLogout = page.waitForResponse((response) => response.request().method() === 'DELETE' && response.status() === 503)
+    await recovery.logout.click()
+    await failedLogout
+    await expect(page.getByRole('button', { name: 'Retry sign-out' })).toBeVisible()
+    await page.goto(link)
+    if (kind === 'confirmation') await recovery.dashboardLink.click()
+    await expect(page).toHaveURL(/\/dashboard$/)
+    expect((await (await context.request.get('/api/v1/session')).json()).data.user.id).toBe(original.id)
+  })
+}

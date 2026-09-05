@@ -90,12 +90,12 @@ export function subscribeSessionEnd(listener: () => void): () => void {
   }
 }
 
-export function rememberSessionEnd(info: EndedSession): void {
+export function rememberSessionEnd(info: EndedSession, { notifyLocal = true }: { notifyLocal?: boolean } = {}): void {
   const value = JSON.stringify(info)
   if (snapshot() === value) return
   persist(value)
   broadcast(value)
-  window.dispatchEvent(new Event(CHANGE))
+  if (notifyLocal) window.dispatchEvent(new Event(CHANGE))
 }
 
 export function forgetSessionEnd(): void {

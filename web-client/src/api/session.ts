@@ -291,7 +291,7 @@ async function afterPendingLogout<T>(fn: () => Promise<T>): Promise<T> {
   return withSessionBootstrapLock(async () => {
     if (readEndedSession()?.logoutPending) {
       unwrap('finish sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
-      rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false })
+      rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false }, { notifyLocal: false })
     }
     return fn()
   }, true)
