@@ -1,3 +1,4 @@
+import { blockLocalStorage } from '@/test/blocked-storage'
 import { waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { forgetSessionEnd, readEndedSession, rememberSessionEnd, subscribeSessionEnd } from './browser-session'
@@ -9,9 +10,7 @@ afterEach(() => {
 })
 
 it('keeps this tab signed out when storage reads work but writes fail', () => {
-  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-    throw new DOMException('Quota exhausted', 'QuotaExceededError')
-  })
+  blockLocalStorage('setItem')
   rememberSessionEnd({ message: 'Sign in again.' })
   expect(readEndedSession()).toEqual({ message: 'Sign in again.' })
 })
@@ -20,7 +19,7 @@ it('broadcasts session end when shared storage writes fail', async () => {
   const peer = new BroadcastChannel('fortymm:session-ended')
   const received: unknown[] = []
   peer.onmessage = (event) => { received.push(JSON.parse(event.data)) }
-  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Full') })
+  blockLocalStorage('setItem')
   try {
     rememberSessionEnd({ message: 'Signed out remotely.' })
     await waitFor(() => expect(received).toContainEqual({ sender: expect.any(String), value: { message: 'Signed out remotely.' } }))
@@ -28,11 +27,7 @@ it('broadcasts session end when shared storage writes fail', async () => {
 })
 
 it('keeps a fallback broadcast after this tab reloads', async () => {
-  const write = Storage.prototype.setItem
-  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
-    if (this === localStorage) throw new Error('Shared storage full')
-    write.call(this, key, value)
-  })
+  blockLocalStorage('setItem')
   const stop = subscribeSessionEnd(() => undefined)
   const peer = new BroadcastChannel('fortymm:session-ended')
   try {

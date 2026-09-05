@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { delay, http, HttpResponse } from 'msw'
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
+import { blockLocalStorage } from '@/test/blocked-storage'
 import { forgetSessionEnd, readEndedSession, rememberSessionEnd } from './browser-session'
 import { sessionQueryOptions, useLogout, useStartNewGuest, useConfirmEmail, useConsumeLoginToken, type SessionUser } from './session'
 
@@ -46,7 +47,7 @@ it('shares sign-out before cookies are cleared and prevents another guest bootst
 })
 
 it.each([undefined, 'getItem', 'setItem'] as const)('coordinates recovery or fails safely with %s blocked', async (blockedMethod) => {
-  if (blockedMethod) vi.spyOn(Storage.prototype, blockedMethod).mockImplementation(() => { throw new Error('Storage unavailable') })
+  if (blockedMethod) blockLocalStorage(blockedMethod)
   rememberSessionEnd({ message: 'Your session ended.' })
   document.cookie = 'csrf_token=ended-session; path=/'
   let cookieUser: SessionUser | null = null
