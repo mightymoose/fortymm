@@ -29,7 +29,7 @@ struct VerifyLoginView: View {
     @State private var approvedSwitch: String?
     @State private var pendingMerge: MergePreview?
     @State private var chosenSkipMerge = false
-    @State private var submission = LinkSubmission()
+    let submission: LinkSubmission
 
     var body: some View {
         Group {

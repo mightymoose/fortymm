@@ -22,6 +22,7 @@ struct LoginFlowView: View {
         case verifying(token: String)
     }
     @State private var step: Step
+    @State private var submission = LinkSubmission()
 
     init(
         start: Start = .email(),
@@ -40,10 +41,15 @@ struct LoginFlowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            LoginCloseHeader(onClose: onClose)
+            LoginCloseHeader(onClose: close)
             content
         }
         .background(LoginBackground())
+        .interactiveDismissDisabled()
+    }
+
+    private func close() {
+        Task { await submission.close(onClose) }
     }
 
     @ViewBuilder
@@ -58,7 +64,8 @@ struct LoginFlowView: View {
                 token: token,
                 onSignedIn: onSignedIn,
                 onRestart: { step = .email(prefill: "") },
-                onClose: onClose
+                onClose: close,
+                submission: submission
             )
         }
     }

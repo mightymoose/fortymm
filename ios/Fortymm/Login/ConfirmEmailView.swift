@@ -39,11 +39,16 @@ struct ConfirmEmailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            LoginCloseHeader(onClose: onClose)
+            LoginCloseHeader(onClose: close)
             content
         }
         .background(LoginBackground())
+        .interactiveDismissDisabled()
         .task { await start() }
+    }
+
+    private func close() {
+        Task { await submission.close(onClose) }
     }
 
     @ViewBuilder
@@ -56,7 +61,7 @@ struct ConfirmEmailView: View {
                 if change == nil { Task { await start() } }
                 else if let merge = pendingMerge { phase = .gate(merge) }
                 else { Task { await confirm(skipMerge: chosenSkipMerge) } }
-            }, onCancel: onClose)
+            }, onCancel: close)
         case let .gate(preview):
             MergeGateView(
                 preview: preview,
@@ -169,7 +174,7 @@ struct ConfirmEmailView: View {
                     ReceiptDivider()
                     ReceiptRow(key: "Fix", value: "Re-send from your profile", valueColor: FMColor.fg2)
                 }
-                LoginButton(title: "Back to FortyMM") { onClose() }
+                LoginButton(title: "Back to FortyMM") { close() }
             }
         }
     }
@@ -211,7 +216,7 @@ struct ConfirmEmailView: View {
                         valueColor: FMColor.fg2
                     )
                 }
-                LoginButton(title: "Back to FortyMM") { onClose() }
+                LoginButton(title: "Back to FortyMM") { close() }
             }
         }
     }
@@ -242,7 +247,7 @@ struct ConfirmEmailView: View {
                 }
                 HStack(spacing: 10) {
                     LoginButton(title: "Retry") { Task { await start() } }
-                    LoginButton(title: "Close", kind: .ghost, fullWidth: false) { onClose() }
+                    LoginButton(title: "Close", kind: .ghost, fullWidth: false) { close() }
                 }
             }
         }

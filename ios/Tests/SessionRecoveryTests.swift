@@ -104,6 +104,27 @@ final class SessionTransport: URLProtocol {
         precondition(SessionTransport.requestCount == 1,
                      "Concurrent approval taps must redeem a single-use link once")
         print("PASS: native duplicate approvals submit one HTTP request")
+        let dismissing = LinkSubmission()
+        var releaseRedemption: CheckedContinuation<Void, Never>?
+        var closed = false
+        let redemption = Task { @MainActor in
+            await dismissing.run {
+                await withCheckedContinuation { releaseRedemption = $0 }
+                _ = try? await LoginService(client: client).consume(token: "approved-link")
+            }
+        }
+        while releaseRedemption == nil { await Task.yield() }
+        let close = Task { @MainActor in
+            await dismissing.close { closed = true }
+        }
+        await Task.yield()
+        precondition(!closed, "Close must wait for credential installation before reloading the session")
+        releaseRedemption?.resume()
+        await redemption.value
+        await close.value
+        precondition(closed)
+        await dismissing.run { fatalError("A dismissed link must not start another redemption") }
+        print("PASS: native Close waits for redemption and prevents later submissions")
         let login = LoginService(client: client)
         SessionTransport.body = #"{"is_merge":false,"guest_matches_count":0,"account_switch":{"from_user_id":"alice-id","from_username":"alice","to_username":"bob"}}"#
         let preview = try await login.mergePreview(token: "bobs-link")
