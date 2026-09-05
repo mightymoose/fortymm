@@ -357,6 +357,26 @@ describe('DetailsTab', () => {
    * refuses it at submit.
    */
   describe('client-side validation (#1593)', () => {
+    it.each([
+      ['Name', ''],
+      ['Description', 'x'.repeat(1025)],
+      ...['Venue name', 'Street', 'City', 'Region', 'Postal', 'Country'].map(
+        (label) => [label, 'x'.repeat(256)],
+      ),
+    ])('announces a client error while %s retains focus', async (label, value) => {
+      detailsTabPage.render({ tournament: buildTournament() })
+      const input = screen.getByRole('textbox', { name: new RegExp(`^${label}\\*?$`) })
+      await userEvent.click(input)
+      fireEvent.change(input, { target: { value } })
+      await flush()
+
+      expect(input).toBeInvalid()
+      expect(input).toHaveFocus()
+      const hint = document.getElementById(input.getAttribute('aria-describedby')!)
+      expect(hint).toHaveAttribute('role', 'alert')
+      expect(hint).not.toBeEmptyDOMElement()
+    })
+
     it('refuses a blank name with "Name is required." and sends nothing', async () => {
       const onUpdate = vi.fn()
       detailsTabPage.render({ tournament: buildTournament(), onUpdate })

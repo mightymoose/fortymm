@@ -62,7 +62,12 @@ setSessionEndedHandler((info) =>
       clearQueryCache: () => queryClient.clear(),
       notify: (message) => void toast.message(message),
       navigateToLogin: (email) =>
-        void router.navigate({ to: '/login', search: { email, error: undefined } }),
+        void router.navigate({
+          to: '/login',
+          search: { email, error: undefined },
+          // Identity loss must leave even when an editor has unsaved changes.
+          ignoreBlocker: true,
+        }),
     },
     info,
   ),

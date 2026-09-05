@@ -505,6 +505,7 @@ export const DetailsTab = ({
       readOnly={!canEdit}
       value={(tournament.address ?? blankAddress())[key]}
       valueClassName={className}
+      announceError
       error={!!errors[key]}
       hint={errors[key]?.message}
     >
@@ -594,11 +595,7 @@ export const DetailsTab = ({
               readOnly={!canEdit}
               value={tournament.name}
               error={!!errors.name}
-              // Client validation either follows an attempted focus move or
-              // fires while typing. A server refusal is asynchronous and can
-              // arrive while Name already owns focus, so only that error must
-              // announce its own insertion (#1593 review).
-              announceError={errors.name?.type === 'server'}
+              announceError
               hint={errors.name?.message}
             >
               {(id, hintId) => (
@@ -619,7 +616,7 @@ export const DetailsTab = ({
                 'Optional. Shown on the public registration page.'
               }
               error={!!errors.description}
-              announceError={errors.description?.type === 'server'}
+              announceError
               readOnly={!canEdit}
               value={tournament.description}
               // Taller than a single-line row so the value mirrors the textarea
