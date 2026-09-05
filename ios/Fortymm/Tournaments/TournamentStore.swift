@@ -60,7 +60,10 @@ final class TournamentStore<Value>: ObservableObject {
             if case .loading = state { return }
         }
         let hasContent = preservingContent && value != nil
-        if !hasContent { state = .loading }
+        if !hasContent {
+            refreshError = nil
+            state = .loading
+        }
         inFlight?.cancel()
         let task = Task {
             do {

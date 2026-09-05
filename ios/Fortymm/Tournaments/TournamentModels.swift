@@ -210,6 +210,11 @@ struct TournamentEventDTO: Decodable, Identifiable {
         guard stages.first(where: { $0.id == fixture.stageId })?.drawType == "round-robin" else { return round }
         return "\(round) · \(groupLabel(fixture.groupId))"
     }
+    func usesTable(_ id: String) -> Bool {
+        reservations?.isEmpty != false ||
+        reservations?.contains { $0.tableIds.contains(id) } == true ||
+        fixtures.contains { $0.tableId == id }
+    }
     func canCutDraw(canEdit: Bool) -> Bool {
         canEdit && !fixtures.contains { $0.winnerEntryId != nil || $0.matchId != nil }
     }

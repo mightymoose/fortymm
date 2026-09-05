@@ -151,6 +151,21 @@ private final class TestLocationManager: CLLocationManager {
         schedulePayload[0]["events"] = [eventPayload, secondEventPayload]
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: schedulePayload), encoding: .utf8)!
         let scheduleEvents = try await service.list()[0].events
+        let placedTableId = "outside-reservation"
+        secondFixtures[0]["table_id"] = placedTableId
+        secondEventPayload["fixtures"] = secondFixtures
+        schedulePayload[0]["events"] = [secondEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: schedulePayload), encoding: .utf8)!
+        let placedEvent = try await service.list()[0].events[0]
+        precondition(placedEvent.usesTable(placedTableId))
+        precondition(placedEvent.usesTable(placedEvent.reservations![0].tableIds[0]))
+        precondition(!placedEvent.usesTable("other-table"))
+        secondEventPayload["reservations"] = []
+        schedulePayload[0]["events"] = [secondEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: schedulePayload), encoding: .utf8)!
+        let unrestrictedEvent = try await service.list()[0].events[0]
+        precondition(unrestrictedEvent.usesTable("other-table"))
+        print("PASS: table usage includes reservations, placed fixtures and unrestricted events")
         let fixtureOrder = [secondFixtureId, event.fixtures[0].id]
         let scheduleIndex = TournamentPlayerSchedule(events: scheduleEvents, fixtureOrder: fixtureOrder)
         precondition(scheduleIndex.players.count == 1)
@@ -213,6 +228,7 @@ private final class TestLocationManager: CLLocationManager {
         print("PASS: refresh failure preserves loaded content and reports the failure")
         await store.load(force: true, preservingContent: false)
         precondition(store.value == nil, "A failed filter change must not show results for the previous filter")
-        print("PASS: a new location filter cannot keep mismatched stale results")
+        precondition(store.refreshError == nil, "A failed replacement must discard the previous refresh error")
+        print("PASS: a new location filter cannot keep mismatched stale results or errors")
     }
 }

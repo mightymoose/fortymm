@@ -58,7 +58,7 @@ struct TournamentDetailView: View {
                                 FMCard {
                                     VStack(alignment: .leading, spacing: 10) {
                                         Label(table.court.isEmpty ? table.label : "\(table.label) · \(table.court)", systemImage: "table.furniture")
-                                        let events = tournament.events.filter { event in event.reservations?.contains { $0.tableIds.contains(table.id) } == true }
+                                        let events = tournament.events.filter { event in event.usesTable(table.id) }
                                         if events.isEmpty { Text("Unused").font(FMFont.ui(12)).foregroundStyle(FMColor.fg3) }
                                         ForEach(events) { Text($0.name).font(FMFont.ui(13)).foregroundStyle(FMColor.fg3) }
                                     }
