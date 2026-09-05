@@ -72,7 +72,12 @@ struct TournamentDTO: Decodable, Identifiable {
     struct Address: Decodable {
         let venue, street, city, region, postal, country: String
         let latitude, longitude: Double?
-        var label: String { [venue, city, region].filter { !$0.isEmpty }.joined(separator: ", ") }
+        var label: String {
+            let compact = [venue, city, region].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: ", ")
+            if !compact.isEmpty { return compact }
+            let fallback = [street, postal, country].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: ", ")
+            return fallback.isEmpty ? "Venue to be announced" : fallback
+        }
         var full: String { [venue, street, city, region, postal, country].filter { !$0.isEmpty }.joined(separator: ", ") }
     }
     struct DateRange: Decodable {
@@ -200,6 +205,9 @@ struct TournamentEventDTO: Decodable, Identifiable {
             var id: UUID { entryId }
         }
     }
+    func canCutDraw(status: TournamentStatus, canEdit: Bool) -> Bool {
+        canEdit && status == .published
+    }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
     var capacityLabel: String { maxPlayers.map { "\(entrants.count)/\($0) players" } ?? TournamentCopy.count(entrants.count, "player") }
     func player(_ id: UUID?) -> String {
@@ -224,6 +232,14 @@ struct TournamentEventDTO: Decodable, Identifiable {
 
 /// Calendar-only API dates never pass through the device's time zone.
 enum TournamentCopy {
+    static func entryFee(_ text: String, locale: Locale = .current) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scanner = Scanner(string: trimmed)
+        scanner.locale = locale
+        guard !trimmed.isEmpty, let value = scanner.scanDouble(), scanner.isAtEnd,
+              value.isFinite, value >= 0 else { return nil }
+        return value
+    }
     static func count(_ count: Int, _ noun: String, plural: String? = nil) -> String {
         "\(count) \(count == 1 ? noun : (plural ?? noun + "s"))"
     }

@@ -101,7 +101,7 @@ struct NewTournamentEventView: View {
     }
     private var valid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 255 && !drawType.isEmpty &&
-        (Double(entryFee).map { $0.isFinite && $0 >= 0 } ?? false) && formatted(start, "HH:mm") < formatted(end, "HH:mm")
+        (TournamentCopy.entryFee(entryFee).map { $0.isFinite && $0 >= 0 } ?? false) && formatted(start, "HH:mm") < formatted(end, "HH:mm")
     }
     private func formatted(_ date: Date, _ format: String) -> String {
         let formatter = DateFormatter()
@@ -112,7 +112,7 @@ struct NewTournamentEventView: View {
         return formatter.string(from: date)
     }
     private func save() {
-        guard valid, !saving, let fee = Double(entryFee) else { return }
+        guard valid, !saving, let fee = TournamentCopy.entryFee(entryFee) else { return }
         saving = true
         let body = NewTournamentEventBody(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines), drawType: drawType,

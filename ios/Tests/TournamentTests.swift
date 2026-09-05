@@ -58,6 +58,18 @@ private final class TournamentTransport: URLProtocol {
         precondition(tournaments[0].schedulePollSeconds == nil)
         print("PASS: near-me query, distances, eligibility rules, reservations, match settings and Swiss tiebreaks")
         let event = tournaments[0].events[0]
+        var reviewFailures: [String] = []
+        if !event.canCutDraw(status: .published, canEdit: true) { reviewFailures.append("existing published draw cannot be re-cut") }
+        if TournamentCopy.entryFee("12,50", locale: Locale(identifier: "de_DE")) != 12.5 { reviewFailures.append("comma-decimal fee refused") }
+        let streetOnly = TournamentDTO.Address(venue: "", street: "123 Test Street", city: "", region: "", postal: "", country: "", latitude: nil, longitude: nil)
+        if streetOnly.label != "123 Test Street" { reviewFailures.append("street-only venue has a blank label") }
+        for failure in reviewFailures { print("FAIL: \(failure)") }
+        precondition(reviewFailures.isEmpty, "Review regression checks failed")
+        precondition(!event.canCutDraw(status: .live, canEdit: true))
+        precondition(!event.canCutDraw(status: .published, canEdit: false))
+        precondition(TournamentCopy.entryFee("12.50", locale: Locale(identifier: "en_US")) == 12.5)
+        precondition(TournamentCopy.entryFee("12,50oops", locale: Locale(identifier: "de_DE")) == nil)
+        print("PASS: re-cut visibility, localized entry fees, and partial venue labels")
         precondition(tournaments[0].address == nil && tournaments[0].entryCount == 1)
         precondition(event.capacityLabel == "1 player" && event.entrants[0].rating == nil)
         precondition(event.player(event.fixtures[0].entryAId) == "alex" && event.player(nil) == "TBD")

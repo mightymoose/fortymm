@@ -41,8 +41,8 @@ struct TournamentEventView: View {
                         }
                     case .draw:
                         if event.fixtures.isEmpty { TournamentNotice(message: "The draw has not been cut yet.") }
-                        if tournament.canEdit && tournament.status == .published && event.fixtures.isEmpty {
-                            Button("Cut draw") { mutate { try await service.cutDraw(tournament.id, event: event.id) } }
+                        if event.canCutDraw(status: tournament.status, canEdit: tournament.canEdit) {
+                            Button(event.fixtures.isEmpty ? "Cut draw" : "Re-cut draw") { mutate { try await service.cutDraw(tournament.id, event: event.id) } }
                                 .buttonStyle(.borderedProminent).disabled(busy || event.entrants.count < 2)
                         }
                         ForEach(event.stages.sorted { $0.position < $1.position }) { stage in
