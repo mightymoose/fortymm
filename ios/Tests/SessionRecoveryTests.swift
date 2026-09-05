@@ -2,11 +2,13 @@ import Foundation
 
 // Exercise the production HTTP client against a transport-boundary stub.
 final class SessionTransport: URLProtocol {
+    static var requestCount = 0
     static var status = 401
     static var body = #"{"detail":{"code":"session_ended","message":"You've been signed out. Sign in to continue."}}"#
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        Self.requestCount += 1
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status,
                                        httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -68,6 +70,32 @@ final class SessionTransport: URLProtocol {
         print("PASS: native link presentation waits for a restored session")
         await tokens.clear()
         print("PASS: sign-out survives relaunch until an explicit new-guest choice")
+        store.apply(bootstrapping.user!)
+        store.handle(URL(string: "https://fortymm.com/login/verifying?token=changed-link")!)
+        await tokens.update("revoked-after-preview")
+        SessionTransport.status = 401
+        SessionTransport.body = #"{"detail":{"code":"session_ended","message":"Your sign-in changed."}}"#
+        await store.cancelDeepLink()
+        precondition(store.user == nil && store.pendingDeepLink == nil,
+                     "Cancel must refresh an invalidated source before returning to the shell")
+        print("PASS: canceling native recovery refreshes the source identity")
+        await tokens.clear()
+        SessionTransport.status = 200
+        SessionTransport.body = #"{"data":{"user":{"username":"new-guest","permissions":[]}}}"#
+        let submission = LinkSubmission()
+        SessionTransport.requestCount = 0
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<2 {
+                group.addTask { @MainActor in
+                    await submission.run {
+                        _ = try? await LoginService(client: client).consume(token: "single-use")
+                    }
+                }
+            }
+        }
+        precondition(SessionTransport.requestCount == 1,
+                     "Concurrent approval taps must redeem a single-use link once")
+        print("PASS: native duplicate approvals submit one HTTP request")
         let login = LoginService(client: client)
         SessionTransport.body = #"{"is_merge":false,"guest_matches_count":0,"account_switch":{"from_user_id":"alice-id","from_username":"alice","to_username":"bob"}}"#
         let preview = try await login.mergePreview(token: "bobs-link")

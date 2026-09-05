@@ -59,14 +59,14 @@ struct RootView: View {
         case let .login(token):
             LoginFlowView(
                 start: .verifying(token: token),
-                onClose: { session.pendingDeepLink = nil },
+                onClose: { Task { await session.cancelDeepLink() } },
                 onSignedIn: { session.resolveDeepLink($0) }
             )
         case let .confirmEmail(token):
             ConfirmEmailView(
                 token: token,
                 onConfirmed: { session.resolveDeepLink($0) },
-                onClose: { session.pendingDeepLink = nil }
+                onClose: { Task { await session.cancelDeepLink() } }
             )
         case let .match(id):
             MatchDetailLoaderView(

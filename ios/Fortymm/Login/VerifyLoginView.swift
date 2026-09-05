@@ -29,6 +29,7 @@ struct VerifyLoginView: View {
     @State private var approvedSwitch: String?
     @State private var pendingMerge: MergePreview?
     @State private var chosenSkipMerge = false
+    @State private var submission = LinkSubmission()
 
     var body: some View {
         Group {
@@ -223,21 +224,23 @@ struct VerifyLoginView: View {
     }
 
     private func verify(skipMerge: Bool) async {
-        chosenSkipMerge = skipMerge
-        pendingMerge = nil
-        phase = .verifying
-        do {
-            phase = .success(
-                try await service.consume(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
-            )
-        } catch LoginConsumeError.accountSwitchRequired(let change) {
-            approvedSwitch = nil
-            phase = .accountSwitch(change)
-        } catch LoginConsumeError.rejected {
-            phase = .expired
-        } catch {
-            // Unreachable (or any other transient failure) — offer a retry.
-            phase = .unreachable
+        await submission.run {
+            chosenSkipMerge = skipMerge
+            pendingMerge = nil
+            phase = .verifying
+            do {
+                phase = .success(
+                    try await service.consume(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
+                )
+            } catch LoginConsumeError.accountSwitchRequired(let change) {
+                approvedSwitch = nil
+                phase = .accountSwitch(change)
+            } catch LoginConsumeError.rejected {
+                phase = .expired
+            } catch {
+                // Unreachable (or any other transient failure) — offer a retry.
+                phase = .unreachable
+            }
         }
     }
 }

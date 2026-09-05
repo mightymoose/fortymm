@@ -35,6 +35,7 @@ struct ConfirmEmailView: View {
     @State private var approvedSwitch: String?
     @State private var pendingMerge: MergePreview?
     @State private var chosenSkipMerge = false
+    @State private var submission = LinkSubmission()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -270,26 +271,28 @@ struct ConfirmEmailView: View {
     }
 
     private func confirm(skipMerge: Bool) async {
-        chosenSkipMerge = skipMerge
-        pendingMerge = nil
-        phase = .verifying
-        do {
-            phase = .success(
-                try await service.confirmEmail(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
-            )
-        } catch LoginConsumeError.accountSwitchRequired(let change) {
-            approvedSwitch = nil
-            phase = .accountSwitch(change)
-        } catch LoginConsumeError.replaced {
-            // A newer resend superseded this link — opening the most recent
-            // email is the fix; resending would kill that newer link (#1616).
-            phase = .replaced
-        } catch LoginConsumeError.rejected {
-            // Invalid / expired / already-used link — terminal.
-            phase = .expired
-        } catch {
-            // 5xx / timeout / offline — the still-valid link is worth a retry.
-            phase = .unreachable
+        await submission.run {
+            chosenSkipMerge = skipMerge
+            pendingMerge = nil
+            phase = .verifying
+            do {
+                phase = .success(
+                    try await service.confirmEmail(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
+                )
+            } catch LoginConsumeError.accountSwitchRequired(let change) {
+                approvedSwitch = nil
+                phase = .accountSwitch(change)
+            } catch LoginConsumeError.replaced {
+                // A newer resend superseded this link — opening the most recent
+                // email is the fix; resending would kill that newer link (#1616).
+                phase = .replaced
+            } catch LoginConsumeError.rejected {
+                // Invalid / expired / already-used link — terminal.
+                phase = .expired
+            } catch {
+                // 5xx / timeout / offline — the still-valid link is worth a retry.
+                phase = .unreachable
+            }
         }
     }
 }

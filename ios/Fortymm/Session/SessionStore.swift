@@ -55,6 +55,12 @@ final class SessionStore: ObservableObject {
         pendingDeepLink = nil
     }
 
+    /// Reconcile credentials with the shell when leaving a recovery link.
+    func cancelDeepLink() async {
+        pendingDeepLink = nil
+        await load(force: true)
+    }
+
     /// Open a match deep link (a tapped result notification). Held like
     /// any pending link so `RootView` presents it once the shell is up.
     func openMatch(_ id: UUID) {
