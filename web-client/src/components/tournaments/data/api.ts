@@ -719,7 +719,7 @@ type TournamentDetail = {
 function tournamentDetailQuery(id: string) {
   return queryOptions({
     queryKey: tournamentKey(id),
-    queryFn: async (): Promise<TournamentDetail> => {
+    queryFn: async ({ signal }): Promise<TournamentDetail> => {
       let payload: TournamentDetailRead
       try {
         // The parse boundary: `apiToTournament` runs `parseFixtures` over every event's
@@ -728,6 +728,7 @@ function tournamentDetailQuery(id: string) {
         payload = unwrap(
           'load tournament',
           await api.GET('/v1/tournaments/{tournament_id}', {
+            signal,
             params: { path: { tournament_id: id } },
           }),
         )

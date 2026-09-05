@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Request } from '@playwright/test'
 
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
 import {
@@ -50,12 +50,14 @@ for (const stalledMethod of ['PATCH', 'GET']) {
   }) => {
     await TournamentDetailPage.navigateTo(page)
     await page.clock.install()
+    const stalledRequests: Request[] = []
     let release!: () => void
     const pending = new Promise<void>((resolve) => {
       release = resolve
     })
     await page.route(`**/v1/tournaments/${TOURNAMENT_ID}`, async (route) => {
       if (route.request().method() !== stalledMethod) return route.fallback()
+      stalledRequests.push(route.request())
       await pending
       await route.abort()
     })
@@ -85,6 +87,14 @@ for (const stalledMethod of ['PATCH', 'GET']) {
       await expect(page.getByRole('textbox', { name: /^Name/ })).toHaveValue(
         'Unsaved tournament',
       )
+      expect(stalledRequests.length).toBeGreaterThan(0)
+      await expect
+        .poll(() =>
+          stalledRequests.every(
+            (request) => request.failure()?.errorText === 'net::ERR_ABORTED',
+          ),
+        )
+        .toBe(true)
       await page
         .getByRole('button', { name: 'Tournaments', exact: true })
         .click()
@@ -150,6 +160,38 @@ test('a save remains pending until its refetch finishes before a second save can
     await expect(
       page.getByRole('textbox', { name: 'Description' }),
     ).toHaveValue('Second draft')
+  } finally {
+    release()
+  }
+})
+
+test('deliberate logout leaves the tournament while a Details save is pending', async ({
+  page,
+}) => {
+  await TournamentDetailPage.navigateTo(page)
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(`**/v1/tournaments/${TOURNAMENT_ID}`, async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    await pending
+    await route.abort()
+  })
+  await page.route('**/v1/session', async (route) => {
+    if (route.request().method() === 'DELETE')
+      return route.fulfill({ status: 204 })
+    return route.fallback()
+  })
+  try {
+    await page.getByRole('tab', { name: 'Details' }).click()
+    await page.getByRole('textbox', { name: /^Name/ }).fill('Pending edit')
+    const patch = page.waitForRequest((request) => request.method() === 'PATCH')
+    await page.getByRole('button', { name: /Save changes/ }).click()
+    await patch
+    await page.getByTestId('user-menu').click()
+    await page.getByTestId('user-menu-logout').click()
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/')
   } finally {
     release()
   }
