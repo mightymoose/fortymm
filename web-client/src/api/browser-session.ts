@@ -25,12 +25,15 @@ function persistTabSnapshot(value: string | null): void {
 
 function persist(value: string | null): void {
   unavailableStorageValue = value
-  persistTabSnapshot(value)
   try {
     if (value === null) localStorage.removeItem(KEY)
     else localStorage.setItem(KEY, value)
     storageWriteFailed = false
-  } catch { storageWriteFailed = true }
+    persistTabSnapshot(null)
+  } catch {
+    storageWriteFailed = true
+    persistTabSnapshot(value)
+  }
 }
 
 function broadcast(value: string | null): void {
@@ -62,7 +65,7 @@ export function subscribeSessionEnd(listener: () => void): () => void {
     if (event.key === KEY || event.key === null) {
       storageWriteFailed = false
       unavailableStorageValue = event.newValue
-      persistTabSnapshot(event.newValue)
+      persistTabSnapshot(null)
       listener()
     }
   }

@@ -44,3 +44,12 @@ it('keeps a fallback broadcast after this tab reloads', async () => {
     reloaded.forgetSessionEnd()
   } finally { stop(); peer.close() }
 })
+
+it('honors completed recovery in shared storage when a closed tab returns', async () => {
+  rememberSessionEnd({ message: 'Signed out.' })
+  // Another tab signed in while this tab had no running listeners.
+  localStorage.removeItem('fortymm.session-ended')
+  vi.resetModules()
+  const reopened = await import('./browser-session')
+  expect(reopened.readEndedSession()).toBeNull()
+})
