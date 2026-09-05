@@ -1640,6 +1640,10 @@ export class TournamentsStore {
    * make the open sheet's next save stale. A caller that wants the OTHER writer's
    * change to be visible on the reloaded card (e.g. a renamed event) passes it.
    */
+  writeDetailsElsewhere(fields: Partial<TournamentDetailRead>): void {
+    this.detail = { ...this.detail, ...fields, details_version: this.detail.details_version + 1 }
+  }
+
   writeEventElsewhere(name: string, fields: Partial<TournamentEventRead> = {}): void {
     const event = this.eventNamed(name)
     this.mutateEvent(event.id, (e) => ({
@@ -2269,9 +2273,19 @@ export class TournamentsStore {
     }
 
     const patch = body as TournamentUpdate
+    const changesDetails = ['name', 'description', 'address'].some((key) => key in patch)
+    if (changesDetails && patch.details_version !== this.detail.details_version) {
+      return json(route, 409, { detail: { code: 'tournament_details_version_conflict', message: 'Tournament details changed elsewhere.' } })
+    }
     const submitted = patch.table_catalogue
     if (submitted === undefined || submitted === null) {
-      this.detail = { ...this.detail, name: patch.name ?? this.detail.name }
+      this.detail = {
+        ...this.detail,
+        details_version: this.detail.details_version + (changesDetails ? 1 : 0),
+        name: patch.name ?? this.detail.name,
+        description: patch.description === undefined ? this.detail.description : patch.description,
+        address: patch.address === undefined ? this.detail.address : patch.address === null ? null : { ...patch.address, latitude: 37.8, longitude: -122.2 },
+      }
       return json(route, 200, this.readDetail())
     }
 

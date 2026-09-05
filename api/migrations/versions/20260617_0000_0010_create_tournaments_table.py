@@ -261,6 +261,7 @@ def upgrade() -> None:
 
     op.create_table(
         "tournaments",
+        sa.Column("details_version", sa.Integer(), nullable=False, server_default=sa.text("1")),
         sa.Column(
             "id",
             postgresql.UUID(as_uuid=True),

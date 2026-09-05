@@ -2135,6 +2135,8 @@ class DateRange(BaseModel):
 class TournamentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    details_version: int
+
     id: uuid.UUID
     name: str
     description: str | None
@@ -2306,6 +2308,17 @@ class TournamentUpdate(BaseModel):
     ``null`` is rejected."""
 
     model_config = ConfigDict(extra="forbid")
+
+    details_version: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Version originally read with this Details draft. Required when sending "
+            "name, description, or address; missing or stale versions return "
+            "a conflict "
+            "without writing. Omit for table-only edits."
+        ),
+    )
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)

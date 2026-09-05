@@ -311,7 +311,7 @@ describe('useUpdateTournament', () => {
     })
   })
 
-  it('surfaces a 403 via a toast without throwing', async () => {
+  it('leaves a rejected Details save for the form to report inline', async () => {
     vi.mocked(toast.error).mockClear()
     mockTournamentUpdateEndpoint(server, () =>
       HttpResponse.json(
@@ -326,12 +326,8 @@ describe('useUpdateTournament', () => {
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't update the tournament",
-      expect.objectContaining({
-        description: 'You do not have permission to edit this tournament.',
-      }),
-    )
+    expect(result.current.error).toMatchObject({ status: 403 })
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })
 

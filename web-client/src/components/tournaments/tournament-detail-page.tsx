@@ -39,7 +39,7 @@ export interface TournamentDetailPageProps {
   tournament: Tournament
   /** This tournament's table catalogue (for the Tables tab and reservations editor). */
   allTables: TournamentTable[]
-  onUpdate: (tournament: Tournament) => void
+  onUpdate: (tournament: Tournament) => void | Promise<unknown>
   /** Persist an edited table catalogue (add/remove from the Tables tab) as the
    * server's id-keyed diff (ADR 20260801). **The returned promise is load-bearing**:
    * `TablesTab` awaits it and turns the 409 on removing an in-use table into a
@@ -227,17 +227,7 @@ export const TournamentDetailPage = ({
       ? onCreateEvent({ ...ev, id: genId('ev') })
       : onUpdateEvent(ev)
 
-  /** The open sheet's event's CURRENT `lock_version` (#1499) — read live off THIS
-   * render's `tournament` prop, never off `editorEvent`. `useOpenEditorEvent` resolves
-   * `?event=` once per value of the param and then HOLDS the result (#1503), so
-   * `editorEvent` is frozen at the version the sheet opened on: a refetch that
-   * reconciles the tournament does not reach back in and replace it — so reusing it
-   * here would hand the editor's override the SAME stale version its conflict was just
-   * refused for, and the override would conflict forever. `null` when this event no longer
-   * appears on the reconciled tournament at all — another writer deleted it while the
-   * sheet sat open, and there is no live version left to overwrite. */
-  const currentLockVersion =
-    tournament.events.find((e) => e.id === editorEvent?.id)?.lockVersion ?? null
+  const latestEvent = tournament.events.find((e) => e.id === editorEvent?.id) ?? null
 
   return (
     <div>
@@ -415,7 +405,7 @@ export const TournamentDetailPage = ({
         open={editorEvent !== null}
         onClose={onCloseEditor}
         event={shownEvent}
-        currentLockVersion={currentLockVersion}
+        latestEvent={latestEvent}
         tables={tournamentTables}
         drawTypes={drawTypes}
         canEdit={canEdit}

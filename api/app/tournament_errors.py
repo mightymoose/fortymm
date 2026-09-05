@@ -729,3 +729,15 @@ class ScheduleQueueUnavailableError(Exception):
     The HTTP adapter maps this to the existing 503 ``"The scheduling queue is
     unavailable, …"``; nothing was queued and the same request is safe to retry.
     Never an ``HTTPException``."""
+
+
+class TournamentDetailsVersionConflictError(Exception):
+    """The submitted Details draft has been superseded by another save."""
+
+    code = "tournament_details_version_conflict"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Tournament details changed elsewhere. "
+            "Load the latest details before saving."
+        )

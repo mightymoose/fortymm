@@ -168,7 +168,7 @@ function TournamentDetailRoute() {
       onOpenEditor={openEditor}
       onCloseEditor={closeEditor}
       onUpdate={(next) =>
-        updateTournament.mutate({
+        updateTournament.mutateAsync({
           id: next.id,
           patch: tournamentToUpdateBody(next),
         })

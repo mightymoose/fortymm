@@ -221,6 +221,7 @@ const distanceMilesSchema = z
 export function apiToTournament(t: TournamentDetailRead): Tournament {
   return {
     id: t.id,
+    detailsVersion: z.number().int().positive().parse(t.details_version),
     name: t.name,
     status: t.status,
     canEdit: t.can_edit,
@@ -351,6 +352,7 @@ function tableEntryToApi(
  * `POST /v1/tournaments/{id}/transitions`, which is a mutation of its own. */
 export function tournamentToUpdateBody(t: Tournament): TournamentUpdate {
   return {
+    details_version: t.detailsVersion,
     name: t.name,
     description: t.description,
     address: toAddressInput(t.address),
@@ -546,8 +548,8 @@ export function eventToCreateBody(ev: EditedEvent): TournamentEventCreate {
  * so it would be a 422 on a create). It is deliberately NOT part of `eventToApiFields`,
  * which both verbs share, for exactly that reason: putting it there would 422 every
  * create the moment a director opened the "New event" sheet. Sent verbatim — the
- * version this client read the event at, or (on the deliberate override,
- * `event-editor.tsx`) the fresh version the director just chose to overwrite. */
+ * version belonging to this complete draft. Load latest replaces both the values
+ * and their version; it never upgrades the version of an old draft. */
 export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
   return {
     ...eventToApiFields(ev),
@@ -854,8 +856,7 @@ export function useUpdateTournament() {
           body: input.patch,
         }),
       ),
-    onSuccess: (_data, input) => invalidateTournament(qc, input.id),
-    onError: notifyError('update the tournament'),
+    onSettled: (_data, _error, input) => reconcileTournament(qc, input.id),
   })
 }
 
@@ -993,19 +994,8 @@ export function useCreateEvent(tournamentId: string) {
   })
 }
 
-/** Patch an event. Errors are the editor's to show — no global `onError` toast;
- * it surfaces the failure inline and keeps the panel open (#933, #934). See
- * `useCreateEvent`.
- *
- * **Reconciles `onSettled`, AWAITED — not `onSuccess`** (#1499), unlike
- * `useCreateEvent`/`useDeleteEvent` beside it, which stay `onSuccess`: a version
- * conflict is precisely the moment this view is stale, and the editor's conflict
- * banner — and the fresh `lockVersion` its override reads (`tournament-detail-page.tsx`
- * derives it live off the reconciled `tournament` prop) — must be stamped against the
- * state the server actually judged, not raced by a refetch still in flight. Awaiting
- * what `onSettled` returns is what makes `mutateAsync` stay unsettled until that
- * refetch has landed, exactly as `useTransitionTournament`'s does and for the same
- * reason. */
+/** Patch an event. The editor owns inline errors and preserves the draft.
+ * Reconcile on either outcome, awaited so Load latest receives a complete fresh read. */
 export function useUpdateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({

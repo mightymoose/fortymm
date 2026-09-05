@@ -87,6 +87,7 @@ from app.tournament_errors import (
     TableInUseError,
     TableNotInCatalogueError,
     TournamentAlreadyInStatusError,
+    TournamentDetailsVersionConflictError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
     TournamentNotReadyToGoLiveError,
@@ -544,6 +545,10 @@ async def update_tournament(
             updates=payload,
             geocoder=geocoder,
         )
+    except TournamentDetailsVersionConflictError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     except TableInUseError as exc:
         # The catalogue's named refusal: removing a table matches are placed at, with no
         # opt-in. Bare prose, like the group-set freeze and the league state rule on

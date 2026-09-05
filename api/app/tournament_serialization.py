@@ -137,6 +137,7 @@ def _tournament_fields(
     # boundary the JSONB used to.
     return {
         "id": t.id,
+        "details_version": t.details_version,
         "name": t.name,
         "description": t.description,
         "status": t.status,

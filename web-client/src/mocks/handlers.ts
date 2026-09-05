@@ -2411,7 +2411,7 @@ export const handlers = [
       // The catalogue's named refusal (ADR 20260801): this edit would remove a table
       // matches are placed at, and nobody opted in. Bare prose, carrying the domain's
       // own sentence — the client shows it verbatim — and nothing was written.
-      if (result.status === 409) return detail(result.detail, 409)
+      if (result.status === 409) return HttpResponse.json({ detail: result.code ? { code: result.code, message: result.detail } : result.detail }, { status: 409 })
       // An entry citing an id this tournament's catalogue does not hold. Shaped as a
       // **field** refusal — FastAPI's per-field array, `loc` naming the entry's index —
       // because that is what the route really sends and what `validationFields`

@@ -1,12 +1,92 @@
+import { ApiError } from '@/api/client'
 import userEvent from '@testing-library/user-event'
 
 import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
-import { screen } from '@/test/utilities'
+import { render, screen } from '@/test/utilities'
+import { DetailsTab } from './details-tab'
 
 import { buildAddress, buildTournament } from '../data/seed.factory'
 import { detailsTabPage } from './details-tab.page'
 
 describe('DetailsTab', () => {
+  it('keeps a rejected draft and reports a stale save inline', async () => {
+    const tournament = buildTournament({ name: 'Original', detailsVersion: 1 })
+    const onUpdate = async () => {
+      throw new ApiError(409, null, 'update tournament', {
+        detail: {
+          code: 'tournament_details_version_conflict',
+          message: 'server prose',
+        },
+      })
+    }
+    render(<DetailsTab tournament={tournament} canEdit onUpdate={onUpdate} />)
+    await userEvent.type(screen.getByDisplayValue('Original'), '!')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Nothing was saved',
+    )
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Load latest' }),
+    ).toBeInTheDocument()
+  })
+
+  it('loads all latest details only after confirming discard, then saves against that version', async () => {
+    const tournament = buildTournament({ name: 'Original', detailsVersion: 1 })
+    const saved: string[] = []
+    const onUpdate = (next: typeof tournament) => {
+      saved.push(`${next.detailsVersion}:${next.name}:${next.address?.venue}`)
+    }
+    const { rerender } = render(
+      <DetailsTab tournament={tournament} canEdit onUpdate={onUpdate} />,
+    )
+    await userEvent.type(screen.getByDisplayValue('Original'), '!')
+    const latest = {
+      ...tournament,
+      name: 'Other tab',
+      detailsVersion: 2,
+      address: buildAddress({ venue: 'New venue' }),
+    }
+    rerender(<DetailsTab tournament={latest} canEdit onUpdate={onUpdate} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Load latest' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      'Discard your unsaved changes?',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Load latest' }))
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Discard & load latest' }),
+    )
+    expect(screen.getByDisplayValue('Other tab')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('New venue')).toBeInTheDocument()
+    expect(screen.queryByText('Updated elsewhere')).not.toBeInTheDocument()
+    await userEvent.type(screen.getByDisplayValue('Other tab'), '!')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(saved).toEqual(['2:Other tab!:New venue'])
+  })
+
+  it('preserves a dirty draft when newer details arrive in the background', async () => {
+    const tournament = buildTournament({ name: 'Original', detailsVersion: 1 })
+    const { rerender } = render(
+      <DetailsTab tournament={tournament} canEdit onUpdate={() => {}} />,
+    )
+    await userEvent.type(screen.getByDisplayValue('Original'), '!')
+    rerender(
+      <DetailsTab
+        tournament={{ ...tournament, name: 'Other tab', detailsVersion: 2 }}
+        canEdit
+        onUpdate={() => {}}
+      />,
+    )
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    expect(screen.getByText('Updated elsewhere')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: 'Load latest' }),
+    ).toBeInTheDocument()
+  })
+
   it('reveals save only after an edit, then commits the draft', async () => {
     const onUpdate = vi.fn()
     detailsTabPage.render({
@@ -108,9 +188,7 @@ describe('DetailsTab', () => {
     expect(
       screen.getByText('The basics for this tournament.'),
     ).toBeInTheDocument()
-    expect(
-      screen.queryByText(/Players see this on the public page/),
-    ).toBeNull()
+    expect(screen.queryByText(/Players see this on the public page/)).toBeNull()
     // A hint explains how to fill in a control; with no control there is
     // nothing to explain, so the read-only view drops it.
     expect(

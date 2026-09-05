@@ -5254,6 +5254,8 @@ export interface components {
         };
         /** TournamentDetailRead */
         TournamentDetailRead: {
+            /** Details Version */
+            details_version: number;
             /**
              * Id
              * Format: uuid
@@ -5725,6 +5727,8 @@ export interface components {
         };
         /** TournamentRead */
         TournamentRead: {
+            /** Details Version */
+            details_version: number;
             /**
              * Id
              * Format: uuid
@@ -5935,6 +5939,11 @@ export interface components {
          *     ``null`` is rejected.
          */
         TournamentUpdate: {
+            /**
+             * Details Version
+             * @description Version originally read with this Details draft. Required when sending name, description, or address; missing or stale versions return a conflict without writing. Omit for table-only edits.
+             */
+            details_version?: number | null;
             /** Name */
             name?: string | null;
             /** Description */

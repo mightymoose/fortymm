@@ -580,6 +580,7 @@ describe('apiToTournament', () => {
 })
 
 const draft: Omit<Tournament, 'id'> = {
+  detailsVersion: 1,
   name: 'Autumn Cup',
   status: 'draft',
   canEdit: true,

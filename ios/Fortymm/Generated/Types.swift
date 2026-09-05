@@ -11118,6 +11118,8 @@ internal enum Components {
         }
         /// - Remark: Generated from `#/components/schemas/TournamentDetailRead`.
         internal struct TournamentDetailRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/details_version`.
+            internal var detailsVersion: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/id`.
             internal var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/name`.
@@ -11209,6 +11211,7 @@ internal enum Components {
             /// Creates a new `TournamentDetailRead`.
             ///
             /// - Parameters:
+            ///   - detailsVersion:
             ///   - id:
             ///   - name:
             ///   - description:
@@ -11227,6 +11230,7 @@ internal enum Components {
             ///   - latestScheduleSolve:
             ///   - drawTypeCatalogue:
             internal init(
+                detailsVersion: Swift.Int,
                 id: Swift.String,
                 name: Swift.String,
                 description: Swift.String? = nil,
@@ -11245,6 +11249,7 @@ internal enum Components {
                 latestScheduleSolve: Components.Schemas.TournamentDetailRead.LatestScheduleSolvePayload? = nil,
                 drawTypeCatalogue: [Components.Schemas.DrawTypeRead]? = nil
             ) {
+                self.detailsVersion = detailsVersion
                 self.id = id
                 self.name = name
                 self.description = description
@@ -11264,6 +11269,7 @@ internal enum Components {
                 self.drawTypeCatalogue = drawTypeCatalogue
             }
             internal enum CodingKeys: String, CodingKey {
+                case detailsVersion = "details_version"
                 case id
                 case name
                 case description
@@ -12433,6 +12439,8 @@ internal enum Components {
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.
         internal struct TournamentRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentRead/details_version`.
+            internal var detailsVersion: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentRead/id`.
             internal var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentRead/name`.
@@ -12478,6 +12486,7 @@ internal enum Components {
             /// Creates a new `TournamentRead`.
             ///
             /// - Parameters:
+            ///   - detailsVersion:
             ///   - id:
             ///   - name:
             ///   - description:
@@ -12491,6 +12500,7 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             internal init(
+                detailsVersion: Swift.Int,
                 id: Swift.String,
                 name: Swift.String,
                 description: Swift.String? = nil,
@@ -12504,6 +12514,7 @@ internal enum Components {
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date
             ) {
+                self.detailsVersion = detailsVersion
                 self.id = id
                 self.name = name
                 self.description = description
@@ -12518,6 +12529,7 @@ internal enum Components {
                 self.updatedAt = updatedAt
             }
             internal enum CodingKeys: String, CodingKey {
+                case detailsVersion = "details_version"
                 case id
                 case name
                 case description
@@ -12830,6 +12842,10 @@ internal enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/TournamentUpdate`.
         internal struct TournamentUpdate: Codable, Hashable, Sendable {
+            /// Version originally read with this Details draft. Required when sending name, description, or address; missing or stale versions return a conflict without writing. Omit for table-only edits.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TournamentUpdate/details_version`.
+            internal var detailsVersion: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/name`.
             internal var name: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/description`.
@@ -12863,6 +12879,7 @@ internal enum Components {
             /// Creates a new `TournamentUpdate`.
             ///
             /// - Parameters:
+            ///   - detailsVersion: Version originally read with this Details draft. Required when sending name, description, or address; missing or stale versions return a conflict without writing. Omit for table-only edits.
             ///   - name:
             ///   - description:
             ///   - address:
@@ -12870,6 +12887,7 @@ internal enum Components {
             ///   - leagueId:
             ///   - unplaceFixturesOnRemovedTables:
             internal init(
+                detailsVersion: Swift.Int? = nil,
                 name: Swift.String? = nil,
                 description: Swift.String? = nil,
                 address: Components.Schemas.TournamentUpdate.AddressPayload? = nil,
@@ -12877,6 +12895,7 @@ internal enum Components {
                 leagueId: Swift.String? = nil,
                 unplaceFixturesOnRemovedTables: Swift.Bool? = nil
             ) {
+                self.detailsVersion = detailsVersion
                 self.name = name
                 self.description = description
                 self.address = address
@@ -12885,6 +12904,7 @@ internal enum Components {
                 self.unplaceFixturesOnRemovedTables = unplaceFixturesOnRemovedTables
             }
             internal enum CodingKeys: String, CodingKey {
+                case detailsVersion = "details_version"
                 case name
                 case description
                 case address
@@ -12894,6 +12914,10 @@ internal enum Components {
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.detailsVersion = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .detailsVersion
+                )
                 self.name = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .name
@@ -12919,6 +12943,7 @@ internal enum Components {
                     forKey: .unplaceFixturesOnRemovedTables
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "details_version",
                     "name",
                     "description",
                     "address",

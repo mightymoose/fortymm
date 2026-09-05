@@ -69,6 +69,7 @@ def _tournament_read_payload(**overrides: Any) -> dict[str, Any]:
         "league_id": uuid.uuid4(),
         "created_by_user_id": uuid.uuid4(),
         "created_by_username": "director",
+        "details_version": 1,
         "can_edit": True,
         "created_at": now,
         "updated_at": now,
@@ -152,14 +153,14 @@ def test_an_all_blank_patch_address_is_a_removal_not_an_omission():
     it. An ``AfterValidator`` runs only on a field that was supplied, which is exactly
     why "remove" survives here and "unchanged" survives below.
     """
-    updates = TournamentUpdate(address=_blank_address())
+    updates = TournamentUpdate(details_version=1, address=_blank_address())
 
     assert updates.address is None
     assert "address" in updates.model_fields_set
 
 
 def test_an_omitted_patch_address_is_absent_from_the_field_set():
-    updates = TournamentUpdate(name="Renamed")
+    updates = TournamentUpdate(details_version=1, name="Renamed")
 
     assert updates.address is None
     assert "address" not in updates.model_fields_set
@@ -177,7 +178,7 @@ def test_patch_accepts_an_explicit_null_address():
     venue. What the accepted ``null`` then *does* to the stored row is the edit verb's
     claim, not this schema's.
     """
-    updates = TournamentUpdate(address=None)
+    updates = TournamentUpdate(details_version=1, address=None)
 
     assert updates.address is None
     assert "address" in updates.model_fields_set
@@ -215,7 +216,8 @@ def test_an_over_long_component_is_refused_on_patch(component: str):
     what makes them impossible to drift apart."""
     with pytest.raises(ValidationError):
         TournamentUpdate(
-            address=_full_address() | {component: "x" * (MAX_ADDRESS_COMPONENT + 1)}
+            details_version=1,
+            address=_full_address() | {component: "x" * (MAX_ADDRESS_COMPONENT + 1)},
         )
 
 

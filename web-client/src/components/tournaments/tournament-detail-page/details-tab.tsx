@@ -1,6 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
 import { Check } from 'lucide-react'
 
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -15,13 +19,44 @@ import {
 import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
 import { SectionHeader } from './section-header'
+import {
+  saveFailure,
+  saveFailureMessage,
+  TOURNAMENT_SAVE_TARGET,
+  type SaveFailure,
+} from '../data/save-failure'
+import { LoadLatestDialog } from './load-latest-dialog'
+
+const addressText = z.string().max(MAX_ADDRESS_COMPONENT)
+const detailsSchema = z.object({
+  name: z.string().trim().min(1, 'Enter a name.').max(255),
+  description: z.string().max(1024),
+  address: z
+    .object({
+      venue: addressText,
+      street: addressText,
+      city: addressText,
+      region: addressText,
+      postal: addressText,
+      country: addressText,
+      latitude: z.number(),
+      longitude: z.number(),
+    })
+    .nullable(),
+})
+type DetailsValues = z.infer<typeof detailsSchema>
+const detailsValues = (t: Tournament): DetailsValues => ({
+  name: t.name,
+  description: t.description,
+  address: t.address,
+})
 
 export interface DetailsTabProps {
   tournament: Tournament
   /** When false (a non-creator), the tab renders the tournament's details as
    * values rather than as a disabled form: no controls, no Save (ADR 0015). */
   canEdit: boolean
-  onUpdate: (tournament: Tournament) => void
+  onUpdate: (tournament: Tournament) => void | Promise<unknown>
 }
 
 /** The Details tab: the creator edits the tournament's name, description, and
@@ -46,37 +81,69 @@ export const DetailsTab = ({
   canEdit,
   onUpdate,
 }: DetailsTabProps) => {
-  const [draft, setDraft] = useState<Tournament>(tournament)
-  const [seen, setSeen] = useState(tournament)
-  // Dirtiness is derivable: the draft diverges from the committed tournament
-  // exactly when there are unsaved edits (saving/reverting realign the refs).
-  const dirty = draft !== tournament
-
-  // Re-seed the draft when a different tournament loads — adjusting state
-  // during render instead of in an effect.
-  if (tournament !== seen) {
-    setSeen(tournament)
-    setDraft(tournament)
+  const [baseline, setBaseline] = useState(tournament)
+  const [failure, setFailure] = useState<SaveFailure | null>(null)
+  const [confirmLoad, setConfirmLoad] = useState(false)
+  const failureRef = useRef<HTMLDivElement>(null)
+  const form = useForm<DetailsValues>({
+    resolver: zodResolver(detailsSchema),
+    defaultValues: detailsValues(tournament),
+  })
+  const [name, description, draftAddress] = useWatch({
+    control: form.control,
+    name: ['name', 'description', 'address'],
+  })
+  const { isDirty: dirty, isSubmitting: saving, errors } = form.formState
+  const draft: Tournament = {
+    ...baseline,
+    name,
+    description,
+    address: draftAddress,
   }
+  const stale = baseline.detailsVersion !== tournament.detailsVersion
 
-  const update = (patch: Partial<Tournament>) =>
-    setDraft((d) => ({ ...d, ...patch }))
-  /** What the six venue boxes show. A tournament with NO venue (CONTEXT.md,
-   * "Venue" — `address: null`) is a valid, first-class state, and this is the one
-   * place it becomes six empty boxes: an editor needs somewhere to type. The blank
-   * stand-in is display state only — it is not written back into the draft unless
-   * the organizer actually types (`updateAddress`), so opening the tab does not
-   * silently give a venue-less tournament a venue. */
+  // React state follows a clean read during render; RHF owns an external form store.
+  // A dirty draft keeps both its original values and original version.
+  if (baseline !== tournament && (!dirty || baseline.id !== tournament.id)) {
+    setBaseline(tournament)
+    setFailure(null)
+  }
+  useEffect(() => {
+    form.reset(detailsValues(baseline))
+  }, [baseline, form])
+  useEffect(() => {
+    if (failure) failureRef.current?.focus()
+  }, [failure])
+
+  const loadLatest = () => {
+    setBaseline(tournament)
+    form.reset(detailsValues(tournament))
+    setConfirmLoad(false)
+    setFailure(null)
+  }
+  const update = (patch: Partial<DetailsValues>) => {
+    const options = {
+      shouldDirty: true,
+      shouldValidate: form.formState.isSubmitted,
+    }
+    if (patch.name !== undefined) form.setValue('name', patch.name, options)
+    if (patch.description !== undefined)
+      form.setValue('description', patch.description, options)
+    if (patch.address !== undefined)
+      form.setValue('address', patch.address, options)
+  }
   const address = draft.address ?? blankAddress()
-  // Typing into a box on a venue-less tournament STARTS a venue, on the blank
-  // stand-in above. Clearing every box again leaves an all-blank `Address` in the
-  // DRAFT — which is right, because the boxes must stay on screen to be retyped into
-  // — and `toAddressInput` (`../data/api`) turns it back into `address: null` on the
-  // way to the wire, the same spelling the create modal sends. The server normalizes
-  // too (`SubmittedAddress`), so this is one intent said once rather than a guard.
   const updateAddress = (patch: Partial<Address>) =>
-    setDraft((d) => ({ ...d, address: { ...(d.address ?? blankAddress()), ...patch } }))
-  const save = () => onUpdate(draft)
+    update({ address: { ...address, ...patch } })
+  const save = form.handleSubmit(async (values) => {
+    setFailure(null)
+    try {
+      await onUpdate({ ...baseline, ...values })
+      form.reset(values)
+    } catch (error) {
+      setFailure(saveFailure(error))
+    }
+  })
 
   /** The address rows are the same shape six times over: an `Input` over the
    * same value, which `Field` renders as text for a reader.
@@ -109,13 +176,22 @@ export const DetailsTab = ({
       valueClassName={className}
     >
       {(id) => (
-        <Input
-          id={id}
-          className={className}
-          maxLength={MAX_ADDRESS_COMPONENT}
-          value={address[key]}
-          onChange={(e) => updateAddress({ [key]: e.target.value })}
-        />
+        <>
+          <Input
+            id={id}
+            disabled={saving}
+            aria-invalid={!!errors.address?.[key]}
+            className={className}
+            maxLength={MAX_ADDRESS_COMPONENT}
+            value={address[key]}
+            onChange={(e) => updateAddress({ [key]: e.target.value })}
+          />
+          {errors.address?.[key] && (
+            <p className="text-sm text-destructive">
+              {errors.address[key].message}
+            </p>
+          )}
+        </>
       )}
     </Field>
   )
@@ -133,10 +209,17 @@ export const DetailsTab = ({
           canEdit &&
           dirty && (
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setDraft(tournament)}>
+              <Button
+                variant="ghost"
+                disabled={saving}
+                onClick={() => {
+                  if (stale) setConfirmLoad(true)
+                  else loadLatest()
+                }}
+              >
                 Revert
               </Button>
-              <Button onClick={save}>
+              <Button onClick={save} disabled={saving}>
                 <Check size={16} />
                 Save changes
               </Button>
@@ -145,6 +228,37 @@ export const DetailsTab = ({
         }
       />
 
+      <LoadLatestDialog
+        open={confirmLoad}
+        onCancel={() => setConfirmLoad(false)}
+        onLoad={loadLatest}
+      />
+      {canEdit && (stale || failure) && (
+        <Alert className="mb-4" ref={failureRef} tabIndex={-1}>
+          <AlertTitle>
+            {stale || failure?.kind === 'conflict'
+              ? 'Updated elsewhere'
+              : 'Couldn’t save your changes'}
+          </AlertTitle>
+          <AlertDescription>
+            {failure
+              ? `${saveFailureMessage(failure, TOURNAMENT_SAVE_TARGET)} Nothing was saved — your changes are still here.`
+              : 'Your unsaved changes are still here.'}
+            {(stale || failure?.kind === 'conflict') && (
+              <Button
+                variant="outline"
+                disabled={saving}
+                onClick={() => {
+                  if (dirty) setConfirmLoad(true)
+                  else loadLatest()
+                }}
+              >
+                Load latest
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
       <div className="grid grid-cols-2 gap-6">
         <Card className="px-4">
           <div className="flex flex-col gap-4">
@@ -155,11 +269,16 @@ export const DetailsTab = ({
               {(id) => (
                 <Input
                   id={id}
+                  disabled={saving}
+                  aria-invalid={!!errors.name}
                   value={draft.name}
                   onChange={(e) => update({ name: e.target.value })}
                 />
               )}
             </Field>
+            {errors.name && (
+              <p className="text-sm text-destructive">{errors.name.message}</p>
+            )}
             <Field
               label="Description"
               hint="Optional. Shown on the public registration page."
@@ -172,6 +291,8 @@ export const DetailsTab = ({
               {(id) => (
                 <Textarea
                   id={id}
+                  disabled={saving}
+                  aria-invalid={!!errors.description}
                   rows={4}
                   value={draft.description}
                   placeholder="Two-day open. USATT-sanctioned."
@@ -179,6 +300,11 @@ export const DetailsTab = ({
                 />
               )}
             </Field>
+            {errors.description && (
+              <p className="text-sm text-destructive">
+                {errors.description.message}
+              </p>
+            )}
           </div>
         </Card>
 

@@ -2639,7 +2639,10 @@ async def test_edit_tournament_owner_renames_and_it_persists(
     async with _mcp_client(raw) as client, client:
         result = await client.call_tool_mcp(
             "edit_tournament",
-            {"tournament_id": tournament_id, "updates": {"name": "Renamed Cup"}},
+            {
+                "tournament_id": tournament_id,
+                "updates": {"details_version": 1, "name": "Renamed Cup"},
+            },
         )
         assert result.isError is False
         body = result.structuredContent
@@ -2685,7 +2688,10 @@ async def test_edit_tournament_non_owner_raises_tool_error_and_writes_nothing(
         with pytest.raises(ToolError, match="only edit tournaments you created"):
             await client.call_tool(
                 "edit_tournament",
-                {"tournament_id": tournament_id, "updates": {"name": "Hijacked"}},
+                {
+                    "tournament_id": tournament_id,
+                    "updates": {"details_version": 1, "name": "Hijacked"},
+                },
             )
 
     # Nothing was written: the name is still the owner's original.
@@ -2710,7 +2716,10 @@ async def test_edit_tournament_unknown_id_raises_tool_error(
         with pytest.raises(ToolError, match=unknown):
             await client.call_tool(
                 "edit_tournament",
-                {"tournament_id": unknown, "updates": {"name": "Nope"}},
+                {
+                    "tournament_id": unknown,
+                    "updates": {"details_version": 1, "name": "Nope"},
+                },
             )
 
 

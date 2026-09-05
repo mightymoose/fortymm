@@ -604,7 +604,7 @@ function seed(): StoredTournament[] {
       },
       table_catalogue: tables(12),
       created_by_user_id: DEV_USER_ID,
-      created_by_username: DEV_USERNAME,
+      details_version: 1,      created_by_username: DEV_USERNAME,
       can_edit: true,
       created_at: '2026-06-01T09:00:00Z',
       updated_at: '2026-06-10T12:00:00Z',
@@ -909,7 +909,7 @@ function seed(): StoredTournament[] {
       },
       table_catalogue: tables(8),
       created_by_user_id: DEV_USER_ID,
-      created_by_username: DEV_USERNAME,
+      details_version: 1,      created_by_username: DEV_USERNAME,
       can_edit: true,
       created_at: '2026-06-05T15:30:00Z',
       updated_at: '2026-06-05T15:30:00Z',
@@ -981,7 +981,7 @@ function seed(): StoredTournament[] {
       },
       table_catalogue: tables(10),
       created_by_user_id: 'u-office',
-      created_by_username: 'league.office',
+      details_version: 1,      created_by_username: 'league.office',
       can_edit: false,
       created_at: '2026-05-20T10:00:00Z',
       updated_at: '2026-06-12T08:00:00Z',
@@ -1069,7 +1069,7 @@ function seed(): StoredTournament[] {
       address: null,
       table_catalogue: tables(2),
       created_by_user_id: DEV_USER_ID,
-      created_by_username: DEV_USERNAME,
+      details_version: 1,      created_by_username: DEV_USERNAME,
       can_edit: true,
       created_at: '2026-06-13T18:00:00Z',
       updated_at: '2026-06-13T18:00:00Z',
@@ -1130,7 +1130,7 @@ function seed(): StoredTournament[] {
       },
       table_catalogue: tables(8),
       created_by_user_id: DEV_USER_ID,
-      created_by_username: DEV_USERNAME,
+      details_version: 1,      created_by_username: DEV_USERNAME,
       can_edit: true,
       created_at: '2026-05-02T10:00:00Z',
       updated_at: '2026-06-07T11:20:00Z',
@@ -1342,7 +1342,7 @@ function seed(): StoredTournament[] {
       },
       table_catalogue: tables(6),
       created_by_user_id: 'u-office',
-      created_by_username: 'league.office',
+      details_version: 1,      created_by_username: 'league.office',
       can_edit: false,
       created_at: '2026-06-14T11:00:00Z',
       updated_at: '2026-06-14T11:00:00Z',
@@ -1839,7 +1839,7 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     // at all — so the store mints one for each, in the order the payload sent them.
     table_catalogue: (body.table_catalogue ?? []).map(mintTable),
     created_by_user_id: DEV_USER_ID,
-    created_by_username: DEV_USERNAME,
+    details_version: 1,    created_by_username: DEV_USERNAME,
     can_edit: true,
     created_at: now,
     updated_at: now,
@@ -1861,7 +1861,7 @@ export function createTournament(body: TournamentCreate): TournamentRead {
 export type StoreResult =
   | { ok: true; tournament: TournamentRead }
   | { ok: false; status: 403 | 404 }
-  | { ok: false; status: 409; detail: string }
+  | { ok: false; status: 409; detail: string; code?: string }
   | { ok: false; status: 422; index: number; tableId: string; detail: string }
 
 /** An event write fails four ways: 404 (no such tournament/event), 403 (not the
@@ -1995,6 +1995,10 @@ export function updateTournament(
   const owned = requireOwned(id)
   if (!owned.ok) return owned
   const existing = owned.tournament
+  const changesDetails = ['name', 'description', 'address'].some((key) => key in patch)
+  if (changesDetails && patch.details_version !== existing.details_version) {
+    return { ok: false, status: 409, code: 'tournament_details_version_conflict', detail: 'Tournament details changed elsewhere.' }
+  }
   // The catalogue diff first, and nothing assigned until it answers: a refusal here
   // must leave the tournament byte-identical, `name` included.
   let catalogue = existing.table_catalogue
@@ -2015,6 +2019,7 @@ export function updateTournament(
   }
   const next: StoredTournament = {
     ...existing,
+    details_version: existing.details_version + (changesDetails ? 1 : 0),
     name: patch.name ?? existing.name,
     description:
       patch.description === undefined ? existing.description : patch.description,

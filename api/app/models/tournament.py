@@ -96,6 +96,9 @@ class Tournament(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
+    details_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[TournamentStatus] = mapped_column(

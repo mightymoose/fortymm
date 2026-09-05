@@ -431,6 +431,7 @@ export function genId(prefix: string): string {
 /** A blank draft tournament for the "New tournament" modal. */
 export function emptyTournament(): Omit<Tournament, 'id'> {
   return {
+    detailsVersion: 1,
     name: '',
     status: 'draft',
     // A brand-new tournament is created by, hence owned by, the current user.

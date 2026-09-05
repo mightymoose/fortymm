@@ -1692,6 +1692,7 @@ export function buildTournament(
 ): Tournament {
   return {
     id: 'bay-area-open-2026',
+    detailsVersion: 1,
     name: 'Bay Area Open 2026',
     status: 'published',
     // Existing component factories/tests build the creator's own tournaments,

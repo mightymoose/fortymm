@@ -422,6 +422,7 @@ async def test_patch_by_creator_updates_fields(
     response = await client.patch(
         f"/v1/tournaments/{created['id']}",
         json={
+            "details_version": 1,
             "name": "Bay Area Major",
             "address": new_address,
         },
@@ -714,7 +715,7 @@ async def test_patch_with_unresolvable_address_is_409_and_leaves_the_address(
 
     bad = {**_address(), "venue": "__unresolvable__"}
     response = await client.patch(
-        f"/v1/tournaments/{created['id']}", json={"address": bad}
+        f"/v1/tournaments/{created['id']}", json={"details_version": 1, "address": bad}
     )
 
     assert response.status_code == 409, response.text
@@ -730,7 +731,7 @@ async def test_patch_explicit_null_name_returns_422(
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
     response = await client.patch(
-        f"/v1/tournaments/{created['id']}", json={"name": None}
+        f"/v1/tournaments/{created['id']}", json={"details_version": 1, "name": None}
     )
     assert response.status_code == 422
 
@@ -782,7 +783,7 @@ async def test_patch_explicit_null_address_removes_the_venue(
     assert created["address"] is not None
 
     response = await client.patch(
-        f"/v1/tournaments/{created['id']}", json={"address": None}
+        f"/v1/tournaments/{created['id']}", json={"details_version": 1, "address": None}
     )
 
     assert response.status_code == 200, response.text
@@ -869,7 +870,8 @@ async def test_a_venue_can_be_booked_and_then_un_booked_over_the_wire(
     assert created["address"] is None
 
     booked = await client.patch(
-        f"/v1/tournaments/{created['id']}", json={"address": _address()}
+        f"/v1/tournaments/{created['id']}",
+        json={"details_version": 1, "address": _address()},
     )
     assert booked.status_code == 200, booked.text
     # Booked with coordinates, not merely with text — the invariant that survived the
@@ -877,7 +879,8 @@ async def test_a_venue_can_be_booked_and_then_un_booked_over_the_wire(
     assert booked.json()["address"] == await _geocoded_address(_address())
 
     un_booked = await client.patch(
-        f"/v1/tournaments/{created['id']}", json={"address": None}
+        f"/v1/tournaments/{created['id']}",
+        json={"details_version": booked.json()["details_version"], "address": None},
     )
     assert un_booked.status_code == 200, un_booked.text
     assert un_booked.json()["address"] is None
@@ -3436,7 +3439,8 @@ async def test_permission_gate_blocks_user_without_permission(
         assert (await client.get(f"/v1/tournaments/{target['id']}")).status_code == 200
         assert (
             await client.patch(
-                f"/v1/tournaments/{target['id']}", json={"name": "Hijack"}
+                f"/v1/tournaments/{target['id']}",
+                json={"details_version": 1, "name": "Hijack"},
             )
         ).status_code == 403
         assert (
@@ -3532,7 +3536,8 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
 
         assert (
             await other_client.patch(
-                f"/v1/tournaments/{target['id']}", json={"name": "Hijack"}
+                f"/v1/tournaments/{target['id']}",
+                json={"details_version": 1, "name": "Hijack"},
             )
         ).status_code == 403
         assert (
@@ -4932,7 +4937,8 @@ async def test_patch_other_fields_still_work_once_published(
     await _set_status(db_session, created["id"], TournamentStatus.published)
 
     response = await client.patch(
-        f"/v1/tournaments/{created['id']}", json={"name": "Bay Area Major"}
+        f"/v1/tournaments/{created['id']}",
+        json={"details_version": 1, "name": "Bay Area Major"},
     )
 
     assert response.status_code == 200, response.text
@@ -8903,6 +8909,7 @@ async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}",
         json={
+            "details_version": 1,
             "name": "Renamed While Removing",
             "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
         },
@@ -8955,6 +8962,7 @@ async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_un
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}",
         json={
+            "details_version": 1,
             "name": "Renamed While Removing",
             "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
             "unplace_fixtures_on_removed_tables": True,

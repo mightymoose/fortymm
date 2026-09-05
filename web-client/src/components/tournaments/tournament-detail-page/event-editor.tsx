@@ -1,3 +1,4 @@
+import { LoadLatestDialog } from './load-latest-dialog'
 import { useEffect, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useBlocker } from '@tanstack/react-router'
@@ -65,17 +66,8 @@ export interface EventEditorProps {
   onClose: (options?: { force?: boolean }) => void
   /** The event to edit. A new event has an id beginning `new-`. */
   event: TournamentEvent | null
-  /** The event's CURRENT `lock_version`, read live off the reconciled `tournament`
-   * prop — `tournament.events.find(e => e.id === editorEvent?.id)?.lockVersion`
-   * (`tournament-detail-page.tsx`) — and NOT `event.lockVersion` above, which is
-   * frozen at the moment the sheet opened (#1499). The override below sends THIS
-   * version, never the frozen one: reusing the frozen prop would have the override
-   * conflict forever, against a version the server already moved past.
-   *
-   * `null` means the event this sheet has open no longer exists on the tournament the
-   * page just re-read — another writer deleted it — so there is no live version left
-   * to overwrite, and the override is disabled rather than sent as a guess. */
-  currentLockVersion: number | null
+  /** Latest complete read, kept separate from the draft's original snapshot. */
+  latestEvent: TournamentEvent | null
   /** The tables available to this tournament (for the reservations tab). */
   tables: TournamentTable[]
   /** The draw formats the server offers, off the tournament payload (ADR 20260726) —
@@ -130,7 +122,10 @@ const SECTIONS = [
  * single-elimination has no groups to split, and swiss has neither, so for those three
  * the tab is *absent* rather than empty: a tab that opened onto settings the format
  * cannot hold would invite a director to configure a draw their event will never cut. */
-const DRAW_STRUCTURE_SECTION = { value: 'draw-structure', label: 'Draw structure' }
+const DRAW_STRUCTURE_SECTION = {
+  value: 'draw-structure',
+  label: 'Draw structure',
+}
 
 /** The slide-in event editor — a side sheet with four sections (Basics,
  * Eligibility, Match settings, Reservations) over ONE React-Hook-Form draft. The form
@@ -163,8 +158,8 @@ const DRAW_STRUCTURE_SECTION = { value: 'draw-structure', label: 'Draw structure
 export const EventEditor = ({
   open,
   onClose,
-  event,
-  currentLockVersion,
+  event: openedEvent,
+  latestEvent,
   tables,
   drawTypes,
   canEdit,
@@ -172,6 +167,14 @@ export const EventEditor = ({
   onDelete,
   saving = false,
 }: EventEditorProps) => {
+  const [event, setEvent] = useState(openedEvent)
+  const [sourceEvent, setSourceEvent] = useState(openedEvent)
+  const [confirmLoad, setConfirmLoad] = useState(false)
+  if (sourceEvent !== openedEvent) {
+    setSourceEvent(openedEvent)
+    setEvent(openedEvent)
+    setConfirmLoad(false)
+  }
   const [section, setSection] = useState('basics')
   const [seenEvent, setSeenEvent] = useState(event)
   /**
@@ -190,10 +193,7 @@ export const EventEditor = ({
   /** How the last save was refused, or `null`. A classified failure — never a raw
    * server string (see `data/save-failure`). Never a reason to close. */
   const [failure, setFailure] = useState<SaveFailure | null>(null)
-  /** The failure banner's own DOM node (#1538). `performSave` sets a fresh `failure`
-   * object on every refusal, including a second back-to-back one and a refused
-   * override, so keying the effect below on `failure` moves focus every time — no
-   * mount/unmount tracking needed. */
+
   const failureRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (failure) failureRef.current?.focus()
@@ -300,7 +300,10 @@ export const EventEditor = ({
   // Computed every render, so a fixed rule stops complaining the moment it is fixed —
   // and shown only once the organizer has *tried* to save: a value box they have not
   // filled in yet is not yet wrong.
-  const watchedPredicates = useWatch({ control: form.control, name: 'predicates' })
+  const watchedPredicates = useWatch({
+    control: form.control,
+    name: 'predicates',
+  })
   const ruleIssues = eligibilityIssues(watchedPredicates ?? [])
 
   // …and the same arrangement for the RESERVATIONS, for the same two reasons and one
@@ -311,7 +314,10 @@ export const EventEditor = ({
   // unlike append/remove — does NOT re-run the resolver (RHF 7.81). Read off the errors,
   // the red would outlive the fix: it would sit under a name the organizer had already
   // re-typed, until they pressed Save again to find out they were done.
-  const watchedReservations = useWatch({ control: form.control, name: 'reservations' })
+  const watchedReservations = useWatch({
+    control: form.control,
+    name: 'reservations',
+  })
   const reservationIssues = reservationNameIssues(watchedReservations ?? [])
 
   // …and the same arrangement again for the RESERVATION WINDOWS (#1501) — ordering and
@@ -323,7 +329,10 @@ export const EventEditor = ({
   // does not ride RHF's own `onSubmit` mode the way `basicsErrors.slot` does, and would
   // show red on load if it were not gated explicitly.
   const watchedSlot = useWatch({ control: form.control, name: 'slot' })
-  const windowIssues = reservationWindowIssues(watchedReservations ?? [], watchedSlot)
+  const windowIssues = reservationWindowIssues(
+    watchedReservations ?? [],
+    watchedSlot,
+  )
 
   const applyChange = (next: TournamentEvent) => {
     // Don't validate until the user has tried to save once — otherwise a new
@@ -349,18 +358,7 @@ export const EventEditor = ({
     form.setValue('match', next.match, opts)
   }
 
-  // Shared by the ordinary submit and the conflict banner's override (#1499): the
-  // only thing that differs between them is WHICH version goes on the wire, the one
-  // this sheet read the event at, or the fresh one the director just chose to
-  // overwrite. Everything else (building the draft, closing only on success, keeping
-  // the sheet and the failure otherwise) is one save, done twice for two reasons.
-  // `lockVersion` is OPTIONAL, and resolved after the `!event` guard below rather
-  // than at the call site: the ordinary submit sends the version the sheet opened on,
-  // which is `event`'s own, and only the override has a different number to name. A
-  // caller-side `event?.lockVersion ?? 0` would put a `0` that can never reach the
-  // wire in front of a reader grepping for where a version comes from.
-  // The actual write, once nothing (or nothing NEW) stands in front of it — the tail
-  // both the ordinary path and the #1537 confirmation's "Save anyway" run.
+  // Every save carries the version belonging to this complete draft.
   const doSave = async (saved: EditedEvent) => {
     setFailure(null)
     try {
@@ -380,7 +378,7 @@ export const EventEditor = ({
     }
   }
 
-  const performSave = async (formValues: EventFormValues, lockVersion?: number) => {
+  const performSave = async (formValues: EventFormValues) => {
     if (!event) return
     // Cleared HERE, not just in `doSave`: the #1537 stranding check below can
     // return early (opening the confirmation) without ever reaching `doSave`, and
@@ -395,7 +393,7 @@ export const EventEditor = ({
     const saved: EditedEvent = {
       ...event,
       ...formValues,
-      lockVersion: lockVersion ?? event.lockVersion,
+      lockVersion: event.lockVersion,
     }
 
     // #1537: would THIS save newly strand an already-placed match against its
@@ -430,21 +428,24 @@ export const EventEditor = ({
     setSection(firstInvalidSection(formErrors) ?? 'basics')
 
   // No version named: the ordinary save states the one the sheet was opened with.
-  const submit = form.handleSubmit((formValues) => performSave(formValues), onInvalid)
+  const submit = form.handleSubmit(
+    (formValues) => performSave(formValues),
+    onInvalid,
+  )
 
-  /** The conflict banner's override (#1499): re-send the SAME draft — whatever the
-   * director has typed since the refusal, this is a live form, not a frozen snapshot
-   * — against the version this sheet has just READ (`currentLockVersion`), never the
-   * one `event` opened on. It is never automatic and never a retry the editor fires
-   * on its own: it exists only behind a button the director presses, on purpose, every
-   * time (`tables-tab.tsx`'s confirm-and-resend is the same shape, for the same
-   * reason — a director's deliberate choice to overwrite someone else's write). A
-   * `null` version means the other writer DELETED the event, so there is nothing left
-   * to overwrite; the button is disabled rather than sending a guessed version. */
-  const overrideSave = form.handleSubmit((formValues) => {
-    if (currentLockVersion === null) return
-    return performSave(formValues, currentLockVersion)
-  }, onInvalid)
+  const stale = !isNew && latestEvent?.lockVersion !== event?.lockVersion
+  const loadLatest = () => {
+    setConfirmLoad(false)
+    if (!latestEvent) return
+    setEvent(latestEvent)
+    form.reset(eventToFormValues(latestEvent))
+    setFailure(null)
+    setStrandConfirm(null)
+  }
+  const requestLatest = () => {
+    if (isDirty) setConfirmLoad(true)
+    else loadLatest()
+  }
 
   // "Edit event" is an imperative addressed to the person in control. A viewer
   // is not one — the panel is a rendering of the event, so it says so
@@ -626,7 +627,12 @@ export const EventEditor = ({
             either side is `100% + 48px` — so the banner ran 24px past the right-hand edge
             of the sheet at every width, phone and desktop alike. The one place a failure
             is reported is not a place that may itself be half off the screen. */}
-        {failure && (
+        <LoadLatestDialog
+          open={confirmLoad}
+          onCancel={() => setConfirmLoad(false)}
+          onLoad={loadLatest}
+        />
+        {(failure || (canEdit && stale)) && (
           <div className="px-6 pb-1">
             <Alert
               variant="destructive"
@@ -637,34 +643,33 @@ export const EventEditor = ({
             >
               <TriangleAlert size={16} />
               <AlertTitle>
-                {isNew ? "Couldn't create this event" : "Couldn't save your changes"}
+                {failure
+                  ? isNew
+                    ? "Couldn't create this event"
+                    : "Couldn't save your changes"
+                  : 'Updated elsewhere'}
               </AlertTitle>
               <AlertDescription>
-                {saveFailureMessage(failure, EVENT_SAVE_TARGET)} Nothing was saved
-                — your changes are still here.
-                {/* The conflict's own override (#1499) — never automatic, never a
-                    retry the editor fires on its own: it exists only behind a button
-                    the director presses on purpose, every time (`tables-tab.tsx`'s
-                    confirm-and-resend is the same shape). Only for a director who can
-                    still edit — a viewer's read-only sheet gets the refusal and
-                    nothing to do about it. */}
-                {failure.kind === 'conflict' && canEdit && (
+                {failure
+                  ? `${saveFailureMessage(failure, EVENT_SAVE_TARGET)} Nothing was saved — your changes are still here.`
+                  : 'Your unsaved changes are still here.'}
+                {(failure?.kind === 'conflict' || stale) && canEdit && (
                   <span className="mt-2 flex flex-wrap items-center gap-2">
-                    {currentLockVersion === null ? (
+                    {latestEvent === null ? (
                       <span data-testid="event-editor-conflict-deleted">
                         It was deleted elsewhere, so there is nothing left to
-                        overwrite. Close this sheet and refresh the event list.
+                        load. Close this sheet and refresh the event list.
                       </span>
                     ) : (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        data-testid="event-editor-override"
-                        onClick={overrideSave}
+                        data-testid="event-editor-load-latest"
+                        onClick={requestLatest}
                         disabled={isSubmitting || saving}
                       >
-                        Overwrite with my changes
+                        Load latest
                       </Button>
                     )}
                   </span>
@@ -707,7 +712,10 @@ export const EventEditor = ({
             // (#1231 QA). Both are asked, so it re-enables only once BOTH are done —
             // and a rejected save re-enables it, because both go false, which is what
             // lets the organizer retry the failure the `Alert` above is reporting.
-            <Button disabled={!draft || isSubmitting || saving} onClick={submit}>
+            <Button
+              disabled={!draft || isSubmitting || saving}
+              onClick={submit}
+            >
               <Check size={16} />
               {isNew ? 'Create event' : 'Save changes'}
             </Button>
