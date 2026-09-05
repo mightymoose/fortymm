@@ -46,7 +46,18 @@ it('shares sign-out before cookies are cleared and prevents another guest bootst
   await expect(anotherTab.fetchQuery(sessionQueryOptions())).rejects.toMatchObject({ status: 401 })
 })
 
-it.each([undefined, 'getItem', 'setItem'] as const)('coordinates recovery or fails safely with %s blocked', async (blockedMethod) => {
+it.each([
+  [false, undefined], [false, 'getItem'], [false, 'setItem'],
+  [true, undefined], [true, 'getItem'], [true, 'setItem'],
+] as const)('coordinates recovery with Web Locks %s and %s blocked', async (webLocks, blockedMethod) => {
+  if (webLocks) {
+    let queue: Promise<unknown> = Promise.resolve()
+    vi.stubGlobal('navigator', { locks: { request: (_name: string, run: () => Promise<unknown>) => {
+      const result = queue.then(run, run)
+      queue = result.catch(() => undefined)
+      return result
+    } } })
+  }
   if (blockedMethod) blockLocalStorage(blockedMethod)
   rememberSessionEnd({ message: 'Your session ended.' })
   document.cookie = 'csrf_token=ended-session; path=/'
@@ -137,5 +148,29 @@ it.each([
   })
   expect(deletes).toBe(2)
   expect(redemptions).toBe(1)
+  expect(readEndedSession()).toBeNull()
+})
+
+it('reuses peer recovery before its completion broadcast reaches a fallback tab', async () => {
+  blockLocalStorage('setItem')
+  rememberSessionEnd({ message: 'Your session ended.' })
+  vi.unstubAllGlobals()
+  // A peer completed under the lock; this tab has not received any event.
+  localStorage.setItem('fortymm.session-ended', 'null')
+  expect(readEndedSession()).not.toBeNull()
+  let deletes = 0
+  server.use(
+    http.delete('*/v1/session', () => {
+      deletes += 1
+      return new HttpResponse(null, { status: 204 })
+    }),
+    http.get('*/v1/session', () => HttpResponse.json(mockSession)),
+  )
+  const { result } = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
+  await act(async () => {
+    const session = await result.current.mutateAsync()
+    expect(session.data.user.id).toBe(mockSession.data.user.id)
+  })
+  expect(deletes).toBe(0)
   expect(readEndedSession()).toBeNull()
 })

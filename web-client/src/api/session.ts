@@ -8,7 +8,7 @@ import {
 import { z } from 'zod'
 import { ApiError, api, hasCsrfCookie, restoreCsrfCompanion, unwrap } from './client'
 import { handleIdentityChange } from './identity-change'
-import { announceIdentityChange, forgetSessionEnd, readEndedSession, rememberSessionEnd } from './browser-session'
+import { announceIdentityChange, forgetSessionEnd, readEndedSession, rememberSessionEnd, synchronizeSessionEnd } from './browser-session'
 import { closeRealtimeConnections } from './realtime/connection'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -116,10 +116,14 @@ function withLocalSessionLock<T>(fn: () => Promise<T>): Promise<T> {
 async function withSessionBootstrapLock<T>(fn: () => Promise<T>, alwaysLock = false): Promise<T> {
   // A session already exists — no mint race to guard against.
   if (!alwaysLock && hasCsrfCookie()) return fn()
-  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
-    return navigator.locks.request(SESSION_LOCK_NAME, () => fn())
+  const run = () => {
+    if (alwaysLock) synchronizeSessionEnd()
+    return fn()
   }
-  return withLocalSessionLock(() => withStorageLock(fn, alwaysLock))
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request(SESSION_LOCK_NAME, run)
+  }
+  return withLocalSessionLock(() => withStorageLock(run, alwaysLock))
 }
 
 export function sessionQueryOptions() {

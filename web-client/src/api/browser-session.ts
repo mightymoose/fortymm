@@ -26,8 +26,7 @@ function persistTabSnapshot(value: string | null): void {
 function persist(value: string | null): void {
   unavailableStorageValue = value
   try {
-    if (value === null) localStorage.removeItem(KEY)
-    else localStorage.setItem(KEY, value)
+    localStorage.setItem(KEY, value ?? 'null')
     storageWriteFailed = false
     persistTabSnapshot(null)
   } catch {
@@ -49,6 +48,23 @@ function snapshot(): string | null {
   if (storageWriteFailed) return unavailableStorageValue
   try { return localStorage.getItem(KEY) ?? tabSnapshot() }
   catch { return unavailableStorageValue ?? tabSnapshot() }
+}
+
+/** Reconcile peer completion synchronously while holding the recovery lock. */
+export function synchronizeSessionEnd(): void {
+  try {
+    const shared = localStorage.getItem(KEY)
+    const value = shared ?? snapshot() ?? 'null'
+    // A stored null records completed recovery, even if this tab still has a
+    // fallback ended marker and has not received the peer's broadcast yet.
+    endedSchema.nullable().parse(JSON.parse(value))
+    localStorage.setItem(KEY, value)
+    storageWriteFailed = false
+    unavailableStorageValue = value
+    persistTabSnapshot(null)
+  } catch {
+    throw new Error('Session recovery is unavailable. Please enable browser storage and try again.')
+  }
 }
 
 export function readEndedSession(): EndedSession | null {
