@@ -179,6 +179,7 @@ from app.tournament_errors import (
     TableInUseError,
     TableNotInCatalogueError,
     TournamentAlreadyInStatusError,
+    TournamentDetailsVersionConflictError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
     TournamentNotReadyToGoLiveError,
@@ -1158,6 +1159,8 @@ async def edit_tournament(
             raise _map_tournament_write_tool_error(
                 exc, tournament_id=tournament_id, owner_denial="edit"
             ) from exc
+        except TournamentDetailsVersionConflictError as exc:
+            raise ToolError(f"[{exc.code}] {exc}") from exc
         except LeagueNotEditableError as exc:
             raise ToolError(str(exc)) from exc
         except LeagueNotFoundError as exc:

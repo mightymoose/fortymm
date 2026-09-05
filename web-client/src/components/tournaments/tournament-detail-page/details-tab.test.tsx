@@ -3,9 +3,10 @@ import { act } from 'react'
 
 import { ApiError } from '@/api/client'
 import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
-import { fireEvent, screen, waitFor } from '@/test/utilities'
+import { fireEvent, render, screen, waitFor } from '@/test/utilities'
 
 import { buildAddress, buildTournament } from '../data/seed.factory'
+import { DetailsTab } from './details-tab'
 import { detailsTabPage } from './details-tab.page'
 
 /** Drain the microtask React Hook Form's async resolver settles one tick after
@@ -58,6 +59,100 @@ const OFFLINE_REFUSAL =
   "The server couldn't be reached. Check your connection and try again."
 
 describe('DetailsTab', () => {
+  it('preserves a rejected draft until a newer Details snapshot is available', async () => {
+    const tournament = buildTournament({ name: 'Original', detailsVersion: 1 })
+    const onUpdate = async () => {
+      throw new ApiError(409, null, 'update tournament', {
+        detail: {
+          code: 'tournament_details_version_conflict',
+          message: 'server prose',
+        },
+      })
+    }
+    const { rerender } = render(
+      <DetailsTab tournament={tournament} canEdit active onUpdate={onUpdate} />,
+    )
+    await userEvent.type(screen.getByDisplayValue('Original'), '!')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByTestId('details-save-error')).toHaveTextContent(
+      'Nothing was saved',
+    )
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Load latest' }),
+    ).not.toBeInTheDocument()
+    rerender(
+      <DetailsTab
+        tournament={{ ...tournament, name: 'Other tab', detailsVersion: 2 }}
+        canEdit
+        active
+        onUpdate={onUpdate}
+      />,
+    )
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Load latest' }),
+    ).toBeInTheDocument()
+  })
+
+  it('loads all latest details only after confirming discard, then saves against that version', async () => {
+    const tournament = buildTournament({ name: 'Original', detailsVersion: 1 })
+    const saved: string[] = []
+    const onUpdate = async (next: typeof tournament) => {
+      saved.push(`${next.detailsVersion}:${next.name}:${next.address?.venue}`)
+    }
+    const { rerender } = render(
+      <DetailsTab tournament={tournament} canEdit active onUpdate={onUpdate} />,
+    )
+    await userEvent.type(screen.getByDisplayValue('Original'), '!')
+    const latest = {
+      ...tournament,
+      name: 'Other tab',
+      detailsVersion: 2,
+      address: buildAddress({ venue: 'New venue' }),
+    }
+    rerender(<DetailsTab tournament={latest} canEdit active onUpdate={onUpdate} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Load latest' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      'Discard your unsaved changes?',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Load latest' }))
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Discard & load latest' }),
+    )
+    expect(screen.getByDisplayValue('Other tab')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('New venue')).toBeInTheDocument()
+    expect(screen.queryByText('Updated elsewhere')).not.toBeInTheDocument()
+    await userEvent.type(screen.getByDisplayValue('Other tab'), '!')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(saved).toEqual(['2:Other tab!:New venue'])
+  })
+
+  it('preserves a dirty draft when newer details arrive in the background', async () => {
+    const tournament = buildTournament({ name: 'Original', detailsVersion: 1 })
+    const { rerender } = render(
+      <DetailsTab tournament={tournament} canEdit active onUpdate={async () => {}} />,
+    )
+    await userEvent.type(screen.getByDisplayValue('Original'), '!')
+    rerender(
+      <DetailsTab
+        tournament={{ ...tournament, name: 'Other tab', detailsVersion: 2 }}
+        canEdit
+        active
+        onUpdate={async () => {}}
+      />,
+    )
+    expect(screen.getByDisplayValue('Original!')).toBeInTheDocument()
+    expect(screen.getByText('Updated elsewhere')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: 'Load latest' }),
+    ).toBeInTheDocument()
+  })
+
+
   it('reveals save only after an edit, then commits the draft', async () => {
     const onUpdate = vi.fn()
     detailsTabPage.render({
@@ -976,43 +1071,28 @@ describe('DetailsTab', () => {
       expect(alert).toHaveTextContent(FAULTED_REFUSAL)
     })
 
-    // The finding names BOTH reset paths: a different committed tournament
-    // arriving (a refetch) re-seeds the form through the reconciliation
-    // effect, which abandons the submitted snapshot just as Revert does.
-    it('stays silent when the PATCH rejects after a reconciliation re-seed mid-flight', async () => {
+    it('preserves the pending draft and refusal when newer Details arrive mid-flight', async () => {
       let reject!: (err: unknown) => void
       const onUpdate = vi.fn(
-        () =>
-          new Promise<void>((_, rej) => {
-            reject = rej
-          }),
+        () => new Promise<void>((_, rej) => { reject = rej }),
       )
-      const view = detailsTabPage.renderStrict({
-        tournament: buildTournament(),
-        onUpdate,
-      })
-
+      const original = buildTournament({ detailsVersion: 1 })
+      const view = detailsTabPage.renderStrict({ tournament: original, onUpdate })
       await userEvent.type(detailsTabPage.getNameInput(), '!')
       await userEvent.click(detailsTabPage.querySaveButton()!)
-      expect(onUpdate).toHaveBeenCalledTimes(1)
-
-      // A refetch replaces the committed tournament while the PATCH is in
-      // flight: the form is re-seeded from it, pristine again.
       view.rerenderWith({
-        tournament: buildTournament({ description: 'Moved venues.' }),
+        tournament: { ...original, description: 'Moved venues.', detailsVersion: 2 },
       })
-      expect(detailsTabPage.querySaveButton()).toBeNull()
+      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(original.description)
 
       await act(async () => reject(refusedName))
       await flush()
-
-      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
-      expect(detailsTabPage.querySaveError()).toBeNull()
-      // The form holds the re-seeded tournament, not the refused draft.
-      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
-      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
-        'Moved venues.',
-      )
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument()
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+      expect(screen.getByRole('button', { name: 'Load latest' })).toBeEnabled()
+      expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ detailsVersion: 1 }))
     })
 
     it('preserves the pending draft when an unrelated tournament refetch arrives', async () => {

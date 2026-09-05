@@ -5254,6 +5254,8 @@ export interface components {
         };
         /** TournamentDetailRead */
         TournamentDetailRead: {
+            /** Details Version */
+            details_version: number;
             /**
              * Id
              * Format: uuid
@@ -5725,6 +5727,8 @@ export interface components {
         };
         /** TournamentRead */
         TournamentRead: {
+            /** Details Version */
+            details_version: number;
             /**
              * Id
              * Format: uuid
@@ -5935,6 +5939,11 @@ export interface components {
          *     ``null`` is rejected.
          */
         TournamentUpdate: {
+            /**
+             * Details Version
+             * @description Version originally read with this Details draft. Required when sending name, description, or address; missing or stale versions return a conflict without writing. Omit for table-only edits.
+             */
+            details_version?: number | null;
             /** Name */
             name?: string | null;
             /** Description */
@@ -5946,6 +5955,27 @@ export interface components {
             league_id?: string | null;
             /** Unplace Fixtures On Removed Tables */
             unplace_fixtures_on_removed_tables?: boolean | null;
+        };
+        /**
+         * TournamentUpdateConflict
+         * @description HTTP conflict envelope, including table and league state refusals.
+         */
+        TournamentUpdateConflict: {
+            /** Detail */
+            detail: components["schemas"]["TournamentUpdateConflictDetail"] | string;
+        };
+        /**
+         * TournamentUpdateConflictDetail
+         * @description Coded refusals produced by a tournament Details save.
+         */
+        TournamentUpdateConflictDetail: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "address_not_geocodable" | "tournament_details_version_conflict";
+            /** Message */
+            message: string;
         };
         /**
          * UnreadCountResponse
@@ -8124,7 +8154,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AddressNotGeocodable"];
+                    "application/json": components["schemas"]["TournamentUpdateConflict"];
                 };
             };
             /** @description Validation Error */

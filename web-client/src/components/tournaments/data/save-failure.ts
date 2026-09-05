@@ -223,7 +223,7 @@ const EVENT_VERSION_CONFLICT_CODE = 'event_version_conflict'
  * classifier keeps the sentence separately (through `extractDetail`, which every
  * arm shares) rather than trusting this parse for it. */
 const eventVersionConflictBodySchema = z.object({
-  detail: z.object({ code: z.literal(EVENT_VERSION_CONFLICT_CODE) }),
+  detail: z.object({ code: z.enum([EVENT_VERSION_CONFLICT_CODE, 'tournament_details_version_conflict']) }),
 })
 
 /** True when a 409's body carries the coded event-version-conflict detail
@@ -316,16 +316,7 @@ export function saveFailureMessage(
     case 'refused':
       return failure.message
     case 'conflict':
-      // The client's OWN copy (ADR-0968) — not `failure.message`, the server's
-      // sentence, which stays on the value for completeness but is never read out
-      // here. The event editor's banner offers the deliberate override
-      // (`event-editor.tsx`); this sentence just says why the save didn't happen.
-      //
-      // `target.subject`, not a hardcoded "event", for the same reason every other
-      // arm here takes it: only the EVENT endpoint carries a version token today,
-      // but the noun is the one thing that would have to change if the tournament
-      // PATCH ever grew one, and a fixed noun is how a shared sentence stops being
-      // shared. Reads identically for `EVENT_SAVE_TARGET`, whose subject is "event".
+      // Forms offer Load latest; recovery never resubmits a stale draft.
       return `This ${target.subject} has changed since you opened it — someone else may have saved a more recent edit.`
     case 'faulted':
       // The server ANSWERED — it just answered badly. So this says whose fault it is

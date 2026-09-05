@@ -26,6 +26,7 @@ import {
 } from '../data/save-failure'
 import type { Tournament } from '../data/types'
 import { Field } from '../field'
+import { LoadLatestDialog } from './load-latest-dialog'
 import { SectionHeader } from './section-header'
 
 export interface DetailsTabProps {
@@ -354,39 +355,47 @@ export const DetailsTab = ({
     if (!isDirty) form.clearErrors('root')
   }, [isDirty, form])
 
-  /** Re-seed the form when its tournament ID or committed DETAILS fields change
-   * — the reconciliation a successful save rides home on. The ID is part of the
-   * snapshot even though it is not an editable field: this route can move to an
-   * already-cached tournament in the same component instance, and equal Details
-   * values do not make it the same entity. A draft from the old ID must never be
-   * left available to save against the new one (#1593 review).
-   *
-   * Events and Tables mutate other fields of this same shared Tournament query,
-   * and their refetches must not wipe a Details draft or abandon its pending
-   * attempt merely because the containing object changed identity.
-   *
-   * An effect, not the adjust-during-render dance the draft state used: `reset`
-   * is a side effect on form state and the DOM, and does not belong in a render.
-   *
-   * A REF, not state, for the same reason nothing renders from it — it only
-   * decides whether this effect resets. */
-  const committedRef = useRef({
-    id: tournament.id,
-    values: valuesFrom(tournament),
-  })
+  /** Dirty drafts retain the snapshot and version they started from. A successful
+   * save may adopt its reconciled values while preserving typing after submit;
+   * an unrelated refresh or a rejected save cannot reset the draft. Switching
+   * tournament IDs always starts a new form. */
+  const [baseline, setBaseline] = useState(tournament)
+  const [confirmLoad, setConfirmLoad] = useState(false)
+  const succeededRef = useRef(false)
+  const stale = baseline.detailsVersion !== tournament.detailsVersion
+  const resetToSaved = () => {
+    attemptGenRef.current += 1
+    submittedRef.current = null
+    succeededRef.current = false
+    setBaseline(tournament)
+    form.reset(valuesFrom(tournament))
+    setConfirmLoad(false)
+  }
+  const loadLatest = () => {
+    if (!stale || saving) return
+    resetToSaved()
+  }
   useEffect(() => {
     const committedValues = valuesFrom(tournament)
     if (
-      tournament.id !== committedRef.current.id ||
-      !sameValues(committedValues, committedRef.current.values)
+      tournament.id !== baseline.id ||
+      (tournament !== baseline &&
+        (!isDirty ||
+          (succeededRef.current &&
+            submittedRef.current !== null &&
+            sameValues(committedValues, submittedRef.current))))
     ) {
       const submitted = submittedRef.current
       const currentValues = form.getValues()
-      const laterFields = tournament.id === committedRef.current.id && submitted
-        ? FIELD_ORDER.filter((field) => currentValues[field] !== submitted[field])
-        : []
+      const laterFields =
+        tournament.id === baseline.id && submitted
+          ? FIELD_ORDER.filter(
+              (field) => currentValues[field] !== submitted[field],
+            )
+          : []
       submittedRef.current = null
-      committedRef.current = { id: tournament.id, values: committedValues }
+      succeededRef.current = false
+      setBaseline(tournament)
       // The re-seed abandons the snapshot a pending save was sent, exactly as
       // the Revert button does — bump the generation with the reset (#1593
       // review).
@@ -395,10 +404,13 @@ export const DetailsTab = ({
       // The response commits only the submitted snapshot. Later typing remains
       // a draft against that new baseline, so Revert still means the saved values.
       for (const field of laterFields) {
-        form.setValue(field, currentValues[field], { shouldDirty: true, shouldValidate: true })
+        form.setValue(field, currentValues[field], {
+          shouldDirty: true,
+          shouldValidate: true,
+        })
       }
     }
-  }, [tournament, form])
+  }, [tournament, form, baseline, isDirty, saving])
 
   /** The refused write, classified and worded in the form's own voice. The draft
    * is untouched — React Hook Form still holds every edit — so Save stays on
@@ -413,12 +425,14 @@ export const DetailsTab = ({
       // Revert or reconciliation reset before the PATCH settles moves it out
       // from under the attempt (#1593 review).
       const attemptGen = attemptGenRef.current
+      succeededRef.current = false
       submittedRef.current = values
       // Last attempt's banner belongs to last attempt (a field's red clears
       // itself: `mode: 'onChange'` re-validates the box as it is retyped).
       form.clearErrors('root')
       try {
-        await onUpdate(draftFrom(tournament, values))
+        await onUpdate(draftFrom(baseline, values))
+        succeededRef.current = attemptGenRef.current === attemptGen
       } catch (err) {
         submittedRef.current = null
         // A refusal is about the draft this attempt SENT, and two guards
@@ -444,7 +458,8 @@ export const DetailsTab = ({
         if (err instanceof DOMException && err.name === 'TimeoutError') {
           form.setError('root', {
             type: 'timeout',
-            message: 'The save took too long. It may still complete on the server. Your edits are still here; reload to check before trying again.',
+            message:
+              'The save took too long. It may still complete on the server. Your edits are still here; reload to check before trying again.',
           })
           return
         }
@@ -473,13 +488,17 @@ export const DetailsTab = ({
           // convention puts a field error — and focus moves there, as it does
           // to the form-level alert, so a screen reader hears the refusal
           // instead of a save that did nothing.
-          form.setError(field, { type: 'server', message }, { shouldFocus: true })
+          form.setError(
+            field,
+            { type: 'server', message },
+            { shouldFocus: true },
+          )
           return
         }
         // EVERY other failure — a nested-address 422, a 403, a 409, a **5xx**, an
         // outage, a bug of ours — lands on the tab's own alert. There is no arm
         // left that can end in silence (#783 QA, round three).
-        form.setError('root', { type: 'server', message })
+        form.setError('root', { type: failure.kind, message })
       } finally {
         setSaving(false)
       }
@@ -506,15 +525,15 @@ export const DetailsTab = ({
    * client (the read `Address` carries them; the write shape does not), so the
    * edit form neither shows nor submits them.
    *
-    * Every one of the six is bounded at `MAX_ADDRESS_COMPONENT` — the server's
-    * `AddressComponent` bound, which the generated schema cannot express, so
-    * the zod schema above is the only place the organizer meets it before the
-    * 422 (#1199, #1593). The boxes carry no `maxLength`: the DOM attribute
-    * counts UTF-16 code units and would stop a value the server accepts from
-    * being typed at all (#1593 review), so the code-point schema is the bound —
-    * checked at submit and as a box is retyped. The bound caps the *value*,
-    * not the display: a row that already holds a 680-character venue from
-    * before the bound still renders it in full, and can still be shortened. */
+   * Every one of the six is bounded at `MAX_ADDRESS_COMPONENT` — the server's
+   * `AddressComponent` bound, which the generated schema cannot express, so
+   * the zod schema above is the only place the organizer meets it before the
+   * 422 (#1199, #1593). The boxes carry no `maxLength`: the DOM attribute
+   * counts UTF-16 code units and would stop a value the server accepts from
+   * being typed at all (#1593 review), so the code-point schema is the bound —
+   * checked at submit and as a box is retyped. The bound caps the *value*,
+   * not the display: a row that already holds a 680-character venue from
+   * before the bound still renders it in full, and can still be shortened. */
   const addressField = (
     label: string,
     key: keyof AddressText,
@@ -562,8 +581,8 @@ export const DetailsTab = ({
                 variant="ghost"
                 type="button"
                 onClick={() => {
-                  attemptGenRef.current += 1
-                  form.reset(valuesFrom(tournament))
+                  if (stale) setConfirmLoad(true)
+                  else resetToSaved()
                 }}
               >
                 Revert
@@ -583,11 +602,16 @@ export const DetailsTab = ({
         }
       />
 
+      <LoadLatestDialog
+        open={confirmLoad}
+        onCancel={() => setConfirmLoad(false)}
+        onLoad={loadLatest}
+      />
       {/* The refusal the form cannot pin to one box. An `Alert`, not a toast:
           what it reports is that the draft in front of you still holds unsaved
           work, and a toast is a portal that leaves in four seconds. Every word
           of it is ours (`saveFailureMessage`). */}
-      {errors.root && (
+      {(errors.root || (canEdit && stale)) && (
         <Alert
           variant="destructive"
           data-testid="details-save-error"
@@ -597,11 +621,39 @@ export const DetailsTab = ({
         >
           <TriangleAlert size={16} />
           <AlertTitle>
-            {errors.root.type === 'timeout' ? "Couldn't confirm your save" : "Couldn't save your changes"}
+            {errors.root?.type === 'timeout'
+              ? "Couldn't confirm your save"
+              : errors.root
+                ? "Couldn't save your changes"
+                : 'Updated elsewhere'}
           </AlertTitle>
           <AlertDescription>
-            {errors.root.message}
-            {errors.root.type !== 'timeout' && ' Nothing was saved — your changes are still here.'}
+            {errors.root?.message}
+            {errors.root &&
+              errors.root.type !== 'timeout' &&
+              ' Nothing was saved — your changes are still here.'}
+            {canEdit && (stale || errors.root?.type === 'conflict') && (
+              <span>
+                {stale ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={saving}
+                    onClick={() => {
+                      if (isDirty) setConfirmLoad(true)
+                      else loadLatest()
+                    }}
+                  >
+                    Load latest
+                  </Button>
+                ) : (
+                  <span>
+                    The latest saved values aren’t available yet. Try saving
+                    again to refresh them.
+                  </span>
+                )}
+              </span>
+            )}
           </AlertDescription>
         </Alert>
       )}

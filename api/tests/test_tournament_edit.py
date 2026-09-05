@@ -245,6 +245,7 @@ async def test_owner_edit_updates_and_persists(
         tournament_id=tournament_id,
         actor=owner,
         updates=TournamentUpdate(
+            details_version=1,
             name="Bay Area Major",
             address=AddressInput(**new_address),
         ),
@@ -289,6 +290,7 @@ async def test_unresolvable_new_address_raises_and_writes_nothing(
             tournament_id=tournament_id,
             actor=owner,
             updates=TournamentUpdate(
+                details_version=1,
                 name="Should Not Persist",
                 address=AddressInput(**bad_address),
             ),
@@ -330,7 +332,7 @@ async def test_name_only_edit_does_not_geocode(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        updates=TournamentUpdate(name="Renamed, Same Venue"),
+        updates=TournamentUpdate(details_version=1, name="Renamed, Same Venue"),
         geocoder=counting,
     )
 
@@ -365,6 +367,7 @@ async def test_resubmitting_the_identical_address_does_not_geocode(
         actor=owner,
         # The address is byte-for-byte the stored one; only the name changes.
         updates=TournamentUpdate(
+            details_version=1,
             name="Bay Area Major",
             address=AddressInput(**_address()),
         ),
@@ -400,7 +403,9 @@ async def test_changed_address_geocodes_exactly_once(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        updates=TournamentUpdate(address=AddressInput(**new_address)),
+        updates=TournamentUpdate(
+            details_version=1, address=AddressInput(**new_address)
+        ),
         geocoder=counting,
     )
 
@@ -463,7 +468,7 @@ async def test_an_explicit_null_address_removes_the_venue(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        updates=TournamentUpdate(address=None),
+        updates=TournamentUpdate(details_version=1, address=None),
         geocoder=counting,
     )
 
@@ -496,7 +501,7 @@ async def test_an_all_blank_address_removes_the_venue(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        updates=TournamentUpdate(address=blank),
+        updates=TournamentUpdate(details_version=1, address=blank),
         geocoder=counting,
     )
 
@@ -521,7 +526,9 @@ async def test_removing_the_venue_leaves_the_rest_of_the_patch_applied(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        updates=TournamentUpdate(name="Venue Cancelled", address=None),
+        updates=TournamentUpdate(
+            details_version=1, name="Venue Cancelled", address=None
+        ),
         geocoder=_GEOCODER,
     )
 
@@ -559,7 +566,7 @@ async def test_giving_a_venue_to_a_tournament_that_has_none_geocodes_it(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        updates=TournamentUpdate(address=AddressInput(**_address())),
+        updates=TournamentUpdate(details_version=1, address=AddressInput(**_address())),
         geocoder=counting,
     )
 
@@ -585,7 +592,7 @@ async def test_non_owner_raises_not_owner(
             db_session,
             tournament_id=tournament_id,
             actor=stranger,
-            updates=TournamentUpdate(name="Hijack"),
+            updates=TournamentUpdate(details_version=1, name="Hijack"),
             geocoder=_GEOCODER,
         )
 
@@ -610,7 +617,7 @@ async def test_missing_tournament_raises_not_found(
             db_session,
             tournament_id=uuid.uuid4(),
             actor=owner,
-            updates=TournamentUpdate(name="Nowhere"),
+            updates=TournamentUpdate(details_version=1, name="Nowhere"),
             geocoder=_GEOCODER,
         )
 
@@ -631,7 +638,7 @@ async def test_league_change_while_draft_moves_the_ladder(
         db_session,
         tournament_id=tournament_id,
         actor=owner,
-        updates=TournamentUpdate(league_id=other_league.id),
+        updates=TournamentUpdate(details_version=1, league_id=other_league.id),
         geocoder=_GEOCODER,
     )
 
@@ -661,7 +668,7 @@ async def test_league_change_after_publish_raises_not_editable(
             db_session,
             tournament_id=tournament_id,
             actor=owner,
-            updates=TournamentUpdate(league_id=other_league.id),
+            updates=TournamentUpdate(details_version=1, league_id=other_league.id),
             geocoder=_GEOCODER,
         )
 
@@ -686,7 +693,7 @@ async def test_league_that_names_no_league_raises_not_found(
             db_session,
             tournament_id=tournament_id,
             actor=owner,
-            updates=TournamentUpdate(league_id=uuid.uuid4()),
+            updates=TournamentUpdate(details_version=1, league_id=uuid.uuid4()),
             geocoder=_GEOCODER,
         )
 
@@ -721,12 +728,13 @@ async def test_adding_a_table_on_a_drawn_tournament_requests_a_solve(
         tournament_id=tournament_id,
         actor=owner,
         updates=TournamentUpdate(
+            details_version=1,
             table_catalogue=[
                 # The two it already has, cited by id, plus one it does not.
                 TournamentTableUpsert(id=kept_first, label="Table 1", court="A"),
                 TournamentTableUpsert(id=kept_second, label="Table 2", court="A"),
                 TournamentTableUpsert(label="Table 3", court="B"),
-            ]
+            ],
         ),
         geocoder=_GEOCODER,
     )
@@ -760,6 +768,7 @@ async def test_re_wording_a_table_on_a_drawn_tournament_requests_no_solve(
         tournament_id=tournament_id,
         actor=owner,
         updates=TournamentUpdate(
+            details_version=1,
             table_catalogue=[
                 TournamentTableUpsert(
                     id=table_ids_before[0], label="Centre Table", court="A"
@@ -767,7 +776,7 @@ async def test_re_wording_a_table_on_a_drawn_tournament_requests_no_solve(
                 TournamentTableUpsert(
                     id=table_ids_before[1], label="Table 2", court="A"
                 ),
-            ]
+            ],
         ),
         geocoder=_GEOCODER,
     )
@@ -796,9 +805,10 @@ async def test_table_catalogue_change_without_a_draw_requests_no_solve(
         tournament_id=tournament_id,
         actor=owner,
         updates=TournamentUpdate(
+            details_version=1,
             table_catalogue=[
                 TournamentTableUpsert(label="Table 9", court="C"),
-            ]
+            ],
         ),
         geocoder=_GEOCODER,
     )
@@ -827,9 +837,10 @@ async def test_a_shorter_catalogue_removes_the_tables_off_the_end(
         tournament_id=tournament_id,
         actor=owner,
         updates=TournamentUpdate(
+            details_version=1,
             table_catalogue=[
                 TournamentTableUpsert(id=first_id, label="Table 1", court="A")
-            ]
+            ],
         ),
         geocoder=_GEOCODER,
     )

@@ -827,6 +827,7 @@ export type TournamentTableEntry =
   | { kind: 'added'; label: string; court: string }
 
 export interface Tournament {
+  detailsVersion: number
   id: string
   name: string
   status: TournamentStatus

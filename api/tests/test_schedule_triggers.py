@@ -612,7 +612,8 @@ async def test_a_rename_only_tournament_patch_requests_no_settings_solve(
     kept = await _catalogue_ids(db_session, tournament_id)
 
     renamed = await client.patch(
-        f"/v1/tournaments/{tournament_id}", json={"name": "Renamed Open"}
+        f"/v1/tournaments/{tournament_id}",
+        json={"details_version": 1, "name": "Renamed Open"},
     )
     resent = await client.patch(
         f"/v1/tournaments/{tournament_id}",

@@ -533,7 +533,7 @@ describe('the tournament write boundary — the venue catalogue (ADR 20260801)',
     const { tableId } = await placeAFixture()
     const before = (await getTournament(SLAM)).body
 
-    const { status, body } = await patchTournament(SLAM, {
+    const { status, body } = await patchTournament(SLAM, { details_version: 1,
       // The rename rides along, so a guard that refused *after* writing is caught.
       name: 'Renamed While Removing',
       table_catalogue: upsertsOf(before).filter((t) => t.id !== tableId),
@@ -559,7 +559,7 @@ describe('the tournament write boundary — the venue catalogue (ADR 20260801)',
     const { fixtureId, tableId } = await placeAFixture()
     const before = (await getTournament(SLAM)).body
 
-    const { status } = await patchTournament(SLAM, {
+    const { status } = await patchTournament(SLAM, { details_version: 1,
       name: 'Renamed While Removing',
       table_catalogue: upsertsOf(before).filter((t) => t.id !== tableId),
       unplace_fixtures_on_removed_tables: true,
@@ -580,7 +580,7 @@ describe('the tournament write boundary — the venue catalogue (ADR 20260801)',
   it('422s an entry citing an id this catalogue does not hold, naming the entry', async () => {
     const before = (await getTournament(SLAM)).body
 
-    const { status, body } = await patchTournament(SLAM, {
+    const { status, body } = await patchTournament(SLAM, { details_version: 1,
       table_catalogue: [
         ...upsertsOf(before),
         { id: 'not-a-table-of-this-tournament', label: 'T9', court: '9' },

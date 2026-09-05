@@ -1361,15 +1361,8 @@ describe('EventEditor', () => {
     })
   })
 
-  /**
-   * The conflict banner and its deliberate override (#1499). A coded 409
-   * (`event_version_conflict`) is a DIFFERENT news than the plain-string 409s above
-   * (the draw freezes) — this event was written elsewhere since the sheet was
-   * opened — and it gets its own copy and its own recovery: a button the director
-   * presses on purpose, which re-sends the same draft against the FRESH version
-   * (`currentLockVersion`), never the one the sheet opened on.
-   */
-  describe('the conflict banner and its override (#1499)', () => {
+
+  describe('the conflict banner and Load latest', () => {
     /** The real shape, byte for byte (`_event_version_conflict`,
      * `api/app/tournaments.py`). */
     const conflictError = new ApiError(409, null, 'update event', {
@@ -1379,12 +1372,12 @@ describe('EventEditor', () => {
       },
     })
 
-    it('keeps the sheet open, keeps the draft, and offers the override — never the server’s sentence', async () => {
+    it('keeps the sheet open, keeps the draft, and offers Load latest — never the server’s sentence', async () => {
       const onSave = vi.fn().mockRejectedValue(conflictError)
       const onClose = vi.fn()
       eventEditorPage.render({
         event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
-        currentLockVersion: 3,
+        latestEvent: buildEvent({ id: 'ev-1', lockVersion: 3 }),
         onSave,
         onClose,
       })
@@ -1405,70 +1398,69 @@ describe('EventEditor', () => {
       expect(eventEditorPage.querySheet()).toBeInTheDocument()
       expect(onClose).not.toHaveBeenCalled()
       expect(eventEditorPage.getNameInput()).toHaveValue('Renamed while stale')
-      expect(eventEditorPage.getOverrideButton()).toBeInTheDocument()
+      expect(eventEditorPage.getLoadLatestButton()).toBeInTheDocument()
     })
 
-    it('the override re-sends the draft against the FRESH version, not the one the sheet opened on', async () => {
-      const onSave = vi.fn().mockRejectedValueOnce(conflictError).mockResolvedValue(undefined)
-      const onClose = vi.fn()
+    it('preserves a rejected draft when the latest read still has the original version', async () => {
       eventEditorPage.render({
-        event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
-        // The version this sheet would read on a FRESH GET — deliberately different
-        // from the event's own frozen 2, which is the whole point of the prop.
-        currentLockVersion: 5,
-        onSave,
-        onClose,
+        event: buildEvent({ id: 'ev-1', name: 'Original', lockVersion: 2 }),
+        latestEvent: buildEvent({ id: 'ev-1', name: 'Original', lockVersion: 2 }),
+        onSave: vi.fn().mockRejectedValue(conflictError),
       })
-
+      await userEvent.type(eventEditorPage.getNameInput(), '!')
       await userEvent.click(eventEditorPage.getSaveButton())
-      await waitFor(() => expect(eventEditorPage.getOverrideButton()).toBeInTheDocument())
-
-      await userEvent.click(eventEditorPage.getOverrideButton())
-
-      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2))
-      // THE assertion: the second call carries `currentLockVersion` (5), never
-      // `event.lockVersion` (2) — reusing the frozen prop would conflict forever.
-      expect(onSave).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ lockVersion: 5 }),
-      )
-      // The override saved and closed, same as any other successful save — `force`,
-      // because the form is still dirty at that instant and the discard guard must
-      // not challenge work that has just been saved.
-      await waitFor(() => expect(onClose).toHaveBeenCalledWith({ force: true }))
+      await waitFor(() => expect(eventEditorPage.queryFailure()).toBeInTheDocument())
+      expect(eventEditorPage.getNameInput()).toHaveValue('Original!')
+      expect(screen.queryByRole('button', { name: 'Load latest' })).not.toBeInTheDocument()
     })
 
-    it('disables the override — and says why — when the event was deleted elsewhere', async () => {
+    it('loads the latest event only after discarding the draft, without saving it', async () => {
+      const onSave = vi.fn().mockRejectedValue(conflictError)
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1', name: 'Original', lockVersion: 2 }),
+        latestEvent: buildEvent({ id: 'ev-1', name: 'Other tab', lockVersion: 5 }),
+        onSave,
+      })
+      await userEvent.type(eventEditorPage.getNameInput(), '!')
+      expect(screen.getByText('Updated elsewhere')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Load latest' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+      expect(eventEditorPage.getNameInput()).toHaveValue('Original!')
+      await userEvent.click(screen.getByRole('button', { name: 'Load latest' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Discard & load latest' }))
+      expect(eventEditorPage.getNameInput()).toHaveValue('Other tab')
+      expect(onSave).not.toHaveBeenCalled()
+      await userEvent.click(eventEditorPage.getSaveButton())
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ name: 'Other tab', lockVersion: 5 })))
+    })
+
+    it('withholds Load latest — and says why — when the event was deleted elsewhere', async () => {
       const onSave = vi.fn().mockRejectedValue(conflictError)
       eventEditorPage.render({
         event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
         // `null`: the reconciled tournament no longer lists this event at all.
-        currentLockVersion: null,
+        latestEvent: null,
         onSave,
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(eventEditorPage.queryFailure()).toBeInTheDocument())
-      expect(eventEditorPage.queryOverrideButton()).not.toBeInTheDocument()
+      expect(eventEditorPage.queryLoadLatestButton()).not.toBeInTheDocument()
       expect(eventEditorPage.queryConflictDeletedNotice()).toBeInTheDocument()
     })
 
-    it('renders no override for a VIEWER (canEdit: false) — a reader has nothing to overwrite with', async () => {
+    it('renders no Load latest for a VIEWER (canEdit: false) — a reader has nothing to overwrite with', async () => {
       const onSave = vi.fn().mockRejectedValue(conflictError)
       eventEditorPage.render({
         event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
-        currentLockVersion: 3,
+        latestEvent: buildEvent({ id: 'ev-1', lockVersion: 3 }),
         canEdit: false,
         onSave,
       })
 
-      // A viewer has no Save button to press in the first place — the banner (and
-      // therefore the override) can only ever be reached by a save this editor
-      // itself fired, which `canEdit: false` never does. Asserted directly: no
-      // override renders even if a failure were somehow on screen.
       expect(eventEditorPage.querySaveButton()).not.toBeInTheDocument()
-      expect(eventEditorPage.queryOverrideButton()).not.toBeInTheDocument()
+      expect(eventEditorPage.queryLoadLatestButton()).not.toBeInTheDocument()
     })
   })
 
@@ -1515,21 +1507,21 @@ describe('EventEditor', () => {
       await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
     })
 
-    it('moves focus to the banner on a refused override — the conflict arm', async () => {
+    it('moves focus to the banner on another refused stale save', async () => {
       const onSave = vi.fn().mockRejectedValue(conflictError)
       eventEditorPage.render({
         event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
-        currentLockVersion: 5,
+        latestEvent: buildEvent({ id: 'ev-1', lockVersion: 5 }),
         onSave,
       })
 
       await userEvent.click(eventEditorPage.getSaveButton())
       await waitFor(() =>
-        expect(eventEditorPage.getOverrideButton()).toBeInTheDocument(),
+        expect(eventEditorPage.getLoadLatestButton()).toBeInTheDocument(),
       )
       eventEditorPage.getNameInput().focus()
 
-      await userEvent.click(eventEditorPage.getOverrideButton())
+      await userEvent.click(eventEditorPage.getSaveButton())
 
       await waitFor(() => expect(eventEditorPage.queryFailure()).toHaveFocus())
     })
@@ -1538,7 +1530,7 @@ describe('EventEditor', () => {
       const onSave = vi.fn().mockRejectedValue(conflictError)
       eventEditorPage.render({
         event: buildEvent({ id: 'ev-1', lockVersion: 2 }),
-        currentLockVersion: null,
+        latestEvent: null,
         onSave,
       })
 
@@ -2062,13 +2054,7 @@ describe('EventEditor', () => {
     })
   })
 
-  /**
-   * The #1537 confirmation: a reservation edit that would newly strand an already-
-   * placed match gets a consequence-stating confirm in front of the save — never a
-   * refusal. `performSave` is the one function both the ordinary submit and the
-   * conflict-override funnel through, so intercepting there is what covers both paths
-   * with one check (`event-editor.tsx`'s own doc on the split).
-   */
+
   describe('the newly-stranded-match confirmation (#1537)', () => {
     /** A drawn event with ONE reservation (round-robin's #1482 cap — a non-`rr-then-
      * ko` draw type may hold at most one) and one placed, in-progress match on `t1`,
@@ -2200,9 +2186,6 @@ describe('EventEditor', () => {
       expect(eventEditorPage.getStrandConfirmSave()).toBeEnabled()
     })
 
-    // The confirmation composes IN FRONT of the existing 409 handling — it must
-    // never bypass or replace it. Confirming "Save anyway" against a stale version
-    // must still land on the conflict banner, with its own override.
     it('still surfaces the 409 conflict banner after "Save anyway" — the confirmation does not bypass it', async () => {
       const conflictError = new ApiError(409, null, 'update event', {
         detail: {
@@ -2213,7 +2196,7 @@ describe('EventEditor', () => {
       const onSave = vi.fn().mockRejectedValue(conflictError)
       eventEditorPage.render({
         event: drawnWithPlacement(),
-        currentLockVersion: 3,
+        latestEvent: buildEvent({ id: 'ev-1', lockVersion: 3 }),
         onSave,
       })
 
@@ -2226,7 +2209,7 @@ describe('EventEditor', () => {
       expect(eventEditorPage.queryFailure()).toHaveTextContent(
         'This event has changed since you opened it',
       )
-      expect(eventEditorPage.getOverrideButton()).toBeInTheDocument()
+      expect(eventEditorPage.getLoadLatestButton()).toBeInTheDocument()
     })
 
     // Review repair: `performSave` used to clear `failure` only inside `doSave`,

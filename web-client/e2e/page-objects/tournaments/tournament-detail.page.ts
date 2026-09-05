@@ -634,12 +634,9 @@ export class TournamentDetailPage {
     return this.page.getByLabel(/Event name/)
   }
 
-  /** The conflict banner's deliberate override (#1499) — present only for a coded
-   * `event_version_conflict` refusal with a live `currentLockVersion` to re-send
-   * against. Pressing it re-sends the same draft against the FRESH version, never
-   * the one the sheet opened on. */
-  get overrideButton(): Locator {
-    return this.page.getByTestId('event-editor-override')
+
+  get loadLatestButton(): Locator {
+    return this.page.getByTestId('event-editor-load-latest')
   }
 
   /** The conflict banner's other branch: the event was deleted by another writer

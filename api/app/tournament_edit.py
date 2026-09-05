@@ -37,6 +37,7 @@ from app.tournament_errors import (
     LeagueNotEditableError,
     LeagueNotFoundError,
     NotTournamentOwnerError,
+    TournamentDetailsVersionConflictError,
     TournamentNotFoundError,
 )
 from app.tournament_geocoding import geocode_address
@@ -64,7 +65,10 @@ async def _load_tournament_for_update(
     """
     tournament = (
         await db.execute(
-            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+            select(Tournament)
+            .where(Tournament.id == tournament_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if tournament is None:
@@ -250,6 +254,21 @@ async def edit_tournament(
     # an all-blank object ``SubmittedAddress`` normalized to one" (remove the venue).
     # Only ``model_fields_set`` tells those apart, so both address branches below are
     # keyed on it.
+    details_changed = bool(
+        {"name", "description", "address"} & updates.model_fields_set
+    )
+    # Refuse an already-stale draft before contacting the geocoder. This read is
+    # only a fast rejection; the authoritative comparison is repeated under lock.
+    if details_changed:
+        version = await db.scalar(
+            select(Tournament.details_version).where(
+                Tournament.id == tournament_id,
+                Tournament.created_by_user_id == actor.id,
+            )
+        )
+        if version is not None and updates.details_version != version:
+            raise TournamentDetailsVersionConflictError()
+
     address_submitted = "address" in updates.model_fields_set
 
     # Geocode the changed address BEFORE taking the lock — never under it (see the
@@ -273,7 +292,11 @@ async def edit_tournament(
 
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
 
+    if details_changed and updates.details_version != tournament.details_version:
+        raise TournamentDetailsVersionConflictError()
+
     fields = updates.model_dump(exclude_unset=True)
+    fields.pop("details_version", None)
 
     # The league is the one field with a *state* rule (ADR-0783), so it comes out
     # of the generic loop and is judged before anything is written — and the
@@ -349,6 +372,9 @@ async def edit_tournament(
         )
         catalogue_changed = applied.changed
         unplaced_event_ids = applied.unplaced_event_ids
+
+    if details_changed:
+        tournament.details_version += 1
 
     for key, value in fields.items():
         setattr(tournament, key, value)

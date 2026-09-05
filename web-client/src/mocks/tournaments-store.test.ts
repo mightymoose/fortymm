@@ -1389,7 +1389,7 @@ describe('transitionTournament', () => {
   // editing a tournament's fields cannot move its lifecycle. The transitions
   // resource is the only door.
   it('is the ONLY way a status changes — a field edit leaves it where it was', () => {
-    const result = updateTournament(PUBLISHED, { name: 'Renamed Open' })
+    const result = updateTournament(PUBLISHED, { details_version: 1, name: 'Renamed Open' })
     if (!result.ok) throw new Error('update failed')
 
     expect(result.tournament.name).toBe('Renamed Open')
@@ -2936,11 +2936,11 @@ describe('the venue on a create/update', () => {
 
   it('REMOVES the venue on a patch of null, and on a patch of six blanks', () => {
     const withVenue = create(venue)
-    expect(updateTournament(withVenue.id, { address: null }).ok).toBe(true)
+    expect(updateTournament(withVenue.id, { details_version: 1, address: null }).ok).toBe(true)
     expect(findTournament(withVenue.id)!.address).toBeNull()
 
     const alsoWithVenue = create(venue)
-    expect(updateTournament(alsoWithVenue.id, { address: blank }).ok).toBe(true)
+    expect(updateTournament(alsoWithVenue.id, { details_version: 1, address: blank }).ok).toBe(true)
     expect(findTournament(alsoWithVenue.id)!.address).toBeNull()
   })
 
@@ -2950,7 +2950,7 @@ describe('the venue on a create/update', () => {
   it('leaves the venue alone when the patch does not mention it', () => {
     const created = create(venue)
 
-    expect(updateTournament(created.id, { name: 'Renamed Cup' }).ok).toBe(true)
+    expect(updateTournament(created.id, { details_version: 1, name: 'Renamed Cup' }).ok).toBe(true)
 
     expect(findTournament(created.id)!.address).toMatchObject({
       venue: 'Oakland Arena',
@@ -2960,7 +2960,7 @@ describe('the venue on a create/update', () => {
   it('gives a venue-less tournament one when the organizer finally books it', () => {
     const created = create(null)
 
-    expect(updateTournament(created.id, { address: venue }).ok).toBe(true)
+    expect(updateTournament(created.id, { details_version: 1, address: venue }).ok).toBe(true)
 
     expect(findTournament(created.id)!.address).toMatchObject({
       venue: 'Oakland Arena',
@@ -3406,7 +3406,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   it('MINTS an id for a table added by a PATCH, and leaves the cited ones alone', () => {
     const before = catalogueOf(SLAM)
 
-    const result = updateTournament(SLAM, {
+    const result = updateTournament(SLAM, { details_version: 1,
       // The whole catalogue, cited by id, plus one entry with NO id: "add this one".
       table_catalogue: [...asUpserts(SLAM), { label: 'T9', court: '9' }],
     })
@@ -3429,7 +3429,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   it('re-words a CITED table in place — the id is what the entry names', () => {
     const [first, ...rest] = catalogueOf(SLAM)
 
-    updateTournament(SLAM, {
+    updateTournament(SLAM, { details_version: 1,
       table_catalogue: [
         { id: first.id, label: 'Centre Court', court: 'Z' },
         ...rest.map((t) => ({ id: t.id, label: t.label, court: t.court })),
@@ -3450,7 +3450,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   it('MOVES tables on a reorder — it does not swap labels between ids', () => {
     const [first, second, ...rest] = catalogueOf(SLAM)
 
-    updateTournament(SLAM, {
+    updateTournament(SLAM, { details_version: 1,
       table_catalogue: [second, first, ...rest].map((t) => ({
         id: t.id,
         label: t.label,
@@ -3466,7 +3466,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   it('refuses an entry citing an id this catalogue does not hold, naming the entry', () => {
     const before = catalogueOf(SLAM)
 
-    const result = updateTournament(SLAM, {
+    const result = updateTournament(SLAM, { details_version: 1,
       name: 'Renamed While Citing A Ghost',
       table_catalogue: [
         ...asUpserts(SLAM),
@@ -3492,7 +3492,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   it('REMOVES a table no entry names', () => {
     const before = catalogueOf(SLAM)
 
-    updateTournament(SLAM, {
+    updateTournament(SLAM, { details_version: 1,
       table_catalogue: asUpserts(SLAM).filter((t) => t.id !== before[7].id),
     })
 
@@ -3512,7 +3512,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
     const reservation = findTournament(SLAM)!.events[0].reservations[0]
     expect(reservation.table_ids).toContain(t2.id)
 
-    const result = updateTournament(SLAM, {
+    const result = updateTournament(SLAM, { details_version: 1,
       table_catalogue: [t1, ...rest].map((t) => ({
         id: t.id,
         label: t.label,
@@ -3531,7 +3531,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
     const { fixtureId, tableId } = placeAFixtureOnT1()
     const before = catalogueOf(SLAM)
 
-    const result = updateTournament(SLAM, {
+    const result = updateTournament(SLAM, { details_version: 1,
       // The rename is the tripwire: a guard that refused AFTER writing would satisfy
       // every assertion about the 409 and still have moved the venue underneath the
       // director.
@@ -3567,7 +3567,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   it('the OPT-IN removes the table and leaves those fixtures unplaced', () => {
     const { fixtureId, tableId } = placeAFixtureOnT1()
 
-    const result = updateTournament(SLAM, {
+    const result = updateTournament(SLAM, { details_version: 1,
       name: 'Renamed While Removing',
       table_catalogue: asUpserts(SLAM).filter((t) => t.id !== tableId),
       unplace_fixtures_on_removed_tables: true,
@@ -3601,7 +3601,7 @@ describe('the venue catalogue on a write (ADR 20260801)', () => {
   ] as const)('refuses identically when the opt-in is %s', (_spelling, optIn) => {
     const { fixtureId, tableId } = placeAFixtureOnT1()
 
-    const result = updateTournament(SLAM, {
+    const result = updateTournament(SLAM, { details_version: 1,
       table_catalogue: asUpserts(SLAM).filter((t) => t.id !== tableId),
       ...optIn,
     })
