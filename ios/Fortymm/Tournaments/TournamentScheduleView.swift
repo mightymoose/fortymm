@@ -13,11 +13,11 @@ struct TournamentScheduleView: View {
     }
     private var rows: [Row] {
         tournament.events.flatMap { event in event.fixtures.map { Row(event: event, fixture: $0) } }
-            .sorted {
-                let left = $0.fixture.scheduledStart?.instant ?? .distantFuture
-                let right = $1.fixture.scheduledStart?.instant ?? .distantFuture
-                return left == right ? $0.id.uuidString < $1.id.uuidString : left < right
-            }
+            .enumerated().sorted {
+                let left = $0.element.fixture.scheduledStart?.instant ?? .distantFuture
+                let right = $1.element.fixture.scheduledStart?.instant ?? .distantFuture
+                return left == right ? $0.offset < $1.offset : left < right
+            }.map(\.element)
     }
     private var playerSections: [(player: TournamentEventDTO.Entrant, rows: [Row])] {
         let sortedRows = rows

@@ -8,6 +8,7 @@ struct TournamentDetailView: View {
     @State private var tab = DetailTab.events
     @State private var creatingEvent = false
     @State private var confirmingTransition = false
+    @State private var transitionSource: TournamentStatus?
     @State private var busy = false
     @State private var error: String?
     @State private var match: FinalMatch?
@@ -113,18 +114,19 @@ struct TournamentDetailView: View {
                     }
                 }
             }
-            .confirmationDialog(store.value?.status.action ?? "", isPresented: $confirmingTransition, titleVisibility: .visible) {
-                if let tournament = store.value, let next = tournament.status.next {
-                    Button(tournament.status.action) {
+            .confirmationDialog(transitionSource?.action ?? "", isPresented: $confirmingTransition, titleVisibility: .visible) {
+                if let tournament = store.value, let source = transitionSource, let next = source.next {
+                    Button(source.action) {
                         busy = true
                         Task {
-                            do { try await service.transition(tournament.id, to: next); error = nil; await store.load(force: true) }
+                            do { try await service.transition(tournament.id, to: next); error = nil }
                             catch { self.error = error.fmMessage }
+                            await store.load(force: true)
                             busy = false
                         }
                     }
                 }
-            } message: { Text(store.value?.status.consequence ?? "") }
+            } message: { Text(transitionSource?.consequence ?? "") }
             .fullScreenCover(item: $match) { selected in
                 MatchDetailView(initial: selected, onBack: { match = nil; Task { await store.load(force: true) } })
             }
@@ -140,7 +142,10 @@ struct TournamentDetailView: View {
             Label(tournament.address?.label ?? "Venue to be announced", systemImage: "mappin.and.ellipse")
             Text([TournamentCopy.count(tournament.events.count, "event"), TournamentCopy.count(tournament.entryCount, "entry", plural: "entries"), TournamentCopy.count(tournament.tableCatalogue.count, "table")].joined(separator: " · "))
             if tournament.canEdit && tournament.status.next != nil {
-                Button(tournament.status.action) { confirmingTransition = true }.buttonStyle(.borderedProminent).disabled(busy)
+                Button(tournament.status.action) {
+                    transitionSource = tournament.status
+                    confirmingTransition = true
+                }.buttonStyle(.borderedProminent).disabled(busy)
             }
         }.font(FMFont.ui(14))
     }
