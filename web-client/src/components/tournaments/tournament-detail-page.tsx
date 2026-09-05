@@ -39,7 +39,15 @@ export interface TournamentDetailPageProps {
   tournament: Tournament
   /** This tournament's table catalogue (for the Tables tab and reservations editor). */
   allTables: TournamentTable[]
-  onUpdate: (tournament: Tournament) => void
+  /** Persist the Details tab's draft. **The returned promise is load-bearing**
+   * (#1593): `DetailsTab` awaits it, keeps the draft and its Save affordance over
+   * a rejection, and reports every failure inline — so a rejection must reach it
+   * rather than being swallowed by a toast. */
+  onUpdate: (tournament: Tournament) => Promise<void>
+  /** While the Details write is pending, its form is the only failure reporter.
+   * The back breadcrumb is therefore withheld so it cannot unmount that form
+   * before the awaited refusal is rendered inline (#1593). */
+  savingDetails?: boolean
   /** Persist an edited table catalogue (add/remove from the Tables tab) as the
    * server's id-keyed diff (ADR 20260801). **The returned promise is load-bearing**:
    * `TablesTab` awaits it and turns the 409 on removing an in-use table into a
@@ -156,6 +164,7 @@ export const TournamentDetailPage = ({
   tournament,
   allTables,
   onUpdate,
+  savingDetails = false,
   onChangeCatalogue,
   onCreateEvent,
   onUpdateEvent,
@@ -244,7 +253,10 @@ export const TournamentDetailPage = ({
       <div className="mx-auto w-full max-w-[1320px] px-12 pt-11 pb-6">
         <PageHeading
           breadcrumb={[
-            { label: 'Tournaments', onClick: onBack },
+            {
+              label: 'Tournaments',
+              onClick: savingDetails ? undefined : onBack,
+            },
             { label: tournament.name },
           ]}
           title={tournament.name}
@@ -401,10 +413,33 @@ export const TournamentDetailPage = ({
           <TabsContent value="schedule">
             <ScheduleTab tournament={tournament} tables={allTables} />
           </TabsContent>
-          <TabsContent value="details">
+          {/* forceMount + self-managed `hidden`: the Details form stays mounted
+              across tab switches. Radix unmounts every other panel when it goes
+              inactive, so a save still in flight when the organizer moved to
+              Events/Tables/Schedule used to have its rejection written into a
+              form that was already gone — and returning to Details mounted a
+              fresh, silent one (#1593 review). Mounted, the report waits beside
+              the draft it preserved: the alert, any field error, and Save are
+              all there when Details comes back. Radix's forceMount hides
+              nothing itself (`hidden: !present` is always false here), so the
+              inactive panel is hidden with the attribute — display:none via
+              preflight in a browser, and out of the accessibility tree (role
+              queries included) everywhere.
+
+              That hiding is also why the tab gets `active`: a refusal landing
+              under another tab cannot take focus (nothing in display:none can),
+              and the unchanged error never re-fires — so the tab re-focuses the
+              retained refusal on this edge, the moment the panel is back
+              (#1593 review). */}
+          <TabsContent
+            value="details"
+            forceMount
+            hidden={tab !== 'details'}
+          >
             <DetailsTab
               tournament={tournament}
               canEdit={canEdit}
+              active={tab === 'details'}
               onUpdate={onUpdate}
             />
           </TabsContent>

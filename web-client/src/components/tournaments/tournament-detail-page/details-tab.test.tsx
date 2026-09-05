@@ -1,10 +1,61 @@
 import userEvent from '@testing-library/user-event'
+import { act } from 'react'
 
+import { ApiError } from '@/api/client'
 import { UNBREAKABLE_VENUE_NAME } from '@/mocks/factories/tournaments/tournament.factory'
-import { screen } from '@/test/utilities'
+import { fireEvent, screen, waitFor } from '@/test/utilities'
 
 import { buildAddress, buildTournament } from '../data/seed.factory'
 import { detailsTabPage } from './details-tab.page'
+
+/** Drain the microtask React Hook Form's async resolver settles one tick after
+ * a `fireEvent.change` — the re-render that shows the Save button (or the
+ * field's error) lands there, outside the event's own act window. `userEvent`
+ * drains it as part of its own await; `fireEvent` does not. */
+const flush = async () => {
+  await act(async () => {})
+}
+
+/**
+ * ⚠️ The string that must NEVER be on screen. It is what FastAPI really answers
+ * an over-long `TournamentUpdate.name` with — Pydantic's own prose, in the wire's
+ * vocabulary. `DEFINITION_OF_COMPLETE.md`: "Raw API detail strings never reach
+ * the UI."
+ */
+const PYDANTIC = 'String should have at most 255 characters'
+
+/** FastAPI's real 422 body for it: a `detail` ARRAY of `{loc, msg}`. */
+const refusedName = new ApiError(422, PYDANTIC, 'update tournament', {
+  detail: [{ type: 'string_too_long', loc: ['body', 'name'], msg: PYDANTIC }],
+})
+
+const refusedDescription = new ApiError(422, PYDANTIC, 'update tournament', {
+  detail: [
+    { type: 'string_too_long', loc: ['body', 'description'], msg: PYDANTIC },
+  ],
+})
+
+/** A nested-address 422 — the wire's own shape for a refused venue component. */
+const refusedAddress = new ApiError(422, PYDANTIC, 'update tournament', {
+  detail: [
+    { type: 'string_too_long', loc: ['body', 'address', 'postal'], msg: PYDANTIC },
+  ],
+})
+
+/** The client-owned wording of each refusal, as `saveFailureMessage` builds it
+ * against `TOURNAMENT_SAVE_TARGET` — asserted verbatim so a wording regression
+ * shows here, not in QA. */
+const NAME_REFUSAL = 'The Name was rejected. Check that field and try again.'
+const DESCRIPTION_REFUSAL =
+  'The Description was rejected. Check that field and try again.'
+const ADDRESS_REFUSAL =
+  'The Venue address was rejected. Check that field and try again.'
+const FIELDLESS_REFUSAL =
+  "Some of this tournament's details were rejected. Check the fields and try again."
+const FAULTED_REFUSAL =
+  'Something went wrong on our end. Nothing you did caused it — try again in a moment.'
+const OFFLINE_REFUSAL =
+  "The server couldn't be reached. Check your connection and try again."
 
 describe('DetailsTab', () => {
   it('reveals save only after an edit, then commits the draft', async () => {
@@ -25,6 +76,44 @@ describe('DetailsTab', () => {
     )
   })
 
+  it('preserves edits typed after a submitted snapshot when its save is reconciled', async () => {
+    let complete!: () => void
+    const onUpdate = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    const tournament = buildTournament()
+    const view = detailsTabPage.renderStrict({ tournament, onUpdate })
+    await userEvent.type(detailsTabPage.getNameInput(), '!')
+    await userEvent.click(detailsTabPage.querySaveButton()!)
+    await userEvent.type(detailsTabPage.getNameInput(), ' Later')
+    await userEvent.type(detailsTabPage.getDescriptionInput(), ' Later description')
+    await act(async () => complete())
+    view.rerenderWith({ tournament: { ...tournament, name: tournament.name + '!' } })
+
+    expect(detailsTabPage.getNameInput()).toHaveValue(tournament.name + '! Later')
+    expect(detailsTabPage.getDescriptionInput()).toHaveValue(tournament.description + ' Later description')
+    expect(detailsTabPage.querySaveButton()).toBeEnabled()
+    await userEvent.click(detailsTabPage.getRevertButton())
+    expect(detailsTabPage.getNameInput()).toHaveValue(tournament.name + '!')
+    expect(detailsTabPage.getDescriptionInput()).toHaveValue(tournament.description)
+    expect(detailsTabPage.querySaveButton()).toBeNull()
+  })
+
+  it('preserves a fresh draft after Revert when the earlier save later succeeds', async () => {
+    let complete!: () => void
+    const onUpdate = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    const tournament = buildTournament()
+    const view = detailsTabPage.renderStrict({ tournament, onUpdate })
+    await userEvent.type(detailsTabPage.getNameInput(), '!')
+    await userEvent.click(detailsTabPage.querySaveButton()!)
+    await userEvent.click(detailsTabPage.getRevertButton())
+    await userEvent.type(detailsTabPage.getDescriptionInput(), ' Fresh draft')
+    await act(async () => complete())
+    view.rerenderWith({ tournament: { ...tournament, name: tournament.name + '!' } })
+
+    expect(detailsTabPage.getDescriptionInput()).toHaveValue(tournament.description + ' Fresh draft')
+    expect(detailsTabPage.getNameInput()).toHaveValue(tournament.name)
+    expect(detailsTabPage.querySaveButton()).toBeEnabled()
+  })
+
   it('reverts the draft back to the committed tournament', async () => {
     detailsTabPage.render({
       tournament: buildTournament({ name: 'Bay Area Open 2026' }),
@@ -36,6 +125,34 @@ describe('DetailsTab', () => {
     await userEvent.click(detailsTabPage.getRevertButton())
     expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
     expect(detailsTabPage.querySaveButton()).toBeNull()
+  })
+
+  it('re-seeds when the tournament id changes despite identical committed Details values', async () => {
+    const onUpdate = vi.fn()
+    const first = buildTournament({ id: 'tournament-one' })
+    const second = buildTournament({ id: 'tournament-two' })
+    const view = detailsTabPage.render({ tournament: first, onUpdate })
+
+    await userEvent.type(detailsTabPage.getNameInput(), ' leaked draft')
+    expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+
+    // The router can reuse this component when a cached tournament replaces the
+    // current one. All eight committed Details values happen to match, so the id
+    // is the only fact that says this is a different form and its draft must go.
+    view.rerenderWith({ tournament: second })
+
+    expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+    expect(detailsTabPage.querySaveButton()).toBeNull()
+
+    await userEvent.type(detailsTabPage.getDescriptionInput(), ' For tournament two.')
+    await userEvent.click(detailsTabPage.querySaveButton()!)
+
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'tournament-two',
+        name: 'Bay Area Open 2026',
+      }),
+    )
   })
 
   // Status is not an editable field (ADR-0017): it moves only across a guarded
@@ -95,6 +212,16 @@ describe('DetailsTab', () => {
     expect(detailsTabPage.getInteractiveControls()).toHaveLength(0)
   })
 
+  it('renders no validation furniture, save state, or failure UI for a non-creator', () => {
+    detailsTabPage.render({ tournament: buildTournament(), canEdit: false })
+
+    expect(detailsTabPage.querySaveButton()).toBeNull()
+    expect(detailsTabPage.querySaveError()).toBeNull()
+    // No validation messages anywhere: a reader's surface has nothing to
+    // validate and nothing to correct.
+    expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeNull()
+  })
+
   it('renders the details as values, and addresses the reader, for a non-creator', () => {
     detailsTabPage.render({
       tournament: buildTournament({
@@ -114,7 +241,7 @@ describe('DetailsTab', () => {
     // A hint explains how to fill in a control; with no control there is
     // nothing to explain, so the read-only view drops it.
     expect(
-      screen.queryByText(/Optional. Shown on the public registration page/),
+      screen.queryByText(/Optional\. Shown on the public registration page/),
     ).toBeNull()
 
     // No status row, for a reader or an editor: status is not a field of this
@@ -222,16 +349,17 @@ describe('DetailsTab', () => {
 
   /**
    * The organizer meets the server's `AddressComponent` bound here, not at the
-   * 422 (#1199). The generated schema cannot carry it — `openapi-typescript` has
-   * no TypeScript construct for a string length, so `maxLength` appears nowhere
-   * in `src/api/schema.d.ts` — which makes this the only statement of it on the
-   * edit surface.
+   * 422 (#1199). The bound is the zod schema's, counted in code points — the
+   * boxes carry NO `maxLength`: the DOM attribute counts UTF-16 code units, so
+   * it would stop a value the server accepts (128 emoji are 256 units, 128
+   * code points) from ever being typed, and the schema would never see it
+   * (#1593 review).
    */
-  it('caps every venue box at the 255 characters the server accepts', () => {
+  it('puts no UTF-16 typing cap on the venue boxes', () => {
     detailsTabPage.render({ tournament: buildTournament() })
 
     for (const input of detailsTabPage.getVenueInputs()) {
-      expect(input).toHaveAttribute('maxlength', '255')
+      expect(input).not.toHaveAttribute('maxlength')
     }
   })
 
@@ -257,5 +385,1125 @@ describe('DetailsTab', () => {
     // The row is present and shows an em-dash: "the organizer set nothing" has
     // to stay distinguishable from "this does not apply".
     expect(detailsTabPage.getReadOnlyValues()).toContain('—')
+  })
+
+  /**
+   * The client-side half of the save boundary (#1593). The schema mirrors every
+   * constraint the server has on `TournamentUpdate` — a name the server would
+   * 422 never leaves the browser — and the `maxLength` attribute is NOT the
+   * guarantee: a programmatic or autofill fill sails past it, so the schema
+   * refuses it at submit.
+   */
+  describe('client-side validation (#1593)', () => {
+    it.each([
+      ['Name', ''],
+      ['Description', 'x'.repeat(1025)],
+      ...['Venue name', 'Street', 'City', 'Region', 'Postal', 'Country'].map(
+        (label) => [label, 'x'.repeat(256)],
+      ),
+    ])('announces a client error while %s retains focus', async (label, value) => {
+      detailsTabPage.render({ tournament: buildTournament() })
+      const input = screen.getByRole('textbox', { name: new RegExp(`^${label}\\*?$`) })
+      await userEvent.click(input)
+      fireEvent.change(input, { target: { value } })
+      await flush()
+
+      expect(input).toBeInvalid()
+      expect(input).toHaveFocus()
+      const hint = document.getElementById(input.getAttribute('aria-describedby')!)
+      expect(hint).toHaveAttribute('role', 'alert')
+      expect(hint).not.toBeEmptyDOMElement()
+    })
+
+    it('refuses a blank name with "Name is required." and sends nothing', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.clear(detailsTabPage.getNameInput())
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeInTheDocument()
+      expect(detailsTabPage.getNameInput()).toBeInvalid()
+      expect(onUpdate).not.toHaveBeenCalled()
+    })
+
+    it('saves a server-valid whitespace-only stored name untouched when another field is edited', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({
+        tournament: buildTournament({ name: '   ' }),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe('   ')
+    })
+
+    it('bounds an enormous whitespace-only name before checking requiredness', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      // `mode: onChange` validates this value on the paste and every later edit.
+      // The bounded code-point check remains the first stage, so this is the
+      // refusal even though whitespace-only values within the bound are valid.
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: ' '.repeat(1_000_000) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Name must be 255 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeNull()
+      expect(onUpdate).not.toHaveBeenCalled()
+    })
+
+    // The finding's exact scenario (#1593 review): the schema's old `.trim()`
+    // TRANSFORM replaced the submitted value, so editing only another field
+    // renamed a whitespace-padded stored name to its trimmed form — a rename
+    // the server, which does not normalize `TournamentUpdate.name`, would have
+    // committed. Non-emptiness is validated without transforming the value; the
+    // stored value itself is what gets sent.
+    it('saves a whitespace-padded stored name untouched when only another field is edited', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({
+        tournament: buildTournament({ name: ' Bay Area Open 2026 ' }),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe(' Bay Area Open 2026 ')
+    })
+
+    // The other half of the same decision: with no transform in the schema, the
+    // name is sent exactly as typed — edge whitespace included — never silently
+    // rewritten by the form.
+    it('saves the name exactly as typed, edge whitespace included', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: '  Renamed Open  ' },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe('  Renamed Open  ')
+    })
+
+    it('refuses a name over 255 characters with a message under the box', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: 'x'.repeat(256) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Name must be 255 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(detailsTabPage.getNameInput()).toBeInvalid()
+      expect(onUpdate).not.toHaveBeenCalled()
+    })
+
+    it('accepts a name of exactly 255 characters', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: 'x'.repeat(255) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe('x'.repeat(255))
+    })
+
+    // The server counts Unicode code points; Zod's own `.max` counts UTF-16
+    // code units, under which 255 emoji are 510 "characters" — so a name the
+    // server would take was refused here before the form ever sent it. The
+    // schema counts code points (`atMostCodePoints`), so this name goes through.
+    it('accepts a name of 255 emoji — 255 code points, 510 UTF-16 units', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      const emoji = '🏆'.repeat(255)
+      // The count `.max` would have applied — the reason this test can tell
+      // code points from code units at all.
+      expect(emoji.length).toBe(510)
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: emoji },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate.mock.calls[0][0].name).toBe(emoji)
+    })
+
+    it('refuses a name of 256 code points, emoji included', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: '🏆'.repeat(256) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Name must be 255 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(onUpdate).not.toHaveBeenCalled()
+    })
+
+    it('refuses a description over 1,024 characters and accepts one exactly at it', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      fireEvent.change(detailsTabPage.getDescriptionInput(), {
+        target: { value: 'y'.repeat(1025) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Description must be 1024 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(onUpdate).not.toHaveBeenCalled()
+
+      fireEvent.change(detailsTabPage.getDescriptionInput(), {
+        target: { value: 'y'.repeat(1024) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    })
+
+    // The bound counts code points, but the WORK of counting is bounded by the
+    // limit, not by the value: the counter stops at max + 1, so re-validating a
+    // huge paste on every keystroke (`mode: 'onChange'`) cannot materialize the
+    // whole string each time (#1593 review). The bounded counter's own unit
+    // tests — including the one that can fail against an unbounded `[...v]` —
+    // live in `data/code-points.test.ts`; this pins the form-level behaviour:
+    // the paste sits in the box (no DOM cap), the refusal is spoken, and the
+    // form still saves once it is cleared.
+    it('refuses an enormous paste at the bound and still saves once it is cleared', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      // 1,000,000 code points of description — a thousand times the 1,024 bound.
+      fireEvent.change(detailsTabPage.getDescriptionInput(), {
+        target: { value: 'y'.repeat(1_000_000) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Description must be 1024 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(onUpdate).not.toHaveBeenCalled()
+
+      // The tab is not wedged: clearing the paste and saving works.
+      await userEvent.clear(detailsTabPage.getDescriptionInput())
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    })
+
+    it('catches an over-long address component typed straight into the box', async () => {
+      // With no `maxLength` on the boxes, the typing path itself reaches the
+      // schema bound — the only statement of it left (#1593 review).
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      const postal = detailsTabPage.getVenueInputs()[4]
+      fireEvent.change(postal, { target: { value: 'z'.repeat(300) } })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Postal must be 255 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+      expect(onUpdate).not.toHaveBeenCalled()
+    })
+
+    it('accepts an address component of exactly 255 characters', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      const postal = detailsTabPage.getVenueInputs()[4]
+      fireEvent.change(postal, { target: { value: 'z'.repeat(255) } })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    })
+
+    // The UTF-16 `maxLength` this form used to carry stopped this value being
+    // TYPED at all: 128 emoji are 256 UTF-16 code units — past the attribute —
+    // but 128 code points, which the server accepts (#1593 review). The typing
+    // path now reaches the code-point schema.
+    it('accepts a venue of 128 emoji — 128 code points, 256 UTF-16 units', async () => {
+      const onUpdate = vi.fn()
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      const emoji = '🏆'.repeat(128)
+      expect(emoji.length).toBe(256)
+
+      fireEvent.change(detailsTabPage.getVenueInputs()[0], {
+        target: { value: emoji },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: expect.objectContaining({ venue: emoji }),
+        }),
+      )
+    })
+
+    it('wires aria-invalid and aria-describedby to the rendered message', async () => {
+      detailsTabPage.render({ tournament: buildTournament() })
+
+      // A clean control describes itself by nothing — the hint id is handed out
+      // only while a hint is really on screen.
+      expect(detailsTabPage.getNameInput()).not.toHaveAttribute(
+        'aria-describedby',
+      )
+
+      await userEvent.clear(detailsTabPage.getNameInput())
+      const message = detailsTabPage.queryFieldMessage('Name is required.')
+      expect(message).toBeInTheDocument()
+      expect(detailsTabPage.getNameInput()).toBeInvalid()
+      expect(detailsTabPage.getNameInput()).toHaveAttribute(
+        'aria-describedby',
+        message!.id,
+      )
+    })
+
+    it('moves focus to the first invalid control when a submit is refused client-side', async () => {
+      detailsTabPage.render({ tournament: buildTournament() })
+
+      await userEvent.clear(detailsTabPage.getNameInput())
+      fireEvent.change(detailsTabPage.getDescriptionInput(), {
+        target: { value: 'y'.repeat(1025) },
+      })
+      await flush()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(detailsTabPage.getNameInput()).toHaveFocus()
+    })
+
+    it('clears a stale field error as the field is corrected, keeping the other edits', async () => {
+      detailsTabPage.render({ tournament: buildTournament() })
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: 'x'.repeat(256) },
+      })
+      await flush()
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Name must be 255 characters or fewer.',
+        ),
+      ).toBeInTheDocument()
+
+      fireEvent.change(detailsTabPage.getNameInput(), {
+        target: { value: 'Fixed name' },
+      })
+      await flush()
+
+      expect(
+        detailsTabPage.queryFieldMessage(
+          'Name must be 255 characters or fewer.',
+        ),
+      ).toBeNull()
+      // The correction did not discard the description edit.
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Two-day open. USATT-sanctioned, ratings-eligible. Still on.',
+      )
+    })
+  })
+
+  /** The save is a promise, not a fire-and-forget: while the write is in flight
+   * the Save control cannot start a second one (#1593). */
+  describe('a pending save', () => {
+    it('cannot submit a duplicate update while the write is pending', async () => {
+      let resolve!: () => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((res) => {
+            resolve = res
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      resolve()
+      await waitFor(() => expect(detailsTabPage.querySaveButton()).toBeEnabled())
+    })
+
+    // The finding's exact scenario (#1593 review): `form.reset` (Revert)
+    // resets React Hook Form's submission state, so with the lock INSIDE the
+    // form, Revert mid-flight re-opened Save and a second edit let a second
+    // PATCH race the first. The lock now lives outside the form, where no
+    // reset can reach it.
+    it('keeps the duplicate-submit gate when Revert resets the form mid-flight', async () => {
+      let resolve!: () => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((res) => {
+            resolve = res
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+
+      // Revert hands the draft back while the write is still in flight...
+      await userEvent.click(detailsTabPage.getRevertButton())
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+
+      // ...and a fresh edit dirties the form again — but the ORIGINAL write
+      // is still pending, so Save stays shut and no second PATCH can start.
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      expect(detailsTabPage.querySaveButton()).toBeDisabled()
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      resolve()
+      await waitFor(() => expect(detailsTabPage.querySaveButton()).toBeEnabled())
+    })
+
+    // The finding's exact scenario (#1593 review): Revert stays usable while
+    // the PATCH is pending, and the rejection lands in a catch whose snapshot
+    // is gone. The `isDirty` sweep clears errors when dirtiness CHANGES, and
+    // the reset has already made the form pristine, so an error the catch
+    // installs afterwards would strand a "your changes are still here" alert
+    // on a form with no Save and no Revert. The catch must not install one.
+    it('stays silent when the PATCH rejects after Revert wiped the draft mid-flight', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // The draft is reverted while the write is still in flight: the form
+      // is pristine again, with no Save and no Revert.
+      await userEvent.click(detailsTabPage.getRevertButton())
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+
+      // The PATCH then rejects. Its refusal is about a snapshot the form no
+      // longer holds: no alert, and no complaint under any box.
+      await act(async () =>
+        reject(new ApiError(500, 'Internal Server Error', 'update tournament')),
+      )
+      await flush()
+
+      expect(detailsTabPage.querySaveError()).toBeNull()
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+
+      // Cleared, not merely hidden while pristine: a fresh edit does not
+      // resurrect the refusal.
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      expect(detailsTabPage.querySaveError()).toBeNull()
+    })
+
+    // The finding's exact scenario (#1593 review), beyond the pristine case
+    // above: Revert abandons the snapshot the PATCH was sent, and the form's
+    // dirtiness afterwards belongs to a NEW draft. The old guard read only
+    // "is the form dirty", so the abandoned attempt's refusal — a 422 for the
+    // old Name — was installed against the new draft: an alert blaming Name
+    // beside a form whose Name was restored and whose only edit was the
+    // Description. The attempt generation is what says the snapshot is gone.
+    it('stays silent when the PATCH rejects after Revert and a fresh edit of another field', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // The draft is reverted while the write is still in flight...
+      await userEvent.click(detailsTabPage.getRevertButton())
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+
+      // ...and a NEW edit starts before the PATCH rejects: the form is dirty
+      // again, but not with the attempt's work.
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The refusal is about the abandoned snapshot: nothing under Name,
+      // whose value was restored, and no alert blaming Name beside a draft
+      // that edits only the Description.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+
+      // The fresh edit is untouched, and Save stays on offer for it.
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Two-day open. USATT-sanctioned, ratings-eligible. Still on.',
+      )
+      expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+    })
+
+    it('stays silent when manual undo abandons the pending draft before a fresh edit', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.renderStrict({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // Ordinary typing, not Revert, returns every field to its committed value.
+      // That pristine transition abandons the submitted Name snapshot too.
+      await userEvent.clear(detailsTabPage.getNameInput())
+      await userEvent.type(detailsTabPage.getNameInput(), 'Bay Area Open 2026')
+      await waitFor(() => expect(detailsTabPage.querySaveButton()).toBeNull())
+
+      // A different edit begins before the abandoned request settles.
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Still on.')
+      await act(async () => reject(refusedName))
+      await flush()
+
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Two-day open. USATT-sanctioned, ratings-eligible. Still on.',
+      )
+      expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+    })
+
+    // The silence belongs to the abandoned attempt alone. A save the
+    // organizer starts AFTER the mid-flight Revert is a fresh attempt bound
+    // to the fresh draft, and its refusal speaks beside that draft.
+    it('speaks for an attempt the organizer started after the mid-flight Revert', async () => {
+      const rejects: Array<(err: unknown) => void> = []
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            rejects.push(rej)
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      await userEvent.click(detailsTabPage.getRevertButton())
+
+      // The first PATCH rejects against the abandoned snapshot: silence.
+      await act(async () =>
+        rejects[0](
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        ),
+      )
+      await flush()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+
+      // The fresh draft's own save fails out loud.
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Held.')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(2))
+      await act(async () =>
+        rejects[1](
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        ),
+      )
+      await flush()
+
+      const alert = detailsTabPage.querySaveError()
+      expect(alert).toBeInTheDocument()
+      expect(alert).toHaveTextContent(FAULTED_REFUSAL)
+    })
+
+    // The finding names BOTH reset paths: a different committed tournament
+    // arriving (a refetch) re-seeds the form through the reconciliation
+    // effect, which abandons the submitted snapshot just as Revert does.
+    it('stays silent when the PATCH rejects after a reconciliation re-seed mid-flight', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      const view = detailsTabPage.renderStrict({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // A refetch replaces the committed tournament while the PATCH is in
+      // flight: the form is re-seeded from it, pristine again.
+      view.rerenderWith({
+        tournament: buildTournament({ description: 'Moved venues.' }),
+      })
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+      // The form holds the re-seeded tournament, not the refused draft.
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Moved venues.',
+      )
+    })
+
+    it('preserves the pending draft when an unrelated tournament refetch arrives', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      const view = detailsTabPage.renderStrict({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // Events and Tables mutations refetch the shared tournament query. Those
+      // collections produce a new Tournament object, but they do not change the
+      // committed fields this form edits and must not wipe its pending draft.
+      view.rerenderWith({
+        tournament: buildTournament({
+          events: [],
+          dateRange: null,
+          tableIds: ['t1'],
+        }),
+      })
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The attempt still belongs to the draft on screen, so its refusal is
+      // retained and attributed normally rather than disappearing in a reset.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument()
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+    })
+  })
+
+  /**
+   * The server half of the save boundary (#1593). Every refusal is spoken —
+   * attributed to a box where the wire names one the form shows, in the tab's
+   * own alert where it cannot — every word of it ours, and the draft always
+   * survives for the retry.
+   */
+  describe('a refused save', () => {
+    it('attributes a 422 naming the name to that box, in our words — never Pydantic prose', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(refusedName)
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() =>
+        expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument(),
+      )
+      expect(screen.queryByText(new RegExp(PYDANTIC))).toBeNull()
+      // The refusal did not bin the work and did not leave silence: the draft
+      // is intact, Save is still on offer, and no form-level alert competes.
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+      expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+      expect(detailsTabPage.querySaveError()).toBeNull()
+    })
+
+    it('attributes a 422 naming the description to that box', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(refusedDescription)
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() =>
+        expect(
+          detailsTabPage.queryFieldMessage(DESCRIPTION_REFUSAL),
+        ).toBeInTheDocument(),
+      )
+      expect(screen.queryByText(new RegExp(PYDANTIC))).toBeNull()
+    })
+
+    it('moves focus to the field a 422 names, so the refusal is announced, not silent', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(refusedName)
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      await waitFor(() =>
+        expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument(),
+      )
+      // Focus goes with the message, as it does to the form-level alert:
+      // otherwise the caret stays on Save and the refused save still reads as
+      // a click that did nothing.
+      expect(detailsTabPage.getNameInput()).toHaveFocus()
+    })
+
+    it('live-announces a field refusal when Enter submits from the already-focused field', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      // Keyboard submit leaves focus in Name. Focusing it again after the async
+      // response creates no focus event, so the inserted error text itself must
+      // be a live announcement.
+      await userEvent.type(detailsTabPage.getNameInput(), '!{Enter}')
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+      expect(detailsTabPage.getNameInput()).toHaveFocus()
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      const message = detailsTabPage.queryFieldMessage(NAME_REFUSAL)
+      expect(message).toBeInTheDocument()
+      expect(message).toHaveAttribute('role', 'alert')
+      expect(detailsTabPage.getNameInput()).toHaveFocus()
+    })
+
+    // The boxes stay live during a slow PATCH (#1593 review): a refusal is for
+    // the snapshot the attempt SENT, so a blamed box that has since changed
+    // must not be reddened and have focus dragged back to it — that blames a
+    // value the server never saw. The complaint goes to the alert instead.
+    it('does not pin a 422 to a box whose value changed while the PATCH was pending', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // The write is slow: the organizer keeps typing, and the Name box no
+      // longer holds the snapshot the server is refusing.
+      await userEvent.type(detailsTabPage.getNameInput(), '?')
+
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The refused value is gone from the box, so the complaint cannot go
+      // under it — and focus must not be dragged back to it either.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeNull()
+      // But the refusal is still spoken: it lands on the tab's alert, which
+      // takes focus the same way any other unpinnable refusal does.
+      const alert = detailsTabPage.querySaveError()
+      expect(alert).toBeInTheDocument()
+      expect(alert).toHaveTextContent(NAME_REFUSAL)
+      expect(alert).toHaveFocus()
+    })
+
+    it('sends a nested-address 422 to the form alert — never to one arbitrary box', async () => {
+      // A FastAPI location under `address` identifies only the Venue address
+      // block, so pinning it onto one of the six inputs would be a lie about
+      // where the organizer has to look.
+      const onUpdate = vi.fn().mockRejectedValue(refusedAddress)
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      const alert = await waitFor(() => {
+        const el = detailsTabPage.querySaveError()
+        expect(el).toBeInTheDocument()
+        return el!
+      })
+      expect(alert).toHaveTextContent(ADDRESS_REFUSAL)
+      expect(alert).toHaveTextContent(
+        'Nothing was saved — your changes are still here.',
+      )
+      expect(screen.queryByText(new RegExp(PYDANTIC))).toBeNull()
+      // Not attributed to any box.
+      expect(detailsTabPage.queryFieldMessage(ADDRESS_REFUSAL)).toBeNull()
+      // The draft is intact and the affordances remain for the retry.
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+      expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+    })
+
+    it('answers a 422 naming no recognized field with the generic sentence', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(
+        new ApiError(422, PYDANTIC, 'update tournament', {
+          detail: [
+            { type: 'too_big', loc: ['body', 'something_else'], msg: PYDANTIC },
+          ],
+        }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      const alert = await waitFor(() => {
+        const el = detailsTabPage.querySaveError()
+        expect(el).toBeInTheDocument()
+        return el!
+      })
+      expect(alert).toHaveTextContent(FIELDLESS_REFUSAL)
+      expect(screen.queryByText(new RegExp(PYDANTIC))).toBeNull()
+    })
+
+    it("reports a 403 refusal in the alert, carrying the server's sentence", async () => {
+      const onUpdate = vi.fn().mockRejectedValue(
+        new ApiError(403, 'You can only modify tournaments you created.', 'update tournament', {
+          detail: 'You can only modify tournaments you created.',
+        }),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      const alert = await waitFor(() => {
+        const el = detailsTabPage.querySaveError()
+        expect(el).toBeInTheDocument()
+        return el!
+      })
+      expect(alert).toHaveTextContent(
+        'You can only modify tournaments you created.',
+      )
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+    })
+
+    it('tells the truth about a 5xx — our fault, not their wifi', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(
+        new ApiError(500, 'Internal Server Error', 'update tournament'),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      const alert = await waitFor(() => {
+        const el = detailsTabPage.querySaveError()
+        expect(el).toBeInTheDocument()
+        return el!
+      })
+      expect(alert).toHaveTextContent(FAULTED_REFUSAL)
+    })
+
+    it('blames the connection only when no response ever arrived', async () => {
+      const onUpdate = vi
+        .fn()
+        .mockRejectedValue(new TypeError('Failed to fetch'))
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      const alert = await waitFor(() => {
+        const el = detailsTabPage.querySaveError()
+        expect(el).toBeInTheDocument()
+        return el!
+      })
+      expect(alert).toHaveTextContent(OFFLINE_REFUSAL)
+    })
+
+    it('answers an unclassifiable failure with "Something went wrong. Try again."', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(new Error('boom'))
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      const alert = await waitFor(() => {
+        const el = detailsTabPage.querySaveError()
+        expect(el).toBeInTheDocument()
+        return el!
+      })
+      expect(alert).toHaveTextContent('Something went wrong. Try again.')
+    })
+
+    it('announces a repeated failure every time, not only on the first mount', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(
+        new ApiError(500, 'Internal Server Error', 'update tournament'),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toHaveFocus())
+
+      // Move focus away, then fail again: the alert takes focus back, so a
+      // screen reader hears the second refusal too.
+      await userEvent.click(detailsTabPage.getNameInput())
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toHaveFocus())
+    })
+
+    it('clears the failure and reconciles normally when a retry succeeds', async () => {
+      const onUpdate = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        )
+        .mockResolvedValueOnce(undefined)
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeInTheDocument())
+
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeNull())
+      expect(onUpdate).toHaveBeenCalledTimes(2)
+    })
+
+    it('clears the prior form-level failure when a new save attempt is refused client-side', async () => {
+      const onUpdate = vi.fn().mockRejectedValue(
+        new ApiError(500, 'Internal Server Error', 'update tournament'),
+      )
+      detailsTabPage.render({ tournament: buildTournament(), onUpdate })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeInTheDocument())
+
+      // The next attempt never reaches the server — the blank name is refused
+      // client-side — but it is still an attempt: the stale banner goes.
+      await userEvent.clear(detailsTabPage.getNameInput())
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+
+      expect(detailsTabPage.querySaveError()).toBeNull()
+      expect(detailsTabPage.queryFieldMessage('Name is required.')).toBeInTheDocument()
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    it('clears a form-level refusal once the draft is back at its committed values', async () => {
+      const onUpdate = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        )
+      detailsTabPage.render({
+        tournament: buildTournament({ name: 'Bay Area Open 2026' }),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeInTheDocument())
+
+      // Undo the edit by hand — not with Revert — so the draft returns to the
+      // committed values on its own. Save and Revert are gone; the alert must
+      // not outlive them: it claims unsaved changes remain, and nothing left
+      // on the tab could dismiss it.
+      await userEvent.clear(detailsTabPage.getNameInput())
+      await userEvent.type(detailsTabPage.getNameInput(), 'Bay Area Open 2026')
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeNull())
+
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+
+      // Cleared, not merely hidden while pristine: a fresh edit does not
+      // resurrect the stale banner.
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      expect(detailsTabPage.querySaveError()).toBeNull()
+    })
+
+    it('keeps the draft — dirty and editable — after a refused save', async () => {
+      const onUpdate = vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(500, 'Internal Server Error', 'update tournament'),
+        )
+      detailsTabPage.render({
+        tournament: buildTournament({ name: 'Bay Area Open 2026' }),
+        onUpdate,
+      })
+
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.type(detailsTabPage.getDescriptionInput(), ' Held.')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toBeInTheDocument())
+
+      // The UI never implies the rejected values committed: the edited values
+      // are still in the boxes, still dirty, Save still offered for the retry,
+      // and Revert can still put the committed tournament back.
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026!')
+      expect(detailsTabPage.getDescriptionInput()).toHaveValue(
+        'Two-day open. USATT-sanctioned, ratings-eligible. Held.',
+      )
+      expect(detailsTabPage.querySaveButton()).toBeInTheDocument()
+      expect(detailsTabPage.getRevertButton()).toBeInTheDocument()
+
+      await userEvent.click(detailsTabPage.getRevertButton())
+      expect(detailsTabPage.getNameInput()).toHaveValue('Bay Area Open 2026')
+      expect(detailsTabPage.querySaveButton()).toBeNull()
+    })
+  })
+
+  /**
+   * A refusal that lands while the panel is HIDDEN (#1593 review). The page
+   * force-mounts this form across tab switches, so a slow PATCH can be refused
+   * while another tab is showing — and a browser refuses to focus into
+   * `display: none`, so the refusal-time focus attempt dies there and the
+   * unchanged error never re-fires it. The `active` prop is the event the
+   * panel coming back is: on its false→true edge the retained refusal takes
+   * focus, so the non-live hint is finally announced.
+   */
+  describe('a refusal that lands while the panel is hidden', () => {
+    /** Park focus on nothing — the state a real browser is left in when its
+     * refusal-time focus attempt died on a hidden panel. jsdom has no layout
+     * and will happily focus a `hidden` subtree, so the test blurs whatever
+     * that quirk focused before the panel comes back. */
+    const blurFocus = () => {
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && focused !== document.body) {
+        focused.blur()
+      }
+    }
+
+    it('focuses the refused field when the panel becomes visible again', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      // The save starts on the visible tab...
+      const view = detailsTabPage.render({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      // ...the organizer moves to another tab while it is in flight, and the
+      // field-level 422 lands on a panel that is now display: none.
+      view.rerenderWith({ active: false })
+      await act(async () => reject(refusedName))
+      await flush()
+
+      // The refusal is retained beside the draft — rendered, though nothing in
+      // the hidden panel can hold focus in a browser.
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument()
+
+      // Model the browser, where the refusal-time attempt failed silently.
+      blurFocus()
+      expect(detailsTabPage.getNameInput()).not.toHaveFocus()
+
+      // Returning to Details is the event the unchanged error never had: the
+      // refused field takes focus, hint and all. (`setFocus` defers the DOM
+      // focus a tick, so the assertion waits for it.)
+      view.rerenderWith({ active: true })
+      await waitFor(() => expect(detailsTabPage.getNameInput()).toHaveFocus())
+      expect(detailsTabPage.queryFieldMessage(NAME_REFUSAL)).toBeInTheDocument()
+    })
+
+    it('focuses the failure alert instead when the refusal names no box', async () => {
+      let reject!: (err: unknown) => void
+      const onUpdate = vi.fn(
+        () =>
+          new Promise<void>((_, rej) => {
+            reject = rej
+          }),
+      )
+      const view = detailsTabPage.render({
+        tournament: buildTournament(),
+        onUpdate,
+      })
+      await userEvent.type(detailsTabPage.getNameInput(), '!')
+      await userEvent.click(detailsTabPage.querySaveButton()!)
+      expect(onUpdate).toHaveBeenCalledTimes(1)
+
+      view.rerenderWith({ active: false })
+      await act(async () =>
+        reject(new ApiError(500, 'Internal Server Error', 'update tournament')),
+      )
+      await flush()
+
+      const alert = detailsTabPage.querySaveError()
+      expect(alert).toBeInTheDocument()
+      expect(alert).toHaveTextContent(FAULTED_REFUSAL)
+
+      // Model the browser's failed focus attempt, as above.
+      blurFocus()
+      expect(alert).not.toHaveFocus()
+
+      // The panel comes back: the alert — not a box the refusal never named —
+      // takes focus.
+      view.rerenderWith({ active: true })
+      await waitFor(() => expect(detailsTabPage.querySaveError()).toHaveFocus())
+    })
   })
 })

@@ -311,7 +311,7 @@ describe('useUpdateTournament', () => {
     })
   })
 
-  it('surfaces a 403 via a toast without throwing', async () => {
+  it('emits no toast on failure — the Details form owns the refusal inline (#1593)', async () => {
     vi.mocked(toast.error).mockClear()
     mockTournamentUpdateEndpoint(server, () =>
       HttpResponse.json(
@@ -322,16 +322,15 @@ describe('useUpdateTournament', () => {
     const { wrapper } = setupClient()
 
     const { result } = renderHookRaw(() => useUpdateTournament(), { wrapper })
-    result.current.mutate({ id: 't-1', patch: updatePatch })
+    // The Details tab's own shape — `mutateAsync`, so the rejection is
+    // catchable there — and the error stays the form's to word.
+    await expect(
+      result.current.mutateAsync({ id: 't-1', patch: updatePatch }),
+    ).rejects.toThrow()
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
-
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't update the tournament",
-      expect.objectContaining({
-        description: 'You do not have permission to edit this tournament.',
-      }),
-    )
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(toast.info).not.toHaveBeenCalled()
   })
 })
 

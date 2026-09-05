@@ -12,6 +12,10 @@ export interface FieldBase {
   hint?: ReactNode
   /** When true, `hint` is rendered as an error (red). */
   error?: boolean
+  /** Give an asynchronously inserted error assertive live-region semantics.
+   * Opt in only when focus may already be on the control, so the error cannot
+   * otherwise rely on a new focus event for its announcement. */
+  announceError?: boolean
   className?: string
 }
 
@@ -113,6 +117,7 @@ export const Field = ({
   required,
   hint,
   error,
+  announceError,
   readOnly,
   value,
   valueClassName,
@@ -147,6 +152,7 @@ export const Field = ({
       {showHint && (
         <p
           id={hintId}
+          role={error && announceError ? 'alert' : undefined}
           className={cn(
             'text-[11px]',
             error ? 'text-[color:var(--loss)]' : 'text-[color:var(--fg-3)]',
