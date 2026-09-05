@@ -13,6 +13,7 @@ struct SessionData: Decodable {
 }
 
 struct SessionUser: Decodable {
+    let id: UUID
     let username: String
     let permissions: [String]
     let email: String?
@@ -33,6 +34,21 @@ struct MergePreview: Decodable {
     let ownerUsername: String?
     let guestUsername: String?
     let guestMatchesCount: Int
+    var accountSwitch: AccountSwitchPreview? = nil
+}
+
+struct AccountSwitchPreview: Decodable {
+    let fromUserId: String
+    let fromUsername: String
+    let toUsername: String
+}
+
+struct LinkCodedError: Decodable, Error {
+    struct Detail: Decodable {
+        let code: String
+        let accountSwitch: AccountSwitchPreview?
+    }
+    let detail: Detail
 }
 
 extension SessionUser {

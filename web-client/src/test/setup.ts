@@ -31,6 +31,18 @@ if (!window.localStorage) {
   })
 }
 
+// Model the platform's exclusive lock across independently mounted clients.
+if (!navigator.locks) {
+  const queues = new Map<string, Promise<unknown>>()
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: {
+    request: (name: string, run: () => Promise<unknown>) => {
+      const result = (queues.get(name) ?? Promise.resolve()).then(run, run)
+      queues.set(name, result.catch(() => undefined))
+      return result
+    },
+  } })
+}
+
 // jsdom doesn't implement matchMedia; responsive components (e.g. AppShell)
 // read it on mount, so provide an inert stub.
 if (!window.matchMedia) {

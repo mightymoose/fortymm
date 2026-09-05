@@ -19,8 +19,8 @@ export interface paths {
          *     the session), and a cookie that resolves to a merged-away guest raises the
          *     structured ``session_merged`` 401 instead of silently swapping identities.
          *
-         *     Only when the cookie resolves no user (no/garbage cookie) does it mint a fresh
-         *     guest and Set-Cookie it — the zero-friction first visit.
+         *     Only a missing cookie mints a fresh guest. A rejected cookie ends the
+         *     session explicitly instead of silently replacing the caller's identity.
          */
         get: operations["get_session_endpoint_v1_session_get"];
         put?: never;
@@ -1851,6 +1851,18 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccountSwitchPreview */
+        AccountSwitchPreview: {
+            /**
+             * From User Id
+             * Format: uuid
+             */
+            from_user_id: string;
+            /** From Username */
+            from_username: string;
+            /** To Username */
+            to_username: string;
+        };
         /**
          * Address
          * @description A tournament venue address as **stored and read**. A JSONB value-object.
@@ -2208,6 +2220,8 @@ export interface components {
         };
         /** ConfirmEmailRequest */
         ConfirmEmailRequest: {
+            /** Switch From User Id */
+            switch_from_user_id?: string | null;
             /** Token */
             token: string;
             /**
@@ -2235,6 +2249,8 @@ export interface components {
         };
         /** ConsumeLoginRequest */
         ConsumeLoginRequest: {
+            /** Switch From User Id */
+            switch_from_user_id?: string | null;
             /** Token */
             token: string;
             /**
@@ -3406,6 +3422,7 @@ export interface components {
          *     will.
          */
         MergePreview: {
+            account_switch?: components["schemas"]["AccountSwitchPreview"] | null;
             /** Is Merge */
             is_merge: boolean;
             /** Owner Username */
@@ -6434,7 +6451,9 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
-            cookie?: never;
+            cookie?: {
+                session?: string | null;
+            };
         };
         requestBody: {
             content: {

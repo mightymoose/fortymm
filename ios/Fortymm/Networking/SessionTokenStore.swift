@@ -8,9 +8,12 @@ import Foundation
 actor SessionTokenStore {
     static let shared = SessionTokenStore()
 
-    private let keychain: KeychainStore
+    private let keychain: any SessionKeychain
+    private let endedKey: String
+    private var endedFallback: SessionEndReason?
     private var cached: String?
     private var didLoad = false
+    private var recoveredInProcess = false
 
     /// Set when `cached` holds a token the Keychain write didn't persist — e.g.
     /// a session minted on a background/locked launch, before the device's
@@ -27,8 +30,9 @@ actor SessionTokenStore {
     /// start in the Keychain the way the session token does.
     private var csrf: String?
 
-    init(keychain: KeychainStore = KeychainStore(account: "session-token")) {
+    init(keychain: any SessionKeychain = KeychainStore(account: "session-token")) {
         self.keychain = keychain
+        self.endedKey = keychain.service + "." + keychain.account + ".ended"
     }
 
     /// Load the token from the Keychain into the cache once, on first access.
@@ -56,10 +60,16 @@ actor SessionTokenStore {
     /// Persist a freshly minted or rotated token. No-op if unchanged, so a
     /// resumed session doesn't rewrite the Keychain on every call.
     func update(_ token: String) {
-        guard token != cached else { return }
-        cached = token
-        didLoad = true
-        needsPersist = !keychain.save(token)
+        endedFallback = nil
+        recoveredInProcess = true
+        if token == cached {
+            retryPersistIfNeeded()
+        } else {
+            cached = token
+            didLoad = true
+            needsPersist = !keychain.save(token)
+        }
+        if !needsPersist { UserDefaults.standard.removeObject(forKey: endedKey) }
     }
 
     /// Re-attempt a previously-failed Keychain write. Called from `token()`,
@@ -69,17 +79,56 @@ actor SessionTokenStore {
     private func retryPersistIfNeeded() {
         guard needsPersist, let token = cached else { return }
         needsPersist = !keychain.save(token)
+        if !needsPersist { UserDefaults.standard.removeObject(forKey: endedKey) }
     }
 
     /// Forget the session (sign-out). Clears both the cache and the vault, plus
     /// the companion CSRF token (the server clears its cookie alongside the
     /// session, and a stale CSRF token is useless without the session anyway).
     func clear() {
+        endedFallback = nil
+        UserDefaults.standard.removeObject(forKey: endedKey)
+        clearCredentials()
+    }
+
+    /// Explicit guest recovery discards the old credential but keeps its
+    /// durable recovery marker until a replacement is safely persisted.
+    func prepareNewGuest() {
+        clearCredentials()
+    }
+
+    private func clearCredentials() {
+        recoveredInProcess = false
         cached = nil
         csrf = nil
         needsPersist = false
         didLoad = true
         keychain.delete()
+    }
+
+    func endedSession() -> SessionEndReason? {
+        // A cached replacement is usable now, but the durable marker remains
+        // until its Keychain write succeeds so relaunch cannot look new.
+        if recoveredInProcess { return nil }
+        if let raw = UserDefaults.standard.string(forKey: endedKey), let data = raw.data(using: .utf8),
+           let reason = try? JSONDecoder().decode(SessionEndReason.self, from: data) {
+            return reason
+        }
+        return endedFallback
+    }
+
+    func endIfCurrent(_ token: String?, message: String, email: String?) -> Bool {
+        hydrate()
+        guard cached == token else { return false }
+        let reason = SessionEndReason(message: message, email: email)
+        endedFallback = reason
+        if let data = try? JSONEncoder().encode(reason), let raw = String(data: data, encoding: .utf8) {
+            UserDefaults.standard.set(raw, forKey: endedKey)
+        }
+        // Save recovery state before removing the credential. An interruption
+        // between these operations must never look like a first visit.
+        clearCredentials()
+        return true
     }
 
     /// Clear the session only if `token` is still the one we hold, returning
@@ -94,4 +143,9 @@ actor SessionTokenStore {
         clear()
         return true
     }
+}
+
+nonisolated struct SessionEndReason: Codable, Sendable {
+    let message: String
+    let email: String?
 }

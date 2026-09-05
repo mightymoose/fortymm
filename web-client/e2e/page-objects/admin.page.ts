@@ -1,3 +1,4 @@
+import { stubUnreadNotifications } from '../support/notifications'
 import type { Locator, Page, Route } from '@playwright/test'
 import type { components } from '../../src/api/schema'
 import { PERM } from '../../src/lib/permissions'
@@ -72,6 +73,7 @@ export class AdminPage {
     // `_app` opens a realtime stream alongside the session bootstrap; this
     // suite has no catch-all, so it needs its own stub (`../support/realtime`).
     await stubRealtimeStream(this.page)
+    await stubUnreadNotifications(this.page)
     await this.page.route('**/v1/session', async (route) => {
       await route.fulfill({
         status: 200,

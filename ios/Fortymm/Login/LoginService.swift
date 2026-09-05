@@ -39,42 +39,37 @@ struct LoginService {
     /// used, wrong account) and terminal; anything else (server error, offline)
     /// is transient and worth a retry. Keeping that distinction here, not in the
     /// view, is the same boundary-typing the rest of the API layer follows.
-    func consume(token: String, skipMerge: Bool = false) async throws -> SessionResponse {
+    func consume(token: String, skipMerge: Bool = false, switchFromUserId: String? = nil) async throws -> SessionResponse {
+        let result: Result<SessionResponse, LinkCodedError>
         do {
-            return try await client.post(
-                "/v1/login/consume",
-                body: ConsumeLoginBody(token: token, skipMerge: skipMerge)
+            result = try await client.sendExpectingCodedError(
+                "POST", "/v1/login/consume",
+                body: ConsumeLoginBody(token: token, skipMerge: skipMerge, switchFromUserId: switchFromUserId)
             )
         } catch let APIError.http(status, _) where (400..<500).contains(status) {
             throw LoginConsumeError.rejected
         } catch {
             throw LoginConsumeError.unreachable
         }
-    }
-
-    /// Side-effect-free preview of an emailed link (`POST /v1/merge/preview`),
-    /// used by both the sign-in and email-confirm landings to decide whether to
-    /// show the "bring N matches over?" gate before finalizing. Non-throwing: a
-    /// preview failure simply reports "not a merge" so the caller finalizes
-    /// straight away rather than blocking on a hiccup.
-    func mergePreview(token: String) async -> MergePreview {
-        do {
-            return try await client.post(
-                "/v1/merge/preview", body: MergePreviewBody(token: token)
-            )
-        } catch {
-            return MergePreview(
-                isMerge: false,
-                ownerUsername: nil,
-                guestUsername: nil,
-                guestMatchesCount: 0
-            )
+        switch result {
+        case .success(let response): return response
+        case .failure(let coded) where coded.detail.code == "account_switch_required":
+            throw LoginConsumeError.accountSwitchRequired(coded.detail.accountSwitch)
+        case .failure: throw LoginConsumeError.rejected
         }
     }
+
+    /// Preview failure must stay retryable; it cannot stand in for consent to
+    /// merge guest data when an account-switch approval is being rechecked.
+    func mergePreview(token: String) async throws -> MergePreview {
+        try await client.post("/v1/merge/preview", body: MergePreviewBody(token: token))
+    }
+
 }
 
 /// Why redeeming an emailed link failed, classified for the UI.
 enum LoginConsumeError: Error {
+    case accountSwitchRequired(AccountSwitchPreview?)
     /// The link is no longer valid — expired, already used, or for another
     /// account. Terminal; the user must request a fresh link.
     case rejected
@@ -105,6 +100,7 @@ private struct RequestLoginBody: Encodable {
 private struct ConsumeLoginBody: Encodable {
     let token: String
     let skipMerge: Bool
+    let switchFromUserId: String?
 }
 
 private struct MergePreviewBody: Encodable {

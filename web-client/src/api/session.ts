@@ -6,8 +6,9 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { z } from 'zod'
-import { ApiError, api, hasCsrfCookie, unwrap } from './client'
+import { ApiError, api, hasCsrfCookie, restoreCsrfCompanion, unwrap } from './client'
 import { handleIdentityChange } from './identity-change'
+import { announceIdentityChange, forgetSessionEnd, readEndedSession, readPeerIdentityRevision, rememberSessionEnd, synchronizeSessionEnd } from './browser-session'
 import { closeRealtimeConnections } from './realtime/connection'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -57,53 +58,95 @@ export function readStorageLock(): StorageLockRecord | null {
 // the way `navigator.locks` does — but it narrows the race window to
 // milliseconds, and the TTL means a tab that crashes mid-bootstrap can never
 // wedge the others (they just wait out the TTL and proceed).
-async function withStorageLock<T>(fn: () => Promise<T>): Promise<T> {
+async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false, requireStorage = alwaysLock): Promise<T> {
   const owner = `${Date.now()}-${Math.random()}`
   const deadline = Date.now() + SESSION_LOCK_TTL_MS
   for (;;) {
-    const held = readStorageLock()
-    if (!held || held.expires < Date.now()) {
-      localStorage.setItem(
-        SESSION_LOCK_STORAGE_KEY,
-        JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }),
-      )
-      // Yield a tick, then re-read: narrows (but can't eliminate) the window
-      // where two tabs both saw no lock and both wrote.
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      if (readStorageLock()?.owner === owner) break
+    try {
+      const held = readStorageLock()
+      if (!held || held.expires < Date.now()) {
+        localStorage.setItem(
+          SESSION_LOCK_STORAGE_KEY,
+          JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }),
+        )
+        // Yield a tick, then re-read: narrows (but can't eliminate) the window
+        // where two tabs both saw no lock and both wrote.
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        if (readStorageLock()?.owner === owner) break
+      }
+    } catch {
+      // Destructive recovery needs cross-tab exclusion; an in-tab queue
+      // cannot safely replace it when the shared backend is unavailable.
+      if (requireStorage) throw new Error('Session recovery is unavailable. Please enable browser storage and try again.')
+      return fn()
     }
-    if (Date.now() > deadline) break
-    if (hasCsrfCookie()) return fn()
+    if (Date.now() > deadline) throw new Error('Another tab is updating your session. Please try again.')
+    if (!alwaysLock && hasCsrfCookie()) return fn()
     await new Promise((resolve) => setTimeout(resolve, SESSION_LOCK_POLL_MS))
   }
+  // Renew while the request is pending: a slow network response must not
+  // turn an active recovery into an expired lock that another tab can take.
+  const renewal = setInterval(() => {
+    try {
+      if (readStorageLock()?.owner === owner) {
+        localStorage.setItem(SESSION_LOCK_STORAGE_KEY,
+          JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }))
+      }
+    } catch { clearInterval(renewal) }
+  }, SESSION_LOCK_TTL_MS / 3)
   try {
     return await fn()
   } finally {
-    if (readStorageLock()?.owner === owner) {
-      localStorage.removeItem(SESSION_LOCK_STORAGE_KEY)
-    }
+    clearInterval(renewal)
+    try {
+      if (readStorageLock()?.owner === owner) localStorage.removeItem(SESSION_LOCK_STORAGE_KEY)
+    } catch { /* Storage became unavailable during the request. */ }
   }
+}
+
+let localSessionQueue: Promise<unknown> = Promise.resolve()
+function withLocalSessionLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = localSessionQueue.then(fn, fn)
+  localSessionQueue = result.catch(() => undefined)
+  return result
 }
 
 /** Single-flights the `/v1/session` cold-bootstrap request across every tab
  * on the origin, not just within one TanStack QueryClient. */
-async function withSessionBootstrapLock<T>(fn: () => Promise<T>): Promise<T> {
+async function withSessionBootstrapLock<T>(fn: () => Promise<T>, mode: 'bootstrap' | 'recovery' | 'redemption' | 'logout' = 'bootstrap'): Promise<T> {
+  const alwaysLock = mode !== 'bootstrap'
   // A session already exists — no mint race to guard against.
-  if (hasCsrfCookie()) return fn()
-  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
-    return navigator.locks.request(SESSION_LOCK_NAME, () => fn())
+  if (!alwaysLock && hasCsrfCookie()) return fn()
+  const requiresRecovery = () => mode === 'recovery' || (mode === 'redemption' && readEndedSession() !== null)
+  const run = () => {
+    if (requiresRecovery()) synchronizeSessionEnd()
+    if (mode === 'logout') {
+      // Refresh stale retry state when possible, but storage failures must
+      // never prevent revocation of the current server-side credential.
+      try { synchronizeSessionEnd() } catch { /* Revocation remains available. */ }
+    }
+    return fn()
   }
-  if (typeof localStorage === 'undefined') return fn()
-  return withStorageLock(fn)
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request(SESSION_LOCK_NAME, run)
+  }
+  if (requiresRecovery()) throw new Error('Session recovery requires a browser with Web Locks support. Please use a supported browser.')
+  return withLocalSessionLock(() => withStorageLock(run, alwaysLock, false))
 }
 
 export function sessionQueryOptions() {
   return queryOptions({
     queryKey: SESSION_QUERY_KEY,
     queryFn: (): Promise<Session> =>
-      withSessionBootstrapLock(async () =>
-        unwrap('load session', await api.GET('/v1/session')),
-      ),
+      withSessionBootstrapLock(async () => {
+        const ended = readEndedSession()
+        if (ended) {
+          throw new ApiError(401, ended.message, 'load session', {
+            detail: { code: 'session_ended', ...ended },
+          })
+        }
+        return unwrap('load session', await api.GET('/v1/session'))
+      }),
     staleTime: 1000 * 60 * 5,
     // Don't retry a 401 (session merged away): the 401 already cleared the
     // cookie, so a retry would silently mint a *new* guest and race the
@@ -214,12 +257,28 @@ export function useResendEmailConfirmation() {
 
 export type MergePreview = components['schemas']['MergePreview']
 
+const accountSwitchSchema = z.object({
+  from_user_id: z.string(),
+  from_username: z.string(),
+  to_username: z.string(),
+})
+const mergePreviewSchema = z.object({
+  is_merge: z.boolean(),
+  owner_username: z.string().nullable().optional(),
+  guest_username: z.string().nullable().optional(),
+  guest_matches_count: z.number().int().nonnegative().default(0),
+  adopts_guest_username: z.boolean().default(false),
+  account_switch: accountSwitchSchema.nullable().optional(),
+})
+
 /** Side-effect-free look at an emailed link, to decide whether to show the
  * "bring N matches over?" gate before finalizing. */
 export function useMergePreview() {
   return useMutation({
     mutationFn: async (token: string): Promise<MergePreview> =>
-      unwrap('check link', await api.POST('/v1/merge/preview', { body: { token } })),
+      mergePreviewSchema.parse(
+        unwrap('check link', await api.POST('/v1/merge/preview', { body: { token } })),
+      ),
   })
 }
 
@@ -228,6 +287,7 @@ export function useMergePreview() {
 export interface FinalizeTokenInput {
   token: string
   skipMerge?: boolean
+  switchFromUserId?: string
 }
 
 /** Seed `SESSION_QUERY_KEY` from a sign-in/confirm response. `GET /v1/session`
@@ -238,19 +298,42 @@ function cacheSession(qc: QueryClient, session: Session): void {
   qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
 }
 
+export class SessionChangedError extends Error {
+  constructor() { super('Your session changed in another tab. Open the link again to continue.') }
+}
+
+async function withLinkRedemption<T>(fn: () => Promise<T>): Promise<T> {
+  const peerRevision = readPeerIdentityRevision()
+  return withSessionBootstrapLock(async () => {
+    if (readPeerIdentityRevision() !== peerRevision) {
+      throw new SessionChangedError()
+    }
+    if (readEndedSession()?.logoutPending) {
+      restoreCsrfCompanion()
+      unwrap('finish sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
+      rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false }, { notifyLocal: false })
+    }
+    const result = await fn()
+    forgetSessionEnd()
+    announceIdentityChange()
+    return result
+  }, 'redemption')
+}
+
 export function useConfirmEmail() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({
       token,
       skipMerge = false,
+      switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
-      unwrap(
+      withLinkRedemption(async () => unwrap(
         'confirm email',
         await api.POST('/v1/me/email/confirm', {
-          body: { token, skip_merge: skipMerge },
+          body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
         }),
-      ),
+      )),
     // This can sign the caller into a *different* existing account
     // (skip_merge). Drop the prior identity's cached per-user data first — the
     // same leak useLogout guards against (#754) — then reseed the session so
@@ -292,12 +375,18 @@ export function useRequestLogin() {
   })
 }
 
-export function useLogout() {
+export function useLogout(retryOnly = false) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (): Promise<void> => {
+    mutationFn: (): Promise<void> => withSessionBootstrapLock(async () => {
+      if (retryOnly && !readEndedSession()?.logoutPending) return
+      restoreCsrfCompanion()
+      rememberSessionEnd({ message: 'Sign-out is not complete. Retry to finish signing out.', logoutPending: true })
       unwrap('sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
-    },
+      if (readEndedSession()?.logoutPending) {
+        rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false })
+      }
+    }, 'logout'),
     // Drop ALL cached per-user data (matches, dashboard, players, ...), not
     // just SESSION_QUERY_KEY — otherwise the prior user's BFF responses leak
     // into the next ephemeral session.
@@ -307,6 +396,7 @@ export function useLogout() {
     // live `/v1/stream` open (the user menu and the settings footer). The
     // caller owns the navigation that follows, so no `navigateToLogin` here.
     onSuccess: () => {
+      if (readEndedSession()?.logoutPending !== false) return
       handleIdentityChange({
         closeRealtime: closeRealtimeConnections,
         clearAppEntered,
@@ -322,13 +412,14 @@ export function useConsumeLoginToken() {
     mutationFn: async ({
       token,
       skipMerge = false,
+      switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
-      unwrap(
+      withLinkRedemption(async () => unwrap(
         'sign in',
         await api.POST('/v1/login/consume', {
-          body: { token, skip_merge: skipMerge },
+          body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
         }),
-      ),
+      )),
     // Same identity-leak guard as useConfirmEmail (#754): this can sign a
     // browsing guest into a different existing account.
     onSuccess: (session) => {
@@ -372,4 +463,44 @@ export function loginSenderQueryOptions() {
  * this is receipt trivia, never something worth blocking `/login/sent` on. */
 export function useLoginSender() {
   return useQuery(loginSenderQueryOptions())
+}
+
+/** An explicit choice to abandon the ended session and start a separate guest. */
+export function useStartNewGuest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (): Promise<Session> => withSessionBootstrapLock(async () => {
+      // A preceding recovery in another tab may already have replaced the
+      // ended session. Reuse that identity instead of deleting it again.
+      if (readEndedSession()) {
+        restoreCsrfCompanion()
+        unwrap('clear old session', await api.DELETE('/v1/session'), { allowEmpty: true })
+      }
+      const session = unwrap('start a new guest', await api.GET('/v1/session'))
+      // Publish completion before releasing the origin-wide lock.
+      forgetSessionEnd()
+      announceIdentityChange()
+      return session
+    }, 'recovery'),
+    onSuccess: (session) => {
+      handleIdentityChange({
+        closeRealtime: closeRealtimeConnections,
+        clearQueryCache: () => qc.clear(),
+      })
+      cacheSession(qc, session)
+    },
+  })
+}
+
+const switchConflictSchema = z.object({
+  detail: z.object({
+    code: z.literal('account_switch_required'),
+    account_switch: accountSwitchSchema.nullable(),
+  }),
+})
+
+export function accountSwitchConflict(error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 409) return null
+  const result = switchConflictSchema.safeParse(error.body)
+  return result.success ? result.data.detail : null
 }

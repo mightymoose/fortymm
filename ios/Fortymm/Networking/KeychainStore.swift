@@ -5,7 +5,15 @@ import Security
 /// session token: a generic-password item, device-local (never synced to iCloud
 /// Keychain), readable after first unlock so background/locked requests still
 /// work. No biometric gate — the guest session is meant to be frictionless.
-struct KeychainStore {
+protocol SessionKeychain: Sendable {
+    var service: String { get }
+    var account: String { get }
+    func save(_ value: String) -> Bool
+    func load() -> String?
+    func delete()
+}
+
+struct KeychainStore: SessionKeychain {
     let service: String
     let account: String
 

@@ -13,22 +13,35 @@ struct VerifyLoginView: View {
     let token: String
     var onSignedIn: (SessionResponse) -> Void
     var onRestart: () -> Void
+    var onClose: () -> Void
 
     private let service = LoginService.shared
 
     private enum Phase {
         case verifying
         case gate(MergePreview)
+        case accountSwitch(AccountSwitchPreview?)
         case success(SessionResponse)
         case expired
         case unreachable
     }
     @State private var phase: Phase = .verifying
+    @State private var approvedSwitch: String?
+    @State private var pendingMerge: MergePreview?
+    @State private var chosenSkipMerge = false
+    let submission: LinkSubmission
 
     var body: some View {
         Group {
             switch phase {
             case .verifying: verifying
+        case let .accountSwitch(change):
+            AccountSwitchGateView(change: change, onContinue: {
+                approvedSwitch = change?.fromUserId
+                if change == nil { Task { await start() } }
+                else if let merge = pendingMerge { phase = .gate(merge) }
+                else { Task { await verify(skipMerge: chosenSkipMerge) } }
+            }, onCancel: onClose)
             case let .gate(preview):
                 MergeGateView(
                     preview: preview,
@@ -181,7 +194,7 @@ struct VerifyLoginView: View {
                     .init(status: "ERR", method: "···", path: "/auth/session", note: "gave up after 12s"),
                 ])
                 HStack(spacing: 10) {
-                    LoginButton(title: "Retry") { Task { await verify(skipMerge: false) } }
+                    LoginButton(title: "Retry") { Task { await start() } }
                     LoginButton(title: "Send a new link", kind: .ghost, fullWidth: false) { onRestart() }
                 }
             }
@@ -193,20 +206,40 @@ struct VerifyLoginView: View {
     /// Preview the link first; a merge that would carry matches over waits at
     /// the gate, everything else signs in straight away.
     private func start() async {
-        let preview = await service.mergePreview(token: token)
-        if preview.isMerge, preview.guestMatchesCount > 0 {
-            phase = .gate(preview)
-        } else {
-            await verify(skipMerge: false)
+        await submission.run {
+            approvedSwitch = nil
+            phase = .verifying
+            do {
+                let preview = try await service.mergePreview(token: token)
+                pendingMerge = !chosenSkipMerge && preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
+                if let change = preview.accountSwitch {
+                    phase = .accountSwitch(change)
+                } else if let merge = pendingMerge {
+                    phase = .gate(merge)
+                } else {
+                    await finalize(skipMerge: chosenSkipMerge)
+                }
+            } catch {
+                phase = .unreachable
+            }
         }
     }
 
     private func verify(skipMerge: Bool) async {
+        await submission.run { await finalize(skipMerge: skipMerge) }
+    }
+
+    private func finalize(skipMerge: Bool) async {
+        chosenSkipMerge = skipMerge
+        pendingMerge = nil
         phase = .verifying
         do {
             phase = .success(
-                try await service.consume(token: token, skipMerge: skipMerge)
+                try await service.consume(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
             )
+        } catch LoginConsumeError.accountSwitchRequired(let change) {
+            approvedSwitch = nil
+            phase = .accountSwitch(change)
         } catch LoginConsumeError.rejected {
             phase = .expired
         } catch {

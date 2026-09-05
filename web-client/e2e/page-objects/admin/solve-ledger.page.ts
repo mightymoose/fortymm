@@ -1,3 +1,4 @@
+import { stubUnreadNotifications } from '../../support/notifications'
 import type { Locator, Page } from '@playwright/test'
 import type { components } from '../../../src/api/schema'
 import { PERM } from '../../../src/lib/permissions'
@@ -74,6 +75,7 @@ export class SolveLedgerPage {
     // `_app` opens a realtime stream alongside the session bootstrap; this
     // suite has no catch-all, so it needs its own stub (`../../support/realtime`).
     await stubRealtimeStream(page)
+    await stubUnreadNotifications(page)
 
     await page.route('**/v1/session', (route) =>
       route.fulfill({

@@ -35,6 +35,8 @@ from app.sessions import (
     CSRF_HEADER_NAME,
     CSRF_SAFE_METHODS,
     SESSION_COOKIE_NAME,
+    SessionEndedException,
+    session_ended_exception_handler,
 )
 from app.sessions import router as sessions_router
 from app.stream import router as stream_router
@@ -135,6 +137,9 @@ app = FastAPI(title="FortyMM API", lifespan=lifespan)
 # is transient-and-retryable to the caller. The catch is deliberately narrow —
 # only the pool-timeout class — so genuine query errors still surface as 500s.
 POOL_TIMEOUT_RETRY_AFTER_SECONDS = 1
+
+
+app.exception_handler(SessionEndedException)(session_ended_exception_handler)
 
 
 @app.exception_handler(SQLAlchemyTimeoutError)

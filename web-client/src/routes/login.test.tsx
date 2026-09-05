@@ -2,6 +2,7 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from '@testing-library/react'
@@ -18,6 +19,9 @@ import { HttpResponse, delay, http } from 'msw'
 import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
+import { api } from '@/api/client'
+import { useLogout } from '@/api/session'
+import { Route as AppRoute } from './_app/route'
 import { mockSession } from '@/mocks/handlers'
 import { Route as LoginIndexRoute } from './login.index'
 import { Route as LoginSentRoute } from './login.sent'
@@ -104,6 +108,7 @@ function renderAt(initialEntry: string) {
   const dashboardRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/dashboard',
+    beforeLoad: AppRoute.options.beforeLoad,
     component: () => <div>Dashboard stub</div>,
   })
   const router = createRouter({
@@ -655,4 +660,53 @@ describe('/login/verifying flow', () => {
       screen.getByRole('button', { name: /not now — sign me in as rita/i }),
     ).toBeInTheDocument()
   })
+})
+
+
+it('keeps the session-ended notice after reopening sign-in and offers an explicit new guest', async () => {
+  server.use(http.get('*/v1/session', () => HttpResponse.json({
+    detail: { code: 'session_ended', message: "You've been signed out. Sign in to continue." },
+  }, { status: 401 })))
+  await api.GET('/v1/session')
+  const first = renderAt('/login')
+  expect(await screen.findByRole('alert')).toHaveTextContent("You've been signed out")
+  first.unmount()
+  renderAt('/login')
+  expect(await screen.findByRole('alert')).toHaveTextContent("You've been signed out")
+  expect(screen.getByRole('button', { name: 'Continue as a new guest' })).toBeVisible()
+})
+
+
+it('redirects a direct dashboard visit after eviction without bootstrapping a guest', async () => {
+  server.use(http.get('*/v1/session', () => HttpResponse.json({
+    detail: { code: 'session_ended', message: "You've been signed out. Sign in to continue." },
+  }, { status: 401 })))
+  await api.GET('/v1/session')
+  const { router } = renderAt('/dashboard')
+  await waitFor(() => expect(router.state.location.pathname).toBe('/login'))
+  expect(await screen.findByRole('alert')).toHaveTextContent("You've been signed out")
+})
+
+it('offers a durable retry when sign-out cannot revoke the server session', async () => {
+  let attempts = 0
+  server.use(http.delete('*/v1/session', () => {
+    attempts += 1
+    return new HttpResponse(null, { status: attempts === 1 ? 503 : 204 })
+  }))
+  const client = new QueryClient()
+  const logout = renderHook(() => useLogout(), { wrapper: ({ children }) =>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+  })
+  await act(async () => {
+    await expect(logout.result.current.mutateAsync()).rejects.toThrow()
+  })
+  logout.unmount()
+  const page = renderAt('/login')
+  expect(await screen.findByRole('button', { name: 'Retry sign-out' })).toBeVisible()
+  page.unmount()
+  renderAt('/login')
+  await userEvent.setup().click(await screen.findByRole('button', { name: 'Retry sign-out' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry sign-out' })).not.toBeInTheDocument())
+  expect(attempts).toBe(2)
+  expect(screen.getByRole('alert')).toHaveTextContent('You have signed out.')
 })

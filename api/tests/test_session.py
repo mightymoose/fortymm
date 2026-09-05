@@ -138,20 +138,27 @@ async def test_returns_existing_session_when_cookie_valid(
     assert tokens[0].token == hashlib.sha256(first_token.encode("utf-8")).digest()
 
 
-async def test_creates_new_session_when_cookie_invalid(
-    api_client: AsyncClient, db_session: AsyncSession
+@pytest.mark.parametrize("has_companion", [False, True])
+async def test_invalid_cookie_ends_session_on_repeated_loads(
+    api_client: AsyncClient, has_companion: bool
 ):
-    api_client.cookies.set(SESSION_COOKIE_NAME, "not-a-real-token", domain="testserver")
-    response = await api_client.get("/v1/session")
-    assert response.status_code == 200
+    # The companion survives the first 401 clearing the rejected session cookie.
+    api_client.cookies.set(SESSION_COOKIE_NAME, "not-a-real-token")
+    if has_companion:
+        api_client.cookies.set(CSRF_COOKIE_NAME, "existing-browser")
+    for _ in range(2):
+        response = await api_client.get("/v1/session")
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "session_ended"
+        assert not response.cookies.get(SESSION_COOKIE_NAME)
+        api_client.cookies.delete(SESSION_COOKIE_NAME)
 
-    new_token = response.cookies.get(SESSION_COOKIE_NAME)
-    assert new_token
-    assert new_token != "not-a-real-token"
-
-    tokens = (await db_session.execute(select(UserToken))).scalars().all()
-    assert len(tokens) == 1
-    assert tokens[0].token == hashlib.sha256(new_token.encode("utf-8")).digest()
+    # Only the explicit new-guest choice clears the browser's old credentials.
+    assert (await api_client.delete("/v1/session")).status_code == 204
+    api_client.cookies.clear()
+    fresh = await api_client.get("/v1/session")
+    assert fresh.status_code == 200
+    assert fresh.json()["data"]["user"]["email"] is None
 
 
 def _assert_session_cookie_cleared(response) -> None:

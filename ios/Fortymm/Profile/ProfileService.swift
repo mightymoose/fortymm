@@ -72,13 +72,13 @@ struct ProfileService {
     /// else is transient and worth a retry. Keeping that boundary-typing in the
     /// service, not the view, is the convention the rest of the API layer
     /// follows.
-    func confirmEmail(token: String, skipMerge: Bool = false) async throws -> SessionResponse {
-        let result: Result<SessionResponse, ConfirmEmailCodedError>
+    func confirmEmail(token: String, skipMerge: Bool = false, switchFromUserId: String? = nil) async throws -> SessionResponse {
+        let result: Result<SessionResponse, LinkCodedError>
         do {
             result = try await client.sendExpectingCodedError(
                 "POST",
                 "/v1/me/email/confirm",
-                body: ConfirmEmailBody(token: token, skipMerge: skipMerge)
+                body: ConfirmEmailBody(token: token, skipMerge: skipMerge, switchFromUserId: switchFromUserId)
             )
         } catch let APIError.http(status, _) where (400..<500).contains(status) {
             // A 4xx whose body isn't the coded shape — the plain-string
@@ -90,6 +90,8 @@ struct ProfileService {
         switch result {
         case .success(let session):
             return session
+        case let .failure(coded) where coded.detail.code == "account_switch_required":
+            throw LoginConsumeError.accountSwitchRequired(coded.detail.accountSwitch)
         case let .failure(coded) where coded.detail.code == "replaced":
             throw LoginConsumeError.replaced
         case .failure:
@@ -123,18 +125,5 @@ private struct ResendEmailBody: Encodable {
 private struct ConfirmEmailBody: Encodable {
     let token: String
     let skipMerge: Bool
-}
-
-/// The coded detail `POST /v1/me/email/confirm` carries on the one `400` whose
-/// body is structured — a superseded link (#1616), mirroring the API's
-/// `ConfirmEmailErrorDetail`. Decode-what-you-need: `message` is deliberately
-/// unread, since a code this client recognises is one it already has a screen
-/// for, and an unrecognised code falls back to `.rejected` anyway.
-private struct ConfirmEmailCodedError: Decodable, Error {
-    let detail: Detail
-
-    struct Detail: Decodable {
-        let code: String
-        let message: String?
-    }
+    let switchFromUserId: String?
 }

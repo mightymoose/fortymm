@@ -1,3 +1,4 @@
+import { stubUnreadNotifications } from '../../support/notifications'
 import type { Locator, Page, Request as PWRequest, Route } from '@playwright/test'
 import { PERM } from '../../../src/lib/permissions'
 import { sessionResponse } from '../../../src/test/factories'
@@ -54,6 +55,7 @@ export async function mockAdminSession(page: Page) {
   // has no catch-all, so an unstubbed stream would fall through to vite's SPA
   // fallback and be answered with `index.html` (`../../support/realtime`).
   await stubRealtimeStream(page)
+  await stubUnreadNotifications(page)
 }
 
 export interface FailureSpec {

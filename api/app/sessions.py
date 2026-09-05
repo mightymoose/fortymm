@@ -17,6 +17,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import JSONResponse
 from pyrate_limiter import Duration, Rate
 from rq.job import Job
 from sqlalchemy import ColumnElement, delete, func, or_, select, update
@@ -42,6 +43,7 @@ from app.rate_limiting import RedisRateLimiter
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.roles import grant_default_role
 from app.schemas.session import (
+    AccountSwitchPreview,
     ConfirmEmail400Response,
     ConfirmEmailRequest,
     ConsumeLoginRequest,
@@ -397,6 +399,110 @@ async def _merge_guest_into(
     return MergeSummary(matches_moved=summary.matches_moved)
 
 
+async def _automatic_login_destination(
+    db: AsyncSession, token_row: UserToken, target: User, *, skip_merge: bool = False
+) -> str:
+    """Name an empty guest's automatic first-sign-in username adoption."""
+    if skip_merge or not _is_first_sign_in_context(token_row.context):
+        return target.username
+    guest_id = _guest_id_from_login_context(token_row.context)
+    guest = await db.get(User, guest_id) if guest_id is not None else None
+    if (
+        guest is not None
+        and guest.id != target.id
+        and guest.confirmed_at is None
+        and guest.merged_into_user_id is None
+        and await _guest_match_count(db, guest.id) == 0
+    ):
+        return guest.username
+    return target.username
+
+
+async def _account_switch_preview(
+    db: AsyncSession,
+    session_cookie: str | None,
+    target: User,
+    *,
+    destination_username: str | None = None,
+) -> AccountSwitchPreview | None:
+    current = await _find_session_user(db, session_cookie) if session_cookie else None
+    if (
+        current is None
+        or current.confirmed_at is None
+        or current.merged_into_user_id is not None
+        or current.id == target.id
+    ):
+        return None
+    return AccountSwitchPreview(
+        from_user_id=current.id,
+        from_username=current.username,
+        to_username=destination_username or target.username,
+    )
+
+
+async def _require_account_switch_approval(
+    db: AsyncSession,
+    session_cookie: str | None,
+    target: User,
+    switch_from_user_id: uuid.UUID | None,
+    *,
+    destination_username: str | None = None,
+) -> None:
+    source_token = None
+    if session_cookie and switch_from_user_id is not None:
+        # Approval belongs to this credential, not just the user UUID. Lock
+        # the source and sessions the target will revoke in a stable order;
+        # opposing account switches must not acquire those rows in reverse.
+        source_hash = hash_token(session_cookie)
+        locked = (
+            (
+                await db.execute(
+                    select(UserToken)
+                    .where(
+                        UserToken.context == SESSION_TOKEN_CONTEXT,
+                        or_(
+                            UserToken.token == source_hash,
+                            UserToken.user_id == target.id,
+                        ),
+                    )
+                    .order_by(UserToken.id)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        source_token = next(
+            (token for token in locked if token.token == source_hash), None
+        )
+    switch = await _account_switch_preview(
+        db, session_cookie, target, destination_username=destination_username
+    )
+    if switch_from_user_id is not None:
+        current = (
+            await _find_session_user(db, session_cookie) if session_cookie else None
+        )
+        if (
+            source_token is not None
+            and current is not None
+            and current.id == switch_from_user_id
+        ):
+            await db.delete(source_token)
+            return
+    elif switch is None:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "account_switch_required",
+            "message": (
+                "Your sign-in changed. Review this account switch before continuing."
+            ),
+            "account_switch": switch.model_dump(mode="json") if switch else None,
+        },
+    )
+
+
 async def _revoke_other_sessions(db: AsyncSession, user: User) -> None:
     """Delete every session token ``user`` currently holds, so only the cookie
     the caller is about to receive still authenticates.
@@ -640,6 +746,21 @@ def _invalid_or_expired_exception() -> HTTPException:
     )
 
 
+class SessionEndedException(HTTPException):
+    """An ended identity needs a durable cookie companion on its 401."""
+
+
+async def session_ended_exception_handler(
+    request: Request, exc: SessionEndedException
+) -> Response:
+    response = JSONResponse(
+        status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers
+    )
+    if not request.cookies.get(CSRF_COOKIE_NAME):
+        _set_csrf_cookie(response)
+    return response
+
+
 def _session_ended_exception() -> HTTPException:
     """Build the 401 for a request whose session cookie no longer resolves to a
     usable user — a signed-out or expired session. Carries the stable
@@ -647,7 +768,7 @@ def _session_ended_exception() -> HTTPException:
     as an ordinary auth failure (or silently minting a fresh guest), and clears
     any lingering dead cookie so the login screen can start a clean guest. There
     is no email to prefill — the holder isn't a known account here."""
-    return HTTPException(
+    return SessionEndedException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={
             "code": SESSION_ENDED_CODE,
@@ -671,7 +792,7 @@ async def _merged_session_exception(db: AsyncSession, user: User) -> HTTPExcepti
     }
     if owner is not None and owner.email:
         detail["email"] = owner.email
-    return HTTPException(
+    return SessionEndedException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=detail,
         headers=_clear_cookie_header(),
@@ -883,11 +1004,15 @@ async def get_session_endpoint(
     the session), and a cookie that resolves to a merged-away guest raises the
     structured ``session_merged`` 401 instead of silently swapping identities.
 
-    Only when the cookie resolves no user (no/garbage cookie) does it mint a fresh
-    guest and Set-Cookie it — the zero-friction first visit.
+    Only a missing cookie mints a fresh guest. A rejected cookie ends the
+    session explicitly instead of silently replacing the caller's identity.
     """
     user = await _resolve_current_user(db, session_cookie=session_cookie)
     if user is None:
+        # A surviving CSRF companion identifies a browser whose dead session
+        # cookie was cleared. Repeated loads must not silently create a guest.
+        if session_cookie is not None or csrf_cookie is not None:
+            raise _session_ended_exception()
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
     elif csrf_cookie is None:
@@ -1472,7 +1597,12 @@ async def confirm_email(
         )
     if token_row.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):
         return await _confirm_account_merge(
-            db, response, token_row, skip_merge=payload.skip_merge
+            db,
+            response,
+            token_row,
+            skip_merge=payload.skip_merge,
+            session_cookie=session_cookie,
+            switch_from_user_id=payload.switch_from_user_id,
         )
     user = (
         await db.execute(select(User).where(User.id == token_row.user_id))
@@ -1503,6 +1633,10 @@ async def confirm_email(
             detail="That confirmation link is invalid or expired.",
         )
 
+    await _require_account_switch_approval(
+        db, session_cookie, user, payload.switch_from_user_id
+    )
+
     # ``_maybe_merge_prior_session`` runs a query that triggers an
     # autoflush of ``user.email`` before our explicit commit, so the
     # users.email unique-constraint race (another user confirmed this
@@ -1525,7 +1659,11 @@ async def confirm_email(
         # unreplaced row) — sweep them here rather than waiting for a later
         # issuance that may never come (#1616).
         await _sweep_replaced_email_tokens(db, user.id)
-        merged = await _maybe_merge_prior_session(db, session_cookie, user)
+        merged = (
+            None
+            if payload.skip_merge
+            else await _maybe_merge_prior_session(db, session_cookie, user)
+        )
         # After the cookie lookup above, before the replacement token below.
         await _revoke_other_sessions(db, user)
         db.add(
@@ -1566,6 +1704,8 @@ async def _confirm_account_merge(
     token_row: UserToken,
     *,
     skip_merge: bool = False,
+    session_cookie: str | None = None,
+    switch_from_user_id: uuid.UUID | None = None,
 ) -> SessionResponse:
     """Consume a merge token: fold the ephemeral guest that requested it into
     the account that owns the target address, then rotate the caller's session
@@ -1597,6 +1737,9 @@ async def _confirm_account_merge(
             detail="That confirmation link is invalid or expired.",
         )
 
+    await _require_account_switch_approval(
+        db, session_cookie, target, switch_from_user_id
+    )
     merged = (
         None if skip_merge else await _merge_guest_into(db, guest=guest, target=target)
     )
@@ -1961,6 +2104,16 @@ async def consume_login_token(
             LOGIN_EMAIL_CHANGED_CODE, "That sign-in link no longer matches your email."
         )
 
+    await _require_account_switch_approval(
+        db,
+        session_cookie,
+        user,
+        payload.switch_from_user_id,
+        destination_username=await _automatic_login_destination(
+            db, token_row, user, skip_merge=payload.skip_merge
+        ),
+    )
+
     # Token-bound merge: fold the guest recorded at request time (follows the
     # user cross-device). Fall back to the clicking browser's guest when the
     # token didn't record one (bare ``login``). ``skip_merge`` lets the owner
@@ -2036,6 +2189,7 @@ async def _adopt_guest_username(db: AsyncSession, *, guest: User, target: User) 
 )
 async def preview_merge(
     payload: MergePreviewRequest,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> MergePreview:
     """Side-effect-free look at an emailed link before it's consumed, so the
@@ -2051,7 +2205,7 @@ async def preview_merge(
                 UserToken.token == hash_token(payload.token),
                 or_(
                     _login_token_clause(),
-                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX),
+                    _pending_email_token_clause(),
                 ),
             )
         )
@@ -2059,21 +2213,12 @@ async def preview_merge(
     if token_row is None:
         return MergePreview(is_merge=False)
 
-    # A token that's been superseded can no longer be consumed — treat it the
-    # same as "not found" here. For login tokens this mirrors
-    # ``consume_login_token``'s own expiry-before-replacement ordering; age is
-    # read off ``created_at`` directly rather than trusting "the row still
-    # exists", since the sweep in ``_issue_and_send_login_email`` is
-    # opportunistic and may not have run yet. Settings confirmation tokens
-    # (``EMAIL_MERGE_CONTEXT_PREFIX``) get their ``replaced_at`` from
-    # ``_issue_confirmation_token`` (#1616), so a merge link a newer resend
-    # replaced must not raise the gate either — ``confirm_email`` would only
-    # 400 it; their lifetime keeps its own separate check on the confirm
-    # endpoint.
-    if _is_login_context(token_row.context) and (
-        token_row.replaced_at is not None
-        or _token_expired(token_row, LOGIN_TOKEN_LIFETIME)
-    ):
+    lifetime = (
+        LOGIN_TOKEN_LIFETIME
+        if _is_login_context(token_row.context)
+        else EMAIL_CONFIRM_TOKEN_LIFETIME
+    )
+    if token_row.replaced_at is not None or _token_expired(token_row, lifetime):
         return MergePreview(is_merge=False)
 
     if token_row.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):
@@ -2083,11 +2228,45 @@ async def preview_merge(
         owner_id = _target_id_from_merge_context(token_row.context)
         owner = await db.get(User, owner_id) if owner_id is not None else None
         guest = await db.get(User, token_row.user_id)
+    elif token_row.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX):
+        owner = await db.get(User, token_row.user_id)
+        guest = await _find_session_user(db, session_cookie) if session_cookie else None
     else:
         # Login token: lives on the *owner*; a recorded guest is in the context.
         owner = await db.get(User, token_row.user_id)
         guest_id = _guest_id_from_login_context(token_row.context)
         guest = await db.get(User, guest_id) if guest_id is not None else None
+
+    if owner is None or owner.merged_into_user_id is not None:
+        return MergePreview(is_merge=False)
+    if token_row.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX):
+        if owner.email != _old_email_from_context(token_row.context):
+            return MergePreview(is_merge=False)
+        claimed = (
+            await db.execute(
+                select(User.id)
+                .where(User.email == token_row.sent_to, User.id != owner.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if claimed is not None:
+            return MergePreview(is_merge=False)
+    elif _is_first_sign_in_context(token_row.context):
+        if (
+            not token_row.sent_to
+            or owner.email is not None
+            or owner.confirmed_at is not None
+        ):
+            return MergePreview(is_merge=False)
+    elif token_row.sent_to and owner.email != token_row.sent_to:
+        return MergePreview(is_merge=False)
+
+    switch = await _account_switch_preview(
+        db,
+        session_cookie,
+        owner,
+        destination_username=await _automatic_login_destination(db, token_row, owner),
+    )
 
     # Only a *mergeable* guest counts — mirror ``_merge_guest_into``'s guards so
     # the preview matches what confirm/consume will actually do.
@@ -2101,10 +2280,12 @@ async def preview_merge(
         return MergePreview(
             is_merge=False,
             owner_username=owner.username if owner is not None else None,
+            account_switch=switch,
         )
 
     return MergePreview(
         is_merge=True,
+        account_switch=switch,
         owner_username=owner.username,
         guest_username=guest.username,
         guest_matches_count=await _guest_match_count(db, guest.id),

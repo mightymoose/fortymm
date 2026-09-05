@@ -1,3 +1,4 @@
+import { stubUnreadNotifications } from '../support/notifications'
 import { test, expect, Page } from '@playwright/test';
 import { matchDetails, sessionResponse } from '../../src/test/factories';
 import type { components } from '../../src/api/schema';
@@ -163,6 +164,7 @@ class MatchDetailsPage {
      * endpoints this page touches are mocked here via `page.route`. */
     async mock(match: MatchDetails) {
         await stubRealtimeStream(this.page);
+        await stubUnreadNotifications(this.page);
         await this.page.route('**/api/v1/session', (route) =>
             route.fulfill({
                 status: 200,

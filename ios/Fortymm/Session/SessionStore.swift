@@ -23,6 +23,21 @@ final class SessionStore: ObservableObject {
     /// matching flow over the shell. Cleared once that flow is dismissed.
     @Published var pendingDeepLink: DeepLink?
 
+    /// Delay link POSTs until bootstrap has restored the CSRF companion, while
+    /// still allowing a recovery link after bootstrap resolves to signed out.
+    var presentedDeepLink: DeepLink? {
+        get {
+            switch state {
+            case .loaded: return pendingDeepLink
+            case .signedOut:
+                if case .match = pendingDeepLink { return nil }
+                return pendingDeepLink
+            case .idle, .loading, .failed: return nil
+            }
+        }
+        set { pendingDeepLink = newValue }
+    }
+
     /// Record an opened URL as a pending deep link if it's one we recognise.
     /// Stored rather than acted on directly: a link can arrive at cold launch
     /// before `GET /v1/session` resolves, so `RootView` only presents it once
@@ -38,6 +53,12 @@ final class SessionStore: ObservableObject {
     func resolveDeepLink(_ response: SessionResponse) {
         apply(response.data.user)
         pendingDeepLink = nil
+    }
+
+    /// Reconcile credentials with the shell when leaving a recovery link.
+    func cancelDeepLink() async {
+        pendingDeepLink = nil
+        await load(force: true)
     }
 
     /// Open a match deep link (a tapped result notification). Held like
@@ -78,10 +99,11 @@ final class SessionStore: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// Drop into the signed-out state (merged away). Clears any pending deep
-    /// link so its cover doesn't sit over the sign-in screen.
+    /// Drop into the signed-out state while keeping pending recovery links.
     func signedOut(reason: String, email: String?) {
-        pendingDeepLink = nil
+        // Keep email links: they are how the holder recovers this session.
+        // A protected match link must not cover the sign-in screen.
+        if case .match = pendingDeepLink { pendingDeepLink = nil }
         state = .signedOut(reason: reason, email: email)
     }
 
@@ -90,6 +112,17 @@ final class SessionStore: ObservableObject {
     /// without a second `GET /v1/session` round-trip.
     func apply(_ user: SessionUser) {
         state = .loaded(user)
+    }
+
+    func startNewGuest() async {
+        guard case .signedOut = state else { return }
+        state = .loading
+        do {
+            let response = try await client.startNewGuest()
+            state = .loaded(response.data.user)
+        } catch {
+            state = .signedOut(reason: "We couldn't start a new guest. Please try again.", email: nil)
+        }
     }
 
     /// Create or resume the session. Skips the network call if a user is

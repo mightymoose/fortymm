@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import re
 from collections.abc import AsyncIterator
@@ -8,7 +9,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import sessions
 from app.db import get_session
@@ -591,7 +592,10 @@ async def test_consume_omits_merge_when_prior_session_is_verified(
     opponent = await make_user(db_session, "opponent-jay")
     sam_match = await _record_singles_match(db_session, sam, opponent)
 
-    response = await api_client.post("/v1/login/consume", json={"token": raw_rita})
+    response = await api_client.post(
+        "/v1/login/consume",
+        json={"token": raw_rita, "switch_from_user_id": str(sam.id)},
+    )
     assert response.status_code == 200
     assert response.json().get("merged") is None
 
@@ -1393,10 +1397,8 @@ async def test_confirming_a_mailed_link_revokes_the_requesting_browsers_session(
     stop authenticating as that account.
 
     Asserting only that B's new cookie works proves nothing — the defect is an
-    old credential surviving. So this holds A's cookie and re-uses it. A revoked
-    cookie resolves no user, so ``GET /v1/session`` mints a *fresh guest*
-    (200) rather than 401ing; the discriminating assertion is therefore that the
-    identity A gets back is not the confirmed account."""
+    old credential surviving. A's next load must report that the session ended,
+    without silently signing the browser into a fresh guest (#1641)."""
     rita = await _make_confirmed_user(db_session, "rita@example.com")
     raw_login = "raw-login-token-revocation"
     await _issue_login_token(db_session, rita, raw_login)
@@ -1437,8 +1439,9 @@ async def test_confirming_a_mailed_link_revokes_the_requesting_browsers_session(
     async with make_client() as browser_a:
         browser_a.cookies.set(SESSION_COOKIE_NAME, held_cookie)
         after = await browser_a.get("/v1/session")
-        assert after.status_code == 200
-        assert after.json()["data"]["user"]["username"] != "rita"
+        assert after.status_code == 401
+        assert after.json()["detail"]["code"] == "session_ended"
+        assert not after.cookies.get(SESSION_COOKIE_NAME)
 
 
 async def test_confirming_an_email_change_revokes_the_users_other_sessions(
@@ -1447,7 +1450,13 @@ async def test_confirming_an_email_change_revokes_the_users_other_sessions(
     """The same hole in the Settings claim flow (#1294 shares it). The browser
     that requested the claim must not keep a live session for the account once
     the mailed link is confirmed elsewhere."""
-    guest = await start_session(api_client, db_session)
+    guest = await _make_confirmed_user(db_session, "quinn-original@example.com")
+    await _issue_login_token(db_session, guest, "quinn-initial-login")
+    assert (
+        await api_client.post(
+            "/v1/login/consume", json={"token": "quinn-initial-login"}
+        )
+    ).status_code == 200
     held_cookie = api_client.cookies.get(SESSION_COOKIE_NAME)
     assert held_cookie
 
@@ -1491,6 +1500,9 @@ async def test_confirming_an_email_change_revokes_the_users_other_sessions(
         .all()
     )
     assert surviving == []
+    ended = await api_client.get("/v1/session")
+    assert ended.status_code == 401
+    assert ended.json()["detail"]["code"] == "session_ended"
 
 
 # ---- structured codes on a dead sign-in link (#1466) ----------------------
@@ -1748,3 +1760,271 @@ async def test_login_sender_response_is_identical_across_calls(
     first = await api_client.get("/v1/login/sender")
     second = await api_client.get("/v1/login/sender")
     assert first.json() == second.json()
+
+
+@pytest.mark.parametrize("link_kind", ["login", "change", "merge"])
+async def test_claimed_account_switch_requires_approval_without_consuming_link(
+    api_client: AsyncClient, db_session: AsyncSession, link_kind: str
+):
+    alice = await _make_confirmed_user(db_session, "alice@example.com")
+    bob = await _make_confirmed_user(db_session, "bob@example.com")
+    await _issue_login_token(db_session, alice, "alice-sign-in")
+    endpoint = "/v1/login/consume" if link_kind == "login" else "/v1/me/email/confirm"
+    if link_kind == "login":
+        await _issue_login_token(db_session, bob, "bob-sign-in")
+    else:
+        guest = (
+            await make_user(db_session, "guest-for-bob")
+            if link_kind == "merge"
+            else bob
+        )
+        db_session.add(
+            UserToken(
+                user_id=guest.id,
+                token=hashlib.sha256(b"bob-sign-in").digest(),
+                context=f"merge:{bob.id}"
+                if link_kind == "merge"
+                else "change:bob@example.com",
+                sent_to="bob@example.com"
+                if link_kind == "merge"
+                else "bob-new@example.com",
+            )
+        )
+        await db_session.commit()
+    assert (
+        await api_client.post("/v1/login/consume", json={"token": "alice-sign-in"})
+    ).status_code == 200
+
+    preview = await api_client.post("/v1/merge/preview", json={"token": "bob-sign-in"})
+    assert preview.json()["account_switch"] == {
+        "from_user_id": str(alice.id),
+        "from_username": "alice",
+        "to_username": "bob",
+    }
+    refused = await api_client.post(endpoint, json={"token": "bob-sign-in"})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "account_switch_required"
+    assert (await api_client.get("/v1/session")).json()["data"]["user"]["id"] == str(
+        alice.id
+    )
+    # Approval from an account that is no longer current cannot consume the link.
+    stale_approval = await api_client.post(
+        endpoint, json={"token": "bob-sign-in", "switch_from_user_id": str(bob.id)}
+    )
+    assert stale_approval.status_code == 409
+    assert stale_approval.json()["detail"]["code"] == "account_switch_required"
+    # Declining is read-only: the link remains live until explicitly approved.
+    accepted = await api_client.post(
+        endpoint, json={"token": "bob-sign-in", "switch_from_user_id": str(alice.id)}
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["user"]["id"] == str(bob.id)
+
+
+async def test_email_change_confirmation_can_leave_previewed_guest_matches_behind(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    owner = await _make_confirmed_user(db_session, "owner@example.com")
+    guest = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "confirmation-opponent")
+    await _record_singles_match(db_session, guest, opponent)
+    raw = "email-change-declined-merge"
+    db_session.add(
+        UserToken(
+            user_id=owner.id,
+            context="change:owner@example.com",
+            token=sessions.hash_token(raw),
+            sent_to="owner-new@example.com",
+        )
+    )
+    await db_session.commit()
+    preview = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert preview.json()["is_merge"] is True
+    assert preview.json()["guest_matches_count"] == 1
+    async with make_client() as other_guest_tab:
+        other_guest_tab.cookies.update(api_client.cookies)
+        response = await api_client.post(
+            "/v1/me/email/confirm", json={"token": raw, "skip_merge": True}
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["user"]["id"] == str(owner.id)
+        assert response.json().get("merged") is None
+        surviving = await other_guest_tab.get("/v1/session")
+        assert surviving.status_code == 200
+        assert surviving.json()["data"]["user"]["id"] == str(guest.id)
+
+
+async def test_first_sign_in_switch_names_the_automatically_adopted_guest(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    guest = await start_session(api_client, db_session)
+    expected_username = guest.username
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+    alice = await _make_confirmed_user(db_session, "alice-switch@example.com")
+    await _issue_login_token(db_session, alice, "alice-switch-token")
+    async with make_client() as clicking_browser:
+        signed_in = await clicking_browser.post(
+            "/v1/login/consume", json={"token": "alice-switch-token"}
+        )
+        assert signed_in.status_code == 200
+        preview = await clicking_browser.post("/v1/merge/preview", json={"token": raw})
+        assert preview.json()["guest_matches_count"] == 0
+        assert preview.json()["account_switch"]["to_username"] == expected_username
+        conflict = await clicking_browser.post("/v1/login/consume", json={"token": raw})
+        assert conflict.status_code == 409
+        assert (
+            conflict.json()["detail"]["account_switch"]["to_username"]
+            == expected_username
+        )
+        confirmed = await clicking_browser.post(
+            "/v1/login/consume",
+            json={"token": raw, "switch_from_user_id": str(alice.id)},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["data"]["user"]["username"] == expected_username
+
+
+async def test_email_change_preview_rejects_destination_claimed_after_issuance(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    owner = await _make_confirmed_user(db_session, "owner-preview@example.com")
+    browsing = await start_session(api_client, db_session)
+    browsing.email = "browsing-preview@example.com"
+    browsing.confirmed_at = datetime.now(UTC)
+    raw = "email-change-claimed-destination"
+    db_session.add(
+        UserToken(
+            user_id=owner.id,
+            token=hashlib.sha256(raw.encode()).digest(),
+            context="change:owner-preview@example.com",
+            sent_to="claimed-preview@example.com",
+        )
+    )
+    await db_session.commit()
+    valid = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert valid.json()["account_switch"] is not None
+    await _make_confirmed_user(db_session, "claimed-preview@example.com")
+    preview = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert preview.status_code == 200
+    assert preview.json()["is_merge"] is False
+    assert preview.json()["account_switch"] is None
+
+
+@pytest.mark.parametrize("link_kind", ["login", "change", "merge"])
+async def test_competing_approved_switches_consume_source_session_once(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    link_kind: str,
+):
+    source = await _make_confirmed_user(db_session, "source-switch@example.com")
+    source_cookie = "shared-source-session"
+    db_session.add(
+        UserToken(
+            user_id=source.id,
+            context=SESSION_TOKEN_CONTEXT,
+            token=sessions.hash_token(source_cookie),
+        )
+    )
+    links = ["switch-first", "switch-second"]
+    for index, raw in enumerate(links):
+        target = await _make_confirmed_user(db_session, f"target-{index}@example.com")
+        if link_kind == "login":
+            await _issue_login_token(db_session, target, raw)
+        else:
+            owner = (
+                await make_user(db_session, f"merge-guest-{index}")
+                if link_kind == "merge"
+                else target
+            )
+            db_session.add(
+                UserToken(
+                    user_id=owner.id,
+                    token=sessions.hash_token(raw),
+                    context=f"merge:{target.id}"
+                    if link_kind == "merge"
+                    else f"change:{target.email}",
+                    sent_to=target.email
+                    if link_kind == "merge"
+                    else f"changed-{index}@example.com",
+                )
+            )
+            await db_session.commit()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    endpoint = "/v1/login/consume" if link_kind == "login" else "/v1/me/email/confirm"
+    async with make_client() as first, make_client() as second:
+        for client in [first, second]:
+            client.cookies.set(SESSION_COOKIE_NAME, source_cookie)
+            client.cookies.set("csrf_token", "test-csrf")
+        responses = await asyncio.gather(
+            *[
+                client.post(
+                    endpoint, json={"token": raw, "switch_from_user_id": str(source.id)}
+                )
+                for client, raw in zip([first, second], links, strict=True)
+            ]
+        )
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    losing_index = next(
+        index for index, response in enumerate(responses) if response.status_code == 409
+    )
+    assert responses[losing_index].json()["detail"]["code"] == "account_switch_required"
+    async with make_client() as retry:
+        response = await retry.post(endpoint, json={"token": links[losing_index]})
+        assert response.status_code == 200, (
+            "The losing request must leave its link unused"
+        )
+
+
+async def test_opposing_approved_switches_do_not_deadlock(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+):
+    users = [
+        await _make_confirmed_user(db_session, f"opposing-{index}@example.com")
+        for index in range(2)
+    ]
+    for index, user in enumerate(users):
+        await _issue_login_token(db_session, user, f"opposing-link-{index}")
+        db_session.add(
+            UserToken(
+                user_id=user.id,
+                context=SESSION_TOKEN_CONTEXT,
+                token=sessions.hash_token(f"opposing-session-{index}"),
+            )
+        )
+    await db_session.commit()
+    # Warm both connections so connection setup cannot serialize the requests.
+    async with engine.connect() as one, engine.connect() as two:
+        await one.execute(select(1))
+        await two.execute(select(1))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    async with make_client() as first, make_client() as second:
+        for index, client in enumerate([first, second]):
+            client.cookies.set(SESSION_COOKIE_NAME, f"opposing-session-{index}")
+            client.cookies.set("csrf_token", "test-csrf")
+        responses = await asyncio.gather(
+            *[
+                client.post(
+                    "/v1/login/consume",
+                    json={
+                        "token": f"opposing-link-{1 - index}",
+                        "switch_from_user_id": str(users[index].id),
+                    },
+                )
+                for index, client in enumerate([first, second])
+            ]
+        )
+    assert sorted(response.status_code for response in responses) == [200, 409]

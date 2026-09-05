@@ -1,20 +1,26 @@
-import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { handleIdentityChange } from '@/api/identity-change'
+import { closeRealtimeConnections } from '@/api/realtime/connection'
+import { useEffect, useRef, useState } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import {
+  accountSwitchConflict,
   type FinalizeTokenInput,
   type Session,
   useConfirmEmail,
   useMergePreview,
+  SessionChangedError,
 } from '@/api/session'
 import { btnGhost, btnPrimary } from '@/components/login/styles'
 import {
   LinkCheckPage,
   type LinkCheckState,
 } from '@/components/login/link-check-page/link-check-page'
+import { AccountSwitchGate, ReviewAccountSwitch } from '@/components/login/account-switch-gate'
 import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
@@ -37,7 +43,7 @@ export const Route = createFileRoute('/confirm-email')({
 // Confirmation copy for every state this page renders. `LinkCheckPage`'s
 // defaults are written for the *sign-in* flow (15-minute links, "you'll be
 // straight in") — wrong for a confirmation link, which lasts 24 hours
-// (`EMAIL_CONFIRM_TOKEN_LIFETIME`) and signs nobody in, so every state
+// (`EMAIL_CONFIRM_TOKEN_LIFETIME`) and also signs the browser in, so every state
 // supplies its own wording (#1616). `email_changed` is absent on purpose:
 // the nearest confirm branch stays opaque, so the page can never name it.
 const CONFIRM_COPY: Partial<
@@ -126,9 +132,18 @@ function isRejectedConfirmError(err: unknown): boolean {
 function ConfirmEmailPage() {
   const { token } = Route.useSearch()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const cancelSwitch = () => {
+    handleIdentityChange({
+      closeRealtime: closeRealtimeConnections,
+      clearQueryCache: () => queryClient.clear(),
+    })
+    void navigate({ to: '/dashboard', replace: true })
+  }
   const preview = useMergePreview()
   const confirm = useConfirmEmail()
   const fired = useRef(false)
+  const [approvedSwitch, setApprovedSwitch] = useState<string | undefined>()
 
   // Fires after any successful confirm, passed as every call site's
   // mutate-level onSuccess below. A mutate's onSuccess runs exactly once per
@@ -158,9 +173,16 @@ function ConfirmEmailPage() {
   // wrap it once so the mutate-level `onSuccess` doesn't repeat at each call
   // site. Recording the input here — the one choke point every confirm passes
   // through — keeps the retained copy identical to the real attempt.
+  const confirming = useRef(false)
+  const [skipMerge, setSkipMerge] = useState(false)
   const confirmWithToast = (input: FinalizeTokenInput) => {
+    if (confirming.current) return
+    confirming.current = true
+    setSkipMerge(input.skipMerge ?? false)
     firedInput.current = input
-    confirm.mutate(input, { onSuccess: showMergeToast })
+    confirm.mutate(input, { onSuccess: showMergeToast, onError: (error) => {
+      if (error instanceof SessionChangedError) void navigate({ to: '/dashboard', replace: true })
+    }, onSettled: () => { confirming.current = false } })
   }
 
   // Preview the link first. A merge that would carry matches over waits for the
@@ -171,11 +193,11 @@ function ConfirmEmailPage() {
     fired.current = true
     preview.mutate(token, {
       onSuccess: (p) => {
-        if (!(p.is_merge && p.guest_matches_count > 0)) {
-          confirmWithToast({ token })
+        if (!p.account_switch && !(p.is_merge && p.guest_matches_count > 0 && !firedInput.current?.skipMerge)) {
+          confirmWithToast({ token, skipMerge: firedInput.current?.skipMerge ?? false })
         }
       },
-      onError: () => confirmWithToast({ token }),
+      onError: () => confirmWithToast({ token, skipMerge: firedInput.current?.skipMerge ?? false }),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, preview, confirm])
@@ -186,14 +208,44 @@ function ConfirmEmailPage() {
   // displayed state is driven by the mutation result, not the search param, so
   // clearing `token` here doesn't revert the page to "missing token".
   useEffect(() => {
-    if ((confirm.isSuccess || confirm.isError) && token) {
+    if (confirm.error instanceof SessionChangedError) {
+      void navigate({ to: '/dashboard', replace: true })
+      return
+    }
+    if ((confirm.isSuccess || (confirm.isError && !accountSwitchConflict(confirm.error))) && token) {
       navigate({ to: '/confirm-email', search: { token: '' }, replace: true })
     }
-  }, [confirm.isSuccess, confirm.isError, token, navigate])
+  }, [confirm.isSuccess, confirm.isError, confirm.error, token, navigate])
+
+  const conflict = accountSwitchConflict(confirm.error)
+  if (conflict) {
+    const change = conflict.account_switch
+    return change
+      ? <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
+          onCancel={cancelSwitch}
+          onContinue={() => confirmWithToast({ ...firedInput.current!, switchFromUserId: change.from_user_id })} />
+      : <ReviewAccountSwitch onCancel={cancelSwitch} onReview={() => {
+          fired.current = false
+          setApprovedSwitch(undefined)
+          confirm.reset()
+          preview.reset()
+        }} />
+  }
 
   const p = preview.data
+  if (confirm.isIdle && p?.account_switch && !approvedSwitch) {
+    const change = p.account_switch
+    return <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
+      onCancel={cancelSwitch}
+      onContinue={() => {
+        setApprovedSwitch(change.from_user_id)
+        if (!(p.is_merge && p.guest_matches_count > 0 && !firedInput.current?.skipMerge)) {
+          confirmWithToast({ token, skipMerge: firedInput.current?.skipMerge ?? false, switchFromUserId: change.from_user_id })
+        }
+      }} />
+  }
   const showGate =
-    confirm.status === 'idle' && !!p && p.is_merge && p.guest_matches_count > 0
+    confirm.status === 'idle' && !!p && p.is_merge && p.guest_matches_count > 0 && !skipMerge
 
   // Order matters: the confirm result wins over `!token`, because we scrub the
   // token from the URL after the mutation settles (#521) — a cleared token on
@@ -225,8 +277,8 @@ function ConfirmEmailPage() {
         matchesCount={p.guest_matches_count}
         adoptsGuestUsername={p.adopts_guest_username}
         busy={confirm.isPending}
-        onBringThemOver={() => confirmWithToast({ token })}
-        onNotNow={() => confirmWithToast({ token, skipMerge: true })}
+        onBringThemOver={() => confirmWithToast({ token, switchFromUserId: approvedSwitch })}
+        onNotNow={() => confirmWithToast({ token, skipMerge: true, switchFromUserId: approvedSwitch })}
       />
     )
   }
@@ -283,7 +335,9 @@ function ConfirmEmailPage() {
 
   // Each failure state's reason is stated once, in its own subtitle — the
   // API's sentence is deliberately not repeated under it (#1616).
-  const copy = CONFIRM_COPY[linkState]
+  const copy = linkState === 'success'
+    ? { ...CONFIRM_COPY.success, subtitle: `You're now signed in as ${confirm.data?.data.user.username}. Your email is verified.` }
+    : CONFIRM_COPY[linkState]
 
   // Intentionally NOT wrapped in <AppShell> — AppShell calls useSession()
   // on mount, and `GET /v1/session` auto-mints a guest for cookieless

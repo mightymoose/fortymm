@@ -1,3 +1,4 @@
+import { stubUnreadNotifications } from './support/notifications'
 import { expect, test, type Page } from '@playwright/test'
 import { SEED, ScoreEntryPage } from './page-objects/score-entry.page'
 import { stubRealtimeStream } from './support/realtime'
@@ -207,6 +208,7 @@ async function installApiMocks(page: Page, seed: Seed): Promise<void> {
     }) as const
 
   await stubRealtimeStream(page)
+  await stubUnreadNotifications(page)
 
   // `id` is required on the wire (the user menu's "Your profile" link reads
   // it) — MSW is off here, so this stub is the only thing feeding the session.
