@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
 import type { components } from '@/api/schema'
-import { fireScoreSave } from '@/api/matches'
+import { fireScoreSave, matchQueryKey } from '@/api/matches'
 import { ScoreEntry } from './score-entry'
 
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
@@ -1445,11 +1445,11 @@ function renderScoringApp(
     routeTree: rootRoute.addChildren([scoringNew, scoringEdit, matchPage]),
     history: createMemoryHistory({ initialEntries: [initialPath] }),
   })
-  return render(
+  return { queryClient, router, ...render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
-  )
+  ) }
 }
 
 // A match sitting on the deciding game: 2–0 with games 1 and 2 scored, so the
@@ -1604,6 +1604,51 @@ async function renderReplaceConflict() {
 }
 
 describe('ScoreEntry — failed saves', () => {
+  it.each(['create', 'edit'] as const)('a failed %s retains its original baseline across refetch and remount', async (kind) => {
+    const user = userEvent.setup()
+    const gameNumber = kind === 'create' ? 3 : 1
+    let current = inProgressMatch()
+    let writes = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(current)),
+      http.post(`*/v1/matches/m-1/games/${gameNumber}/scores/new`, () => {
+        writes += 1
+        return HttpResponse.error()
+      }),
+      http.put(`*/v1/matches/m-1/games/${gameNumber}/scores`, () => {
+        writes += 1
+        return HttpResponse.error()
+      }),
+    )
+    const { queryClient, router } = renderScoringApp(`/matches/m-1/games/${gameNumber}/scores/${kind === 'create' ? 'new' : 'edit'}`)
+    const me = await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    await user.clear(me)
+    await user.type(me, '11')
+    const opp = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.clear(opp)
+    await user.type(opp, '4')
+    await user.click(screen.getByRole('button', { name: /save game & next|save changes/i }))
+    await screen.findByRole('button', { name: /^retry$/i })
+    expect(writes).toBe(1)
+
+    const updated = { id: `g-${gameNumber}`, game_number: gameNumber, score: { ...score(`s-${gameNumber}`, 5, 11), version: kind === 'edit' ? 2 : 1 } }
+    current = inProgressMatch({ games: [...current.games.filter((game) => game.game_number !== gameNumber), updated] })
+    await act(async () => { queryClient.setQueryData(matchQueryKey('m-1'), current) })
+    // The banner must stop offering a blind retry as soon as server truth moves.
+    await screen.findByRole('button', { name: new RegExp(`review game ${gameNumber}`, 'i') })
+    expect(screen.queryByRole('button', { name: /^retry$/i })).not.toBeInTheDocument()
+    // Even an already-dispatched imperative retry must not adopt the fresh version.
+    await act(async () => { await fireScoreSave(queryClient, 'm-1', gameNumber, { side_1_points: 11, side_2_points: 4 }) })
+    expect(writes).toBe(1)
+    await act(async () => { await router.navigate({ to: `/matches/m-1/games/${gameNumber}/scores/edit` }) })
+    await screen.findByRole('heading', { name: new RegExp(`edit game ${gameNumber}`, 'i') })
+    expect(screen.getByText(/this game was saved by someone else/i)).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'rita.kovac score' })).toHaveValue('11')
+    expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toHaveValue('4')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(writes).toBe(1)
+  })
+
   it('still navigates forward on a 500, but shows the banner and flags the cell with the entered points', async () => {
     const user = userEvent.setup()
     server.use(

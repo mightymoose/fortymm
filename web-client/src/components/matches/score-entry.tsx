@@ -565,9 +565,10 @@ function ScoreEntryInner({
   // navigating out from under them would silently discard their typing and
   // hide the very state they need to see.
   const versionDiffered =
-    isDirty &&
-    (baseline.version !== (persistedScore?.version ?? null) ||
-      baseline.scoreId !== (persistedScore?.id ?? null))
+    (ownSave?.status === 'error' && isScoreConflict(ownSave.error)) ||
+    (isDirty &&
+      (baseline.version !== (persistedScore?.version ?? null) ||
+        baseline.scoreId !== (persistedScore?.id ?? null)))
 
   // Mode/URL/state alignment: in create mode but a score exists → swap to
   // the edit URL so Save doesn't try to POST .../scores/new and 409. The
@@ -1047,7 +1048,7 @@ function ScoreEntryInner({
     const body = failedEntry ?? (parseResult.success ? toBody() : null)
     if (!body) return
     // Re-fire the save. The cache now holds the committed score (and its newer
-    // version — `scoreSaveMutationOptions` reads it fresh at call time, never
+    // version — `replaceCommitted` captures it at call time, never
     // the frozen `baseline.version` this component tracks), so the mutation
     // PUTs with that fresh version and overwrites deliberately — no longer a blind
     // last-write-wins, but a choice made against the value we just showed
@@ -1062,7 +1063,7 @@ function ScoreEntryInner({
     // refetch would re-open the notice we just resolved.
     replacingRef.current = true
     setIsReplacing(true)
-    saveMutation.mutate(body, {
+    saveMutation.replaceCommitted(body, {
       onSuccess: () => setIsDirty(false),
       onSettled: () => {
         replacingRef.current = false

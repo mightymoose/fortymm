@@ -36,7 +36,9 @@ export class ScoreEntryPage {
    * finalize. On an **unrated** match this is "Finalize result" (an immediate
    * self-accept), on a rated one "Post result" — matched loosely to cover both. */
   get finalizeButton(): Locator {
-    return this.page.getByRole('button', { name: /Finalize result|Post result/ })
+    return this.page.getByRole('button', {
+      name: /Finalize result|Post result/,
+    })
   }
 
   /** A participant's numeric score input, by their username (its accessible
@@ -49,6 +51,18 @@ export class ScoreEntryPage {
    * loosely so a cosmetic tweak to the arrow doesn't red the test. */
   get saveButton(): Locator {
     return this.page.getByRole('button', { name: /Save changes/ })
+  }
+
+  failedGameLink(gameNumber: number): Locator {
+    return this.page.getByRole('link', {
+      name: new RegExp(`Game ${gameNumber} didn't save,`),
+    })
+  }
+
+  savedGameLink(gameNumber: number): Locator {
+    return this.page.getByRole('link', {
+      name: new RegExp(`Game ${gameNumber}, saved,`),
+    })
   }
 
   /** The in-page conflict notice raised when this game's save 409'd because a
@@ -90,13 +104,17 @@ export class ScoreEntryPage {
   /** The screen's heading — `Enter game N score.` / `Edit game N score.` — which
    * names the game the inputs are for. */
   get heading(): Locator {
-    return this.page.getByRole('heading', { name: /(Enter|Edit) game \d+ score\./ })
+    return this.page.getByRole('heading', {
+      name: /(Enter|Edit) game \d+ score\./,
+    })
   }
 
   /** The boundary refusal (`Can't enter a score here`) with the API's own reason
    * as its description — what a participant sees on a game they may not score
    * (the match is over, or an earlier game is still unsaved). */
   get refusal(): Locator {
-    return this.page.getByRole('alert').filter({ hasText: "Can't enter a score here" })
+    return this.page
+      .getByRole('alert')
+      .filter({ hasText: "Can't enter a score here" })
   }
 }

@@ -32,7 +32,49 @@ import {
  * page never needs a reload or a save of its own to notice.
  */
 test.describe('Score entry — the page follows the other side', () => {
-  test('keeping a saved score replaces both fields on a dirty edit page', async ({ page, baseURL }) => {
+  test('a failed offline edit cannot adopt a newer saved version on remount', async ({
+    page,
+    baseURL,
+  }) => {
+    const a = await guestFromContext(page.request)
+    const b = await mintGuest(baseURL!)
+    const matchId = await createMatch(a, await findUserId(a, b.username), 3)
+    const version = await createGameScore(a, matchId, 1, 11, 5)
+    // Visit both routes in one app instance so route code is loaded offline.
+    const entry = await ScoreEntryPage.navigateToNew(page, matchId, 2)
+    await entry.savedGameLink(1).click()
+    await expect(entry.scoreInput(a.username)).toHaveValue('11')
+    await entry.scoreInput(b.username).fill('7')
+    const failed = page.waitForEvent('requestfailed', {
+      predicate: (request) =>
+        request.method() === 'PUT' && request.url().endsWith('/games/1/scores'),
+    })
+    await page.context().setOffline(true)
+    await entry.saveButton.click()
+    await failed
+    await page.context().setOffline(false)
+    await expect(entry.heading).toHaveText('Enter game 2 score.')
+    await expect(entry.failedGameLink(1)).toBeVisible()
+    const changed = await editGameScore(b, matchId, 1, 5, 11, version)
+    expect(changed.status()).toBe(200)
+    await expect(entry.conflictReviewBanner(1)).toBeVisible({
+      timeout: 15_000,
+    })
+    await entry.reviewGameButton(1).click()
+    await expect(entry.heading).toHaveText('Edit game 1 score.')
+    await expect(entry.conflictNotice).toBeVisible({ timeout: 15_000 })
+    await expect(entry.scoreInput(a.username)).toHaveValue('11')
+    await expect(entry.scoreInput(b.username)).toHaveValue('7')
+    await entry.keepSavedButton.click()
+    await expect(entry.scoreInput(a.username)).toHaveValue('5')
+    await expect(entry.scoreInput(b.username)).toHaveValue('11')
+    await b.ctx.dispose()
+  })
+
+  test('keeping a saved score replaces both fields on a dirty edit page', async ({
+    page,
+    baseURL,
+  }) => {
     const a = await guestFromContext(page.request)
     const b = await mintGuest(baseURL!)
     const matchId = await createMatch(a, await findUserId(a, b.username), 3)
@@ -50,7 +92,7 @@ test.describe('Score entry — the page follows the other side', () => {
     await b.ctx.dispose()
   })
 
-  test('a clean page fills in the opponent\'s save, then closes when they finalize', async ({
+  test("a clean page fills in the opponent's save, then closes when they finalize", async ({
     page,
     baseURL,
   }) => {
@@ -68,7 +110,9 @@ test.describe('Score entry — the page follows the other side', () => {
     await createGameScore(b, matchId, 1, 11, 5)
 
     // A's untouched inputs take the saved score — no reload, no save of A's own.
-    await expect(entry.scoreInput(a.username)).toHaveValue('11', { timeout: 15_000 })
+    await expect(entry.scoreInput(a.username)).toHaveValue('11', {
+      timeout: 15_000,
+    })
     await expect(entry.scoreInput(b.username)).toHaveValue('5')
 
     // B finalizes the match (game 2 decides a best-of-3, unrated → final at once).
@@ -88,7 +132,7 @@ test.describe('Score entry — the page follows the other side', () => {
     await b.ctx.dispose()
   })
 
-  test('a dirty page surfaces the opponent\'s save as a conflict to resolve, without a save of its own', async ({
+  test("a dirty page surfaces the opponent's save as a conflict to resolve, without a save of its own", async ({
     page,
     baseURL,
   }) => {
